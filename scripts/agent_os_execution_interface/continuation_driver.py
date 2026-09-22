@@ -44,6 +44,32 @@ def continuation_payload(decision: ContinuationDecision) -> dict[str, object]:
     }
 
 
+def completion_continuation_payload(
+    *,
+    terminal: bool,
+    blocked: bool,
+    next_action: str,
+    reason_codes: tuple[str, ...],
+) -> dict[str, object]:
+    """Project already-decided completion facts into the canonical host payload."""
+    if type(terminal) is not bool or type(blocked) is not bool:
+        raise TypeError("completion terminal and blocked values must be built-in bool")
+    if type(next_action) is not str:
+        raise TypeError("next_action must be built-in text")
+    if type(reason_codes) is not tuple or any(
+        type(code) is not str or not code for code in reason_codes
+    ):
+        raise TypeError("reason_codes must be a tuple of non-empty strings")
+    return continuation_payload(
+        ContinuationDecision(
+            action="" if terminal or blocked else next_action,
+            terminal=terminal,
+            blocked=blocked,
+            reason_codes=reason_codes,
+        )
+    )
+
+
 def drive_governed_continuation(adapter: ContinuationAdapter, decide: Callable[[object], ContinuationDecision], *, max_transitions: int = MAX_DRIVER_TRANSITIONS) -> ContinuationDriveResult:
     if type(max_transitions) is not int or max_transitions < 1 or max_transitions > MAX_DRIVER_TRANSITIONS:
         raise ValueError("max_transitions is outside the governed finite bound")
