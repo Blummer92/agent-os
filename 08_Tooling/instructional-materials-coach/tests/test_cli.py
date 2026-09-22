@@ -44,7 +44,7 @@ def _current_curriculum_evidence_file(tmp_path):
         evidence_id = f"gate-{index}"
         owner_evidence.append({"evidence_id": evidence_id, "owner": "instructional-materials-coach", "decision_key": decision_key, "value": "ready", "classification": "owner-governed", "source_revision": 1, "observed_at": "2026-08-28T12:00:00Z", "currentness": "current", "material": True, "relation_resolved": True, "reference": reference(evidence_id)})
 
-    return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": []})
+    return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": [{"asset_id": "asset-1", "exists": True, "approved_for_requested_use": True, "approved_student_reuse": True, "source_revision": 1, "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"}}]})
 
 
 def _base_build_args(lesson_file, requirement_file):
