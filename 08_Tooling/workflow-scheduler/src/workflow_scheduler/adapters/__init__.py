@@ -29,6 +29,9 @@ from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
 from workflow_scheduler.adapters.instructional_materials_dry_run_adapter import (
     InstructionalMaterialsDryRunAdapter,
 )
+from workflow_scheduler.adapters.instructional_materials_live_adapter import (
+    InstructionalMaterialsLiveAdapter,
+)
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
 from workflow_scheduler.adapters.notion_readonly_adapter import (
     NotionReadOnlyAdapter,
@@ -40,6 +43,7 @@ __all__ = [
     "TaskAdapter",
     "NoopAdapter",
     "InstructionalMaterialsDryRunAdapter",
+    "InstructionalMaterialsLiveAdapter",
     "FakeSuccessAdapter",
     "FakeFailureAdapter",
     "FakeRetryableAdapter",
