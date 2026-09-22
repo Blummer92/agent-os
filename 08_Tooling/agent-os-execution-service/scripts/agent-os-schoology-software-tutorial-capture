@@ -1,0 +1,17 @@
+#!/bin/sh
+# Fixed root-owned outer entrypoint for one Schoology/Kami software-tutorial capture.
+# Accepts no argv; Recorder bytes are forwarded only on stdin.
+set -eu
+CAPTURE_USER=agent-os-schoology-capture
+CAPTURE_HOME=/var/lib/agent-os/schoology-capture-home
+SESSION_ENTRYPOINT=/usr/local/libexec/agent-os-schoology-software-tutorial-capture-session
+RUNUSER=/usr/sbin/runuser
+fail() { printf '%s\n' "schoology software tutorial capture refused: $1" >&2; exit 64; }
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -u)" -eq 0 ] || fail "outer entrypoint must run as root"
+[ -x "$RUNUSER" ] || fail "runuser unavailable"
+[ -x "$SESSION_ENTRYPOINT" ] || fail "fixed session entrypoint unavailable"
+exec "$RUNUSER" -u "$CAPTURE_USER" -- env -i \
+  HOME="$CAPTURE_HOME" \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  "$SESSION_ENTRYPOINT"

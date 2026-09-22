@@ -6,6 +6,7 @@ import {
   BROWSER_SESSION_REF,
   BROWSER_SESSION_REFS,
   CANVA_BROWSER_SESSION_REF,
+  SCHOOLOGY_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   PRIVACY_MODE,
 } from './live_capture_request.mjs';
@@ -13,6 +14,7 @@ import {
 export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
   [BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-adobe-software-tutorial-capture',
   [CANVA_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-canva-software-tutorial-capture',
+  [SCHOOLOGY_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-schoology-software-tutorial-capture',
 });
 export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;

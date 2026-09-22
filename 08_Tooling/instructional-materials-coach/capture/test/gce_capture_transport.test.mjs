@@ -12,6 +12,7 @@ import {
 import {
   BROWSER_SESSION_REF,
   CANVA_BROWSER_SESSION_REF,
+  SCHOOLOGY_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   PRIVACY_MODE,
 } from '../live_capture_request.mjs';
@@ -134,4 +135,16 @@ test('capture transport rejects non-ready auth and alternate execution surfaces 
   await assert.rejects(() => invokeGceCapture(payload({ authentication_status: 'AUTH_REQUIRED' }), { spawnImpl }));
   await assert.rejects(() => invokeGceCapture(payload({ execution_surface: { ...EXECUTION_SURFACE, instance: 'other' } }), { spawnImpl }));
   assert.equal(spawned, false);
+});
+
+test('Schoology capture argv is fixed to the dedicated Schoology host entrypoint', () => {
+  assert.equal(captureHostEntrypoint(SCHOOLOGY_BROWSER_SESSION_REF), CAPTURE_HOST_ENTRYPOINTS[SCHOOLOGY_BROWSER_SESSION_REF]);
+  assert.deepEqual(captureGcloudArgv(SCHOOLOGY_BROWSER_SESSION_REF), [
+    'compute', 'ssh', 'agent-os-test',
+    '--project', 'agent-os-502614',
+    '--zone', 'us-central1-a',
+    '--tunnel-through-iap',
+    '--quiet',
+    '--command', 'sudo -n /usr/local/libexec/agent-os-schoology-software-tutorial-capture',
+  ]);
 });

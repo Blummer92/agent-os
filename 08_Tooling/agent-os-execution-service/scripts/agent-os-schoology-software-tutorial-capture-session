@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fixed unprivileged Schoology/Kami capture session. Accepts no argv; stdin/stdout only.
+set -eu
+CAPTURE_USER=agent-os-schoology-capture
+CAPTURE_HOME=/var/lib/agent-os/schoology-capture-home
+NODE=/opt/agent-os/software-tutorial-capture/node/bin/node
+ENTRYPOINT=/opt/agent-os/software-tutorial-capture/package/live_capture_host.mjs
+fail() { printf '%s\n' "schoology software tutorial capture session refused: $1" >&2; exit 64; }
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -un)" = "$CAPTURE_USER" ] || fail "must run as dedicated Schoology capture user"
+[ "${HOME:-}" = "$CAPTURE_HOME" ] || fail "capture HOME mismatch"
+[ -x "$NODE" ] || fail "fixed Node runtime unavailable"
+[ -f "$ENTRYPOINT" ] || fail "fixed capture entrypoint unavailable"
+unset PYTHONPATH PYTHONHOME NODE_OPTIONS
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME="$CAPTURE_HOME"
+export XDG_CONFIG_HOME="$CAPTURE_HOME/.config"
+export XDG_CACHE_HOME="$CAPTURE_HOME/.cache"
+exec "$NODE" "$ENTRYPOINT"

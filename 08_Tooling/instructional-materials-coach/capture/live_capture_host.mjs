@@ -8,6 +8,7 @@ import { validateFileInputArtifacts } from './file_input_bindings.mjs';
 import {
   BROWSER_SESSION_REF,
   CANVA_BROWSER_SESSION_REF,
+  SCHOOLOGY_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   PRIVACY_MODE,
 } from './live_capture_request.mjs';
@@ -45,6 +46,12 @@ const HOST_SESSION_CONFIG = Object.freeze({
     profile: '/var/lib/agent-os/canva-capture-home/.agent-os/browser-profiles/canva',
     authProbeUrl: 'https://www.canva.com/projects/',
     expectedOrigin: 'https://www.canva.com',
+  }),
+  [SCHOOLOGY_BROWSER_SESSION_REF]: Object.freeze({
+    username: 'agent-os-schoology-capture',
+    profile: '/var/lib/agent-os/schoology-capture-home/.agent-os/browser-profiles/schoology-kami',
+    authProbeUrl: 'https://dpscd.schoology.com/home',
+    expectedOrigin: 'https://dpscd.schoology.com',
   }),
 });
 
