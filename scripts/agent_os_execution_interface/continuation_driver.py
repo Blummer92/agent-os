@@ -52,14 +52,6 @@ def completion_continuation_payload(
     reason_codes: tuple[str, ...],
 ) -> dict[str, object]:
     """Project already-decided completion facts into the canonical host payload."""
-    if type(terminal) is not bool or type(blocked) is not bool:
-        raise TypeError("completion terminal and blocked values must be built-in bool")
-    if type(next_action) is not str:
-        raise TypeError("next_action must be built-in text")
-    if type(reason_codes) is not tuple or any(
-        type(code) is not str or not code for code in reason_codes
-    ):
-        raise TypeError("reason_codes must be a tuple of non-empty strings")
     return continuation_payload(
         ContinuationDecision(
             action="" if terminal or blocked else next_action,
