@@ -6,7 +6,7 @@ export PATH
 umask 077
 CAPTURE_USER=agent-os-schoology-capture
 CAPTURE_HOME=/var/lib/agent-os/schoology-capture-home
-PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/schoology-kami-kami
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/schoology-kami
 TRANSPORT_PRINCIPAL=sa_117278680011452280250
 RUNTIME_ROOT=/opt/agent-os/software-tutorial-capture
 STAGING_ROOT=/var/lib/agent-os/software-tutorial-capture-staging
