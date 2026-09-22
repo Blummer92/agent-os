@@ -84,3 +84,15 @@ def test_production_reader_uses_read_only_query_action_only():
     assert [task.action for task in adapter.tasks] == ["query_data_source"]
     assert [task.type for task in adapter.tasks] == ["read"]
     assert all(task.payload["action"] == "query_data_source" for task in adapter.tasks)
+
+
+def test_missing_local_binding_resolves_governed_github_route_before_fallback(monkeypatch):
+    monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
+
+    route = resolve_lesson_read_route(governed_route_available=True)
+
+    assert route.status is LessonReadRouteStatus.GOVERNED_ROUTE_REQUIRED
+    assert route.reason_code == "governed-github-route-required"
+    assert route.execute_read is None
+    assert route.canonical_source_unavailable is False
+    assert route.side_effects_performed is False
