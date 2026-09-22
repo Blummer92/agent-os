@@ -4,6 +4,8 @@
 set -uo pipefail
 shopt -s nullglob
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 pass=0
