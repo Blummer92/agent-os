@@ -16,7 +16,6 @@ from agent_memory_context_manager.lesson_preflight import FailedRepairAttempt, R
 from agent_memory_context_manager.repair_lesson_activation import activate_repair_retry_lessons
 from agent_os_execution_service.execution_surface_availability import ExecutionSurfaceAvailabilityOutcome
 from agent_os_execution_service.failed_repair_admission import evaluate_failed_repair_admission
-from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
 from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision as DriverDecision, continuation_payload
 from scripts.agent_os_execution_interface.mission_completion_admission import evaluate_mission_completion_admission
 from scripts.agent_os_execution_interface.post_selection_continuation import (
@@ -26,11 +25,6 @@ from scripts.agent_os_execution_interface.post_selection_continuation import (
     PriorAttemptEffect,
     classify_post_selection_continuation,
 )
-from workflow_scheduler.execution.continuation import ContinuationDisposition, ExistingWorkEvidence, plan_execution_continuation
-from workflow_scheduler.execution.host_local_lease_adapter import HostLocalLeaseObservation
-from workflow_scheduler.execution.recovery_progress import RecoveryProgressDisposition, RecoverySemanticEvidence, classify_recovery_progress
-from workflow_scheduler.execution.red_ci_continuation import RedCiEvidence, RedCiNextAction, plan_red_ci_continuation
-from workflow_scheduler.execution.single_issue_pilot import PilotLeaseRequest
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", re.ASCII)
 _HANDOFF_RE = re.compile(r"^executor-handoff:[0-9a-f]{64}$", re.ASCII)
@@ -97,17 +91,7 @@ def classify_agent_os_mission_completion(*, repository: str, issue_number: int, 
     payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if decision.completion_admissible else decision.next_action, terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.capable_route_available), reason_codes=decision.reason_codes)); return payload
 
 
-def classify_agent_os_existing_work(*, evidence: ExistingWorkEvidence, resume_plan: ResumePlan | None, lease_request: PilotLeaseRequest | None, lease_observation: HostLocalLeaseObservation | None) -> dict[str, object]:
-    decision = plan_execution_continuation(evidence, resume_plan=resume_plan, lease_request=lease_request, lease_observation=lease_observation)
-    payload = asdict(decision); payload["disposition"] = decision.disposition.value; blocked = decision.disposition in {ContinuationDisposition.ACTIVE_CONFLICT, ContinuationDisposition.SCOPE_DRIFT, ContinuationDisposition.NEEDS_DECISION}; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if blocked else decision.recommended_action, blocked=blocked, reason_codes=decision.reason_codes)); return payload
 
-
-def classify_agent_os_red_ci(evidence: RedCiEvidence) -> dict[str, object]:
-    decision = plan_red_ci_continuation(evidence); payload = asdict(decision); payload["failure_class"] = decision.failure_class.value; payload["next_action"] = decision.next_action.value; blocked = decision.next_action in {RedCiNextAction.BLOCKED_DIAGNOSTIC_SURFACE, RedCiNextAction.NEEDS_DECISION}; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if blocked else decision.next_action.value, blocked=blocked, reason_codes=decision.reason_codes)); return payload
-
-
-def classify_agent_os_recovery_progress(current: RecoverySemanticEvidence, *, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None) -> dict[str, object]:
-    decision = classify_recovery_progress(current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint); payload = asdict(decision); payload["disposition"] = decision.disposition.value; stalled = decision.disposition is RecoveryProgressDisposition.RECOVERY_STALLED; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if stalled else decision.recommended_action, stalled=stalled, reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_continuation(*, repository: str, issue_number: int, operation_id: str, surface_outcome: str, approved_alternative_capability: str | None = None, branch: str | None = None, pull_request: int | None = None, checkpoint_id: str | None = None, lease_id: str | None = None, prior_effect: str = "none-proven", target_identity_reacquired: bool = False, requires_exact_blob_identity: bool = False, exact_blob_identity_reacquired: bool = False, runtime_surface_transition: bool = False, evidence_compatibility_confirmed: bool = False, active_foreign_lease: bool = False, equivalent_transition_repeated: bool = False, material_decision_required: bool = False, alternative_widens_authority: bool = False, non_absorbed_domain: str | None = None) -> dict[str, object]:
