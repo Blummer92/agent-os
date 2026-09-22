@@ -42,6 +42,34 @@ def _with_lesson_route(result: dict[str, object], route_status: str, reason_code
     return {**result, "lesson_read_route_status": route_status, "lesson_read_route_reason_code": reason_code, "canonical_lessons_source_unavailable": canonical_source_unavailable}
 
 
+def _deferred_lesson_read():
+    """Resolve the provider route only when CKR6 actually performs a read."""
+    state: dict[str, object] = {
+        "resolved": False,
+        "execute_read": None,
+        "status": "not-needed",
+        "reason_code": "lesson-retrieval-not-required",
+        "canonical_source_unavailable": False,
+    }
+
+    def execute_read(query):
+        if not state["resolved"]:
+            reader, status, reason_code, source_unavailable = _lesson_route(None)
+            state.update(
+                resolved=True,
+                execute_read=reader,
+                status=status,
+                reason_code=reason_code,
+                canonical_source_unavailable=source_unavailable,
+            )
+        reader = state["execute_read"]
+        if reader is None:
+            raise RuntimeError("lesson read route unavailable on current execution surface")
+        return reader(query)
+
+    return execute_read, state
+
+
 @mcp.tool()
 def plan_connected_issue_creation_tool(
     repository: str,
@@ -131,9 +159,19 @@ def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object
 
 @mcp.tool()
 def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
-    execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
+    if lesson_rows is not None:
+        execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
+        result = activate_issue_start_lesson_preflight(repository=repository, issue_number=issue_number, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read)
+        return _with_lesson_route(result, route_status, reason_code, source_unavailable)
+
+    execute_read, route_state = _deferred_lesson_read()
     result = activate_issue_start_lesson_preflight(repository=repository, issue_number=issue_number, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read)
-    return _with_lesson_route(result, route_status, reason_code, source_unavailable)
+    return _with_lesson_route(
+        result,
+        str(route_state["status"]),
+        str(route_state["reason_code"]),
+        bool(route_state["canonical_source_unavailable"]),
+    )
 
 
 @mcp.tool()
