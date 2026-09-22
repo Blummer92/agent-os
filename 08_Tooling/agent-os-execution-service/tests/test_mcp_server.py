@@ -266,6 +266,58 @@ def test_diagnostic_rows_do_not_depend_on_current_surface_binding(monkeypatch) -
     assert source_unavailable is False
 
 
+def test_2781_not_needed_issue_start_does_not_resolve_lesson_route(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        mcp_server,
+        "resolve_lesson_read_route",
+        lambda: calls.append("resolved") or (_ for _ in ()).throw(
+            AssertionError("not-needed CKR6 must not resolve the Notion lesson route")
+        ),
+    )
+
+    result = mcp_server.activate_agent_os_issue_start_lessons_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2781,
+        task_reference="issue:#2781",
+        specialized_knowledge_required=False,
+    )
+
+    assert calls == []
+    assert result["lesson_retrieval_status"] == "not-needed"
+    assert result["lesson_read_route_status"] == "not-needed"
+    assert result["lesson_read_route_reason_code"] == "lesson-retrieval-not-required"
+
+
+def test_2781_required_issue_start_resolves_lesson_route_once(monkeypatch) -> None:
+    calls = []
+
+    class Route:
+        status = type("Status", (), {"value": "configured-canonical-reader"})()
+        reason_code = "configured-canonical-reader"
+        canonical_source_unavailable = False
+
+        @staticmethod
+        def execute_read(_query):
+            return {"results": []}
+
+    monkeypatch.setattr(
+        mcp_server,
+        "resolve_lesson_read_route",
+        lambda: calls.append("resolved") or Route(),
+    )
+
+    result = mcp_server.activate_agent_os_issue_start_lessons_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2781,
+        task_reference="issue:#2781",
+        specialized_knowledge_required=True,
+    )
+
+    assert calls == ["resolved"]
+    assert result["lesson_read_route_status"] == "configured-canonical-reader"
+
+
 def test_issue_batch_completion_tool_requires_pr_or_explicit_no_pr_terminal_proof() -> None:
     result = mcp_server.classify_agent_os_issue_batch_completion_tool(
         repository="Blummer92/agent-os",
