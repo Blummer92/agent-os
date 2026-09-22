@@ -134,6 +134,10 @@ def test_schema_and_closed_vocabularies() -> None:
         "checkpointed-resume",
         "github-api-read",
         "github-api-write",
+        "cgroup-v2-containment",
+        "clone3-into-cgroup",
+        "unattended-scheduler-execution",
+        "fixed-service-identity",
     ]
 
 

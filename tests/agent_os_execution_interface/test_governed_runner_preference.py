@@ -155,3 +155,60 @@ def test_preference_never_creates_authority() -> None:
     assert preference.merge_authorized is False
     assert preference.external_writes_authorized is False
     assert preference.side_effects_performed is False
+
+
+def test_containment_capability_requires_gce_without_separate_provider_flag() -> None:
+    required = _caps(
+        ExecutorCapability.CGROUP_V2_CONTAINMENT,
+        ExecutorCapability.CLONE3_INTO_CGROUP,
+    )
+    preference = choose_governed_runner(
+        required_capabilities=required,
+        codespaces=_candidate(
+            GovernedRunnerKind.CODESPACES,
+            capabilities=required,
+        ),
+        gce=_candidate(
+            GovernedRunnerKind.GCE,
+            capabilities=required,
+        ),
+    )
+    assert preference.selected is not None
+    assert preference.selected.kind is GovernedRunnerKind.GCE
+    assert preference.reason_codes == (
+        GovernedRunnerPreferenceReason.AUTONOMOUS_HOST_REQUIRED,
+        GovernedRunnerPreferenceReason.GCE_CAPABLE,
+    )
+
+
+def test_gce_required_capability_fails_closed_when_gce_is_stale() -> None:
+    required = _caps(ExecutorCapability.UNATTENDED_SCHEDULER_EXECUTION)
+    preference = choose_governed_runner(
+        required_capabilities=required,
+        codespaces=_candidate(
+            GovernedRunnerKind.CODESPACES,
+            capabilities=required,
+        ),
+        gce=_candidate(
+            GovernedRunnerKind.GCE,
+            current=False,
+            capabilities=required,
+        ),
+    )
+    assert preference.selected is None
+    assert preference.reason_codes == (
+        GovernedRunnerPreferenceReason.AUTONOMOUS_HOST_REQUIRED,
+        GovernedRunnerPreferenceReason.GCE_STALE,
+        GovernedRunnerPreferenceReason.NO_CAPABLE_GOVERNED_RUNNER,
+    )
+
+
+def test_ordinary_runtime_capability_still_prefers_codespaces() -> None:
+    required = _caps(ExecutorCapability.RUNTIME_INSPECTION)
+    preference = choose_governed_runner(
+        required_capabilities=required,
+        codespaces=_candidate(GovernedRunnerKind.CODESPACES, capabilities=required),
+        gce=_candidate(GovernedRunnerKind.GCE, capabilities=required),
+    )
+    assert preference.selected is not None
+    assert preference.selected.kind is GovernedRunnerKind.CODESPACES
