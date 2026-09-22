@@ -101,6 +101,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.current_curriculum_evidence:
             raise RuntimeError("Governed current-curriculum evidence is required before a connected build.")
         material_requirement = _load_json(args.material_requirement, default=None)
+        current_curriculum_evidence = _load_json(args.current_curriculum_evidence, default=None)
+        current_asset_evidence = (
+            current_curriculum_evidence.get("asset_evidence", [])
+            if isinstance(current_curriculum_evidence, dict)
+            else []
+        )
         visual_plan = plan_governed_visual_reuse(
             material_requirement,
             artifact_manifests=_load_json(args.artifact_manifests, default=[]),
@@ -108,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             source_revision=args.visual_source_revision,
             changed_dependency_keys=_load_json(args.changed_dependency_keys, default=[]),
             impact_map=_load_json(args.impact_map, default={}),
+            current_asset_evidence=current_asset_evidence,
         )
         context["visual_reuse_outcome"] = visual_plan.outcome
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
@@ -118,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         content = compose_generation_context(
             content,
             material_requirement=material_requirement,
-            current_curriculum_evidence=_load_json(args.current_curriculum_evidence, default=None),
+            current_curriculum_evidence=current_curriculum_evidence,
             selected_asset_ids=tuple(visual_plan.selected_asset_ids),
             governed_visual_plan=visual_plan.cohesive_visual_plan_result,
         )
