@@ -18,7 +18,7 @@ from typing import Literal
 EXECUTOR_ROUTING_SCHEMA_VERSION = "1.0"
 MAX_IDENTIFIER_LENGTH = 256
 MAX_OPERATION_LENGTH = 256
-MAX_CAPABILITIES = 14
+MAX_CAPABILITIES = 18
 MAX_REASONS = 19
 MAX_INVALIDATION_CONDITIONS = 32
 MAX_PATHS = 256
@@ -74,6 +74,10 @@ class ExecutorCapability(str, Enum):
     CHECKPOINTED_RESUME = "checkpointed-resume"
     GITHUB_API_READ = "github-api-read"
     GITHUB_API_WRITE = "github-api-write"
+    CGROUP_V2_CONTAINMENT = "cgroup-v2-containment"
+    CLONE3_INTO_CGROUP = "clone3-into-cgroup"
+    UNATTENDED_SCHEDULER_EXECUTION = "unattended-scheduler-execution"
+    FIXED_SERVICE_IDENTITY = "fixed-service-identity"
 
 
 class ExecutorRouteReason(str, Enum):
