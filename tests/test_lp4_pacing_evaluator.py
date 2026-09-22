@@ -111,7 +111,35 @@ def test_active_time_cannot_exceed_elapsed_time() -> None:
     packet = _packet()
     packet["prior_runs"][0]["active_minutes"] = 60
     payload = _payload(evaluate_lesson_pacing(packet))
-    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-run-interrupted-or-sparse"
+    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-active-elapsed-time-conflict"
+
+
+def test_active_elapsed_conflict_stays_visible_behind_healthy_evidence() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 120
+    packet["prior_runs"] = [
+        {"run_id": "run/bad", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 60, "elapsed_minutes": 40, "context_ref": "context/a"},
+        {"run_id": "run/1", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 39, "elapsed_minutes": 50, "context_ref": "context/a"},
+        {"run_id": "run/2", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 40, "elapsed_minutes": 52, "context_ref": "context/b"},
+        {"run_id": "run/3", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 41, "elapsed_minutes": 51, "context_ref": "context/b"},
+    ]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["included_count"] == 3
+    assert "lp-evidence-active-elapsed-time-conflict" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
+
+
+def test_ordinary_exclusions_do_not_force_manual_review() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 120
+    packet["prior_runs"] = [
+        {"run_id": "run/1", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 39, "elapsed_minutes": 50, "context_ref": "context/a"},
+        {"run_id": "run/2", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 40, "elapsed_minutes": 52, "context_ref": "context/b"},
+        {"run_id": "run/3", "objective_ref": "objective/other", "work_mode": "camera", "quality": "usable", "active_minutes": 20, "elapsed_minutes": 40, "context_ref": "context/c"},
+    ]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-objective-match-weak"
+    assert "lp-evidence-objective-match-weak" not in payload["unresolved_uncertainties"]
 
 
 def test_six_dimensions_are_required_and_never_collapsed() -> None:

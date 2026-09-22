@@ -15,7 +15,7 @@ from instructional_workflow_contracts import (
 )
 
 from .adaptation import plan_lesson_adaptation
-from .comparability import filter_comparable_runs
+from .comparability import MANUAL_REVIEW_EXCLUSION_REASONS, filter_comparable_runs
 from .diagnosis import diagnose_dimensions
 from .packet import NON_AUTHORITY_FIELDS, validate_pacing_packet
 
@@ -66,6 +66,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         reasons: list[str] = []
         if comparison["included_count"] < 2:
             reasons.append("lp-evidence-comparable-runs-insufficient")
+        reasons.extend(
+            item["reason"]
+            for item in comparison["excluded"]
+            if item["reason"] in MANUAL_REVIEW_EXCLUSION_REASONS
+        )
         if comparison["included_count"] == 0:
             classification, routing = "insufficient-evidence", "hold"
         if packet["privacy_disposition"] != "eligible":
