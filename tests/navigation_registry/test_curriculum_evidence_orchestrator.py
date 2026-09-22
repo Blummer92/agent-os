@@ -77,6 +77,10 @@ def source_records(source: str) -> list[dict[str, object]]:
             "approved_student_reuse": False,
             "source_revision": 1,
             "canonical_unit_relation": True,
+            "library_reference": {
+                "page_id": "notion-page-pf-010",
+                "drive_file_id": "drive-file-pf-010",
+            },
             "title": "deliberately-not-photography-named",
         }],
     }
@@ -165,9 +169,17 @@ def test_pf010_is_reached_by_relation_and_provider_filter_is_hidden_downstream()
         "approved_student_reuse": False,
         "exists": True,
         "source_revision": 1,
+        "library_reference": {
+            "page_id": "notion-page-pf-010",
+            "drive_file_id": "drive-file-pf-010",
+        },
     }]
     assert "relation_filter" not in repr(packet)
     assert "deliberately-not-photography-named" not in repr(packet)
+    assert packet["asset_evidence"][0]["library_reference"] == {
+        "page_id": "notion-page-pf-010",
+        "drive_file_id": "drive-file-pf-010",
+    }
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
     record = state.record.to_dict()
