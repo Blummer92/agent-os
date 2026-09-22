@@ -96,10 +96,22 @@ def test_result_is_not_a_durable_curriculum_store(verified_catalog) -> None:
 
 
 def test_shipped_catalog_declares_verified_current_binding(shipped_catalog) -> None:
-    for source in shipped_catalog.sources:
-        assert source.verification_state == "verified-current"
+    verified_sources = {
+        source.logical_source: source
+        for source in shipped_catalog.sources
+        if source.verification_state == "verified-current"
+    }
+    assert set(verified_sources) == {"canonical-unit", "visual-asset-library"}
+    for source in verified_sources.values():
         assert source.data_source_id is not None
         assert source.dispatchable is True
+    teacher_modeling = next(
+        source for source in shipped_catalog.sources
+        if source.logical_source == "teacher-modeling"
+    )
+    assert teacher_modeling.verification_state == "unverified"
+    assert teacher_modeling.data_source_id is None
+    assert teacher_modeling.dispatchable is False
     for unit in shipped_catalog.canonical_units:
         assert unit.verification_state == "verified-current"
         assert unit.provider_page_id is not None
@@ -115,9 +127,26 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
 
 
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
-    assert {source.logical_source for source in shipped_catalog.sources} == {"canonical-unit","visual-asset-library"}
+    assert {source.logical_source for source in shipped_catalog.sources} == {
+        "canonical-unit",
+        "visual-asset-library",
+        "teacher-modeling",
+    }
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
-    for record in shipped_catalog.requests: assert record.issue_number == 2283
+    legacy_requests = [
+        record for record in shipped_catalog.requests
+        if record.issue_number == 2283
+    ]
+    assert {record.request_class for record in legacy_requests} == {
+        "canonical-unit",
+        "visual-assets",
+    }
+    ppux_request = next(
+        record for record in shipped_catalog.requests
+        if record.request_id == "ppux-photography-foundations-teacher-modeling"
+    )
+    assert ppux_request.issue_number == 2759
+    assert ppux_request.request_class == "teacher-modeling"
 
 
 def test_cli_writes_one_bounded_json_artifact(tmp_path, capsys) -> None:
