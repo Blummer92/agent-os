@@ -152,6 +152,25 @@ def test_title_or_filename_similarity_cannot_substitute_for_the_relation(verifie
     assert assets["relation_source"] == "canonical-unit-relation"
 
 
+def test_public_projection_does_not_expose_internal_visual_library_identity(verified_catalog) -> None:
+    executor = RecordingExecutor(assets=[{
+        "asset_id": APPROVED_ASSET,
+        "exists": True,
+        "approved_for_requested_use": True,
+        "approved_student_reuse": True,
+        "source_revision": 3,
+        "canonical_unit_relation": True,
+        "library_reference": {
+            "page_id": "private-notion-page-id",
+            "drive_file_id": "private-drive-file-id",
+        },
+    }])
+    result = run(verified_catalog, executor)["result"]
+    assert result["assets"]["eligible_asset_ids"] == [APPROVED_ASSET]
+    assert "private-notion-page-id" not in repr(result)
+    assert "private-drive-file-id" not in repr(result)
+
+
 def test_asset_existence_is_not_approved_use_or_production_authority(verified_catalog) -> None:
     assets = run(verified_catalog, RecordingExecutor())["result"]["assets"]
     assert assets["matching_asset_exists"] is True
