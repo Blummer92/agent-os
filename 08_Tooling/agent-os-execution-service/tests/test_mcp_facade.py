@@ -79,3 +79,14 @@ def test_repeated_equivalent_transition_delegates_to_no_progress_owner() -> None
 def test_adjacent_lifecycles_are_not_absorbed(domain: str) -> None:
     with pytest.raises(ValueError, match="must not absorb"):
         classify_agent_os_continuation(repository="Blummer92/agent-os", issue_number=1233, operation_id="bounded-operation", surface_outcome="selected-surface-unavailable", non_absorbed_domain=domain)
+
+
+def test_mission_completion_blocks_repository_green_when_required_live_consumer_is_unproven() -> None:
+    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2765, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_reachability_proven=False)
+    assert result["completion_admissible"] is False
+    assert "required-live-consumer-reachability-not-proven" in result["reason_codes"]
+
+
+def test_mission_completion_accepts_proven_required_live_consumer() -> None:
+    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2765, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_reachability_proven=True)
+    assert result["completion_admissible"] is True
