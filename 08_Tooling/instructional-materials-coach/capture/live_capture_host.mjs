@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { resolve } from 'node:path';
 import puppeteer from 'puppeteer';
 
 import { captureFlow } from './replay_capture.mjs';
+import { validateFileInputArtifacts } from './file_input_bindings.mjs';
 import {
   BROWSER_SESSION_REF,
   CANVA_BROWSER_SESSION_REF,
@@ -29,6 +30,7 @@ const HOST_INPUT_FIELDS = new Set([
   'authentication_status',
   'privacy_mode',
   'raw_recording',
+  'file_input_artifacts',
 ]);
 
 const HOST_SESSION_CONFIG = Object.freeze({
@@ -74,7 +76,8 @@ export function validateHostCaptureInput(value) {
   if (typeof value.raw_recording !== 'string') throw new TypeError('raw_recording must be a string');
   if (Buffer.byteLength(value.raw_recording, 'utf8') > CAPTURE_HOST_MAX_INPUT_BYTES) throw new TypeError('raw_recording exceeds byte bound');
   if (fingerprintRecording(value.raw_recording) !== value.recording_sha256) throw new TypeError('recording digest mismatch');
-  return Object.freeze(structuredClone(value));
+  const fileInputArtifacts = validateFileInputArtifacts(value.raw_recording, value.file_input_artifacts ?? []);
+  return Object.freeze({ ...structuredClone(value), file_input_artifacts: fileInputArtifacts });
 }
 
 function canonicalCapturedAt(date = new Date()) {
@@ -163,10 +166,25 @@ export async function runHostCapture(value, {
 
   const runtimeRoot = await mkdtemp('/dev/shm/agent-os-software-tutorial-capture-');
   const screenshotDir = resolve(runtimeRoot, 'screenshots');
+  const uploadDir = resolve(runtimeRoot, 'file-inputs');
   let captureResult;
   let screenshots = Object.freeze([]);
   try {
     await mkdir(screenshotDir, { recursive: true, mode: 0o700 });
+    await mkdir(uploadDir, { recursive: true, mode: 0o700 });
+    const fileInputBindings = [];
+    for (const artifact of input.file_input_artifacts) {
+      const path = resolve(uploadDir, `${String(artifact.source_index).padStart(3, '0')}-${artifact.filename}`);
+      await writeFile(path, Buffer.from(artifact.content_base64, 'base64'), { mode: 0o600 });
+      fileInputBindings.push(Object.freeze({
+        source_index: artifact.source_index,
+        source_fingerprint: artifact.source_fingerprint,
+        content_ref: artifact.content_ref,
+        sha256: artifact.sha256,
+        filename: artifact.filename,
+        path,
+      }));
+    }
     captureResult = await captureImpl({
       rawRecording: input.raw_recording,
       approvedOrigins: input.approved_origins,
@@ -178,6 +196,7 @@ export async function runHostCapture(value, {
       headless: true,
       launchOptions: Object.freeze({ executablePath: '/usr/bin/chromium' }),
       captureTargetStyle: false,
+      fileInputBindings,
     });
     screenshots = await collectScreenshots(screenshotDir);
   } finally {
