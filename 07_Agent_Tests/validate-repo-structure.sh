@@ -154,6 +154,15 @@ if [ -f "$map_meta" ]; then
 fi
 check "All Documentation Dependency Map metadata paths exist" "$map_refs_missing"
 
+# 7b. Authored Python must not contain duplicate unconditional top-level
+# function/class declarations. Keep the AST semantics in the dedicated checker;
+# structural validation only consumes its exit status and bounded evidence.
+duplicate_python_declarations=0
+if ! "$PYTHON_BIN" scripts/check_duplicate_python_declarations.py .; then
+  duplicate_python_declarations=1
+fi
+check "No duplicate authored top-level Python declarations" "$duplicate_python_declarations"
+
 # 8. Every Markdown file path listed in the Navigation Alias Registry exists.
 alias_registry="04_Registry/navigation-alias-registry.md"
 alias_refs_missing=0
