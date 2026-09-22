@@ -15,9 +15,9 @@ from instructional_workflow_contracts import (
 )
 
 from .adaptation import plan_lesson_adaptation
-from .comparability import MANUAL_REVIEW_EXCLUSION_REASONS, USABLE_OBSERVATION_QUALITY, filter_comparable_runs
+from .comparability import filter_comparable_runs
 from .diagnosis import diagnose_dimensions
-from .packet import NON_AUTHORITY_FIELDS, OBSERVATION_MANUAL_REVIEW_CODES, validate_pacing_packet
+from .packet import NON_AUTHORITY_FIELDS, validate_pacing_packet
 
 
 def _declared_range(functions: list[dict[str, Any]]) -> dict[str, float]:
@@ -66,22 +66,14 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         reasons: list[str] = []
         if comparison["included_count"] < 2:
             reasons.append("lp-evidence-comparable-runs-insufficient")
-        reasons.extend(
-            item["reason"]
-            for item in comparison["excluded"]
-            if item["reason"] in MANUAL_REVIEW_EXCLUSION_REASONS
-        )
+        if comparison["included_count"] == 0:
+            classification, routing = "insufficient-evidence", "hold"
         if packet["privacy_disposition"] != "eligible":
             reasons.append("lp-evidence-privacy-ineligible")
             classification, routing = "insufficient-evidence", "hold"
         observation = packet["observation_quality"]
-        if observation["status"] not in USABLE_OBSERVATION_QUALITY:
+        if observation.get("status") not in {"usable", "usable-with-limits"}:
             reasons.append("lp-evidence-observation-quality-unusable")
-            classification, routing = "insufficient-evidence", "hold"
-        # Canonical LP14 limitations stay visible; the catalog's own
-        # manual_review_required flag decides which of them also fail closed.
-        reasons.extend(observation["reason_codes"])
-        if not OBSERVATION_MANUAL_REVIEW_CODES.isdisjoint(observation["reason_codes"]):
             classification, routing = "insufficient-evidence", "hold"
         if packet["implementation_stage"] == "suspended":
             reasons.append("lp-calibration-revision-suspended")

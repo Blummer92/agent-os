@@ -6,15 +6,8 @@ from typing import Any
 
 from instructional_workflow_contracts import ContractValidationError, validate_stable_id
 
-#: Canonical LP14 observation-quality states. This module is the LP2/LP14
-#: comparability seam, so packet admission and the evaluator consume this one
-#: vocabulary instead of restating it.
-USABLE_OBSERVATION_QUALITY = frozenset({"usable", "usable-with-limits"})
-EXCLUDED_OBSERVATION_QUALITY = frozenset(
-    {"unusable", "stale", "contradictory", "too-late", "privacy-blocked"}
-)
-OBSERVATION_QUALITY_STATES = USABLE_OBSERVATION_QUALITY | EXCLUDED_OBSERVATION_QUALITY
-MANUAL_REVIEW_EXCLUSION_REASONS = frozenset({"lp-evidence-active-elapsed-time-conflict"})
+_USABLE_QUALITY = frozenset({"usable", "usable-with-limits"})
+_EXCLUDED_QUALITY = frozenset({"unusable", "stale", "contradictory", "too-late", "privacy-blocked"})
 
 
 def filter_comparable_runs(
@@ -30,7 +23,6 @@ def filter_comparable_runs(
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     contexts: set[str] = set()
-    seen_runs: dict[str, dict[str, Any]] = {}
 
     for run in runs:
         if type(run) is not dict:
@@ -39,12 +31,6 @@ def filter_comparable_runs(
         if set(run) != required:
             raise ContractValidationError("handoff-invalid", "prior run fields are not canonical")
         run_id = validate_stable_id(run["run_id"], "run_id")
-        first_seen = seen_runs.get(run_id)
-        if first_seen is not None:
-            if first_seen != run:
-                raise ContractValidationError("handoff-duplicate", "duplicate prior-run identity has conflicting evidence")
-            continue
-        seen_runs[run_id] = run
         validate_stable_id(run["objective_ref"], "prior objective_ref")
         validate_stable_id(run["context_ref"], "context_ref")
         active = run["active_minutes"]
@@ -53,9 +39,13 @@ def filter_comparable_runs(
             excluded.append({"run_id": run_id, "reason": "lp-evidence-run-interrupted-or-sparse"})
             continue
         if active > elapsed:
-            excluded.append({"run_id": run_id, "reason": "lp-evidence-active-elapsed-time-conflict"})
+            excluded.append({"run_id": run_id, "reason": "lp-evidence-run-interrupted-or-sparse"})
             continue
-        if run["quality"] not in USABLE_OBSERVATION_QUALITY:
+        quality = run["quality"]
+        if quality in _EXCLUDED_QUALITY:
+            excluded.append({"run_id": run_id, "reason": "lp-evidence-observation-quality-unusable"})
+            continue
+        if quality not in _USABLE_QUALITY:
             excluded.append({"run_id": run_id, "reason": "lp-evidence-observation-quality-unusable"})
             continue
         if run["objective_ref"] != objective_ref:
