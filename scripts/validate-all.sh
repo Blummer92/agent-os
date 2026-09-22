@@ -350,7 +350,7 @@ for target in "${normalized_focused_targets[@]}"; do
   run_focused_target "$target"
 done
 
-run_check "structural validation" "$ROOT_DIR" "bash $STRUCTURAL_SCRIPT" bash "$STRUCTURAL_SCRIPT"
+run_check "structural validation" "$ROOT_DIR" "PYTHON_BIN=$PYTHON_BIN bash $STRUCTURAL_SCRIPT" env PYTHON_BIN="$PYTHON_BIN" bash "$STRUCTURAL_SCRIPT"
 
 mapfile -t test_dirs < <(
   find . -type d -name tests \
