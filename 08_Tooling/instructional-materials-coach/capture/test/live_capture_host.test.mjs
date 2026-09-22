@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { access, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
 
 import {
   CAPTURE_HOST_MAX_INPUT_BYTES,
@@ -12,7 +12,7 @@ import {
   EXECUTION_SURFACE,
   PRIVACY_MODE,
 } from '../live_capture_request.mjs';
-import { fingerprintRecording } from '../safe_recording.mjs';
+import { fingerprintAction, fingerprintRecording } from '../safe_recording.mjs';
 
 const rawRecording = JSON.stringify({ title: 'Synthetic Canva', steps: [] });
 const authReady = async () => 'AUTH_READY';
@@ -117,6 +117,46 @@ test('Canva host uses tmpfs, returns screenshot bytes, and deletes the workspace
   assert.deepEqual(result.screenshots.map((item) => item.filename), ['000-after.png', '000-before.png']);
   assert.deepEqual(Buffer.from(result.screenshots[0].content_base64, 'base64'), fakePng);
   await assert.rejects(() => access(observed.screenshotDir));
+});
+
+test('file-input artifacts are materialized in capture tmpfs and removed after execution', async () => {
+  const step = { type: 'change', selectors: [['#file']], value: 'C:\\fakepath\\practice.pdf' };
+  const fileRawRecording = JSON.stringify({ title: 'Synthetic file input', steps: [step] });
+  const bytes = Buffer.from('synthetic upload bytes');
+  const crypto = await import('node:crypto');
+  const artifact = {
+    source_index: 0,
+    source_fingerprint: fingerprintAction(step),
+    content_ref: 'capture-inputs/practice.pdf',
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    filename: 'practice.pdf',
+    content_base64: bytes.toString('base64'),
+  };
+  let materializedPath;
+  const result = await runHostCapture(input({
+    raw_recording: fileRawRecording,
+    recording_sha256: fingerprintRecording(fileRawRecording),
+    file_input_artifacts: [artifact],
+  }), {
+    username: 'agent-os-canva-capture',
+    authenticationProbeImpl: authReady,
+    captureImpl: async (value) => {
+      assert.equal(value.fileInputBindings.length, 1);
+      materializedPath = value.fileInputBindings[0].path;
+      assert.match(materializedPath, /^\/dev\/shm\/agent-os-software-tutorial-capture-[^/]+\/file-inputs\/000-practice\.pdf$/);
+      assert.deepEqual(await readFile(materializedPath), bytes);
+      return Object.freeze({
+        status: 'valid',
+        capture: Object.freeze({
+          format_version: 'software-tutorial-capture-v1',
+          capture_id: 'tutorial0-canva',
+          source: Object.freeze({ recording_sha256: fingerprintRecording(fileRawRecording) }),
+        }),
+      });
+    },
+  });
+  assert.equal(result.capture_result.status, 'valid');
+  await assert.rejects(() => access(materializedPath));
 });
 
 test('tmpfs workspace is removed when capture throws', async () => {
