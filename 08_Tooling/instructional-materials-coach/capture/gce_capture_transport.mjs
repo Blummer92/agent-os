@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 
+import { validateFileInputArtifacts } from './file_input_bindings.mjs';
+
 import {
   BROWSER_SESSION_REF,
   BROWSER_SESSION_REFS,
@@ -12,7 +14,7 @@ export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
   [BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-adobe-software-tutorial-capture',
   [CANVA_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-canva-software-tutorial-capture',
 });
-export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 512 * 1024;
+export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_TIMEOUT_MS = 120_000;
 
@@ -28,6 +30,7 @@ const TRANSPORT_FIELDS = new Set([
   'authentication_status',
   'privacy_mode',
   'raw_recording',
+  'file_input_artifacts',
 ]);
 
 function exactKeys(value, allowed, label) {
@@ -56,6 +59,7 @@ function validateTransportPayload(payload) {
   if (payload.authentication_status !== 'AUTH_READY') throw new TypeError('capture transport requires AUTH_READY');
   if (payload.privacy_mode !== PRIVACY_MODE) throw new TypeError('unsupported privacy mode');
   if (typeof payload.raw_recording !== 'string') throw new TypeError('raw_recording must be a string');
+  validateFileInputArtifacts(payload.raw_recording, payload.file_input_artifacts ?? []);
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8');
   if (encoded.length > CAPTURE_TRANSPORT_MAX_INPUT_BYTES) throw new TypeError('capture transport input exceeds byte bound');
   return encoded;

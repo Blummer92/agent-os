@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createRunner, parse, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
+import { validateMaterializedFileInputBindings } from './file_input_bindings.mjs';
 import {
   authenticationBlocker,
   buildCaptureEnvelope,
@@ -125,14 +126,44 @@ export async function resolveTargetEvidence(queryContext, page, step, { captureT
 }
 
 class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
-  constructor(browser, page, { screenshotDir, timeout, captureTargetStyle = false }) {
+  constructor(browser, page, { screenshotDir, timeout, captureTargetStyle = false, fileInputBindings = [] }) {
     super(browser, page, { timeout });
     this.browser = browser;
     this.defaultPage = page;
     this.screenshotDir = screenshotDir;
     this.captureTargetStyle = captureTargetStyle;
+    this.fileInputBindings = new Map(fileInputBindings.map((binding) => [binding.source_index, binding]));
     this.actionEvidence = [];
     this.currentIndex = -1;
+  }
+
+  async runStepInFrame(step, mainPage, targetPageOrFrame, localFrame, timeout) {
+    const binding = this.fileInputBindings.get(this.currentIndex);
+    if (!binding) return super.runStepInFrame(step, mainPage, targetPageOrFrame, localFrame, timeout);
+    if (step.type !== 'change' || binding.source_fingerprint !== fingerprintAction(step)) {
+      throw new Error('file-input-binding-mismatch');
+    }
+    if (Array.isArray(step.assertedEvents) && step.assertedEvents.length > 0) {
+      throw new Error('file-input-asserted-events-unsupported');
+    }
+
+    let handle = null;
+    for (const selector of step.selectors ?? []) {
+      const candidate = selectorAsPuppeteer(selector);
+      if (!candidate) continue;
+      try {
+        handle = await localFrame.$(candidate);
+      } catch {
+        handle = null;
+      }
+      if (handle) break;
+    }
+    if (!handle) throw new Error('file-input-target-unresolved');
+    const isFileInput = await handle.evaluate((element) => (
+      element instanceof HTMLInputElement && element.type === 'file'
+    ));
+    if (!isFileInput) throw new Error('file-input-target-mismatch');
+    await handle.uploadFile(binding.path);
   }
 
   async beforeEachStep(step, flow) {
@@ -195,9 +226,25 @@ export async function captureFlow({
   timeout = 7000,
   launchOptions = {},
   captureTargetStyle = false,
+  fileInputBindings = [],
 }) {
   const validation = validateRecording(rawRecording, { approvedOrigins });
   if (validation.status !== 'valid') return Object.freeze({ status: validation.status, validation, capture: null });
+
+  let validatedFileInputBindings;
+  try {
+    validatedFileInputBindings = validateMaterializedFileInputBindings(rawRecording, fileInputBindings);
+  } catch (error) {
+    return Object.freeze({
+      status: 'blocked',
+      validation,
+      capture: null,
+      failure: Object.freeze({
+        reason_code: 'artifact-recording-invalid',
+        error_name: error instanceof Error ? error.name : 'Error',
+      }),
+    });
+  }
 
   const authReason = authenticationBlocker(authenticationStatus);
   if (authReason) {
@@ -212,7 +259,12 @@ export async function captureFlow({
   const browser = await puppeteer.launch({ ...launchOptions, userDataDir, headless });
   const pages = await browser.pages();
   const page = pages[0] ?? await browser.newPage();
-  const extension = new EvidenceCaptureExtension(browser, page, { screenshotDir, timeout, captureTargetStyle });
+  const extension = new EvidenceCaptureExtension(browser, page, {
+    screenshotDir,
+    timeout,
+    captureTargetStyle,
+    fileInputBindings: validatedFileInputBindings,
+  });
 
   try {
     const runner = await createRunner(parsed, extension);

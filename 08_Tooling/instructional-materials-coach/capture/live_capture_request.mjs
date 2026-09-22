@@ -4,6 +4,10 @@ import {
   fingerprintRecording,
   validateAuthenticationStatus,
 } from './safe_recording.mjs';
+import {
+  fileInputArtifactIdentity,
+  validateFileInputArtifacts,
+} from './file_input_bindings.mjs';
 
 export const LIVE_CAPTURE_REQUEST_VERSION = 'software-tutorial-capture-request-v1';
 export const LIVE_CAPTURE_RESULT_VERSION = 'software-tutorial-capture-request-result-v1';
@@ -140,6 +144,7 @@ export async function runLiveCaptureRequest({
   request,
   rawRecording,
   browserSessionCapability,
+  fileInputArtifacts = [],
   executionSurface = EXECUTION_SURFACE,
   invokeCapture,
   idempotencyLookup = async () => null,
@@ -164,7 +169,16 @@ export async function runLiveCaptureRequest({
       side_effects_performed: false,
     });
   }
-  const requestFingerprint = fingerprint(normalized);
+  let validatedFileInputArtifacts;
+  try {
+    validatedFileInputArtifacts = validateFileInputArtifacts(rawRecording, fileInputArtifacts);
+  } catch {
+    return blocked(normalized, fingerprint(normalized), null, 'file-input-artifact-invalid');
+  }
+  const requestFingerprint = fingerprint({
+    request: normalized,
+    file_input_artifacts: validatedFileInputArtifacts.map(fileInputArtifactIdentity),
+  });
   if (!surfaceMatches(executionSurface)) return blocked(normalized, requestFingerprint, null, 'execution-surface-mismatch');
 
   let capability;
@@ -200,6 +214,7 @@ export async function runLiveCaptureRequest({
       authentication_status: capability.authentication_status,
       privacy_mode: normalized.privacy_mode,
       raw_recording: rawRecording,
+      file_input_artifacts: validatedFileInputArtifacts,
     }));
   } catch {
     return blocked(normalized, requestFingerprint, capability.authentication_status, 'transport-failed', 'failed');
