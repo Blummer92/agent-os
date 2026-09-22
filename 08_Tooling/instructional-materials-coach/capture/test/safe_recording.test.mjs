@@ -58,6 +58,47 @@ test('navigation is restricted to exact approved origins', () => {
   assert.equal(result.findings[0].reason_code, 'artifact-recording-invalid');
 });
 
+test('Recorder target URLs are restricted to exact approved origins', () => {
+  const recording = parseFixture();
+  recording.steps[2].target = 'https://example.com/secondary';
+  const result = validate(recording);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.findings[0].reason_code, 'artifact-recording-invalid');
+  assert.match(result.findings[0].detail, /target origin is not approved/);
+});
+
+test('approved secondary target URL and bounded numeric frame path pass preflight', () => {
+  const recording = parseFixture();
+  recording.steps[2].target = 'https://kami.example.edu/work';
+  recording.steps[2].frame = [0, 1];
+  const result = validateRecording(JSON.stringify(recording), {
+    approvedOrigins: [...APPROVED_ORIGINS, 'https://kami.example.edu'],
+  });
+  assert.equal(result.status, 'valid');
+});
+
+test('invalid Recorder frame paths fail closed', () => {
+  for (const frame of [[-1], [1.5], ['0'], new Array(17).fill(0)]) {
+    const recording = parseFixture();
+    recording.steps[2].frame = frame;
+    const result = validate(recording);
+    assert.equal(result.status, 'invalid');
+    assert.equal(result.findings[0].reason_code, 'artifact-recording-invalid');
+    assert.match(result.findings[0].detail, /step frame/);
+  }
+});
+
+test('non-URL Recorder target fails closed unless it is main', () => {
+  const recording = parseFixture();
+  recording.steps[2].target = 'popup-1';
+  const result = validate(recording);
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.findings[0].reason_code, 'artifact-recording-invalid');
+
+  recording.steps[2].target = 'main';
+  assert.equal(validate(recording).status, 'valid');
+});
+
 test('raw recording fingerprint is byte-stable and whitespace-sensitive', () => {
   assert.equal(fingerprintRecording(fixture), fingerprintRecording(Buffer.from(fixture)));
   assert.notEqual(fingerprintRecording(fixture), fingerprintRecording(`${fixture.toString('utf8')}\n`));

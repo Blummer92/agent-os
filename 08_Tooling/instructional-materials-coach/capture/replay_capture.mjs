@@ -28,6 +28,41 @@ function selectorAsPuppeteer(selector) {
   return null;
 }
 
+function targetUrlFor(step) {
+  return typeof step?.target === 'string' && step.target !== 'main' ? step.target : null;
+}
+
+function childFrameAt(frame, index) {
+  const children = typeof frame?.childFrames === 'function' ? frame.childFrames() : [];
+  return children[index] ?? null;
+}
+
+export async function resolveStepContext(browser, defaultPage, step) {
+  let page = defaultPage;
+  const targetUrl = targetUrlFor(step);
+  if (targetUrl) {
+    const pages = await browser.pages();
+    const matches = pages.filter((candidate) => typeof candidate?.url === 'function' && candidate.url() === targetUrl);
+    if (matches.length === 0) {
+      return Object.freeze({ status: 'unresolved', reason_code: 'quality-target-unresolved', page: null, query_context: null });
+    }
+    if (matches.length > 1) {
+      return Object.freeze({ status: 'ambiguous', reason_code: 'quality-target-ambiguous', page: null, query_context: null });
+    }
+    [page] = matches;
+  }
+
+  let queryContext = typeof page?.mainFrame === 'function' ? page.mainFrame() : page;
+  for (const frameIndex of Array.isArray(step?.frame) ? step.frame : []) {
+    queryContext = childFrameAt(queryContext, frameIndex);
+    if (!queryContext) {
+      return Object.freeze({ status: 'unresolved', reason_code: 'quality-target-unresolved', page: null, query_context: null });
+    }
+  }
+
+  return Object.freeze({ status: 'resolved', reason_code: null, page, query_context: queryContext });
+}
+
 /**
  * Capture optional bounded target-style evidence (#1485) from the
  * already-resolved handle only. Style evidence is optional/non-authoritative:
@@ -56,7 +91,7 @@ async function resolveTargetStyleEvidence(page, handle, geometry) {
   }
 }
 
-export async function resolveTargetEvidence(page, step, { captureTargetStyle = false } = {}) {
+export async function resolveTargetEvidence(queryContext, page, step, { captureTargetStyle = false } = {}) {
   if (!SELECTOR_STEP_TYPES.has(step.type) || !Array.isArray(step.selectors)) {
     return Object.freeze({ selector_resolved: null, selector_classification: null, target_type: 'UNKNOWN', geometry: null, derived_click: null, reason_code: null, target_style: null });
   }
@@ -66,7 +101,7 @@ export async function resolveTargetEvidence(page, step, { captureTargetStyle = f
     const candidate = selectorAsPuppeteer(selector);
     if (!candidate) continue;
     try {
-      const handle = await page.$(candidate);
+      const handle = await queryContext.$(candidate);
       if (handle) matches.push({ selector, handle, box: await handle.boundingBox() });
     } catch {
       // Replay remains authoritative for execution. Unsupported inspection selectors
@@ -93,6 +128,8 @@ export async function resolveTargetEvidence(page, step, { captureTargetStyle = f
 class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
   constructor(browser, page, { screenshotDir, timeout, captureTargetStyle = false, fileInputBindings = [] }) {
     super(browser, page, { timeout });
+    this.browser = browser;
+    this.defaultPage = page;
     this.screenshotDir = screenshotDir;
     this.captureTargetStyle = captureTargetStyle;
     this.fileInputBindings = new Map(fileInputBindings.map((binding) => [binding.source_index, binding]));
@@ -131,9 +168,16 @@ class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
 
   async beforeEachStep(step, flow) {
     this.currentIndex += 1;
+    const context = await resolveStepContext(this.browser, this.defaultPage, step);
+    if (context.status !== 'resolved') {
+      const error = new Error(context.reason_code);
+      error.name = context.reason_code === 'quality-target-ambiguous' ? 'TargetContextAmbiguousError' : 'TargetContextUnresolvedError';
+      throw error;
+    }
+    this.currentContext = context;
     const beforeName = `${String(this.currentIndex).padStart(3, '0')}-before.png`;
-    await this.page.screenshot({ path: resolve(this.screenshotDir, beforeName), fullPage: false });
-    const target = await resolveTargetEvidence(this.page, step, { captureTargetStyle: this.captureTargetStyle });
+    await context.page.screenshot({ path: resolve(this.screenshotDir, beforeName), fullPage: false });
+    const target = await resolveTargetEvidence(context.query_context, context.page, step, { captureTargetStyle: this.captureTargetStyle });
     this.actionEvidence[this.currentIndex] = {
       source_index: this.currentIndex,
       source_fingerprint: fingerprintAction(step),
@@ -159,7 +203,13 @@ class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
   async afterEachStep(step, flow) {
     await super.afterEachStep(step, flow);
     const afterName = `${String(this.currentIndex).padStart(3, '0')}-after.png`;
-    await this.page.screenshot({ path: resolve(this.screenshotDir, afterName), fullPage: false });
+    const context = this.currentContext ?? await resolveStepContext(this.browser, this.defaultPage, step);
+    if (context.status !== 'resolved') {
+      const error = new Error(context.reason_code);
+      error.name = context.reason_code === 'quality-target-ambiguous' ? 'TargetContextAmbiguousError' : 'TargetContextUnresolvedError';
+      throw error;
+    }
+    await context.page.screenshot({ path: resolve(this.screenshotDir, afterName), fullPage: false });
     this.actionEvidence[this.currentIndex] = { ...this.actionEvidence[this.currentIndex], screenshot_after: afterName, execution_result: 'passed' };
   }
 }
@@ -231,7 +281,10 @@ export async function captureFlow({
       }),
     });
   } catch (error) {
-    return Object.freeze({ status: 'blocked', validation, capture: null, failure: Object.freeze({ reason_code: 'quality-replay-failed', error_name: error instanceof Error ? error.name : 'Error' }) });
+    const reasonCode = error instanceof Error && ['quality-target-ambiguous', 'quality-target-unresolved'].includes(error.message)
+      ? error.message
+      : 'quality-replay-failed';
+    return Object.freeze({ status: 'blocked', validation, capture: null, failure: Object.freeze({ reason_code: reasonCode, error_name: error instanceof Error ? error.name : 'Error' }) });
   } finally {
     await browser.close();
   }
