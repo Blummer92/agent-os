@@ -47,12 +47,13 @@ def test_schoology_profile_and_runtime_are_isolated_from_existing_products() -> 
     assert '"127.0.0.1:$NOVNC_PORT"' in session
     assert '"127.0.0.1:$VNC_PORT"' in session
 
-def test_schoology_exposes_no_remote_debugging_or_auth_material() -> None:
+def test_schoology_exposes_no_remote_debugging_or_web_auth_material() -> None:
     combined = (_text(SESSION) + "\n" + _text(INSTALLER)).lower()
     for forbidden in (
         "--remote-debugging-port", "--remote-debugging-address", "--remote-debugging-pipe",
         "devtoolsactiveport", "socat", "--url", "--profile", "provider_selector",
-        "password=", "token=", "cookie=", "mfa=", "credential=",
+        "password=", "token=", "mfa=", "credential=",
+        "document.cookie", "set-cookie", "cookie_header", "cookies.json", "--cookie",
     ):
         assert forbidden not in combined
 
