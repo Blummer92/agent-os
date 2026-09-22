@@ -289,6 +289,38 @@ credentials, artifact quality, or permission to write. The receipt command is an
 inert argument list and is never executed by this adapter. The sanitized authoring
 example is `examples/instructional-materials-dry-run.yaml`.
 
+
+### InstructionalMaterialsLiveAdapter (C4B)
+
+`InstructionalMaterialsLiveAdapter` is the finite `imc-materials-live-task-v1`
+Scheduler binding for #1196. It is intentionally dependency-injected and is not
+registered in the zero-argument adapter registry. The authorized host must supply
+the canonical typed-approval revalidator, the read-only #1986 execution-
+authorization reacquirer, a bounded `LiveBuildInput` factory, the #1195
+`build_live_materials` callable, and already-resolved Drive/Slides/Docs clients.
+
+The closed task payload carries the complete #1975 live-operation subject, exact
+#1976 approval/revision/projection identities, repository plus authorization
+issue, and only the expected #1986 authorization ID as its non-authorizing
+locator. The adapter revalidates the subject, requires current approval/
+projection applicability, reacquires current authorization for the exact
+Scheduler `run_id + task_id + attempt_number + instructional-materials-live-operation`,
+and only then invokes the #1195 builder once. The bridge-generated
+`ExecutionRequest.execution_id` is trace evidence and is deliberately not an
+authorization binding.
+
+Batching, expanded payload fields, stale approval/projection evidence, stale or
+missing execution authorization, and identity mismatches fail closed before the
+builder. The adapter adds no retry or cleanup path; partial or ambiguous #1195
+receipts remain truthful and are returned unchanged for reconciliation.
+
+Constructing this adapter or scheduling a task does not itself authorize
+credentials, OAuth, Google access, production, or an external write. Those
+dependencies and the current v2 authorization record must be supplied by a host
+that has separately satisfied the live-write boundary. The C4B implementation
+and its tests perform no Google authentication, provider calls, or external
+writes.
+
 ### HostLocalLeaseAdapter
 
 `HostLocalLeaseAdapter` is the bounded host-local implementation of the canonical
