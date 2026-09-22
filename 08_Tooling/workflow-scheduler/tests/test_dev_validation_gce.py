@@ -18,8 +18,12 @@ def claims(**overrides):
 def payload(req,status="success",exit_code=0):return {"schema_version":"1.0","status":status,"reason_codes":["validation-passed" if status=="success" else "validation-failed"],"repository":req.repository,"issue_number":req.issue_number,"branch":req.branch,"tested_sha":req.source_sha,"validation_id":req.validation_id,"request_id":req.request_id,"exit_code":exit_code,"stdout_tail":"ok","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False,"cleanup_complete":True,"workspace_side_effects_performed":True,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
 
 class Adapter:
- def __init__(self,state=VmState.RUNNING,result=None):self.state=state;self.result=result;self.calls=[]
+ def __init__(self,state=VmState.RUNNING,result=None,shutdown_enabled=False):self.state=state;self.result=result;self.shutdown_enabled=shutdown_enabled;self.calls=[]
  def observe_state(self,resource):self.calls.append("observe");return self.state
+ def start(self,resource):self.calls.append("start");return True
+ def wait_until_running(self,resource):self.calls.append("wait");return VmState.RUNNING
+ def stop(self,resource):self.calls.append("stop");return self.shutdown_enabled
+ def wait_until_stopped(self,resource):self.calls.append("wait-stop");return VmState.STOPPED
  def _ssh(self,resource,command):
   self.calls.append(("ssh",command));body=payload(request()) if self.result is None else self.result
   return SimpleNamespace(returncode=0,stdout=live._FRAME_START+"\n"+json.dumps(body)+"\n"+live._FRAME_END+"\n",stderr="")
@@ -60,8 +64,20 @@ def test_successful_transport_remains_non_authorizing():
 def test_wrong_claims_fail_before_ssh():
  adapter=Adapter();result=live.execute_dev_validation_transport(ingress(),claims=claims(repository="other/repo"),adapter=adapter);assert adapter.calls==[];assert result["dev_validation"]["reason_codes"]==["claims-rejected"]
 
-def test_stopped_host_does_not_start():
- adapter=Adapter(state=VmState.STOPPED);result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert adapter.calls==["observe"];assert result["dev_validation"]["reason_codes"]==["host-not-running"]
+def test_stopped_host_starts_once_then_validates():
+ adapter=Adapter(state=VmState.STOPPED);result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert adapter.calls[:3]==["observe","start","wait"];assert adapter.calls[3][0]=="ssh";assert result["dev_validation"]["status"]=="success";assert result["dev_validation"]["start_issued"] is True
+
+def test_running_host_does_not_redundantly_start():
+ adapter=Adapter();result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert "start" not in adapter.calls;assert result["dev_validation"]["vm_initial_state"]=="running";assert result["dev_validation"]["start_issued"] is False
+
+def test_clean_terminal_validation_stops_when_lifecycle_capability_enabled():
+ adapter=Adapter(shutdown_enabled=True);result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert adapter.calls[-2:]==["stop","wait-stop"];assert result["dev_validation"]["shutdown_issued"] is True;assert result["dev_validation"]["status"]=="success"
+
+def test_cleanup_failure_withholds_shutdown():
+ bad=payload(request(),status="failure",exit_code=1);bad["cleanup_complete"]=False;adapter=Adapter(result=bad,shutdown_enabled=True);result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert "stop" not in adapter.calls;assert result["dev_validation"]["shutdown_issued"] is False
+
+def test_timeout_withholds_shutdown_even_if_cleanup_flag_is_true():
+ bad=payload(request(),status="timeout",exit_code=1);adapter=Adapter(result=bad,shutdown_enabled=True);result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter);assert "stop" not in adapter.calls;assert result["dev_validation"]["shutdown_issued"] is False
 
 def test_ssh_failure_preserves_bounded_diagnostics():
  class Failed(Adapter):
