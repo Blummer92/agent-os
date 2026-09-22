@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 
+import { validateFileInputArtifacts } from './file_input_bindings.mjs';
+
 import {
   BROWSER_SESSION_REF,
   BROWSER_SESSION_REFS,
@@ -57,6 +59,7 @@ function validateTransportPayload(payload) {
   if (payload.authentication_status !== 'AUTH_READY') throw new TypeError('capture transport requires AUTH_READY');
   if (payload.privacy_mode !== PRIVACY_MODE) throw new TypeError('unsupported privacy mode');
   if (typeof payload.raw_recording !== 'string') throw new TypeError('raw_recording must be a string');
+  validateFileInputArtifacts(payload.raw_recording, payload.file_input_artifacts ?? []);
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8');
   if (encoded.length > CAPTURE_TRANSPORT_MAX_INPUT_BYTES) throw new TypeError('capture transport input exceeds byte bound');
   return encoded;
