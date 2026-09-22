@@ -34,7 +34,7 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
         argv = tuple(argv); calls.append(argv)
         if argv[:4] == ("gcloud", "compute", "instances", "describe"):
             return result(instance_payload)
-        if argv[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"):
+        if argv[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"):
             return result({"permissions": stop_permissions}, code=stop_code, stderr="SECRET provider transcript must not escape")
         if argv[:5] == ("gcloud", "iam", "service-accounts", "list", "--project"):
             return result(inventory)
@@ -98,7 +98,7 @@ def test_missing_runtime_identity_preserves_missing_state_but_still_checks_trans
     assert evidence["vm_runtime_identity"] == {"status": "missing", "email": None, "scopes": []}
     assert evidence["effective_stop_permission"]["effective"] is False
     assert evidence["effective_stop_permission"]["reason_codes"] == ["stop-permission-denied"]
-    assert any(call[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions") for call in calls)
+    assert any(call[:5] == ("gcloud", "compute", "instances", "test-iam-permissions") for call in calls)
     assert not any(call[:4] == ("gcloud", "iam", "service-accounts", "list") for call in calls)
 
 
@@ -126,7 +126,7 @@ def test_commands_are_fixed_to_canonical_target_and_current_transport_caller():
     run, calls = fake_run_factory()
     live.collect_cloud_identity(run)
     assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json")
-    stop_call = next(call for call in calls if call[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"))
+    stop_call = next(call for call in calls if call[:5] == ("gcloud", "compute", "instances", "test-iam-permissions"))
     assert stop_call == ("gcloud", "beta", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--format=json(permissions)")
 
 
