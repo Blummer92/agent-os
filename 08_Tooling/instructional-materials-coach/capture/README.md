@@ -56,6 +56,14 @@ The capture extension records bounded selector/geometry evidence and viewport sc
 
 No real unsanitized screenshot or Recorder capture belongs in Git. Repository fixtures must remain synthetic or sanitized and human-reviewed.
 
+### Recorder file-input binding (#2811)
+
+Recorder `change` steps produced by browser file inputs expose a browser fake path such as `C:\\fakepath\\practice.pdf`; that string is never treated as a host path or file identity. When such a step is present, live capture requires exactly one bounded file artifact tied to the exact recording action by `source_index` + `source_fingerprint`, plus an opaque `content_ref`, SHA-256 digest, bounded basename, and base64 bytes.
+
+The file bytes are part of runtime evidence only. Their identity participates in the logical capture-request fingerprint. The GCE transport revalidates the action/digest, the host materializes bytes only inside the capture's `/dev/shm/agent-os-software-tutorial-capture-*/file-inputs` workspace, and `captureFlow` accepts only those host-materialized bindings. Replay uploads the materialized file only when the recorded target is an actual `<input type="file">`. The entire tmpfs workspace is deleted after the capture attempt.
+
+Missing, stale, mismatched, duplicate, oversized, or path-bearing file evidence fails closed. Ordinary non-file `change` steps and recordings without file inputs retain the existing behavior. No raw teacher file belongs in Git, logs, issue bodies, or a persistent capture store.
+
 ### Capture format v2 / optional target-style evidence (#1485)
 
 `captureFlow({ ..., captureTargetStyle: true })` opts into `software-tutorial-capture-v2`, which adds one optional bounded `target_style` snapshot per resolved action from a frozen `getComputedStyle` property allowlist on the already-resolved target handle only (no DOM traversal). Colors persist as canonical RGBA; `background_image` retains bounded CSS gradients and blocks `url(...)`/`blob:`/`data:` resource identity. Style resolution failure leaves `target_style: null` rather than blocking or fabricating a value, since Replay stays authoritative for execution regardless.
