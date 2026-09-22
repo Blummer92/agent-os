@@ -13,6 +13,8 @@ def admission(**overrides):
         "canonical_pr_readback_verified": True,
         "capable_route_available": True,
         "subordinate_writes_only": False,
+        "live_consumer_required": False,
+        "live_consumer_reachability_proven": False,
     }
     values.update(overrides)
     return evaluate_mission_completion_admission(**values)
@@ -71,3 +73,14 @@ def test_guard_grants_no_dangerous_authority():
     assert result.workflow_authorized is False
     assert result.production_authorized is False
     assert result.external_system_write_authorized is False
+
+
+def test_repository_delivery_cannot_complete_feature_that_requires_unproven_live_consumer():
+    result = admission(live_consumer_required=True, live_consumer_reachability_proven=False)
+    assert result.completion_admissible is False
+    assert "required-live-consumer-reachability-not-proven" in result.reason_codes
+
+
+def test_required_live_consumer_allows_completion_only_when_reachability_is_proven():
+    result = admission(live_consumer_required=True, live_consumer_reachability_proven=True)
+    assert result.completion_admissible is True

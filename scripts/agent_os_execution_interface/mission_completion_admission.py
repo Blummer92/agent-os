@@ -13,6 +13,8 @@ class MissionCompletionAdmission:
     canonical_pr_readback_verified: bool
     capable_route_available: bool
     subordinate_writes_only: bool
+    live_consumer_required: bool
+    live_consumer_reachability_proven: bool
     completion_admissible: bool
     reason_codes: tuple[str, ...]
     next_action: str
@@ -34,6 +36,8 @@ def evaluate_mission_completion_admission(
     canonical_pr_readback_verified: bool,
     capable_route_available: bool,
     subordinate_writes_only: bool,
+    live_consumer_required: bool = False,
+    live_consumer_reachability_proven: bool = False,
 ) -> MissionCompletionAdmission:
     """Prevent subordinate writes from masquerading as implementation completion.
 
@@ -49,6 +53,8 @@ def evaluate_mission_completion_admission(
         ("canonical_pr_readback_verified", canonical_pr_readback_verified),
         ("capable_route_available", capable_route_available),
         ("subordinate_writes_only", subordinate_writes_only),
+        ("live_consumer_required", live_consumer_required),
+        ("live_consumer_reachability_proven", live_consumer_reachability_proven),
     ):
         if type(value) is not bool:
             raise TypeError(f"{name} must be built-in bool")
@@ -66,6 +72,8 @@ def evaluate_mission_completion_admission(
         reasons.append("canonical-pr-readback-not-proven")
     if subordinate_writes_only:
         reasons.append("subordinate-write-is-not-parent-completion")
+    if live_consumer_required and not live_consumer_reachability_proven:
+        reasons.append("required-live-consumer-reachability-not-proven")
 
     if not reasons:
         completion_admissible = True
@@ -87,6 +95,8 @@ def evaluate_mission_completion_admission(
         canonical_pr_readback_verified=canonical_pr_readback_verified,
         capable_route_available=capable_route_available,
         subordinate_writes_only=subordinate_writes_only,
+        live_consumer_required=live_consumer_required,
+        live_consumer_reachability_proven=live_consumer_reachability_proven,
         completion_admissible=completion_admissible,
         reason_codes=tuple(reasons),
         next_action=next_action,
