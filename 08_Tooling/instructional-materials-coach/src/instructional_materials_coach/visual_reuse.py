@@ -16,6 +16,56 @@ from instructional_workflow_contracts.visual_asset_candidates import (
 from instructional_workflow_contracts.visual_needs import plan_visual_needs
 
 
+def _scope_candidates_to_current_assets(
+    visual_candidates: object,
+    current_asset_evidence: object,
+) -> object:
+    """Constrain supplied governed candidates to exact current-unit asset identity.
+
+    The caller may omit current asset evidence for existing offline/planner-only
+    uses. When current evidence is supplied, only candidates whose existing
+    Asset ID + Visual Asset Library page ID + Drive file ID tuple is present in
+    that relation-first evidence can reach the existing candidate filter.
+    """
+    if current_asset_evidence is None:
+        return visual_candidates
+    if type(visual_candidates) is not list or type(current_asset_evidence) is not list:
+        return []
+
+    admitted: set[tuple[str, str, str]] = set()
+    for item in current_asset_evidence:
+        if type(item) is not dict:
+            continue
+        reference = item.get("library_reference")
+        if type(reference) is not dict:
+            continue
+        asset_id = item.get("asset_id")
+        page_id = reference.get("page_id")
+        drive_file_id = reference.get("drive_file_id")
+        if all(isinstance(value, str) and value for value in (asset_id, page_id, drive_file_id)):
+            admitted.add((asset_id, page_id, drive_file_id))
+
+    scoped: list[object] = []
+    for candidate in visual_candidates:
+        if type(candidate) is not dict:
+            continue
+        evidence = candidate.get("compatibility_evidence")
+        if type(evidence) is not dict:
+            continue
+        asset_reference = evidence.get("asset_reference")
+        library_reference = evidence.get("library_reference")
+        if type(asset_reference) is not dict or type(library_reference) is not dict:
+            continue
+        identity = (
+            asset_reference.get("asset_id"),
+            library_reference.get("page_id"),
+            library_reference.get("drive_file_id"),
+        )
+        if identity in admitted:
+            scoped.append(candidate)
+    return scoped
+
+
 @dataclass(frozen=True)
 class GovernedVisualReusePlan:
     """Retain upstream governed evidence and expose only runtime coordination state."""
@@ -47,6 +97,7 @@ def plan_governed_visual_reuse(
     source_revision: object = None,
     changed_dependency_keys: object = None,
     impact_map: object = None,
+    current_asset_evidence: object = None,
 ) -> GovernedVisualReusePlan:
     """Compose existing public contracts without adding selection or safety policy."""
     requirement_result = validate_material_requirement(requirement)
@@ -98,9 +149,13 @@ def plan_governed_visual_reuse(
             artifact_reuse_result=artifact_reuse_result,
         )
 
+    scoped_candidates = _scope_candidates_to_current_assets(
+        [] if visual_candidates is None else visual_candidates,
+        current_asset_evidence,
+    )
     candidate_filter_result = filter_approved_visual_candidates(
         visual_needs_result,
-        [] if visual_candidates is None else visual_candidates,
+        scoped_candidates,
         source_revision=source_revision,
         contract_version=VISUAL_CANDIDATES_V2_CONTRACT_ID,
     )
