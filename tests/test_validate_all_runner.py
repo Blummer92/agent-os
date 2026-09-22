@@ -27,7 +27,7 @@ def repo(tmp_path: Path) -> Path:
     structural = root / "07_Agent_Tests" / "validate-repo-structure.sh"
     structural.parent.mkdir(parents=True)
     structural.write_text(
-        '#!/usr/bin/env bash\necho "STRUCTURE_MARKER"\nexit "${STRUCTURE_EXIT:-0}"\n',
+        '#!/usr/bin/env bash\necho "STRUCTURE_MARKER"\necho "STRUCTURE_PYTHON_BIN=${PYTHON_BIN:-}"\nexit "${STRUCTURE_EXIT:-0}"\n',
         encoding="utf-8",
     )
     os.chmod(structural, 0o755)
@@ -84,6 +84,7 @@ def test_no_argument_behavior_runs_structure_and_root_once(repo: Path) -> None:
     result = run(repo)
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.stdout.count("STRUCTURE_MARKER") == 1
+    assert f"STRUCTURE_PYTHON_BIN={repo / 'fake-python'}" in result.stdout
     assert result.stdout.count("==> root") == 1
     assert "focused:" not in result.stdout
     assert "OVERALL STATUS\nPASS" in result.stdout
