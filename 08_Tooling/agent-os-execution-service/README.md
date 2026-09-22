@@ -96,43 +96,5 @@ git diff --check
 ## Rollback
 Revert the additive #1986 v2 source contract/tests/docs to restore v1-only execution-authorization source behavior. Existing #811/#1226 v1 authorization, #757 verifier, #761 unified evidence bundle/projection, routing, Scheduler, and external systems require no cleanup.
 
-## Read-only shadow issue selection — Issue #2832
-
-`shadow_issue_selection.py` is the Phase-1 read-only composition seam for selecting one **next executable issue under the existing canonical selector semantics**. It does not define a priority policy and does not claim that the selected issue is the “best,” “most important,” or “highest-value” issue.
-
-The composition reuses existing owners in this order:
-
-```text
-paginated GitHub issue reader
--> scan_connected_issues(state=open)
--> caller-supplied canonical mission/request narrowing
--> bounded candidate cohort
--> caller-supplied CandidateIssueEvidence
--> existing select_executable_lanes(...)
--> reacquire selected issue
--> issue_source_revision currentness check
--> read-only ShadowIssueSelectionResult
-```
-
-The scanner remains the population/completeness owner. Pull requests are excluded by the existing `GitHubIssuePageSource` adapter. The composition never uses connected issue search as evidence that the whole backlog was exhausted.
-
-The existing `ExecutableLaneSelection` contract accepts at most 64 candidates. This seam does not silently truncate a larger cohort and does not compare chunk-local winners. If canonical mission/request constraints still leave more than 64 open candidates, it returns `shadow-selection.candidate-population-too-broad` with no selected issue.
-
-Operational state is supplied only through the existing `CandidateIssueEvidence` contract. The seam does not derive lifecycle stage, primary-PR claims, dependency state, validation state, authorization, or freshness from scanner rows, labels, timestamps, or prose. Missing candidate evidence returns `shadow-selection.candidate-evidence-incomplete`.
-
-Two revision identities remain deliberately separate:
-- `IssueOperationalState.source_revision` is the lowercase 40-character repository commit SHA.
-- the scanned/current issue content revision is `github-issue-v1:<sha256>` from `issue_source_revision(...)`.
-
-For every bounded candidate, the scanned issue revision must already be preserved in that candidate's `IssueOperationalState.evidence_ids`; all candidate states must also agree on one repository source revision. After the existing selector chooses one lane, the seam performs one single-issue read and recomputes the current issue revision. A changed or inaccessible selected issue produces `replan-required`, never execution.
-
-`ShadowIssueSelectionResult.execution_authorized` and `side_effects_performed` are fixed `false`. The module exposes only read protocols, invokes no CKR6/execution path, and performs no issue, label, branch, PR, merge, closure, Scheduler, workflow, credential, production, or external-system mutation.
-
-Focused validation:
-
-```bash
-PYTHONPATH=08_Tooling/agent-os-execution-service/src python -m pytest -q \
-  08_Tooling/agent-os-execution-service/tests/test_shadow_issue_selection.py
-```
-
-Phase 1 is complete only when this read-only seam and its bounded real-backlog canary are proven. Host/CKR6 consumption remains a separate downstream integration concern.
+## Shadow issue selection
+See `SHADOW_ISSUE_SELECTION.md` for #2832's read-only population-to-selector composition contract.
