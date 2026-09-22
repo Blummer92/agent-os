@@ -63,7 +63,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         timing = _calibrated_range(declared, comparison["included"])
         classification, routing = _classification(timing, available, packet["continuation_allowed"])
 
-        reasons: list[str] = []
+        reasons: list[str] = [
+            item["reason"]
+            for item in comparison["excluded"]
+            if item["reason"] == "lp-evidence-active-elapsed-time-conflict"
+        ]
         if comparison["included_count"] < 2:
             reasons.append("lp-evidence-comparable-runs-insufficient")
         if comparison["included_count"] == 0:
