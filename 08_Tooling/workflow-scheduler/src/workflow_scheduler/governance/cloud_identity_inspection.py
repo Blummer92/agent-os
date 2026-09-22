@@ -116,12 +116,12 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
     evidence = _stop_permission_base()
     member = _runtime_member(TRANSPORT_PRINCIPAL)
     try:
-        # gcloud does not expose a stable instances test-iam-permissions command
-        # on every supported surface. Use the documented Compute Engine REST
-        # method through the authenticated gcloud credential instead. This is
-        # still fixed-resource, read-only, and evaluates the current caller.
+        # The instance permission probe is GA in current Google Cloud CLI.
+        # Keep the probe on the stable track so the governed runtime does not
+        # depend on beta command registration. It remains fixed-resource,
+        # read-only, and evaluates the current authenticated caller.
         allowed = _run_json(run, (
-            "gcloud", "beta", "compute", "instances", "test-iam-permissions", INSTANCE,
+            "gcloud", "compute", "instances", "test-iam-permissions", INSTANCE,
             "--project", PROJECT, "--zone", ZONE,
             "--permissions", STOP_PERMISSION,
             "--format=json(permissions)",
