@@ -143,12 +143,49 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
 
+def _run(run_id: str, context: str, active: int = 40) -> dict:
+    return {
+        "run_id": run_id,
+        "objective_ref": "objective/composition",
+        "work_mode": "camera",
+        "quality": "usable",
+        "active_minutes": active,
+        "elapsed_minutes": 50,
+        "context_ref": context,
+    }
 
-def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
+
+def test_exact_duplicate_prior_run_counts_once() -> None:
     packet = _packet()
-    packet["prior_runs"] = []
-    packet["period_minutes"] = 70
+    packet["prior_runs"] = [_run("run/1", "context/a"), deepcopy(_run("run/1", "context/a")), _run("run/2", "context/b")]
     payload = _payload(evaluate_lesson_pacing(packet))
-    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
-    assert payload["routing_recommendation"] == "hold"
+    assert payload["evidence_summary"]["included_count"] == 2
+    assert payload["evidence_summary"]["excluded_count"] == 0
+
+
+def test_reordered_duplicate_prior_runs_reconcile_identically() -> None:
+    first = _packet()
+    first["prior_runs"] = [_run("run/1", "context/a"), _run("run/2", "context/b"), deepcopy(_run("run/1", "context/a"))]
+    second = _packet()
+    second["prior_runs"] = [deepcopy(_run("run/1", "context/a")), _run("run/1", "context/a"), _run("run/2", "context/b")]
+    assert _payload(evaluate_lesson_pacing(first))["evidence_summary"] == _payload(
+        evaluate_lesson_pacing(second)
+    )["evidence_summary"]
+
+
+def test_repeated_run_cannot_inflate_past_the_evidence_threshold() -> None:
+    """One logical run repeated three times stays below the two-run threshold."""
+    packet = _packet()
+    packet["prior_runs"] = [_run("run/1", "context/a") for _ in range(3)]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["included_count"] == 1
     assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
+
+
+def test_conflicting_duplicate_prior_run_identity_fails_closed() -> None:
+    packet = _packet()
+    packet["prior_runs"] = [_run("run/1", "context/a", active=40), _run("run/1", "context/a", active=41)]
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-duplicate",)

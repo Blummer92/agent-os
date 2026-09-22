@@ -23,6 +23,7 @@ def filter_comparable_runs(
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     contexts: set[str] = set()
+    seen_runs: dict[str, dict[str, Any]] = {}
 
     for run in runs:
         if type(run) is not dict:
@@ -31,6 +32,17 @@ def filter_comparable_runs(
         if set(run) != required:
             raise ContractValidationError("handoff-invalid", "prior run fields are not canonical")
         run_id = validate_stable_id(run["run_id"], "run_id")
+        # One logical run is one piece of evidence however many times it is
+        # supplied. Repeating it is reconciled to a single record; the same
+        # identity carrying different evidence is a contradiction, not evidence.
+        first_seen = seen_runs.get(run_id)
+        if first_seen is not None:
+            if first_seen != run:
+                raise ContractValidationError(
+                    "handoff-duplicate", "duplicate prior-run identity has conflicting evidence"
+                )
+            continue
+        seen_runs[run_id] = run
         validate_stable_id(run["objective_ref"], "prior objective_ref")
         validate_stable_id(run["context_ref"], "context_ref")
         active = run["active_minutes"]
