@@ -94,6 +94,10 @@ def test_connected_issue_creation_tool_passes_distinct_bug_admission() -> None:
     assert result["merge_authorized"] is False
     assert result["closure_authorized"] is False
     assert result["external_write_authorized"] is False
+    assert result["create_response_terminal"] is False
+    assert result["post_create_readback_required"] is True
+    assert result["post_create_reconciliation_required_on_mismatch"] is True
+    assert result["terminal_success_requires_label_convergence"] is True
 
 
 def test_connected_issue_creation_tool_passes_existing_owner_admission() -> None:
