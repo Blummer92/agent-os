@@ -1,0 +1,5 @@
+[
+  {"case":"valid-performance","outcome":"valid","survey_mastery_classification":"mastery_capable","selected_method":"authentic_performance_task","provenance_conflict":"none","authority_valid":true},
+  {"case":"survey-separated","outcome":"valid","survey_mastery_classification":"survey_only","selected_method":"survey","provenance_conflict":"none","authority_valid":true},
+  {"case":"teacher-decision","outcome":"needs_teacher_decision","survey_mastery_classification":"mastery_capable","selected_method":"demonstration","provenance_conflict":"none","authority_valid":true}
+]

@@ -1,0 +1,32 @@
+name: Navigation Registry Offline Tests
+
+on:
+  pull_request:
+    paths:
+      - "04_Registry/navigation-alias-registry.md"
+      - "08_Tooling/notion-navigation-client/**"
+      - "tests/navigation_registry/**"
+      - ".github/workflows/navigation-registry-offline-tests.yml"
+
+concurrency:
+  group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
+jobs:
+  offline-notion-connector-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install offline test dependencies
+        run: python -m pip install -e ".[test]"
+
+      - name: Run offline Notion connector contract tests
+        run: pytest tests/navigation_registry/test_notion_read_only_connector.py

@@ -1,0 +1,26 @@
+[project]
+name = "notion-navigation-client"
+version = "0.1.0"
+description = "Read-only client for the Notion navigation-index Google Sheet: fast owner/routing/duplicate-risk lookups instead of a live Notion call."
+requires-python = ">=3.10"
+dependencies = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.23",
+    "google-auth-oauthlib>=1.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+notion-nav = "notion_navigation_client.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -1,0 +1,65 @@
+{
+  "handoff_type": "unit_alignment_coach_guarded_handoff",
+  "generated_artifact": "drive-metadata-dashboard",
+  "governance_model": "limited_internal_pilot_unit_alignment_dry_run_first",
+  "review_status": "unit_alignment_handoff_ready_for_dry_run_testing",
+  "production_deployment_approved": false,
+  "ui_labels": {
+    "view_group_label": "Workspace Views",
+    "handoff_tab_label": "Handoff Preview"
+  },
+  "unit_alignment_handoff": {
+    "destination_agent": "Unit Alignment Coach",
+    "dry_run_function": "dryRunUnitAlignmentCoachBatch",
+    "write_preflight_function": "UnitAlignmentCoachService.assertUnitAlignmentCoachWriteAllowed",
+    "required_scope": "UNIT_ALIGNMENT_COACH_BATCH",
+    "required_dry_run_mode": "DRY_RUN",
+    "required_write_mode": "STAGING_WRITE",
+    "required_write_approval": "YES_UNIT_ALIGNMENT_STAGING_ONLY",
+    "required_write_approval_property": "DM_UNIT_ALIGNMENT_STAGING_WRITE_APPROVED",
+    "required_data_source_id": "collection://fixture-unit-alignment-staging",
+    "visual_asset_library_data_source_id": "collection://fixture-visual-asset-library",
+    "batch_size_default": 25,
+    "batch_size_max": 50,
+    "idempotency_key": "file_id",
+    "verify_after_write": true,
+    "sheet_write_back": false,
+    "cursor_written_to_sheet": false
+  },
+  "unit_alignment_handoff_checks": [
+    "file_id must be present",
+    "unit alignment item must be locked, finalized, approved, prepared_for_upload, or ready_for_upload",
+    "daily checkpoint evidence must be visible",
+    "storyboard, 3-panel Hero Moment, comic page, villain design, and opposing-force production must not appear as required core evidence",
+    "duplicate sections or duplicate structure risks must be blocked",
+    "Instructional Materials Coach work must be routed for review instead of entering Modeling Coach-only flow",
+    "synced_count must equal verified_count after any guarded staging write"
+  ],
+  "dashboard_read_only_enforcement": {
+    "writes_google_sheets": false,
+    "writes_drive": false,
+    "writes_dashboard_databases": false,
+    "writes_unit_alignment": false,
+    "writes_visual_asset_library": false,
+    "merges_duplicates": false,
+    "overwrites_prompts": false,
+    "promotes_export_eligibility": false,
+    "promotes_generation_eligibility": false,
+    "updates_curriculum_readiness": false,
+    "exports_blocked_records": false,
+    "creates_or_deletes_records": false
+  },
+  "blocked_actions": [
+    "production deployment",
+    "production Notion sync",
+    "Unit Alignment write without dry-run verification",
+    "Visual Asset Library write without explicit approval metadata",
+    "Drive file edits",
+    "Google Sheets writes",
+    "duplicate merge",
+    "prompt overwrite",
+    "export or generation promotion",
+    "curriculum readiness updates"
+  ],
+  "recommended_next_agent": "Unit Alignment Coach"
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>RJ4 Synthetic Fixture</title></head>
+<body>
+  <main>
+    <button data-testid="folder" id="generated-folder-4f2a">Folder A</button>
+    <button data-testid="equivalent-folder">Folder A</button>
+    <button data-testid="wrong-folder">Folder B</button>
+    <label>Title <input data-testid="title-input" value="Assignment 1"></label>
+    <output data-testid="title-value">Assignment 1</output>
+    <output data-testid="mode">idle</output>
+    <dialog data-testid="modal"><p>Confirm synthetic action?</p><button data-testid="confirm">Confirm</button><button data-testid="cancel">Cancel</button></dialog>
+    <button data-testid="open-modal">Open modal</button>
+    <button data-testid="cause-error">Cause recoverable error</button>
+    <button data-testid="recover">Recover</button>
+    <output data-testid="error"></output>
+    <output data-testid="recovered">no</output>
+    <button data-testid="start-loading">Start loading</button>
+    <output data-testid="ready">no</output>
+    <button data-testid="step-one">Step one</button>
+    <button data-testid="step-two">Step two</button>
+  </main>
+<script>
+const $ = (selector) => document.querySelector(selector);
+const folder = $('[data-testid="folder"]');
+const equivalentFolder = $('[data-testid="equivalent-folder"]');
+const wrongFolder = $('[data-testid="wrong-folder"]');
+const mode = $('[data-testid="mode"]');
+const modal = $('[data-testid="modal"]');
+const error = $('[data-testid="error"]');
+const recovered = $('[data-testid="recovered"]');
+const ready = $('[data-testid="ready"]');
+let firstStep = false;
+function selectFolder(name) { mode.textContent = `selected:${name}`; }
+folder.addEventListener('click', () => selectFolder('Folder A'));
+folder.addEventListener('dblclick', () => { mode.textContent = 'opened:Folder A'; });
+equivalentFolder.addEventListener('click', () => selectFolder('Folder A'));
+wrongFolder.addEventListener('click', () => selectFolder('Folder B'));
+$('[data-testid="title-input"]').addEventListener('change', event => { $('[data-testid="title-value"]').textContent = event.target.value; });
+$('[data-testid="open-modal"]').addEventListener('click', () => modal.showModal());
+$('[data-testid="confirm"]').addEventListener('click', () => { mode.textContent = 'confirmed'; modal.close(); });
+$('[data-testid="cancel"]').addEventListener('click', () => modal.close());
+$('[data-testid="cause-error"]').addEventListener('click', () => { error.textContent = 'recoverable'; recovered.textContent = 'no'; });
+$('[data-testid="recover"]').addEventListener('click', () => { if (error.textContent) { error.textContent = ''; recovered.textContent = 'yes'; } });
+$('[data-testid="start-loading"]').addEventListener('click', () => { ready.textContent = 'pending'; setTimeout(() => { ready.textContent = 'yes'; }, 30); });
+$('[data-testid="step-one"]').addEventListener('click', () => { firstStep = true; mode.textContent = 'step-one'; });
+$('[data-testid="step-two"]').addEventListener('click', () => { mode.textContent = firstStep ? 'ordered-complete' : 'order-error'; });
+</script>
+</body>
+</html>

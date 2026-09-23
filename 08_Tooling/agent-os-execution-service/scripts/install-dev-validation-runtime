@@ -1,0 +1,123 @@
+#!/bin/sh
+# Governed DEVVAL2 host test-runtime installer (#1436).
+#
+# This script is intended for a separately authorized administrator-run host
+# application step. DEVVAL1 never calls this installer. The resulting runtime is
+# root-owned, fixed-path, and contains only the exact hash-pinned pytest stack
+# required by the fixed remote-validation-suite identity.
+set -eu
+
+PYTHON=/usr/bin/python3
+RUNTIME_ROOT=/opt/agent-os/dev-validation-runtime
+SITE_ROOT=$RUNTIME_ROOT/site
+STAGING_ROOT=/var/lib/agent-os/dev-validation-runtime-staging
+WRAPPER=/usr/local/libexec/agent-os-dev-validation-python
+PYTEST_VERSION=8.3.5
+
+fail() {
+  printf '%s\n' "dev-validation runtime install refused: $1" >&2
+  exit 64
+}
+
+[ "$(id -u)" = "0" ] || fail "installer must run as root"
+[ -x "$PYTHON" ] || fail "system python unavailable"
+"$PYTHON" -m pip --version >/dev/null 2>&1 || fail "system pip unavailable"
+
+# Keep all package-resolution inputs fixed inside this script. Caller environment
+# must not be able to add an index, find-links path, config file, or PYTHONPATH.
+unset PYTHONPATH PYTHONHOME PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_FIND_LINKS PIP_REQUIRE_VIRTUALENV
+export PIP_CONFIG_FILE=/dev/null
+export PIP_NO_CACHE_DIR=1
+
+rm -rf "$STAGING_ROOT"
+mkdir -p "$STAGING_ROOT/site"
+trap 'rm -rf "$STAGING_ROOT"' EXIT HUP INT TERM
+chown -R root:root "$STAGING_ROOT"
+chmod 0700 "$STAGING_ROOT" "$STAGING_ROOT/site"
+
+requirements=$STAGING_ROOT/requirements.txt
+cat > "$requirements" <<'EOF_REQUIREMENTS'
+pytest==8.3.5 --hash=sha256:c69214aa47deac29fad6c2a4f590b9c4a9fdb16a403176fe154b79c0b4d4d820
+iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+packaging==25.0 --hash=sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484
+pluggy==1.5.0 --hash=sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669
+Pygments==2.19.2 --hash=sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b
+EOF_REQUIREMENTS
+chmod 0600 "$requirements"
+
+"$PYTHON" -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --only-binary=:all: \
+  --require-hashes \
+  --index-url https://pypi.org/simple \
+  --target "$STAGING_ROOT/site" \
+  -r "$requirements" >&2
+
+# Prove the staged stack before publication. The fixed test overlay supplements
+# the qualified host's existing runtime dependencies but cannot consume user-site
+# packages or caller PYTHONPATH.
+PYTHONPATH="$STAGING_ROOT/site" PYTHONNOUSERSITE=1 "$PYTHON" - <<'PY_VERIFY'
+from importlib.metadata import version
+
+expected = {
+    "pytest": "8.3.5",
+    "iniconfig": "2.1.0",
+    "packaging": "25.0",
+    "pluggy": "1.5.0",
+    "Pygments": "2.19.2",
+}
+actual = {name: version(name) for name in expected}
+if actual != expected:
+    raise SystemExit(f"dev-validation runtime install refused: version mismatch: {actual!r}")
+PY_VERIFY
+
+mkdir -p /opt/agent-os /usr/local/libexec
+chown root:root /opt/agent-os /usr/local/libexec
+chmod 0755 /opt/agent-os /usr/local/libexec
+rm -rf "$RUNTIME_ROOT.next"
+mv "$STAGING_ROOT/site" "$RUNTIME_ROOT.next"
+chown -R root:root "$RUNTIME_ROOT.next"
+find "$RUNTIME_ROOT.next" -type d -exec chmod 0755 {} \;
+find "$RUNTIME_ROOT.next" -type f -exec chmod go-w {} \;
+rm -rf "$RUNTIME_ROOT"
+mv "$RUNTIME_ROOT.next" "$RUNTIME_ROOT"
+
+wrapper_tmp=$STAGING_ROOT/agent-os-dev-validation-python
+cat > "$wrapper_tmp" <<'EOF_WRAPPER'
+#!/bin/sh
+set -eu
+PYTHONPATH=/opt/agent-os/dev-validation-runtime
+PYTHONNOUSERSITE=1
+export PYTHONPATH PYTHONNOUSERSITE
+exec /usr/bin/python3 "$@"
+EOF_WRAPPER
+install -o root -g root -m 0755 "$wrapper_tmp" "$WRAPPER"
+
+# Final proof uses the exact executable DEVVAL1 will call.
+"$WRAPPER" - <<'PY_FINAL'
+import pytest
+if pytest.__version__ != "8.3.5":
+    raise SystemExit("dev-validation runtime install refused: final pytest identity mismatch")
+PY_FINAL
+
+wrapper_sha=$(sha256sum "$WRAPPER" | awk '{print $1}')
+WRAPPER_SHA="$wrapper_sha" "$PYTHON" - <<'PY_EVIDENCE'
+import json
+import os
+
+print(json.dumps({
+    "status": "installed",
+    "runtime_path": "/usr/local/libexec/agent-os-dev-validation-python",
+    "package_root": "/opt/agent-os/dev-validation-runtime",
+    "pytest_version": "8.3.5",
+    "wrapper_sha256": os.environ["WRAPPER_SHA"],
+    "owner": "root",
+    "group": "root",
+    "mode": "755",
+    "scheduler_invoked": False,
+    "execution_authorized": False,
+    "publication_invoked": False,
+    "merge_authorized": False,
+}, sort_keys=True, separators=(",", ":")))
+PY_EVIDENCE

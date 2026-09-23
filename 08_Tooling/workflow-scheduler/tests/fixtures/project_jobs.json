@@ -1,0 +1,29 @@
+{
+  "jobs": [
+    {
+      "id": "issue-101",
+      "issue_number": 101,
+      "title": "Independent issue A",
+      "priority": 2
+    },
+    {
+      "id": "issue-102",
+      "issue_number": 102,
+      "title": "Independent issue B",
+      "priority": 1
+    },
+    {
+      "id": "issue-103",
+      "issue_number": 103,
+      "title": "Dependent issue",
+      "dependencies": ["issue-101"]
+    },
+    {
+      "id": "issue-104",
+      "issue_number": 104,
+      "title": "Governance blocked issue",
+      "governance_blocked": true,
+      "blocked_reason": "approval boundary unclear"
+    }
+  ]
+}

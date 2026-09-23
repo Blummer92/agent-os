@@ -1,0 +1,7 @@
+[
+  {"case":"vocabulary-recall","assessment_purpose":"formative","primary_target_classification":"recall","survey_mastery_classification":"mastery_capable","selected_method":"selected_response","authenticity_requirement":"low"},
+  {"case":"file-organization","assessment_purpose":"performance","primary_target_classification":"technical_workflow","survey_mastery_classification":"mastery_capable","selected_method":"authentic_performance_task","authenticity_requirement":"high"},
+  {"case":"critique","assessment_purpose":"formative","primary_target_classification":"critique","survey_mastery_classification":"mastery_capable","selected_method":"critique","authenticity_requirement":"high"},
+  {"case":"ai-judgment","assessment_purpose":"diagnostic","primary_target_classification":"judgment","survey_mastery_classification":"mastery_capable","selected_method":"scenario_based_judgment","authenticity_requirement":"moderate"},
+  {"case":"readiness-survey","assessment_purpose":"readiness_survey","primary_target_classification":"reflection_metacognition","survey_mastery_classification":"survey_only","selected_method":"survey","authenticity_requirement":"low"}
+]

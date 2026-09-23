@@ -1,0 +1,324 @@
+import { describe, expect, it } from 'vitest';
+import { tutorial0ReviewedTutorial } from './fixtures/tutorial0-prompts';
+import type { PromptAuthoringInput } from './promptIntent';
+import type { ReviewedTutorialProjection } from './types';
+import { buildTutorialPackage, type RoutedTutorialNeed } from './tutorialPackage';
+
+const authoring: PromptAuthoringInput = {
+  imagePurpose: 'Show the modeled result without reconstructing unsupported interface details.',
+  imageState: 'result',
+  applicationContext: '',
+  targetState: 'the modeled result is visible',
+  mustShow: ['modeled result'],
+  mustNotShow: ['invented controls'],
+  annotationSpace: 'right side',
+  requestedUiDetails: [],
+};
+
+function route(overrides: Partial<RoutedTutorialNeed> = {}): RoutedTutorialNeed {
+  return {
+    routeId: 'route-tutorial0-core',
+    representation: 'tutorial-process',
+    sourceHandoffRef: 'curriculum-workflow-handoff://unit0/modeling',
+    sourceFingerprint: 'handoff-fingerprint-v1',
+    objectiveRef: 'objective://unit0/files',
+    successCriteriaRef: 'criteria://unit0/files',
+    evidenceTargetRef: 'evidence://unit0/files',
+    steps: tutorial0ReviewedTutorial.retained_steps.map((step, index) => ({
+      reviewStepId: step.review_step_id,
+      visualRoleRef: index === 0 ? 'visual-role://teacher-model' : 'visual-role://process-sequence',
+      disposition: index === 0 ? 'new-visual' : 'no-additional-visual-needed',
+      ...(index === 0 ? { authoring } : { reasonRef: 'route-reason://core/no-extra-frame' }),
+    })),
+    ...overrides,
+  };
+}
+
+function businessCardRoute(
+  authoringOverride: PromptAuthoringInput = authoring,
+  stepOverride: Record<string, unknown> = {},
+): RoutedTutorialNeed {
+  const base = route({ canonicalArtifactIdentity: 'business-card' });
+  return {
+    ...base,
+    steps: base.steps.map((step, index) => index === 0
+      ? { ...step, authoring: authoringOverride, visualArtifactIdentity: 'business-card', ...stepOverride }
+      : step),
+  };
+}
+
+function withModeledApplication(application: string): ReviewedTutorialProjection {
+  return {
+    ...tutorial0ReviewedTutorial,
+    retained_steps: tutorial0ReviewedTutorial.retained_steps.map((step) => ({
+      ...step,
+      modeled_application: application,
+      source_steps: step.source_steps.map((sourceStep) => ({
+        ...sourceStep,
+        source: { ...sourceStep.source, modeled_application: application },
+      })),
+    })),
+  };
+}
+
+describe('PPUX #1776 routed Tutorial Package', () => {
+  it('builds a reusable package only for an explicit tutorial-process route', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, route());
+    expect(result.status).toBe('valid');
+    expect(result.package?.packageVersion).toBe('picture-perfect-tutorial-package-v1');
+    expect(result.package?.cards).toHaveLength(1);
+    expect(result.package?.steps).toHaveLength(tutorial0ReviewedTutorial.retained_steps.length);
+    expect(result.package?.productionAuthorized).toBe(false);
+    expect(result.package?.externalWriteAuthorized).toBe(false);
+  });
+
+  it('blocks when routing evidence is absent rather than inferring that every reviewed tutorial needs PPUX', () => {
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, null)).toEqual({
+      status: 'blocked', package: null, blockers: ['route-missing'],
+    });
+  });
+
+  it('blocks a missing retained-step disposition instead of silently skipping the step', () => {
+    const incomplete = route({ steps: route().steps.slice(0, -1) });
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, incomplete).blockers).toContain('step-disposition-missing');
+  });
+
+  it('allows explicit reuse and resurfacing without creating phantom prompt cards', () => {
+    const steps = route().steps.map((step, index) => index === 0
+      ? { ...step, disposition: 'reuse-existing-visual' as const, authoring: undefined, approvedAssetRef: 'visual-asset://approved/tutorial-frame-1' }
+      : index === 1
+        ? { ...step, disposition: 'resurface-prior-visual' as const, approvedAssetRef: 'visual-asset://approved/tutorial-frame-1', reasonRef: undefined }
+        : step);
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, route({ steps }));
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards).toHaveLength(0);
+    expect(result.package?.reusedAssetRefs).toEqual(['visual-asset://approved/tutorial-frame-1']);
+    expect(result.package?.resurfacedAssetRefs).toEqual(['visual-asset://approved/tutorial-frame-1']);
+  });
+
+  it('requires reason evidence for intentional no-additional and compacted dispositions', () => {
+    const steps = route().steps.map((step, index) => index === 2 ? { ...step, reasonRef: undefined } : step);
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, route({ steps })).blockers).toContain('reason-evidence-missing');
+  });
+
+  it('rejects a route entry for a non-retained/raw step', () => {
+    const steps = [...route().steps, {
+      reviewStepId: 'raw-recorder-step-not-retained',
+      visualRoleRef: 'visual-role://process-sequence',
+      disposition: 'no-additional-visual-needed' as const,
+      reasonRef: 'route-reason://not-needed',
+    }];
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, route({ steps })).blockers).toContain('step-not-retained');
+  });
+
+  it('fails closed when Canva modeled evidence receives stale Adobe-specific prompt constraints', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const staleAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express workspace',
+      mustShow: ['Adobe Express', 'modeled result'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const staleRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: staleAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, staleRoute);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('application-identity-conflict');
+    expect(result.package).toBeNull();
+  });
+
+  it('allows Canva authoring when it agrees with the modeled application identity', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const canvaAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Canva projects workspace',
+      mustShow: ['Canva', 'modeled result'],
+      mustNotShow: ['invented Canva controls'],
+    };
+    const canvaRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: canvaAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, canvaRoute);
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].application).toBe('Canva');
+    expect(result.package?.cards[0].blockerReasons).not.toContain('application-identity-conflict' as never);
+  });
+
+  it('preserves the historical Adobe Tutorial 0 regression fixture when intentionally selected', () => {
+    const historicalAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express workspace',
+      mustShow: ['Adobe Express', 'modeled result'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const historicalRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: historicalAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, historicalRoute);
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].application).toBe('Adobe Express');
+    expect(result.blockers).not.toContain('application-identity-conflict');
+  });
+
+  it('rejects a bare Adobe brand constraint under Canva modeled evidence', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, bareAdobeRoute);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('application-identity-conflict');
+  });
+
+  it('keeps the bare Adobe brand term valid for Adobe Express modeled evidence', () => {
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, bareAdobeRoute);
+    expect(result.status).toBe('valid');
+    expect(result.blockers).not.toContain('application-identity-conflict');
+  });
+
+  it('does not read the design word "canvas" as the Canva application identity', () => {
+    const canvasAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express new-file creation context',
+      targetState: 'the landscape canvas choice is visible and distinguishable',
+      mustShow: ['Adobe Express', 'Landscape'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const canvasRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: canvasAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, canvasRoute);
+    expect(result.blockers).not.toContain('application-identity-conflict');
+    expect(result.status).toBe('valid');
+  });
+
+  it('leaves the instructional-specificity gate reading only the authored instruction body', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const requestedUiAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      requestedUiDetails: ['the 12pt toolbar label'],
+    };
+    const requestedUiRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: requestedUiAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, requestedUiRoute);
+    expect(result.blockers).not.toContain('unsupported-instructional-specificity');
+    expect(result.status).toBe('valid');
+  });
+});
+
+describe('PPUX #2010 artifact identity and instructional specificity', () => {
+  it('preserves business-card identity in the package, provenance, and ready prompt', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute());
+    expect(result.status).toBe('valid');
+    expect(result.package?.canonicalArtifactIdentity).toBe('business-card');
+    expect(result.package?.cards[0].provenance).toContain('canonical_artifact:business-card');
+    expect(result.package?.cards[0].portablePrompt).toContain('Canonical task/artifact identity: business-card');
+  });
+
+  it('rejects an event-flyer substitution without owner-backed exemplar evidence', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(authoring, {
+      visualArtifactIdentity: 'event-flyer',
+    }));
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('artifact-identity-mismatch');
+    expect(result.blockers).toContain('cross-context-exemplar-evidence-missing');
+  });
+
+  it('permits an owner-backed cross-context exemplar without replacing canonical identity', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(authoring, {
+      visualArtifactIdentity: 'event-flyer',
+      crossContextExemplarEvidenceRef: 'teacher-modeling://approved-transfer-example',
+    }));
+    expect(result.status).toBe('valid');
+    expect(result.package?.canonicalArtifactIdentity).toBe('business-card');
+    expect(result.package?.cards[0].portablePrompt).toContain('Cross-context exemplar: event-flyer');
+    expect(result.package?.cards[0].portablePrompt).toContain('do not replace the canonical task/artifact identity');
+  });
+
+  it('blocks unsupported exact point and spacing prescriptions', () => {
+    const exactAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'title is 24 pt and subtitle is 12 pt',
+      mustShow: ['8 pt spacing'],
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(exactAuthoring));
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('unsupported-instructional-specificity');
+  });
+
+  it('allows exact non-UI prescriptions only with explicit owner-backed evidence', () => {
+    const exactAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'title is 24 pt and subtitle is 12 pt',
+      mustShow: ['8 pt spacing'],
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(exactAuthoring, {
+      instructionalSpecificityEvidenceRefs: ['teacher-modeling://approved-exact-values'],
+    }));
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].provenance).toContain(
+      'instructional_specificity_evidence:teacher-modeling://approved-exact-values',
+    );
+  });
+
+  it('keeps semantic hierarchy guidance eligible without exact numeric prescriptions', () => {
+    const semanticAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'the primary element is more prominent',
+      mustShow: ['clear visual hierarchy'],
+    };
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(semanticAuthoring)).status).toBe('valid');
+  });
+
+  it('leaves software UI detail to the existing fidelity gate instead of specificity authority', () => {
+    const uiAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express editor',
+      targetState: 'set the size control to 24 pt',
+      mustShow: ['24 pt'],
+      requestedUiDetails: ['24 pt'],
+      screenFidelityRequired: true,
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(uiAuthoring));
+    expect(result.blockers).not.toContain('unsupported-instructional-specificity');
+  });
+
+  it('does not add assessment, composition, provider, execution, production, or external-write authority', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute());
+    expect(result.status).toBe('valid');
+    expect(result.package?.objectiveRef).toBe('objective://unit0/files');
+    expect(result.package?.successCriteriaRef).toBe('criteria://unit0/files');
+    expect(result.package?.evidenceTargetRef).toBe('evidence://unit0/files');
+    expect(result.package?.executionAuthorized).toBe(false);
+    expect(result.package?.productionAuthorized).toBe(false);
+    expect(result.package?.externalWriteAuthorized).toBe(false);
+    expect(JSON.stringify(result.package)).not.toMatch(/Gemini|Microsoft 365|Meta Instant/);
+  });
+});

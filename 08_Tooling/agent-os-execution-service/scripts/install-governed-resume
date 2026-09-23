@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+TARGET=${TARGET:-/usr/local/libexec/agent-os-governed-resume}
+MODE=${MODE:-0755}
+OWNER=${OWNER:-root}
+GROUP=${GROUP:-root}
+
+case "$TARGET" in
+  /usr/local/libexec/agent-os-governed-resume|*/agent-os-governed-resume) ;;
+  *) echo "refusing unexpected target" >&2; exit 64 ;;
+esac
+
+wrapper=$(mktemp)
+trap 'rm -f "$wrapper"' EXIT HUP INT TERM
+cat > "$wrapper" <<'EOF'
+#!/bin/sh
+set -eu
+exec systemd-run --user --scope -p Delegate=yes --quiet \
+  /usr/bin/python3 -m agent_os_execution_service.governed_resume_entrypoint "$@"
+EOF
+
+if [ -f "$TARGET" ] && cmp -s "$wrapper" "$TARGET"; then
+  chmod "$MODE" "$TARGET"
+  chown "$OWNER:$GROUP" "$TARGET"
+  exit 0
+fi
+
+install -d -m 0755 "$(dirname "$TARGET")"
+install -o "$OWNER" -g "$GROUP" -m "$MODE" "$wrapper" "$TARGET"

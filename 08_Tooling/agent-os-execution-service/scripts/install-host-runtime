@@ -1,0 +1,91 @@
+#!/bin/sh
+# Unprivileged Agent OS host-runtime orchestration (#1238 route, hardened by #1341).
+#
+# This script holds no privileged step of its own. It performs host preflight,
+# then delegates every privileged operation to the fixed root-owned installer at
+# PRIVILEGED_INSTALLER, which stages and installs entirely from a root-owned
+# directory. Nothing under this script's control is executed as root, so a
+# compromised transport identity cannot substitute privileged code.
+set -eu
+
+EXPECTED_SHA=${EXPECTED_SHA:-}
+REPOSITORY_ROOT=${REPOSITORY_ROOT:-}
+PRIVILEGED_INSTALLER=/usr/local/libexec/agent-os-host-install
+
+fail() {
+  printf '%s\n' "host runtime install refused: $1" >&2
+  exit 64
+}
+
+printf '%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "EXPECTED_SHA must be a lowercase 40-hex commit"
+case "$REPOSITORY_ROOT" in
+  /*) ;;
+  *) fail "REPOSITORY_ROOT must be absolute" ;;
+esac
+[ -d "$REPOSITORY_ROOT/.git" ] || fail "REPOSITORY_ROOT must be a git checkout"
+
+source_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)
+[ "$source_sha" = "$EXPECTED_SHA" ] || fail "checkout does not match EXPECTED_SHA"
+branch=$(git -C "$REPOSITORY_ROOT" rev-parse --abbrev-ref HEAD)
+[ "$branch" = "main" ] || fail "checkout must be on main"
+
+[ -r /etc/os-release ] || fail "host OS identity unavailable"
+. /etc/os-release
+[ "${ID:-}" = "debian" ] || fail "qualified host must be Debian"
+case "${VERSION_ID:-}" in
+  12|12.*) ;;
+  *) fail "qualified host must be Debian 12" ;;
+esac
+
+command -v sudo >/dev/null 2>&1 || fail "sudo unavailable"
+python3 -m pip --version >/dev/null 2>&1 || fail "python3 pip unavailable"
+
+# Operator diagnostics, NOT a security boundary: this script runs as the
+# unprivileged transport identity, which could skip it and call sudo directly.
+# These checks only turn a misconfigured host into a legible finite reason code.
+# The real boundary is the no-wildcard sudoers rule, the privileged helper's own
+# validation of its argv and path ancestry, and filesystem permissions.
+if [ -L "$PRIVILEGED_INSTALLER" ]; then
+  fail "privileged installer must be a root-owned regular file"
+fi
+[ -f "$PRIVILEGED_INSTALLER" ] && [ -x "$PRIVILEGED_INSTALLER" ] ||
+  fail "privileged installer unavailable"
+installer_metadata=$(stat -c '%U:%G:%a' "$PRIVILEGED_INSTALLER")
+case "$installer_metadata" in
+  root:root:700|root:root:750|root:root:755) ;;
+  *) fail "privileged installer must be a root-owned regular file" ;;
+esac
+
+# Probe the exact command this identity is about to run. The bounded sudoers rule
+# authorizes only that one invocation, so a generic `sudo -n true` probe would
+# report a false negative here.
+sudo -n -l "$PRIVILEGED_INSTALLER" --source-sha "$EXPECTED_SHA" >/dev/null 2>&1 ||
+  fail "passwordless bounded sudo unavailable"
+
+install_json=$(sudo -n "$PRIVILEGED_INSTALLER" --source-sha "$EXPECTED_SHA")
+
+INSTALL_JSON="$install_json" EXPECTED_SHA="$EXPECTED_SHA" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ["INSTALL_JSON"]
+try:
+    payload = json.loads(raw)
+except ValueError:
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence malformed\n"
+    )
+    raise SystemExit(64)
+if not isinstance(payload, dict) or payload.get("status") != "installed":
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence malformed\n"
+    )
+    raise SystemExit(64)
+if payload.get("source_sha") != os.environ["EXPECTED_SHA"]:
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence source mismatch\n"
+    )
+    raise SystemExit(64)
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+PY

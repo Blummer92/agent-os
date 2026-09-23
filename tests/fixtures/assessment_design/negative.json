@@ -1,0 +1,6 @@
+[
+  {"case":"confidence-as-mastery","assessment_purpose":"interest_confidence_experience_survey","primary_target_classification":"reflection_metacognition","survey_mastery_classification":"mastery_capable","selected_method":"survey","expected":"survey_mastery_conflict"},
+  {"case":"procedure-selected-response-only","assessment_purpose":"summative","primary_target_classification":"procedural_skill","survey_mastery_classification":"mastery_capable","selected_method":"selected_response","expected":"method_mismatch"},
+  {"case":"creative-recall-only","assessment_purpose":"summative","primary_target_classification":"creative_production","survey_mastery_classification":"mastery_capable","selected_method":"selected_response","expected":"method_mismatch"},
+  {"case":"performance-without-authentic-evidence","assessment_purpose":"performance","primary_target_classification":"performance","survey_mastery_classification":"mastery_capable","selected_method":"short_constructed_response","expected":"authentic_evidence_missing"}
+]

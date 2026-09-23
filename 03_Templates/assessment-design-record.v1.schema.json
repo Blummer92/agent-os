@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-design-record/v1",
+  "title": "Assessment Design Record v1",
+  "type": "object",
+  "required": ["assessment_design_contract_version","design_record_id","source_context","assessment_purpose","intended_instructional_decision","approved_target_ref","target_source_state","claim_id","claim_statement","primary_target_classification","supporting_target_classifications","observable_evidence","evidence_sufficiency_rule","evidence_exclusions","selected_method","supporting_methods","method_rationale","method_limitations","survey_mastery_classification","scoring_or_observation_requirement","success_evidence_features","likely_misconceptions","possible_instructional_responses","accessibility_considerations","authenticity_requirement","provenance","blockers","unresolved_uncertainties","next_owner","authority"],
+  "properties": {
+    "assessment_design_contract_version": {"const":"1.0"},
+    "assessment_purpose": {"enum":["readiness_survey","interest_confidence_experience_survey","diagnostic","formative","interim","summative","performance","portfolio","hybrid","practice_non_assessment"]},
+    "primary_target_classification": {"enum":["recall","conceptual_understanding","procedural_skill","technical_workflow","judgment","critique","revision","creative_production","performance","reflection_metacognition","collaboration"]},
+    "survey_mastery_classification": {"enum":["mastery_capable","supporting_only","survey_only"]},
+    "authority": {"type":"object","required":["report_only","target_approval_authorized","grading_authorized","readiness_authorized","classroom_use_authorized","production_authorized","publication_authorized","external_write_authorized","source_of_truth_write_authorized"],"properties":{"report_only":{"const":true},"target_approval_authorized":{"const":false},"grading_authorized":{"const":false},"readiness_authorized":{"const":false},"classroom_use_authorized":{"const":false},"production_authorized":{"const":false},"publication_authorized":{"const":false},"external_write_authorized":{"const":false},"source_of_truth_write_authorized":{"const":false}},"additionalProperties":false}
+  },
+  "additionalProperties": true
+}

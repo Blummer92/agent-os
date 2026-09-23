@@ -1,0 +1,1201 @@
+"""Command-line interface for Workflow Scheduler."""
+
+import argparse
+import json
+import sys
+import uuid
+import yaml
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from workflow_scheduler.adapters import NoopAdapter
+from workflow_scheduler.audit import AuditLogger
+from workflow_scheduler.dependencies import DependencyResolver
+from workflow_scheduler.execution import Executor, RetryManager
+from workflow_scheduler.governance import StopConditionChecker
+from workflow_scheduler.models import (
+    ApprovalDecision,
+    ApprovalRequest,
+    Task,
+    TaskMode,
+    TaskStatus,
+    WorkflowPlan,
+    WorkflowMode,
+    WorkflowStatus,
+)
+from workflow_scheduler.queue import JobQueue
+from workflow_scheduler.repository import SQLiteRepository
+
+_TERMINAL_TASK_STATUSES = (
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+    TaskStatus.GOVERNANCE_BLOCKED,
+)
+
+_BATCH_BAD_STATUSES = (TaskStatus.FAILED, TaskStatus.GOVERNANCE_BLOCKED, TaskStatus.CANCELLED)
+_BATCH_RESUMABLE_STATUSES = (TaskStatus.APPROVAL_PENDING, TaskStatus.RETRY_SCHEDULED, TaskStatus.PAUSED)
+_BATCH_NOT_ATTEMPTED_STATUSES = (TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.APPROVED, TaskStatus.QUEUED, TaskStatus.RUNNING)
+
+
+def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
+    """Compute a batch's rollup status from its current member statuses.
+
+    Rules (checked in order):
+      - "failed": any member is FAILED, GOVERNANCE_BLOCKED, or CANCELLED
+      - "completed": every member is COMPLETED
+      - "not_started": every member is still un-attempted (DRAFT/PENDING/
+        APPROVED/QUEUED/RUNNING) — nothing has happened to this batch yet
+      - "partial": anything else (a mix of completed, resumable-blocked,
+        and/or not-yet-attempted members, with nothing failed)
+
+    This is a pure, stateless computation over current task statuses — it
+    is not read from any persisted "batch status" field. There is no
+    stored source of truth for "current" batch status other than the
+    member tasks themselves.
+    """
+    if any(s in _BATCH_BAD_STATUSES for s in member_statuses):
+        return "failed"
+    if all(s == TaskStatus.COMPLETED for s in member_statuses):
+        return "completed"
+    if all(s in _BATCH_NOT_ATTEMPTED_STATUSES for s in member_statuses):
+        return "not_started"
+    return "partial"
+
+
+class WorkflowSchedulerCLI:
+    """Command-line interface for Workflow Scheduler."""
+
+    def __init__(self, db_path: str = "workflow_scheduler.db", max_workers: int = 1):
+        """Initialize CLI with database backend.
+
+        Args:
+            db_path: Path to SQLite database file
+            max_workers: Max tasks the executor runs concurrently per
+                dependency-ready pass in run_workflow (default 1 = fully
+                sequential; only the "run" command's --max-workers flag
+                sets this above 1). Must be >= 1.
+        """
+        self.repository = SQLiteRepository(db_path)
+        self.audit_logger = AuditLogger(repository=self.repository)
+        self.adapter = NoopAdapter()
+        self.executor = Executor(
+            adapter=self.adapter,
+            repository=self.repository,
+            audit_logger=self.audit_logger,
+            max_workers=max_workers,
+        )
+        self.queue = JobQueue()
+
+    def _format_response(
+        self,
+        status: str,
+        blockers: Optional[list[str]] = None,
+        checks_passed: Optional[list[str]] = None,
+        checks_failed: Optional[list[str]] = None,
+        next_owner: str = "system",
+        handoff_artifacts: Optional[list[str]] = None,
+        files_changed: Optional[list[str]] = None,
+        tests_run: str = "N/A",
+        **extra_fields,
+    ) -> Dict[str, Any]:
+        """Format CLI response using Part A output schema.
+
+        Args:
+            status: "pass" | "fail" | "blocked"
+            blockers: List of blockers
+            checks_passed: Passed checks
+            checks_failed: Failed checks
+            next_owner: Next responsible party
+            handoff_artifacts: Artifacts to pass forward
+            files_changed: Changed files
+            tests_run: Test summary
+            **extra_fields: Additional fields to include
+
+        Returns:
+            Dict with schema-compliant response
+        """
+        response = {
+            "status": status,
+            "blockers": blockers or [],
+            "checks_passed": checks_passed or [],
+            "checks_failed": checks_failed or [],
+            "next_owner": next_owner,
+            "handoff_artifacts": handoff_artifacts or [],
+            "files_changed": files_changed or [],
+            "tests_run": tests_run,
+        }
+        response.update(extra_fields)
+        return response
+
+    def create_workflow(self, yaml_path: str) -> Dict[str, Any]:
+        """Create workflow from YAML file.
+
+        Args:
+            yaml_path: Path to workflow YAML file
+
+        Returns:
+            Dict with workflow creation result
+        """
+        try:
+            with open(yaml_path) as f:
+                workflow_data = yaml.safe_load(f)
+        except FileNotFoundError:
+            return self._format_response(
+                status="fail",
+                checks_failed=["file_not_found"],
+                next_owner="user",
+                error=f"File not found: {yaml_path}",
+            )
+        except yaml.YAMLError as e:
+            return self._format_response(
+                status="fail",
+                checks_failed=["yaml_parse"],
+                next_owner="user",
+                error=f"Invalid YAML: {e}",
+            )
+
+        workflow_id = workflow_data.get("workflow_id", f"workflow-{uuid.uuid4().hex[:8]}")
+        title = workflow_data.get("title", "Untitled Workflow")
+        created_by = workflow_data.get("created_by", "cli")
+        mode_str = workflow_data.get("mode", "Draft")
+
+        try:
+            mode = WorkflowMode[mode_str.upper()]
+        except KeyError:
+            return self._format_response(
+                status="fail",
+                checks_failed=["invalid_mode"],
+                next_owner="user",
+                error=f"Invalid mode: {mode_str}",
+            )
+
+        # Build all Task objects and the dependency map in memory first.
+        # No repository writes happen until batch validation has passed —
+        # a workflow must never end up with partially-written tasks, a
+        # workflow row, or a batch left behind by a validation failure.
+        tasks_data = workflow_data.get("tasks", [])
+        built_tasks: List[Task] = []
+        dependencies: Dict[str, List[str]] = {}
+        for task_data in tasks_data:
+            task_id = task_data.get("id", f"task-{uuid.uuid4().hex[:8]}")
+            task = Task(
+                id=task_id,
+                workflow_id=workflow_id,
+                type=task_data.get("type", "generic"),
+                owner=task_data.get("owner", "system"),
+                action=task_data.get("action", ""),
+                idempotency_key=task_data.get("idempotency_key", task_id),
+                status=TaskStatus.DRAFT,
+                mode=TaskMode[task_data.get("mode", "Draft").upper()],
+                priority=task_data.get("priority", 0),
+                approval_required=task_data.get("approval_required", False),
+                depends_on=task_data.get("depends_on", []),
+                payload=task_data.get("payload", {}),
+                production_ready=task_data.get("production_ready", False),
+                batch_id=task_data.get("batch_id"),
+            )
+            built_tasks.append(task)
+            dependencies[task_id] = task.depends_on
+
+        batch_error = self._validate_batches(built_tasks, dependencies)
+        if batch_error is not None:
+            return batch_error
+
+        workflow = WorkflowPlan(
+            workflow_id=workflow_id,
+            title=title,
+            created_by=created_by,
+            mode=mode,
+        )
+        for task in built_tasks:
+            workflow.add_task(task.id)
+            workflow.set_dependencies(task.id, task.depends_on)
+
+        self.repository.create_workflow(workflow)
+        for task in built_tasks:
+            self.repository.create_task(task)
+        self.audit_logger.log_workflow_created(workflow)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_created", "tasks_created"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            title=title,
+            task_count=len(tasks_data),
+        )
+
+    def _validate_batches(self, tasks: List[Task], dependencies: Dict[str, List[str]]) -> Optional[Dict[str, Any]]:
+        """Validate that no batch spans a direct or transitive dependency edge.
+
+        A batch is invalid if any two of its members have a dependency
+        relationship between them — they could never be simultaneously
+        ready, so grouping them is a contradiction. Uses
+        DependencyResolver.get_all_dependencies() (transitive) so indirect
+        chains are caught, not just direct depends_on edges.
+
+        Args:
+            tasks: Task objects built in memory (not yet persisted)
+            dependencies: Map of task_id -> depends_on, matching `tasks`
+
+        Returns:
+            An error response dict if validation fails, else None.
+        """
+        batches: Dict[str, List[str]] = {}
+        for task in tasks:
+            if task.batch_id:
+                batches.setdefault(task.batch_id, []).append(task.id)
+
+        if not batches:
+            return None
+
+        resolver = DependencyResolver(tasks, dependencies)
+
+        for batch_id, member_ids in batches.items():
+            member_set = set(member_ids)
+            for task_id in member_ids:
+                transitive_deps = resolver.get_all_dependencies(task_id)
+                conflict = transitive_deps & (member_set - {task_id})
+                if conflict:
+                    return self._format_response(
+                        status="fail",
+                        checks_failed=["batch_spans_dependency"],
+                        next_owner="user",
+                        error=(
+                            f"Batch '{batch_id}' is invalid: task '{task_id}' has a "
+                            f"dependency relationship with batch member(s) {sorted(conflict)}"
+                        ),
+                    )
+
+        return None
+
+    def list_workflows(self) -> Dict[str, Any]:
+        """List all workflows.
+
+        Returns:
+            Dict with workflows list
+        """
+        # Note: Repository doesn't have list_workflows yet; would need to add
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflows_listed"],
+            next_owner="user",
+            workflows=[],
+        )
+
+    def get_workflow_status(self, workflow_id: str) -> Dict[str, Any]:
+        """Get workflow status.
+
+        Args:
+            workflow_id: Workflow ID
+
+        Returns:
+            Dict with workflow status and tasks
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        tasks = self.repository.list_workflow_tasks(workflow_id)
+        task_statuses = {t.id: t.status.value for t in tasks}
+        task_retry_info = {
+            t.id: {
+                "retry_count": t.retry_count,
+                "next_retry_at": t.next_retry_at.isoformat() if t.next_retry_at else None,
+                "max_retries": t.max_retries,
+            }
+            for t in tasks
+            if t.status == TaskStatus.RETRY_SCHEDULED
+        }
+
+        # Batch rollup is always computed live from current member task
+        # statuses — there is no persisted "batch status" to read.
+        batch_members: Dict[str, List[Task]] = {}
+        for t in tasks:
+            if t.batch_id:
+                batch_members.setdefault(t.batch_id, []).append(t)
+        batch_statuses = {
+            batch_id: {
+                "status": _compute_batch_rollup([m.status for m in members]),
+                "task_ids": [m.id for m in members],
+            }
+            for batch_id, members in batch_members.items()
+        }
+
+        mode_value = workflow.mode.value if hasattr(workflow.mode, "value") else workflow.mode
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_status_retrieved"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            title=workflow.title,
+            workflow_status=workflow.status.value,
+            mode=mode_value,
+            task_count=len(tasks),
+            task_statuses=task_statuses,
+            task_retry_info=task_retry_info,
+            batch_statuses=batch_statuses,
+            created_at=workflow.created_at.isoformat(),
+            updated_at=workflow.updated_at.isoformat(),
+        )
+
+    def run_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Execute workflow.
+
+        Args:
+            workflow_id: Workflow ID
+
+        Returns:
+            Dict with execution result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.is_terminal():
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error=f"Workflow is in terminal state: {workflow.status.value}",
+            )
+
+        if workflow.status == WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_paused"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error="Workflow is paused; resume it with resume-workflow before running.",
+            )
+
+        workflow.mark_running()
+        self.audit_logger.log_workflow_started(workflow)
+        self.repository.update_workflow(workflow)
+
+        tasks = self.repository.list_workflow_tasks(workflow_id)
+        tasks_by_id = {t.id: t for t in tasks}
+        resolver = DependencyResolver(tasks, workflow.dependencies)
+
+        # Check for cycles
+        has_cycle, cycle_path = resolver.has_cycle()
+        if has_cycle:
+            workflow.mark_failed(reason=f"Circular dependency detected: {' -> '.join(cycle_path)}")
+            self.repository.update_workflow(workflow)
+            return self._format_response(
+                status="fail",
+                checks_failed=["cycle_detected"],
+                next_owner="user",
+                error=f"Circular dependency detected: {' -> '.join(cycle_path)}",
+            )
+
+        # Execute in dependency order. Seed `completed` from tasks already
+        # COMPLETED in a prior run so a rerun (e.g. after approval or a
+        # retry) does not re-execute work that already finished. Likewise
+        # seed `cancelled` and `paused` from tasks already in those statuses
+        # so a rerun never force-queues and re-invokes the adapter for a
+        # task a human explicitly cancelled or paused.
+        completed: set[str] = {t.id for t in tasks if t.status == TaskStatus.COMPLETED}
+        cancelled: set[str] = {t.id for t in tasks if t.status == TaskStatus.CANCELLED}
+        paused: set[str] = {t.id for t in tasks if t.status == TaskStatus.PAUSED}
+        failed: set[str] = set()
+        blocked: set[str] = set()
+        approval_pending: set[str] = set()
+        retry_pending: set[str] = set()
+
+        while (
+            len(completed) + len(cancelled) + len(paused) + len(failed)
+            + len(blocked) + len(approval_pending) + len(retry_pending)
+        ) < len(tasks):
+            raw_ready = [
+                task_id
+                for task_id in resolver.get_ready_tasks(completed)
+                if task_id not in cancelled
+                and task_id not in paused
+                and task_id not in failed
+                and task_id not in blocked
+                and task_id not in approval_pending
+                and task_id not in retry_pending
+            ]
+            if not raw_ready:
+                break
+
+            # Group batch members contiguously (first-seen order preserved
+            # for both batch groups and ungrouped tasks); this only
+            # affects bookkeeping/rollup order, not dependency ordering --
+            # every task in `ready` is, by construction, independent of
+            # every other task in `ready` for this pass.
+            ready = self._group_ready_by_batch(raw_ready, tasks_by_id)
+            touched_batch_ids: set[str] = set()
+
+            # Phase 1 (sequential, cheap): resolve which of this pass's
+            # ready tasks are actually dispatchable now, mark them QUEUED,
+            # and skip any still inside a retry backoff window. This stays
+            # sequential regardless of max_workers -- it's bookkeeping, not
+            # task execution, and preserves `ready`'s deterministic order
+            # for the classification pass below.
+            dispatchable: list[Task] = []
+            for task_id in ready:
+                task = self.repository.get_task(task_id)
+                if not task:
+                    continue
+
+                if task.batch_id:
+                    touched_batch_ids.add(task.batch_id)
+
+                if task.status == TaskStatus.RETRY_SCHEDULED and not RetryManager.is_due(task):
+                    # Backoff window hasn't elapsed yet — do not re-attempt
+                    # this task in this run; it stays resumable.
+                    retry_pending.add(task_id)
+                    continue
+
+                task.status = TaskStatus.QUEUED
+                self.repository.update_task(task)
+                dispatchable.append(task)
+
+            # Phase 2: run every dispatchable task in this pass, one
+            # execute() call per task. Sequential when max_workers == 1
+            # (identical behavior to before execute_many existed);
+            # concurrent, bounded by max_workers, otherwise. Every task in
+            # `dispatchable` is independent by construction (see above),
+            # so dispatch order/interleaving cannot change the outcome.
+            results = self.executor.execute_many(dispatchable)
+
+            # Phase 3 (sequential, cheap): classify each result in
+            # `dispatchable`'s deterministic order, same rules as before.
+            for task in dispatchable:
+                result = results[task.id]
+
+                if result.success:
+                    completed.add(task.id)
+                elif result.status == "retry_scheduled":
+                    retry_pending.add(task.id)
+                elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
+                    approval_pending.add(task.id)
+                elif result.status == "blocked":
+                    blocked.add(task.id)
+                else:
+                    failed.add(task.id)
+
+            if touched_batch_ids:
+                current_tasks = self.repository.list_workflow_tasks(workflow_id)
+                for batch_id in touched_batch_ids:
+                    members = [t for t in current_tasks if t.batch_id == batch_id]
+                    rollup = _compute_batch_rollup([m.status for m in members])
+                    self.audit_logger.log_batch_result(
+                        workflow, batch_id=batch_id, status=rollup, task_ids=[m.id for m in members]
+                    )
+
+        if (approval_pending or retry_pending or paused) and not failed and not blocked and not cancelled:
+            # Waiting on an explicit human decision, a retry backoff window,
+            # and/or an explicit pause — all resumable states, not terminal
+            # failures. Leave the workflow RUNNING so a later `run` can pick
+            # back up.
+            workflow.metadata["tasks_awaiting_approval"] = sorted(approval_pending)
+            workflow.metadata["tasks_awaiting_retry"] = sorted(retry_pending)
+            workflow.metadata["tasks_paused"] = sorted(paused)
+            self.repository.update_workflow(workflow)
+
+            blockers = []
+            checks_failed = []
+            if approval_pending:
+                blockers.append("tasks_awaiting_approval")
+                checks_failed.append("tasks_awaiting_approval")
+            if retry_pending:
+                blockers.append("tasks_awaiting_retry")
+                checks_failed.append("tasks_awaiting_retry")
+            if paused:
+                blockers.append("tasks_paused")
+                checks_failed.append("tasks_paused")
+
+            return self._format_response(
+                status="blocked",
+                blockers=blockers,
+                checks_passed=["workflow_executed"],
+                checks_failed=checks_failed,
+                next_owner="user" if (approval_pending or paused) else "system",
+                workflow_id=workflow_id,
+                completed=len(completed),
+                failed=len(failed),
+                blocked=len(blocked),
+                cancelled=len(cancelled),
+                approval_pending=len(approval_pending),
+                approval_pending_task_ids=sorted(approval_pending),
+                retry_pending=len(retry_pending),
+                retry_pending_task_ids=sorted(retry_pending),
+                paused=len(paused),
+                paused_task_ids=sorted(paused),
+                final_status=workflow.status.value,
+            )
+
+        if failed or blocked or cancelled:
+            reason = f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
+            workflow.mark_failed(reason=reason)
+            status = "fail"
+            checks_failed = [
+                c
+                for c in (
+                    "tasks_failed" if failed else None,
+                    "tasks_blocked" if blocked else None,
+                    "tasks_cancelled" if cancelled else None,
+                )
+                if c
+            ]
+            self.audit_logger.log_workflow_failed(workflow, reason=reason)
+        else:
+            workflow.mark_completed()
+            status = "pass"
+            checks_failed = []
+            self.audit_logger.log_workflow_completed(workflow)
+
+        self.repository.update_workflow(workflow)
+
+        return self._format_response(
+            status=status,
+            checks_passed=["workflow_executed"],
+            checks_failed=checks_failed,
+            next_owner="user",
+            workflow_id=workflow_id,
+            completed=len(completed),
+            failed=len(failed),
+            blocked=len(blocked),
+            cancelled=len(cancelled),
+            final_status=workflow.status.value,
+        )
+
+    def _group_ready_by_batch(self, ready: List[str], tasks_by_id: Dict[str, Task]) -> List[str]:
+        """Reorder a ready-task list so batch members dispatch contiguously,
+        preserving first-seen order for both batch groups and ungrouped
+        tasks. Pure reordering only — every element of `ready` appears
+        exactly once in the result; nothing is added, removed, or
+        dispatched differently. Ungrouped (batch_id=None) workflows are
+        unaffected: this returns `ready` unchanged in that case.
+
+        Args:
+            ready: Ready task IDs in their original (priority-ordered) order
+            tasks_by_id: Task lookup for batch_id membership
+
+        Returns:
+            Reordered list of the same task IDs
+        """
+        grouped: List[str] = []
+        seen_batches: set[str] = set()
+
+        for task_id in ready:
+            task = tasks_by_id.get(task_id)
+            batch_id = task.batch_id if task else None
+
+            if not batch_id:
+                grouped.append(task_id)
+                continue
+
+            if batch_id in seen_batches:
+                continue  # already appended as part of an earlier group
+
+            seen_batches.add(batch_id)
+            grouped.extend(tid for tid in ready if tasks_by_id.get(tid) and tasks_by_id[tid].batch_id == batch_id)
+
+        return grouped
+
+    def _get_pending_approval_or_block(self, task_id: str, approver: str) -> tuple:
+        """Look up a task and its approval request, enforcing that the task is
+        actually awaiting approval before allowing a decision to be recorded.
+
+        A task may only be approved or rejected if:
+          - it exists
+          - its status is APPROVAL_PENDING (it went through the executor's
+            approval-pending path; it was never proactively approvable from
+            Draft/Pending/Queued/Running/etc.)
+          - its approval request (created by the executor) is still PENDING
+
+        If the task is APPROVAL_PENDING but its approval request is missing
+        (a recovery case — e.g. the record was lost), one is created here so
+        the decision can still be recorded.
+
+        Returns:
+            Tuple of (task, approval, error_response). Exactly one of
+            (task/approval) or error_response is populated.
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return None, None, self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status != TaskStatus.APPROVAL_PENDING:
+            return None, None, self._format_response(
+                status="blocked",
+                blockers=["task_not_awaiting_approval"],
+                checks_failed=["task_not_awaiting_approval"],
+                next_owner="user",
+                error=f"Task is not awaiting approval (status: {task.status.value})",
+            )
+
+        approval = self.repository.get_approval_request(task_id)
+        if approval is None:
+            # Recovery case: task is APPROVAL_PENDING but has no approval
+            # record on file (should not normally happen; the executor
+            # always creates one when it moves a task into this state).
+            approval = ApprovalRequest(
+                id=str(uuid.uuid4()),
+                task_id=task_id,
+                requested_by=approver,
+                decision=ApprovalDecision.PENDING,
+            )
+            self.repository.create_approval_request(approval)
+        elif approval.decision != ApprovalDecision.PENDING:
+            return None, None, self._format_response(
+                status="blocked",
+                blockers=["approval_already_decided"],
+                checks_failed=["approval_already_decided"],
+                next_owner="user",
+                error=f"Approval already decided: {approval.decision.value}",
+            )
+
+        return task, approval, None
+
+    def approve(self, task_id: str, approver: str) -> Dict[str, Any]:
+        """Explicitly approve a task currently awaiting approval.
+
+        Args:
+            task_id: Task ID to approve
+            approver: Name/identifier of the human approver
+
+        Returns:
+            Dict with approval result
+        """
+        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
+        if error_response is not None:
+            return error_response
+
+        self.repository.update_approval_decision(
+            task_id=task_id,
+            decision=ApprovalDecision.APPROVED,
+            approver=approver,
+        )
+
+        task.mark_approved()
+        self.repository.update_task(task)
+        self.audit_logger.log_task_approved(task, approved_by=approver)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["approval_granted"],
+            next_owner="system",
+            task_id=task_id,
+            decision="approved",
+            approver=approver,
+        )
+
+    def reject(self, task_id: str, approver: str, reason: str) -> Dict[str, Any]:
+        """Explicitly reject a task currently awaiting approval.
+
+        Args:
+            task_id: Task ID to reject
+            approver: Name/identifier of the human approver
+            reason: Rejection reason
+
+        Returns:
+            Dict with rejection result
+        """
+        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
+        if error_response is not None:
+            return error_response
+
+        self.repository.update_approval_decision(
+            task_id=task_id,
+            decision=ApprovalDecision.REJECTED,
+            approver=approver,
+            reason=reason,
+        )
+
+        previous_status = task.status.value
+        task.mark_cancelled(reason=reason)
+        self.repository.update_task(task)
+        self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["approval_rejected"],
+            next_owner="user",
+            task_id=task_id,
+            decision="rejected",
+            approver=approver,
+            reason=reason,
+        )
+
+    def pause_task(self, task_id: str) -> Dict[str, Any]:
+        """Pause a task, remembering its exact prior status for resume.
+
+        Args:
+            task_id: Task ID to pause
+
+        Returns:
+            Dict with pause result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES or task.status == TaskStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_pausable"],
+                checks_failed=["task_not_pausable"],
+                next_owner="user",
+                error=f"Task cannot be paused from status: {task.status.value}",
+            )
+
+        if task.has_active_lease(timeout_seconds=self.executor.lease_timeout_seconds):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_lease_active"],
+                checks_failed=["task_lease_active"],
+                next_owner="user",
+                error="Task has an active execution lease; cannot pause in-flight work. Wait for the lease to expire or complete.",
+            )
+
+        previous_status = task.status.value
+        task.mark_paused()
+        self.repository.update_task(task)
+        self.audit_logger.log_task_paused(task, previous_status=previous_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_paused"],
+            next_owner="user",
+            task_id=task_id,
+            paused_from_status=previous_status,
+        )
+
+    def resume_task(self, task_id: str) -> Dict[str, Any]:
+        """Resume a paused task to its exact prior status.
+
+        Args:
+            task_id: Task ID to resume
+
+        Returns:
+            Dict with resume result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status != TaskStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_paused"],
+                checks_failed=["task_not_paused"],
+                next_owner="user",
+                error=f"Task is not paused (status: {task.status.value})",
+            )
+
+        try:
+            task.resume()
+        except ValueError as e:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_resume_invalid"],
+                checks_failed=["task_resume_invalid"],
+                next_owner="user",
+                error=str(e),
+            )
+
+        restored_status = task.status.value
+        self.repository.update_task(task)
+        self.audit_logger.log_task_resumed(task, restored_status=restored_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_resumed"],
+            next_owner="system",
+            task_id=task_id,
+            restored_status=restored_status,
+        )
+
+    def cancel_task(self, task_id: str, reason: str) -> Dict[str, Any]:
+        """Cancel a task.
+
+        Args:
+            task_id: Task ID to cancel
+            reason: Cancellation reason
+
+        Returns:
+            Dict with cancellation result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_cancellable"],
+                checks_failed=["task_not_cancellable"],
+                next_owner="user",
+                error=f"Task cannot be cancelled from terminal status: {task.status.value}",
+            )
+
+        if task.has_active_lease(timeout_seconds=self.executor.lease_timeout_seconds):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_lease_active"],
+                checks_failed=["task_lease_active"],
+                next_owner="user",
+                error="Task has an active execution lease; cannot cancel in-flight work. Wait for the lease to expire or complete.",
+            )
+
+        previous_status = task.status.value
+        task.mark_cancelled(reason=reason)
+        self.repository.update_task(task)
+        self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_cancelled"],
+            next_owner="user",
+            task_id=task_id,
+            reason=reason,
+        )
+
+    def pause_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Pause a workflow so `run` refuses to proceed until resumed.
+
+        Allowed from any non-terminal, non-PAUSED status (DRAFT, PENDING,
+        or RUNNING) — not just RUNNING. A not-yet-started workflow can be
+        paused up front so a later `run` refuses to start it at all;
+        `run_workflow` itself calls mark_running() unconditionally as its
+        first step regardless of whether it was DRAFT or already RUNNING,
+        so there is no meaningful distinction between "pause before it
+        started" and "pause while it's running" from run_workflow's
+        perspective.
+
+        Args:
+            workflow_id: Workflow ID to pause
+
+        Returns:
+            Dict with pause result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.is_terminal():
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_terminal"],
+                next_owner="user",
+                error=f"Workflow cannot be paused from terminal status: {workflow.status.value}",
+            )
+
+        if workflow.status == WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_already_paused"],
+                checks_failed=["workflow_already_paused"],
+                next_owner="user",
+                error="Workflow is already paused",
+            )
+
+        previous_status = workflow.status.value
+        workflow.mark_paused()
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_paused(workflow, previous_status=previous_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_paused"],
+            next_owner="user",
+            workflow_id=workflow_id,
+        )
+
+    def resume_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Resume a paused workflow back to RUNNING.
+
+        Args:
+            workflow_id: Workflow ID to resume
+
+        Returns:
+            Dict with resume result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.status != WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_not_paused"],
+                checks_failed=["workflow_not_paused"],
+                next_owner="user",
+                error=f"Workflow is not paused (status: {workflow.status.value})",
+            )
+
+        workflow.resume()
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_resumed(workflow)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_resumed"],
+            next_owner="system",
+            workflow_id=workflow_id,
+        )
+
+    def cancel_workflow(self, workflow_id: str, reason: str) -> Dict[str, Any]:
+        """Cancel a workflow and cascade-cancel every non-terminal task.
+
+        Args:
+            workflow_id: Workflow ID to cancel
+            reason: Cancellation reason
+
+        Returns:
+            Dict with cancellation result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.is_terminal():
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_terminal"],
+                next_owner="user",
+                error=f"Workflow is already in terminal state: {workflow.status.value}",
+            )
+
+        previous_status = workflow.status.value
+        workflow.mark_cancelled(reason=reason)
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_cancelled(workflow, previous_status=previous_status, reason=reason)
+
+        # Cascade: cancel every non-terminal task, sequentially. Tasks
+        # already COMPLETED, FAILED, CANCELLED, or GOVERNANCE_BLOCKED are
+        # left untouched.
+        cancelled_task_ids = []
+        for task in self.repository.list_workflow_tasks(workflow_id):
+            if task.status in _TERMINAL_TASK_STATUSES:
+                continue
+
+            task_previous_status = task.status.value
+            task.mark_cancelled(reason=f"{reason} (cascaded from workflow cancellation)")
+            self.repository.update_task(task)
+            self.audit_logger.log_task_cancelled(
+                task, previous_status=task_previous_status, reason=f"{reason} (cascaded from workflow cancellation)"
+            )
+            cancelled_task_ids.append(task.id)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_cancelled"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            reason=reason,
+            cancelled_task_count=len(cancelled_task_ids),
+            cancelled_task_ids=cancelled_task_ids,
+        )
+
+    def show_audit_log(self, workflow_id: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
+        """Show audit log.
+
+        Args:
+            workflow_id: Filter by workflow ID (optional)
+            task_id: Filter by task ID (optional)
+
+        Returns:
+            Dict with audit events
+        """
+        events = self.audit_logger.get_events(task_id=task_id, workflow_id=workflow_id)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["audit_log_retrieved"],
+            next_owner="user",
+            event_count=len(events),
+            events=[e.to_dict() for e in events],
+        )
+
+
+def main() -> None:
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(description="Workflow Scheduler CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # create command
+    create_parser = subparsers.add_parser("create", help="Create workflow from YAML")
+    create_parser.add_argument("yaml_path", help="Path to workflow YAML file")
+    create_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # list command
+    list_parser = subparsers.add_parser("list", help="List workflows")
+    list_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # status command
+    status_parser = subparsers.add_parser("status", help="Get workflow status")
+    status_parser.add_argument("workflow_id", help="Workflow ID")
+    status_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # run command
+    run_parser = subparsers.add_parser("run", help="Execute workflow")
+    run_parser.add_argument("workflow_id", help="Workflow ID")
+    run_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+    run_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="Max tasks to run concurrently per dependency-ready pass (default: 1, sequential)",
+    )
+
+    # approve command
+    approve_parser = subparsers.add_parser("approve", help="Approve a task pending explicit approval")
+    approve_parser.add_argument("task_id", help="Task ID")
+    approve_parser.add_argument("--approver", required=True, help="Name of the approving human")
+    approve_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # reject command
+    reject_parser = subparsers.add_parser("reject", help="Reject a task pending explicit approval")
+    reject_parser.add_argument("task_id", help="Task ID")
+    reject_parser.add_argument("--approver", required=True, help="Name of the rejecting human")
+    reject_parser.add_argument("--reason", required=True, help="Reason for rejection")
+    reject_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # pause-task command
+    pause_task_parser = subparsers.add_parser("pause-task", help="Pause a task")
+    pause_task_parser.add_argument("task_id", help="Task ID")
+    pause_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # resume-task command
+    resume_task_parser = subparsers.add_parser("resume-task", help="Resume a paused task")
+    resume_task_parser.add_argument("task_id", help="Task ID")
+    resume_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # cancel-task command
+    cancel_task_parser = subparsers.add_parser("cancel-task", help="Cancel a task")
+    cancel_task_parser.add_argument("task_id", help="Task ID")
+    cancel_task_parser.add_argument("--reason", required=True, help="Reason for cancellation")
+    cancel_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # pause-workflow command
+    pause_workflow_parser = subparsers.add_parser("pause-workflow", help="Pause a running workflow")
+    pause_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    pause_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # resume-workflow command
+    resume_workflow_parser = subparsers.add_parser("resume-workflow", help="Resume a paused workflow")
+    resume_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    resume_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # cancel-workflow command
+    cancel_workflow_parser = subparsers.add_parser("cancel-workflow", help="Cancel a workflow and cascade-cancel its tasks")
+    cancel_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    cancel_workflow_parser.add_argument("--reason", required=True, help="Reason for cancellation")
+    cancel_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # audit command
+    audit_parser = subparsers.add_parser("audit", help="View audit log")
+    audit_parser.add_argument("--workflow-id", help="Filter by workflow ID")
+    audit_parser.add_argument("--task-id", help="Filter by task ID")
+    audit_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        cli = WorkflowSchedulerCLI(
+            db_path=getattr(args, "db", "workflow_scheduler.db"),
+            max_workers=getattr(args, "max_workers", 1),
+        )
+
+        if args.command == "create":
+            result = cli.create_workflow(args.yaml_path)
+        elif args.command == "list":
+            result = cli.list_workflows()
+        elif args.command == "status":
+            result = cli.get_workflow_status(args.workflow_id)
+        elif args.command == "run":
+            result = cli.run_workflow(args.workflow_id)
+        elif args.command == "approve":
+            result = cli.approve(args.task_id, args.approver)
+        elif args.command == "reject":
+            result = cli.reject(args.task_id, args.approver, args.reason)
+        elif args.command == "pause-task":
+            result = cli.pause_task(args.task_id)
+        elif args.command == "resume-task":
+            result = cli.resume_task(args.task_id)
+        elif args.command == "cancel-task":
+            result = cli.cancel_task(args.task_id, args.reason)
+        elif args.command == "pause-workflow":
+            result = cli.pause_workflow(args.workflow_id)
+        elif args.command == "resume-workflow":
+            result = cli.resume_workflow(args.workflow_id)
+        elif args.command == "cancel-workflow":
+            result = cli.cancel_workflow(args.workflow_id, args.reason)
+        elif args.command == "audit":
+            result = cli.show_audit_log(
+                workflow_id=getattr(args, "workflow_id", None),
+                task_id=getattr(args, "task_id", None),
+            )
+        else:
+            result = {"status": "fail", "error": f"Unknown command: {args.command}"}
+
+        print(json.dumps(result, indent=2, default=str))
+        sys.exit(0 if result.get("status") == "pass" else 1)
+
+    except Exception as e:
+        print(json.dumps({"status": "fail", "error": str(e)}, indent=2))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

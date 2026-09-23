@@ -1,0 +1,48 @@
+name: Picture Perfect TypeScript Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "08_Tooling/instructional-materials-coach/picture-perfect-coach/**"
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: picture-perfect-typescript-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: npm run check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: 08_Tooling/instructional-materials-coach/picture-perfect-coach
+    steps:
+      - name: Checkout exact PR source head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: 08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run canonical Picture Perfect check
+        run: npm run check
+
+      - name: Record exact tested source SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"

@@ -1,0 +1,99 @@
+# Coverage Reporting in CI/CD
+
+## Generate Coverage in Tests
+
+```yaml
+- name: Run tests with coverage
+  run: pytest --cov=src --cov-report=xml --cov-fail-under=80
+```
+
+## Upload to Codecov
+
+Codecov v6 OIDC requires `id-token: write`; keep normal repository contents read-only.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+- name: Upload to Codecov
+  uses: codecov/codecov-action@v6
+  with:
+    files: ./coverage.xml
+    flags: unittests
+    name: codecov-umbrella
+    fail_ci_if_error: false
+    use_oidc: true
+```
+
+## Coverage Badge
+
+Add to README:
+
+```markdown
+[![codecov](https://codecov.io/gh/owner/repo/branch/main/graph/badge.svg)](https://codecov.io/gh/owner/repo)
+```
+
+Or use shields.io:
+
+```markdown
+[![Coverage](https://img.shields.io/codecov/c/github/owner/repo/main?label=coverage)](https://codecov.io/gh/owner/repo)
+```
+
+## Generate HTML Report
+
+```bash
+pytest --cov=src --cov-report=html
+```
+
+View results:
+
+```bash
+open htmlcov/index.html
+```
+
+## Multiple Formats
+
+Generate several report formats:
+
+```yaml
+- name: Generate coverage reports
+  run: |
+    pytest \
+      --cov=src \
+      --cov-report=xml \
+      --cov-report=html \
+      --cov-report=term-missing \
+      --cov-fail-under=80
+```
+
+## Fail on Coverage Drop
+
+Prevent merging if coverage decreases:
+
+```yaml
+- name: Check coverage threshold
+  run: pytest --cov=src --cov-fail-under=80
+```
+
+This blocks PR if:
+- Overall coverage < 80%
+- Coverage decreased from previous commit
+
+## Report Artifacts
+
+Save coverage HTML as artifact:
+
+```yaml
+- name: Upload coverage report
+  uses: actions/upload-artifact@v6
+  with:
+    name: coverage-report
+    path: htmlcov/
+```
+
+Then download and view locally.
+
+## Coverage Trends
+
+Track coverage over time with Codecov: push coverage, review historical trends, and
+alert on significant drops. Result: trends visible in PR checks.

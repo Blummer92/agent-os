@@ -1,0 +1,11 @@
+version: 1
+dashboards:
+  - key: example_dashboard
+    name: Example Dashboard
+    notion_id: EXAMPLE_NOTION_ID
+    data_source_id: EXAMPLE_DATA_SOURCE_ID
+    owner: Modeling & Dashboard Governance Agent
+    source_of_truth_role: example only
+    retirement_allowed: false
+    human_approval_required: true
+    notes: Sanitized example. Replace with local private evidence outside Git.

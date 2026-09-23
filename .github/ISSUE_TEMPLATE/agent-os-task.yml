@@ -1,0 +1,187 @@
+name: Agent OS task
+description: Canonical tiered issue form for Agent OS repository work
+title: "[Agent OS] "
+labels: [agent-os, status:needs-decision]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the canonical Agent OS issue entry path. Choose the smallest tier that safely fits the work. Readiness is evidence only and never authorizes merge or external writes.
+
+        Follow `01_Shared_Standards/github/issue-lifecycle-standard.md`: one objective per implementation issue, link canonical boilerplate and risk owners instead of pasting them, and keep the body authoritative as decisions change.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Issue tier
+      description: Tier 0 is small safe maintenance, Tier 1 is standard implementation, and Tier 2 is governed or cross-system work. Tier remains body evidence and is not projected as a label.
+      options: [tier:0-small-maintenance, tier:1-standard-implementation, tier:2-governed-cross-system]
+    validations: {required: true}
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and value
+      description: State the outcome and why it matters.
+    validations: {required: true}
+
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Primary owner
+      description: Select only a currently registered canonical Agent OS owner. Historical owner names are compatibility input for legacy issues, not choices for new issues.
+      options:
+        - owner:chatgpt-orchestrator
+        - owner:github-service-agent
+        - owner:modeling-dashboard-governance-agent
+        - owner:qa-test-agent
+        - owner:agent-orchestrator
+        - owner:unit-alignment-agent
+        - owner:teacher-modeling-coach
+        - owner:instructional-materials-coach
+        - needs-decision
+    validations: {required: true}
+
+  - type: dropdown
+    id: readiness
+    attributes:
+      label: Readiness candidate
+      description: The readiness preflight makes the final evidence-based decision. Proposed/planning work uses status:needs-decision until canonical readiness evidence supports ready or blocked.
+      options: [status:ready, status:blocked, status:needs-decision]
+    validations: {required: true}
+
+  - type: dropdown
+    id: work-type
+    attributes:
+      label: Work type
+      description: Optional searchable work classification. This does not create readiness or execution authority.
+      options: [type:bug, type:docs, type:tooling, type:governance, type:validation, type:classroom-artifact, type:planning]
+    validations: {required: false}
+
+  - type: dropdown
+    id: source-of-truth
+    attributes:
+      label: Source of truth
+      options: [GitHub, Notion handoff, Google Drive handoff, ChatGPT planning only, needs-decision]
+    validations: {required: true}
+
+  - type: dropdown
+    id: external-write
+    attributes:
+      label: External write boundary
+      description: This remains canonical body evidence. no-external-write is not itself projected as a label or authorization.
+      options: [no-external-write, external-write-requested, needs-decision]
+    validations: {required: true}
+
+  - type: input
+    id: original-parent
+    attributes:
+      label: Original parent
+      description: Optional historical bug-lineage reference in exact form #<positive-integer>. May reference an open or closed issue. Leave blank when unresolved; do not write placeholder values.
+      placeholder: "#1234"
+    validations: {required: false}
+
+  - type: input
+    id: root-cause-owner
+    attributes:
+      label: Current root-cause owner
+      description: Optional current causal-owner issue reference in exact form #<positive-integer>. May self-reference. Leave blank when unresolved; current-open validation is required before this value controls a mutation.
+      placeholder: "#1234"
+    validations: {required: false}
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      placeholder: "Scope:\n- ...\n\nNon-goals:\n- ..."
+    validations: {required: true}
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Allowed files, areas, or governed surfaces
+      placeholder: "Allowed:\n- ...\n\nForbidden or protected:\n- ..."
+    validations: {required: true}
+
+  - type: textarea
+    id: prior-scope-review
+    attributes:
+      label: Prior scope, duplicate, and supersession review
+      description: Which prior or closed issues, branches, and pull requests were reviewed, and why this is not a duplicate or retired-scope revival. Readiness requires visible evidence here for every tier.
+    validations: {required: true}
+
+  - type: textarea
+    id: refactor-evidence
+    attributes:
+      label: Refactor or consolidation evidence, when applicable
+      description: For refactor or consolidation work, give caller count and concrete correctness or drift evidence. State not applicable otherwise. See the issue-lifecycle standard for when this is required.
+    validations: {required: false}
+
+  - type: dropdown
+    id: documentation-impact
+    attributes:
+      label: Documentation impact
+      description: Choose whether implementation requires documentation, does not require it, or needs a human decision.
+      options: [docs-required, docs-not-required, docs-needs-decision]
+    validations: {required: true}
+
+  - type: textarea
+    id: required-docs
+    attributes:
+      label: Required documentation paths or bounded areas
+      description: One repository-relative POSIX path per line. Use exact files or bounded directories without trailing slashes, such as 01_Shared_Standards/github or .github/workflows. Do not use **, ?, bracket classes, absolute paths, ./, traversal, backslashes, repeated separators, or trailing separators.
+    validations: {required: false}
+
+  - type: textarea
+    id: documentation-expected-change
+    attributes:
+      label: Expected documentation change
+      description: When documentation is required, state the behavior, contract, workflow, or operator guidance that must change.
+    validations: {required: false}
+
+  - type: textarea
+    id: documentation-exemption-reason
+    attributes:
+      label: Documentation exemption reason
+      description: When documentation is not required, explain why the implementation does not change documented behavior or operator guidance.
+    validations: {required: false}
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required tests, validation, and documentation
+      placeholder: "Tests:\n- ...\n\nDocs:\n- not applicable"
+    validations: {required: true}
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      placeholder: "Dependencies: none\nBlockers: none"
+    validations: {required: true}
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and definition of done
+      placeholder: "Acceptance criteria:\n- [ ] ...\n\nDefinition of done:\n- [ ] ..."
+    validations: {required: true}
+
+  - type: textarea
+    id: tier2-controls
+    attributes:
+      label: Tier 2 controls, when applicable
+      description: For governed or cross-system work, include authorization, external surfaces, rollback, approval requirements, stop conditions, and migration or compatibility planning.
+    validations: {required: false}
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: No direct push to main, automatic merge, or autonomous issue closure is authorized.
+          required: true
+        - label: No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.
+          required: true
+        - label: Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.
+          required: true

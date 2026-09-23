@@ -1,0 +1,80 @@
+# Dashboard Sync Workflow Example
+#
+# Reference implementation of workflow pattern for syncing dashboard data
+# across multiple systems. Uses three stages: prepare, sync, verify.
+#
+# This workflow demonstrates:
+# - Task dependencies (sequential execution)
+# - Error handling via task status tracking
+# - Audit trail for compliance
+
+workflow_id: "dashboard-sync-v1"
+title: "Dashboard Sync Workflow"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  # Stage 1: Prepare for sync
+  - id: "prepare-sync"
+    type: "preparation"
+    owner: "dashboard-sync-agent"
+    action: "prepare_dashboard_sync"
+    idempotency_key: "prepare-dashboard-sync-20260712"
+    priority: 2
+    payload:
+      dashboard_id: "dashboard-main"
+      source_system: "analytics"
+      target_systems:
+        - "reporting"
+        - "monitoring"
+    depends_on: []
+
+  # Stage 2a: Sync to reporting system
+  - id: "sync-reporting"
+    type: "sync"
+    owner: "dashboard-sync-agent"
+    action: "sync_to_reporting"
+    idempotency_key: "sync-to-reporting-20260712"
+    priority: 1
+    payload:
+      target_system: "reporting"
+      sync_type: "incremental"
+    depends_on: ["prepare-sync"]
+
+  # Stage 2b: Sync to monitoring system
+  - id: "sync-monitoring"
+    type: "sync"
+    owner: "dashboard-sync-agent"
+    action: "sync_to_monitoring"
+    idempotency_key: "sync-to-monitoring-20260712"
+    priority: 1
+    payload:
+      target_system: "monitoring"
+      sync_type: "incremental"
+    depends_on: ["prepare-sync"]
+
+  # Stage 3: Verify sync completed successfully
+  - id: "verify-sync"
+    type: "verification"
+    owner: "dashboard-sync-agent"
+    action: "verify_dashboard_sync"
+    idempotency_key: "verify-dashboard-sync-20260712"
+    priority: 0
+    payload:
+      expected_systems_synced: 2
+      timeout_seconds: 300
+    depends_on:
+      - "sync-reporting"
+      - "sync-monitoring"
+
+  # Stage 4: Cleanup (runs after verification)
+  - id: "cleanup-temp-files"
+    type: "cleanup"
+    owner: "dashboard-sync-agent"
+    action: "cleanup_temporary_files"
+    idempotency_key: "cleanup-temp-files-20260712"
+    priority: 0
+    payload:
+      temp_dir: "/tmp/dashboard-sync"
+    depends_on:
+      - "verify-sync"

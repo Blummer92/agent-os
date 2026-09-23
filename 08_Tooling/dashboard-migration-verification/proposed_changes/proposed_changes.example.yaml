@@ -1,0 +1,141 @@
+version: 1
+changes:
+  - action: rename_field
+    item_type: field
+    source_database: "REVIEW BEFORE USE - Teacher Request Routing Dashboard"
+    source_item: "Teacher Requests"
+    canonical_database: "Teacher Request Routing Dashboard"
+    canonical_item: "Teacher Requests"
+    current_name: "Request Owner"
+    proposed_name: "Teacher Request Owner"
+    migration_method: "Verify current field parity through local snapshot evidence and the dependency graph before any human-approved rename recommendation."
+    rollback_method: "Keep the current field name in place or restore the original label, then regenerate snapshot, graph, and validation outputs."
+    owner: "Dashboard Governance"
+    approval_required: true
+    notes: "Verification only. Never treat a matching name as proof of equivalence."
+
+  - action: merge_field
+    item_type: field
+    source_database: "Teacher Modeling Coach Action Dashboard"
+    source_item: "Coach Action Items"
+    canonical_database: "Student Evidence Coach Action Dashboard"
+    canonical_item: "Coach Action Items"
+    current_name: "Modeling Coach Status"
+    proposed_name: "Coach Status"
+    migration_method: "Confirm record mapping, field semantics, formulas, views, and automation references before recommending a merge."
+    rollback_method: "Retain both fields and re-run evidence capture if parity cannot be verified."
+    owner: "Coaching Operations"
+    approval_required: true
+    notes: "If evidence is incomplete or contradictory, classify as Requires Manual Review."
+
+  - action: archive_view
+    item_type: view
+    source_database: "Generated Asset Review"
+    source_item: "Legacy Review Queue"
+    canonical_database: "Generated Asset Review"
+    canonical_item: "Current Review Queue"
+    current_name: "Legacy Review Queue"
+    proposed_name: "Current Review Queue"
+    migration_method: "Verify the replacement view covers all filters, sorts, linked relations, buttons, templates, and documentation references."
+    rollback_method: "Keep the source view active until dependencies and unique record coverage are revalidated."
+    owner: "Generated Asset Review Ops"
+    approval_required: true
+    notes: "Archive decisions are blocked if any active workflow dependency is unknown."
+
+  - action: archive_database
+    item_type: database
+    source_database: "REVIEW BEFORE USE - Teacher Request Routing Dashboard"
+    source_item: "Teacher Requests Database"
+    canonical_database: "Teacher Request Routing Dashboard"
+    canonical_item: "Teacher Requests Database"
+    current_name: "REVIEW BEFORE USE - Teacher Request Routing Dashboard"
+    proposed_name: "Teacher Request Routing Dashboard"
+    migration_method: "Only recommend retirement after verifying unique record parity, dependency cleanup, and no active workflow, sync, or permission gaps."
+    rollback_method: "Do not retire the source database and refresh local evidence until all blockers are resolved."
+    owner: "Dashboard Governance"
+    approval_required: true
+    notes: "Never approve retirement when unique records or dependencies remain unverified."
+
+  - action: merge_database
+    item_type: database
+    source_database: "Daily Generation Packet Dashboard"
+    source_item: "Generation Packet Records"
+    canonical_database: "Unit Alignment & Readiness Dashboard"
+    canonical_item: "Generation Packet Records"
+    current_name: "Daily Generation Packet Dashboard"
+    proposed_name: "Unit Alignment & Readiness Dashboard"
+    migration_method: "Verify record-level mapping, field-level parity, and all synced and documentation references before any merge recommendation."
+    rollback_method: "Keep both databases in place and treat the merge as blocked until record migration evidence is complete."
+    owner: "Generation Operations"
+    approval_required: true
+    notes: "Database merges are high-risk and should remain verification-only."
+
+  - action: rename_status_value
+    item_type: status_value
+    source_database: "Unit Readiness Action Heatmap"
+    source_item: "Readiness Status"
+    canonical_database: "Unit Alignment & Readiness Dashboard"
+    canonical_item: "Unit Status"
+    current_name: "Ready for Review"
+    proposed_name: "Needs Review"
+    migration_method: "Verify that formulas, views, rollups, and workflows do not distinguish the two labels before proposing a rename."
+    rollback_method: "Preserve both labels until downstream dependencies are verified."
+    owner: "Curriculum Operations"
+    approval_required: true
+    notes: "Do not infer status equivalence from similar wording."
+
+  - action: normalize_status_vocabulary
+    item_type: status_value
+    source_database: "Unit Alignment & Readiness Dashboard"
+    source_item: "Unit Status"
+    canonical_database: "Unit Alignment & Readiness Dashboard"
+    canonical_item: "Unit Status"
+    current_name: "Needs Review / Review Needed / Pending Review"
+    proposed_name: "Needs Review"
+    migration_method: "Map current values, check all dependent formulas and views, and verify no hidden branch depends on a legacy status label."
+    rollback_method: "Keep legacy labels available until local evidence shows the normalized vocabulary is safe."
+    owner: "Curriculum Operations"
+    approval_required: true
+    notes: "Contradictory usage should remain Requires Manual Review."
+
+  - action: update_linked_view
+    item_type: linked_view
+    source_database: "Transfer Alignment & Source Evidence Dashboard"
+    source_item: "Source Evidence Overview"
+    canonical_database: "Transfer Alignment & Source Evidence Dashboard"
+    canonical_item: "Transfer Evidence Overview"
+    current_name: "Source Evidence Overview"
+    proposed_name: "Transfer Evidence Overview"
+    migration_method: "Verify relation targets, rollups, filters, permissions, and documentation references before recommending a linked-view update."
+    rollback_method: "Leave the linked view unchanged until the dependency graph is fully verified."
+    owner: "Curriculum Governance"
+    approval_required: true
+    notes: "Linked views should be treated as dependency-bearing surfaces, not cosmetic aliases."
+
+  - action: update_formula_dependency
+    item_type: formula_dependency
+    source_database: "Unit Readiness Action Heatmap"
+    source_item: "Heatmap Score"
+    canonical_database: "Unit Alignment & Readiness Dashboard"
+    canonical_item: "Readiness Score"
+    current_name: "Legacy completion formula"
+    proposed_name: "Canonical readiness formula"
+    migration_method: "Verify all formula inputs, relation paths, rollups, and status mappings before proposing a dependency update."
+    rollback_method: "Retain the existing formula path until all upstream inputs are verified."
+    owner: "Curriculum Operations"
+    approval_required: true
+    notes: "Formula updates should be blocked when any upstream field evidence is stale or missing."
+
+  - action: dependency_cleanup
+    item_type: dependency
+    source_database: "Dashboard Admin & Change Log"
+    source_item: "Legacy references"
+    canonical_database: "Dashboard Governance Ownership Map"
+    canonical_item: "Current references"
+    current_name: "Legacy admin references"
+    proposed_name: "Governance-owned references"
+    migration_method: "Inventory remaining templates, buttons, automations, synced databases, permissions, documentation references, and agent references before cleanup."
+    rollback_method: "Preserve all current references until cleanup evidence is complete and reviewed."
+    owner: "Dashboard Governance"
+    approval_required: true
+    notes: "Cleanup should not be treated as safe when any dependency inventory is unknown."

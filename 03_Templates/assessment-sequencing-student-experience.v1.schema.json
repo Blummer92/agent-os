@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-sequencing-student-experience/v1",
+  "title": "Assessment Sequencing and Student Experience v1",
+  "type": "object",
+  "required": ["sequencing_contract_version","sequencing_result_id","blueprint_id","blueprint_version","lifecycle_disposition","sequence_status","ordered_section_ids","sections","blockers","uncertainties","preserved_section_ids","downstream_handoffs","authority"],
+  "properties": {
+    "sequencing_contract_version": {"const":"1.0"},
+    "sequencing_result_id": {"type":"string","minLength":1},
+    "blueprint_id": {"type":"string","minLength":1},
+    "blueprint_version": {"type":"string","minLength":1},
+    "lifecycle_disposition": {"enum":["current","stale","needs-decision"]},
+    "sequence_status": {"enum":["blocked","needs_teacher_decision","revision_required","valid"]},
+    "ordered_section_ids": {"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},
+    "sections": {"type":"array","items":{"$ref":"#/$defs/section"}},
+    "blockers": {"type":"array","items":{"type":"string"}},
+    "uncertainties": {"type":"array","items":{"type":"string"}},
+    "preserved_section_ids": {"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},
+    "downstream_handoffs": {"type":"array","uniqueItems":true,"items":{"enum":["qa","dashboard","portability"]}},
+    "authority": {"$ref":"#/$defs/authority"}
+  },
+  "$defs": {
+    "section": {
+      "type":"object",
+      "required":["section_id","section_version","purpose","section_type","target_refs","claim_refs","evidence_refs","method_refs","evidence_classification","prerequisite_section_ids","dependency_section_ids","required","student_directions","vocabulary_refs","materials_tools","time","scoring_observation","cognitive_burden","accessibility_findings","engagement_rationale","ai_direction_requirements","blockers","uncertainties"],
+      "properties": {
+        "section_id":{"type":"string","minLength":1},
+        "section_version":{"type":"string","minLength":1},
+        "purpose":{"type":"string","minLength":1},
+        "section_type":{"type":"string","minLength":1},
+        "target_refs":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
+        "claim_refs":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
+        "evidence_refs":{"type":"array","items":{"type":"string","minLength":1}},
+        "method_refs":{"type":"array","items":{"type":"string","minLength":1}},
+        "evidence_classification":{"enum":["mastery_capable","supporting_only","survey_only","practice_only"]},
+        "prerequisite_section_ids":{"type":"array","uniqueItems":true,"items":{"type":"string"}},
+        "dependency_section_ids":{"type":"array","uniqueItems":true,"items":{"type":"string"}},
+        "required":{"type":"boolean"},
+        "branch_condition":{"type":["string","null"]},
+        "student_directions":{"type":"string","minLength":1},
+        "vocabulary_refs":{"type":"array","items":{"type":"string"}},
+        "materials_tools":{"type":"array","items":{"type":"string"}},
+        "time":{"$ref":"#/$defs/time"},
+        "scoring_observation":{"type":"string"},
+        "cognitive_burden":{"enum":["low","moderate","high","unresolved"]},
+        "accessibility_findings":{"type":"array","items":{"type":"string"}},
+        "engagement_rationale":{"type":"string"},
+        "ai_direction_requirements":{"type":"array","items":{"type":"string"}},
+        "blockers":{"type":"array","items":{"type":"string"}},
+        "uncertainties":{"type":"array","items":{"type":"string"}}
+      },
+      "additionalProperties":false
+    },
+    "time": {
+      "type":"object",
+      "required":["reading","setup","response_performance","transition","submission"],
+      "properties":{"reading":{"type":"integer","minimum":0},"setup":{"type":"integer","minimum":0},"response_performance":{"type":"integer","minimum":0},"transition":{"type":"integer","minimum":0},"submission":{"type":"integer","minimum":0}},
+      "additionalProperties":false
+    },
+    "authority": {
+      "type":"object",
+      "required":["report_only","execution_authorized","classroom_use_authorized","grading_authorized","readiness_authorized","production_authorized","publication_authorized","external_write_authorized","source_of_truth_write_authorized"],
+      "properties":{"report_only":{"const":true},"execution_authorized":{"const":false},"classroom_use_authorized":{"const":false},"grading_authorized":{"const":false},"readiness_authorized":{"const":false},"production_authorized":{"const":false},"publication_authorized":{"const":false},"external_write_authorized":{"const":false},"source_of_truth_write_authorized":{"const":false}},
+      "additionalProperties":false
+    }
+  },
+  "additionalProperties":false
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/dashboard_migration/proposed_change.definition.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action",
+    "item_type",
+    "source_database",
+    "source_item",
+    "canonical_database",
+    "canonical_item",
+    "current_name",
+    "proposed_name",
+    "migration_method",
+    "rollback_method",
+    "owner",
+    "approval_required",
+    "notes"
+  ],
+  "properties": {
+    "action": { "$ref": "proposed_change.enums.json#/$defs/action" },
+    "item_type": { "$ref": "proposed_change.enums.json#/$defs/item_type" },
+    "source_database": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "source_item": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "canonical_database": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "canonical_item": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "current_name": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "proposed_name": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "migration_method": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "rollback_method": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "owner": { "$ref": "proposed_change.enums.json#/$defs/non_empty_string" },
+    "approval_required": { "type": "boolean" },
+    "notes": { "type": "string" }
+  }
+}

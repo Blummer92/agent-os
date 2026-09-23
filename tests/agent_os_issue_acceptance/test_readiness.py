@@ -1,0 +1,713 @@
+from pathlib import Path
+
+import pytest
+
+from scripts.agent_os_issue_acceptance.models import Status
+from scripts.agent_os_issue_acceptance.readiness import (
+    ReadinessOutcome,
+    evaluate_issue_readiness,
+)
+from scripts.agent_os_issue_acceptance.report import exit_code_for
+
+
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "agent_os_issue_readiness"
+
+
+def test_tier_zero_maintenance_is_ready():
+    body = """
+Issue Tier: 0
+## Objective
+Remove one deprecation warning.
+## Owner
+QA / Test Agent
+## Allowed Files
+- src/example.py
+## Validation
+- pytest tests/test_example.py
+## Completion Criterion
+- Warning no longer appears.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_tier_one_standard_issue_is_ready():
+    body = """
+Issue Tier: 1
+## Objective
+Add a local report-only checker.
+## Value
+Make readiness visible.
+## Owner
+QA / Test Agent
+## Scope
+- Add local checker.
+## Non-Goals
+- No writes.
+## Allowed Files
+- scripts/example/
+## Validation
+- pytest tests/example
+## Documentation
+- Update README.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Checker reports one result.
+## Definition Of Done
+- [ ] Tests pass.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+README.md
+## Expected documentation change
+Explain the new local checker behavior.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_tier_two_governed_issue_is_ready_evidence_only():
+    body = """
+Issue Tier: 2
+## Objective
+Update a governed integration contract.
+## Value
+Reduce routing ambiguity.
+## Owner
+Integration Manager
+## Scope
+- Update the contract.
+## Non-Goals
+- No production writes.
+## Allowed Files
+- 01_Shared_Standards/
+## Validation
+- validate-all.sh
+## Documentation
+- Update operator guidance.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Contract is explicit.
+## Definition Of Done
+- [ ] Validation passes.
+## Authorization
+Explicit approval required.
+## Source Of Truth
+GitHub
+## External Write Boundary
+None
+## Rollback
+Revert the PR.
+## Approval Requirements
+Human approval before merge.
+## Stop Conditions
+Stop on unclear ownership.
+## Migration Or Compatibility Planning
+Preserve old issue-form parsing during migration.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+01_Shared_Standards
+## Expected documentation change
+Explain the updated governed integration contract.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    assert "does not authorize" in result.report.remaining_risks[0]
+
+
+def test_missing_required_fields_is_blocked():
+    body = """
+Issue Tier: 1
+## Objective
+Add a checker.
+## Owner
+QA / Test Agent
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert result.report.blockers
+
+
+def test_blocked_dependency_is_blocked():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+Blocked by: #100
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+
+
+def test_pending_validation_is_blocked_not_needs_decision():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+"""
+    result = evaluate_issue_readiness(body, validation_pending=True)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+
+
+def test_needs_decision_is_human_decision():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+needs-decision
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+
+
+def test_empty_body_requires_decision_without_crashing():
+    result = evaluate_issue_readiness("")
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers
+
+
+def test_invalid_tier_requires_decision():
+    result = evaluate_issue_readiness("Issue Tier: 9\n\n## Objective\nDo work.")
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+
+
+def test_malformed_acceptance_yaml_requires_decision():
+    body = """
+## Objective
+Do work.
+
+```yaml
+agent_os_issue_acceptance:
+  tier: [
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue metadata" for check in result.report.checks)
+
+
+def test_manual_review_metadata_requires_decision():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  manual_review:
+    - confirm ownership
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert "confirm ownership" in result.report.manual_review_items
+
+
+def test_legacy_ia_metadata_without_documentation_impact_requires_decision():
+    """DOC2B intentional transition: a previously-ready legacy body with no
+    documentation-impact evidence now becomes needs-decision. Every other
+    check continues to pass, and report-only exit-code behavior is unchanged.
+    """
+    body = """
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  owner_agent: github-service-agent
+  source_of_truth: GitHub
+  external_writes: none
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+
+    checks = {check.name: check for check in result.report.checks}
+    assert checks["issue tier"].status == Status.PASS
+    assert checks["required issue fields"].status == Status.PASS
+    assert checks["documentation impact"].status == Status.MANUAL_REVIEW
+    assert "field=documentation_impact; code=legacy-metadata-missing" in checks["documentation impact"].evidence
+    assert not result.report.blockers
+    assert exit_code_for(result.report.overall_status) == 0
+
+
+def test_unrelated_prose_does_not_satisfy_required_sections():
+    body = """
+Issue Tier: 1
+## Objective
+The prose mentions scope, non-goals, files, validation, documentation, dependencies,
+acceptance criteria, and definition of done, but those sections do not exist.
+## Owner
+QA / Test Agent
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert len(result.report.blockers) >= 5
+
+
+def test_code_comments_and_quotes_do_not_create_fields_or_decisions():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+This change does not alter documented behavior or operator guidance.
+
+<!-- needs-decision -->
+> needs-decision
+```text
+## Authorization
+needs-decision
+Blocked by: #999
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_tier_two_combined_controls_require_labeled_values():
+    body = """
+Issue Tier: 2
+## Objective And Value
+Update a governed contract and reduce ambiguity.
+## Owner And Source Of Truth
+- Primary owner: Integration Manager
+- Source of truth: GitHub
+## Scope And Non-Goals
+- Scope: update the contract
+- Non-goals: no production writes
+## Allowed And Protected Areas
+- Allowed: 01_Shared_Standards/
+## Validation And Documentation
+- Tests: validate-all.sh
+- Docs: update guidance
+## Dependencies And Blockers
+- Dependencies: none
+- Blockers: none
+## Acceptance Criteria And Definition Of Done
+- Acceptance criteria: contract is explicit
+- Definition of done: tests pass
+## Tier 2 Controls, When Applicable
+- Authorization: explicit approval required
+- External write: none
+- Rollback: revert the PR
+- Approval: human approval required
+- Stop conditions: stop on unclear ownership
+- Compatibility: preserve legacy parsing
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+01_Shared_Standards
+## Expected documentation change
+Explain the updated governed contract.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_legacy_issue_form_is_deterministic_needs_decision():
+    body = (FIXTURES / "legacy_issue_form.md").read_text()
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue tier" for check in result.report.checks)
+
+
+def test_legacy_build_issue_headings_are_recognized_but_require_tier_decision():
+    body = (FIXTURES / "legacy_build_issue.md").read_text()
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue tier" for check in result.report.checks)
+
+
+def test_legacy_ia1_without_tier_requires_tier_decision_not_blocked():
+    body = (FIXTURES / "legacy_ia1_without_tier.md").read_text()
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers
+
+
+def test_new_tiered_issue_fixture_is_ready():
+    body = (FIXTURES / "new_tiered_issue.md").read_text()
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+# --- prior-scope review readiness enforcement --------------------------------
+
+# Otherwise-ready bodies (all tier fields present, documentation impact resolved)
+# whose only missing evidence is the prior-scope review section.
+_TIER_BODIES = {
+    0: """
+Issue Tier: 0
+## Objective
+Remove one deprecation warning.
+## Owner
+QA / Test Agent
+## Allowed Files
+- src/example.py
+## Validation
+- pytest tests/test_example.py
+## Completion Criterion
+- Warning no longer appears.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
+""",
+    1: """
+Issue Tier: 1
+## Objective
+Add a local report-only checker.
+## Value
+Make readiness visible.
+## Owner
+QA / Test Agent
+## Scope
+- Add local checker.
+## Non-Goals
+- No writes.
+## Allowed Files
+- scripts/example/
+## Validation
+- pytest tests/example
+## Documentation
+- Update README.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Checker reports one result.
+## Definition Of Done
+- [ ] Tests pass.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Internal checker only.
+""",
+    2: """
+Issue Tier: 2
+## Objective
+Update a governed integration contract.
+## Value
+Reduce routing ambiguity.
+## Owner
+Integration Manager
+## Scope
+- Update the contract.
+## Non-Goals
+- No production writes.
+## Allowed Files
+- 01_Shared_Standards/
+## Validation
+- validate-all.sh
+## Documentation
+- Update operator guidance.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Contract is explicit.
+## Definition Of Done
+- [ ] Validation passes.
+## Authorization
+Explicit approval required.
+## Source Of Truth
+GitHub
+## External Write Boundary
+None
+## Rollback
+Revert the PR.
+## Approval Requirements
+Human approval before merge.
+## Stop Conditions
+Stop on unclear ownership.
+## Migration Or Compatibility Planning
+Preserve old issue-form parsing during migration.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Governed contract text only.
+""",
+}
+
+_PRIOR_SCOPE_SECTION = (
+    "## Prior scope, duplicate, and supersession review\n"
+    "Reviewed related prior issues; no duplicate or superseded scope applies.\n"
+)
+
+
+def _prior_scope_check(result):
+    return next(
+        check for check in result.report.checks if check.name == "prior scope review"
+    )
+
+
+@pytest.mark.parametrize("tier", [0, 1, 2])
+def test_missing_prior_scope_review_is_needs_decision_for_all_tiers(tier):
+    result = evaluate_issue_readiness(_TIER_BODIES[tier])
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _prior_scope_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert check.evidence == ["field=prior_scope_review; code=prior-scope-review-missing"]
+    # Missing prior-scope evidence is fail-closed to needs-decision, never blocked.
+    assert not result.report.blockers
+
+
+@pytest.mark.parametrize("tier", [0, 1, 2])
+def test_valid_prior_scope_review_preserves_ready_for_all_tiers(tier):
+    result = evaluate_issue_readiness(_TIER_BODIES[tier] + _PRIOR_SCOPE_SECTION)
+    assert result.outcome == ReadinessOutcome.READY
+    assert _prior_scope_check(result).status == Status.PASS
+
+
+def test_prior_scope_review_no_response_is_needs_decision():
+    body = _TIER_BODIES[0] + (
+        "## Prior scope, duplicate, and supersession review\n_No response_\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_prior_scope_review_blank_is_needs_decision():
+    body = _TIER_BODIES[0] + "## Prior scope, duplicate, and supersession review\n\n"
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_prior_scope_review_only_quoted_fenced_or_commented_is_needs_decision():
+    body = _TIER_BODIES[0] + (
+        "## Prior scope, duplicate, and supersession review\n"
+        "> Reviewed #1; not a duplicate.\n"
+        "<!-- Reviewed #2; not a duplicate. -->\n"
+        "```\nReviewed #3; not a duplicate.\n```\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _prior_scope_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert check.evidence == ["field=prior_scope_review; code=prior-scope-review-missing"]
+
+
+def test_unrelated_prose_without_prior_scope_heading_is_needs_decision():
+    # Prior-scope-shaped prose that is not under the canonical heading is not credited.
+    body = _TIER_BODIES[0] + (
+        "## Notes\nWe reviewed prior scope, duplicates, and supersession informally.\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_2650_concrete_dependency_blocker_dominates_manual_review() -> None:
+    body = """
+Issue Tier: 0
+## Objective
+Wait for the required upstream implementation.
+## Owner
+needs-decision
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Upstream dependency is available.
+Blocked by: #2434
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert "A required dependency is blocked." in result.report.blockers
+    assert result.report.manual_review_items
+
+
+def _tier_zero_body(dependency_line: str) -> str:
+    return f"""
+Issue Tier: 0
+## Objective
+Remove one deprecation warning.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- src/example.py
+## Validation
+- pytest tests/test_example.py
+## Completion Criterion
+- Warning no longer appears.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
+{dependency_line}
+"""
+
+
+@pytest.mark.parametrize(
+    "dependency_line",
+    [
+        "Blockers: none",
+        "Blockers:  none",
+        "Blockers: None",
+        "Blocked by: none",
+        "Blocked by: not applicable",
+        "Blockers: not applicable",
+    ],
+)
+def test_2645_declared_absence_of_blockers_is_not_a_controlling_blocker(dependency_line):
+    """#2645: an issue that declares it has no blockers must not project blocked."""
+    result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
+    assert result.outcome == ReadinessOutcome.READY, dependency_line
+    assert "A required dependency is blocked." not in result.report.blockers
+
+
+@pytest.mark.parametrize(
+    "dependency_line",
+    [
+        "Blocked by: #9999",
+        "Blockers: #9999",
+        "Blocked by: the governed host runtime is unavailable",
+    ],
+)
+def test_2645_genuine_controlling_blocker_still_blocks(dependency_line):
+    """Control: a real declared blocker must remain blocked."""
+    result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
+    assert result.outcome == ReadinessOutcome.BLOCKED, dependency_line
+    assert "A required dependency is blocked." in result.report.blockers
+
+
+def _parent_tracking_body(coordination: str) -> str:
+    """A parent/tracking issue body with its own executable next action."""
+    return f"""
+Issue Tier: 0
+## Objective
+Coordinate the low-compute remote validation roadmap.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Downstream references no longer advertise retired authority.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Coordination only; no documented behavior changes.
+{coordination}
+"""
+
+
+def test_2648_parent_is_not_blocked_merely_because_children_are_incomplete():
+    """#2648/#367: incomplete children are not a controlling blocker for the parent.
+
+    The parent references child work and states its own executable coordination
+    next action. Readiness is classified from the parent's own next action, so
+    child incompleteness alone must not project blocked.
+    """
+    body = _parent_tracking_body(
+        "Coordinates with: #240, #330, #520\n"
+        "## Current next action\n"
+        "Reconcile #240, then perform the final smoke-test necessity review."
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    assert "A required dependency is blocked." not in result.report.blockers
+
+
+def test_2648_parent_gated_on_prerequisite_evidence_remains_blocked():
+    """#330-shaped control: a parent that cannot advance until evidence exists."""
+    body = _parent_tracking_body(
+        "Blocked by: positive single-job production-path evidence is unavailable"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert "A required dependency is blocked." in result.report.blockers
+
+
+def test_2648_parent_gated_on_child_evidence_remains_blocked():
+    """Child-evidence-gated control: the parent's own decision needs child output."""
+    body = _parent_tracking_body("Blocked by: #604 terminal child evidence")
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+
+
+def test_2648_parent_requiring_a_material_choice_is_needs_decision_not_blocked():
+    """A material option/architecture gate maps to needs-decision, never blocked."""
+    body = _parent_tracking_body(
+        "## Current next action\n"
+        "Owner: needs-decision\n"
+        "Choose the supported execution host before further coordination."
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers

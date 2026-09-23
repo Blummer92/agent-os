@@ -1,0 +1,5 @@
+{
+  "authorization": ["lesson-36", "lesson-37"],
+  "permissions": ["lesson-36", "lesson-37"],
+  "workflow-ci-authority": ["lesson-5", "lesson-12", "lesson-13"]
+}

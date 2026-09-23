@@ -1,0 +1,10 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 275,
+    "body": "payload body is not authoritative",
+    "labels": [
+      {"name": "status:ready"}
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+[
+  {"case":"stale-blueprint-accepted","lifecycle_disposition":"stale","claimed_status":"valid","expected_status":"blocked"},
+  {"case":"survey-contaminates-mastery","lifecycle_disposition":"current","survey_mastery_separate":false,"claimed_status":"valid","expected_status":"blocked"},
+  {"case":"performance-before-prerequisite","lifecycle_disposition":"current","dependencies_valid":false,"claimed_status":"valid","expected_status":"blocked"},
+  {"case":"hidden-instructions","lifecycle_disposition":"current","language_complete":false,"claimed_status":"valid","expected_status":"revision_required"},
+  {"case":"unrealistic-time","lifecycle_disposition":"current","time_feasible":false,"teacher_owned_time_choice":false,"claimed_status":"valid","expected_status":"revision_required"},
+  {"case":"unrealistic-workload","lifecycle_disposition":"current","workload_feasible":false,"claimed_status":"valid","expected_status":"revision_required"},
+  {"case":"authority-true","lifecycle_disposition":"current","authority_valid":false,"claimed_status":"valid","expected_status":"blocked"},
+  {"case":"global-invalidation-after-local-edit","local_edit":true,"preserved_section_ids":[],"claimed_preservation_valid":true,"expected_preservation_valid":false}
+]

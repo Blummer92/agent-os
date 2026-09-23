@@ -1,0 +1,47 @@
+[
+  [
+    "Drive File ID",
+    "Drive URL",
+    "File Name",
+    "Approved Use",
+    "Audience",
+    "Review Status",
+    "Review Date",
+    "Visual Rationale",
+    "Worksheet Fit",
+    "Slideshow Fit",
+    "Poster Fit",
+    "Format Decision Notes",
+    "Excluded"
+  ],
+  [
+    "abc123def456ghi789jkl012m",
+    "https://drive.google.com/file/d/abc123def456ghi789jkl012m/view",
+    "camera-angle.png",
+    "Photography Foundations",
+    "High school",
+    "Approved",
+    "2026-07-29",
+    "Supports camera-angle modeling",
+    "Strong",
+    "Strong",
+    "Possible",
+    "Use annotated version",
+    "FALSE"
+  ],
+  [
+    "bad-id",
+    "",
+    "diagnostic-only.png",
+    "Teacher reference",
+    "Teacher",
+    "Needs review",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    true
+  ]
+]

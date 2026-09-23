@@ -1,0 +1,89 @@
+registry_version: 0.1.0
+capabilities:
+  # Records and set-like list values are intentionally NOT in sorted order so
+  # provenance canonicalization (record sort by capability_id, list sort by
+  # Unicode code point) is genuinely exercised.
+  - capability_id: gamma-tool
+    name: Gamma Tool
+    summary: Résumé café helper with composed Unicode.
+    status: active
+    canonical_paths:
+      - src/gamma/two.py
+      - src/gamma/one.py
+    public_interfaces:
+      - gamma:run
+    owner_agent: Integration Manager
+    known_consumers:
+      - scripts/use_gamma.py
+    tests:
+      - tests/test_gamma.py
+    keywords:
+      - gamma
+      - tool
+    reuse_guidance: Reuse gamma only for composed-text handling.
+    side_effects:
+      - Performs no writes.
+
+  - capability_id: alpha-widget
+    name: Alpha Widget
+    summary: Full-featured widget exercising every governed field.
+    status: active
+    canonical_paths:
+      - src/alpha/zeta.py
+      - src/alpha/alpha.py
+      - src/alpha/mid.py
+    public_interfaces:
+      - alpha:Zeta
+      - alpha:Alpha
+    owner_agent: Google Workspace Automation Engineer
+    supporting_agents:
+      - QA / Test Agent
+      - Integration Manager
+    known_consumers:
+      - scripts/use_alpha_b.py
+      - scripts/use_alpha_a.py
+    tests:
+      - tests/test_alpha_b.py
+      - tests/test_alpha_a.py
+    keywords:
+      - zeta-keyword
+      - alpha-keyword
+    reuse_guidance: Reuse the alpha widget for governed-field coverage.
+    side_effects:
+      - Returns values only.
+      - Performs no network calls.
+    inputs:
+      - A parsed record.
+      - A registry version.
+    outputs:
+      - A digest string.
+    extension_points:
+      - Add a new serializer projection.
+    invariants:
+      - Output is deterministic.
+    failure_modes:
+      - Fails closed on duplicate values.
+    compatibility:
+      - Requires registry 0.1.0.
+    documentation_handoff:
+      - docs/alpha.md
+
+  - capability_id: beta-gadget
+    name: Beta Gadget
+    summary: Superseded gadget retained as evidence.
+    status: replaced
+    canonical_paths:
+      - src/beta/one.py
+    public_interfaces:
+      - beta:run
+    owner_agent: Integration Manager
+    known_consumers: []
+    known_consumer_exemption: Superseded by alpha-widget; retained for evidence only.
+    tests:
+      - tests/test_beta.py
+    keywords:
+      - beta
+    reuse_guidance: Do not reuse; prefer alpha-widget.
+    side_effects:
+      - Performs no writes.
+    deprecated_by: alpha-widget

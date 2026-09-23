@@ -1,0 +1,232 @@
+# MD2A metadata validation fixture corpus
+#
+# These cases are fixture evidence only. They do not implement validation,
+# enforcement, migration, issue mutation, or label mutation.
+#
+# Each case captures one MD0/MD1 metadata finding and the expected future
+# report-only outcome for MD2B.
+
+cases:
+  - id: issue-tier-canonical-tier-0
+    field: issue_tier
+    input_evidence: tier:0-small-maintenance
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 issue-tier value.
+
+  - id: issue-tier-canonical-tier-1
+    field: issue_tier
+    input_evidence: tier:1-standard-implementation
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 issue-tier value.
+
+  - id: issue-tier-canonical-tier-2
+    field: issue_tier
+    input_evidence: tier:2-governed-cross-system
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 issue-tier value.
+
+  - id: issue-tier-candidate-alias-high-risk
+    field: issue_tier
+    input_evidence: tier:2-high-risk-or-governed-change
+    classification: candidate-alias
+    expected_outcome: manual-review
+    reason: Candidate alias found by MD1; not approved as canonical.
+
+  - id: issue-tier-ambiguous-generic-tier-2
+    field: issue_tier
+    input_evidence: Tier 2
+    classification: ambiguous
+    expected_outcome: manual-review
+    reason: Generic tier language may describe execution risk, not issue tier.
+
+  - id: issue-tier-execution-risk-tier-3
+    field: issue_tier
+    input_evidence: 'Tier 3: production modifier'
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Tier 3 has no MD0 v1 issue-tier equivalent.
+
+  - id: readiness-candidate-ready
+    field: readiness_candidate
+    input_evidence: status:ready
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 readiness-candidate value.
+
+  - id: readiness-candidate-blocked
+    field: readiness_candidate
+    input_evidence: status:blocked
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 readiness-candidate value.
+
+  - id: readiness-candidate-needs-decision
+    field: readiness_candidate
+    input_evidence: status:needs-decision
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 readiness-candidate value.
+
+  - id: readiness-body-label-conflict
+    field: readiness_candidate
+    input_evidence: body=status:needs-decision; label=status:ready
+    classification: ambiguous
+    expected_outcome: manual-review
+    reason: Conflicting governed sources cannot be silently resolved.
+
+  - id: lifecycle-legacy-ready-for-planning
+    field: lifecycle_status
+    input_evidence: status:ready-for-planning
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Legacy planning status is not canonical readiness.
+
+  - id: lifecycle-legacy-blocked-human-review
+    field: lifecycle_status
+    input_evidence: status:blocked-human-review
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Legacy human-review status is not canonical readiness.
+
+  - id: documentation-impact-required
+    field: documentation_impact
+    input_evidence: docs-required
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact documentation-impact enum value.
+
+  - id: documentation-impact-not-required
+    field: documentation_impact
+    input_evidence: docs-not-required
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact documentation-impact enum value.
+
+  - id: documentation-impact-needs-decision
+    field: documentation_impact
+    input_evidence: docs-needs-decision
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact documentation-impact enum value.
+
+  - id: source-route-github
+    field: source_route
+    input_evidence: GitHub
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 source-route value.
+
+  - id: source-route-notion-handoff
+    field: source_route
+    input_evidence: Notion handoff
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 combined source/handoff value.
+
+  - id: source-route-google-drive-handoff
+    field: source_route
+    input_evidence: Google Drive handoff
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 combined source/handoff value.
+
+  - id: source-route-chatgpt-planning-only
+    field: source_route
+    input_evidence: ChatGPT planning only
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 source-route value.
+
+  - id: source-route-needs-decision
+    field: source_route
+    input_evidence: needs-decision
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact MD0 v1 source-route value.
+
+  - id: external-write-none
+    field: external_write_boundary
+    input_evidence: no-external-write
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact external-write-boundary enum value.
+
+  - id: external-write-requested
+    field: external_write_boundary
+    input_evidence: external-write-requested
+    classification: canonical
+    expected_outcome: pass
+    reason: Boundary value is canonical but is not authorization.
+
+  - id: external-write-needs-decision
+    field: external_write_boundary
+    input_evidence: needs-decision
+    classification: canonical
+    expected_outcome: pass
+    reason: Exact external-write-boundary enum value.
+
+  - id: owner-registered-integration-manager
+    field: primary_owner
+    input_evidence: owner:integration-manager
+    classification: canonical
+    expected_outcome: pass
+    reason: Registered owner exposed by the issue form.
+
+  - id: owner-registry-form-surface-gap
+    field: primary_owner
+    input_evidence: Agent Orchestrator
+    classification: canonical
+    expected_outcome: warn
+    reason: Registry-owned canonical agent may not appear in the form surface.
+
+  - id: owner-registered-legacy-alias
+    field: primary_owner
+    input_evidence: QA Agent
+    classification: approved-alias
+    expected_outcome: warn
+    reason: Legacy alias registry maps this to QA / Test Agent.
+
+  - id: owner-unregistered-prose
+    field: primary_owner
+    input_evidence: 'Recommended owner agent: Metadata Maintainer'
+    classification: ambiguous
+    expected_outcome: manual-review
+    reason: Unregistered owner prose must not create a new agent.
+
+  - id: unknown-governed-enum-value
+    field: issue_tier
+    input_evidence: tier:9-unregistered
+    classification: invalid
+    expected_outcome: fail
+    reason: Unknown closed-enum value in a governed field.
+
+  - id: legacy-risk-live-write
+    field: legacy_metadata
+    input_evidence: risk:live-write
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Risk metadata is explicitly outside MD0 v1.
+
+  - id: legacy-surface-github-issues
+    field: legacy_metadata
+    input_evidence: surface:github-issues
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Surface metadata is legacy evidence, not a governed MD0 enum.
+
+  - id: legacy-system-github
+    field: legacy_metadata
+    input_evidence: system:github
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: System metadata is legacy evidence, not a governed MD0 enum.
+
+  - id: legacy-phase-governance
+    field: legacy_metadata
+    input_evidence: phase:0-governance
+    classification: legacy-evidence-only
+    expected_outcome: manual-review
+    reason: Phase metadata is legacy evidence, not a governed MD0 enum.

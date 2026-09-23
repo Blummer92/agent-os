@@ -1,0 +1,116 @@
+registry_version: 0.1.0
+capabilities:
+  - &base
+    capability_id: capability-000
+    name: Fixture Capability
+    summary: Deterministic fixture capability.
+    status: active
+    canonical_paths: [src/fixture.py]
+    public_interfaces: [fixture:run]
+    owner_agent: Integration Manager
+    supporting_agents: [QA / Test Agent]
+    known_consumers: []
+    known_consumer_exemption: Fixture exemption.
+    tests: [tests/test_fixture.py]
+    keywords: [shared, fixture]
+    reuse_guidance: Fixture only.
+    side_effects: [Performs no writes.]
+  - {<<: *base, capability_id: capability-001}
+  - {<<: *base, capability_id: capability-002}
+  - {<<: *base, capability_id: capability-003}
+  - {<<: *base, capability_id: capability-004}
+  - {<<: *base, capability_id: capability-005}
+  - {<<: *base, capability_id: capability-006}
+  - {<<: *base, capability_id: capability-007}
+  - {<<: *base, capability_id: capability-008}
+  - {<<: *base, capability_id: capability-009}
+  - {<<: *base, capability_id: capability-010}
+  - {<<: *base, capability_id: capability-011}
+  - {<<: *base, capability_id: capability-012}
+  - {<<: *base, capability_id: capability-013}
+  - {<<: *base, capability_id: capability-014}
+  - {<<: *base, capability_id: capability-015}
+  - {<<: *base, capability_id: capability-016}
+  - {<<: *base, capability_id: capability-017}
+  - {<<: *base, capability_id: capability-018}
+  - {<<: *base, capability_id: capability-019}
+  - {<<: *base, capability_id: capability-020}
+  - {<<: *base, capability_id: capability-021}
+  - {<<: *base, capability_id: capability-022}
+  - {<<: *base, capability_id: capability-023}
+  - {<<: *base, capability_id: capability-024}
+  - {<<: *base, capability_id: capability-025}
+  - {<<: *base, capability_id: capability-026}
+  - {<<: *base, capability_id: capability-027}
+  - {<<: *base, capability_id: capability-028}
+  - {<<: *base, capability_id: capability-029}
+  - {<<: *base, capability_id: capability-030}
+  - {<<: *base, capability_id: capability-031}
+  - {<<: *base, capability_id: capability-032}
+  - {<<: *base, capability_id: capability-033}
+  - {<<: *base, capability_id: capability-034}
+  - {<<: *base, capability_id: capability-035}
+  - {<<: *base, capability_id: capability-036}
+  - {<<: *base, capability_id: capability-037}
+  - {<<: *base, capability_id: capability-038}
+  - {<<: *base, capability_id: capability-039}
+  - {<<: *base, capability_id: capability-040}
+  - {<<: *base, capability_id: capability-041}
+  - {<<: *base, capability_id: capability-042}
+  - {<<: *base, capability_id: capability-043}
+  - {<<: *base, capability_id: capability-044}
+  - {<<: *base, capability_id: capability-045}
+  - {<<: *base, capability_id: capability-046}
+  - {<<: *base, capability_id: capability-047}
+  - {<<: *base, capability_id: capability-048}
+  - {<<: *base, capability_id: capability-049}
+  - {<<: *base, capability_id: capability-050}
+  - {<<: *base, capability_id: capability-051}
+  - {<<: *base, capability_id: capability-052}
+  - {<<: *base, capability_id: capability-053}
+  - {<<: *base, capability_id: capability-054}
+  - {<<: *base, capability_id: capability-055}
+  - {<<: *base, capability_id: capability-056}
+  - {<<: *base, capability_id: capability-057}
+  - {<<: *base, capability_id: capability-058}
+  - {<<: *base, capability_id: capability-059}
+  - {<<: *base, capability_id: capability-060}
+  - {<<: *base, capability_id: capability-061}
+  - {<<: *base, capability_id: capability-062}
+  - {<<: *base, capability_id: capability-063}
+  - {<<: *base, capability_id: capability-064}
+  - {<<: *base, capability_id: capability-065}
+  - {<<: *base, capability_id: capability-066}
+  - {<<: *base, capability_id: capability-067}
+  - {<<: *base, capability_id: capability-068}
+  - {<<: *base, capability_id: capability-069}
+  - {<<: *base, capability_id: capability-070}
+  - {<<: *base, capability_id: capability-071}
+  - {<<: *base, capability_id: capability-072}
+  - {<<: *base, capability_id: capability-073}
+  - {<<: *base, capability_id: capability-074}
+  - {<<: *base, capability_id: capability-075}
+  - {<<: *base, capability_id: capability-076}
+  - {<<: *base, capability_id: capability-077}
+  - {<<: *base, capability_id: capability-078}
+  - {<<: *base, capability_id: capability-079}
+  - {<<: *base, capability_id: capability-080}
+  - {<<: *base, capability_id: capability-081}
+  - {<<: *base, capability_id: capability-082}
+  - {<<: *base, capability_id: capability-083}
+  - {<<: *base, capability_id: capability-084}
+  - {<<: *base, capability_id: capability-085}
+  - {<<: *base, capability_id: capability-086}
+  - {<<: *base, capability_id: capability-087}
+  - {<<: *base, capability_id: capability-088}
+  - {<<: *base, capability_id: capability-089}
+  - {<<: *base, capability_id: capability-090}
+  - {<<: *base, capability_id: capability-091}
+  - {<<: *base, capability_id: capability-092}
+  - {<<: *base, capability_id: capability-093}
+  - {<<: *base, capability_id: capability-094}
+  - {<<: *base, capability_id: capability-095}
+  - {<<: *base, capability_id: capability-096}
+  - {<<: *base, capability_id: capability-097}
+  - {<<: *base, capability_id: capability-098}
+  - {<<: *base, capability_id: capability-099}

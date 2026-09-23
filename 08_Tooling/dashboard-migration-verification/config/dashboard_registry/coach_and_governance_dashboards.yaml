@@ -1,0 +1,30 @@
+dashboards:
+  teacher_modeling_coach_action_dashboard:
+    name: "Teacher Modeling Coach Action Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Teacher Coaching Ops"
+    source_of_truth_role: "coach_action_surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Keep until downstream documentation, automations, and ownership paths are verified."
+
+  student_evidence_coach_action_dashboard:
+    name: "Student Evidence Coach Action Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Student Evidence Ops"
+    source_of_truth_role: "coach_action_surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Requires proof that evidence-specific workflows and views have equivalent replacements."
+
+  transfer_alignment_source_evidence_dashboard:
+    name: "Transfer Alignment & Source Evidence Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Transfer Alignment Ops"
+    source_of_truth_role: "source_evidence_surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Treat linked evidence references and synced databases as high-risk until verified."

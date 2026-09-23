@@ -1,0 +1,63 @@
+# Notion Read-Only Adapter Smoke Test
+#
+# Illustrates the canonical Notion API 2026-03-11 database/data-source model.
+# This example is not run in CI; real execution requires a NOTION_TOKEN and
+# real object IDs. The adapter remains read-only: GET endpoints plus the fixed
+# POST /v1/data_sources/{data_source_id}/query read endpoint.
+#
+# Migration: new callers should use get_data_source/query_data_source. The
+# query_database action remains temporarily available for legacy Scheduler
+# payloads and should not be used for new work.
+
+workflow_id: "notion-readonly-smoke-test-v2"
+title: "Notion Read-Only Adapter Smoke Test"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  - id: "get-database"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_database"
+    idempotency_key: "get-database-20260807"
+    priority: 3
+    payload:
+      action: "get_database"
+      database_id: "REPLACE_WITH_REAL_DATABASE_ID"
+    depends_on: []
+
+  - id: "get-data-source"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_database"
+    idempotency_key: "get-data-source-20260807"
+    priority: 2
+    payload:
+      action: "get_data_source"
+      data_source_id: "REPLACE_WITH_REAL_DATA_SOURCE_ID"
+    depends_on: ["get-database"]
+
+  - id: "query-data-source"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_database"
+    idempotency_key: "query-data-source-20260807"
+    priority: 1
+    payload:
+      action: "query_data_source"
+      data_source_id: "REPLACE_WITH_REAL_DATA_SOURCE_ID"
+      page_size: 10
+      max_pages: 2
+      max_results: 20
+    depends_on: ["get-data-source"]
+
+  - id: "get-page"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_page"
+    idempotency_key: "get-page-20260807"
+    priority: 0
+    payload:
+      action: "get_page"
+      page_id: "REPLACE_WITH_REAL_PAGE_ID"
+    depends_on: []

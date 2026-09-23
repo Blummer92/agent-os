@@ -1,0 +1,24 @@
+{
+  "title": "Route unknown issue metadata to review",
+  "fields": {
+    "tier": "tier:1-standard-implementation",
+    "objective": "Prove unknown values remain visible and fail closed.",
+    "owner": "owner:unknown-agent",
+    "readiness": "status:ready",
+    "source-of-truth": "GitHub",
+    "external-write": "no-external-write",
+    "scope": "Scope:\n- Detect unknown input.\n\nNon-goals:\n- No mutation.",
+    "files": "Allowed:\n- tests\n\nForbidden or protected:\n- main",
+    "prior-scope-review": "Reviewed the canonical form and label map.",
+    "documentation-impact": "docs-not-required",
+    "validation": "Tests:\n- manual-review fixture\n\nDocs:\n- not applicable",
+    "dependencies": "Dependencies: none\nBlockers: unknown owner",
+    "acceptance": "Acceptance criteria:\n- [ ] Unknown owner routes to review.\n\nDefinition of done:\n- [ ] No write is authorized.",
+    "safety": [
+      "No direct push to main, automatic merge, or autonomous issue closure is authorized.",
+      "No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.",
+      "Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks."
+    ],
+    "mystery-field": "unexpected"
+  }
+}

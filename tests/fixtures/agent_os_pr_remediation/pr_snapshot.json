@@ -1,0 +1,17 @@
+{
+  "repository": "Blummer92/agent-os",
+  "pr_number": 999,
+  "base_branch": "main",
+  "base_sha": "1111111111111111111111111111111111111111",
+  "head_branch": "agent/999-test",
+  "head_sha": "2222222222222222222222222222222222222222",
+  "state": "open",
+  "merged": false,
+  "draft": true,
+  "changed_files": [
+    "tests/example.py",
+    "scripts/example.py"
+  ],
+  "captured_at": "2026-08-09T14:00:00Z",
+  "source_revision": "fixture-v1"
+}

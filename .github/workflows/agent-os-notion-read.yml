@@ -1,0 +1,163 @@
+name: Agent OS Bounded Notion Read
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-notion-read-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  notion_read:
+    name: Read bounded curriculum and visual-asset evidence
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-read') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Admit bounded Notion read without credentials
+        id: admission
+        env:
+          PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agent-os-notion-read"
+          python -m workflow_scheduler.governance.github_issue_comment_ingress \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/agent-os-notion-read/transport.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.agent_os_notion_read_request import (
+              admit_notion_read_request,
+              load_catalog,
+          )
+          from scripts.agent_os_notion_read_request.binding_verification import (
+              VERIFICATION_REQUEST_ID,
+              admit_binding_verification_request,
+          )
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-notion-read"
+          transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
+          if transport.get("notion_read_request_id_or_none") == VERIFICATION_REQUEST_ID:
+              decision = admit_binding_verification_request(
+                  transport,
+                  expected_repository=os.environ["GITHUB_REPOSITORY"],
+                  expected_actor="Blummer92",
+              )
+          else:
+              decision = admit_notion_read_request(
+                  transport,
+                  catalog=load_catalog(),
+                  expected_repository=os.environ["GITHUB_REPOSITORY"],
+                  expected_actor="Blummer92",
+              ).to_dict()
+          (root / "admission.json").write_text(
+              json.dumps(decision, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(
+                  "secret_dispatch_authorized="
+                  + ("true" if decision.get("secret_dispatch_authorized") is True else "false")
+                  + "\n"
+              )
+              output.write(
+                  "binding_verification="
+                  + ("true" if decision.get("request_id") == VERIFICATION_REQUEST_ID else "false")
+                  + "\n"
+              )
+          PY
+
+      - name: Execute admitted binding verification through canonical Notion adapter
+        if: ${{ steps.admission.outputs.secret_dispatch_authorized == 'true' && steps.admission.outputs.binding_verification == 'true' }}
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          set -euo pipefail
+          python -m scripts.agent_os_notion_read_request.binding_verification \
+            --transport "$RUNNER_TEMP/agent-os-notion-read/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --generated-at "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --output "$RUNNER_TEMP/agent-os-notion-read/result.json"
+
+      - name: Execute admitted read through canonical Notion adapter
+        if: ${{ steps.admission.outputs.secret_dispatch_authorized == 'true' && steps.admission.outputs.binding_verification != 'true' }}
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          set -euo pipefail
+          python -m scripts.agent_os_notion_read_request.runner \
+            --transport "$RUNNER_TEMP/agent-os-notion-read/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --generated-at "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --output "$RUNNER_TEMP/agent-os-notion-read/result.json" \
+            --live-notion
+
+      - name: Record blocked admission without secret access
+        if: ${{ steps.admission.outputs.secret_dispatch_authorized != 'true' }}
+        env:
+          PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          python -m scripts.agent_os_notion_read_request.runner \
+            --transport "$RUNNER_TEMP/agent-os-notion-read/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --generated-at "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --output "$RUNNER_TEMP/agent-os-notion-read/result.json"
+
+      - name: Publish bounded Notion read summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-notion-read"
+          result_path = root / "result.json"
+          admission_path = root / "admission.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS bounded Notion read\n\n")
+              if admission_path.exists():
+                  admission = json.loads(admission_path.read_text(encoding="utf-8"))
+                  summary.write(f"Admission: `{admission.get('status')}`\n\n")
+                  summary.write(
+                      "Secret dispatch authorized: `"
+                      + str(admission.get("secret_dispatch_authorized") is True)
+                      + "`\n\n"
+                  )
+              if result_path.exists():
+                  result = json.loads(result_path.read_text(encoding="utf-8"))
+                  summary.write(
+                      f"Dispatch: `{result.get('dispatch_status')}` / "
+                      f"`{result.get('dispatch_reason')}`\n\n"
+                  )
+                  summary.write(f"Notion writes: `{result.get('notion_writes_performed')}`\n\n")
+                  summary.write(f"Drive writes: `{result.get('drive_writes_performed')}`\n\n")
+                  summary.write(f"GCE invoked: `{result.get('gce_invoked')}`\n")
+              else:
+                  summary.write("Result evidence unavailable; manual review required.\n")
+          PY
+
+      - name: Publish bounded Notion read evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-notion-read-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-notion-read/*.json
+          if-no-files-found: warn
+          retention-days: 7

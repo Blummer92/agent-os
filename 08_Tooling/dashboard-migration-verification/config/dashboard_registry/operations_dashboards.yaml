@@ -1,0 +1,30 @@
+dashboards:
+  generated_asset_review:
+    name: "Generated Asset Review"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Generated Asset Review Ops"
+    source_of_truth_role: "review_workflow_surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Contains review workflow context that must remain visible until replacements are verified."
+
+  unit_alignment_readiness_dashboard:
+    name: "Unit Alignment & Readiness Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Curriculum Ops"
+    source_of_truth_role: "cross_function_operational_dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Assume dependencies are material until field, formula, and linked-view parity is verified."
+
+  daily_generation_packet_dashboard:
+    name: "Daily Generation Packet Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Generation Operations"
+    source_of_truth_role: "daily_execution_dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Likely tied to active daily workflows and packet production references."

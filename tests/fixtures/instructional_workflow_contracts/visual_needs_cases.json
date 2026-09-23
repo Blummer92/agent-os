@@ -1,0 +1,14 @@
+{
+  "unspecified": {
+    "decision": "unspecified",
+    "maximum_visual_count": 0,
+    "roles": [],
+    "expected_outcome": "manual-review-required"
+  },
+  "no-visuals": {
+    "decision": "no-visuals",
+    "maximum_visual_count": 0,
+    "roles": [],
+    "expected_outcome": "no-visual-needed"
+  }
+}

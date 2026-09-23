@@ -1,0 +1,118 @@
+# Modeled Software Tutorial Capture Spike
+
+Repository-only Phase 1 implementation for #932 (parent #931). This package validates Chrome DevTools Recorder JSON before execution, provides a thin Puppeteer Replay capture shell, owns the RJ3 Recorder-conformance adapter from #1125, owns the RJ4 synthetic replay-equivalence harness from #1126, and now owns the bounded live-capture request/receipt seam from #2100.
+
+## Boundary
+
+This directory is capture/replay evidence only. It does not own tutorial wording, Teacher Modeling binding, `software-tutorial-v1`, rendering, Drive/Notion writes, AI grouping, OCR, computer vision, UI repair, instructional approval, or live-application fidelity claims. Live Adobe testing remains a manual/controlled contract test outside ordinary CI.
+
+## Runtime
+
+- Node `>=22.12 <23`
+- `@puppeteer/replay` `4.0.2`
+- `puppeteer` `25.3.0`
+
+Run `npm ci` here. The package is isolated from root Node dependencies and tests use Node's built-in `node:test`.
+
+## Safety preflight
+
+`validateRecording(rawRecording, { approvedOrigins })` hashes source bytes first, then applies #932's execution preflight. Allowed step types are `setViewport`, `navigate`, `click`, `doubleClick`, `change`, `hover`, `scroll`, `keyDown`, `keyUp`, and `waitForElement`.
+
+It rejects `waitForExpression`, `customStep`, `emulateNetworkConditions`, `close`, and unknown future types. Navigation requires an exact caller-supplied HTTPS origin. Sensitive values route to `manual-review-required`; raw captures are sensitive by default. Reason codes use existing `artifact-*`, `quality-*`, `asset-*`, and `authority-*` families.
+
+## Recorder conformance (RJ3 / #1125)
+
+`validateRecorderConformance(rawRecording)` is the canonical Recorder-format gate. It fingerprints exact input bytes, separates JSON syntax failure from Recorder rejection, then delegates format parsing to pinned `@puppeteer/replay` `4.0.2`.
+
+Statuses are `json-invalid`, `recorder-invalid`, `recorder-valid`, `validator-unavailable`, and `validator-error`. Every result records input SHA-256, validator name/version, parse status, bounded diagnostic codes, and `behavioral_equivalence_proven: false`. Raw upstream exception text and local paths are never returned.
+
+### Dependency upgrades
+
+Replay is exact-pinned in `package.json` and `package-lock.json`, and the adapter verifies the installed version equals `4.0.2`. Mismatch fails closed as `validator-error`. Any upgrade requires explicit dependency review and the full RJ3 positive/negative compatibility matrix before changing the supported version.
+
+## Replay equivalence (RJ4 / #1126)
+
+`validateReplayEquivalence(originalRaw, candidateRaw)` runs only against the local synthetic `rj4-app.html` fixture. Candidate replay is blocked unless RJ3 returns `recorder-valid`. The harness resets state between runs, compares normalized observable checkpoints and final state rather than step count or selector identity, and returns only `equivalent`, `not-equivalent`, `indeterminate`, or `runner-unavailable` for the behavioral comparison.
+
+Evidence binds original/candidate SHA-256 digests, fixture version/digest, exact Replay version, normalized checkpoints/final state, and bounded failure reasons. `indeterminate` and `runner-unavailable` are fail-closed and never imply rewrite safety. Every result keeps `external_write_authorized=false` and `production_authorized=false`.
+
+The synthetic fixture includes folder/card actions, title changes, click/double-click distinction, modal behavior, recoverable error/recovery, bounded delayed state, stable and fragile-looking selectors, ordering-sensitive actions, and duplicate/noise cases. Tests cover all twelve required #1126 fixture-pair classes plus a real headless pinned-Replay smoke path.
+
+The browser harness blocks requests except `about:blank` and the in-memory fixture document. It performs no Adobe, Schoology, PowerSchool, Notion, Drive, classroom, account, provider, or production access.
+
+## Recorder testing ladder
+
+`JSON syntax -> Recorder conformance (RJ3) -> semantic/provenance invariants (RJ1/RJ2) -> deterministic replay equivalence (RJ4) -> separately authorized application-specific empirical fidelity`
+
+RJ3 proves only Recorder-format compatibility. RJ4 proves only behavioral equivalence inside the bounded synthetic fixture. Neither proves instructional correctness, current Adobe UI fidelity, source authenticity, or production safety.
+
+## Replay capture
+
+`captureFlow(...)` always runs preflight before Replay. It requires a dedicated `userDataDir` outside the repository; recommended location: `~/.agent-os/browser-profiles/adobe-express/`.
+
+Authentication is manual only. Operator status is exactly `AUTH_READY`, `AUTH_REQUIRED`, `AUTH_EXPIRED`, or `AUTH_BLOCKED`; only `AUTH_READY` may launch Replay. No password/MFA/SSO automation, cookie/token extraction, or committed browser profile is allowed.
+
+The capture extension records bounded selector/geometry evidence and viewport screenshots before/after each step. Capture JSON stores screenshot filenames, not absolute paths. Replay remains authoritative for execution.
+
+Recorder target/frame context is fail-closed. URL-valued `step.target` values must use an exact approved HTTPS origin during preflight. At replay time evidence capture resolves the same page URL identity and numeric `step.frame` child-frame path that pinned Replay uses. Missing or duplicate target pages, or missing child frames, block evidence capture with finite `quality-target-unresolved` / `quality-target-ambiguous` reasons rather than silently inspecting the main page. Selector, geometry, style, and before/after screenshot evidence therefore remain local to the action's actual replay context.
+
+No real unsanitized screenshot or Recorder capture belongs in Git. Repository fixtures must remain synthetic or sanitized and human-reviewed.
+
+### Recorder file-input binding (#2811)
+
+Recorder `change` steps produced by browser file inputs expose a browser fake path such as `C:\\fakepath\\practice.pdf`; that string is never treated as a host path or file identity. When such a step is present, live capture requires exactly one bounded file artifact tied to the exact recording action by `source_index` + `source_fingerprint`, plus an opaque `content_ref`, SHA-256 digest, bounded basename, and base64 bytes.
+
+The file bytes are part of runtime evidence only. Their identity participates in the logical capture-request fingerprint. The GCE transport revalidates the action/digest, the host materializes bytes only inside the capture's `/dev/shm/agent-os-software-tutorial-capture-*/file-inputs` workspace, and `captureFlow` accepts only those host-materialized bindings. Replay uploads the materialized file only when the recorded target is an actual `<input type="file">`. The entire tmpfs workspace is deleted after the capture attempt.
+
+Missing, stale, mismatched, duplicate, oversized, or path-bearing file evidence fails closed. Ordinary non-file `change` steps and recordings without file inputs retain the existing behavior. No raw teacher file belongs in Git, logs, issue bodies, or a persistent capture store.
+
+### Capture format v2 / optional target-style evidence (#1485)
+
+`captureFlow({ ..., captureTargetStyle: true })` opts into `software-tutorial-capture-v2`, which adds one optional bounded `target_style` snapshot per resolved action from a frozen `getComputedStyle` property allowlist on the already-resolved target handle only (no DOM traversal). Colors persist as canonical RGBA; `background_image` retains bounded CSS gradients and blocks `url(...)`/`blob:`/`data:` resource identity. Style resolution failure leaves `target_style: null` rather than blocking or fabricating a value, since Replay stays authoritative for execution regardless.
+
+`captureTargetStyle` defaults to `false`, which keeps `format_version: software-tutorial-capture-v1` and its existing shape byte-identical. Adding `target_style` never changes `fingerprintAction()` output or recording identity.
+
+## Governed live capture request seam (#2100)
+
+`runLiveCaptureRequest(...)` is a thin request/receipt adapter around the existing #932 capture worker. It does not reimplement Replay, Recorder validation, browser launch, screenshot capture, or target inspection.
+
+The request format is exactly `software-tutorial-capture-request-v1`. It binds one bounded `capture_request_id`, HTTPS target URL, exact approved origins, Chrome Recorder content reference + SHA-256, one exact governed opaque browser-session identity (`adobe-express-default`, `canva-default`, or `schoology-default`), and `privacy_mode = sensitive-by-default`. Unknown fields fail closed, so callers cannot smuggle arbitrary commands, scripts, profile paths, ports, displays, credentials, or alternate browser instructions into the capture route.
+
+The selected execution surface is fixed to:
+
+```text
+kind = gce-iap
+project = agent-os-502614
+zone = us-central1-a
+instance = agent-os-test
+```
+
+A different execution surface is rejected; there is no silent local/Cloud Build/provider fallback. Browser-session capability is bounded to the same opaque session identity plus one of #932's canonical auth states. Only `AUTH_READY` admits invocation. The adapter verifies the Recorder bytes against the request SHA before transport.
+
+The injected transport receives only the bounded capture operation and request evidence needed by the selected route. It may resolve the host-local profile internally, but the request/result contract never contains a profile path, profile bytes, password, MFA material, cookie, token, or SSO artifact.
+
+Transport status and capture status remain separate. Successful transport does not imply a successful capture, privacy clearance, Picture Perfect readiness, classroom readiness, or publication authority. A successful receipt returns only a bounded `software-tutorial-capture-v1` identity reference (`capture_id` + recording SHA), not raw screenshots or unrestricted page data.
+
+Duplicate request handling is injected rather than creating a new persistence system. If the selected route supplies an existing receipt for the same logical request identity, the adapter reuses it without a second capture invocation; a conflicting request fingerprint fails closed.
+
+Repository tests remain synthetic and credential-free. Live GCE/IAP/browser activation, package installation, provider login, Recorder replay against an authenticated application, and screenshot capture remain separately authorized under the applicable provider bootstrap/qualification issue.
+
+### Schoology/Kami governed session (#2809)
+
+The Schoology/Kami route adds one fixed opaque session identity, `schoology-default`, on the existing fixed GCE/IAP execution surface. Its request allowlist is exact and closed:
+
+- `https://dpscd.schoology.com` — teacher-owned Schoology tenant used by the modeled flow;
+- `https://web.kamihq.com` — Kami web application reached through the normal Schoology LTI launch.
+
+The request must carry that exact two-origin set; wildcard Schoology tenants, arbitrary Kami origins, caller-supplied profile paths, and alternate execution hosts remain unrepresentable. The host resolves `schoology-default` only to the dedicated `agent-os-schoology-capture` identity and host-local `schoology-kami` browser profile. Authentication is manual through Schoology/SSO/MFA; Kami is expected to inherit the normal LTI session rather than receive a second automated login path.
+
+Repository implementation does not activate the live host, log into Schoology/Kami, access a real class, or authorize Schoology mutations. The first empirical use belongs to the separately governed teacher-sandbox canary in #2812.
+
+## Local checks
+
+```bash
+npm test
+npm run check
+```
+
+A later separately authorized live spike must produce #932's GO/MODIFY/STOP packet. This repository package alone cannot produce that verdict.

@@ -1,0 +1,41 @@
+{
+  "proposal_notice": "Offline fixture property names only; verify the live contract under issue #737.",
+  "mapping": {
+    "asset_title": "Asset Title",
+    "drive_file_id": "Drive File ID",
+    "drive_url": "Drive URL",
+    "approved_use": "Approved Use",
+    "asset_type": "Asset Type",
+    "human_review_status": "Human Review Status",
+    "review_date": "Review Date"
+  },
+  "pages": [
+    {
+      "id": "fixture-page-001",
+      "url": "https://www.notion.so/fixture-page-001",
+      "properties": {
+        "Asset Title": {"type": "title", "title": [{"plain_text": "Camera Diagram"}]},
+        "Drive File ID": {"type": "rich_text", "rich_text": [{"plain_text": "fixtureDriveFileId_000001"}]},
+        "Drive URL": {"type": "url", "url": "https://drive.google.com/file/d/fixtureDriveFileId_000001/view"},
+        "Approved Use": {"type": "select", "select": {"name": "Approved"}},
+        "Asset Type": {"type": "select", "select": {"name": "Diagram"}},
+        "Human Review Status": {"type": "status", "status": {"name": "Reviewed"}},
+        "Review Date": {"type": "date", "date": {"start": "2026-07-30"}},
+        "Teacher Visible": {"type": "checkbox", "checkbox": true},
+        "Revision Count": {"type": "number", "number": 2}
+      }
+    },
+    {
+      "id": "fixture-page-002",
+      "url": null,
+      "properties": {
+        "Asset Title": {"type": "title", "title": [{"plain_text": "Exposure Triangle"}]},
+        "Drive File ID": {"type": "rich_text", "rich_text": [{"plain_text": "fixtureDriveFileId_000002"}]},
+        "Drive URL": {"type": "url", "url": "https://drive.google.com/file/d/fixtureDriveFileId_000002/view"},
+        "Approved Use": {"type": "select", "select": null},
+        "Asset Type": {"type": "select", "select": {"name": "Reference"}},
+        "Human Review Status": {"type": "status", "status": null}
+      }
+    }
+  ]
+}

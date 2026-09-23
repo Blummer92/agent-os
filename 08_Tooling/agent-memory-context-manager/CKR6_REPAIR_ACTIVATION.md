@@ -1,0 +1,44 @@
+# CKR6 Repair Activation — #1873
+
+## Purpose
+
+Make the existing CKR6 Lessons Learned retry boundary automatic at failed implementation and repair transitions without creating another memory, selector, scheduler, retry engine, or Notion client.
+
+## Canonical flow
+
+```text
+failed implementation/repair attempt
+-> preserve FailedRepairAttempt
+-> activate_repair_retry_lessons(...)
+-> existing CKR11 orchestrate_lesson_activation(...)
+-> bounded read-only Lessons Learned retrieval when material
+-> record retry_reentry_outcome on that exact failed attempt
+-> existing plan_repair_retry_boundary(...)
+-> next repository mutation admitted or blocked
+-> caller reacquires mutable GitHub state and continues the still-authorized mission
+```
+
+Every new failed attempt creates a new retry-specific CKR6 obligation. An outcome from an earlier attempt cannot satisfy a later attempt.
+
+## Retrieval contract
+
+Ordinary CKR11 retrieval derives provider filters from the current `CodingKnowledgeRequest` using only the bridge's existing finite Area/ecosystem and Learning Type/capability maps plus the request's explicit capability, library, and target-path terms. Unmapped ecosystem or capability vocabulary does not create guessed clauses.
+
+The provider read may return a bounded relevance page larger than CKR2's five-candidate selection budget. The bridge reuses CKR2's canonical candidate matcher to rank normalized rows and hands at most `MAX_LESSON_RECORDS` candidates to CKR2. Corpus growth therefore does not make the first arbitrary five provider rows authoritative, and an over-budget provider response is narrowed deterministically instead of failing solely because more than five rows were returned.
+
+## Outcomes
+
+- `consumed`: relevant lesson evidence was selected through CKR6/CKR2; the retry gate may admit the next mutation.
+- `not-material`: CKR6 determined retrieval was not needed; the retry gate may admit the next mutation.
+- `unavailable-or-failed`: the existing coarse retry-admission outcome is preserved for compatibility. When specialized knowledge is required, the mutation remains blocked.
+- `lesson_disposition`: exact-attempt classification distinguishes `capability-unavailable`, `no-relevant-lesson`, `candidate-data-defect`, `stale-relevant-lesson`, `unverifiable-relevant-lesson`, `canonical-authority-conflict`, and `governance-insufficient` without changing mutation admission. `consumed` and `not-material` remain explicit dispositions. The execution-service facade carries this value across its boundary beside the coarse outcome, so a downstream semantic-recurrence consumer reads capability unavailability as capability evidence rather than as another same-class repair failure. Downstream consumers read the disposition rather than re-deriving it from the coarse outcome.
+
+## Authority
+
+Lessons Learned remain advisory-only. GitHub governance, current issue/PR state, authorization, repository code, tests, and exact-head validation remain authoritative. This seam performs no Notion writes and grants no implementation, merge, issue-closure, workflow, production, credential, or external-write authority.
+
+## Implementation
+
+`src/agent_memory_context_manager/repair_lesson_activation.py` composes existing public CKR6/CKR11 functions. It does not duplicate retrieval or selection logic.
+
+Regression coverage lives in `tests/test_repair_lesson_activation.py` and `tests/test_lesson_activation_bridge.py` and proves automatic retrieval, task-specific bounded retrieval, deterministic over-budget narrowing, retry-specific re-entry, specialized-required fail-closed behavior, explicit not-material zero-read behavior, and rejection of reuse of an already-satisfied attempt.

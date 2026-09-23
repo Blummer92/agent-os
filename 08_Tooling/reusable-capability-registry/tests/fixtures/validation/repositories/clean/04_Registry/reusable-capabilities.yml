@@ -1,0 +1,22 @@
+registry_version: 0.1.0
+capabilities:
+  - capability_id: clean-widget
+    name: Clean Widget
+    summary: A fully valid capability used for the clean validation fixture.
+    status: active
+    canonical_paths:
+      - src/cleanpkg/core.py
+    public_interfaces:
+      - src.cleanpkg.core:run
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - src/cleanpkg/consumer.py
+    tests:
+      - test_clean.py
+    keywords:
+      - clean
+    reuse_guidance: Reuse the clean widget for validated example flows.
+    side_effects:
+      - Performs no writes.

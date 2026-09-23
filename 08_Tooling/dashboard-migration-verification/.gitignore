@@ -1,0 +1,15 @@
+# Generated local evidence. Do not commit live dashboard data.
+snapshots/*.json
+graph/*.json
+validation/*.json
+validation/*.md
+
+# Keep directory placeholders.
+!snapshots/.gitkeep
+!graph/.gitkeep
+!validation/.gitkeep
+
+# Python local cache.
+__pycache__/
+.pytest_cache/
+*.pyc

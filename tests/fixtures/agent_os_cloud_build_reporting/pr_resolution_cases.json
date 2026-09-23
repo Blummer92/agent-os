@@ -1,0 +1,115 @@
+[
+  {
+    "name": "authoritative_exact_match",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authoritative_pr_number": 42,
+    "candidates": [
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 42,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "open",
+        "evidence_source": "authoritative"
+      }
+    ],
+    "expect_status": "resolved",
+    "expect_pull_request_number": 42
+  },
+  {
+    "name": "single_candidate_match",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "authoritative_pr_number": null,
+    "candidates": [
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 7,
+        "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "state": "open",
+        "evidence_source": "lookup"
+      }
+    ],
+    "expect_status": "resolved",
+    "expect_pull_request_number": 7
+  },
+  {
+    "name": "no_match",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "authoritative_pr_number": null,
+    "candidates": [],
+    "expect_status": "skipped"
+  },
+  {
+    "name": "multiple_matches",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "dddddddddddddddddddddddddddddddddddddddd",
+    "authoritative_pr_number": null,
+    "candidates": [
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 10,
+        "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "state": "open",
+        "evidence_source": "lookup"
+      },
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 11,
+        "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "state": "open",
+        "evidence_source": "lookup"
+      }
+    ],
+    "expect_status": "manual-review"
+  },
+  {
+    "name": "wrong_repository",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "authoritative_pr_number": null,
+    "candidates": [
+      {
+        "repository": "someone-else/other-repo",
+        "pull_request_number": 5,
+        "head_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "state": "open",
+        "evidence_source": "lookup"
+      }
+    ],
+    "expect_status": "skipped"
+  },
+  {
+    "name": "wrong_sha",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "ffffffffffffffffffffffffffffffffffffffff",
+    "authoritative_pr_number": null,
+    "candidates": [
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 6,
+        "head_sha": "1111111111111111111111111111111111111111",
+        "state": "open",
+        "evidence_source": "lookup"
+      }
+    ],
+    "expect_status": "skipped"
+  },
+  {
+    "name": "closed_pr",
+    "repository": "Blummer92/agent-os",
+    "tested_sha": "2222222222222222222222222222222222222222",
+    "authoritative_pr_number": null,
+    "candidates": [
+      {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 8,
+        "head_sha": "2222222222222222222222222222222222222222",
+        "state": "closed",
+        "evidence_source": "lookup"
+      }
+    ],
+    "expect_status": "skipped"
+  }
+]

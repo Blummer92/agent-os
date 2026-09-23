@@ -1,0 +1,133 @@
+registry_name: lp-authority-state-registry
+contract_version: "1.0"
+record_revision: 1
+normative_standard: 01_Shared_Standards/instructional-design/lp-authority-state-registry.md
+bounds:
+  reason_codes:
+    maximum: 16
+    normative_id: bound-reason-codes
+  source_references:
+    maximum: 20
+    normative_id: bound-source-references
+  unresolved_uncertainties:
+    maximum: 12
+    normative_id: bound-unresolved-uncertainties
+  explanations:
+    maximum: 12
+    normative_id: bound-explanations
+namespaces:
+  advisory_assessment_outcomes:
+    - value: feasible
+      normative_id: advisory-feasible
+    - value: feasible-with-adjustments
+      normative_id: advisory-feasible-with-adjustments
+    - value: not-feasible
+      normative_id: advisory-not-feasible
+    - value: insufficient-evidence
+      normative_id: advisory-insufficient-evidence
+  routing_recommendations:
+    - value: continue
+      normative_id: route-continue
+    - value: revise
+      normative_id: route-revise
+    - value: hold
+      normative_id: route-hold
+    - value: manual-review
+      normative_id: route-manual-review
+  deployment_lifecycle_states:
+    - value: draft
+      normative_id: lifecycle-draft
+    - value: shadow
+      normative_id: lifecycle-shadow
+    - value: active
+      normative_id: lifecycle-active
+    - value: retired
+      normative_id: lifecycle-retired
+gate_states:
+  - value: NOT_EVALUATED
+    normative_id: gate-not-evaluated
+  - value: BLOCKED
+    normative_id: gate-blocked
+  - value: CLEARED
+    normative_id: gate-cleared
+  - value: REVOKED
+    normative_id: gate-revoked
+compatibility_states:
+  - value: compatible
+    normative_id: compatibility-compatible
+  - value: migration-required
+    normative_id: compatibility-migration-required
+  - value: unsupported
+    normative_id: compatibility-unsupported
+  - value: conflicting
+    normative_id: compatibility-conflicting
+  - value: manual-review-required
+    normative_id: compatibility-manual-review-required
+legacy_aliases:
+  - value: fits
+    normative_id: legacy-fits
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+  - value: ready
+    normative_id: legacy-ready
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+  - value: valid
+    normative_id: legacy-valid
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+  - value: approved
+    normative_id: legacy-approved
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+  - value: authorized
+    normative_id: legacy-authorized
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+  - value: status
+    normative_id: legacy-unscoped-status
+    display_only: true
+    authority_advancing: false
+    migration_review_required: true
+    preserve_original_literal: true
+non_authority_evidence:
+  - value: confidence
+    normative_id: evidence-confidence
+    authority_advancing: false
+  - value: review-recommendation
+    normative_id: evidence-review-recommendation
+    authority_advancing: false
+  - value: blocker-or-reason-code
+    normative_id: evidence-blocker-or-reason-code
+    authority_advancing: false
+  - value: stale-finding
+    normative_id: evidence-stale-finding
+    authority_advancing: false
+  - value: compatibility-result
+    normative_id: evidence-compatibility-result
+    authority_advancing: false
+  - value: migration-recommendation
+    normative_id: evidence-migration-recommendation
+    authority_advancing: false
+  - value: notion-view-membership
+    normative_id: evidence-notion-view-membership
+    authority_advancing: false
+  - value: drive-file-existence
+    normative_id: evidence-drive-file-existence
+    authority_advancing: false
+  - value: validator-result
+    normative_id: evidence-validator-result
+    authority_advancing: false
+  - value: api-success
+    normative_id: evidence-api-success
+    authority_advancing: false

@@ -1,0 +1,10 @@
+{
+  "title": "Synthetic RJ2 clean rewrite",
+  "steps": [
+    {"type": "navigate", "url": "https://example.test/"},
+    {"type": "click", "selectors": [["aria/Create folder"]], "offsetX": 4, "offsetY": 5},
+    {"type": "change", "selectors": [["aria/Folder name"]], "value": "Folder A"},
+    {"type": "keyDown", "key": "Enter"},
+    {"type": "keyUp", "key": "Enter"}
+  ]
+}

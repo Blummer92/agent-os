@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Agent OS protected-branch guard: unable to resolve repository root" >&2
+  exit 2
+}
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 "$ROOT/scripts/protected_branch_push_guard.py" check
+fi
+
+if command -v python >/dev/null 2>&1; then
+  exec python "$ROOT/scripts/protected_branch_push_guard.py" check
+fi
+
+echo "Agent OS protected-branch guard: Python 3 is required" >&2
+exit 2

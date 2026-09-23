@@ -1,0 +1,69 @@
+#!/bin/sh
+# Separately authorized root installer for the fixed Schoology/Kami software-tutorial capture runtime.
+set -eu
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+CAPTURE_USER=agent-os-schoology-capture
+CAPTURE_HOME=/var/lib/agent-os/schoology-capture-home
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/schoology-kami
+TRANSPORT_PRINCIPAL=sa_117278680011452280250
+RUNTIME_ROOT=/opt/agent-os/software-tutorial-capture
+STAGING_ROOT=/var/lib/agent-os/software-tutorial-capture-staging
+OUTER_TARGET=/usr/local/libexec/agent-os-schoology-software-tutorial-capture
+SESSION_TARGET=/usr/local/libexec/agent-os-schoology-software-tutorial-capture-session
+SUDOERS_TARGET=/etc/sudoers.d/agent-os-schoology-software-tutorial-capture
+NODE_VERSION=22.16.0
+NODE_ARCHIVE=node-v${NODE_VERSION}-linux-x64.tar.xz
+NODE_URL=https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ARCHIVE}
+NODE_SHA256=f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
+CAPTURE_SOURCE=$REPO_ROOT/08_Tooling/instructional-materials-coach/capture
+fail() { printf '%s\n' "schoology software tutorial capture install refused: $1" >&2; exit 64; }
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+id "$CAPTURE_USER" >/dev/null 2>&1 || fail "dedicated Schoology capture user unavailable"
+[ -d "$PROFILE_DIR" ] || fail "fixed Schoology profile unavailable"
+[ -d "$CAPTURE_SOURCE" ] || fail "capture package source unavailable"
+for binary in /usr/bin/chromium /usr/bin/curl /usr/bin/tar /usr/bin/xz /usr/sbin/visudo /usr/sbin/runuser; do
+  [ -x "$binary" ] || fail "required fixed host runtime unavailable"
+done
+rm -rf "$STAGING_ROOT"
+mkdir -p "$STAGING_ROOT" /usr/local/libexec /opt/agent-os
+trap 'rm -rf "$STAGING_ROOT"' EXIT HUP INT TERM
+chown root:root "$STAGING_ROOT"
+chmod 0700 "$STAGING_ROOT"
+/usr/bin/curl --fail --silent --show-error --location "$NODE_URL" --output "$STAGING_ROOT/$NODE_ARCHIVE"
+printf '%s  %s\n' "$NODE_SHA256" "$STAGING_ROOT/$NODE_ARCHIVE" | sha256sum -c - >/dev/null
+mkdir "$STAGING_ROOT/node"
+/usr/bin/tar -xJf "$STAGING_ROOT/$NODE_ARCHIVE" --strip-components=1 -C "$STAGING_ROOT/node"
+mkdir "$STAGING_ROOT/package"
+for file in package.json package-lock.json safe_recording.mjs replay_capture.mjs recorder_conformance.mjs replay_equivalence.mjs file_input_bindings.mjs live_capture_request.mjs gce_capture_transport.mjs gce_live_capture_request.mjs live_capture_host.mjs; do
+  [ -f "$CAPTURE_SOURCE/$file" ] || fail "capture runtime source missing: $file"
+  cp "$CAPTURE_SOURCE/$file" "$STAGING_ROOT/package/$file"
+done
+(
+  cd "$STAGING_ROOT/package"
+  PATH="$STAGING_ROOT/node/bin:$PATH" PUPPETEER_SKIP_DOWNLOAD=1 npm ci --ignore-scripts --omit=dev >/dev/null
+)
+rm -rf "$RUNTIME_ROOT"
+mkdir -p "$RUNTIME_ROOT"
+cp -a "$STAGING_ROOT/node" "$RUNTIME_ROOT/node"
+cp -a "$STAGING_ROOT/package" "$RUNTIME_ROOT/package"
+chown -R root:root "$RUNTIME_ROOT"
+find "$RUNTIME_ROOT" -type d -exec chmod 0755 {} +
+find "$RUNTIME_ROOT" -type f -exec chmod 0644 {} +
+chmod 0755 "$RUNTIME_ROOT/node/bin/node"
+install -o root -g root -m 0755 "$SCRIPT_DIR/agent-os-schoology-software-tutorial-capture" "$OUTER_TARGET"
+install -o root -g root -m 0755 "$SCRIPT_DIR/agent-os-schoology-software-tutorial-capture-session" "$SESSION_TARGET"
+candidate="$STAGING_ROOT/sudoers"
+printf '%s ALL=(root) NOPASSWD: %s\n' "$TRANSPORT_PRINCIPAL" "$OUTER_TARGET" > "$candidate"
+chmod 0440 "$candidate"
+/usr/sbin/visudo -c -f "$candidate" >/dev/null
+install -o root -g root -m 0440 "$candidate" "$SUDOERS_TARGET"
+/usr/sbin/visudo -c >/dev/null
+node_version=$($RUNTIME_ROOT/node/bin/node --version)
+[ "$node_version" = "v$NODE_VERSION" ] || fail "fixed Node runtime version mismatch"
+HOME="$CAPTURE_HOME" PUPPETEER_SKIP_DOWNLOAD=1 "$RUNTIME_ROOT/node/bin/node" --input-type=module -e "import('file://$RUNTIME_ROOT/package/gce_capture_transport.mjs'); import('file://$RUNTIME_ROOT/package/live_capture_host.mjs')" >/dev/null
+printf '%s\n' "{\"schema_name\":\"agent-os-schoology-software-tutorial-capture-runtime\",\"schema_version\":\"1.0\",\"status\":\"installed\",\"browser_session_ref\":\"schoology-default\",\"node_version\":\"$node_version\",\"outer_entrypoint\":\"$OUTER_TARGET\",\"session_entrypoint\":\"$SESSION_TARGET\",\"transport_principal\":\"$TRANSPORT_PRINCIPAL\",\"generic_upload_enabled\":false,\"generic_shell_enabled\":false,\"profile_material_emitted\":false,\"scheduler_invoked\":false}"

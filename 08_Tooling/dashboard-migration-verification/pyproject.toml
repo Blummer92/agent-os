@@ -1,0 +1,16 @@
+[project]
+name = "dashboard-migration-verification"
+version = "0.1.0"
+description = "Local verification toolkit for Agent OS dashboard migration evidence, placeholder snapshots, dependency graphs, and conservative validation reports."
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

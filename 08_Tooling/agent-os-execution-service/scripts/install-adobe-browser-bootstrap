@@ -1,0 +1,78 @@
+#!/bin/sh
+# Separately authorized administrator installer for the fixed #2106 browser bootstrap.
+# Repository implementation does not authorize running this script on agent-os-test.
+set -eu
+
+CAPTURE_USER=agent-os-capture
+CAPTURE_HOME=/var/lib/agent-os/capture-home
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/adobe-express
+RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
+INNER_TARGET=/usr/local/libexec/agent-os-adobe-browser-session
+OUTER_TARGET=/usr/local/libexec/agent-os-adobe-browser-bootstrap
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+INNER_SOURCE=$SCRIPT_DIR/agent-os-adobe-browser-session
+
+fail() {
+  printf '%s\n' "adobe browser bootstrap install refused: $1" >&2
+  exit 64
+}
+
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -u)" = "0" ] || fail "installer must run as root"
+[ -f "$INNER_SOURCE" ] || fail "fixed session source unavailable"
+[ -r /etc/os-release ] || fail "host identity unavailable"
+. /etc/os-release
+[ "${ID:-}" = debian ] || fail "qualified host must be Debian"
+[ "${VERSION_ID:-}" = 12 ] || fail "qualified host must be Debian 12"
+
+# Package installation and every host mutation below are an excluded live-host
+# activation step. Merely merging this source does not authorize invocation.
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+  chromium \
+  novnc \
+  websockify \
+  x11vnc \
+  xauth \
+  xvfb
+
+if ! getent passwd "$CAPTURE_USER" >/dev/null 2>&1; then
+  useradd --system --home-dir "$CAPTURE_HOME" --create-home --shell /usr/sbin/nologin "$CAPTURE_USER"
+fi
+
+mkdir -p /usr/local/libexec "$PROFILE_DIR" "$RUNTIME_DIR"
+chown root:root /usr/local/libexec
+chmod 0755 /usr/local/libexec
+chown -R "$CAPTURE_USER:$CAPTURE_USER" "$CAPTURE_HOME" "$RUNTIME_DIR"
+chmod 0700 "$CAPTURE_HOME" "$PROFILE_DIR" "$RUNTIME_DIR"
+
+install -o root -g root -m 0755 "$INNER_SOURCE" "$INNER_TARGET"
+
+outer_tmp=$(mktemp)
+trap 'rm -f "$outer_tmp"' EXIT HUP INT TERM
+cat > "$outer_tmp" <<'EOF_OUTER'
+#!/bin/sh
+set -eu
+CAPTURE_USER=agent-os-capture
+CAPTURE_HOME=/var/lib/agent-os/capture-home
+RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
+INNER=/usr/local/libexec/agent-os-adobe-browser-session
+fail() {
+  printf '%s\n' "adobe browser bootstrap refused: $1" >&2
+  exit 64
+}
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -u)" = "0" ] || fail "bootstrap entrypoint requires administrator invocation"
+[ -x "$INNER" ] || fail "fixed session entrypoint unavailable"
+install -d -o "$CAPTURE_USER" -g "$CAPTURE_USER" -m 0700 "$RUNTIME_DIR"
+exec /usr/sbin/runuser -u "$CAPTURE_USER" -- env -i \
+  HOME="$CAPTURE_HOME" \
+  PATH=/usr/bin:/bin \
+  "$INNER"
+EOF_OUTER
+install -o root -g root -m 0755 "$outer_tmp" "$OUTER_TARGET"
+
+inner_sha=$(sha256sum "$INNER_TARGET" | awk '{print $1}')
+outer_sha=$(sha256sum "$OUTER_TARGET" | awk '{print $1}')
+printf '%s\n' "{\"status\":\"installed\",\"browser_session_ref\":\"adobe-express-default\",\"inner_sha256\":\"$inner_sha\",\"outer_sha256\":\"$outer_sha\",\"owner\":\"root\",\"group\":\"root\",\"mode\":\"755\",\"auth_ready_asserted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"

@@ -1,0 +1,10 @@
+{
+  "title": "Incomplete issue draft",
+  "fields": {
+    "tier": "tier:1-standard-implementation",
+    "owner": "owner:github-service-agent",
+    "readiness": "status:blocked",
+    "source-of-truth": "GitHub",
+    "external-write": "no-external-write"
+  }
+}

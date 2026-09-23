@@ -1,0 +1,154 @@
+{
+  "contract_version": "1.0",
+  "record_revision": 1,
+  "evidence_id": "cw6-preflight-evidence-1",
+  "workspace_context_id": "workspace-curriculum-1",
+  "notion_api_version": "2026-03-11",
+  "database_id": "notion-database-1",
+  "data_source_id": "notion-data-source-1",
+  "evidence_source": "synthetic-supplied-evidence",
+  "verified_at": "2026-07-30T17:00:00Z",
+  "schema_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "view_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "properties": [
+    {
+      "property_id": "prop-handoff",
+      "display_name": "Curriculum Handoff",
+      "property_type": "relation",
+      "value_owner": "unit-alignment-agent",
+      "record_owner": "agent-orchestrator",
+      "classification": "owner-governed",
+      "current_write_mode": "read-only",
+      "readiness_effect": "reference-only",
+      "generation_effect": "none",
+      "relation_target_data_source_id": "notion-data-source-units",
+      "maximum_value_size": 1000,
+      "evidence_state": "verified"
+    },
+    {
+      "property_id": "prop-material",
+      "display_name": "Material Requirement",
+      "property_type": "rich_text",
+      "value_owner": "instructional-materials-coach",
+      "record_owner": "instructional-materials-coach",
+      "classification": "agent-suggested",
+      "current_write_mode": "local-draft",
+      "readiness_effect": "advisory",
+      "generation_effect": "none",
+      "relation_target_data_source_id": null,
+      "maximum_value_size": 2000,
+      "evidence_state": "verified"
+    },
+    {
+      "property_id": "prop-manifest",
+      "display_name": "Artifact Manifest",
+      "property_type": "relation",
+      "value_owner": "instructional-materials-coach",
+      "record_owner": "instructional-materials-coach",
+      "classification": "display-only",
+      "current_write_mode": "read-only",
+      "readiness_effect": "reference-only",
+      "generation_effect": "none",
+      "relation_target_data_source_id": "notion-data-source-artifacts",
+      "maximum_value_size": 1000,
+      "evidence_state": "verified"
+    },
+    {
+      "property_id": "prop-reuse",
+      "display_name": "Reuse Recommendation",
+      "property_type": "rich_text",
+      "value_owner": "instructional-materials-coach",
+      "record_owner": "instructional-materials-coach",
+      "classification": "agent-suggested",
+      "current_write_mode": "local-draft",
+      "readiness_effect": "advisory",
+      "generation_effect": "none",
+      "relation_target_data_source_id": null,
+      "maximum_value_size": 2000,
+      "evidence_state": "verified"
+    }
+  ],
+  "relations": [
+    {
+      "property_id": "prop-manifest",
+      "source_data_source_id": "notion-data-source-1",
+      "target_data_source_id": "notion-data-source-artifacts",
+      "target_shared_with_connection": true,
+      "access_state": "verified",
+      "ambiguity_state": "unambiguous"
+    }
+  ],
+  "views": [
+    {
+      "view_id": "view-curriculum-review",
+      "parent_data_source_id": "notion-data-source-1",
+      "view_type": "table",
+      "capability_state": "supported",
+      "filter_sort_compatibility": "compatible",
+      "evidence_state": "verified"
+    }
+  ],
+  "limits": {
+    "page_size_limit": 100,
+    "pagination_complete": true,
+    "property_value_limit": 2000,
+    "collection_limit": 256,
+    "payload_limit": 262144,
+    "rate_limit_policy_known": true,
+    "retry_after_supported": true
+  },
+  "contract_mappings": [
+    {
+      "contract_name": "curriculum-workflow-handoff-v1",
+      "contract_version": "1.0",
+      "source_field": "identity.unit_id",
+      "target_property_id": "prop-handoff",
+      "projection_mode": "reference-only",
+      "owner_compatible": true,
+      "type_compatible": true,
+      "bounded": true,
+      "governed_field": true
+    },
+    {
+      "contract_name": "curriculum-material-requirement-v1",
+      "contract_version": "1.0",
+      "source_field": "instructional_purpose",
+      "target_property_id": "prop-material",
+      "projection_mode": "agent-suggested",
+      "owner_compatible": true,
+      "type_compatible": true,
+      "bounded": true,
+      "governed_field": false
+    },
+    {
+      "contract_name": "curriculum-artifact-manifest-v1",
+      "contract_version": "1.0",
+      "source_field": "artifact_identity",
+      "target_property_id": "prop-manifest",
+      "projection_mode": "display-only",
+      "owner_compatible": true,
+      "type_compatible": true,
+      "bounded": true,
+      "governed_field": false
+    },
+    {
+      "contract_name": "curriculum-artifact-reuse-plan-v1",
+      "contract_version": "1.0",
+      "source_field": "advisory_disposition",
+      "target_property_id": "prop-reuse",
+      "projection_mode": "agent-suggested",
+      "owner_compatible": true,
+      "type_compatible": true,
+      "bounded": true,
+      "governed_field": false
+    }
+  ],
+  "authorization": {
+    "live_read_authorized": false,
+    "write_authorized": false,
+    "schema_change_authorized": false,
+    "view_change_authorized": false,
+    "production_authorized": false,
+    "publication_authorized": false
+  }
+}

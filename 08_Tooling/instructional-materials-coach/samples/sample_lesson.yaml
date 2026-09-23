@@ -1,0 +1,18 @@
+title: Fractions Intro
+objectives:
+  - Add fractions with like denominators
+  - Compare the size of two fractions
+slides:
+  - index: 1
+    heading: Welcome
+    bullets:
+      - "Today we're learning about fractions"
+      - "By the end you'll be able to add and compare them"
+  - index: 2
+    heading: Adding Fractions
+    bullets:
+      - Keep the denominator the same
+      - Add the numerators
+worksheet_questions:
+  - What is 1/4 + 2/4?
+  - Which is bigger, 3/8 or 1/2?
