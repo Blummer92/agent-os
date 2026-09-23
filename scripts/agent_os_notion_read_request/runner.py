@@ -19,7 +19,11 @@ from typing import Mapping
 
 from .admission import admit_notion_read_request
 from .catalog import load_catalog
-from .execution import SchedulerTaskExecutorFactory, execute_admitted_notion_read
+from .execution import (
+    SchedulerTaskExecutorFactory,
+    execute_admitted_notion_read,
+    execute_destination_verification,
+)
 from .live_executor import build_live_notion_executor_factory
 from .models import SCHEMA_VERSION, NotionReadCatalog, NotionReadRequestError
 from .projection import reject_credential_keys, project_public_result
@@ -73,20 +77,37 @@ def run_notion_read_request(
         reject_credential_keys(evidence, "evidence")
         return evidence
 
-    execution = execute_admitted_notion_read(
-        admission,
-        catalog=resolved_catalog,
-        scheduler_task_executor_factory=scheduler_task_executor_factory,
-        current_context=current_context,
-    )
-    evidence["dispatch_status"] = DISPATCH_COMPLETED
-    evidence["dispatch_reason"] = "bounded-read-projected"
-    evidence["result"] = project_public_result(
-        admission,
-        execution,
-        catalog=resolved_catalog,
-        generated_at=generated_at,
-    )
+    if admission.request_class == "destination-verification":
+        execution = execute_destination_verification(
+            admission,
+            scheduler_task_executor_factory=scheduler_task_executor_factory,
+        )
+        evidence["dispatch_status"] = DISPATCH_COMPLETED
+        evidence["dispatch_reason"] = "bounded-destination-verification-projected"
+        evidence["result"] = {
+            "schema_version": SCHEMA_VERSION,
+            "result_kind": "agent-os-notion-destination-verification-result",
+            "repository": admission.repository,
+            "issue_number": admission.issue_number,
+            "request_id": admission.request_id,
+            **execution,
+            "generated_at": generated_at,
+        }
+    else:
+        execution = execute_admitted_notion_read(
+            admission,
+            catalog=resolved_catalog,
+            scheduler_task_executor_factory=scheduler_task_executor_factory,
+            current_context=current_context,
+        )
+        evidence["dispatch_status"] = DISPATCH_COMPLETED
+        evidence["dispatch_reason"] = "bounded-read-projected"
+        evidence["result"] = project_public_result(
+            admission,
+            execution,
+            catalog=resolved_catalog,
+            generated_at=generated_at,
+        )
     reject_credential_keys(evidence, "evidence")
     return evidence
 
