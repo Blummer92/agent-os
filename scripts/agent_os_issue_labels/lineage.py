@@ -72,6 +72,7 @@ class GitHubLineageReconciliationResult:
     ci: CiSnapshot | None
     mutation_allowed: bool
     reportable_head_sha: str | None
+    active_pr_disposition: str | None = None
     merge_authorized: bool = field(default=False, init=False)
     issue_closure_authorized: bool = field(default=False, init=False)
     protected_setting_authorized: bool = field(default=False, init=False)
@@ -211,6 +212,12 @@ def reconcile_github_lineage(
                 reasons.add("expected-exact-head-ci-missing")
 
     status = _classify(reasons)
+    active_pr_disposition = None
+    if issue.state == "closed" and not pr.merged:
+        if pr.state == "open" and pr.draft:
+            active_pr_disposition = "preserve-draft-orphaned-parent"
+        else:
+            active_pr_disposition = "needs-decision"
     return GitHubLineageReconciliationResult(
         status=status,
         reason_codes=tuple(sorted(reasons)) if reasons else ("canonical-lineage-converged",),
@@ -220,6 +227,7 @@ def reconcile_github_lineage(
         ci=ci,
         mutation_allowed=status == "converged",
         reportable_head_sha=branch.sha,
+        active_pr_disposition=active_pr_disposition,
     )
 
 
