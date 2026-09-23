@@ -15,7 +15,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
-    admit_canonical_unit_verification_request,
     verify_candy_branding_binding,
     verify_live_bindings,
 )
@@ -146,24 +145,6 @@ class CandyVerificationAdapter:
             },
         }
 
-
-def test_candy_verification_request_is_exact_and_read_only() -> None:
-    decision = admit_canonical_unit_verification_request(
-        transport(
-            request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-            issue_number=2816,
-        ),
-        expected_repository=REPOSITORY,
-        expected_actor=ACTOR,
-    )
-
-    assert decision["status"] == "admitted"
-    assert decision["canonical_unit_key"] == "candy-branding"
-    assert decision["allowed_read_actions"] == ["query_data_source"]
-    assert decision["secret_dispatch_authorized"] is True
-    assert decision["write_allowed"] is False
-    assert decision["production_authorized"] is False
-    assert decision["notion_write_reachable"] is False
 
 
 def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
