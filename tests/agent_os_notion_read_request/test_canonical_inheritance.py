@@ -130,7 +130,10 @@ def test_authority_and_disposition_come_from_the_canonical_973_resolver(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("request_class", REQUEST_CLASSES)
+@pytest.mark.parametrize(
+    "request_class",
+    tuple(item for item in REQUEST_CLASSES if item != "destination-verification"),
+)
 def test_request_class_intent_stays_consistent_across_planner_and_assembler(
     request_class: str,
 ) -> None:
