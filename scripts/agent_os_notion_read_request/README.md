@@ -75,16 +75,22 @@ those canonical booleans onto the existing #973 status vocabulary.
 
 ## Activation state
 
-The shipped catalog declares **no verified binding**: every
-`verification_state` is `unverified` and every identity is `null`. Admission
-therefore fails closed before any secret-bearing step, and the runner reports
-`dispatch_status: "blocked"`.
+The shared Canonical Digital Media Unit Registry and Visual Asset Library
+bindings are verified-current, and the existing Photography Foundations
+requests remain dispatchable. Additional units may be staged in the finite
+catalog with `provider_page_id=null` and `verification_state=unverified`;
+those request ids are known but fail closed with `canonical-unit-unverified`.
 
-Live activation requires separately authorized excluded-surface work: the
-bounded workflow file, the repository secret, the read-only Notion integration,
-Notion source sharing, and re-verified source identities. Historical #962
-identities are planning leads only and are deliberately absent from this
-executable allowlist.
+#2816 stages Candy Branding this way. Its bounded verifier queries only the
+already-verified Canonical Digital Media Unit Registry, by the repository-owned
+exact canonical title, and returns one candidate page identity or fails closed
+on zero/multiple results. That evidence does not mutate the catalog or make the
+unit dispatchable by itself. A later repository update must deliberately bind
+the freshly verified page id before the existing Candy Branding canonical-unit
+or visual-assets request can reach the secret-bearing read step.
+
+Historical/exported page ids remain planning evidence only and are never copied
+into the executable catalog as verified-current identity.
 
 ## Public API
 
