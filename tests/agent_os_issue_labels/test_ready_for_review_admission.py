@@ -16,6 +16,7 @@ def admission(**overrides):
         "validation_head_sha": HEAD,
         "validation_admission_mode": "draft-final-candidate",
         "aggregate_status": "success",
+        "focused_status": "success",
         "requested_changes": False,
         "blocking_unresolved": 0,
         "ready_for_review_authority_supplied": True,
@@ -138,3 +139,14 @@ def test_provisional_ready_head_drift_requires_draft_rollback():
     assert result.rollback_to_draft_required is True
     assert "exact-head-drift" in result.reason_codes
     assert result.next_action == "convert-pull-request-back-to-draft"
+
+
+def test_provisional_ready_requires_focused_green():
+    result = admission(
+        validation_admission_mode="pull-request-draft-focused",
+        aggregate_status="skipped",
+        focused_status="failure",
+    )
+    assert result.transition_admissible is False
+    assert result.provisional_ready is False
+    assert "focused-validation-not-green" in result.reason_codes
