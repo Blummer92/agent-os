@@ -54,7 +54,7 @@ def completion_continuation_payload(
     """Project already-decided completion facts into the canonical host payload."""
     return continuation_payload(
         ContinuationDecision(
-            action="" if terminal or blocked else next_action,
+            action="" if terminal else next_action,
             terminal=terminal,
             blocked=blocked,
             reason_codes=reason_codes,
