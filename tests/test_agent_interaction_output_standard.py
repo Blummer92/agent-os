@@ -228,6 +228,14 @@ def test_classroom_receipt_order_reuses_artifact_first_by_reference() -> None:
     assert "Blocked-Production Behavior" not in standard_text
 
 
+def test_explicit_console_command_requests_require_executable_read_only_commands() -> None:
+    text = section(STANDARD, "Compact Operator Rendering")
+    assert "explicitly asks for console, shell, GitHub CLI, or other executable commands" in text
+    assert "return executable commands rather than conversational prompts" in text
+    assert "reuse variables/context" in text
+    assert "Default investigation commands to read-only" in text
+
+
 def test_progress_rules_require_canonical_evidence_and_reject_percentages() -> None:
     text = section(STANDARD, "Progress And Evidence Rules")
     assert "Render progress from named canonical states and evidence" in text
