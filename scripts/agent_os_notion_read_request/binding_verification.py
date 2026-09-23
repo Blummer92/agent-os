@@ -2,11 +2,12 @@
 
 This module exists only to bootstrap the already-authorized catalog bindings.
 It reuses the canonical #936 ``NotionReadOnlyAdapter`` and preserves the
-original exact Photography Foundations bootstrap. #2816 additionally permits one
-finite exact-title lookup inside the already-verified Canonical Digital Media Unit
-Registry for a repository-declared unverified canonical unit. The lookup returns
-identity evidence only; normal curriculum/asset reads remain fail-closed until the
-verified identity is deliberately bound in the catalog.
+original exact Photography Foundations bootstrap. #2816 additionally provides a pure helper for one finite exact-title lookup
+inside the already-verified Canonical Digital Media Unit Registry for a
+repository-declared unverified canonical unit. The helper returns identity
+evidence only; this change does not route or execute that live query. Normal
+curriculum/asset reads remain fail-closed until the verified identity is
+deliberately bound in the catalog.
 
 It does not query arbitrary data sources or properties, mutate Notion, write
 Drive/classroom artifacts, broaden workspace access, or create a second Notion
