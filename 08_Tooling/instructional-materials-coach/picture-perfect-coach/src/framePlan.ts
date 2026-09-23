@@ -297,6 +297,8 @@ export type ExactAssetFill = Readonly<{
 type OverlayBase<Kind extends OverlayKind> = Readonly<{
   overlay_id: string;
   kind: Kind;
+  /** Stable student-task identity this callout supports. */
+  semantic_target_id?: string;
   /** Bounding rect the validator dilates by `overlay_bleed_px` to exclude. */
   bounds: OutputPixelRect;
 }>;
