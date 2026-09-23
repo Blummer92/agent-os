@@ -96,3 +96,21 @@ def test_mission_completion_projects_current_successor_owned_residual_acceptance
     result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2525, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_requirement_source="issue-contract:#2525", successor_issue_number=2673, successor_current=True, successor_owns_residual_live_acceptance=True)
     assert result["completion_admissible"] is True
     assert "residual-live-acceptance-owned-by-current-successor" in result["reason_codes"]
+
+
+def test_blocked_mission_completion_preserves_existing_next_action() -> None:
+    result = classify_agent_os_mission_completion(
+        repository="Blummer92/agent-os",
+        issue_number=2189,
+        branch_exists=True,
+        implementation_commit_count=1,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        capable_route_available=False,
+        subordinate_writes_only=False,
+    )
+    assert result["completion_admissible"] is False
+    assert result["next_action"] == "report-exact-patch-capability-blocker-without-completion-claim"
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["blocked"] is True
+    assert result["agent_os_continuation"]["action"] == result["next_action"]
