@@ -1,4 +1,0 @@
-registry_version: 0.1.0
-capabilities:
-  - capability_id: broken
-    name: [not, text
