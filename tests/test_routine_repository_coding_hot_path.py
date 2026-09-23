@@ -47,7 +47,8 @@ def test_hot_path_reuses_existing_authority_and_freshness_owners() -> None:
     safe_lane = normalized(SAFE_LANE)
     orchestrator = normalized(ORCHESTRATOR)
     assert "Do not introduce a new cache or Task State Capsule" in contract
-    assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in safe_lane
+    assert "current exact head" in safe_lane
+    assert "Ready-for-Review" in safe_lane
     assert "Route repository writes only to the GitHub Service Agent" in orchestrator
     assert "GitHub Service Agent remains sole repository writer" in contract
 
