@@ -95,6 +95,7 @@ class TestSupportedActionsSucceed:
         http_get = FakeHttpGet(response={
             "id": "page-1",
             "url": "https://notion.so/page-1",
+            "public_url": None,
             "archived": False,
             "properties": {"Name": {"type": "title"}},
             "created_time": "2026-07-01T00:00:00Z",
@@ -108,6 +109,7 @@ class TestSupportedActionsSucceed:
         assert result["status"] == "success"
         assert "success" not in result
         assert result["output"]["id"] == "page-1"
+        assert result["output"]["public_url"] is None
         assert http_get.calls[0][0] == "https://api.notion.com/v1/pages/page-1"
 
     def test_get_page_sends_notion_version_header(self):
