@@ -163,6 +163,7 @@ REASON_CODES = frozenset(
         "lifecycle.terminal-disposition",
         "lifecycle.stage-conflict",
         "reconciliation.closed-with-ready-label",
+        "reconciliation.open-status-label-conflict",
         "reconciliation.merged-pr-open-issue",
     }
 )
@@ -770,6 +771,18 @@ def build_issue_operational_state(
             reconciliation_required = True
             reasons.add("reconciliation.closed-with-ready-label")
             blockers.add("reconciliation.closed-with-ready-label")
+    else:
+        active_statuses = tuple(sorted(label for label in evidence.observed_labels if label.startswith("status:")))
+        expected_status = {
+            ReadinessState.READY: ("status:ready",),
+            ReadinessState.BLOCKED: ("status:blocked",),
+            ReadinessState.NEEDS_DECISION: ("status:needs-decision",),
+            ReadinessState.TERMINAL: (),
+        }[evidence.readiness]
+        if active_statuses != expected_status:
+            reconciliation_required = True
+            reasons.add("reconciliation.open-status-label-conflict")
+            blockers.add("reconciliation.open-status-label-conflict")
     if evidence.terminal_disposition is not TerminalDisposition.NONE:
         reasons.add("lifecycle.terminal-disposition")
     if evidence.issue_state is IssueState.CLOSED and evidence.lifecycle_stage is not LifecycleStage.CLOSED:
