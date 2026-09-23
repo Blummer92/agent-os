@@ -65,7 +65,7 @@ REASON_CODES = frozenset({
     "projection.readiness-stale", "projection.completed-dependency-blocker",
     "projection.pr-description-head-stale", "projection.pr-state-stale",
     "validation.exact-head-stale", "lifecycle.status-label-stale",
-    "lifecycle.merged-pr-open-issue", "lifecycle.closed-without-terminal-evidence",
+    "lifecycle.merged-pr-open-issue", "lifecycle.terminal-open-issue", "lifecycle.closed-without-terminal-evidence",
     "authorization.lifecycle-admission-required", "authorization.closure-required",
 })
 
@@ -439,10 +439,15 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
                 reasons.add("validation.exact-head-stale")
                 actions.append(ReconciliationAction(ActionCategory.OBSERVATION, "validation.exact-head-stale", "validation", v.tested_head_sha, pr.head_sha))
 
+    # Completed implementation (a merged primary PR, or an explicit terminal
+    # disposition) must not keep advertising the open issue as fresh work while
+    # its separately authorized closure is pending (#2796).
+    merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
+    terminal_open = s.issue_state is IssueState.OPEN and s.terminal_disposition is not TerminalDisposition.NONE
     if snap:
         current = tuple(v for v in snap.lifecycle_labels if v.startswith("status:"))
         desired = None
-        if s.issue_state is IssueState.OPEN:
+        if s.issue_state is IssueState.OPEN and not (merged_open or terminal_open):
             desired = {ReadinessState.READY: "status:ready", ReadinessState.BLOCKED: "status:blocked", ReadinessState.NEEDS_DECISION: "status:needs-decision"}.get(s.readiness)
         expected_status = (desired,) if desired else ()
         if current != expected_status:
@@ -452,9 +457,9 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
                 reasons.add("authorization.lifecycle-admission-required")
             actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired or "none", "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
 
-    merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
-    if merged_open:
-        reasons.add("lifecycle.merged-pr-open-issue")
+    close_reason = "lifecycle.merged-pr-open-issue" if merged_open else ("lifecycle.terminal-open-issue" if terminal_open else None)
+    if close_reason is not None:
+        reasons.add(close_reason)
         adm = _admission(e, "close-issue")
         auth = s.closure_authorization.evidence_id if s.closure_authorization.state is AuthorizationState.AUTHORIZED else None
         if auth is None:
@@ -466,7 +471,7 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
             decision = True
         else:
             category = ActionCategory.GOVERNED_MUTATION if auth is not None and adm is not None else ActionCategory.MANUAL_DECISION
-            actions.append(ReconciliationAction(category, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
+            actions.append(ReconciliationAction(category, close_reason, "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
     if s.issue_state is IssueState.CLOSED and s.terminal_disposition is TerminalDisposition.NONE and s.primary_pr_state is not PrimaryPrState.MERGED:
         reasons.add("lifecycle.closed-without-terminal-evidence")
         decision = True
