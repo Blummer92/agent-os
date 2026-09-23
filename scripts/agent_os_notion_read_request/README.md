@@ -81,13 +81,13 @@ requests remain dispatchable. Additional units may be staged in the finite
 catalog with `provider_page_id=null` and `verification_state=unverified`;
 those request ids are known but fail closed with `canonical-unit-unverified`.
 
-#2816 stages Candy Branding this way. Its bounded verifier queries only the
-already-verified Canonical Digital Media Unit Registry, by the repository-owned
-exact canonical title, and returns one candidate page identity or fails closed
-on zero/multiple results. That evidence does not mutate the catalog or make the
-unit dispatchable by itself. A later repository update must deliberately bind
-the freshly verified page id before the existing Candy Branding canonical-unit
-or visual-assets request can reach the secret-bearing read step.
+#2816 stages Candy Branding this way and adds the pure bounded verifier needed
+for an exact-title lookup inside the already-verified Canonical Digital Media
+Unit Registry. This repository change does not route or execute that live
+verification query. Until a separately authorized execution surface runs the
+verifier and a later repository update deliberately binds the freshly verified
+page id, the Candy Branding canonical-unit and visual-assets requests remain
+non-dispatchable.
 
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
