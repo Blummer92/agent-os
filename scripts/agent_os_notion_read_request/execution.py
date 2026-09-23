@@ -17,6 +17,7 @@ require GCE: the injected executor is supplied by the GitHub-controlled job.
 
 from __future__ import annotations
 
+import re
 from typing import Callable, Mapping
 
 from instructional_workflow_contracts.common import thaw_json
@@ -43,6 +44,18 @@ from .models import (
 )
 
 SchedulerTaskExecutorFactory = Callable[[], Callable[[Mapping[str, object]], object]]
+
+_NOTION_UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _notion_identity_key(value: str) -> str:
+    """Normalize only Notion UUID formatting while preserving non-UUID identities."""
+    compact = value.replace("-", "").casefold()
+    return compact if _NOTION_UUID_HEX_RE.fullmatch(compact) else value
+
+
+def _same_notion_identity(observed: str, expected: str) -> bool:
+    return _notion_identity_key(observed) == _notion_identity_key(expected)
 
 
 def execute_admitted_notion_read(
@@ -129,7 +142,7 @@ def execute_destination_verification(
     resource = SchedulerNotionEvidenceAdapter().from_scheduler_result("get_page", result)
     if isinstance(resource, ConnectorError):
         raise NotionReadRequestError(f"destination evidence is unavailable: {resource.message}")
-    if resource.canonical_id != admission.fixed_page_id:
+    if not _same_notion_identity(resource.canonical_id, admission.fixed_page_id):
         raise NotionReadRequestError("destination identity mismatch")
 
     title_matches = resource.display_name == admission.expected_title
@@ -182,7 +195,7 @@ def _resolve_live_unit_status(
         raise NotionReadRequestError(
             f"canonical unit evidence is unavailable: {resource.message}"
         )
-    if resource.canonical_id != unit.provider_page_id:
+    if not _same_notion_identity(resource.canonical_id, unit.provider_page_id):
         raise NotionReadRequestError("canonical unit identity mismatch")
 
     if resource.metadata.get("archived") is True:
