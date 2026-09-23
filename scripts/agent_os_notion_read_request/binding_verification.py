@@ -41,7 +41,6 @@ CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
 _ALLOWED_ACTIONS = ("get_database", "get_page")
-_CANDY_ALLOWED_ACTIONS = ("query_data_source",)
 
 
 def _normalize_notion_id(value: object) -> str:
@@ -106,61 +105,6 @@ def admit_binding_verification_request(
     }
 
 
-
-def admit_canonical_unit_verification_request(
-    transport: object,
-    *,
-    expected_repository: str,
-    expected_actor: str,
-) -> dict[str, object]:
-    """Admit only the exact #2816 Candy Branding identity-verification request."""
-
-    reason = "admitted"
-    authorized = True
-    issue_number: int | None = None
-
-    if not isinstance(transport, Mapping):
-        reason, authorized = "transport-malformed", False
-    elif transport.get("status") != "accepted":
-        reason, authorized = "transport-not-accepted", False
-    elif transport.get("reason") != INGRESS_REASON:
-        reason, authorized = "transport-reason-mismatch", False
-    elif any(
-        transport.get(claim) is not False
-        for claim in ("execution_authorized", "scheduler_invoked", "side_effects_performed")
-    ):
-        reason, authorized = "transport-claims-authority", False
-    elif transport.get("repository") != expected_repository:
-        reason, authorized = "repository-mismatch", False
-    elif type(transport.get("run_attempt")) is not int or transport.get("run_attempt") != 1:
-        reason, authorized = "run-attempt-replay", False
-    elif transport.get("actor") != expected_actor:
-        reason, authorized = "actor-not-allowed", False
-    elif transport.get("notion_read_request_id_or_none") != CANDY_BRANDING_VERIFICATION_REQUEST_ID:
-        reason, authorized = "verification-request-mismatch", False
-    elif type(transport.get("issue_number")) is not int:
-        reason, authorized = "issue-target-mismatch", False
-    else:
-        issue_number = int(transport["issue_number"])
-        if issue_number != CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER:
-            reason, authorized = "issue-target-mismatch", False
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "status": "admitted" if authorized else "rejected",
-        "reason_codes": [reason],
-        "repository": expected_repository,
-        "issue_number": issue_number,
-        "request_id": CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-        "request_class": "binding-verification",
-        "canonical_unit_key": CANDY_BRANDING_UNIT_KEY,
-        "allowed_read_actions": list(_CANDY_ALLOWED_ACTIONS),
-        "secret_dispatch_authorized": authorized,
-        "write_allowed": False,
-        "production_authorized": False,
-        "notion_write_reachable": False,
-        "gce_required": False,
-    }
 
 
 def _execute_read(adapter: object, action: str, **payload: object) -> dict[str, Any]:
@@ -406,7 +350,6 @@ __all__ = [
     "VERIFICATION_REQUEST_ID",
     "VISUAL_ASSET_LIBRARY_DATABASE_ID",
     "admit_binding_verification_request",
-    "admit_canonical_unit_verification_request",
     "verify_candy_branding_binding",
     "verify_live_bindings",
 ]
