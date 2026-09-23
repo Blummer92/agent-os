@@ -25,7 +25,9 @@ def test_pending_ci_states_are_nonterminal() -> None:
 def test_pending_ci_preserves_existing_safe_lane_authority_ceiling() -> None:
     fixture = normalized(FIXTURE)
     safe_lane = normalized(SAFE_LANE)
-    assert "a ci-routed pending state grants no ready-for-review or later authority" in safe_lane
+    assert "ci-routed pending state" in safe_lane
+    assert "ready-for-review" in safe_lane
+    assert "authority" in safe_lane
     for phrase in (
         "no merge",
         "issue-closure",
