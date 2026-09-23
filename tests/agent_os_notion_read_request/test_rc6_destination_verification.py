@@ -62,6 +62,17 @@ def test_fixed_rc6_request_reads_only_the_registered_page():
     assert "private-page-location" not in repr(result)
 
 
+def test_live_dashed_notion_page_id_matches_registered_undashed_binding():
+    live_page_id = "3a57ac78-3131-8106-8440-df5a7fc9ae85"
+    executor = rc6_executor(page_id=live_page_id)
+
+    evidence = run(executor)
+
+    assert executor.calls == [{"action": "get_page", "page_id": PAGE_ID}]
+    assert evidence["dispatch_status"] == "completed"
+    assert evidence["result"]["destination_id"] == PAGE_ID
+
+
 def test_wrong_issue_cannot_dispatch_fixed_destination():
     evidence = run(rc6_executor(), rc6_transport(issue_number=2283))
     assert evidence["dispatch_status"] == "blocked"
