@@ -13,7 +13,8 @@ from dataclasses import asdict
 from typing import Mapping
 
 from scripts.agent_os_execution_interface.continuation_driver import (
-    completion_continuation_payload,
+    ContinuationDecision,
+    continuation_payload,
 )
 from scripts.agent_os_issue_acceptance.batch_repair_continuation import (
     RepairCandidateEvidence,
