@@ -60,6 +60,47 @@ def test_duplicate_content_fails_closed_instead_of_reposting():
     assert result.retry_safe is False
 
 
+def test_provider_failure_with_complete_empty_readback_is_not_persisted():
+    result = evaluate_comment_persistence(
+        issue_number=2784, intended_body="decision record",
+        provider_reported_success=False, readback_complete=True, comments=(),
+    )
+    assert result.status is CommentPersistenceStatus.NOT_PERSISTED
+    assert result.reason_codes == ("provider-failure-and-no-persistence",)
+    assert result.retry_safe is True
+
+
+def test_provider_failure_never_overrides_canonical_persisted_readback():
+    # The provider response is not authoritative: a reported failure whose
+    # comment did land must be recognized as persisted so no retry duplicates it.
+    result = evaluate_comment_persistence(
+        issue_number=2784, intended_body="decision record",
+        provider_reported_success=False, readback_complete=True,
+        comments=(CommentReadback(42, 2784, "decision record"),),
+    )
+    assert result.status is CommentPersistenceStatus.PERSISTED
+    assert result.persisted_comment_id == 42
+    assert result.retry_safe is False
+
+
+def test_foreign_or_other_human_comments_never_count_as_persistence():
+    unrelated = evaluate_comment_persistence(
+        issue_number=2784, intended_body="decision record",
+        provider_reported_success=True, readback_complete=True,
+        comments=(CommentReadback(7, 2784, "human note"),),
+    )
+    mismatched = evaluate_comment_persistence(
+        issue_number=2784, intended_body="decision record",
+        provider_reported_success=True, readback_complete=True,
+        comments=(CommentReadback(8, 2785, "decision record"),),
+    )
+    assert unrelated.status is CommentPersistenceStatus.NOT_PERSISTED
+    assert unrelated.persisted_comment_id is None
+    assert mismatched.status is CommentPersistenceStatus.UNCERTAIN
+    assert mismatched.reason_codes == ("readback.target-mismatch",)
+    assert mismatched.retry_safe is False
+
+
 def test_content_identity_is_target_bound_and_deterministic():
     assert content_digest(2784, "x") == content_digest(2784, "x")
     assert content_digest(2784, "x") != content_digest(2785, "x")
