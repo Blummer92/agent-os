@@ -65,11 +65,17 @@ that evidence is pending. Do not require the user to copy/paste shell commands
 solely because the active connector cannot execute them. If no capable authorized
 local, governed-runner, or existing governed CI route exists, stop with
 `needs-decision`.
-A CI-routed pending state grants no Ready-for-Review or later authority. Only
-required evidence bound to the current exact head may satisfy Ready-for-Review;
-stale-head CI is insufficient. When the existing exact-head CI aggregate subsumes
-the focused checks, one clean exact-head aggregate may satisfy both obligations
-without duplicate local execution. Preserve the repository's current CI trigger
+A CI-routed pending state grants no ordinary Ready-for-Review or later authority.
+Only required evidence bound to the current exact head may satisfy converged
+Ready-for-Review; stale-head CI is insufficient. When the existing exact-head CI
+aggregate subsumes the focused checks, one clean exact-head aggregate may satisfy
+both obligations without duplicate local execution. If the existing Ready event
+is the only currently capable governed trigger for that aggregate, the lane may
+use the reversible provisional-Ready contract in Testing And Release after exact
+head, focused validation, review convergence, and Ready authority are proven.
+That transition exists only to stage the aggregate: it grants no merge or later
+lifecycle authority, and non-success or head drift requires immediate conversion
+back to Draft before progression. Preserve the repository's current CI trigger
 policy: this lane does not require aggregate validation on ordinary Draft PR
 updates and does not create or modify a workflow to obtain validation.
 ## Bounded Scope Envelope
@@ -151,8 +157,9 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.11.0
+0.12.0
 ## Changelog
+- 0.12.0 composes #2852's reversible provisional-Ready aggregate trigger from Testing And Release when the existing Ready event is the only capable governed final-validation trigger; aggregate success is still required for converged Ready and any non-success/head drift requires Draft rollback. No merge, closure, workflow-edit, protected-setting, credential, production, or external-write authority is added.
 - 0.11.0 clarifies #2644 that separately authorized excluded-surface authority can be consumed by the canonical executor; it does not create a second executor or widen protected-setting authority.
 - 0.10.0 declares the WSC5 `validated-workspace` boundary and makes its continuation to the Safe Implementation Lane `draft-pr-handoff` terminal state executable through the existing #2137 continuation driver and GitHub Service Agent delivery owner (#2138).
 - 0.9.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
