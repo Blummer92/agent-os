@@ -145,11 +145,12 @@ their provider identity remains unverified. Those requests fail closed with
 `canonical-unit-unverified`; merely naming a unit never reaches the
 secret-bearing normal read.
 
-#2816 adds Candy Branding as the first staged second-unit case. Its bounded
-identity-verification step queries only the already-verified canonical registry
-by one repository-owned exact title and returns at most one page identity.
-Zero or multiple matches fail closed. Verification evidence alone does not
-mutate the catalog or authorize a curriculum/asset read: a later deliberate
+#2816 adds Candy Branding as the first staged second-unit case and the pure
+bounded helper for an exact-title identity query against the already-verified
+canonical registry. This repository change does not route or execute that live
+verification query. Zero or multiple matches fail closed when the helper is
+executed on a separately authorized surface. Verification evidence alone does
+not mutate the catalog or authorize a curriculum/asset read: a later deliberate
 repository binding is required before Candy Branding becomes dispatchable.
 
 Historical exports and old issue comments may help identify what to verify, but
