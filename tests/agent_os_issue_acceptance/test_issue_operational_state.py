@@ -345,6 +345,32 @@ def test_merged_lifecycle_stage_with_open_issue_requires_reconciliation():
     assert "reconciliation.merged-pr-open-issue" in state.blocker_codes
 
 
+def test_open_ready_label_cannot_hide_canonical_blocked_readiness():
+    current = build_issue_operational_state(
+        evidence(readiness=ReadinessState.BLOCKED, observed_labels=("status:ready",))
+    )
+    assert current.outcome is OperationalOutcome.BLOCKED
+    assert current.reconciliation_required is True
+    assert "reconciliation.open-status-label-conflict" in current.reason_codes
+    assert "reconciliation.open-status-label-conflict" in current.blocker_codes
+
+
+def test_open_ready_label_cannot_hide_needs_decision_readiness():
+    current = build_issue_operational_state(
+        evidence(readiness=ReadinessState.NEEDS_DECISION, observed_labels=("status:ready",))
+    )
+    assert current.outcome is OperationalOutcome.NEEDS_DECISION
+    assert current.reconciliation_required is True
+    assert "reconciliation.open-status-label-conflict" in current.reason_codes
+
+
+def test_matching_open_status_projection_does_not_create_reconciliation_work():
+    current = build_issue_operational_state(
+        evidence(readiness=ReadinessState.BLOCKED, observed_labels=("status:blocked",))
+    )
+    assert "reconciliation.open-status-label-conflict" not in current.reason_codes
+
+
 def test_blocked_dependency_blocks_implementation():
     state = build_issue_operational_state(
         evidence(dependency_state=DependencyState.BLOCKED)
