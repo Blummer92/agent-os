@@ -16,7 +16,7 @@ from agent_memory_context_manager.lesson_preflight import FailedRepairAttempt, R
 from agent_memory_context_manager.repair_lesson_activation import activate_repair_retry_lessons
 from agent_os_execution_service.execution_surface_availability import ExecutionSurfaceAvailabilityOutcome
 from agent_os_execution_service.failed_repair_admission import evaluate_failed_repair_admission
-from scripts.agent_os_execution_interface.continuation_driver import (\n    ContinuationDecision as DriverDecision,\n    completion_continuation_payload,\n    continuation_payload,\n)
+from scripts.agent_os_execution_interface.continuation_driver import (\n    completion_continuation_payload,\n)
 from scripts.agent_os_execution_interface.mission_completion_admission import evaluate_mission_completion_admission
 from scripts.agent_os_execution_interface.post_selection_continuation import (
     ContinuationLineage,
