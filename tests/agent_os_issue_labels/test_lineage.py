@@ -199,3 +199,23 @@ def test_duplicate_create_response_reconciles_existing_identity_without_retry():
     assert result.canonical_pr_number == 2192
     assert result.creation_allowed is False
     assert "duplicate-create-response-reconciled" in result.reason_codes
+
+
+def test_2798_owner_closed_issue_preserves_active_draft_pr_as_orphaned_lineage():
+    provider = Provider()
+    provider.issue = replace(provider.issue, state="closed", state_reason="not_planned")
+
+    result = reconcile_github_lineage(provider, expectation())
+
+    assert result.status == "conflicting"
+    assert "issue-closed-with-active-draft-pr" in result.reason_codes
+    assert result.active_pr_disposition == "preserve-draft-orphaned-parent"
+    assert result.mutation_allowed is False
+    assert result.merge_authorized is False
+    assert result.issue_closure_authorized is False
+
+
+def test_2798_open_issue_does_not_invent_orphaned_parent_disposition():
+    result = reconcile_github_lineage(Provider(), expectation())
+
+    assert result.active_pr_disposition is None

@@ -72,6 +72,7 @@ class GitHubLineageReconciliationResult:
     ci: CiSnapshot | None
     mutation_allowed: bool
     reportable_head_sha: str | None
+    active_pr_disposition: str | None = None
     merge_authorized: bool = field(default=False, init=False)
     issue_closure_authorized: bool = field(default=False, init=False)
     protected_setting_authorized: bool = field(default=False, init=False)
@@ -192,8 +193,16 @@ def reconcile_github_lineage(
     if expectation.expected_pr_draft is not None and pr.draft != expectation.expected_pr_draft:
         reasons.add("draft-ready-state-drift")
 
+    active_pr_disposition: str | None = None
     if issue.state == "closed" and issue.state_reason == "completed" and not pr.merged:
         reasons.add("issue-completed-with-open-or-unmerged-pr")
+
+    # #2798: issue closure is authority for the issue only.  An active Draft PR
+    # remains explicit unfinished lineage unless separate evidence authorizes a
+    # different PR disposition.
+    if issue.state == "closed" and pr.state == "open" and pr.draft and not pr.merged:
+        reasons.add("issue-closed-with-active-draft-pr")
+        active_pr_disposition = "preserve-draft-orphaned-parent"
 
     if expectation.require_open_pr_for_active_issue and issue.state == "open" and pr.state != "open" and not pr.merged:
         reasons.add("active-issue-with-nonopen-pr")
@@ -220,6 +229,7 @@ def reconcile_github_lineage(
         ci=ci,
         mutation_allowed=status == "converged",
         reportable_head_sha=branch.sha,
+        active_pr_disposition=active_pr_disposition,
     )
 
 
@@ -246,6 +256,7 @@ def _classify(reasons: set[str]) -> str:
             "head-ref-mismatch",
             "draft-ready-state-drift",
             "issue-completed-with-open-or-unmerged-pr",
+            "issue-closed-with-active-draft-pr",
             "active-issue-with-nonopen-pr",
         )
     ):
