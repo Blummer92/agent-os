@@ -6,6 +6,8 @@ from dataclasses import asdict
 
 from mcp.server import MCPServer
 
+from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+
 from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision, continuation_payload
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
 from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
@@ -68,6 +70,27 @@ def _deferred_lesson_read():
         return reader(query)
 
     return execute_read, state
+
+
+@mcp.tool()
+def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dict[str, object]:
+    """Bind an event/intake request to the canonical #924 identity before dispatch."""
+    result = validate_request_interpretation(request)
+    record = result.record
+    return {
+        "status": result.status.value,
+        "record_id": record.record_id if record is not None else None,
+        "record_fingerprint": record.fingerprint if record is not None else None,
+        "raw_input_digest": record.to_dict()["raw_input_digest"] if record is not None else None,
+        "reason_codes": list(result.reason_codes),
+        "details": list(result.details),
+        "dispatch_admitted": result.status is ValidationStatus.VALID,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
 @mcp.tool()
