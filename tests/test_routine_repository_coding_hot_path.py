@@ -1,4 +1,5 @@
 """Conformance guards for #1726 routine repository-coding hot path."""
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,16 @@ ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 
 def normalized(path: Path) -> str:
     return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def states_invariant(text: str, *terms: str, qualifier: str) -> bool:
+    """One sentence must bind every term to the restricting qualifier (#2858)."""
+    sentences = re.split(r"(?<=[.;])\s+", " ".join(text.split()))
+    return any(
+        all(term in sentence for term in terms)
+        and re.search(rf"\b{re.escape(qualifier)}\b", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
 
 
 def test_minimum_hot_path_is_explicit() -> None:
@@ -47,8 +58,7 @@ def test_hot_path_reuses_existing_authority_and_freshness_owners() -> None:
     safe_lane = normalized(SAFE_LANE)
     orchestrator = normalized(ORCHESTRATOR)
     assert "Do not introduce a new cache or Task State Capsule" in contract
-    assert "current exact head" in safe_lane
-    assert "Ready-for-Review" in safe_lane
+    assert states_invariant(safe_lane, "current exact head", "Ready-for-Review", qualifier="only")
     assert "Route repository writes only to the GitHub Service Agent" in orchestrator
     assert "GitHub Service Agent remains sole repository writer" in contract
 

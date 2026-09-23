@@ -1,4 +1,5 @@
 """Regression guards for #1719 pending exact-head CI continuation."""
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +9,16 @@ FIXTURE = ROOT / "07_Agent_Tests/fixtures/pending-ci-continuation.md"
 
 def normalized(path: Path) -> str:
     return " ".join(path.read_text(encoding="utf-8").split()).lower()
+
+
+def states_invariant(text: str, *terms: str, qualifier: str) -> bool:
+    """One sentence must bind every term to the restricting qualifier (#2858)."""
+    sentences = re.split(r"(?<=[.;])\s+", " ".join(text.split()))
+    return any(
+        all(term in sentence for term in terms)
+        and re.search(rf"\b{re.escape(qualifier)}\b", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
 
 
 def test_pending_ci_states_are_nonterminal() -> None:
@@ -25,9 +36,7 @@ def test_pending_ci_states_are_nonterminal() -> None:
 def test_pending_ci_preserves_existing_safe_lane_authority_ceiling() -> None:
     fixture = normalized(FIXTURE)
     safe_lane = normalized(SAFE_LANE)
-    assert "ci-routed pending state" in safe_lane
-    assert "ready-for-review" in safe_lane
-    assert "authority" in safe_lane
+    assert states_invariant(safe_lane, "ci-routed pending state", "ready-for-review", "authority", qualifier="no")
     for phrase in (
         "no merge",
         "issue-closure",

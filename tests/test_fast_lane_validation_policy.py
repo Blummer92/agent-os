@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,29 @@ def normalized_section(path: Path, heading: str) -> str:
     end = remainder.find("\n## ")
     section = remainder if end == -1 else remainder[:end]
     return " ".join(section.split())
+
+
+def sentences(text: str) -> tuple[str, ...]:
+    return tuple(part for part in re.split(r"(?<=[.;])\s+", " ".join(text.split())) if part)
+
+
+def states_invariant(text: str, *terms: str, qualifier: str) -> bool:
+    """One sentence must bind every term to the restricting qualifier (#2858).
+
+    Surrounding wording may change freely, but dropping or inverting the
+    qualifier (for example `grants no` -> `grants`) breaks the invariant.
+    """
+    return any(
+        all(term in sentence for term in terms)
+        and re.search(rf"\b{re.escape(qualifier)}\b", sentence, re.IGNORECASE)
+        for sentence in sentences(text)
+    )
+
+
+EXACT_HEAD_READY = (("current exact head", "Ready-for-Review"), "only")
+PENDING_CI_NO_AUTHORITY = (("CI-routed pending state", "Ready-for-Review", "authority"), "no")
+STALE_HEAD_INSUFFICIENT = (("stale-head CI",), "insufficient")
+READY_INVARIANTS = (EXACT_HEAD_READY, PENDING_CI_NO_AUTHORITY, STALE_HEAD_INSUFFICIENT)
 
 
 def test_validation_obligation_is_separate_from_execution_location() -> None:
@@ -56,9 +80,8 @@ def test_exact_head_evidence_is_required_for_ready_for_review() -> None:
     lane = normalized_section(SAFE_LANE, "Validation Loop")
     assert "CI evidence from any SHA other than the current required head is stale" in authoritative
     assert "Ready-for-Review" in authoritative
-    assert "current exact head" in lane
-    assert "Ready-for-Review" in lane
-    assert "stale-head CI is insufficient" in lane
+    assert states_invariant(lane, *EXACT_HEAD_READY[0], qualifier=EXACT_HEAD_READY[1])
+    assert states_invariant(lane, *STALE_HEAD_INSUFFICIENT[0], qualifier=STALE_HEAD_INSUFFICIENT[1])
 
 
 def test_exact_head_ci_may_subsume_focused_and_aggregate_obligations() -> None:
@@ -75,17 +98,14 @@ def test_ci_routing_does_not_grant_lifecycle_or_external_authority() -> None:
     lane = normalized_section(SAFE_LANE, "Validation Loop")
     for phrase in ("Ready-for-Review", "merge", "closure", "production", "credential", "permission", "external-write"):
         assert phrase in developer_loop
-    assert "CI-routed pending state" in lane
-    assert "Ready-for-Review" in lane
-    assert "authority" in lane
+    assert states_invariant(lane, *PENDING_CI_NO_AUTHORITY[0], qualifier=PENDING_CI_NO_AUTHORITY[1])
 
 
 def test_validation_policy_preserves_draft_cost_and_exact_head_ready_boundaries() -> None:
     lane = normalized_section(SAFE_LANE, "Validation Loop")
     assert "this lane does not require aggregate validation on ordinary Draft PR updates" in lane
     assert "does not create or modify a workflow to obtain validation" in lane
-    assert "current exact head" in lane
-    assert "Ready-for-Review" in lane
+    assert states_invariant(lane, *EXACT_HEAD_READY[0], qualifier=EXACT_HEAD_READY[1])
 
 
 def test_broader_local_validation_remains_available_for_diagnosis() -> None:
@@ -95,3 +115,32 @@ def test_broader_local_validation_remains_available_for_diagnosis() -> None:
         "specific failure that needs diagnosis, when CI is unavailable, or when the "
         "governing issue explicitly requires broader local validation."
     ) in developer_loop
+
+
+# The #2853 wording that false-redded the legacy exact-phrase assertions.
+EQUIVALENT_2853_WORDING = (
+    "A CI-routed pending state grants no ordinary Ready-for-Review or later authority. "
+    "Only required evidence bound to the current exact head may satisfy converged "
+    "Ready-for-Review; stale-head CI is insufficient."
+)
+WEAKENED_WORDINGS = (
+    EQUIVALENT_2853_WORDING.replace("grants no ordinary", "grants ordinary"),
+    EQUIVALENT_2853_WORDING.replace(
+        "Only required evidence bound to the current exact head may satisfy",
+        "Evidence from a recent head, ideally the current exact head, may satisfy",
+    ),
+    EQUIVALENT_2853_WORDING.replace("stale-head CI is insufficient", "stale-head CI is acceptable"),
+)
+
+
+def test_equivalent_ready_policy_wording_keeps_every_invariant() -> None:
+    for terms, qualifier in READY_INVARIANTS:
+        assert states_invariant(EQUIVALENT_2853_WORDING, *terms, qualifier=qualifier)
+
+
+def test_weakened_ready_policy_wording_breaks_an_invariant() -> None:
+    for text in WEAKENED_WORDINGS:
+        assert not all(
+            states_invariant(text, *terms, qualifier=qualifier)
+            for terms, qualifier in READY_INVARIANTS
+        ), text
