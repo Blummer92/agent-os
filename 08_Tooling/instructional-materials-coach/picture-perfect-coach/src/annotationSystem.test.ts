@@ -49,7 +49,7 @@ function planWith(overrides: Partial<TutorialFramePlan> = {}): TutorialFramePlan
 
 describe('resolveFrameOverlays geometry', () => {
   it('resolves every overlay deterministically in paint order', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.status).toBe('valid');
     expect(result.blocker_reasons).toEqual([]);
@@ -60,7 +60,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('pads the spotlight boundary and dilates its bounds by the declared falloff', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
     const spotlight = result.overlays?.[0];
 
     expect(spotlight?.kind).toBe('spotlight');
@@ -71,7 +71,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('places badge, arrow, and label on the preferred side with deterministic clearance', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
     const [, badge, arrow, label] = result.overlays ?? [];
 
     expect(badge?.bounds.rect).toEqual([668, 318, 44, 44]);
@@ -82,7 +82,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('gives every overlay an output-pixel bounding rect for the exclusion mask', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     for (const overlay of result.overlays ?? []) {
       expect(overlay.bounds.space).toBe('output-pixel');
@@ -137,7 +137,7 @@ describe('resolveFrameOverlays placement rules', () => {
       output_height_px: 171,
       anchored_rects: [anchored('add-content-button', [24, 49, 256, 72])],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.status).toBe('blocked');
     expect(result.overlays).toBeNull();
@@ -161,7 +161,7 @@ describe('resolveFrameOverlays fail-closed behaviour', () => {
 
   it('blocks when the plan carries no anchored rect for the resolved target', () => {
     const plan = planWith({ resolved_target_region_id: 'missing-region' });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.targetRectMissing);
   });
@@ -170,7 +170,7 @@ describe('resolveFrameOverlays fail-closed behaviour', () => {
     const plan = planWith({
       annotation_intent: { target_region_id: 'add-content-button', label: null, preferred_side: 'right' },
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.labelTextMissing);
   });
