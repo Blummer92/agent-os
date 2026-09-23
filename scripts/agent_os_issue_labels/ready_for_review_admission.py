@@ -39,6 +39,7 @@ def evaluate_ready_for_review_admission(
     validation_head_sha: str,
     validation_admission_mode: str,
     aggregate_status: str,
+    focused_status: str,
     requested_changes: bool,
     blocking_unresolved: int,
     ready_for_review_authority_supplied: bool,
@@ -87,6 +88,7 @@ def evaluate_ready_for_review_admission(
     )
     provisional_aggregate_missing = (
         validation_admission_mode != _FINAL_CANDIDATE_MODE
+        and focused_status == "success"
         and aggregate_status in {"missing", "skipped"}
     )
 
@@ -107,6 +109,8 @@ def evaluate_ready_for_review_admission(
     else:
         if validation_admission_mode != _FINAL_CANDIDATE_MODE:
             reasons.append("draft-final-candidate-validation-not-proven")
+        if focused_status != "success":
+            reasons.append("focused-validation-not-green")
         if aggregate_status != "success":
             reasons.append("authoritative-aggregate-not-green")
         if "exact-head-drift" in reasons or "stale-validation-head" in reasons:
