@@ -65,9 +65,11 @@ that evidence is pending. Do not require the user to copy/paste shell commands
 solely because the active connector cannot execute them. If no capable authorized
 local, governed-runner, or existing governed CI route exists, stop with
 `needs-decision`.
-A CI-routed pending state grants no ordinary Ready-for-Review or later authority.
-Only required evidence bound to the current exact head may satisfy converged
-Ready-for-Review; stale-head CI is insufficient. When the existing exact-head CI
+A CI-routed pending state grants no Ready-for-Review or later authority.
+Only required evidence bound to the current exact head may satisfy Ready-for-Review;
+stale-head CI is insufficient. A provisional Ready transition is not a satisfied
+Ready-for-Review state: it is a reversible validation trigger and grants no later
+lifecycle authority until the exact-head aggregate succeeds. When the existing exact-head CI
 aggregate subsumes the focused checks, one clean exact-head aggregate may satisfy
 both obligations without duplicate local execution. If the existing Ready event
 is the only currently capable governed trigger for that aggregate, the lane may
