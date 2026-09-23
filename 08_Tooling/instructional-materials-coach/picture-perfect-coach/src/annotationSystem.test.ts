@@ -117,7 +117,7 @@ describe('resolveFrameOverlays placement rules', () => {
         anchored('media-tab', [660, 300, 300, 80]),
       ],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 3 });
+    const result = resolveFrameOverlays(plan, { ordinal: 3, semantic_target_id: "mission-9-submit-check" });
     const label = result.overlays?.find((overlay) => overlay.kind === 'label');
 
     expect(label && 'resolved_side' in label ? label.resolved_side : null).toBe('below');
@@ -176,7 +176,7 @@ describe('resolveFrameOverlays fail-closed behaviour', () => {
   });
 
   it('blocks an invalid badge ordinal', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 0 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 0, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.badgeOrdinalInvalid);
   });
