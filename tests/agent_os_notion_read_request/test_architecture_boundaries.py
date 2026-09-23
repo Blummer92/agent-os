@@ -118,6 +118,10 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
     for verified in ("da5cba48-50fd-4377-9790-8df8f6f2c7dd","c5b202aa-83d1-4cc4-9992-f98af648e461","3907ac78-3131-8129-8c73-cd9f6b8e8a7d"):
         assert verified in raw
     assert "f7f22d33-e1ef-4932-b294-cbe39b24a39a" not in raw
+    # Historical/export evidence for Candy Branding must never be promoted into
+    # the executable catalog before the bounded live verification step.
+    assert "3907ac78313181328f84f9fd633acba5" not in raw
+    assert "3907ac78-3131-8132-8f84-f9fd633acba5" not in raw
     assert "notion.so" not in raw; assert "https://" not in raw
 
 
