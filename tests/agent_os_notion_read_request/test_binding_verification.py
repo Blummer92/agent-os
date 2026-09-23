@@ -7,11 +7,16 @@ import pytest
 from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
+    CANDY_BRANDING_STABLE_ID,
+    CANDY_BRANDING_TITLE,
+    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     PHOTOGRAPHY_FOUNDATIONS_PAGE_ID,
     VERIFICATION_REQUEST_ID,
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
+    admit_canonical_unit_verification_request,
+    verify_candy_branding_binding,
     verify_live_bindings,
 )
 from scripts.agent_os_notion_read_request.models import NotionReadRequestError
@@ -121,3 +126,100 @@ def test_ambiguous_data_source_identity_fails_closed() -> None:
     )
     with pytest.raises(NotionReadRequestError, match="data source identity is ambiguous"):
         verify_live_bindings(adapter, generated_at="run:1")
+
+
+class CandyVerificationAdapter:
+    def __init__(self, results):
+        self.calls = []
+        self.results = results
+
+    def execute(self, task):
+        self.calls.append(dict(task.payload))
+        if task.payload["action"] != "query_data_source":
+            raise AssertionError(task.payload["action"])
+        return {
+            "status": "success",
+            "output": {
+                "results": self.results,
+                "has_more": False,
+                "next_cursor": None,
+            },
+        }
+
+
+def test_candy_verification_request_is_exact_and_read_only() -> None:
+    decision = admit_canonical_unit_verification_request(
+        transport(
+            request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+            issue_number=2816,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "candy-branding"
+    assert decision["allowed_read_actions"] == ["query_data_source"]
+    assert decision["secret_dispatch_authorized"] is True
+    assert decision["write_allowed"] is False
+    assert decision["production_authorized"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
+    adapter = CandyVerificationAdapter(
+        [
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "archived": False,
+                "in_trash": False,
+            }
+        ]
+    )
+    evidence = verify_candy_branding_binding(
+        adapter,
+        canonical_registry_data_source_id="canonical-data-source-current",
+        generated_at="run:2816",
+    )
+
+    assert len(adapter.calls) == 1
+    call = adapter.calls[0]
+    assert call["action"] == "query_data_source"
+    assert call["data_source_id"] == "canonical-data-source-current"
+    assert call["filter"] == {
+        "property": "Name",
+        "title": {"equals": CANDY_BRANDING_TITLE},
+    }
+    assert call["max_pages"] == 1
+    assert call["max_results"] == 2
+    assert evidence["canonical_unit"] == {
+        "canonical_unit_key": "candy-branding",
+        "stable_id": CANDY_BRANDING_STABLE_ID,
+        "provider_page_id": "33333333-3333-3333-3333-333333333333",
+        "verification_state": "verified-current",
+    }
+    assert evidence["notion_writes_performed"] is False
+    assert evidence["drive_writes_performed"] is False
+    assert evidence["gce_invoked"] is False
+
+
+@pytest.mark.parametrize(
+    "results",
+    (
+        [],
+        [
+            {"id": "one", "archived": False, "in_trash": False},
+            {"id": "two", "archived": False, "in_trash": False},
+        ],
+    ),
+)
+def test_candy_binding_missing_or_ambiguous_fails_closed(results) -> None:
+    with pytest.raises(
+        NotionReadRequestError,
+        match="identity is missing or ambiguous",
+    ):
+        verify_candy_branding_binding(
+            CandyVerificationAdapter(results),
+            canonical_registry_data_source_id="canonical-data-source-current",
+            generated_at="run:2816",
+        )
