@@ -19,6 +19,23 @@ class PullRequestCreationExpectation:
     merge_authorized: bool = False
 
 @dataclass(frozen=True, slots=True)
+class PullRequestTerminalExpectation:
+    repository: str
+    pr_number: int
+    head_sha: str
+    expected_state: str = "closed"
+    expected_draft: bool = True
+    merged_expected: bool = False
+
+@dataclass(frozen=True, slots=True)
+class PullRequestTerminalVerification:
+    status: str
+    reason_codes: tuple[str, ...]
+    canonical_snapshot: LivePullRequestSnapshot | None
+    mutation_allowed: bool
+    reportable_state: str
+
+@dataclass(frozen=True, slots=True)
 class PullRequestCreationVerification:
     status: str
     reason_codes: tuple[str, ...]
@@ -52,6 +69,7 @@ class PullRequestLifecycleReconciliationResult:
     lifecycle_admitted: bool
     side_effects_performed: bool
     creation_verification: PullRequestCreationVerification | None = None
+    terminal_verification: PullRequestTerminalVerification | None = None
     ready_for_review_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
     issue_closure_authorized: bool = field(default=False, init=False)
@@ -82,27 +100,57 @@ def verify_pull_request_creation(provider: PullRequestLabelProvider, expectation
     if not discoverable: codes.add("secondary-discovery-lag-ignored")
     return PullRequestCreationVerification("verified", tuple(sorted(codes)), snapshot, True, True, _reportable_state(snapshot))
 
-def reconcile_pull_request_lifecycle(provider: PullRequestLabelProvider, repository: str, pr_number: int, *, invocation_reason: str, caller_operation_evidence: str | None=None, caller_result_evidence: str | None=None, dry_run: bool=True, lifecycle_admission: LifecycleMutationAdmissionResult | None=None, creation_expectation: PullRequestCreationExpectation | None=None, creation_discoverable: bool | None=None) -> PullRequestLifecycleReconciliationResult:
+
+def verify_pull_request_terminal_state(provider: PullRequestLabelProvider, expectation: PullRequestTerminalExpectation) -> PullRequestTerminalVerification:
+    try:
+        snapshot = provider.read(expectation.repository, expectation.pr_number)
+    except Exception as exc:
+        return PullRequestTerminalVerification("uncertain", (f"canonical-readback-failed:{type(exc).__name__}",), None, False, "terminal-state-uncertain")
+    reasons=set()
+    if snapshot.repository != expectation.repository: reasons.add("repository-mismatch")
+    if snapshot.pr_number != expectation.pr_number: reasons.add("pr-number-mismatch")
+    if snapshot.head_sha != expectation.head_sha: reasons.add("head-sha-mismatch")
+    if snapshot.state != expectation.expected_state: reasons.add("terminal-state-mismatch")
+    if snapshot.draft is not expectation.expected_draft: reasons.add("terminal-draft-state-mismatch")
+    if snapshot.merged is not expectation.merged_expected: reasons.add("terminal-merge-state-mismatch")
+    if reasons:
+        return PullRequestTerminalVerification("state-drift", tuple(sorted(reasons)), snapshot, False, _reportable_state(snapshot))
+    return PullRequestTerminalVerification("verified", ("canonical-terminal-readback-verified",), snapshot, True, _reportable_state(snapshot))
+
+def reconcile_pull_request_lifecycle(provider: PullRequestLabelProvider, repository: str, pr_number: int, *, invocation_reason: str, caller_operation_evidence: str | None=None, caller_result_evidence: str | None=None, dry_run: bool=True, lifecycle_admission: LifecycleMutationAdmissionResult | None=None, creation_expectation: PullRequestCreationExpectation | None=None, creation_discoverable: bool | None=None, terminal_expectation: PullRequestTerminalExpectation | None=None) -> PullRequestLifecycleReconciliationResult:
     if invocation_reason not in _LIFECYCLE_INVOCATION_REASONS: raise ValueError("invocation_reason must be a supported PR lifecycle event")
-    op=_normalize_optional_evidence(caller_operation_evidence); res=_normalize_optional_evidence(caller_result_evidence); verification=None
+    op=_normalize_optional_evidence(caller_operation_evidence); res=_normalize_optional_evidence(caller_result_evidence); verification=None; terminal_verification=None
     if invocation_reason=="draft-pr-created" and creation_expectation is not None:
         if creation_discoverable is None: raise ValueError("draft PR creation verification requires canonical discoverability evidence")
         if creation_expectation.repository != repository or creation_expectation.pr_number != pr_number: raise ValueError("draft PR creation expectation must match lifecycle repository and PR number")
         verification=verify_pull_request_creation(provider, creation_expectation, discoverable=creation_discoverable)
         if not verification.mutation_allowed: return _blocked_creation_result(repository, pr_number, invocation_reason, op, res, verification)
+    if invocation_reason=="final-state-readback" and terminal_expectation is not None:
+        if terminal_expectation.repository != repository or terminal_expectation.pr_number != pr_number:
+            raise ValueError("terminal PR expectation must match lifecycle repository and PR number")
+        terminal_verification=verify_pull_request_terminal_state(provider, terminal_expectation)
+        if not terminal_verification.mutation_allowed:
+            return _blocked_terminal_result(repository, pr_number, invocation_reason, op, res, terminal_verification)
     reconciliation=reconcile_pull_request_labels(provider, repository, pr_number, dry_run=dry_run, lifecycle_admission=lifecycle_admission); recomputed=False
     if reconciliation.convergence_status=="stale-head" and not reconciliation.side_effects_performed:
         reconciliation=reconcile_pull_request_labels(provider, repository, pr_number, dry_run=dry_run, lifecycle_admission=lifecycle_admission); recomputed=True
     reasons=set(reconciliation.reason_codes); reasons.add(f"invocation.{invocation_reason}")
     if verification: reasons.update(verification.reason_codes)
+    if terminal_verification: reasons.update(terminal_verification.reason_codes)
     if recomputed: reasons.add("head-recomputed-before-mutation")
     if reconciliation.convergence_status=="converged" and not (reconciliation.labels_to_add or reconciliation.labels_to_remove): reasons.add("managed-labels-unchanged")
-    return PullRequestLifecycleReconciliationResult(reconciliation.repository,reconciliation.pr_number,invocation_reason,reconciliation.planned_head_sha,reconciliation.verified_head_sha,_integration_status(reconciliation.convergence_status),bool(reconciliation.labels_to_add or reconciliation.labels_to_remove),recomputed,reconciliation.labels_added,reconciliation.labels_removed,reconciliation.unmanaged_labels_preserved,tuple(sorted(reasons)),reconciliation,op,res,reconciliation.lifecycle_admitted,reconciliation.side_effects_performed,verification)
+    return PullRequestLifecycleReconciliationResult(reconciliation.repository,reconciliation.pr_number,invocation_reason,reconciliation.planned_head_sha,reconciliation.verified_head_sha,_integration_status(reconciliation.convergence_status),bool(reconciliation.labels_to_add or reconciliation.labels_to_remove),recomputed,reconciliation.labels_added,reconciliation.labels_removed,reconciliation.unmanaged_labels_preserved,tuple(sorted(reasons)),reconciliation,op,res,reconciliation.lifecycle_admitted,reconciliation.side_effects_performed,verification,terminal_verification)
 
 def _blocked_creation_result(repository, pr_number, invocation_reason, operation_evidence, result_evidence, verification):
     snapshot=verification.canonical_snapshot; head=snapshot.head_sha if snapshot else ""
     empty=PullRequestLabelReconciliationResult(repository,pr_number,head,head or None,(),(),(),(),(),(),"blocked",verification.reason_codes,False,False,False,False)
     return PullRequestLifecycleReconciliationResult(repository,pr_number,invocation_reason,head,head or None,"blocked",False,False,(),(),(),tuple(sorted(set(verification.reason_codes)|{f"invocation.{invocation_reason}"})),empty,operation_evidence,result_evidence,False,False,verification)
+
+
+def _blocked_terminal_result(repository, pr_number, invocation_reason, operation_evidence, result_evidence, verification):
+    snapshot=verification.canonical_snapshot; head=snapshot.head_sha if snapshot else ""
+    empty=PullRequestLabelReconciliationResult(repository,pr_number,head,head or None,(),(),(),(),(),(),"blocked",verification.reason_codes,False,False,False,False)
+    return PullRequestLifecycleReconciliationResult(repository,pr_number,invocation_reason,head,head or None,"blocked",False,False,(),(),(),tuple(sorted(set(verification.reason_codes)|{f"invocation.{invocation_reason}"})),empty,operation_evidence,result_evidence,False,False,None,verification)
 
 def _reportable_state(snapshot):
     if snapshot.merged: return "merged"
