@@ -11,6 +11,11 @@ from scripts.agent_os_issue_acceptance.approval_records import (
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     AdmissionStatus,
     LifecycleMutationAdmissionResult,
+    LifecycleStateSnapshot,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_reconciliation import (
+    LifecycleReconciliationInput,
+    reconcile_lifecycle,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (
     MergeAuthorizationApplicabilityResult,
@@ -369,6 +374,54 @@ def test_matching_open_status_projection_does_not_create_reconciliation_work():
         evidence(readiness=ReadinessState.BLOCKED, observed_labels=("status:blocked",))
     )
     assert "reconciliation.open-status-label-conflict" not in current.reason_codes
+
+
+def test_absent_status_label_asserts_nothing_and_preserves_ready_projection():
+    labelled = build_issue_operational_state(evidence(observed_labels=("agent-os", "status:ready")))
+    unlabelled = build_issue_operational_state(evidence(observed_labels=("agent-os",)))
+    assert "reconciliation.open-status-label-conflict" not in unlabelled.reason_codes
+    assert unlabelled.reconciliation_required is False
+    assert unlabelled.outcome is labelled.outcome
+    assert unlabelled.blocker_codes == labelled.blocker_codes
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [("status:blocked",), ("status:ready", "status:blocked"), ("status:ready", "status:deferred")],
+)
+def test_contradicting_status_label_on_ready_issue_fails_closed(labels):
+    current = build_issue_operational_state(evidence(observed_labels=labels))
+    assert current.reconciliation_required is True
+    assert "reconciliation.open-status-label-conflict" in current.blocker_codes
+
+
+@pytest.mark.parametrize(
+    "readiness", [ReadinessState.READY, ReadinessState.BLOCKED, ReadinessState.NEEDS_DECISION]
+)
+@pytest.mark.parametrize(
+    "labels",
+    [(), ("status:ready",), ("status:blocked",), ("status:needs-decision",),
+     ("status:ready", "status:blocked"), ("status:deferred",)],
+)
+def test_open_label_conflict_agrees_with_lifecycle_reconciliation_owner(readiness, labels):
+    # The conflict routes the issue to lifecycle reconciliation, so the owner
+    # must see the same present label as stale; otherwise the queue never drains.
+    current = build_issue_operational_state(evidence(readiness=readiness, observed_labels=labels))
+    snapshot = LifecycleStateSnapshot(
+        repository="Blummer92/agent-os", issue_number=862, pull_request_number=None,
+        source_head=None, base_head=SOURCE_SHA, pr_state="none", merged=False,
+        issue_state="open", review_state="clear", unresolved_threads=0,
+        lifecycle_labels=labels, observed_revision="revision-1",
+    )
+    result = reconcile_lifecycle(
+        LifecycleReconciliationInput(
+            repository="Blummer92/agent-os", issue_number=862,
+            operational_state=current, lifecycle_snapshot=snapshot,
+        )
+    )
+    flagged = "reconciliation.open-status-label-conflict" in current.reason_codes
+    stale = "lifecycle.status-label-stale" in result.reason_codes
+    assert flagged == (bool(labels) and stale)
 
 
 def test_blocked_dependency_blocks_implementation():

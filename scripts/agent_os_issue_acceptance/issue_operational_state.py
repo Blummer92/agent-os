@@ -168,6 +168,13 @@ REASON_CODES = frozenset(
     }
 )
 
+# The managed readiness projection written by lifecycle reconciliation (#2855).
+_MANAGED_READINESS_LABELS = {
+    ReadinessState.READY: "status:ready",
+    ReadinessState.BLOCKED: "status:blocked",
+    ReadinessState.NEEDS_DECISION: "status:needs-decision",
+}
+
 _AUTHORITY_FIELDS = (
     "implementation_authorization",
     "ready_for_review_authorization",
@@ -772,14 +779,17 @@ def build_issue_operational_state(
             reasons.add("reconciliation.closed-with-ready-label")
             blockers.add("reconciliation.closed-with-ready-label")
     else:
-        active_statuses = tuple(sorted(label for label in evidence.observed_labels if label.startswith("status:")))
-        expected_status = {
-            ReadinessState.READY: ("status:ready",),
-            ReadinessState.BLOCKED: ("status:blocked",),
-            ReadinessState.NEEDS_DECISION: ("status:needs-decision",),
-            ReadinessState.TERMINAL: (),
-        }[evidence.readiness]
-        if active_statuses != expected_status:
+        # A present lifecycle status label that contradicts canonical readiness
+        # (e.g. #2673: `status:ready` while a dependency blocks it) is a conflict.
+        # An absent label asserts nothing, so it stays a non-blocking label repair
+        # owned by lifecycle reconciliation.
+        observed_statuses = tuple(
+            sorted(label for label in evidence.observed_labels if label.startswith("status:"))
+        )
+        expected_status = tuple(
+            label for label in (_MANAGED_READINESS_LABELS.get(evidence.readiness),) if label
+        )
+        if observed_statuses and observed_statuses != expected_status:
             reconciliation_required = True
             reasons.add("reconciliation.open-status-label-conflict")
             blockers.add("reconciliation.open-status-label-conflict")

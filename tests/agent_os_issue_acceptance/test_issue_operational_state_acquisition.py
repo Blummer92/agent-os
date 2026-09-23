@@ -229,3 +229,38 @@ def test_1359_shape_flows_through_1441_and_1419_without_special_case() -> None:
 def test_bad_acquirer_types_fail_closed() -> None:
     with pytest.raises(TypeError, match="DependencyState"):
         acquire(Reader(snapshot()), dependency_acquirer=lambda _: "clear")
+
+
+
+@pytest.mark.parametrize("declared_in_body", [False, True])
+def test_2673_open_ready_label_with_blocked_dependency_requires_reconciliation(declared_in_body) -> None:
+    # #2855 live reproduction: #2673 stayed open and `status:ready` while its
+    # canonical evidence said implementation is blocked on #2675.
+    body = snapshot().body + ("\nBlocked by: #2675\n" if declared_in_body else "")
+    dependency = DependencyState.CLEAR if declared_in_body else DependencyState.BLOCKED
+
+    def current(labels: tuple[str, ...]):
+        reader = Reader(
+            snapshot(
+                issue_number=2673,
+                body=body,
+                lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+                observed_labels=labels,
+            )
+        )
+        return acquire(
+            reader,
+            issue_number=2673,
+            dependency_acquirer=lambda _: dependency,
+            claim_acquirer=lambda _: (),
+        ).operational_state
+
+    labelled = current(("agent-os", "status:ready", "type:bug"))
+    unlabelled = current(("agent-os", "type:bug"))
+
+    assert labelled.readiness is ReadinessState.BLOCKED
+    assert labelled.reconciliation_required is True
+    assert "reconciliation.open-status-label-conflict" in labelled.blocker_codes
+    assert unlabelled.readiness is ReadinessState.BLOCKED
+    assert unlabelled.reconciliation_required is False
+    assert "reconciliation.open-status-label-conflict" not in unlabelled.reason_codes
