@@ -95,15 +95,22 @@ def test_result_is_not_a_durable_curriculum_store(verified_catalog) -> None:
     assert provenance["durable_curriculum_store"] is False
 
 
-def test_shipped_catalog_declares_verified_current_binding(shipped_catalog) -> None:
+def test_shipped_catalog_preserves_verified_sources_and_fail_closed_unit_bindings(shipped_catalog) -> None:
     for source in shipped_catalog.sources:
         assert source.verification_state == "verified-current"
         assert source.data_source_id is not None
         assert source.dispatchable is True
-    for unit in shipped_catalog.canonical_units:
-        assert unit.verification_state == "verified-current"
-        assert unit.provider_page_id is not None
-        assert unit.dispatchable is True
+
+    by_key = {unit.canonical_unit_key: unit for unit in shipped_catalog.canonical_units}
+    photography = by_key["photography-foundations"]
+    assert photography.verification_state == "verified-current"
+    assert photography.provider_page_id is not None
+    assert photography.dispatchable is True
+
+    candy = by_key["candy-branding"]
+    assert candy.verification_state == "unverified"
+    assert candy.provider_page_id is None
+    assert candy.dispatchable is False
 
 
 def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
@@ -117,7 +124,11 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
     assert {source.logical_source for source in shipped_catalog.sources} == {"canonical-unit","visual-asset-library"}
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
-    for record in shipped_catalog.requests: assert record.issue_number == 2283
+    request_issues = {record.request_id: record.issue_number for record in shipped_catalog.requests}
+    assert request_issues["photography-foundations-canonical-unit"] == 2283
+    assert request_issues["photography-foundations-visual-assets"] == 2283
+    assert request_issues["candy-branding-canonical-unit"] == 2816
+    assert request_issues["candy-branding-visual-assets"] == 2816
 
 
 def test_cli_writes_one_bounded_json_artifact(tmp_path, capsys) -> None:
