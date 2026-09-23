@@ -111,6 +111,48 @@ def execute_admitted_notion_read(
     }
 
 
+def execute_destination_verification(
+    admission: NotionReadAdmission,
+    *,
+    scheduler_task_executor_factory: SchedulerTaskExecutorFactory,
+) -> dict[str, object]:
+    """Verify one fixed Notion page identity without publishing page content."""
+    if admission.status != "admitted" or admission.secret_dispatch_authorized is not True:
+        raise NotionReadRequestError("destination verification requires admitted evidence")
+    if admission.request_class != "destination-verification":
+        raise NotionReadRequestError("destination verification request class required")
+    if not admission.fixed_page_id or not admission.expected_title:
+        raise NotionReadRequestError("fixed destination binding is incomplete")
+
+    execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
+    result = execute_task({"action": "get_page", "page_id": admission.fixed_page_id})
+    resource = SchedulerNotionEvidenceAdapter().from_scheduler_result("get_page", result)
+    if isinstance(resource, ConnectorError):
+        raise NotionReadRequestError(f"destination evidence is unavailable: {resource.message}")
+    if resource.canonical_id != admission.fixed_page_id:
+        raise NotionReadRequestError("destination identity mismatch")
+
+    title_matches = resource.display_name == admission.expected_title
+    public_url = resource.metadata.get("public_url")
+    archived = resource.metadata.get("archived")
+    raw_output = resource.metadata.get("raw_scheduler_output")
+    in_trash = raw_output.get("in_trash") if isinstance(raw_output, Mapping) else None
+    return {
+        "destination_id": admission.fixed_page_id,
+        "expected_title": admission.expected_title,
+        "observed_title": resource.display_name,
+        "title_matches": title_matches,
+        "reachable": True,
+        "archived": archived,
+        "in_trash": in_trash,
+        "public_url_present": bool(public_url),
+        "last_edited_time": resource.metadata.get("last_edited_time"),
+        "write_allowed": False,
+        "production_authorized": False,
+        "sharing_evidence_scope": "public-url-only",
+    }
+
+
 def _bounded_read_task_executor(
     execute_task: object,
 ) -> Callable[[Mapping[str, object]], object]:
@@ -150,4 +192,4 @@ def _resolve_live_unit_status(
     return "active"
 
 
-__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read"]
+__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification"]
