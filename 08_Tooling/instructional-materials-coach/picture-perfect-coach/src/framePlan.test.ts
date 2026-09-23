@@ -288,7 +288,7 @@ describe('planTutorialFrame framing', () => {
   });
 
   it('fails closed when a lone instructional target would be tiny inside the crop', () => {
-    const tinyTarget: ReferenceRegion = { ...targetRegion, rect: [0.48, 0.48, 0.01, 0.01] };
+    const tinyTarget: ReferenceRegion = { ...targetRegion, rect: [0.48, 0.4, 0.01, 0.2] };
     const result = planTutorialFrame(request({
       region_set: {
         reference_id: reference.reference_id,
