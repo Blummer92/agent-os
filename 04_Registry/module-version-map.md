@@ -6,6 +6,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Global Engineering | 0.4.0 |
 | Agent Interaction Output Standard | 0.2.0 |
 | Testing And Release | 0.6.0 |
+| ChatGPT Orchestrator | 0.3.9 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
