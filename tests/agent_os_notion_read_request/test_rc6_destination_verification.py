@@ -12,7 +12,8 @@ EXPECTED_TITLE = "Agent OS / RC6 Participant Pilot / Operator Planning and Readi
 
 
 def rc6_transport(**overrides):
-    return transport(request_id=REQUEST_ID, issue_number=249, **overrides)
+    issue_number = overrides.pop("issue_number", 249)
+    return transport(request_id=REQUEST_ID, issue_number=issue_number, **overrides)
 
 
 def rc6_executor(*, title=EXPECTED_TITLE, public_url=None, page_id=PAGE_ID):
