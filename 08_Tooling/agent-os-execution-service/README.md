@@ -95,3 +95,7 @@ git diff --check
 
 ## Rollback
 Revert the additive #1986 v2 source contract/tests/docs to restore v1-only execution-authorization source behavior. Existing #811/#1226 v1 authorization, #757 verifier, #761 unified evidence bundle/projection, routing, Scheduler, and external systems require no cleanup.
+
+## Finite GitHub CKR6 bridge
+
+Issue #2851 adds the separately authorized GitHub-hosted Actions ingress in `.github/workflows/agent-os-ckr6.yml`. The comment form is `/agent-os ckr6 <json-object>`; `ckr6_github_bridge.py` strictly validates the bounded issue-start or failed-repair envelope, then delegates materiality to the existing CKR6 `plan_lesson_preflight` owner. A not-needed request reaches zero Lessons Learned provider reads. Only a request the existing CKR6 plan marks retrieval-required enters the step that exposes the existing `NOTION_TOKEN` and the live-verified repository variable `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID`. The bridge never guesses that source identity, never routes through GCE, and publishes only bounded sanitized CKR6 result evidence. It creates no merge, closure, GitHub-write, Notion-write, or execution authority.
