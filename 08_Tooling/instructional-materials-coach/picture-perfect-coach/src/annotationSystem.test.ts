@@ -91,7 +91,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('resolves only the requested subset', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['spotlight'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['spotlight'] });
 
     expect(result.overlays).toHaveLength(1);
     expect(result.overlays?.[0]!.kind).toBe('spotlight');
@@ -103,7 +103,7 @@ describe('resolveFrameOverlays placement rules', () => {
     const plan = planWith({
       anchored_rects: [anchored('add-content-button', [1000, 300, 240, 80])],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 2 });
+    const result = resolveFrameOverlays(plan, { ordinal: 2, semantic_target_id: "mission-9-submit-check" });
     const label = result.overlays?.find((overlay) => overlay.kind === 'label');
 
     expect(result.status).toBe('valid');
@@ -147,13 +147,13 @@ describe('resolveFrameOverlays placement rules', () => {
 
 describe('resolveFrameOverlays fail-closed behaviour', () => {
   it('blocks an unknown overlay kind', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['spotlight', 'halo'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['spotlight', 'halo'] });
 
     expect(result.blocker_reasons).toEqual([ANNOTATION_BLOCKER_REASONS.unknownOverlayKind]);
   });
 
   it('blocks a requested inset instead of dropping it silently', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['inset'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['inset'] });
 
     expect(result.overlays).toBeNull();
     expect(result.blocker_reasons).toEqual([ANNOTATION_BLOCKER_REASONS.unknownOverlayKind]);
