@@ -8,6 +8,7 @@ from agent_os_execution_service.lesson_reader_composition import LESSONS_LEARNED
 
 EXPECTED_TOOLS = frozenset(
     {
+        "bind_agent_os_request_interpretation_tool",
         "plan_connected_issue_creation_tool",
         "plan_agent_os_continuation_tool",
         "admit_agent_os_primary_pr_creation_tool",
@@ -49,6 +50,51 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+
+def _request_interpretation_payload() -> dict[str, object]:
+    import hashlib
+    raw = "work on #2821"
+    return {
+        "schema_name": "request-interpretation",
+        "contract_version": "request-interpretation-v1",
+        "record_revision": 1,
+        "observed_at": "2026-09-23T12:00:00Z",
+        "interpreter_id": "chatgpt-orchestrator",
+        "raw_input_digest": hashlib.sha256(raw.encode()).hexdigest(),
+        "instruction_origin": "direct-user",
+        "action": "implement",
+        "requested_effect": "mutate",
+        "continuation_mode": "new",
+        "target": {"system": "github", "resource_kind": "issue", "repository": "Blummer92/agent-os", "resource_id": "2821"},
+        "requested_outputs": [],
+        "constraints": [],
+        "reason_codes": [],
+        "evidence_references": [],
+    }
+
+
+def test_request_binding_produces_stable_non_authorizing_identity_before_dispatch() -> None:
+    first = mcp_server.bind_agent_os_request_interpretation_tool(_request_interpretation_payload())
+    second = mcp_server.bind_agent_os_request_interpretation_tool(_request_interpretation_payload())
+    assert first["status"] == "valid"
+    assert first["dispatch_admitted"] is True
+    assert first["record_id"] == second["record_id"]
+    assert first["raw_input_digest"] == second["raw_input_digest"]
+    assert first["execution_authorized"] is False
+    assert first["github_writes_authorized"] is False
+    assert first["side_effects_performed"] is False
+
+
+def test_request_binding_fails_closed_before_dispatch_for_ambiguous_input() -> None:
+    payload = _request_interpretation_payload()
+    payload["action"] = "unknown"
+    result = mcp_server.bind_agent_os_request_interpretation_tool(payload)
+    assert result["status"] == "manual-review-required"
+    assert result["dispatch_admitted"] is False
+    assert result["record_id"] is not None
+    assert "action.ambiguous" in result["details"]
 
 
 CONNECTED_ISSUE_BODY = """### Issue tier
