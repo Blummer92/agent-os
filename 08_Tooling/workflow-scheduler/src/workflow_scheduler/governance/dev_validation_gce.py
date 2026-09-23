@@ -305,6 +305,12 @@ def run_dev_validation_over_ssh(adapter: GcloudIapAdapter, request: DevValidatio
     return payload
 
 
+def _lifecycle_failure(request: DevValidationRequest, reason: str, *, initial_state: VmState | None = None, start_issued: bool = False, shutdown_issued: bool = False) -> dict[str, object]:
+    evidence=_failure(request,reason)
+    evidence.update({"vm_initial_state":None if initial_state is None else initial_state.value,"start_issued":start_issued,"shutdown_issued":shutdown_issued})
+    return evidence
+
+
 def execute_dev_validation_transport(ingress: IssueCommentIngressResult, *, claims: Mapping[str, object], adapter: GcloudIapAdapter) -> dict[str, object]:
     if ingress.status!="accepted" or ingress.reason!="accepted-dev-validation-envelope":raise ValueError("dev validation requires accepted canonical ingress evidence")
     if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform dev validation")
@@ -312,8 +318,30 @@ def execute_dev_validation_transport(ingress: IssueCommentIngressResult, *, clai
     if ingress.issue_number is None or ingress.dev_validation_branch_or_none is None or ingress.dev_validation_sha_or_none is None or ingress.dev_validation_id_or_none is None:raise ValueError("dev validation ingress identity incomplete")
     request=build_dev_validation_request(repository=ingress.repository,issue_number=ingress.issue_number,branch=ingress.dev_validation_branch_or_none,source_sha=ingress.dev_validation_sha_or_none,validation_id=ingress.dev_validation_id_or_none)
     if not _policy().accepts(claims):return {"dev_validation":_failure(request,"claims-rejected")}
-    if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"dev_validation":_failure(request,"host-not-running")}
-    return {"dev_validation":run_dev_validation_over_ssh(adapter,request)}
+    initial=adapter.observe_state(RESOURCE);start_issued=False
+    if initial is VmState.STOPPED:
+        if adapter.start(RESOURCE) is not True:return {"dev_validation":_lifecycle_failure(request,"vm-start-failed",initial_state=initial)}
+        start_issued=True
+        if adapter.wait_until_running(RESOURCE) is not VmState.RUNNING:return {"dev_validation":_lifecycle_failure(request,"vm-start-failed",initial_state=initial,start_issued=True)}
+    elif initial is not VmState.RUNNING:
+        return {"dev_validation":_lifecycle_failure(request,"host-unavailable",initial_state=initial)}
+    evidence=run_dev_validation_over_ssh(adapter,request)
+    evidence["vm_initial_state"]=initial.value
+    evidence["start_issued"]=start_issued
+    evidence["shutdown_issued"]=False
+    # Developer validation has no Scheduler lease. Its fixed host runner owns
+    # workspace cleanup, so only a terminal result with cleanup_complete=True is
+    # eligible for the existing exact-resource stop capability. Browser profile
+    # contents are never touched by this lifecycle path.
+    if evidence.get("status") in {"success","failure"} and evidence.get("cleanup_complete") is True and bool(getattr(adapter,"shutdown_enabled",False)):
+        if adapter.stop(RESOURCE) is not True:
+            evidence["status"]="needs-decision";evidence["reason_codes"]=["shutdown-failed"];return {"dev_validation":evidence}
+        evidence["shutdown_issued"]=True
+        wait_stopped=getattr(adapter,"wait_until_stopped",None)
+        observed=wait_stopped(RESOURCE) if callable(wait_stopped) else VmState.UNKNOWN
+        if observed is not VmState.STOPPED:
+            evidence["status"]="needs-decision";evidence["reason_codes"]=["shutdown-failed"]
+    return {"dev_validation":evidence}
 
 
 def _ingress_from_file(path: Path) -> IssueCommentIngressResult:
