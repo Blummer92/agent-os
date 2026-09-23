@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Mapping
 
 from scripts.agent_os_execution_interface.continuation_driver import (
-    completion_continuation_payload,
+    ContinuationDecision,
+    continuation_payload,
 )
 from scripts.agent_os_execution_interface.mission_completion_admission import (
     evaluate_mission_completion_admission,
