@@ -117,7 +117,9 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
     assert {source.logical_source for source in shipped_catalog.sources} == {"canonical-unit","visual-asset-library"}
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
-    for record in shipped_catalog.requests: assert record.issue_number == 2283
+    for record in shipped_catalog.requests:
+        expected_issue = 249 if record.request_class == "destination-verification" else 2283
+        assert record.issue_number == expected_issue
 
 
 def test_cli_writes_one_bounded_json_artifact(tmp_path, capsys) -> None:
