@@ -367,6 +367,10 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
 def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
     tmp_path, monkeypatch
 ) -> None:
+    canonical_source = binding_verification_module.load_catalog().source("canonical-unit")
+    assert canonical_source is not None
+    assert canonical_source.data_source_id is not None
+
     adapter = CandyVerificationAdapter(
         [
             {
@@ -374,7 +378,8 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
                 "archived": False,
                 "in_trash": False,
             }
-        ]
+        ],
+        data_source_id=canonical_source.data_source_id,
     )
     monkeypatch.setattr(binding_verification_module, "new_read_adapter", lambda: adapter)
     transport_path = tmp_path / "transport.json"
