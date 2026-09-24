@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+from scripts.agent_os_notion_read_request import binding_verification as binding_verification_module
 from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
+    BINDING_VERIFICATION_REQUEST_IDS,
     CANDY_BRANDING_STABLE_ID,
     CANDY_BRANDING_TITLE,
+    CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
     CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     PHOTOGRAPHY_FOUNDATIONS_PAGE_ID,
     VERIFICATION_REQUEST_ID,
@@ -204,3 +210,146 @@ def test_candy_binding_missing_or_ambiguous_fails_closed(results) -> None:
             canonical_registry_data_source_id="canonical-data-source-current",
             generated_at="run:2816",
         )
+
+
+def test_candy_verification_admission_is_finite_and_read_only() -> None:
+    decision = admit_binding_verification_request(
+        transport(
+            request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+            issue_number=CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "candy-branding"
+    assert decision["allowed_read_actions"] == ["query_data_source"]
+    assert decision["secret_dispatch_authorized"] is True
+    assert decision["write_allowed"] is False
+    assert decision["production_authorized"] is False
+    assert decision["notion_write_reachable"] is False
+    assert decision["gce_required"] is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    (
+        ({"issue_number": 2283}, "issue-target-mismatch"),
+        ({"actor": "someone-else"}, "actor-not-allowed"),
+        ({"run_attempt": 2}, "run-attempt-replay"),
+        ({"execution_authorized": True}, "transport-claims-authority"),
+        ({"request_id": "verify-something-else"}, "verification-request-mismatch"),
+    ),
+)
+def test_candy_verification_admission_rejects_broadened_envelopes(
+    overrides, reason
+) -> None:
+    payload = {
+        "request_id": CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+        "issue_number": CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+        **overrides,
+    }
+    decision = admit_binding_verification_request(
+        transport(**payload),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "rejected"
+    assert decision["reason_codes"] == [reason]
+    assert decision["secret_dispatch_authorized"] is False
+
+
+def test_candy_binding_archived_or_trashed_fails_closed() -> None:
+    for state in (
+        {"archived": True, "in_trash": False},
+        {"archived": False, "in_trash": True},
+    ):
+        with pytest.raises(
+            NotionReadRequestError,
+            match="canonical page is archived or trashed",
+        ):
+            verify_candy_branding_binding(
+                CandyVerificationAdapter(
+                    [{"id": "33333333-3333-3333-3333-333333333333", **state}]
+                ),
+                canonical_registry_data_source_id="canonical-data-source-current",
+                generated_at="run:2816",
+            )
+
+
+def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
+    assert BINDING_VERIFICATION_REQUEST_IDS == (
+        VERIFICATION_REQUEST_ID,
+        CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+    )
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "agent-os-notion-read.yml"
+    ).read_text(encoding="utf-8")
+    assert "BINDING_VERIFICATION_REQUEST_IDS" in workflow
+    assert (
+        'transport.get("notion_read_request_id_or_none") '
+        "in BINDING_VERIFICATION_REQUEST_IDS"
+    ) in workflow
+    assert (
+        'decision.get("request_id") in BINDING_VERIFICATION_REQUEST_IDS'
+        in workflow
+    )
+
+
+def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
+    tmp_path, monkeypatch
+) -> None:
+    adapter = CandyVerificationAdapter(
+        [
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "archived": False,
+                "in_trash": False,
+            }
+        ]
+    )
+    monkeypatch.setattr(binding_verification_module, "new_read_adapter", lambda: adapter)
+    transport_path = tmp_path / "transport.json"
+    transport_path.write_text(
+        json.dumps(
+            transport(
+                request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+                issue_number=CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "result.json"
+
+    exit_code = binding_verification_module.main(
+        [
+            "--transport",
+            str(transport_path),
+            "--repository",
+            REPOSITORY,
+            "--allowed-actor",
+            ACTOR,
+            "--generated-at",
+            "run:2816",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    evidence = json.loads(output_path.read_text(encoding="utf-8"))
+    assert evidence["admission"]["status"] == "admitted"
+    assert evidence["dispatch_status"] == "completed"
+    assert evidence["canonical_unit"]["canonical_unit_key"] == "candy-branding"
+    assert evidence["canonical_unit"]["provider_page_id"] == (
+        "33333333-3333-3333-3333-333333333333"
+    )
+    assert len(adapter.calls) == 1
+    assert adapter.calls[0]["action"] == "query_data_source"
+    assert evidence["notion_writes_performed"] is False
+    assert evidence["drive_writes_performed"] is False
+    assert evidence["classroom_artifact_writes_performed"] is False
+    assert evidence["gce_invoked"] is False
