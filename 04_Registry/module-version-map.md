@@ -4,9 +4,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Module | Version |
 |---|---|
 | Global Engineering | 0.4.0 |
-| Agent Interaction Output Standard | 0.2.0 |
+| Agent Interaction Output Standard | 0.2.1 |
 | Testing And Release | 0.6.0 |
-| ChatGPT Orchestrator | 0.3.9 |
+| ChatGPT Orchestrator | 0.3.10 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
@@ -42,7 +42,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
-**Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
+**Agent Interaction Output Standard** `0.2.1` requires explicit console/shell/GitHub CLI requests to render executable, connected, read-only-by-default commands rather than conversational prompts (#2794). `0.2.0` added compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
 
 **Safe Implementation Lane** `0.7.0` adds opt-in Terminal Fast Lane (#1309) by composing the canonical #924 `request-interpretation-v1` record, existing `operating_mode.py` `RequestedMode.RELEASE` ceiling, existing #1187 branch refresh, and existing `agent-os-release-run.py` terminal progression for eligible Tier 0/1 `no-external-write` work. The Orchestrator does not add a second raw-language parser, and no new lifecycle stage, router, merge/closure authority model, or Scheduler is introduced. This registry entry was previously stale at `0.5.0` against the standard's own `0.6.0` (#1274); `0.6.0` distinguished artifact non-authority from later direct-owner authorization and carried one instruction across a single mechanical readiness intervention. `0.5.0` composed existing #895 checkpoint/resume and #758 Scheduler lease evidence into resumable authorized work, distinguished same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and required current replacement evidence before cancelled stale-head validation was treated as superseded (#1188).
 
@@ -50,7 +50,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Design Standards** `0.17.0` adds the synthetic/noncanonical Assessment Cross-Unit Validation and Regression Standard (#846), proving portability across Photography, Typography, Graphic Design, Branding, Video Production, and AI Media while rejecting domain-name defaults and cross-domain assessment-rule leakage. `0.16.0` added the Unit 0 Assessment Reference Validation Standard (#842); `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
-**Testing And Release** `0.6.0` adds governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.\n\n**QA / Test Agent** `0.2.2` consumes that #2872 campaign-reconciliation contract for next-test planning while preserving canonical campaign evidence and the existing validation/non-authority boundary. `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
+**Testing And Release** `0.6.0` adds governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.
+
+**QA / Test Agent** `0.2.2` consumes that #2872 campaign-reconciliation contract for next-test planning while preserving canonical campaign evidence and the existing validation/non-authority boundary. `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 

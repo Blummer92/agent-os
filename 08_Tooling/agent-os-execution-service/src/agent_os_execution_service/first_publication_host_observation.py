@@ -20,7 +20,11 @@ from typing import Mapping, Protocol
 
 from scripts.agent_os_candidate_packet.cli import prepare_candidate_packet
 from scripts.agent_os_candidate_packet.models import CandidatePacketPhase
-from scripts.agent_os_candidate_packet_live_input.issue_reader import LiveIssueReader
+from scripts.agent_os_candidate_packet_live_input.issue_reader import (
+    LiveIssueReader,
+    SingleIssueTransportOutcome,
+    SingleIssueTransportResult,
+)
 from scripts.agent_os_candidate_packet_live_input.repository_reader import LiveRepositoryEvidenceReader
 from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyPreparationStatus,
@@ -153,6 +157,22 @@ class GovernanceBlobReader(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _BoundedIssueTransport:
+    """Present one already-acquired issue result to existing read interfaces."""
+
+    repository: str
+    issue_number: int
+    result: SingleIssueTransportResult
+
+    def get_issue(self, repository: str, issue_number: int) -> SingleIssueTransportResult:
+        if repository.casefold() != self.repository.casefold() or issue_number != self.issue_number:
+            return SingleIssueTransportResult(
+                outcome=SingleIssueTransportOutcome.NOT_FOUND
+            )
+        return self.result
+
+
+@dataclass(frozen=True, slots=True)
 class _LineageReader:
     github: HostGitHubReadTransport
 
@@ -226,6 +246,14 @@ def activate_first_publication_from_host(
             config.checkpoint_store_root, identity.source_capsule_id
         )
         packet = source.candidate_packet
+        issue_result = github.get_issue(packet.repository, packet.issue_number)
+        if issue_result.item is None:
+            raise FirstPublicationHostObservationError("issue-source-unavailable")
+        issue_transport = _BoundedIssueTransport(
+            repository=packet.repository,
+            issue_number=packet.issue_number,
+            result=issue_result,
+        )
         payload = _bundle_payload(source.validation_bundle_json)
         advisory = _rebuild_advisory(packet, source, payload)
 
@@ -255,7 +283,7 @@ def activate_first_publication_from_host(
         prepared = prepare_candidate_packet(
             repository=packet.repository,
             issue_number=packet.issue_number,
-            issue_reader=LiveIssueReader(github),
+            issue_reader=LiveIssueReader(issue_transport),
             repository_reader=repository_reader,
             observed_at=now,
             base_branch=packet.base_branch,
@@ -306,9 +334,6 @@ def activate_first_publication_from_host(
         ):
             raise FirstPublicationHostObservationError("execution-authorization-not-current")
 
-        issue_result = github.get_issue(packet.repository, packet.issue_number)
-        if issue_result.item is None:
-            raise FirstPublicationHostObservationError("issue-source-unavailable")
         issue_item = issue_result.item
         issue_open = issue_item.get("state") == "open"
         if issue_item.get("state") not in {"open", "closed"}:
@@ -325,7 +350,7 @@ def activate_first_publication_from_host(
             lineage, reader=_LineageReader(github), issue_open=issue_open
         )
         issue_reader = LiveCurrentIssueSnapshotReader(
-            transport=github,
+            transport=issue_transport,
             source_revision=packet.candidate_sha,
             observed_at=now,
             lifecycle_stage=verified.lifecycle_stage,

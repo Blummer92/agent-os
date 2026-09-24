@@ -91,9 +91,10 @@ def test_short_handoff_fixture_is_minimum_not_exhaustive() -> None:
 
 
 def test_version_registration_and_changelog_are_synchronized() -> None:
-    """The standard, registry, and release note all register 0.2.0 once."""
-    assert section(STANDARD, "Version").strip() == "0.2.0"
-    row = "| Agent Interaction Output Standard | 0.2.0 |"
+    """The standard, registry, and release note all register 0.2.1 once."""
+    assert section(STANDARD, "Version").strip() == "0.2.1"
+    row = "| Agent Interaction Output Standard | 0.2.1 |"
     assert read(VERSION_MAP).count(row) == 1
     changelog = read(CHANGELOG)
     assert "Agent Interaction Output Standard" in changelog and "#1081" in changelog
+    assert "Agent Interaction Output Standard 0.2.1" in changelog and "#2794" in changelog

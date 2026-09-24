@@ -13,8 +13,7 @@ from dataclasses import asdict
 from typing import Mapping
 
 from scripts.agent_os_execution_interface.continuation_driver import (
-    ContinuationDecision,
-    continuation_payload,
+    completion_continuation_payload,
 )
 from scripts.agent_os_issue_acceptance.batch_repair_continuation import (
     RepairCandidateEvidence,
@@ -51,13 +50,11 @@ def classify_bulk_repair_continuation(
         "report-complete-repair-batch",
     }
     blocked = result.next_action == "halt-shared-blocker"
-    payload["agent_os_continuation"] = continuation_payload(
-        ContinuationDecision(
-            action="" if terminal else result.next_action,
-            terminal=terminal,
-            blocked=blocked,
-            reason_codes=result.finite_admission.reason_codes,
-        )
+    payload["agent_os_continuation"] = completion_continuation_payload(
+        terminal=terminal,
+        blocked=blocked,
+        next_action=result.next_action,
+        reason_codes=result.finite_admission.reason_codes,
     )
     return payload
 
