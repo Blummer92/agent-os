@@ -25,6 +25,13 @@
       "data_source_id": "da5cba48-50fd-4377-9790-8df8f6f2c7dd",
       "verification_state": "verified-current",
       "content_class": "visual-asset-metadata"
+    },
+    {
+      "logical_source": "teacher-modeling",
+      "display_name": "Teacher Modeling",
+      "data_source_id": null,
+      "verification_state": "unverified",
+      "content_class": "curriculum-metadata"
     }
   ],
   "requests": [
@@ -39,6 +46,12 @@
       "request_class": "visual-assets",
       "canonical_unit_key": "photography-foundations",
       "issue_number": 2283
+    },
+    {
+      "request_id": "ppux-photography-foundations-teacher-modeling",
+      "request_class": "teacher-modeling",
+      "canonical_unit_key": "photography-foundations",
+      "issue_number": 2759
     },
     {
       "request_id": "rc6-operator-planning-destination",
