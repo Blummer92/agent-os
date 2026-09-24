@@ -107,7 +107,23 @@ def admit_notion_read_request(
             expected_repository, "request-class-not-allowed", request_id=request_id
         )
 
-    unit = catalog.canonical_unit(record.canonical_unit_key)
+    if record.request_class == "destination-verification":
+        if not record.fixed_page_id or not record.expected_title:
+            return _reject(expected_repository, "destination-binding-invalid", request_id=request_id)
+        return NotionReadAdmission(
+            status="admitted",
+            reason_codes=("admitted",),
+            repository=expected_repository,
+            issue_number=issue_number,
+            request_id=record.request_id,
+            request_class=record.request_class,
+            fixed_page_id=record.fixed_page_id,
+            expected_title=record.expected_title,
+            required_logical_sources=(),
+            secret_dispatch_authorized=True,
+        )
+
+    unit = catalog.canonical_unit(str(record.canonical_unit_key))
     if unit is None:
         return _reject(
             expected_repository, "canonical-unit-unknown", request_id=request_id

@@ -32,6 +32,7 @@ REQUEST_CLASSES: tuple[str, ...] = (
     "visual-assets",
     "teacher-modeling",
     "packet-materials",
+    "destination-verification",
 )
 
 #: Each request class resolves to already-resolved #980 intent. The read plan,
@@ -159,8 +160,10 @@ class NotionReadRequestRecord:
 
     request_id: str
     request_class: str
-    canonical_unit_key: str
+    canonical_unit_key: str | None
     issue_number: int
+    fixed_page_id: str | None = None
+    expected_title: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -210,6 +213,8 @@ class NotionReadAdmission:
     request_id: str | None = None
     request_class: str | None = None
     canonical_unit_key: str | None = None
+    fixed_page_id: str | None = None
+    expected_title: str | None = None
     required_logical_sources: tuple[str, ...] = ()
     allowed_read_actions: tuple[str, ...] = tuple(sorted(READ_ONLY_ACTIONS))
     secret_dispatch_authorized: bool = False
@@ -228,6 +233,8 @@ class NotionReadAdmission:
             "request_id": self.request_id,
             "request_class": self.request_class,
             "canonical_unit_key": self.canonical_unit_key,
+            "fixed_page_id": self.fixed_page_id,
+            "expected_title": self.expected_title,
             "required_logical_sources": list(self.required_logical_sources),
             "allowed_read_actions": list(self.allowed_read_actions),
             "secret_dispatch_authorized": self.secret_dispatch_authorized,
