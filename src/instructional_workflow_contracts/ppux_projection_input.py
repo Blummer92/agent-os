@@ -190,7 +190,16 @@ def assemble_ppux_projection_input(
             byte_length=None,
             reason_codes=(exc.reason_code,),
         )
-    except (ContractValidationError, TypeError, ValueError, KeyError):
+    except ContractValidationError as exc:
+        return PpuxProjectionInputAssembly(
+            status="blocked",
+            envelope=None,
+            canonical_bytes=None,
+            sha256=None,
+            byte_length=None,
+            reason_codes=(f"ppux-input-invalid-{exc.reason_code}",),
+        )
+    except (TypeError, ValueError, KeyError):
         return PpuxProjectionInputAssembly(
             status="blocked",
             envelope=None,
