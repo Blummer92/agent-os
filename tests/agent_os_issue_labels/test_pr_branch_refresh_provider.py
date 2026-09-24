@@ -45,6 +45,8 @@ class FakeRunner:
             return observation(stdout=f"{OLD}\n")
         if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
             return observation(stdout="scripts/example.py\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+            return observation()
         self.calls.append((argv, cwd, dict(env)))
         if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
             return observation(stdout=f"{self.head_subject}\n")
