@@ -15,9 +15,9 @@ from instructional_workflow_contracts import (
 )
 
 from .adaptation import plan_lesson_adaptation
-from .comparability import filter_comparable_runs
+from .comparability import USABLE_OBSERVATION_QUALITY, filter_comparable_runs
 from .diagnosis import diagnose_dimensions
-from .packet import NON_AUTHORITY_FIELDS, validate_pacing_packet
+from .packet import NON_AUTHORITY_FIELDS, OBSERVATION_MANUAL_REVIEW_CODES, validate_pacing_packet
 
 
 _MANUAL_REVIEW_EXCLUSION_REASONS = frozenset({"lp-evidence-active-elapsed-time-conflict"})
@@ -80,8 +80,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             reasons.append("lp-evidence-privacy-ineligible")
             classification, routing = "insufficient-evidence", "hold"
         observation = packet["observation_quality"]
-        if observation.get("status") not in {"usable", "usable-with-limits"}:
+        if observation["status"] not in USABLE_OBSERVATION_QUALITY:
             reasons.append("lp-evidence-observation-quality-unusable")
+            classification, routing = "insufficient-evidence", "hold"
+        reasons.extend(observation["reason_codes"])
+        if not OBSERVATION_MANUAL_REVIEW_CODES.isdisjoint(observation["reason_codes"]):
             classification, routing = "insufficient-evidence", "hold"
         if packet["implementation_stage"] == "suspended":
             reasons.append("lp-calibration-revision-suspended")
