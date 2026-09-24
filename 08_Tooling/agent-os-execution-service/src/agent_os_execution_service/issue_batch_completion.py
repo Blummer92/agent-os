@@ -10,8 +10,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from scripts.agent_os_execution_interface.continuation_driver import (
-    ContinuationDecision,
-    continuation_payload,
+    completion_continuation_payload,
 )
 from scripts.agent_os_execution_interface.mission_completion_admission import (
     evaluate_mission_completion_admission,
@@ -62,13 +61,11 @@ def classify_issue_batch_completion(
         "terminal": terminal,
         "unfinished_issue_numbers": list(unfinished),
         "reason_codes": list(reasons),
-        "agent_os_continuation": continuation_payload(
-            ContinuationDecision(
-                action="" if terminal else "continue-incomplete-issue-lanes",
-                terminal=terminal,
-                blocked=False,
-                reason_codes=reasons,
-            )
+        "agent_os_continuation": completion_continuation_payload(
+            terminal=terminal,
+            blocked=False,
+            next_action="continue-incomplete-issue-lanes",
+            reason_codes=reasons,
         ),
         "github_writes_authorized": False,
         "merge_authorized": False,

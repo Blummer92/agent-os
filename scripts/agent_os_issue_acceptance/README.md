@@ -165,3 +165,8 @@ The reviewer binds repository/issue/original-authorization identity, exact origi
 Existing `IssueOperationalState`, approval applicability, merge authorization, lifecycle mutation admission, candidate-packet freshness/invalidation, provenance verification, and #543 stale-authority/retired-scope risk ownership remain canonical. The reviewer does not recreate or override those meanings and is consumed by direct-module import rather than a package-facade expansion.
 
 `AuthorizationRefreshHandoff` is evidence for the existing authorization owner only. It may be built from an eligible review result (and completed revalidation evidence when required), preserves the original scope/allowlist/forbidden paths/tests, and always carries `authorization_granted=false` and `side_effects_performed=false`. No consumer may treat that handoff, a passing test, branch existence, or a `no-relevant-drift` result as authorization.
+
+
+## Issue-comment mutation readback
+
+`comment_mutation_readback.py` (#2785) classifies a connected issue-comment mutation only after caller-supplied canonical readback. Exact target/body identity yields `persisted`; a complete readback with no matching comment yields `not-persisted`; incomplete, duplicate, target-mismatched, or unknown-provider evidence remains `uncertain`. Retry eligibility is evidence only and never performs or authorizes a GitHub write.
