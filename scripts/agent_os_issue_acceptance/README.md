@@ -165,3 +165,21 @@ The reviewer binds repository/issue/original-authorization identity, exact origi
 Existing `IssueOperationalState`, approval applicability, merge authorization, lifecycle mutation admission, candidate-packet freshness/invalidation, provenance verification, and #543 stale-authority/retired-scope risk ownership remain canonical. The reviewer does not recreate or override those meanings and is consumed by direct-module import rather than a package-facade expansion.
 
 `AuthorizationRefreshHandoff` is evidence for the existing authorization owner only. It may be built from an eligible review result (and completed revalidation evidence when required), preserves the original scope/allowlist/forbidden paths/tests, and always carries `authorization_granted=false` and `side_effects_performed=false`. No consumer may treat that handoff, a passing test, branch existence, or a `no-relevant-drift` result as authorization.
+
+### Merge authorization persistence (#2869)
+
+Terminal Fast Lane reuses the canonical content-bound merge authorization owner.
+An authorized `MergeAuthorizationRecord` may be serialized as an exact
+repository-owner-authored `agent-os-merge-authorization/v1` PR-conversation
+record. `merge_authorization_source.py` reacquires a complete trusted
+conversation, rejects bot/untrusted/malformed/conflicting evidence, selects the
+latest revision per authorization identity, and exposes only current
+`authorized` records. The caller must still run
+`evaluate_merge_authorization_applicability(...)` against freshly reacquired
+PR/head/base/scope/check/review evidence immediately before merge. Persistence
+does not create authority, and the release runner remains an ordering-only
+consumer.
+
+## Issue-comment mutation readback
+
+`comment_mutation_readback.py` (#2785) classifies a connected issue-comment mutation only after caller-supplied canonical readback. Exact target/body identity yields `persisted`; a complete readback with no matching comment yields `not-persisted`; incomplete, duplicate, target-mismatched, or unknown-provider evidence remains `uncertain`. Retry eligibility is evidence only and never performs or authorizes a GitHub write.

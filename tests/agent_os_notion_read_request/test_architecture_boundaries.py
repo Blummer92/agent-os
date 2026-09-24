@@ -95,15 +95,34 @@ def test_result_is_not_a_durable_curriculum_store(verified_catalog) -> None:
     assert provenance["durable_curriculum_store"] is False
 
 
-def test_shipped_catalog_declares_verified_current_binding(shipped_catalog) -> None:
-    for source in shipped_catalog.sources:
-        assert source.verification_state == "verified-current"
+def test_shipped_catalog_preserves_verified_sources_and_fail_closed_unit_bindings(shipped_catalog) -> None:
+    verified_sources = {
+        source.logical_source: source
+        for source in shipped_catalog.sources
+        if source.verification_state == "verified-current"
+    }
+    assert set(verified_sources) == {"canonical-unit", "visual-asset-library"}
+    for source in verified_sources.values():
         assert source.data_source_id is not None
         assert source.dispatchable is True
-    for unit in shipped_catalog.canonical_units:
-        assert unit.verification_state == "verified-current"
-        assert unit.provider_page_id is not None
-        assert unit.dispatchable is True
+    teacher_modeling = next(
+        source for source in shipped_catalog.sources
+        if source.logical_source == "teacher-modeling"
+    )
+    assert teacher_modeling.verification_state == "unverified"
+    assert teacher_modeling.data_source_id is None
+    assert teacher_modeling.dispatchable is False
+
+    by_key = {unit.canonical_unit_key: unit for unit in shipped_catalog.canonical_units}
+    photography = by_key["photography-foundations"]
+    assert photography.verification_state == "verified-current"
+    assert photography.provider_page_id is not None
+    assert photography.dispatchable is True
+
+    candy = by_key["candy-branding"]
+    assert candy.verification_state == "unverified"
+    assert candy.provider_page_id is None
+    assert candy.dispatchable is False
 
 
 def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
@@ -111,15 +130,29 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
     for verified in ("da5cba48-50fd-4377-9790-8df8f6f2c7dd","c5b202aa-83d1-4cc4-9992-f98af648e461","3907ac78-3131-8129-8c73-cd9f6b8e8a7d"):
         assert verified in raw
     assert "f7f22d33-e1ef-4932-b294-cbe39b24a39a" not in raw
+    # Historical/export evidence for Candy Branding must never be promoted into
+    # the executable catalog before the bounded live verification step.
+    assert "3907ac78313181328f84f9fd633acba5" not in raw
+    assert "3907ac78-3131-8132-8f84-f9fd633acba5" not in raw
     assert "notion.so" not in raw; assert "https://" not in raw
 
 
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
-    assert {source.logical_source for source in shipped_catalog.sources} == {"canonical-unit","visual-asset-library"}
+    assert {source.logical_source for source in shipped_catalog.sources} == {
+        "canonical-unit",
+        "visual-asset-library",
+        "teacher-modeling",
+    }
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
-    for record in shipped_catalog.requests:
-        expected_issue = 249 if record.request_class == "destination-verification" else 2283
-        assert record.issue_number == expected_issue
+    request_issues = {record.request_id: record.issue_number for record in shipped_catalog.requests}
+    assert request_issues == {
+        "photography-foundations-canonical-unit": 2283,
+        "photography-foundations-visual-assets": 2283,
+        "ppux-photography-foundations-teacher-modeling": 2759,
+        "rc6-operator-planning-destination": 249,
+        "candy-branding-canonical-unit": 2816,
+        "candy-branding-visual-assets": 2816,
+    }
 
 
 def test_cli_writes_one_bounded_json_artifact(tmp_path, capsys) -> None:
