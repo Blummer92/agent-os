@@ -24,6 +24,7 @@ from typing import Any
 
 from agent_os_notion_binding import NotionBindingError, build_read_task, new_read_adapter
 
+from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
 
@@ -41,7 +42,20 @@ CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
-_ALLOWED_ACTIONS = ("get_database", "get_page")
+BINDING_VERIFICATION_REQUEST_IDS = (
+    VERIFICATION_REQUEST_ID,
+    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+)
+_PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
+_CANDY_ALLOWED_ACTIONS = ("query_data_source",)
+
+
+def _verification_request_spec(request_id: str | None) -> tuple[int, str, tuple[str, ...]] | None:
+    if request_id == VERIFICATION_REQUEST_ID:
+        return VERIFICATION_ISSUE_NUMBER, "photography-foundations", _PHOTOGRAPHY_ALLOWED_ACTIONS
+    if request_id == CANDY_BRANDING_VERIFICATION_REQUEST_ID:
+        return CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER, CANDY_BRANDING_UNIT_KEY, _CANDY_ALLOWED_ACTIONS
+    return None
 
 
 def _normalize_notion_id(value: object) -> str:
@@ -56,11 +70,20 @@ def admit_binding_verification_request(
     expected_repository: str,
     expected_actor: str,
 ) -> dict[str, object]:
-    """Admit only the exact owner-authorized #2283 bootstrap request."""
-
+    """Admit only a finite repository-owned binding-verification request."""
     reason = "admitted"
     authorized = True
     issue_number: int | None = None
+    request_id = (
+        transport.get("notion_read_request_id_or_none")
+        if isinstance(transport, Mapping)
+        and isinstance(transport.get("notion_read_request_id_or_none"), str)
+        else None
+    )
+    spec = _verification_request_spec(request_id)
+    expected_issue, canonical_unit_key, allowed_actions = (
+        spec if spec is not None else (None, None, ())
+    )
 
     if not isinstance(transport, Mapping):
         reason, authorized = "transport-malformed", False
@@ -79,13 +102,13 @@ def admit_binding_verification_request(
         reason, authorized = "run-attempt-replay", False
     elif transport.get("actor") != expected_actor:
         reason, authorized = "actor-not-allowed", False
-    elif transport.get("notion_read_request_id_or_none") != VERIFICATION_REQUEST_ID:
+    elif spec is None:
         reason, authorized = "verification-request-mismatch", False
     elif type(transport.get("issue_number")) is not int:
         reason, authorized = "issue-target-mismatch", False
     else:
         issue_number = int(transport["issue_number"])
-        if issue_number != VERIFICATION_ISSUE_NUMBER:
+        if issue_number != expected_issue:
             reason, authorized = "issue-target-mismatch", False
 
     return {
@@ -94,17 +117,16 @@ def admit_binding_verification_request(
         "reason_codes": [reason],
         "repository": expected_repository,
         "issue_number": issue_number,
-        "request_id": VERIFICATION_REQUEST_ID,
+        "request_id": request_id,
         "request_class": "binding-verification",
-        "canonical_unit_key": "photography-foundations",
-        "allowed_read_actions": list(_ALLOWED_ACTIONS),
+        "canonical_unit_key": canonical_unit_key,
+        "allowed_read_actions": list(allowed_actions),
         "secret_dispatch_authorized": authorized,
         "write_allowed": False,
         "production_authorized": False,
         "notion_write_reachable": False,
         "gce_required": False,
     }
-
 
 
 
@@ -323,10 +345,18 @@ def main(argv: list[str] | None = None) -> int:
             adapter = new_read_adapter()
         except NotionBindingError as exc:
             raise NotionReadRequestError(str(exc)) from exc
-        evidence = {
-            "admission": admission,
-            **verify_live_bindings(adapter, generated_at=args.generated_at),
-        }
+        if admission.get("request_id") == CANDY_BRANDING_VERIFICATION_REQUEST_ID:
+            canonical_source = load_catalog().source("canonical-unit")
+            if canonical_source is None or not canonical_source.dispatchable or canonical_source.data_source_id is None:
+                raise NotionReadRequestError("canonical registry source binding is not verified-current")
+            result = verify_candy_branding_binding(
+                adapter,
+                canonical_registry_data_source_id=canonical_source.data_source_id,
+                generated_at=args.generated_at,
+            )
+        else:
+            result = verify_live_bindings(adapter, generated_at=args.generated_at)
+        evidence = {"admission": admission, **result}
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
@@ -342,6 +372,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "BINDING_VERIFICATION_REQUEST_IDS",
     "CANONICAL_REGISTRY_DATABASE_ID",
     "CANDY_BRANDING_STABLE_ID",
     "CANDY_BRANDING_TITLE",
