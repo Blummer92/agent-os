@@ -127,6 +127,69 @@ def test_arbitrary_notion_identities_cannot_become_request_identities(
     assert decision.secret_dispatch_authorized is False
 
 
+
+def test_shipped_candy_branding_request_fails_closed_until_live_binding_is_verified(
+    shipped_catalog,
+) -> None:
+    decision = admit(
+        transport(
+            request_id="candy-branding-visual-assets",
+            issue_number=2816,
+        ),
+        shipped_catalog,
+    )
+
+    assert decision.status == "rejected"
+    assert decision.reason_codes == ("canonical-unit-unverified",)
+    assert decision.secret_dispatch_authorized is False
+
+
+def test_verified_candy_branding_binding_uses_existing_visual_asset_read_plan(
+    catalog_payload,
+) -> None:
+    payload = verified_payload(catalog_payload)
+    for unit in payload["canonical_units"]:
+        if unit["canonical_unit_key"] == "candy-branding":
+            unit["provider_page_id"] = "22222222-2222-2222-2222-222222222222"
+            unit["verification_state"] = "verified-current"
+
+    decision = admit(
+        transport(
+            request_id="candy-branding-visual-assets",
+            issue_number=2816,
+        ),
+        parse_catalog(payload),
+    )
+
+    assert decision.status == "admitted"
+    assert decision.canonical_unit_key == "candy-branding"
+    assert decision.required_logical_sources == (
+        "canonical-unit",
+        "visual-asset-library",
+    )
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    (
+        "candy-branding",
+        "candy-branding-anything",
+        "candy-branding-visual-assets-extra",
+    ),
+)
+def test_unregistered_candy_branding_request_ids_still_fail_closed(
+    shipped_catalog,
+    request_id: str,
+) -> None:
+    decision = admit(
+        transport(request_id=request_id, issue_number=2816),
+        shipped_catalog,
+    )
+
+    assert decision.status == "rejected"
+    assert decision.reason_codes == ("request-id-unknown",)
+    assert decision.secret_dispatch_authorized is False
+
 def test_catalog_repository_drift_fails_closed(catalog_payload) -> None:
     payload = verified_payload(catalog_payload)
     payload["repository"] = "someone/else"

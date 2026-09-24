@@ -136,14 +136,26 @@ re-evaluation trigger before continued activation.
 
 ## Current activation state
 
-`notion_read_catalog.json` ships with **no verified binding**: every
-`verification_state` is `unverified` and every source and canonical unit identity
-is `null`. Admission therefore fails closed with `canonical-unit-unverified`
-before any secret-bearing step, and the runner reports `dispatch_status:
-"blocked"`.
+The shared Canonical Digital Media Unit Registry and Visual Asset Library
+bindings and the Photography Foundations unit binding are verified-current.
+Photography Foundations remains the proven live request path.
 
-Historical #962 identities are planning leads only and are deliberately absent
-from the executable allowlist, so a stale lead can never be dispatched.
+Additional units may be declared by finite repository-owned request ids while
+their provider identity remains unverified. Those requests fail closed with
+`canonical-unit-unverified`; merely naming a unit never reaches the
+secret-bearing normal read.
+
+#2816 adds Candy Branding as the first staged second-unit case and the pure
+bounded helper for an exact-title identity query against the already-verified
+canonical registry. This repository change does not route or execute that live
+verification query. Zero or multiple matches fail closed when the helper is
+executed on a separately authorized surface. Verification evidence alone does
+not mutate the catalog or authorize a curriculum/asset read: a later deliberate
+repository binding is required before Candy Branding becomes dispatchable.
+
+Historical exports and old issue comments may help identify what to verify, but
+their page ids never become verified-current catalog identity without the live
+bounded verification step.
 
 ## Remaining excluded-surface authorization packet
 

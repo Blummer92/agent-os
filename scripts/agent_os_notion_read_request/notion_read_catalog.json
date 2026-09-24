@@ -9,6 +9,13 @@
       "provider_page_id": "3907ac78-3131-8129-8c73-cd9f6b8e8a7d",
       "verification_state": "verified-current",
       "content_class": "curriculum-metadata"
+    },
+    {
+      "canonical_unit_key": "candy-branding",
+      "stable_id": "canonical-unit-candy-branding",
+      "provider_page_id": null,
+      "verification_state": "unverified",
+      "content_class": "curriculum-metadata"
     }
   ],
   "sources": [
@@ -46,6 +53,18 @@
       "request_class": "visual-assets",
       "canonical_unit_key": "photography-foundations",
       "issue_number": 2283
+    },
+    {
+      "request_id": "candy-branding-canonical-unit",
+      "request_class": "canonical-unit",
+      "canonical_unit_key": "candy-branding",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "candy-branding-visual-assets",
+      "request_class": "visual-assets",
+      "canonical_unit_key": "candy-branding",
+      "issue_number": 2816
     },
     {
       "request_id": "ppux-photography-foundations-teacher-modeling",
