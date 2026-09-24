@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from instructional_materials_coach.live_build import ArtifactReceipt, LiveBuildInput, LiveBuildReceipt, build_live_materials
+from instructional_materials_coach.live_build import ArtifactReceipt, LiveBuildInput, LiveBuildReceipt, build_live_materials, evaluate_artifact_completeness
 
 
 def _build():
@@ -62,6 +62,54 @@ def test_pdf_like_receipt_cannot_satisfy_native_final_completion():
         parents=("folder",), delivery_kind="pending", canonical_editable=False, persistence_verified=True,
     )
     assert not pdf.is_final
+
+
+
+def test_requested_pdf_is_blocked_when_only_native_doc_exists():
+    native = ArtifactReceipt(
+        role="worksheet", state="updated", file_id="doc-id",
+        mime_type="application/vnd.google-apps.document", parents=("folder",),
+        delivery_kind="final", canonical_editable=True, persistence_verified=True,
+    )
+    result = evaluate_artifact_completeness(
+        native, requested_mime_type="application/pdf", target_folder_id="folder"
+    )
+    assert result.status == "blocked-production"
+    assert result.complete is False
+    assert result.reason_code == "requested-format-mismatch"
+    assert result.side_effects_performed is False
+
+
+def test_verified_pdf_in_intended_destination_satisfies_pdf_request():
+    pdf = ArtifactReceipt(
+        role="worksheet-pdf", state="updated", file_id="pdf-id",
+        mime_type="application/pdf", parents=("folder",),
+        persistence_verified=True,
+    )
+    result = evaluate_artifact_completeness(
+        pdf, requested_mime_type="application/pdf", target_folder_id="folder"
+    )
+    assert result.status == "complete"
+    assert result.complete is True
+    assert result.reason_code == "requested-format-verified"
+    assert result.file_id == "pdf-id"
+
+
+def test_empty_or_wrong_destination_pdf_fails_closed():
+    missing = ArtifactReceipt(role="worksheet-pdf")
+    assert evaluate_artifact_completeness(
+        missing, requested_mime_type="application/pdf", target_folder_id="folder"
+    ).reason_code == "requested-format-missing"
+
+    wrong_folder = ArtifactReceipt(
+        role="worksheet-pdf", state="updated", file_id="pdf-id",
+        mime_type="application/pdf", parents=("other-folder",), persistence_verified=True,
+    )
+    result = evaluate_artifact_completeness(
+        wrong_folder, requested_mime_type="application/pdf", target_folder_id="folder"
+    )
+    assert result.status == "blocked-production"
+    assert result.reason_code == "requested-destination-mismatch"
 
 
 def test_one_exact_match_recovers_without_duplicate():

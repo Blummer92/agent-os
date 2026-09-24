@@ -128,6 +128,10 @@ def test_completed_issue_with_unmerged_pr_is_conflicting():
 
     assert result.status == "conflicting"
     assert "issue-completed-with-open-or-unmerged-pr" in result.reason_codes
+    assert result.active_pr_disposition == "preserve-draft-orphaned-parent"
+    assert result.mutation_allowed is False
+    assert result.merge_authorized is False
+    assert result.issue_closure_authorized is False
 
 
 def test_missing_branch_head_from_pr_lineage_is_stale():
@@ -199,3 +203,29 @@ def test_duplicate_create_response_reconciles_existing_identity_without_retry():
     assert result.canonical_pr_number == 2192
     assert result.creation_allowed is False
     assert "duplicate-create-response-reconciled" in result.reason_codes
+
+
+def test_2798_owner_closed_issue_preserves_active_draft_with_explicit_disposition():
+    provider = Provider()
+    provider.issue = IssueSnapshot(REPO, 2765, "closed", "completed")
+    provider.pr = PullRequestSnapshot(REPO, 2797, "main", "agent/1879", SHA, "open", True, False)
+
+    result = reconcile_github_lineage(provider, expectation(issue_number=2765, pr_number=2797))
+
+    assert result.status == "conflicting"
+    assert result.active_pr_disposition == "preserve-draft-orphaned-parent"
+    assert "issue-completed-with-open-or-unmerged-pr" in result.reason_codes
+    assert result.mutation_allowed is False
+    assert result.merge_authorized is False
+    assert result.issue_closure_authorized is False
+
+
+def test_closed_issue_with_non_draft_unmerged_pr_routes_to_needs_decision():
+    provider = Provider()
+    provider.issue = replace(provider.issue, state="closed", state_reason="completed")
+    provider.pr = replace(provider.pr, draft=False)
+
+    result = reconcile_github_lineage(provider, expectation(expected_pr_draft=None))
+
+    assert result.active_pr_disposition == "needs-decision"
+    assert result.mutation_allowed is False

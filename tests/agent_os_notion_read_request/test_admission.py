@@ -271,6 +271,33 @@ def test_canonical_unit_request_needs_only_the_registry_source(
     assert decision.required_logical_sources == ("canonical-unit",)
 
 
+
+def test_ppux_teacher_modeling_request_is_finite_and_fails_closed_until_source_verified(
+    shipped_catalog, verified_catalog
+) -> None:
+    request_id = "ppux-photography-foundations-teacher-modeling"
+
+    blocked = admit(
+        transport(request_id=request_id, issue_number=2759),
+        shipped_catalog,
+    )
+    assert blocked.status == "rejected"
+    assert blocked.reason_codes == ("source-unverified",)
+    assert blocked.secret_dispatch_authorized is False
+
+    admitted = admit(
+        transport(request_id=request_id, issue_number=2759),
+        verified_catalog,
+    )
+    assert admitted.status == "admitted"
+    assert admitted.request_class == "teacher-modeling"
+    assert admitted.canonical_unit_key == "photography-foundations"
+    assert admitted.required_logical_sources == ("canonical-unit", "teacher-modeling")
+    assert admitted.secret_dispatch_authorized is True
+    assert admitted.write_allowed is False
+    assert admitted.production_authorized is False
+
+
 def test_request_sensitive_planning_is_preserved_per_class() -> None:
     """Each finite class keeps the existing #980 request-sensitive read plan."""
     assert required_logical_sources("canonical-unit") == ("canonical-unit",)
@@ -295,8 +322,10 @@ def test_request_sensitive_planning_is_preserved_per_class() -> None:
         assert unrelated not in required_logical_sources("visual-assets")
 
 
-def test_every_declared_request_class_has_a_read_plan() -> None:
+def test_every_curriculum_request_class_has_a_read_plan() -> None:
     for request_class in REQUEST_CLASSES:
+        if request_class == "destination-verification":
+            continue
         sources = required_logical_sources(request_class)
         assert sources
         assert sources[0] == "canonical-unit"

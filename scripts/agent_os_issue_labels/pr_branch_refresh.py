@@ -57,6 +57,12 @@ def refresh_pull_request_branch(provider: PullRequestBranchRefreshProvider, requ
     if mutation.status != "updated" or mutation.new_head_sha is None:
         return _result(request,"manual-review" if mutation.status=="ambiguous" else "blocked",mutation.old_head_sha,reasons=(mutation.reason_code or f"refresh.{mutation.status}",),mutation_attempted=True)
     after=provider.read_branch(request.repository,request.pr_number); post=_post_refresh_blocker(before,after,mutation,request)
+    # #2850: a successful remote update can be visible to the write transport before
+    # the immediately following PR read reflects the new head. Permit exactly one
+    # additional canonical read for that propagation-only shape. This is not a
+    # second mutation/rebase attempt; every other blocker remains immediately terminal.
+    if post == "refresh.remote-head-mismatch":
+        after=provider.read_branch(request.repository,request.pr_number); post=_post_refresh_blocker(before,after,mutation,request)
     if post: return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,reasons=(post,),side_effects=True,mutation_attempted=True)
     validation=provider.run_required_validation(request.repository,request.pr_number,head_sha=mutation.new_head_sha,command_ids=request.required_validation_command_ids)
     if validation.head_sha != mutation.new_head_sha: return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("validation.head-mismatch",),side_effects=True,mutation_attempted=True)

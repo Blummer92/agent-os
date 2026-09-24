@@ -44,6 +44,24 @@ def continuation_payload(decision: ContinuationDecision) -> dict[str, object]:
     }
 
 
+def completion_continuation_payload(
+    *,
+    terminal: bool,
+    blocked: bool,
+    next_action: str,
+    reason_codes: tuple[str, ...],
+) -> dict[str, object]:
+    """Project already-decided completion facts into the canonical host payload."""
+    return continuation_payload(
+        ContinuationDecision(
+            action="" if terminal else next_action,
+            terminal=terminal,
+            blocked=blocked,
+            reason_codes=reason_codes,
+        )
+    )
+
+
 def drive_governed_continuation(adapter: ContinuationAdapter, decide: Callable[[object], ContinuationDecision], *, max_transitions: int = MAX_DRIVER_TRANSITIONS) -> ContinuationDriveResult:
     if type(max_transitions) is not int or max_transitions < 1 or max_transitions > MAX_DRIVER_TRANSITIONS:
         raise ValueError("max_transitions is outside the governed finite bound")

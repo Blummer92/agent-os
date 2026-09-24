@@ -234,3 +234,53 @@ def test_no_lifecycle_merge_retry_workflow_or_repository_setting_authority_is_gr
     assert result.issue_closure_authorized is False
     assert result.repository_setting_authorized is False
     assert result.workflow_authorized is False
+
+
+def test_2850_one_bounded_readback_retry_accepts_remote_head_propagation_lag():
+    class LaggingReadbackProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.branch_reads = 0
+            self.stale_after_update = None
+
+        def read_branch(self, repository, pr_number):
+            self.branch_reads += 1
+            if self.rebases == 1 and self.branch_reads == 2:
+                return self.stale_after_update
+            return self.branch
+
+        def rebase_onto_main(self, *args, **kwargs):
+            self.stale_after_update = self.branch
+            return super().rebase_onto_main(*args, **kwargs)
+
+    provider = LaggingReadbackProvider()
+    result = refresh_pull_request_branch(provider, request())
+
+    assert result.status == "converged"
+    assert result.reason_codes == ("branch.current-proven", "head-evidence.invalidated", "refresh.rebased")
+    assert provider.rebases == 1
+    assert provider.validations == 1
+
+
+def test_2850_persistent_remote_head_mismatch_still_fails_closed_without_mutation_retry():
+    class PersistentlyStaleReadbackProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.before_update = None
+
+        def read_branch(self, repository, pr_number):
+            if self.rebases == 1:
+                return self.before_update
+            return self.branch
+
+        def rebase_onto_main(self, *args, **kwargs):
+            self.before_update = self.branch
+            return super().rebase_onto_main(*args, **kwargs)
+
+    provider = PersistentlyStaleReadbackProvider()
+    result = refresh_pull_request_branch(provider, request())
+
+    assert result.status == "blocked"
+    assert result.reason_codes == ("refresh.remote-head-mismatch",)
+    assert provider.rebases == 1
+    assert provider.validations == 0

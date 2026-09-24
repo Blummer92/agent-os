@@ -92,6 +92,27 @@ non-dispatchable.
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
 
+## Fixed destination verification
+
+Issue #2871 adds one finite governance read for #249:
+
+```text
+/agent-os notion-read rc6-operator-planning-destination
+```
+
+The catalog binds that slug to the already-approved RC6 operator-planning page.
+The caller cannot supply or override a page id, URL, property, filter, or method.
+The projection publishes only identity/title-match, reachability, archived/trash
+state, last-edited evidence, and whether Notion reports a public URL. It never
+publishes the page URL, public URL value, page body, unrestricted properties, or
+credentials.
+
+The sharing evidence is deliberately labeled `public-url-only`. A successful
+read can prove integration reachability and whether Notion reports a public URL;
+it cannot enumerate every private user/workspace permission. #249 must preserve
+that limitation rather than treating this projection as a complete permissions
+audit.
+
 ## Public API
 
 ```python
