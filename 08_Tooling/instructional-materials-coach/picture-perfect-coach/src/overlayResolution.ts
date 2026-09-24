@@ -27,6 +27,7 @@ export const ANNOTATION_BLOCKER_REASONS = {
   labelTextMissing: 'annotation-label-text-missing',
   badgeOrdinalInvalid: 'annotation-badge-ordinal-invalid',
   clearanceUnavailable: 'annotation-clearance-unavailable',
+  semanticTargetMissing: 'annotation-semantic-target-missing',
 } as const;
 
 export type AnnotationBlockerReason =
@@ -46,6 +47,8 @@ const SIDE_ORDER: readonly AnnotationSide[] = ['right', 'left', 'below', 'above'
 export type OverlayResolutionRequest = Readonly<{
   /** Step number the badge shows. Supplied, never derived from the plan. */
   ordinal: number;
+  /** Stable student prompt/task identity supported by every rendered callout. */
+  semantic_target_id: string;
   /** Overlay kinds to resolve. Omit to request the standard paint-order set. */
   kinds?: readonly string[];
 }>;
@@ -190,6 +193,10 @@ export function resolveFrameOverlays(
   plan: TutorialFramePlan,
   request: OverlayResolutionRequest,
 ): OverlayResolutionResult {
+  const semanticTargetId = request.semantic_target_id?.trim() ?? "";
+  if (!semanticTargetId || semanticTargetId !== request.semantic_target_id || /\s/.test(semanticTargetId)) {
+    return { status: "blocked", overlays: null, blocker_reasons: [ANNOTATION_BLOCKER_REASONS.semanticTargetMissing] };
+  }
   const requestedKinds = request.kinds ?? OVERLAY_PAINT_ORDER;
   const unknown = requestedKinds.filter((kind) => !isResolvableOverlayKind(kind));
   if (unknown.length > 0) {
@@ -249,6 +256,7 @@ export function resolveFrameOverlays(
       const spotlight: SpotlightOverlay = {
         overlay_id: `spotlight-${request.ordinal}`,
         kind: 'spotlight',
+        semantic_target_id: semanticTargetId,
         bounds: outputRect(clampBox(expandBox(boundary, spec.spotlight.falloff_px, spec.spotlight.falloff_px), width, height)),
         region_id: plan.resolved_target_region_id,
         boundary: outputRect(boundary),
@@ -266,6 +274,7 @@ export function resolveFrameOverlays(
       const badge: BadgeOverlay = {
         overlay_id: `badge-${request.ordinal}`,
         kind: 'badge',
+        semantic_target_id: semanticTargetId,
         bounds: outputRect(placement.badge),
         ordinal: request.ordinal,
         centre_x_px: Math.round((placement.badge.left + placement.badge.right) / 2),
@@ -276,6 +285,7 @@ export function resolveFrameOverlays(
       const arrow: ArrowOverlay = {
         overlay_id: `arrow-${request.ordinal}`,
         kind: 'arrow',
+        semantic_target_id: semanticTargetId,
         bounds: outputRect(placement.arrow),
         from_x_px: placement.from[0],
         from_y_px: placement.from[1],
@@ -287,6 +297,7 @@ export function resolveFrameOverlays(
       const label: LabelOverlay = {
         overlay_id: `label-${request.ordinal}`,
         kind: 'label',
+        semantic_target_id: semanticTargetId,
         bounds: outputRect(placement.label),
         text: labelText,
         preferred_side: plan.annotation_intent.preferred_side,

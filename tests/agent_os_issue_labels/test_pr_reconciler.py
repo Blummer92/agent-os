@@ -66,6 +66,16 @@ def test_dry_run_performs_zero_writes_and_preserves_unmanaged_labels():
     assert result.side_effects_performed is False
 
 
+def test_converged_state_requires_no_mutation_admission_when_delta_is_empty():
+    labels = ("pr:draft", "validation:pending", "branch:current", "review:clear", "human:keep")
+    provider = FakeProvider([snap(labels=labels)] * 3)
+    result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False)
+    assert result.convergence_status == "converged"
+    assert result.reason_codes == ("managed-labels-unchanged",)
+    assert result.lifecycle_admitted is False
+    assert not provider.added and not provider.removed
+
+
 def test_converged_state_performs_zero_writes():
     labels = ("pr:draft", "validation:pending", "branch:current", "review:clear", "human:keep")
     provider = FakeProvider([snap(labels=labels)] * 3)
