@@ -94,6 +94,8 @@ def reconcile_pull_request_labels(provider: PullRequestLabelProvider, repository
         return _result(plan, status="blocked", reasons=("managed-label-unavailable",), dry_run=dry_run, admitted=admitted, verified_head=initial.head_sha)
     if dry_run:
         return _result(plan, status="dry-run", reasons=(), dry_run=True, admitted=admitted, verified_head=initial.head_sha)
+    if not plan.labels_to_add and not plan.labels_to_remove:
+        return _result(plan, status="converged", reasons=("managed-labels-unchanged",), dry_run=False, admitted=False, verified_head=initial.head_sha)
     blocker = _admission_blocker(lifecycle_admission)
     if blocker is not None:
         return _result(plan, status="blocked", reasons=(blocker,), dry_run=False, admitted=False, verified_head=initial.head_sha)
