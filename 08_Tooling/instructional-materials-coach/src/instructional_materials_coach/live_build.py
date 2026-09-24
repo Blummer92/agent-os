@@ -22,6 +22,7 @@ from .workspace_clients import (
 
 ArtifactState = Literal["planned", "recovered", "created", "updated", "failed", "ambiguous"]
 ArtifactDeliveryKind = Literal["pending", "final"]
+ArtifactCompletenessStatus = Literal["complete", "blocked-production"]
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,49 @@ class ArtifactReceipt:
             and bool(self.mime_type)
             and bool(self.parents)
         )
+
+
+
+@dataclass(frozen=True)
+class ArtifactCompletenessResult:
+    role: str
+    requested_mime_type: str
+    status: ArtifactCompletenessStatus
+    complete: bool
+    reason_code: str
+    file_id: str = ""
+    side_effects_performed: bool = False
+
+
+def evaluate_artifact_completeness(
+    receipt: ArtifactReceipt,
+    *,
+    requested_mime_type: str,
+    target_folder_id: str,
+) -> ArtifactCompletenessResult:
+    """Evaluate requested-format completion without performing any external write."""
+    if not requested_mime_type or not target_folder_id:
+        raise ValueError("requested_mime_type and target_folder_id are required")
+    persisted = (
+        receipt.state == "updated"
+        and receipt.persistence_verified
+        and bool(receipt.file_id)
+        and receipt.mime_type == requested_mime_type
+        and target_folder_id in receipt.parents
+    )
+    if persisted:
+        return ArtifactCompletenessResult(
+            receipt.role, requested_mime_type, "complete", True, "requested-format-verified", receipt.file_id
+        )
+    if receipt.mime_type and receipt.mime_type != requested_mime_type:
+        reason = "requested-format-mismatch"
+    elif receipt.persistence_verified and target_folder_id not in receipt.parents:
+        reason = "requested-destination-mismatch"
+    else:
+        reason = "requested-format-missing"
+    return ArtifactCompletenessResult(
+        receipt.role, requested_mime_type, "blocked-production", False, reason, receipt.file_id
+    )
 
 
 @dataclass(frozen=True)
