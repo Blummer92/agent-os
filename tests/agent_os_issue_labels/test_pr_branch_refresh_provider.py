@@ -36,18 +36,18 @@ class FakeRunner:
 
     def run(self, argv, *, cwd, env):
         argv = tuple(argv)
-        self.calls.append((argv, cwd, dict(env)))
-        if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
-            return observation(stdout=f"{self.head_subject}\n")
         # #2921 adds read-only lineage probes before the existing preparation
-        # sequence. Legacy provider tests model one admitted feature path without
-        # spending their scripted observations on those probes.
+        # sequence. Legacy provider tests model one admitted feature path and keep
+        # their historical call assertions focused on the mutation lifecycle.
         if len(argv) >= 3 and argv[0:3] == ("git", "diff", "--name-only"):
             return observation(stdout="scripts/example.py\n")
         if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent"):
             return observation(stdout=f"{OLD}\n")
         if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
             return observation(stdout="scripts/example.py\n")
+        self.calls.append((argv, cwd, dict(env)))
+        if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
+            return observation(stdout=f"{self.head_subject}\n")
         return self.observations.pop(0)
 
 
