@@ -41,7 +41,7 @@ class FakeRunner:
         # their historical call assertions focused on the mutation lifecycle.
         if len(argv) >= 3 and argv[0:3] == ("git", "diff", "--name-only"):
             return observation(stdout="scripts/example.py\n")
-        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent"):
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
             return observation(stdout=f"{OLD}\n")
         if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
             return observation(stdout="scripts/example.py\n")
