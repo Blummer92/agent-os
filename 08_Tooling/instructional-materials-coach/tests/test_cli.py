@@ -43,6 +43,12 @@ def _current_curriculum_evidence_file(tmp_path):
     for index, decision_key in enumerate(gate_keys):
         evidence_id = f"gate-{index}"
         owner_evidence.append({"evidence_id": evidence_id, "owner": "instructional-materials-coach", "decision_key": decision_key, "value": "ready", "classification": "owner-governed", "source_revision": 1, "observed_at": "2026-08-28T12:00:00Z", "currentness": "current", "material": True, "relation_resolved": True, "reference": reference(evidence_id)})
+    for decision_key, value in (
+        ("directions", "Follow the worksheet directions."),
+        ("practice", "Complete the guided practice."),
+    ):
+        evidence_id = f"section-{decision_key}"
+        owner_evidence.append({"evidence_id": evidence_id, "owner": "instructional-materials-coach", "decision_key": decision_key, "value": value, "classification": "owner-governed", "source_revision": 1, "observed_at": "2026-08-28T12:00:00Z", "currentness": "current", "material": True, "relation_resolved": True, "reference": reference(evidence_id)})
 
     return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": [{"asset_id": "asset-1", "exists": True, "approved_for_requested_use": True, "approved_student_reuse": True, "source_revision": 1, "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"}}]})
 
@@ -161,6 +167,53 @@ def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypat
     assert "no verified image-placement operation" in record["what_happened"]
     assert "asset-1" in record["what_happened"]
 
+
+
+def test_main_required_worksheet_section_missing_from_plan_blocks_before_credentials(monkeypatch, tmp_path, capsys):
+    from instructional_materials_coach import cli
+    monkeypatch.setenv("ALLOW_WRITE", "true")
+    lesson_file = _lesson_file(tmp_path)
+    requirement_file = _no_visual_requirement_file(tmp_path)
+    evidence_file = _current_curriculum_evidence_file(tmp_path)
+    lessons_dir = tmp_path / "lessons"
+    original_builder = cli.build_docs_replace_requests
+
+    def missing_practice(content):
+        return [
+            request
+            for request in original_builder(content)
+            if request["replaceAllText"]["containsText"]["text"] != "{{curriculum_practice}}"
+        ]
+
+    with patch("instructional_materials_coach.cli.build_docs_replace_requests", side_effect=missing_practice), patch("instructional_materials_coach.cli.get_credentials") as credentials, patch("instructional_materials_coach.cli.build_live_materials") as live:
+        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--lessons-dir", str(lessons_dir)])
+    assert exit_code == 1
+    credentials.assert_not_called()
+    live.assert_not_called()
+    assert "fail" in capsys.readouterr().err
+    record = yaml.safe_load(next(lessons_dir.glob("*.yaml")).read_text())
+    assert "practice" in record["what_happened"]
+
+
+def test_main_unobservable_required_worksheet_section_blocks_for_manual_review(monkeypatch, tmp_path, capsys):
+    from instructional_materials_coach import cli
+    from instructional_workflow_contracts.material_requirement import material_requirement_source_fingerprint
+
+    monkeypatch.setenv("ALLOW_WRITE", "true")
+    lesson_file = _lesson_file(tmp_path)
+    requirement = json.loads(_no_visual_requirement_file(tmp_path).read_text(encoding="utf-8"))
+    requirement["instructional"]["required_sections"].append("worked-example")
+    requirement["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(requirement)
+    requirement_file = _write_json(tmp_path, "manual-review-requirement.json", requirement)
+    evidence_file = _current_curriculum_evidence_file(tmp_path)
+    lessons_dir = tmp_path / "lessons"
+
+    with patch("instructional_materials_coach.cli.get_credentials") as credentials, patch("instructional_materials_coach.cli.build_live_materials") as live:
+        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--lessons-dir", str(lessons_dir)])
+    assert exit_code == 1
+    credentials.assert_not_called()
+    live.assert_not_called()
+    assert "manual-review" in capsys.readouterr().err
 
 def test_main_build_failure_writes_lesson_record_and_never_touches_notion(monkeypatch, tmp_path, capsys):
     from instructional_materials_coach import cli
