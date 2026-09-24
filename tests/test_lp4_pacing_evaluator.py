@@ -229,3 +229,13 @@ def test_conflicting_duplicate_prior_run_identity_fails_closed() -> None:
     result = evaluate_lesson_pacing(packet)
     assert result.status is ValidationStatus.INVALID
     assert result.reason_codes == ("handoff-duplicate",)
+
+
+def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
+    packet = _packet()
+    packet["prior_runs"] = []
+    packet["period_minutes"] = 70
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
+    assert payload["routing_recommendation"] == "hold"
+    assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
