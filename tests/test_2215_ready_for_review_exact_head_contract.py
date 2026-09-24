@@ -14,10 +14,6 @@ HEAD = "a" * 40
 MAIN = "b" * 40
 
 
-def _lifecycle():
-    return {"reconciliation_status": "converged", "invocation_reason": "validation-terminal", "verified_head_sha": HEAD}
-
-
 def _evidence(**overrides):
     base = {
         "repository": "Blummer92/agent-os", "pull_request_number": 2217, "issue_number": 2215,
@@ -30,7 +26,6 @@ def _evidence(**overrides):
         "canonical_required_checks": [AGGREGATE, ACCEPTANCE], "authoritative_aggregate_check": AGGREGATE,
         "authorized_merge_method": "squash", "review_thread_summary": {"blocking_unresolved": 0},
         "ready_for_review_authorized": True, "merge_authorized": False, "issue_closure_authorized": False,
-        "lifecycle_reconciliation": _lifecycle(),
     }
     base.update(overrides)
     return base

@@ -23,16 +23,6 @@ HOLDER_ID = "pilot-holder:owned"
 GENERATION = 7
 
 
-def lifecycle(reason="validation-terminal"):
-    return {
-        "reconciliation_status": "converged",
-        "invocation_reason": reason,
-        "planned_head_sha": HEAD,
-        "verified_head_sha": HEAD,
-        "unmanaged_labels_preserved": ["agent-os"],
-    }
-
-
 def lease_observation(**overrides):
     value = {
         "released": True,
@@ -98,7 +88,6 @@ def evidence(**overrides):
         "main_verified": True,
         "review_thread_summary": {"blocking_unresolved": 0},
         "ready_for_review_authorized": True,
-        "lifecycle_reconciliation": lifecycle(),
         "side_effects_performed": ["merge"],
     }
     value.update(overrides)
@@ -188,7 +177,7 @@ def test_proven_no_lease_or_exact_canonical_release_allows_issue_closure():
     assert released.next_action == "close-issue"
 
 
-def test_closed_issue_requires_final_existing_lifecycle_reconciliation():
+def test_closed_issue_can_advance_to_final_report_without_pr_label_projection():
     state = release_run.evaluate_release_run(
         evidence(
             issue_state="closed",
@@ -196,8 +185,7 @@ def test_closed_issue_requires_final_existing_lifecycle_reconciliation():
             lease_release_required=False,
         )
     )
-    assert "terminal projection reconciliation receipt is missing" in state.blockers
-    assert state.next_action == "reconcile-terminal-projections-via-existing-lifecycle"
+    assert state.next_action == "emit-final-report"
 
 
 def test_terminal_reconciliation_finishes_with_one_final_report_idempotently():
@@ -205,7 +193,6 @@ def test_terminal_reconciliation_finishes_with_one_final_report_idempotently():
         issue_state="closed",
         side_effects_performed=[*terminal_side_effects(), "close-issue"],
         lease_release_required=False,
-        terminal_lifecycle_reconciliation=lifecycle("final-state-readback"),
     )
     pending = release_run.evaluate_release_run(before_report)
     assert pending.next_action == "emit-final-report"

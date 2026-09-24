@@ -58,7 +58,6 @@ from .pr_branch_refresh_operator import (
     refresh_pr,
 )
 from .pr_branch_refresh_provider import (
-    BlockingReviewThreadsReader,
     BranchRefreshValidationExecutor,
     GitHubPullRequestBranchRefreshBackingProvider,
     ProductionPullRequestBranchRefreshProvider,
@@ -78,7 +77,6 @@ from .validation import (
 __all__ = [
     "AUTHORIZATION_MARKER",
     "BatchPullRequestLabelReconciliationResult",
-    "BlockingReviewThreadsReader",
     "BranchRefreshMutationResult",
     "BranchRefreshValidationExecutor",
     "BranchRefreshValidationResult",

@@ -17,7 +17,6 @@ from scripts.agent_os_issue_labels.pr_branch_refresh_provider import (
     ProductionPullRequestBranchRefreshProvider,
     run_production_pull_request_branch_refresh,
 )
-from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
 
 OLD = "1" * 40
 BASE = "2" * 40
@@ -46,11 +45,8 @@ class FakeRunner:
 @dataclass
 class FakeBacking:
     branch_snapshot: PullRequestBranchSnapshot
-    labels: tuple[str, ...] = ("branch:behind",)
     branch_reads: int = 0
     validation_calls: list[tuple[str, int, str, tuple[str, ...]]] = field(default_factory=list)
-    added: list[str] = field(default_factory=list)
-    removed: list[str] = field(default_factory=list)
 
     def read_branch(self, repository, pr_number):
         self.branch_reads += 1
@@ -59,30 +55,6 @@ class FakeBacking:
     def run_required_validation(self, repository, pr_number, *, head_sha, command_ids):
         self.validation_calls.append((repository, pr_number, head_sha, command_ids))
         return BranchRefreshValidationResult(head_sha=head_sha, status="green", command_ids=command_ids)
-
-    def read(self, repository, pr_number):
-        snapshot = self.branch_snapshot
-        return LivePullRequestSnapshot(
-            repository=repository,
-            pr_number=pr_number,
-            head_sha=snapshot.head_sha,
-            draft=True,
-            mergeable=True,
-            conflicted=False,
-            behind=snapshot.branch_state == "behind",
-            validation_state="pending",
-            blocking_review_threads=0,
-            labels=self.labels,
-        )
-
-    def available_labels(self, repository):
-        return ("branch:behind", "branch:current", "status:ready")
-
-    def add_label(self, repository, pr_number, label):
-        self.added.append(label)
-
-    def remove_label(self, repository, pr_number, label):
-        self.removed.append(label)
 
 
 @dataclass
@@ -141,10 +113,6 @@ class FakeRepo:
     def compare(self, base, head):
         return SimpleNamespace(status="diverged")
 
-    def get_issue(self, pr_number):
-        return self.issue
-
-    def get_labels(self):
         return [SimpleNamespace(name=label) for label in ("branch:behind", "branch:current", "pr:draft", "validation:pending", "review:clear")]
 
 
@@ -486,34 +454,26 @@ def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     assert sum("push" in call[0] for call in runner.calls) == 1
 
 
-def test_label_and_validation_operations_delegate_to_existing_backing_provider():
+def test_validation_operation_delegates_to_existing_backing_provider():
     backing = FakeBacking(snapshot())
     subject = provider(backing, FakeRunner([]))
-    subject.add_label("Blummer92/agent-os", 1363, "branch:current")
-    subject.remove_label("Blummer92/agent-os", 1363, "branch:behind")
-    validation = subject.run_required_validation("Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused", "aggregate"))
-    assert backing.added == ["branch:current"] and backing.removed == ["branch:behind"]
+    validation = subject.run_required_validation(
+        "Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused", "aggregate")
+    )
     assert validation.status == "green"
 
 
-def test_live_github_backing_normalizes_branch_scope_and_label_evidence():
+def test_live_github_backing_normalizes_branch_scope_evidence():
     repo = FakeRepo()
     backing = GitHubPullRequestBranchRefreshBackingProvider(
         github_client=FakeGithub(repo),
         request=request(),
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     branch = backing.read_branch("Blummer92/agent-os", 1363)
     assert branch.head_sha == OLD and branch.current_main_sha == MAIN
     assert branch.branch_state == "behind" and branch.mergeability == "mergeable"
     assert branch.changed_paths == ("scripts/example.py",)
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.draft is True and live.behind is True and live.blocking_review_threads == 0
-    assert live.labels == ("branch:behind",)
-    backing.add_label("Blummer92/agent-os", 1363, "branch:current")
-    backing.remove_label("Blummer92/agent-os", 1363, "branch:behind")
-    assert repo.issue.added == ["branch:current"] and repo.issue.removed == ["branch:behind"]
 
 
 def test_live_github_read_failure_is_fail_closed_unknown_not_authority():
@@ -521,30 +481,11 @@ def test_live_github_read_failure_is_fail_closed_unknown_not_authority():
         github_client=FakeGithub(fail=True),
         request=request(),
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     branch = backing.read_branch("Blummer92/agent-os", 1363)
     assert branch.branch_state == "unknown" and branch.mergeability == "unknown"
     assert branch.changed_paths == ()
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.mergeable is False and live.behind is False
-    assert backing.available_labels("Blummer92/agent-os") == ()
 
-
-def test_uncertain_branch_evidence_blocks_managed_label_catalog_before_write():
-    repo = FakeRepo()
-    repo.pull.mergeable = None
-    repo.pull.mergeable_state = "unknown"
-    backing = GitHubPullRequestBranchRefreshBackingProvider(
-        github_client=FakeGithub(repo),
-        request=request(),
-        validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
-    )
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.mergeable is False
-    assert backing.available_labels("Blummer92/agent-os") == ()
-    assert repo.issue.added == [] and repo.issue.removed == []
 
 
 def test_validation_failure_is_projected_for_existing_lifecycle_owner():

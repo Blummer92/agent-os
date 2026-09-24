@@ -303,12 +303,11 @@ def _result(*, status="converged", side_effects=True, reasons=None, validation_s
         head_sha="c" * 40, status=validation_status,
         command_ids=("pytest:pr-branch-refresh",),
     )
-    lifecycle = None if not side_effects else SimpleNamespace(reconciliation_status="converged")
     return PullRequestBranchRefreshResult(
         repository="Blummer92/agent-os", pr_number=1363, status=status,
         old_head_sha="a" * 40, new_head_sha="c" * 40 if side_effects else None,
         invalidated_head_evidence=("tested-sha",) if side_effects else (),
-        validation=validation, lifecycle_reconciliation=lifecycle,
+        validation=validation,
         reason_codes=tuple(reasons), branch_refresh_authorized=True,
         side_effects_performed=side_effects,
     )
@@ -418,7 +417,6 @@ def test_refresh_pr_success_receipt_is_bounded_and_non_authorizing(monkeypatch):
     assert receipt.mutation_count == 1
     assert receipt.validation_status == "green"
     assert receipt.validation_head_sha == "c" * 40
-    assert receipt.lifecycle_reconciliation_status == "converged"
     assert receipt.final_current_proven is True
     assert receipt.blockers == ()
     assert receipt.rollback_posture == "restore-old-head-with-separate-authorization"
@@ -462,7 +460,7 @@ def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
             authorization_id="auth:1363", authorization_consumed=False,
             admitted_main_sha="b" * 40, old_head_sha="a" * 40, new_head_sha=None,
             mutation_count=2, validation_status=None, validation_head_sha=None,
-            lifecycle_reconciliation_status=None, final_current_proven=False,
+            final_current_proven=False,
             blockers=("blocked",), reason_codes=("blocked",),
             rollback_posture="no-branch-mutation", side_effects_performed=False,
         )

@@ -95,151 +95,6 @@ def _output(value: object) -> str:
     return str(value)
 
 
-@dataclass(frozen=True, slots=True)
-class PyGithubBlockingReviewThreadsReader:
-    """Read current review-thread state through GitHub GraphQL and normalize it."""
-
-    github_client: object
-
-    def __post_init__(self) -> None:
-        if not hasattr(self.github_client, "requester"):
-            raise TypeError("github_client must expose the canonical PyGithub requester")
-
-    def blocking_review_threads(self, repository: str, pr_number: int) -> int:
-        from scripts.agent_os_pr_remediation.normalization import normalize_review_threads
-
-        if (
-            not isinstance(repository, str)
-            or repository.count("/") != 1
-            or not all(repository.split("/"))
-        ):
-            raise ValueError("repository must be owner/name")
-        if type(pr_number) is not int or pr_number <= 0:
-            raise ValueError("pr_number must be a positive int")
-
-        owner, name = repository.split("/", 1)
-        query = """
-        query($owner:String!, $name:String!, $number:Int!) {
-          repository(owner:$owner, name:$name) {
-            pullRequest(number:$number) {
-              reviewThreads(first:100) {
-                pageInfo { hasNextPage }
-                nodes {
-                  id
-                  isResolved
-                  isOutdated
-                  path
-                  line
-                  originalLine
-                  diffSide
-                  startLine
-                  startDiffSide
-                  comments(first:100) {
-                    pageInfo { hasNextPage }
-                    nodes {
-                      databaseId
-                      id
-                      body
-                      createdAt
-                      updatedAt
-                      author { login }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-
-        headers, payload = self.github_client.requester.requestJsonAndCheck(
-            "POST",
-            "/graphql",
-            input={
-                "query": query,
-                "variables": {
-                    "owner": owner,
-                    "name": name,
-                    "number": pr_number,
-                },
-            },
-        )
-        del headers
-
-        threads = (
-            payload.get("data", {})
-            .get("repository", {})
-            .get("pullRequest", {})
-            .get("reviewThreads")
-        )
-        if not isinstance(threads, dict):
-            raise RuntimeError("review-thread evidence unavailable")
-        page_info = threads.get("pageInfo")
-        nodes = threads.get("nodes")
-        if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False:
-            raise RuntimeError("review-thread evidence incomplete")
-        if not isinstance(nodes, list):
-            raise RuntimeError("review-thread evidence malformed")
-
-        raw: list[dict[str, object]] = []
-        for thread in nodes:
-            if not isinstance(thread, dict):
-                raise RuntimeError("review-thread evidence malformed")
-            comments = thread.get("comments")
-            if not isinstance(comments, dict):
-                raise RuntimeError("review-thread comments unavailable")
-            comments_page = comments.get("pageInfo")
-            comment_nodes = comments.get("nodes")
-            if (
-                not isinstance(comments_page, dict)
-                or comments_page.get("hasNextPage") is not False
-                or not isinstance(comment_nodes, list)
-                or not comment_nodes
-            ):
-                raise RuntimeError("review-thread comments incomplete")
-
-            top = comment_nodes[0]
-            if not isinstance(top, dict):
-                raise RuntimeError("review-thread comment malformed")
-            author = top.get("author")
-            if not isinstance(author, dict) or not isinstance(author.get("login"), str):
-                raise RuntimeError("review-thread reviewer unavailable")
-            body = top.get("body")
-            if not isinstance(body, str):
-                raise RuntimeError("review-thread body unavailable")
-
-            raw.append(
-                {
-                    "thread_id": thread.get("id"),
-                    "top_level_comment_id": top.get("databaseId"),
-                    "reviewer": author["login"],
-                    "body": body,
-                    "resolved": thread.get("isResolved"),
-                    "outdated": thread.get("isOutdated"),
-                    "superseded": False,
-                    "path": thread.get("path"),
-                    "line": thread.get("line"),
-                    "original_line": thread.get("originalLine"),
-                    "side": thread.get("diffSide"),
-                    "start_line": thread.get("startLine"),
-                    "start_side": thread.get("startDiffSide"),
-                    "created_at": top.get("createdAt"),
-                    "updated_at": top.get("updatedAt"),
-                    "reply_ids": [
-                        item.get("id")
-                        for item in comment_nodes[1:]
-                        if isinstance(item, dict) and isinstance(item.get("id"), str)
-                    ],
-                    "supersession_evidence": [],
-                }
-            )
-
-        normalized = normalize_review_threads(raw)
-        if any(item.classification == "unavailable" for item in normalized):
-            raise RuntimeError("review-thread evidence cannot prove currentness")
-        return sum(item.classification == "current-unresolved" for item in normalized)
-
-
 _REFRESH_VALIDATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "pytest:pr-branch-refresh": (
         ".venv/bin/python",
@@ -428,15 +283,10 @@ def preflight_production_branch_refresh(
         def run_required_validation(self, *args, **kwargs):
             raise AssertionError("preflight must not execute validation")
 
-    class _NoReview:
-        def blocking_review_threads(self, *args, **kwargs):
-            raise AssertionError("preflight must not read review threads")
-
     backing = GitHubPullRequestBranchRefreshBackingProvider(
         github_client=github_client,
         request=request,
         validation_executor=_NoValidation(),
-        review_threads_reader=_NoReview(),
     )
     snapshot = backing.read_branch(request.repository, request.pr_number)
 
@@ -508,7 +358,6 @@ def run_branch_refresh_operator(
         runner=runner,
         repository_root=repository_root,
     )
-    reviews = PyGithubBlockingReviewThreadsReader(github_client)
 
     preflight = preflight_production_branch_refresh(
         github_client=github_client,
@@ -524,7 +373,6 @@ def run_branch_refresh_operator(
         github_client=github_client,
         runner=runner,
         validation_executor=validation,
-        review_threads_reader=reviews,
         request=request,
         repository_root=repository_root,
         invocation_id=invocation_id,

@@ -5,8 +5,14 @@ from typing import Protocol
 
 
 _INVALIDATED_HEAD_EVIDENCE = (
-    "approval-applicability", "branch-freshness", "candidate-runtime", "focused-validation",
-"merge-authorization", "ready-for-review", "review-applicability", "tested-sha",
+    "approval-applicability",
+    "branch-freshness",
+    "candidate-runtime",
+    "focused-validation",
+    "merge-authorization",
+    "ready-for-review",
+    "review-applicability",
+    "tested-sha",
 )
 
 @dataclass(frozen=True, slots=True)

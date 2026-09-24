@@ -62,25 +62,18 @@ class BranchRefreshValidationExecutor(Protocol):
     def run_required_validation(self, repository: str, pr_number: int, *, head_sha: str, command_ids: tuple[str, ...]) -> BranchRefreshValidationResult: ...
 
 
-@runtime_checkable
-class BlockingReviewThreadsReader(Protocol):
-    def blocking_review_threads(self, repository: str, pr_number: int) -> int: ...
-
 
 @dataclass(slots=True)
 class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBackingProvider):
     github_client: object
     request: PullRequestBranchRefreshRequest
     validation_executor: BranchRefreshValidationExecutor
-    review_threads_reader: BlockingReviewThreadsReader
 
     def __post_init__(self) -> None:
         if not hasattr(self.github_client, "get_repo"):
             raise TypeError("github_client must provide get_repo")
         if not isinstance(self.validation_executor, BranchRefreshValidationExecutor):
             raise TypeError("validation_executor does not satisfy BranchRefreshValidationExecutor")
-        if not isinstance(self.review_threads_reader, BlockingReviewThreadsReader):
-            raise TypeError("review_threads_reader does not satisfy BlockingReviewThreadsReader")
         if not isinstance(self.request, PullRequestBranchRefreshRequest):
             raise TypeError("request must be exact PullRequestBranchRefreshRequest")
 
@@ -311,10 +304,10 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         return proposed_head_sha
 
 
-def run_production_pull_request_branch_refresh(*, github_client: object, runner: BranchUpdateRunner, validation_executor: BranchRefreshValidationExecutor, review_threads_reader: BlockingReviewThreadsReader, request: PullRequestBranchRefreshRequest, repository_root: str, invocation_id: str, environment: Mapping[str, str] | None = None, git_binary: str = "git") -> PullRequestBranchRefreshResult:
+def run_production_pull_request_branch_refresh(*, github_client: object, runner: BranchUpdateRunner, validation_executor: BranchRefreshValidationExecutor, request: PullRequestBranchRefreshRequest, repository_root: str, invocation_id: str, environment: Mapping[str, str] | None = None, git_binary: str = "git") -> PullRequestBranchRefreshResult:
     if not isinstance(request, PullRequestBranchRefreshRequest):
         raise TypeError("request must be exact PullRequestBranchRefreshRequest")
-    backing = GitHubPullRequestBranchRefreshBackingProvider(github_client=github_client, request=request, validation_executor=validation_executor, review_threads_reader=review_threads_reader)
+    backing = GitHubPullRequestBranchRefreshBackingProvider(github_client=github_client, request=request, validation_executor=validation_executor)
     provider = ProductionPullRequestBranchRefreshProvider(backing=backing, runner=runner, repository_root=repository_root, invocation_id=invocation_id, authorization_id=request.authorization_id, authorization_current=request.authorization_current, branch_update_authorized=request.branch_refresh_authorized, environment=dict(environment or {}), git_binary=git_binary)
     return refresh_pull_request_branch(provider, request)
 
