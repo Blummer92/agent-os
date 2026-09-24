@@ -39,7 +39,7 @@ class FakeRunner:
         # #2921 adds read-only lineage probes before the existing preparation
         # sequence. Legacy provider tests model one admitted feature path and keep
         # their historical call assertions focused on the mutation lifecycle.
-        if len(argv) >= 3 and argv[0:3] == ("git", "diff", "--name-only"):
+        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
             return observation(stdout="scripts/example.py\n")
         if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
             return observation(stdout=f"{OLD}\n")
