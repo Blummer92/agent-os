@@ -183,6 +183,14 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if merge_base_sha == current_main_sha:
             return _blocked(expected_head_sha, "branch.refresh-not-required-after-merge-base")
 
+        integrity_blocker = self._lineage_integrity_blocker(
+            merge_base_sha=merge_base_sha,
+            expected_head_sha=expected_head_sha,
+            admitted_paths=snapshot.changed_paths,
+        )
+        if integrity_blocker is not None:
+            return _blocked(expected_head_sha, integrity_blocker)
+
         history = self.runner.run((self.git_binary, "rev-list", "--merges", f"{merge_base_sha}..{expected_head_sha}"), cwd=self.repository_root, env=dict(self.environment))
         if not history.started:
             return _blocked(expected_head_sha, "topology-history-not-started")
@@ -253,6 +261,95 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if update.status is ExpectedHeadBranchUpdateStatus.UNCERTAIN:
             return _ambiguous(expected_head_sha, f"transport.{update.reason}")
         return _blocked(expected_head_sha, f"transport.{update.reason}")
+
+    def _lineage_integrity_blocker(
+        self,
+        *,
+        merge_base_sha: str,
+        expected_head_sha: str,
+        admitted_paths: tuple[str, ...],
+    ) -> str | None:
+        """Reject PR diff paths that exist only because of merge-shaped lineage.
+
+        A legitimate PR path must be attributable to at least one non-merge
+        commit after the merge base. This prevents a hand-built merge commit
+        from silently importing stale content for a path the PR never changed.
+        """
+        diff = self.runner.run(
+            (self.git_binary, "diff", "--name-only", "--no-renames", merge_base_sha, expected_head_sha),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        net_paths = _exact_paths(diff)
+        if net_paths is None:
+            return "lineage-integrity.net-diff-unavailable"
+        if net_paths != tuple(sorted(admitted_paths)):
+            return "lineage-integrity.admitted-scope-mismatch"
+        commits = self.runner.run(
+            (self.git_binary, "rev-list", "--first-parent", "--no-merges", f"{merge_base_sha}..{expected_head_sha}"),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        if not commits.started or commits.timed_out or not commits.termination_confirmed or commits.return_code != 0:
+            return "lineage-integrity.commit-history-unavailable"
+        commit_shas = tuple(line.strip() for line in commits.stdout.splitlines() if line.strip())
+        if any(_SHA40_RE.fullmatch(sha) is None for sha in commit_shas):
+            return "lineage-integrity.commit-history-malformed"
+        touched: set[str] = set()
+        for commit_sha in commit_shas:
+            paths = self.runner.run(
+                (self.git_binary, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", commit_sha),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            exact = _exact_paths(paths)
+            if exact is None:
+                return "lineage-integrity.commit-paths-unavailable"
+            touched.update(exact)
+        if set(net_paths) - touched:
+            return "lineage-integrity.merge-only-path"
+
+        merges = self.runner.run(
+            (self.git_binary, "rev-list", "--first-parent", "--merges", f"{merge_base_sha}..{expected_head_sha}"),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        if not merges.started or merges.timed_out or not merges.termination_confirmed or merges.return_code != 0:
+            return "lineage-integrity.merge-history-unavailable"
+        merge_shas = tuple(line.strip() for line in merges.stdout.splitlines() if line.strip())
+        if any(_SHA40_RE.fullmatch(sha) is None for sha in merge_shas):
+            return "lineage-integrity.merge-history-malformed"
+        for merge_sha in merge_shas:
+            parents = self.runner.run(
+                (self.git_binary, "rev-list", "--parents", "-n", "1", merge_sha),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if not parents.started or parents.timed_out or not parents.termination_confirmed or parents.return_code != 0:
+                return "lineage-integrity.merge-parents-unavailable"
+            parts = parents.stdout.strip().split()
+            if len(parts) != 3 or parts[0] != merge_sha or any(_SHA40_RE.fullmatch(sha) is None for sha in parts):
+                return "lineage-integrity.merge-parents-ambiguous"
+            deterministic = self.runner.run(
+                (self.git_binary, "merge-tree", "--write-tree", parts[1], parts[2]),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if not deterministic.started or deterministic.timed_out or not deterministic.termination_confirmed:
+                return "lineage-integrity.merge-result-unavailable"
+            if deterministic.return_code != 0:
+                return "lineage-integrity.semantic-conflict"
+            expected_tree = _exact_head(deterministic)
+            if expected_tree is None:
+                return "lineage-integrity.merge-result-unavailable"
+            actual = self.runner.run(
+                (self.git_binary, "rev-parse", "--verify", f"{merge_sha}^{{tree}}"),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if _exact_head(actual) != expected_tree:
+                return "lineage-integrity.stale-merge-tree"
+        return None
 
     def _prepare_merge_shaped_candidate(self, *, expected_head_sha: str, current_main_sha: str, admitted_paths: tuple[str, ...]) -> str | BranchRefreshMutationResult:
         merge_tree = self.runner.run((self.git_binary, "merge-tree", "--write-tree", current_main_sha, expected_head_sha), cwd=self.repository_root, env=dict(self.environment))
