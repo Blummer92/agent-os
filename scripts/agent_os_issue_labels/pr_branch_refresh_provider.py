@@ -286,7 +286,7 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if net_paths != tuple(sorted(admitted_paths)):
             return "lineage-integrity.admitted-scope-mismatch"
         commits = self.runner.run(
-            (self.git_binary, "rev-list", "--no-merges", f"{merge_base_sha}..{expected_head_sha}"),
+            (self.git_binary, "rev-list", "--first-parent", "--no-merges", f"{merge_base_sha}..{expected_head_sha}"),
             cwd=self.repository_root,
             env=dict(self.environment),
         )
