@@ -124,12 +124,18 @@ def test_assembles_exact_ppux_envelope_with_stable_identity() -> None:
 
 def test_material_handoff_mismatch_fails_closed() -> None:
     handoff, material, visual = upstream()
-    other = copy.deepcopy(handoff)
-    other["identity"]["handoff_id"] = "handoff-other"
+    other_material = copy.deepcopy(material)
+    other_material["handoff_reference"]["handoff_id"] = "handoff-other"
+    from instructional_workflow_contracts.material_requirement import (
+        material_requirement_source_fingerprint,
+    )
+    other_material["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(
+        other_material
+    )
 
     result = assemble_ppux_projection_input(
-        handoff=other,
-        material_requirement=material,
+        handoff=handoff,
+        material_requirement=other_material,
         visual_needs_plan=visual,
         reviewed_tutorial=tutorial(),
         routed_steps=routed_steps(visual),
