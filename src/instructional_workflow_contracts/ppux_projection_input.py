@@ -345,8 +345,11 @@ def _validate_authoring(value: object) -> None:
         raise _blocked("ppux-authoring-invalid", "authoring must be a built-in mapping")
     if not _AUTHORING_REQUIRED.issubset(value) or set(value) - (_AUTHORING_REQUIRED | _AUTHORING_OPTIONAL):
         raise _blocked("ppux-authoring-invalid", "authoring fields do not match PromptAuthoringInput")
-    for field_name in ("imagePurpose", "applicationContext", "targetState", "annotationSpace"):
+    for field_name in ("imagePurpose", "targetState", "annotationSpace"):
         validate_text(value[field_name], field_name)
+    application_context = value["applicationContext"]
+    if type(application_context) is not str or len(application_context) > 512:
+        raise _blocked("ppux-authoring-invalid", "applicationContext must be bounded text")
     if value["imageState"] not in {"action", "result", "action+result"}:
         raise _blocked("ppux-authoring-invalid", "imageState is unsupported")
     for field_name in ("mustShow", "mustNotShow", "requestedUiDetails"):
