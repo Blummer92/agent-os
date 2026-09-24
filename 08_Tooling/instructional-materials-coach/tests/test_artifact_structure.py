@@ -7,6 +7,7 @@ from instructional_materials_coach.artifact_structure import (
     MANUAL_REVIEW,
     PASS,
     validate_artifact_structure,
+    validate_required_worksheet_sections,
 )
 
 
@@ -182,3 +183,101 @@ def test_fixture_mutations_do_not_cross_contaminate() -> None:
     second["slides"][4]["teaching_move_ids"].append("later-step")
     assert validate_artifact_structure(first).status == PASS
     assert validate_artifact_structure(second).status == FAIL
+
+
+
+def _docs_request(token: str) -> dict:
+    return {
+        "replaceAllText": {
+            "containsText": {"text": "{{" + token + "}}", "matchCase": True},
+            "replaceText": "student-facing content",
+        }
+    }
+
+
+def test_required_worksheet_sections_pass_with_exact_plan_coverage() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("warm-up", "exit-ticket"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(
+            _docs_request("curriculum_warm_up"),
+            _docs_request("curriculum_exit_ticket"),
+        ),
+    )
+    assert result.status == PASS
+    assert result.findings == ()
+
+
+def test_required_worksheet_sections_are_unordered_exact_identities() -> None:
+    forward = validate_required_worksheet_sections(
+        required_sections=("warm-up", "exit-ticket"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(
+            _docs_request("curriculum_exit_ticket"),
+            _docs_request("curriculum_warm_up"),
+        ),
+    )
+    reversed_result = validate_required_worksheet_sections(
+        required_sections=("exit-ticket", "warm-up"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(
+            _docs_request("curriculum_warm_up"),
+            _docs_request("curriculum_exit_ticket"),
+        ),
+    )
+    assert forward == reversed_result
+    assert forward.status == PASS
+
+
+def test_required_worksheet_section_missing_from_docs_plan_fails() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("warm-up", "exit-ticket"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(_docs_request("curriculum_warm_up"),),
+    )
+    assert result.status == FAIL
+    assert "worksheet-required-section-missing-from-plan" in _codes(result)
+
+
+def test_required_worksheet_section_without_exact_observation_routes_to_manual_review() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("worked-example",),
+        curriculum_decision_tokens={"model": "curriculum_model"},
+        docs_requests=(_docs_request("curriculum_model"),),
+    )
+    assert result.status == MANUAL_REVIEW
+    assert "worksheet-required-section-unobservable" in _codes(result)
+
+
+def test_required_worksheet_section_token_collision_routes_to_manual_review() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("warm-up",),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "warm_up": "curriculum_warm_up",
+        },
+        docs_requests=(_docs_request("curriculum_warm_up"),),
+    )
+    assert result.status == MANUAL_REVIEW
+    assert "worksheet-required-section-token-ambiguous" in _codes(result)
+
+
+def test_exit_ticket_identity_is_not_reinterpreted_as_artifact_type() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("exit-ticket",),
+        curriculum_decision_tokens={"exit-ticket": "curriculum_exit_ticket"},
+        docs_requests=(_docs_request("curriculum_exit_ticket"),),
+    )
+    assert result.status == PASS
