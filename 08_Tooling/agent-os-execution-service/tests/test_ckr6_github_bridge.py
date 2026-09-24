@@ -87,6 +87,12 @@ def test_failed_repair_uses_existing_repair_context_to_force_material_retrieval(
         payload(
             operation="failed-repair",
             specialized_knowledge_required=None,
+            # Sparse signals: CKR2 alone would report not-needed, so only the
+            # repair context can make retrieval material.
+            ecosystem_hints=[],
+            language_hints=[],
+            capability_keywords=[],
+            target_path_hints=[],
             attempt_id="attempt-1",
             failed_hypothesis="label convergence was already complete",
             result_summary="refresh still reported blocked",
