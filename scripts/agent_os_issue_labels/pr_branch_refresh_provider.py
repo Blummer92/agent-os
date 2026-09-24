@@ -1,8 +1,8 @@
 """Production composition for the governed #1187 PR branch-refresh lifecycle.
 
 This module implements the concrete ``PullRequestBranchRefreshProvider`` seam
-without owning refresh admission, scope checks, validation ordering, label
-reconciliation, or final branch-current proof. Those semantics remain in
+without owning refresh admission, scope checks, validation ordering, or final
+branch-current proof. Those semantics remain in
 ``pr_branch_refresh.refresh_pull_request_branch``.
 
 The provider prepares exactly one topology-appropriate candidate head with fixed
@@ -11,8 +11,7 @@ Git argv and then delegates the only remote non-fast-forward mutation to #1381
 preparation when GitHub reports a clean merge; conflicted stale history uses a
 bounded ``merge-tree`` final-tree projection so Git, not GitHub's coarse
 mergeability flag, decides whether reconciliation is mechanically possible.
-The live backing provider reacquires GitHub PR/base/head/scope evidence and
-performs only the managed-label operations that #1187/#1038 authorize.
+The live backing provider reacquires GitHub PR/base/head/scope evidence.
 Validation and bounded process execution remain injected from their existing
 canonical owners. There is no retry, merge-main fallback, unconditional force
 push, protected-branch mutation, credential acquisition, or alternate remote
@@ -41,7 +40,6 @@ from .pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
-from .pr_reconciler import LivePullRequestSnapshot, PullRequestLabelProvider
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TOPOLOGY_COMMIT_MESSAGE = "Agent OS governed PR refresh candidate"
@@ -54,7 +52,7 @@ _PROVIDER_GIT_IDENTITY = {
 
 
 @runtime_checkable
-class PullRequestBranchRefreshBackingProvider(PullRequestLabelProvider, Protocol):
+class PullRequestBranchRefreshBackingProvider(Protocol):
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot: ...
     def run_required_validation(self, repository: str, pr_number: int, *, head_sha: str, command_ids: tuple[str, ...]) -> BranchRefreshValidationResult: ...
 
@@ -64,27 +62,18 @@ class BranchRefreshValidationExecutor(Protocol):
     def run_required_validation(self, repository: str, pr_number: int, *, head_sha: str, command_ids: tuple[str, ...]) -> BranchRefreshValidationResult: ...
 
 
-@runtime_checkable
-class BlockingReviewThreadsReader(Protocol):
-    def blocking_review_threads(self, repository: str, pr_number: int) -> int: ...
-
 
 @dataclass(slots=True)
 class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBackingProvider):
     github_client: object
     request: PullRequestBranchRefreshRequest
     validation_executor: BranchRefreshValidationExecutor
-    review_threads_reader: BlockingReviewThreadsReader
-    _validation_state_by_head: dict[str, str] = field(default_factory=dict, init=False)
-    _label_reconciliation_blocked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not hasattr(self.github_client, "get_repo"):
             raise TypeError("github_client must provide get_repo")
         if not isinstance(self.validation_executor, BranchRefreshValidationExecutor):
             raise TypeError("validation_executor does not satisfy BranchRefreshValidationExecutor")
-        if not isinstance(self.review_threads_reader, BlockingReviewThreadsReader):
-            raise TypeError("review_threads_reader does not satisfy BlockingReviewThreadsReader")
         if not isinstance(self.request, PullRequestBranchRefreshRequest):
             raise TypeError("request must be exact PullRequestBranchRefreshRequest")
 
@@ -122,60 +111,11 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
         except Exception:
             return self._unknown_branch(repository, pr_number)
 
-    def read(self, repository: str, pr_number: int) -> LivePullRequestSnapshot:
-        branch = self.read_branch(repository, pr_number)
-        self._label_reconciliation_blocked = branch.branch_state == "unknown" or branch.mergeability == "unknown"
-        try:
-            repo = self.github_client.get_repo(repository)
-            pr = repo.get_pull(pr_number)
-            labels = tuple(sorted({str(item.name) for item in repo.get_issue(pr_number).labels}))
-            draft = bool(getattr(pr, "draft", True))
-        except Exception:
-            self._label_reconciliation_blocked = True
-            labels = ()
-            draft = True
-        try:
-            blocking_review_threads = self.review_threads_reader.blocking_review_threads(repository, pr_number)
-            if type(blocking_review_threads) is not int or blocking_review_threads < 0:
-                raise ValueError("blocking review-thread count is malformed")
-        except Exception:
-            self._label_reconciliation_blocked = True
-            blocking_review_threads = 1
-        validation_state = self._validation_state_by_head.get(branch.head_sha, "pending")
-        return LivePullRequestSnapshot(
-            repository=repository,
-            pr_number=pr_number,
-            head_sha=branch.head_sha,
-            draft=draft,
-            mergeable=branch.mergeability == "mergeable",
-            conflicted=branch.mergeability == "conflicted",
-            behind=branch.branch_state == "behind",
-            validation_state=validation_state,
-            blocking_review_threads=blocking_review_threads,
-            labels=labels,
-        )
-
-    def available_labels(self, repository: str) -> tuple[str, ...]:
-        if self._label_reconciliation_blocked:
-            return ()
-        try:
-            return tuple(sorted({str(item.name) for item in self.github_client.get_repo(repository).get_labels()}))
-        except Exception:
-            return ()
-
-    def add_label(self, repository: str, pr_number: int, label: str) -> None:
-        self.github_client.get_repo(repository).get_issue(pr_number).add_to_labels(label)
-
-    def remove_label(self, repository: str, pr_number: int, label: str) -> None:
-        self.github_client.get_repo(repository).get_issue(pr_number).remove_from_labels(label)
-
     def run_required_validation(self, repository: str, pr_number: int, *, head_sha: str, command_ids: tuple[str, ...]) -> BranchRefreshValidationResult:
         try:
             result = self.validation_executor.run_required_validation(repository, pr_number, head_sha=head_sha, command_ids=command_ids)
         except Exception:
             result = BranchRefreshValidationResult(head_sha=head_sha, status="failing", command_ids=command_ids)
-        if result.head_sha == head_sha:
-            self._validation_state_by_head[head_sha] = "green" if result.status == "green" else "failing"
         return result
 
     def _unknown_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot:
@@ -221,18 +161,6 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
                 raise ValueError(f"{name} is required")
         if type(self.authorization_current) is not bool or type(self.branch_update_authorized) is not bool:
             raise TypeError("authorization flags must be bool")
-
-    def read(self, repository: str, pr_number: int) -> LivePullRequestSnapshot:
-        return self.backing.read(repository, pr_number)
-
-    def available_labels(self, repository: str) -> tuple[str, ...]:
-        return self.backing.available_labels(repository)
-
-    def add_label(self, repository: str, pr_number: int, label: str) -> None:
-        self.backing.add_label(repository, pr_number, label)
-
-    def remove_label(self, repository: str, pr_number: int, label: str) -> None:
-        self.backing.remove_label(repository, pr_number, label)
 
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot:
         return self.backing.read_branch(repository, pr_number)
@@ -376,10 +304,10 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         return proposed_head_sha
 
 
-def run_production_pull_request_branch_refresh(*, github_client: object, runner: BranchUpdateRunner, validation_executor: BranchRefreshValidationExecutor, review_threads_reader: BlockingReviewThreadsReader, request: PullRequestBranchRefreshRequest, repository_root: str, invocation_id: str, environment: Mapping[str, str] | None = None, git_binary: str = "git") -> PullRequestBranchRefreshResult:
+def run_production_pull_request_branch_refresh(*, github_client: object, runner: BranchUpdateRunner, validation_executor: BranchRefreshValidationExecutor, request: PullRequestBranchRefreshRequest, repository_root: str, invocation_id: str, environment: Mapping[str, str] | None = None, git_binary: str = "git") -> PullRequestBranchRefreshResult:
     if not isinstance(request, PullRequestBranchRefreshRequest):
         raise TypeError("request must be exact PullRequestBranchRefreshRequest")
-    backing = GitHubPullRequestBranchRefreshBackingProvider(github_client=github_client, request=request, validation_executor=validation_executor, review_threads_reader=review_threads_reader)
+    backing = GitHubPullRequestBranchRefreshBackingProvider(github_client=github_client, request=request, validation_executor=validation_executor)
     provider = ProductionPullRequestBranchRefreshProvider(backing=backing, runner=runner, repository_root=repository_root, invocation_id=invocation_id, authorization_id=request.authorization_id, authorization_current=request.authorization_current, branch_update_authorized=request.branch_refresh_authorized, environment=dict(environment or {}), git_binary=git_binary)
     return refresh_pull_request_branch(provider, request)
 

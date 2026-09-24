@@ -3,14 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
-
-from .pr_lifecycle import PullRequestLifecycleReconciliationResult, reconcile_pull_request_lifecycle
-from .pr_reconciler import PullRequestLabelProvider
 
 _INVALIDATED_HEAD_EVIDENCE = (
-    "approval-applicability", "branch-freshness", "candidate-runtime", "focused-validation",
-    "lifecycle-reconciliation", "merge-authorization", "ready-for-review", "review-applicability", "tested-sha",
+    "approval-applicability",
+    "branch-freshness",
+    "candidate-runtime",
+    "focused-validation",
+    "merge-authorization",
+    "ready-for-review",
+    "review-applicability",
+    "tested-sha",
 )
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +28,7 @@ class BranchRefreshMutationResult:
 class BranchRefreshValidationResult:
     head_sha: str; status: str; command_ids: tuple[str, ...]
 
-class PullRequestBranchRefreshProvider(PullRequestLabelProvider, Protocol):
+class PullRequestBranchRefreshProvider(Protocol):
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot: ...
     def rebase_onto_main(self, repository: str, pr_number: int, *, expected_head_sha: str, expected_base_sha: str, current_main_sha: str) -> BranchRefreshMutationResult: ...
     def run_required_validation(self, repository: str, pr_number: int, *, head_sha: str, command_ids: tuple[str, ...]) -> BranchRefreshValidationResult: ...
@@ -36,13 +38,12 @@ class PullRequestBranchRefreshRequest:
     repository: str; pr_number: int; base_branch: str; expected_base_sha: str; expected_head_sha: str; current_main_sha: str
     authorization_id: str; authorization_current: bool; allowed_changed_paths: tuple[str, ...]; forbidden_paths: tuple[str, ...]
     required_validation_command_ids: tuple[str, ...]; branch_refresh_authorized: bool
-    lifecycle_admission: LifecycleMutationAdmissionResult | None = None
 
 @dataclass(frozen=True, slots=True)
 class PullRequestBranchRefreshResult:
     repository: str; pr_number: int; status: str; old_head_sha: str; new_head_sha: str | None
     invalidated_head_evidence: tuple[str, ...]; validation: BranchRefreshValidationResult | None
-    lifecycle_reconciliation: PullRequestLifecycleReconciliationResult | None; reason_codes: tuple[str, ...]
+    reason_codes: tuple[str, ...]
     branch_refresh_authorized: bool; side_effects_performed: bool; mutation_attempted: bool = False
     automatic_retry_authorized: bool = field(default=False, init=False); merge_authorized: bool = field(default=False, init=False)
     ready_for_review_authorized: bool = field(default=False, init=False); issue_closure_authorized: bool = field(default=False, init=False)
@@ -66,12 +67,10 @@ def refresh_pull_request_branch(provider: PullRequestBranchRefreshProvider, requ
     if post: return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,reasons=(post,),side_effects=True,mutation_attempted=True)
     validation=provider.run_required_validation(request.repository,request.pr_number,head_sha=mutation.new_head_sha,command_ids=request.required_validation_command_ids)
     if validation.head_sha != mutation.new_head_sha: return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("validation.head-mismatch",),side_effects=True,mutation_attempted=True)
-    lifecycle=reconcile_pull_request_lifecycle(provider,request.repository,request.pr_number,invocation_reason="validation-terminal",caller_operation_evidence=f"branch-refresh:{request.authorization_id}",caller_result_evidence=f"validation:{validation.status}:{validation.head_sha}",dry_run=False,lifecycle_admission=request.lifecycle_admission)
-    if lifecycle.reconciliation_status != "converged": return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,lifecycle=lifecycle,reasons=("labels.convergence-not-proven",),side_effects=True,mutation_attempted=True)
     final=provider.read_branch(request.repository,request.pr_number)
-    if final.current_main_sha != request.current_main_sha: return _result(request,"stale",before.head_sha,new_head=mutation.new_head_sha,validation=validation,lifecycle=lifecycle,reasons=("main.moved-before-final-proof",),side_effects=True,mutation_attempted=True)
-    if final.head_sha != mutation.new_head_sha or final.branch_state != "current" or final.mergeability == "conflicted": return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,lifecycle=lifecycle,reasons=("branch.current-not-proven",),side_effects=True,mutation_attempted=True)
-    return _result(request,"converged" if validation.status=="green" else "validation-failing",before.head_sha,new_head=mutation.new_head_sha,validation=validation,lifecycle=lifecycle,reasons=("refresh.rebased","head-evidence.invalidated","branch.current-proven"),side_effects=True,mutation_attempted=True)
+    if final.current_main_sha != request.current_main_sha: return _result(request,"stale",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("main.moved-before-final-proof",),side_effects=True,mutation_attempted=True)
+    if final.head_sha != mutation.new_head_sha or final.branch_state != "current" or final.mergeability == "conflicted": return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("branch.current-not-proven",),side_effects=True,mutation_attempted=True)
+    return _result(request,"converged" if validation.status=="green" else "validation-failing",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("refresh.rebased","head-evidence.invalidated","branch.current-proven"),side_effects=True,mutation_attempted=True)
 
 def _validate_request(request):
     for value,name in ((request.expected_base_sha,"expected_base_sha"),(request.expected_head_sha,"expected_head_sha"),(request.current_main_sha,"current_main_sha")):
@@ -103,5 +102,5 @@ def _path_blocker(paths,request):
     if not s.issubset(set(request.allowed_changed_paths)): return "scope.expanded-after-refresh"
     return None
 
-def _result(request,status,old_head,*,new_head=None,validation=None,lifecycle=None,reasons=(),side_effects=False,mutation_attempted=False):
-    return PullRequestBranchRefreshResult(request.repository,request.pr_number,status,old_head,new_head,_INVALIDATED_HEAD_EVIDENCE if side_effects else (),validation,lifecycle,tuple(sorted(set(reasons))),request.branch_refresh_authorized,side_effects,mutation_attempted)
+def _result(request,status,old_head,*,new_head=None,validation=None,reasons=(),side_effects=False,mutation_attempted=False):
+    return PullRequestBranchRefreshResult(request.repository,request.pr_number,status,old_head,new_head,_INVALIDATED_HEAD_EVIDENCE if side_effects else (),validation,tuple(sorted(set(reasons))),request.branch_refresh_authorized,side_effects,mutation_attempted)

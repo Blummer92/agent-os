@@ -20,16 +20,6 @@ HEAD = "a" * 40
 MAIN = "b" * 40
 
 
-def lifecycle():
-    return {
-        "reconciliation_status": "converged",
-        "invocation_reason": "validation-terminal",
-        "planned_head_sha": HEAD,
-        "verified_head_sha": HEAD,
-        "unmanaged_labels_preserved": ["agent-os"],
-    }
-
-
 def evidence(**changes):
     value = {
         "repository": "Blummer92/agent-os",
@@ -55,7 +45,6 @@ def evidence(**changes):
         "merge_authorized": True,
         "merge_commit_verified": True,
         "main_verified": True,
-        "lifecycle_reconciliation": lifecycle(),
         "side_effects_performed": ["merge"],
     }
     value.update(changes)

@@ -63,11 +63,6 @@ class Validation:
         raise AssertionError("not used")
 
 
-class Reviews:
-    def blocking_review_threads(self, *args, **kwargs):
-        return 0
-
-
 class Pull:
     base = SimpleNamespace(ref="main")
     head = SimpleNamespace(ref="agent/1849", sha=OLD)
@@ -149,7 +144,6 @@ def test_github_conflict_preserves_proven_diverged_branch_state():
         github_client=Github(),
         request=request(),
         validation_executor=Validation(),
-        review_threads_reader=Reviews(),
     )
     result = backing.read_branch("Blummer92/agent-os", 1849)
     assert result.branch_state == "behind"

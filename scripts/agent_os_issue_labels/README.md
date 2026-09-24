@@ -22,38 +22,11 @@ This utility produces migration evidence only (`mutation_performed=false`,
 `write_authorized=false`). Any issue-body mutation and managed-label reconciliation remain
 separately authorized GitHub operations under the existing lifecycle contracts.
 
-## Pull-request reconciliation
+## Pull-request lifecycle evidence
 
-`scripts/agent_os_issue_labels/pr_reconciler.py` consumes the canonical PR-label
-planner from `scripts/agent_os_issue_labels/pr_planner.py`; it does not define a
-second label-state engine. The contract reads exact live PR evidence, verifies desired
-managed labels exist, defaults to dry-run, requires separate label-write authorization,
-rereads the exact head before mutation, changes only the canonical managed delta,
-preserves unmanaged/human/security/dependency/third-party labels, proves convergence,
-and reports partial failures without claiming synchronization. Finite batch processing
-continues past item-local blockers.
+Managed PR lifecycle labels were retired as required Agent OS state by #2904. PR lifecycle decisions consume canonical GitHub Draft/Ready state, exact head identity, authoritative validation, branch freshness/conflicts, review threads, and terminal state directly. This package no longer owns a PR-label planner, reconciler, or connected PR-label lifecycle.
 
-Managed PR labels are disposable projections only; they never become lifecycle,
-validation, review, merge, closure, production, or authorization truth. The executor
-never creates labels. Missing managed labels fail closed as `managed-label-unavailable`.
-Authorization remains governed by `00_Governance/write-authorization-policy.md` and
-`01_Shared_Standards/github/excluded-surface-baseline.md`.
-
-## Lifecycle integration
-
-`scripts/agent_os_issue_labels/pr_lifecycle.py` is the thin operator/connector seam for
-#1038 and reuses the #1022 planner plus #1023 reconciler. Supported invocations cover
-Draft PR creation, head changes, terminal validation, Draft/Ready transitions, review
-threads, branch freshness/conflict checks, and final-state readback.
-
-For #1076, authorized Draft PR creation reacquires the live PR/head, invokes
-`draft-pr-created`, reconciles only the managed delta, preserves unmanaged labels,
-rereads for convergence, and keeps creation/reconciliation evidence separate. Optional
-caller evidence is validated before provider access. A pre-mutation head move triggers
-one fresh recomputation; a post-mutation move remains stale evidence and is not retried.
-Repeated unchanged calls perform zero writes.
-
-This layer is connector/operator driven; unattended trigger surfaces are not implemented.
+Issue-label tooling remains unchanged and continues to own Agent OS issue classification/readiness projection.
 
 ## Governed stale-branch refresh
 
@@ -68,29 +41,19 @@ remote-head mismatch, ambiguous transport, or failure to prove `branch:current` 
 fail closed. There is no merge-main fallback, automatic retry, Update Branch setting
 change, or revival of retired connector-only #568 behavior.
 
-A successful refresh creates a new exact head and invalidates prior validation,
-tested-SHA, branch-freshness, review/approval applicability, merge authorization,
-lifecycle reconciliation, candidate-runtime, and Ready-for-Review evidence. Scope is
-rechecked before validation. Post-refresh order is fixed: prove the new head and scope;
-run required validation; invoke #1038 for terminal validation state; converge managed
-labels through #1022/#1023 while preserving unmanaged labels; then prove
-`branch:current` against the same current-main identity.
+A successful refresh creates a new exact head and invalidates prior validation, tested-SHA, branch-freshness, review/approval applicability, merge authorization, candidate-runtime, and Ready-for-Review evidence. Scope is rechecked before validation. Post-refresh order is fixed: prove the new head and scope; run required validation; then prove `branch:current` against the same current-main identity.
 
-If `main` moves before final proof, the result is stale and no second refresh occurs.
-Failing validation may reconcile `validation:failing` / `pr:blocked`, but grants no
-Ready-for-Review, merge, closure, workflow, repository-setting, production, or external
-system authority.
+If `main` moves before final proof, the result is stale and no second refresh occurs. Failing validation grants no Ready-for-Review, merge, closure, workflow, repository-setting, production, or external system authority.
 
 ## Production branch-refresh composition
 
 `scripts/agent_os_issue_labels/pr_branch_refresh_provider.py` is the GH-LIFE4 / #1365
 production composition behind #1187's existing `PullRequestBranchRefreshProvider`
-protocol. It does not replace #1187 admission, scope checking, validation ordering,
-managed-label reconciliation, or final `branch:current` proof.
+protocol. It does not replace #1187 admission, scope checking, validation ordering, or final `branch:current` proof.
 
 `GitHubPullRequestBranchRefreshBackingProvider` uses one already-authenticated
 PyGithub-compatible client to reacquire the exact PR head/base/main identities,
-mergeability, changed paths, labels, and managed-label catalog. It never acquires
+mergeability and changed paths. It never acquires
 credentials. Review-thread evidence and required validation remain injected from their
 existing canonical owners. Read failures become `unknown`/unavailable/blocking evidence
 so they cannot produce refresh or lifecycle authority.
@@ -149,20 +112,6 @@ receipt = refresh_pr(
 )
 ```
 
-Lifecycle-label authority is never a boolean. The retired `label_write_authorized`
-input has been removed from the reconciler, PR-lifecycle, connected-lifecycle, and
-branch-refresh facade boundaries. Callers that need managed-label mutation must supply a
-canonical `LifecycleMutationAdmissionResult` through `lifecycle_admission`, produced by
-`scripts.agent_os_issue_acceptance.lifecycle_mutation_guard.evaluate_lifecycle_mutation(...)`
-against a current authorization and lifecycle-state snapshot. An absent, refused, or
-non-canonical admission fails closed with zero writes and the
-`lifecycle-admission-required` reason code; it is never upgraded into write authority.
-
-The persisted `RefreshAuthorization` record retains its own `label_write_authorized`
-field as authorization-source data. That stored field is evidence about a governed
-decision, not a caller-supplied grant, and it is no longer projected into
-`refresh_pr(...)` kwargs.
-
 `request != authorization`: naming a PR or calling `refresh_pr(...)` never grants,
 renews, manufactures, or rebinds refresh authority. Missing or stale authorization,
 moved head/main evidence, conflicted/unknown state, or scope drift fails closed through
@@ -170,7 +119,7 @@ the existing contracts. The facade does not accept provider, runner, review-read
 validation-executor, transport, Git argv, or validation-command objects from callers.
 
 The returned immutable receipt projects the admitted main, old/new heads, authorization
-identity/consumption, mutation count, validation and lifecycle status, final-current
+identity/consumption, mutation count, validation status, final-current
 proof, reason codes/blockers, rollback posture, and side-effect evidence. It grants no
 Ready-for-Review, merge, issue-closure, workflow, repository-setting, credential,
 production, or external-system authority.
@@ -195,8 +144,7 @@ repository-label catalog; its initial policy may approve only missing `agent-os`
 
 ## Read-only workflows
 
-Existing issue-label workflows remain read-only. No workflow is added or modified for
-PR-label reconciliation, lifecycle integration, or branch refresh.
+Existing issue-label workflows remain read-only. #2904 adds no workflow for PR labels or branch refresh.
 
 ## Validation
 
@@ -206,7 +154,6 @@ python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh_operator.py 
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh.py -q
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py -q
 python -m pytest tests/agent_os_github_git_objects/test_branch_update.py -q
-python -m pytest tests/agent_os_issue_labels/test_pr_lifecycle.py -q
 python -m pytest tests/agent_os_issue_labels/test_github_service_agent_draft_pr_contract.py -q
 python -m pytest tests/agent_os_issue_labels -q
 ```

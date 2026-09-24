@@ -127,7 +127,6 @@ def converged_refresh(auth, calls):
             "mutation_count": 1,
             "validation_status": "green",
             "validation_head_sha": "3" * 40,
-            "lifecycle_reconciliation_status": "converged",
             "final_current_proven": True,
             "blockers": (),
             "reason_codes": ("branch.current-proven",),

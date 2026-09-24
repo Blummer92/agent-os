@@ -36,7 +36,6 @@ BRANCH_STATES = {"current", "behind", "conflicted", "unknown"}
 PR_LIFECYCLE_STATES = {"draft", "ready", "merged", "closed"}
 REQUIRED_REFRESH_INVALIDATIONS = {
     "branch-freshness",
-    "lifecycle-reconciliation",
     "merge-authorization",
     "ready-for-review",
     "tested-sha",
@@ -74,8 +73,6 @@ class ReleaseRunState:
     ready_for_review_authorized: bool = False
     merge_authorized: bool = False
     issue_closure_authorized: bool = False
-    lifecycle_reconciliation_status: str | None = None
-    lifecycle_invocation_reason: str | None = None
     terminal_reconciliation_status: str | None = None
     next_action: str = "stop"
     blockers: list[str] = field(default_factory=list)
@@ -84,9 +81,6 @@ class ReleaseRunState:
 
 def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
     """Project fresh caller-supplied release evidence into one governed next state."""
-    lifecycle = evidence.get("lifecycle_reconciliation")
-    if lifecycle is not None and not isinstance(lifecycle, dict):
-        raise TypeError("lifecycle_reconciliation must be object or null")
 
     state = ReleaseRunState(
         repository=_text_or_default(evidence.get("repository"), "repository", ""),
@@ -134,12 +128,6 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         issue_closure_authorized=_exact_bool(
             evidence.get("issue_closure_authorized", False)
         ),
-        lifecycle_reconciliation_status=(
-            str(lifecycle.get("reconciliation_status", "")) if lifecycle else None
-        ),
-        lifecycle_invocation_reason=(
-            str(lifecycle.get("invocation_reason", "")) if lifecycle else None
-        ),
         side_effects_performed=_ordered_strings(
             evidence.get("side_effects_performed", [])
         ),
@@ -171,8 +159,7 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         _validate_branch_freshness(state, evidence)
         _validate_refresh_receipt(state, evidence.get("branch_refresh_result"))
         _validate_validation_head(state)
-        _validate_lifecycle_receipt(state, lifecycle)
-
+    
     _validate_authoritative_checks(state)
     _classify_failed_validation(state, evidence.get("validation_failure_evidence"))
 
@@ -193,8 +180,6 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         )
         if "branch is behind current main" in state.blockers:
             state.next_action = "route-through-gh-life3-1187"
-        elif any(item.startswith("managed-label reconciliation") for item in state.blockers):
-            state.next_action = "reconcile-managed-labels-via-gh-life2-1038"
         elif state.external_transition:
             state.next_action = "reacquire-and-reclassify-external-transition"
         else:
@@ -311,14 +296,6 @@ def _evaluate_terminal_reconciliation(
         state.next_action = "close-issue"
         return
 
-    terminal_lifecycle = evidence.get("terminal_lifecycle_reconciliation")
-    lifecycle_blocker = _terminal_lifecycle_blocker(state, terminal_lifecycle)
-    if lifecycle_blocker is not None:
-        state.classification = "BLOCKED"
-        state.blockers.append(lifecycle_blocker)
-        state.next_action = "reconcile-terminal-projections-via-existing-lifecycle"
-        return
-
     if "final-report" not in state.side_effects_performed:
         state.classification = "BLOCKED"
         state.next_action = "emit-final-report"
@@ -360,19 +337,6 @@ def _lease_release_blocker(evidence: dict[str, Any]) -> str | None:
         return "terminal lease release is not proven"
     return None
 
-
-def _terminal_lifecycle_blocker(
-    state: ReleaseRunState, lifecycle: Any
-) -> str | None:
-    if not isinstance(lifecycle, dict):
-        return "terminal projection reconciliation receipt is missing"
-    if lifecycle.get("reconciliation_status") != "converged":
-        return "terminal projection reconciliation is not converged"
-    if lifecycle.get("verified_head_sha") != state.observed_head_sha:
-        return "terminal projection reconciliation is bound to a stale head"
-    if lifecycle.get("invocation_reason") != "final-state-readback":
-        return "terminal projection reconciliation is not final-state readback"
-    return None
 
 
 def _detect_external_transition(state: ReleaseRunState, evidence: dict[str, Any]) -> bool:
@@ -456,26 +420,6 @@ def _validate_validation_head(state: ReleaseRunState) -> None:
         state.blockers.append("authoritative validation is bound to a stale head")
 
 
-def _validate_lifecycle_receipt(
-    state: ReleaseRunState, lifecycle: dict[str, Any] | None
-) -> None:
-    if lifecycle is None:
-        state.blockers.append("managed-label reconciliation receipt is missing")
-        return
-    if lifecycle.get("reconciliation_status") != "converged":
-        state.blockers.append("managed-label reconciliation is not converged")
-    verified_head = lifecycle.get("verified_head_sha")
-    if verified_head != state.observed_head_sha:
-        state.blockers.append("managed-label reconciliation is bound to a stale head")
-    invocation = lifecycle.get("invocation_reason")
-    if invocation not in {
-        "validation-terminal",
-        "draft-ready-transition",
-        "branch-state-rechecked",
-        "final-state-readback",
-    }:
-        state.blockers.append("managed-label reconciliation invocation is not release-current")
-
 
 def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
     if raw is None:
@@ -500,9 +444,6 @@ def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
             state.blockers.append("#1187 refreshed-head validation is stale")
         if validation.get("status") != "green":
             state.blockers.append("#1187 refreshed-head validation is not green")
-    lifecycle = raw.get("lifecycle_reconciliation")
-    if not isinstance(lifecycle, dict) or lifecycle.get("reconciliation_status") != "converged":
-        state.blockers.append("#1187 post-refresh lifecycle reconciliation is not converged")
 
 
 def _refresh_proves_head_transition(raw: Any, old_head: str | None, new_head: str) -> bool:
