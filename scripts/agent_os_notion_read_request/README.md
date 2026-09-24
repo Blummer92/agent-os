@@ -84,10 +84,13 @@ those request ids are known but fail closed with `canonical-unit-unverified`.
 #2816 stages Candy Branding this way and reuses the existing bounded workflow
 for one finite verification request, `verify-candy-branding-binding`. That
 request is admitted only on issue #2816 and executes the existing exact-title
-verifier against the already-verified Canonical Digital Media Unit Registry. It
-accepts no caller-supplied title, filter, page id, data-source id, or arbitrary
-query surface, and it preserves the existing read-only / no-GCE authority
-ceiling.
+verifier against the already-verified Canonical Digital Media Unit Registry.
+Before querying, the verifier reads that already-bound data-source schema and
+requires exactly one title-typed property; the exact Candy filter is then built
+against that verified property name instead of assuming the column is named
+`Name`. It accepts no caller-supplied title, filter, page id, data-source id, or
+arbitrary query surface, and it preserves the existing read-only / no-GCE
+authority ceiling.
 
 The verification result is evidence only. It does not mutate the catalog or
 make Candy Branding dispatchable. A later separately authorized repository
