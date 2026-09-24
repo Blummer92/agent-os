@@ -49,7 +49,7 @@ function planWith(overrides: Partial<TutorialFramePlan> = {}): TutorialFramePlan
 
 describe('resolveFrameOverlays geometry', () => {
   it('resolves every overlay deterministically in paint order', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.status).toBe('valid');
     expect(result.blocker_reasons).toEqual([]);
@@ -60,7 +60,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('pads the spotlight boundary and dilates its bounds by the declared falloff', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
     const spotlight = result.overlays?.[0];
 
     expect(spotlight?.kind).toBe('spotlight');
@@ -71,7 +71,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('places badge, arrow, and label on the preferred side with deterministic clearance', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
     const [, badge, arrow, label] = result.overlays ?? [];
 
     expect(badge?.bounds.rect).toEqual([668, 318, 44, 44]);
@@ -82,7 +82,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('gives every overlay an output-pixel bounding rect for the exclusion mask', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     for (const overlay of result.overlays ?? []) {
       expect(overlay.bounds.space).toBe('output-pixel');
@@ -91,7 +91,7 @@ describe('resolveFrameOverlays geometry', () => {
   });
 
   it('resolves only the requested subset', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['spotlight'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['spotlight'] });
 
     expect(result.overlays).toHaveLength(1);
     expect(result.overlays?.[0]!.kind).toBe('spotlight');
@@ -103,7 +103,7 @@ describe('resolveFrameOverlays placement rules', () => {
     const plan = planWith({
       anchored_rects: [anchored('add-content-button', [1000, 300, 240, 80])],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 2 });
+    const result = resolveFrameOverlays(plan, { ordinal: 2, semantic_target_id: "mission-9-submit-check" });
     const label = result.overlays?.find((overlay) => overlay.kind === 'label');
 
     expect(result.status).toBe('valid');
@@ -117,7 +117,7 @@ describe('resolveFrameOverlays placement rules', () => {
         anchored('media-tab', [660, 300, 300, 80]),
       ],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 3 });
+    const result = resolveFrameOverlays(plan, { ordinal: 3, semantic_target_id: "mission-9-submit-check" });
     const label = result.overlays?.find((overlay) => overlay.kind === 'label');
 
     expect(label && 'resolved_side' in label ? label.resolved_side : null).toBe('below');
@@ -137,7 +137,7 @@ describe('resolveFrameOverlays placement rules', () => {
       output_height_px: 171,
       anchored_rects: [anchored('add-content-button', [24, 49, 256, 72])],
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.status).toBe('blocked');
     expect(result.overlays).toBeNull();
@@ -147,13 +147,13 @@ describe('resolveFrameOverlays placement rules', () => {
 
 describe('resolveFrameOverlays fail-closed behaviour', () => {
   it('blocks an unknown overlay kind', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['spotlight', 'halo'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['spotlight', 'halo'] });
 
     expect(result.blocker_reasons).toEqual([ANNOTATION_BLOCKER_REASONS.unknownOverlayKind]);
   });
 
   it('blocks a requested inset instead of dropping it silently', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 1, kinds: ['inset'] });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 1, semantic_target_id: "mission-9-submit-check", kinds: ['inset'] });
 
     expect(result.overlays).toBeNull();
     expect(result.blocker_reasons).toEqual([ANNOTATION_BLOCKER_REASONS.unknownOverlayKind]);
@@ -161,7 +161,7 @@ describe('resolveFrameOverlays fail-closed behaviour', () => {
 
   it('blocks when the plan carries no anchored rect for the resolved target', () => {
     const plan = planWith({ resolved_target_region_id: 'missing-region' });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.targetRectMissing);
   });
@@ -170,13 +170,13 @@ describe('resolveFrameOverlays fail-closed behaviour', () => {
     const plan = planWith({
       annotation_intent: { target_region_id: 'add-content-button', label: null, preferred_side: 'right' },
     });
-    const result = resolveFrameOverlays(plan, { ordinal: 1 });
+    const result = resolveFrameOverlays(plan, { ordinal: 1, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.labelTextMissing);
   });
 
   it('blocks an invalid badge ordinal', () => {
-    const result = resolveFrameOverlays(planWith(), { ordinal: 0 });
+    const result = resolveFrameOverlays(planWith(), { ordinal: 0, semantic_target_id: "mission-9-submit-check" });
 
     expect(result.blocker_reasons).toContain(ANNOTATION_BLOCKER_REASONS.badgeOrdinalInvalid);
   });
