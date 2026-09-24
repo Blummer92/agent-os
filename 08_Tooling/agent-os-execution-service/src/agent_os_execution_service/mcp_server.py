@@ -117,7 +117,7 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 
 @mcp.tool()
-def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]]) -> dict[str, object]:
+def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]], branch_exists: bool = False) -> dict[str, object]:
     """Classify create/reuse/conflict immediately before Draft PR materialization."""
     claims = tuple(
         ActivePrimaryPr(
@@ -132,6 +132,7 @@ def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool,
         issue_open=issue_open,
         evidence_current=evidence_current,
         active_primary_prs=claims,
+        branch_exists=branch_exists,
     )
     return {
         "action": result.action.value,
@@ -150,6 +151,7 @@ def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object
             issue_number=item["issue_number"],
             issue_open=item["issue_open"],
             objective_ref=item["objective_ref"],
+            branch_exists=item.get("branch_exists", False),
             active_primary_prs=tuple(
                 ActivePrimaryPr(
                     pull_request_number=claim["pull_request_number"],
