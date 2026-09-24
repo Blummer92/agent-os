@@ -377,7 +377,6 @@ class PullRequestBranchRefreshReceipt:
     mutation_count: int
     validation_status: str | None
     validation_head_sha: str | None
-    lifecycle_reconciliation_status: str | None
     final_current_proven: bool
     blockers: tuple[str, ...]
     reason_codes: tuple[str, ...]
@@ -635,7 +634,6 @@ def _blocked_refresh_receipt(
         mutation_count=0,
         validation_status=None,
         validation_head_sha=None,
-        lifecycle_reconciliation_status=None,
         final_current_proven=False,
         blockers=tuple(sorted(set(reason_codes))),
         reason_codes=tuple(sorted(set(reason_codes))),
@@ -656,7 +654,6 @@ def _receipt_from_result(
         raise TypeError("operator returned an invalid branch-refresh result")
 
     validation = result.validation
-    lifecycle = result.lifecycle_reconciliation
     reasons = tuple(result.reason_codes)
     blockers = () if result.status == "converged" else reasons
     side_effects = bool(result.side_effects_performed)
@@ -673,9 +670,6 @@ def _receipt_from_result(
         mutation_count=1 if mutation_attempted else 0,
         validation_status=None if validation is None else validation.status,
         validation_head_sha=None if validation is None else validation.head_sha,
-        lifecycle_reconciliation_status=(
-            None if lifecycle is None else lifecycle.reconciliation_status
-        ),
         final_current_proven="branch.current-proven" in reasons,
         blockers=blockers,
         reason_codes=reasons,
