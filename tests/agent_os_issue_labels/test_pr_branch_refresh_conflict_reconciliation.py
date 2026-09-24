@@ -126,7 +126,7 @@ class Runner:
 
     def run(self, argv, *, cwd, env):
         argv = tuple(argv)
-        if len(argv) >= 3 and argv[0:3] == ("git", "diff", "--name-only"):
+        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
             return obs(f"{PATH}\n")
         if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
             return obs(f"{OLD}\n")
