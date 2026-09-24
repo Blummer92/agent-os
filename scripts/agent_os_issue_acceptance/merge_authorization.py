@@ -918,6 +918,127 @@ def record_merge_execution_observation(
     return observation, consumed
 
 
+def serialize_merge_authorization_record(record: MergeAuthorizationRecord) -> bytes:
+    """Serialize one verified merge-authorization revision as canonical JSON."""
+
+    verified = _verified(record, MergeAuthorizationRecord)
+    return _canonical_bytes(verified) + b"\n"
+
+
+def reconstruct_merge_authorization_record(
+    payload: bytes | str | dict[str, Any],
+) -> MergeAuthorizationRecord:
+    """Strictly reconstruct and reverify one merge-authorization revision."""
+
+    if isinstance(payload, bytes):
+        try:
+            raw = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("merge authorization must be UTF-8 JSON") from exc
+    elif isinstance(payload, str):
+        try:
+            raw = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError("merge authorization must be JSON") from exc
+    elif isinstance(payload, dict):
+        raw = payload
+    else:
+        raise TypeError("merge authorization must be bytes, string, or mapping")
+    if type(raw) is not dict:
+        raise ValueError("merge authorization must contain one JSON object")
+
+    expected = {
+        "schema_version", "authorization_id", "authorization_revision",
+        "revision_number", "previous_revision", "state", "binding",
+        "authorizer_id", "decision_id", "decision_at", "expires_at",
+        "supersedes_authorization_id", "revoked_authorization_id",
+        "consumed_observation_id", "emergency_override_reason",
+        "emergency_override_audit_location", "reason_codes", "details",
+    }
+    if set(raw) != expected:
+        raise ValueError("merge authorization fields are invalid")
+    binding_raw = raw["binding"]
+    if type(binding_raw) is not dict:
+        raise ValueError("merge authorization binding must be an object")
+    binding_expected = {
+        "repository", "pull_request_number", "exact_head_sha",
+        "target_base_branch", "base_sha_or_evidence_id",
+        "permitted_merge_method", "approval_id", "approval_revision",
+        "approval_applicability_identity", "approval_expires_at",
+        "approved_execution_projection_id", "changed_scope_fingerprint",
+        "allowed_files", "forbidden_paths", "required_tests",
+        "required_check_evidence", "review_evidence", "draft_ready_state",
+    }
+    if set(binding_raw) != binding_expected:
+        raise ValueError("merge authorization binding fields are invalid")
+    checks_raw = binding_raw["required_check_evidence"]
+    review_raw = binding_raw["review_evidence"]
+    if type(checks_raw) is not list or type(review_raw) is not dict:
+        raise ValueError("merge authorization nested evidence is invalid")
+    checks = tuple(
+        MergeCheckEvidence(
+            context=item["context"],
+            app_identity=item["app_identity"],
+            tested_sha=item["tested_sha"],
+            evidence_id=item["evidence_id"],
+            state=item["state"],
+        )
+        for item in checks_raw
+        if type(item) is dict
+    )
+    if len(checks) != len(checks_raw):
+        raise ValueError("merge authorization checks are invalid")
+    if set(review_raw) != {
+        "blocking_review_present", "unresolved_conversation_count",
+        "exact_head_reviewed",
+    }:
+        raise ValueError("merge review evidence fields are invalid")
+    binding = MergeAuthorizationBinding(
+        repository=binding_raw["repository"],
+        pull_request_number=binding_raw["pull_request_number"],
+        exact_head_sha=binding_raw["exact_head_sha"],
+        target_base_branch=binding_raw["target_base_branch"],
+        base_sha_or_evidence_id=binding_raw["base_sha_or_evidence_id"],
+        permitted_merge_method=binding_raw["permitted_merge_method"],
+        approval_id=binding_raw["approval_id"],
+        approval_revision=binding_raw["approval_revision"],
+        approval_applicability_identity=binding_raw["approval_applicability_identity"],
+        approval_expires_at=binding_raw["approval_expires_at"],
+        approved_execution_projection_id=binding_raw["approved_execution_projection_id"],
+        changed_scope_fingerprint=binding_raw["changed_scope_fingerprint"],
+        allowed_files=tuple(binding_raw["allowed_files"]),
+        forbidden_paths=tuple(binding_raw["forbidden_paths"]),
+        required_tests=tuple(binding_raw["required_tests"]),
+        required_check_evidence=checks,
+        review_evidence=MergeReviewEvidence(
+            blocking_review_present=review_raw["blocking_review_present"],
+            unresolved_conversation_count=review_raw["unresolved_conversation_count"],
+            exact_head_reviewed=review_raw["exact_head_reviewed"],
+        ),
+        draft_ready_state=binding_raw["draft_ready_state"],
+    )
+    return MergeAuthorizationRecord(
+        schema_version=raw["schema_version"],
+        authorization_id=raw["authorization_id"],
+        authorization_revision=raw["authorization_revision"],
+        revision_number=raw["revision_number"],
+        previous_revision=raw["previous_revision"],
+        state=MergeAuthorizationState(raw["state"]),
+        binding=binding,
+        authorizer_id=raw["authorizer_id"],
+        decision_id=raw["decision_id"],
+        decision_at=raw["decision_at"],
+        expires_at=raw["expires_at"],
+        supersedes_authorization_id=raw["supersedes_authorization_id"],
+        revoked_authorization_id=raw["revoked_authorization_id"],
+        consumed_observation_id=raw["consumed_observation_id"],
+        emergency_override_reason=raw["emergency_override_reason"],
+        emergency_override_audit_location=raw["emergency_override_audit_location"],
+        reason_codes=tuple(raw["reason_codes"]),
+        details=tuple(raw["details"]),
+    )
+
+
 def approval_applicability_identity(result: ApprovalApplicabilityResult) -> str:
     verified = _verified(result, ApprovalApplicabilityResult)
     return _identity(
