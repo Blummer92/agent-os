@@ -132,6 +132,8 @@ class Runner:
             return obs(f"{OLD}\n")
         if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
             return obs(f"{PATH}\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+            return obs()
         self.calls.append(argv)
         return self.observations.pop(0)
 
