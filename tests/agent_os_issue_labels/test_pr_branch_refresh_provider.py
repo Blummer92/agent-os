@@ -764,3 +764,41 @@ def test_lineage_integrity_accepts_paths_owned_by_non_merge_feature_commits(tmp_
         admitted_paths=("feature.txt",),
     )
     assert blocker is None
+
+
+
+def test_lineage_integrity_rejects_merge_commit_tree_that_differs_from_clean_git_merge(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "shared.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "main-line", base)
+    main_head = _commit_file(repo, "main.txt", "main\n", "main work")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_head = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    # Parents merge cleanly, but manufacture a merge commit with only the
+    # feature parent's tree. This drops main.txt despite there being no conflict.
+    feature_tree = _git_out(repo, "rev-parse", f"{feature_head}^{{tree}}")
+    stale_merge = _git_out(
+        repo,
+        "commit-tree",
+        feature_tree,
+        "-p",
+        feature_head,
+        "-p",
+        main_head,
+        "-m",
+        "stale reconcile tree",
+    )
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=stale_merge,
+        admitted_paths=("feature.txt",),
+    )
+    assert blocker == "lineage-integrity.stale-merge-tree"
