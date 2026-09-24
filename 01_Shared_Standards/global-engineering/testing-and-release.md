@@ -12,6 +12,21 @@
 - Do not run another local full aggregate solely before pushing when a clean exact-head CI aggregate will run the full suite.
 - Expand local testing when focused tests fail, when exact-head CI reports a specific failure that needs diagnosis, when CI is unavailable, or when the governing issue explicitly requires broader local validation.
 
+
+## Governed Test-Campaign Reconciliation
+
+Before recommending another manual, conversational, benchmark, or adversarial test in an active governed campaign, reacquire the canonical campaign owner and its current result evidence. Reconstruct only the smallest evidence-backed completed-test matrix needed for the next-test decision; do not create a second test-state store, experiment database, conversation-memory system, or parallel source of truth.
+
+Compare proposed conditions semantically against that matrix rather than by prompt text alone. Classify every candidate as exactly one of:
+
+- `new condition` — the material behavior/configuration condition is not already evidenced;
+- `intentional repeat` — materially equivalent work is rerun for a stated measurement purpose such as regression verification, changed model/configuration, variance, or changed dependency;
+- `already completed` — current canonical evidence already answers the proposed condition.
+
+Recommend `new condition` candidates by default. An `intentional repeat` must state what changed or what measurement the repetition provides before it is recommended. Never present an `already completed` condition as new work. When the planned matrix is sufficiently populated, recommend synthesis, decision, or the genuinely unresolved acceptance condition instead of inventing more tests.
+
+For conversational/manual tests, any selected `new condition` or `intentional repeat` must carry the active campaign's reproducibility metadata contract: exact prompt, model/configuration, user-visible reasoning/thinking setting, same-chat or fresh-chat mode, required prior turns/context, required attached/project sources, expected behavior/pass criteria, failure signals, result-evidence location, and timestamp/config notes when material. Existing campaign evidence remains canonical at its owning issue; bounded protocol/index cross-references may point to it without duplicating full test bodies.
+
 ## Authoritative Final Validation
 
 - The full suite remains required before release or Ready-for-Review when the governing repository workflow requires aggregate validation.
@@ -23,9 +38,10 @@
 - Release only with required exact-head evidence and checklist status.
 
 ## Version
-0.5.0
+0.6.0
 
 ## Changelog
+- 0.6.0 adds #2872 governed test-campaign reconciliation before next-test recommendations: reacquire canonical campaign evidence, semantically classify candidates as `new condition`, `intentional repeat`, or `already completed`, require a stated purpose for repeats, and preserve the conversational/manual reproducibility metadata contract without adding a second test-state store.
 - 0.5.0 adds #2852's reversible provisional-Ready validation trigger for the existing Ready-event aggregate path when no other capable governed aggregate trigger is available; exact-head success is still required before Ready converges and any non-success requires Draft rollback. No merge, closure, workflow-edit, permission, production, or external-write authority is added.
 - 0.4.1 rewords the exact-head governed CI aggregate sentence in Developer Loop Validation so its subsuming-evidence phrase is contiguous and test-verifiable, with no change in meaning (#1594).
 - 0.4.0 separates validation obligation from execution location, permits Draft PR staging when an existing governed CI executor is the capable route, forbids false manual-command stops, and preserves exact-head evidence before Ready-for-Review or release (#1595).

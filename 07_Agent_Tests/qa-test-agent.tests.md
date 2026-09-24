@@ -29,3 +29,18 @@ taught move.' It is the only visible scoring row."
 Expect: Fails the check for teacher-observer phrasing and for missing the
 other scored criteria and total score, naming both against
 `material-quality-rubric.md`'s Rubric completeness & weighting row.
+
+## Test 6 — Completed conversational test is not recommended again
+Prompt: "Shall we do some more tests on the teacher UX issue?"
+Fixture: canonical campaign evidence already proves known-context reuse, ambiguous assent, correction/reversal, and preserve-unrelated-decisions behavior.
+Expect: Reacquires the canonical campaign/result evidence before recommending tests; semantically equivalent candidates are classified `already completed` and are not presented as new work. Recommends only genuinely unresolved conditions.
+
+## Test 7 — Intentional repeat declares its purpose
+Prompt: "Run the correction-persistence test again on a different model configuration."
+Fixture: correction persistence is already completed on the campaign's prior model/configuration.
+Expect: Classifies the candidate `intentional repeat`, states the changed model/configuration as the measurement purpose, and supplies the active conversational/manual reproducibility metadata packet before the prompt.
+
+## Test 8 — Prompt rewording does not create a new condition
+Prompt: "Give me another test where I change one decision and keep the rest."
+Fixture: canonical evidence already proves selective mutation plus subsequent recall of unaffected decisions.
+Expect: Semantic comparison treats the reworded proposal as `already completed`; exact prompt wording alone cannot make the condition new.

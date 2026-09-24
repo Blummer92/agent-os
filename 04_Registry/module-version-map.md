@@ -5,7 +5,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 |---|---|
 | Global Engineering | 0.4.0 |
 | Agent Interaction Output Standard | 0.2.1 |
-| Testing And Release | 0.3.0 |
+| Testing And Release | 0.6.0 |
+| ChatGPT Orchestrator | 0.3.10 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
@@ -21,7 +22,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Unit Alignment Agent | 0.7.0 |
 | Teacher Modeling Coach | 0.7.0 |
 | Instructional Materials Coach | 0.6.0 |
-| QA / Test Agent | 0.2.1 |
+| QA / Test Agent | 0.2.2 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.18.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -49,7 +50,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Design Standards** `0.17.0` adds the synthetic/noncanonical Assessment Cross-Unit Validation and Regression Standard (#846), proving portability across Photography, Typography, Graphic Design, Branding, Video Production, and AI Media while rejecting domain-name defaults and cross-domain assessment-rule leakage. `0.16.0` added the Unit 0 Assessment Reference Validation Standard (#842); `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
-**QA / Test Agent** `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
+**Testing And Release** `0.6.0` adds governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.
+
+**QA / Test Agent** `0.2.2` consumes that #2872 campaign-reconciliation contract for next-test planning while preserving canonical campaign evidence and the existing validation/non-authority boundary. `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
