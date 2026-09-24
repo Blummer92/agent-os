@@ -4,9 +4,11 @@ import pytest
 
 from scripts.agent_os_issue_labels.pr_lifecycle import (
     PullRequestCreationExpectation,
+    PullRequestTerminalExpectation,
     lifecycle_invocation_reasons,
     reconcile_pull_request_lifecycle,
     verify_pull_request_creation,
+    verify_pull_request_terminal_state,
 )
 from scripts.agent_os_issue_labels.pr_planner import managed_labels
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
@@ -111,6 +113,60 @@ def test_all_required_lifecycle_invocation_points_are_representable(reason):
     result = reconcile_pull_request_lifecycle(provider, "Blummer92/agent-os", 1038, invocation_reason=reason)
     assert result.invocation_reason == reason
     assert result.reconciliation_status == "skipped"
+
+
+
+def terminal_expectation(**overrides):
+    values = dict(
+        repository="Blummer92/agent-os", pr_number=1038, head_sha=SHA,
+        expected_state="closed", expected_draft=True, merged_expected=False,
+    )
+    values.update(overrides)
+    return PullRequestTerminalExpectation(**values)
+
+
+def test_final_state_readback_verifies_closed_draft_before_label_convergence():
+    provider = MutableProvider(snap(state="closed", draft=True, merged=False))
+    result = reconcile_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 1038,
+        invocation_reason="final-state-readback",
+        terminal_expectation=terminal_expectation(),
+        dry_run=False,
+        lifecycle_admission=admitted_lifecycle_labels(),
+    )
+    assert result.terminal_verification.status == "verified"
+    assert result.terminal_verification.reportable_state == "closed"
+    assert "canonical-terminal-readback-verified" in result.reason_codes
+
+
+def test_final_state_readback_blocks_when_close_did_not_persist():
+    provider = MutableProvider(snap(state="open", draft=False, merged=False))
+    result = reconcile_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 1038,
+        invocation_reason="final-state-readback",
+        terminal_expectation=terminal_expectation(),
+        dry_run=False,
+        lifecycle_admission=admitted_lifecycle_labels(),
+    )
+    assert result.reconciliation_status == "blocked"
+    assert result.terminal_verification.status == "state-drift"
+    assert "terminal-state-mismatch" in result.reason_codes
+    assert "terminal-draft-state-mismatch" in result.reason_codes
+    assert not provider.added and not provider.removed
+
+
+def test_final_state_readback_rejects_unexpected_merge():
+    provider = MutableProvider(snap(state="closed", draft=False, merged=True))
+    result = reconcile_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 1038,
+        invocation_reason="final-state-readback",
+        terminal_expectation=terminal_expectation(expected_draft=False),
+        dry_run=False,
+        lifecycle_admission=admitted_lifecycle_labels(),
+    )
+    assert result.reconciliation_status == "blocked"
+    assert "terminal-merge-state-mismatch" in result.reason_codes
+    assert result.merge_authorized is False
 
 
 def test_post_create_exact_readback_verifies_draft_before_label_followup():

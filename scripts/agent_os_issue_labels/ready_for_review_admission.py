@@ -16,6 +16,8 @@ class ReadyForReviewAdmissionResult:
     validation_head_sha: str
     validation_admission_mode: str
     transition_admissible: bool
+    provisional_ready: bool
+    rollback_to_draft_required: bool
     reason_codes: tuple[str, ...]
     next_action: str
     ready_for_review_authorized: bool = field(default=False, init=False)
@@ -37,17 +39,24 @@ def evaluate_ready_for_review_admission(
     validation_head_sha: str,
     validation_admission_mode: str,
     aggregate_status: str,
+    focused_status: str,
     requested_changes: bool,
     blocking_unresolved: int,
     ready_for_review_authority_supplied: bool,
 ) -> ReadyForReviewAdmissionResult:
-    """Fail closed before Draft -> Ready until the final candidate has converged.
+    """Project ordinary or provisional Draft -> Ready admission.
 
-    This is a non-authorizing projection over caller-supplied canonical evidence.
-    It does not run validation, mark a PR ready, resolve review threads, or grant
-    authority. It only prevents Ready-for-Review from being used as the trigger
-    for the aggregate validation that should already have run through the
-    existing exact-head Draft final-candidate path.
+    The ordinary path still requires a successful exact-head Draft final-candidate
+    aggregate. The provisional path is deliberately narrower: when the exact
+    current Draft has no review blocker or requested changes, Ready authority is
+    supplied, and the authoritative aggregate is only missing/skipped because the
+    Draft trigger deferred it, the existing reversible Ready transition may be
+    used solely to trigger the repository's existing ready_for_review aggregate.
+
+    This projection grants no merge, closure, workflow, protected-setting,
+    production, or external-write authority. A provisional transition must be
+    reconciled after the Ready-triggered aggregate; non-success or head drift
+    requires conversion back to Draft before later lifecycle progression.
     """
     _validate_identity(repository, pr_number)
     _validate_bool(requested_changes, "requested_changes")
@@ -66,10 +75,6 @@ def evaluate_ready_for_review_admission(
         reasons.append("invalid-validation-head")
     elif validation_head_sha != observed_head_sha:
         reasons.append("stale-validation-head")
-    if validation_admission_mode != _FINAL_CANDIDATE_MODE:
-        reasons.append("draft-final-candidate-validation-not-proven")
-    if aggregate_status != "success":
-        reasons.append("authoritative-aggregate-not-green")
     if requested_changes:
         reasons.append("requested-changes-unresolved")
     if blocking_unresolved:
@@ -77,22 +82,46 @@ def evaluate_ready_for_review_admission(
     if not ready_for_review_authority_supplied:
         reasons.append("ready-for-review-authority-missing")
 
-    if reasons:
+    final_candidate_green = (
+        validation_admission_mode == _FINAL_CANDIDATE_MODE
+        and aggregate_status == "success"
+    )
+    provisional_aggregate_missing = (
+        validation_admission_mode != _FINAL_CANDIDATE_MODE
+        and focused_status == "success"
+        and aggregate_status in {"missing", "skipped"}
+    )
+
+    hard_blockers = bool(reasons)
+    provisional_ready = False
+    rollback_to_draft_required = False
+
+    if not hard_blockers and final_candidate_green:
+        next_action = "perform-ready-for-review-at-exact-head"
+        admissible = True
+        reasons.append("draft-final-candidate-ready-converged")
+    elif not hard_blockers and provisional_aggregate_missing:
+        next_action = "perform-provisional-ready-to-trigger-exact-head-aggregate"
+        admissible = True
+        provisional_ready = True
+        rollback_to_draft_required = True
+        reasons.append("provisional-ready-aggregate-trigger-admitted")
+    else:
+        if validation_admission_mode != _FINAL_CANDIDATE_MODE:
+            reasons.append("draft-final-candidate-validation-not-proven")
+        if focused_status != "success":
+            reasons.append("focused-validation-not-green")
+        if aggregate_status != "success":
+            reasons.append("authoritative-aggregate-not-green")
         if "exact-head-drift" in reasons or "stale-validation-head" in reasons:
             next_action = "reacquire-current-head-and-validation"
-        elif "draft-final-candidate-validation-not-proven" in reasons or "authoritative-aggregate-not-green" in reasons:
-            next_action = "run-draft-final-candidate-aggregate"
         elif "requested-changes-unresolved" in reasons or "blocking-review-conversation-unresolved" in reasons:
             next_action = "resolve-review-before-ready"
         elif "ready-for-review-authority-missing" in reasons:
             next_action = "request-ready-for-review-authorization"
         else:
-            next_action = "reacquire-ready-for-review-evidence"
+            next_action = "run-draft-final-candidate-aggregate"
         admissible = False
-    else:
-        next_action = "perform-ready-for-review-at-exact-head"
-        admissible = True
-        reasons.append("draft-final-candidate-ready-converged")
 
     return ReadyForReviewAdmissionResult(
         repository=repository,
@@ -102,6 +131,8 @@ def evaluate_ready_for_review_admission(
         validation_head_sha=validation_head_sha,
         validation_admission_mode=validation_admission_mode,
         transition_admissible=admissible,
+        provisional_ready=provisional_ready,
+        rollback_to_draft_required=rollback_to_draft_required,
         reason_codes=tuple(reasons),
         next_action=next_action,
     )
@@ -121,3 +152,66 @@ def _validate_bool(value: bool, field_name: str) -> None:
 
 def _is_sha40(value: object) -> bool:
     return type(value) is str and _SHA40_RE.fullmatch(value) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionalReadyReconciliationResult:
+    repository: str
+    pr_number: int
+    expected_head_sha: str
+    observed_head_sha: str
+    aggregate_status: str
+    ready_converged: bool
+    rollback_to_draft_required: bool
+    reason_codes: tuple[str, ...]
+    next_action: str
+    merge_authorized: bool = field(default=False, init=False)
+    issue_closure_authorized: bool = field(default=False, init=False)
+
+
+def evaluate_provisional_ready_reconciliation(
+    *,
+    repository: str,
+    pr_number: int,
+    pr_lifecycle_state: str,
+    expected_head_sha: str,
+    observed_head_sha: str,
+    validation_head_sha: str,
+    aggregate_status: str,
+) -> ProvisionalReadyReconciliationResult:
+    """Reconcile the reversible Ready validation trigger without granting release authority."""
+    _validate_identity(repository, pr_number)
+    reasons: list[str] = []
+    if pr_lifecycle_state != "ready":
+        reasons.append("pr-not-ready")
+    if not _is_sha40(expected_head_sha) or not _is_sha40(observed_head_sha):
+        reasons.append("invalid-head-identity")
+    elif expected_head_sha != observed_head_sha:
+        reasons.append("exact-head-drift")
+    if not _is_sha40(validation_head_sha):
+        reasons.append("invalid-validation-head")
+    elif validation_head_sha != observed_head_sha:
+        reasons.append("stale-validation-head")
+
+    ready_converged = not reasons and aggregate_status == "success"
+    if ready_converged:
+        reasons.append("provisional-ready-aggregate-converged")
+        rollback = False
+        next_action = "retain-ready-and-reacquire-later-gates"
+    else:
+        if aggregate_status != "success":
+            reasons.append("authoritative-aggregate-not-green")
+        rollback = True
+        next_action = "convert-pull-request-back-to-draft"
+
+    return ProvisionalReadyReconciliationResult(
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_sha=expected_head_sha,
+        observed_head_sha=observed_head_sha,
+        aggregate_status=aggregate_status,
+        ready_converged=ready_converged,
+        rollback_to_draft_required=rollback,
+        reason_codes=tuple(reasons),
+        next_action=next_action,
+    )

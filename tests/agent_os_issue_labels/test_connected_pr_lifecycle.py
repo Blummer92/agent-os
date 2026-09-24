@@ -1,6 +1,9 @@
 from dataclasses import replace
 
+import pytest
+
 from scripts.agent_os_issue_labels.connected_pr_lifecycle import converge_connected_pull_request_lifecycle
+from scripts.agent_os_issue_labels.pr_lifecycle import PullRequestTerminalExpectation
 from scripts.agent_os_issue_labels.pr_planner import managed_labels
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
 from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
@@ -72,3 +75,62 @@ def test_connected_ready_transition_without_label_admission_is_not_terminal():
     )
     assert result.terminal_success is False
     assert "connected-pr-label-convergence-not-proven" in result.reason_codes
+
+
+def closed_draft_expectation(**overrides):
+    values = dict(repository="Blummer92/agent-os", pr_number=2145, head_sha=SHA)
+    values.update(overrides)
+    return PullRequestTerminalExpectation(**values)
+
+
+def test_connected_final_state_readback_requires_terminal_expectation():
+    with pytest.raises(ValueError, match="terminal expectation"):
+        converge_connected_pull_request_lifecycle(
+            Provider(), "Blummer92/agent-os", 2145,
+            invocation_reason="final-state-readback",
+            lifecycle_admission=admitted_lifecycle_labels(),
+        )
+
+
+def test_2705_interrupted_close_is_not_terminal_and_safe_reentry_converges():
+    # #2789: #2705 stayed open and Ready although its closure was expected.
+    provider = Provider()
+    provider.snapshot = replace(provider.snapshot, draft=False)
+    provider.labels = {"human:keep", "pr:ready-for-review"}
+
+    interrupted = converge_connected_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 2145,
+        invocation_reason="final-state-readback",
+        lifecycle_admission=admitted_lifecycle_labels(),
+        terminal_expectation=closed_draft_expectation(),
+    )
+    assert interrupted.terminal_success is False
+    assert "terminal-state-mismatch" in interrupted.reason_codes
+    assert "connected-pr-label-convergence-not-proven" in interrupted.reason_codes
+    assert provider.labels == {"human:keep", "pr:ready-for-review"}
+
+    provider.snapshot = replace(provider.snapshot, state="closed", draft=True)
+    reentry = converge_connected_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 2145,
+        invocation_reason="final-state-readback",
+        lifecycle_admission=admitted_lifecycle_labels(),
+        terminal_expectation=closed_draft_expectation(),
+    )
+    assert reentry.terminal_success is True
+    assert "canonical-terminal-readback-verified" in reentry.reason_codes
+    assert "pr:ready-for-review" not in provider.labels
+    assert "human:keep" in provider.labels
+
+
+def test_connected_terminal_readback_without_label_authority_is_not_terminal():
+    provider = Provider()
+    provider.snapshot = replace(provider.snapshot, state="closed", draft=True)
+    provider.labels = {"human:keep", "pr:ready-for-review"}
+    result = converge_connected_pull_request_lifecycle(
+        provider, "Blummer92/agent-os", 2145,
+        invocation_reason="final-state-readback",
+        lifecycle_admission=refused_lifecycle_labels(),
+        terminal_expectation=closed_draft_expectation(),
+    )
+    assert result.terminal_success is False
+    assert "canonical-terminal-readback-verified" in result.reason_codes

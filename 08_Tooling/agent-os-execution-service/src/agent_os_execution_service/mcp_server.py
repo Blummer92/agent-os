@@ -6,7 +6,9 @@ from dataclasses import asdict
 
 from mcp.server import MCPServer
 
-from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision, continuation_payload
+from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+
+from scripts.agent_os_execution_interface.continuation_driver import completion_continuation_payload
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
 from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
     ActivePrimaryPr,
@@ -68,6 +70,27 @@ def _deferred_lesson_read():
         return reader(query)
 
     return execute_read, state
+
+
+@mcp.tool()
+def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dict[str, object]:
+    """Bind an event/intake request to the canonical #924 identity before dispatch."""
+    result = validate_request_interpretation(request)
+    record = result.record
+    return {
+        "status": result.status.value,
+        "record_id": record.record_id if record is not None else None,
+        "record_fingerprint": record.fingerprint if record is not None else None,
+        "raw_input_digest": record.to_dict()["raw_input_digest"] if record is not None else None,
+        "reason_codes": list(result.reason_codes),
+        "details": list(result.details),
+        "dispatch_admitted": result.status is ValidationStatus.VALID,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
 @mcp.tool()
@@ -200,7 +223,7 @@ def classify_agent_os_issue_batch_completion_tool(repository: str, issue_number:
 @mcp.tool()
 def classify_agent_os_investigation_completion_tool(repository: str, issue_number: int, material_branch_states: tuple[str, ...], executable_next_action_available: bool, subordinate_write_performed: bool) -> dict[str, object]:
     decision = evaluate_investigation_completion_admission(repository=repository, issue_number=issue_number, material_branch_states=material_branch_states, executable_next_action_available=executable_next_action_available, subordinate_write_performed=subordinate_write_performed)
-    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(ContinuationDecision(action="" if decision.completion_admissible else decision.next_action, terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.executable_next_action_available), reason_codes=decision.reason_codes)); return payload
+    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = completion_continuation_payload(terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.executable_next_action_available), next_action=decision.next_action, reason_codes=decision.reason_codes); return payload
 
 
 @mcp.tool()
