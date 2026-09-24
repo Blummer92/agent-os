@@ -674,3 +674,82 @@ def test_merge_shaped_local_git_fixture_reproduces_old_rebase_rejection_and_v2_s
     assert _git_out(repo, "rev-parse", f"{candidate}^1") == current_main
     assert _git_out(repo, "diff", "--name-only", "--no-renames", current_main, candidate) == "scripts/example.py"
     assert (repo / "scripts" / "example.py").read_text(encoding="utf-8") == "B\nrepair\n"
+
+
+def _commit_file(repo, path, content, message):
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    _git(repo, "add", path)
+    _git(repo, "commit", "-qm", message)
+    return _git_out(repo, "rev-parse", "HEAD")
+
+
+def _local_integrity_provider(repo):
+    return ProductionPullRequestBranchRefreshProvider(
+        backing=FakeBacking(snapshot()),
+        runner=LocalGitRunner(),
+        repository_root=str(repo),
+        invocation_id="invocation-2921",
+        authorization_id="authorization-2921",
+        authorization_current=True,
+        branch_update_authorized=True,
+        environment=dict(os.environ),
+    )
+
+
+def test_lineage_integrity_rejects_path_introduced_only_by_hand_built_merge(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "main-line", base)
+    main_head = _commit_file(repo, "protected.txt", "new-main\n", "main fix")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_commit = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    # Manufacture the incident shape: two parents, but reuse main's tree wholesale.
+    # protected.txt now appears in the PR net diff even though no non-merge feature
+    # commit ever touched it.
+    main_tree = _git_out(repo, "rev-parse", f"{main_head}^{{tree}}")
+    stale_merge = _git_out(
+        repo,
+        "commit-tree",
+        main_tree,
+        "-p",
+        feature_commit,
+        "-p",
+        main_head,
+        "-m",
+        "hand-built reconcile",
+    )
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=stale_merge,
+        admitted_paths=("protected.txt",),
+    )
+    assert blocker == "lineage-integrity.merge-only-path"
+
+
+def test_lineage_integrity_accepts_paths_owned_by_non_merge_feature_commits(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_head = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=feature_head,
+        admitted_paths=("feature.txt",),
+    )
+    assert blocker is None
