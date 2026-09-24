@@ -112,6 +112,80 @@ def _instructional_purpose(spec: Mapping[str, Any], requirements: Mapping[str, A
         yield ArtifactStructureFinding("artifact-learning-target-collapsed-to-clicks", FAIL, "Learning target collapses the broader approved objective into software-click directions.")
 
 
+
+def validate_required_worksheet_sections(
+    *,
+    required_sections: Sequence[str],
+    curriculum_decision_tokens: Mapping[str, str],
+    docs_requests: Sequence[Mapping[str, Any]],
+) -> ArtifactStructureResult:
+    """Validate exact required-section coverage in the pre-write Docs plan.
+
+    This proves generation-plan coverage only. It does not claim that a native
+    Google Doc physically contains or correctly renders a section.
+    """
+    required = tuple(sorted(set(required_sections)))
+    planned_tokens = _docs_replacement_tokens(docs_requests)
+    token_owners: dict[str, list[str]] = {}
+    for decision_key, token in curriculum_decision_tokens.items():
+        token_owners.setdefault(token, []).append(decision_key)
+
+    findings: list[ArtifactStructureFinding] = []
+    for section in required:
+        token = curriculum_decision_tokens.get(section)
+        if token is None:
+            findings.append(
+                ArtifactStructureFinding(
+                    "worksheet-required-section-unobservable",
+                    MANUAL_REVIEW,
+                    f"Required worksheet section has no deterministic current-curriculum observation: {section}.",
+                )
+            )
+            continue
+        owners = token_owners.get(token, [])
+        if owners != [section]:
+            findings.append(
+                ArtifactStructureFinding(
+                    "worksheet-required-section-token-ambiguous",
+                    MANUAL_REVIEW,
+                    "Required worksheet section cannot be matched exactly because "
+                    f"its planned token is shared by multiple decision identities: {section}.",
+                )
+            )
+            continue
+        if token not in planned_tokens:
+            findings.append(
+                ArtifactStructureFinding(
+                    "worksheet-required-section-missing-from-plan",
+                    FAIL,
+                    f"Required worksheet section is missing from the planned Docs requests: {section}.",
+                )
+            )
+
+    if any(f.severity == FAIL for f in findings):
+        status = FAIL
+    elif any(f.severity == MANUAL_REVIEW for f in findings):
+        status = MANUAL_REVIEW
+    else:
+        status = PASS
+    return ArtifactStructureResult(status, tuple(findings))
+
+
+def _docs_replacement_tokens(requests: Sequence[Mapping[str, Any]]) -> set[str]:
+    tokens: set[str] = set()
+    for request in requests:
+        replace = request.get("replaceAllText")
+        if not isinstance(replace, Mapping):
+            continue
+        contains = replace.get("containsText")
+        if not isinstance(contains, Mapping):
+            continue
+        text = contains.get("text")
+        if not isinstance(text, str) or not text.startswith("{{") or not text.endswith("}}"):
+            continue
+        tokens.add(text[2:-2])
+    return tokens
+
 def validate_artifact_structure(spec: Mapping[str, Any]) -> ArtifactStructureResult:
     """Validate structure only; rendered visual uncertainty routes to manual review."""
     slides_value = spec.get("slides", [])
