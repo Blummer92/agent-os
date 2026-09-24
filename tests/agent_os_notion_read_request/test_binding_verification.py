@@ -134,22 +134,45 @@ def test_ambiguous_data_source_identity_fails_closed() -> None:
 
 
 class CandyVerificationAdapter:
-    def __init__(self, results):
+    def __init__(
+        self,
+        results,
+        *,
+        title_properties=("Canonical Unit Name",),
+        data_source_id="canonical-data-source-current",
+    ):
         self.calls = []
         self.results = results
+        self.title_properties = title_properties
+        self.data_source_id = data_source_id
 
     def execute(self, task):
         self.calls.append(dict(task.payload))
-        if task.payload["action"] != "query_data_source":
-            raise AssertionError(task.payload["action"])
-        return {
-            "status": "success",
-            "output": {
-                "results": self.results,
-                "has_more": False,
-                "next_cursor": None,
-            },
-        }
+        action = task.payload["action"]
+        if action == "get_data_source":
+            return {
+                "status": "success",
+                "output": {
+                    "id": self.data_source_id,
+                    "properties": {
+                        **{
+                            name: {"id": f"title-{index}", "type": "title"}
+                            for index, name in enumerate(self.title_properties)
+                        },
+                        "Aliases": {"id": "aliases", "type": "rich_text"},
+                    },
+                },
+            }
+        if action == "query_data_source":
+            return {
+                "status": "success",
+                "output": {
+                    "results": self.results,
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            }
+        raise AssertionError(action)
 
 
 
@@ -169,16 +192,19 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
         generated_at="run:2816",
     )
 
-    assert len(adapter.calls) == 1
-    call = adapter.calls[0]
-    assert call["action"] == "query_data_source"
-    assert call["data_source_id"] == "canonical-data-source-current"
-    assert call["filter"] == {
-        "property": "Name",
+    assert [call["action"] for call in adapter.calls] == [
+        "get_data_source",
+        "query_data_source",
+    ]
+    schema_call, query_call = adapter.calls
+    assert schema_call["data_source_id"] == "canonical-data-source-current"
+    assert query_call["data_source_id"] == "canonical-data-source-current"
+    assert query_call["filter"] == {
+        "property": "Canonical Unit Name",
         "title": {"equals": CANDY_BRANDING_TITLE},
     }
-    assert call["max_pages"] == 1
-    assert call["max_results"] == 2
+    assert query_call["max_pages"] == 1
+    assert query_call["max_results"] == 2
     assert evidence["canonical_unit"] == {
         "canonical_unit_key": "candy-branding",
         "stable_id": CANDY_BRANDING_STABLE_ID,
@@ -188,6 +214,45 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
     assert evidence["notion_writes_performed"] is False
     assert evidence["drive_writes_performed"] is False
     assert evidence["gce_invoked"] is False
+
+
+@pytest.mark.parametrize(
+    "title_properties",
+    (
+        (),
+        ("First Title", "Second Title"),
+    ),
+)
+def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(
+    title_properties,
+) -> None:
+    with pytest.raises(
+        NotionReadRequestError,
+        match="exactly one title property",
+    ):
+        verify_candy_branding_binding(
+            CandyVerificationAdapter(
+                [],
+                title_properties=title_properties,
+            ),
+            canonical_registry_data_source_id="canonical-data-source-current",
+            generated_at="run:2816",
+        )
+
+
+def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch() -> None:
+    with pytest.raises(
+        NotionReadRequestError,
+        match="data source identity mismatch",
+    ):
+        verify_candy_branding_binding(
+            CandyVerificationAdapter(
+                [],
+                data_source_id="different-data-source",
+            ),
+            canonical_registry_data_source_id="canonical-data-source-current",
+            generated_at="run:2816",
+        )
 
 
 @pytest.mark.parametrize(
@@ -223,7 +288,7 @@ def test_candy_verification_admission_is_finite_and_read_only() -> None:
     )
     assert decision["status"] == "admitted"
     assert decision["canonical_unit_key"] == "candy-branding"
-    assert decision["allowed_read_actions"] == ["query_data_source"]
+    assert decision["allowed_read_actions"] == ["get_data_source", "query_data_source"]
     assert decision["secret_dispatch_authorized"] is True
     assert decision["write_allowed"] is False
     assert decision["production_authorized"] is False
@@ -347,8 +412,10 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
     assert evidence["canonical_unit"]["provider_page_id"] == (
         "33333333-3333-3333-3333-333333333333"
     )
-    assert len(adapter.calls) == 1
-    assert adapter.calls[0]["action"] == "query_data_source"
+    assert [call["action"] for call in adapter.calls] == [
+        "get_data_source",
+        "query_data_source",
+    ]
     assert evidence["notion_writes_performed"] is False
     assert evidence["drive_writes_performed"] is False
     assert evidence["classroom_artifact_writes_performed"] is False
