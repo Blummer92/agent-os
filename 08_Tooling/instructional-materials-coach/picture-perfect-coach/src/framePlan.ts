@@ -405,6 +405,7 @@ export const FRAME_PLAN_BLOCKER_REASONS = {
   sourceDimensionsInvalid: 'frame-plan-source-dimensions-invalid',
   outputGeometryInconsistent: 'frame-plan-output-geometry-inconsistent',
   framingUnresolvable: 'frame-plan-framing-unresolvable',
+  targetOccupancyTooLow: 'frame-plan-target-occupancy-too-low',
 } as const;
 
 export type FramePlanBlockerReason =
@@ -619,6 +620,12 @@ export function planTutorialFrame(request: FramePlanRequest): FramePlanResult {
     right: frameLeft + frameWidth,
     bottom: frameTop + frameHeight,
   };
+
+  const targetBox = regionBox(target, sourceWidth, sourceHeight);
+  const targetOccupancy = ((targetBox.right - targetBox.left) * (targetBox.bottom - targetBox.top)) / (frameWidth * frameHeight);
+  if (request.must_show_claims.length <= 1 && targetOccupancy < 0.08) {
+    return blockedResult([FRAME_PLAN_BLOCKER_REASONS.targetOccupancyTooLow]);
+  }
 
   if (!keepBoxes.every((box) => containsBox(frame, box))) {
     return blockedResult([FRAME_PLAN_BLOCKER_REASONS.mustShowRegionOutsideFrame]);
