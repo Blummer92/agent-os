@@ -47,7 +47,7 @@ BINDING_VERIFICATION_REQUEST_IDS = (
     CANDY_BRANDING_VERIFICATION_REQUEST_ID,
 )
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
-_CANDY_ALLOWED_ACTIONS = ("query_data_source",)
+_CANDY_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
 
 def _verification_request_spec(request_id: str | None) -> tuple[int, str, tuple[str, ...]] | None:
@@ -158,10 +158,41 @@ def _execute_read(adapter: object, action: str, **payload: object) -> dict[str, 
 
 
 
+def _resolve_title_property_name(adapter: object, *, data_source_id: str) -> str:
+    """Resolve the one title-typed property from the verified registry schema."""
+
+    output = _execute_read(
+        adapter,
+        "get_data_source",
+        data_source_id=data_source_id,
+    )
+    if _normalize_notion_id(output.get("id")) != _normalize_notion_id(data_source_id):
+        raise NotionReadRequestError("canonical registry data source identity mismatch")
+
+    properties = output.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("canonical registry schema is missing properties")
+
+    title_properties = [
+        name
+        for name, metadata in properties.items()
+        if isinstance(name, str)
+        and name.strip()
+        and isinstance(metadata, Mapping)
+        and metadata.get("type") == "title"
+    ]
+    if len(title_properties) != 1:
+        raise NotionReadRequestError(
+            "canonical registry schema must expose exactly one title property"
+        )
+    return title_properties[0]
+
+
 def _execute_registry_query(
     adapter: object,
     *,
     data_source_id: str,
+    title_property_name: str,
     exact_title: str,
 ) -> list[dict[str, Any]]:
     """Query one verified registry source by one repository-owned exact title."""
@@ -170,7 +201,10 @@ def _execute_registry_query(
         adapter,
         "query_data_source",
         data_source_id=data_source_id,
-        filter={"property": "Name", "title": {"equals": exact_title}},
+        filter={
+            "property": title_property_name,
+            "title": {"equals": exact_title},
+        },
         page_size=2,
         max_pages=1,
         max_results=2,
@@ -192,9 +226,15 @@ def verify_candy_branding_binding(
     if not isinstance(canonical_registry_data_source_id, str) or not canonical_registry_data_source_id.strip():
         raise NotionReadRequestError("canonical registry data source id is missing")
 
+    data_source_id = canonical_registry_data_source_id.strip()
+    title_property_name = _resolve_title_property_name(
+        adapter,
+        data_source_id=data_source_id,
+    )
     matches = _execute_registry_query(
         adapter,
-        data_source_id=canonical_registry_data_source_id.strip(),
+        data_source_id=data_source_id,
+        title_property_name=title_property_name,
         exact_title=CANDY_BRANDING_TITLE,
     )
     if len(matches) != 1:
