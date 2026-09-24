@@ -75,7 +75,7 @@ def routed_steps(visual) -> list[dict[str, object]]:
             "authoring": {
                 "imagePurpose": "Model purposeful typography hierarchy.",
                 "imageState": "result",
-                "applicationContext": "",
+                "applicationContext": "Canva design workspace",
                 "targetState": "clear hierarchy between headline and supporting text",
                 "mustShow": ["headline", "supporting text"],
                 "mustNotShow": ["student data"],
