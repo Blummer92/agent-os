@@ -141,11 +141,13 @@ def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
         "canonical-unit",
         "visual-assets",
     }
+    expected_issue = {"destination-verification": 249, "teacher-modeling": 2759}
+    for record in shipped_catalog.requests:
+        assert record.issue_number == expected_issue.get(record.request_class, 2283)
     ppux_request = next(
         record for record in shipped_catalog.requests
         if record.request_id == "ppux-photography-foundations-teacher-modeling"
     )
-    assert ppux_request.issue_number == 2759
     assert ppux_request.request_class == "teacher-modeling"
 
 

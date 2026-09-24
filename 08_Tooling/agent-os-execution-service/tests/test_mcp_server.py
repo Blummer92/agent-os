@@ -433,3 +433,18 @@ def test_mcp_main_does_not_register_additional_tools() -> None:
     source = inspect.getsource(mcp_server.main)
     assert "mcp.run" in source
     assert "mcp.tool" not in source
+
+
+def test_blocked_investigation_completion_preserves_existing_next_action() -> None:
+    result = mcp_server.classify_agent_os_investigation_completion_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2522,
+        material_branch_states=("resolved-supported", "in-progress"),
+        executable_next_action_available=False,
+        subordinate_write_performed=True,
+    )
+    assert result["completion_admissible"] is False
+    assert result["next_action"] == "report-investigation-blocker-with-clearing-condition"
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["blocked"] is True
+    assert result["agent_os_continuation"]["action"] == result["next_action"]
