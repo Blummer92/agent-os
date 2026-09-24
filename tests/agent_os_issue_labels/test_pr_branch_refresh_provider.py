@@ -65,14 +65,6 @@ class FakeValidationExecutor:
         return BranchRefreshValidationResult(head_sha=head_sha, status=self.status, command_ids=command_ids)
 
 
-@dataclass
-class FakeReviewThreadsReader:
-    count: int = 0
-
-    def blocking_review_threads(self, repository, pr_number):
-        return self.count
-
-
 class FakeIssue:
     def __init__(self, labels=("branch:behind",)):
         self.labels = [SimpleNamespace(name=label) for label in labels]
@@ -493,7 +485,6 @@ def test_validation_failure_is_projected_for_existing_lifecycle_owner():
         github_client=FakeGithub(),
         request=request(),
         validation_executor=FakeValidationExecutor(status="failing"),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     result = backing.run_required_validation("Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused",))
     assert result.status == "failing"
@@ -514,7 +505,6 @@ def test_production_entrypoint_delegates_exactly_once_to_1187(monkeypatch):
         github_client=FakeGithub(),
         runner=runner,
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
         request=supplied_request,
         repository_root="/workspace/agent-os",
         invocation_id="invocation-1365",

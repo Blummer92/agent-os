@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import subprocess
-from types import SimpleNamespace
 
 import pytest
 
@@ -70,58 +69,6 @@ def test_subprocess_runner_rejects_malformed_argv():
     for argv in ((), ("git", ""), ("git", "bad\x00arg")):
         with pytest.raises(ValueError):
             runner.run(argv, cwd="/repo", env={})
-
-
-class _Requester:
-    def __init__(self, payload):
-        self.payload = payload
-        self.calls = []
-
-    def requestJsonAndCheck(self, method, url, **kwargs):
-        self.calls.append((method, url, kwargs))
-        return {}, self.payload
-
-
-class _Client:
-    def __init__(self, payload):
-        self.requester = _Requester(payload)
-
-
-def _review_payload(*, resolved=False, has_next=False):
-    return {
-        "data": {"repository": {"pullRequest": {"reviewThreads": {
-            "pageInfo": {"hasNextPage": has_next},
-            "nodes": [{
-                "id": "PRRT_1", "isResolved": resolved, "isOutdated": False,
-                "path": "x.py", "line": 7, "originalLine": 7,
-                "diffSide": "RIGHT", "startLine": None, "startDiffSide": None,
-                "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{
-                    "databaseId": 123, "id": "PRRC_1", "body": "blocking review",
-                    "createdAt": "2026-08-25T00:00:00Z",
-                    "updatedAt": "2026-08-25T00:00:00Z",
-                    "author": {"login": "reviewer"},
-                }]},
-            }],
-        }}}}
-    }
-
-
-def test_review_reader_counts_current_unresolved_threads():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    client = _Client(_review_payload())
-    assert PyGithubBlockingReviewThreadsReader(client).blocking_review_threads("Blummer92/agent-os", 1363) == 1
-    assert len(client.requester.calls) == 1
-
-
-def test_review_reader_does_not_count_resolved_thread():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    assert PyGithubBlockingReviewThreadsReader(_Client(_review_payload(resolved=True))).blocking_review_threads("Blummer92/agent-os", 1363) == 0
-
-
-def test_review_reader_fails_closed_on_incomplete_pagination():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    with pytest.raises(RuntimeError, match="incomplete"):
-        PyGithubBlockingReviewThreadsReader(_Client(_review_payload(has_next=True))).blocking_review_threads("Blummer92/agent-os", 1363)
 
 
 class _SequenceRunner:
@@ -325,7 +272,7 @@ def test_refresh_pr_signature_hides_internal_composition_and_validation_profile(
     from scripts.agent_os_issue_labels.pr_branch_refresh_operator import refresh_pr
     parameters = set(inspect.signature(refresh_pr).parameters)
     for hidden in (
-        "request", "provider", "runner", "review_threads_reader",
+        "request", "provider", "runner",
         "validation_executor", "required_validation_command_ids",
     ):
         assert hidden not in parameters
