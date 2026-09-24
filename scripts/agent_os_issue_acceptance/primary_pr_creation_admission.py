@@ -53,12 +53,13 @@ def evaluate_primary_pr_creation_admission(
     issue_open: bool,
     evidence_current: bool,
     active_primary_prs: tuple[ActivePrimaryPr, ...],
+    branch_exists: bool = False,
 ) -> PrimaryPrCreationAdmission:
     """Classify create/reuse/conflict from fresh canonical primary-PR evidence."""
     if type(issue_number) is not int or issue_number < 1:
         raise TypeError("issue_number must be a positive built-in integer")
-    if type(issue_open) is not bool or type(evidence_current) is not bool:
-        raise TypeError("issue_open and evidence_current must be built-in bools")
+    if type(issue_open) is not bool or type(evidence_current) is not bool or type(branch_exists) is not bool:
+        raise TypeError("issue_open, evidence_current, and branch_exists must be built-in bools")
     if type(active_primary_prs) is not tuple or any(
         type(item) is not ActivePrimaryPr for item in active_primary_prs
     ):
@@ -79,6 +80,12 @@ def evaluate_primary_pr_creation_admission(
             action=PrimaryPrCreationAction.MANUAL_RECONCILIATION,
             existing_pull_request_number=None,
             reason_codes=("primary-pr-evidence.stale",),
+        )
+    if not ordered and branch_exists:
+        return PrimaryPrCreationAdmission(
+            action=PrimaryPrCreationAction.MANUAL_RECONCILIATION,
+            existing_pull_request_number=None,
+            reason_codes=("primary-pr.branch-without-active-pr",),
         )
     if not ordered:
         return PrimaryPrCreationAdmission(
@@ -107,12 +114,13 @@ class BatchIssuePrimaryPrEvidence:
     issue_open: bool
     objective_ref: str
     active_primary_prs: tuple[ActivePrimaryPr, ...] = ()
+    branch_exists: bool = False
 
     def __post_init__(self) -> None:
         if type(self.issue_number) is not int or self.issue_number < 1:
             raise TypeError("issue_number must be a positive built-in integer")
-        if type(self.issue_open) is not bool:
-            raise TypeError("issue_open must be a built-in bool")
+        if type(self.issue_open) is not bool or type(self.branch_exists) is not bool:
+            raise TypeError("issue_open and branch_exists must be built-in bools")
         if type(self.objective_ref) is not str or not self.objective_ref:
             raise ValueError("objective_ref must be non-empty canonical issue objective evidence")
         if type(self.active_primary_prs) is not tuple or any(
@@ -163,6 +171,7 @@ def evaluate_batch_primary_pr_packaging(
                 issue_open=item.issue_open,
                 evidence_current=evidence_current,
                 active_primary_prs=item.active_primary_prs,
+                branch_exists=item.branch_exists,
             ),
         )
         for item in ordered
