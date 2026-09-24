@@ -51,7 +51,7 @@ Classroom-artifact receipts order their available surfaces as live artifact link
 - For implementation/review, label canonical evidence as `Completed`, `Current`, `Remaining`, and `Blockers`: `Completed` = completed named stages; `Current` = canonical current stage; `Remaining` = unfinished stages in the bounded sequence and is distinct from `remaining_risks`; `Blockers` = Base Report Contract `blockers`.
 - Render a state-based progress bar only when canonical evidence exposes a bounded named stage sequence. Segments represent those stage slots, not a percentage, score, persisted progress record, or independent lifecycle model; omit the bar when no bounded sequence exists.
 - Show `Best execution` only when executor-route/capability evidence is material. Prefer one `Next` action only when current canonical evidence supports one; otherwise omit it rather than inventing work.
-- Prompt/command delivery uses the smallest reusable context packet that executes safely. Do not repeat governance, source-of-truth, architecture, or repository boilerplate already available to the target unless material to the exact action.
+- Prompt/command delivery uses the smallest reusable context packet that executes safely. When the user explicitly asks for console, shell, GitHub CLI, or other executable commands, return executable commands rather than conversational prompts; keep connected sequences short and reuse variables/context where that reduces repeated typing. Name the command surface (for example `bash` with the GitHub CLI `gh`) and keep explanatory text outside the commands so the result runs as given. Default investigation commands to read-only unless mutation is separately requested and authorized. Do not repeat governance, source-of-truth, architecture, or repository boilerplate already available to the target unless material to the exact action.
 - Compact rendering never hides a controlling blocker, authorization boundary, owner/source-of-truth constraint, exact-head requirement, validation failure, or required final-report evidence.
 
 ## Progress And Evidence Rules
@@ -62,4 +62,4 @@ Classroom-artifact receipts order their available surfaces as live artifact link
 - Presentation never implies execution authority, and a recommendation is never reported as executed.
 
 ## Version
-0.2.0
+0.2.1

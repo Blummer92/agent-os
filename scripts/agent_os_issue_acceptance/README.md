@@ -179,3 +179,7 @@ latest revision per authorization identity, and exposes only current
 PR/head/base/scope/check/review evidence immediately before merge. Persistence
 does not create authority, and the release runner remains an ordering-only
 consumer.
+
+## Issue-comment mutation readback
+
+`comment_mutation_readback.py` (#2785) classifies a connected issue-comment mutation only after caller-supplied canonical readback. Exact target/body identity yields `persisted`; a complete readback with no matching comment yields `not-persisted`; incomplete, duplicate, target-mismatched, or unknown-provider evidence remains `uncertain`. Retry eligibility is evidence only and never performs or authorizes a GitHub write.

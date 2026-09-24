@@ -141,6 +141,61 @@ def test_ready_for_review_fact_does_not_grant_merge_authority():
     assert result.side_effects_performed is False
 
 
+def test_completed_open_issue_removes_ready_and_surfaces_closure_without_inventing_authority():
+    current = state(terminal=TerminalDisposition.COMPLETED)
+    snap = snapshot(status="status:ready", value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    assert "lifecycle.terminal-open-issue" in result.reason_codes
+    assert "authorization.closure-required" in result.reason_codes
+    label_action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert label_action.expected == "none"
+    close_action = next(item for item in result.actions if item.reason_code == "lifecycle.terminal-open-issue")
+    assert close_action.required_mutation == "close-issue"
+    assert close_action.authorization_id is None
+    assert result.closure_authorization is AuthorizationState.NOT_AUTHORIZED
+
+
+def test_completed_open_issue_converges_close_only_with_existing_authority_and_admission():
+    current = state(terminal=TerminalDisposition.COMPLETED, closure=AuthorizationState.AUTHORIZED)
+    snap = snapshot(status=None, value="none", issue_state="open")
+    admission = LifecycleMutationAdmissionResult(
+        requested_mutation="close-issue", admitted=True, status=AdmissionStatus.ADMITTED,
+        reason_codes=(), details=(), authorization_id=current.closure_authorization.evidence_id,
+        snapshot_id=snap.snapshot_id,
+    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, admissions=(admission,)))
+    action = next(item for item in result.actions if item.reason_code == "lifecycle.terminal-open-issue")
+    assert action.category is ActionCategory.GOVERNED_MUTATION
+    assert action.authorization_id == current.closure_authorization.evidence_id
+    assert action.admission_result_id == admission.result_id
+
+
+def test_1950_merged_implementation_open_issue_drops_ready_without_closure_authority():
+    # #2796 reproduction: #1950 stayed open and `status:ready` after its primary
+    # implementation PR merged. Production represents that as a merged primary
+    # claim on an open issue whose GitHub state_reason (hence terminal
+    # disposition) is still empty.
+    current = state(claims=(claim(value="merged"),))
+    assert current.terminal_disposition is TerminalDisposition.NONE
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="ready", merged=True), current_pull_request=pr(value=PullRequestState.MERGED)))
+    label = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert (label.observed, label.expected) == ("status:ready", "none")
+    close = next(item for item in result.actions if item.reason_code == "lifecycle.merged-pr-open-issue")
+    assert close.category is ActionCategory.MANUAL_DECISION
+    assert close.authorization_id is None
+    assert "authorization.closure-required" in result.reason_codes
+    assert result.closure_authorization is AuthorizationState.NOT_AUTHORIZED
+
+
+def test_open_issue_without_completed_implementation_keeps_ready_projection():
+    for claims in ((), (claim(value="draft"),), (claim(value="ready"),)):
+        value = "none" if not claims else claims[0].state
+        result = reconcile_lifecycle(input_for(state(claims=claims), lifecycle_snapshot=snapshot(value=value)))
+        assert "lifecycle.status-label-stale" not in result.reason_codes
+        assert "lifecycle.merged-pr-open-issue" not in result.reason_codes
+
+
 def test_merged_pr_open_issue_requires_closure_authority_and_admission():
     current = state(claims=(claim(value="merged"),))
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="ready", merged=True), current_pull_request=pr(value=PullRequestState.MERGED)))

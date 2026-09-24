@@ -66,7 +66,7 @@ function frame(overrides: Partial<FramePlanRequest> = {}): FramePlanRequest {
 
 describe('planResolvedTutorialFrame', () => {
   it('emits the standard plan-authorized overlays in canonical paint order', () => {
-    const result = planResolvedTutorialFrame({ frame: frame(), overlays: { ordinal: 2 } });
+    const result = planResolvedTutorialFrame({ frame: frame(), overlays: { ordinal: 2, semantic_target_id: "student-prompt-1" } });
 
     expect(result.status).toBe('valid');
     expect(result.blocker_reasons).toEqual([]);
@@ -78,7 +78,7 @@ describe('planResolvedTutorialFrame', () => {
   });
 
   it('is structurally deterministic for identical inputs', () => {
-    const request = { frame: frame(), overlays: { ordinal: 3 } } as const;
+    const request = { frame: frame(), overlays: { ordinal: 3, semantic_target_id: "student-prompt-1" } } as const;
 
     expect(planResolvedTutorialFrame(request)).toEqual(planResolvedTutorialFrame(request));
   });
@@ -86,7 +86,7 @@ describe('planResolvedTutorialFrame', () => {
   it('keeps zero-overlay intent explicit', () => {
     const result = planResolvedTutorialFrame({
       frame: frame(),
-      overlays: { ordinal: 1, kinds: [] },
+      overlays: { ordinal: 1, semantic_target_id: "student-prompt-1", kinds: [] },
     });
 
     expect(result.status).toBe('valid');
@@ -96,7 +96,7 @@ describe('planResolvedTutorialFrame', () => {
   it('fails closed for unsupported inset instead of silently dropping it', () => {
     const result = planResolvedTutorialFrame({
       frame: frame(),
-      overlays: { ordinal: 1, kinds: ['inset'] },
+      overlays: { ordinal: 1, semantic_target_id: "student-prompt-1", kinds: ['inset'] },
     });
 
     expect(result.status).toBe('blocked');
@@ -107,7 +107,7 @@ describe('planResolvedTutorialFrame', () => {
   it('surfaces overlay placement blockers without returning a partial plan', () => {
     const result = planResolvedTutorialFrame({
       frame: frame({ output_width_px: 304, output_height_px: 171 }),
-      overlays: { ordinal: 1 },
+      overlays: { ordinal: 1, semantic_target_id: "student-prompt-1" },
     });
 
     expect(result.status).toBe('blocked');

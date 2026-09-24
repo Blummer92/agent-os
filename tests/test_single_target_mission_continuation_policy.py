@@ -53,3 +53,31 @@ def test_single_target_continuation_reuses_1994_preflight_and_existing_orchestra
     assert "Coding Lessons Learned Preflight" in agents
     assert "Final finite-mission reconciliation" in orchestrator
     assert "test_fix_1683_style_investigation_cannot_skip_initial_lesson_outcome" in preflight_test
+
+
+def test_reduction_candidate_inventory_is_reconciled_before_reuse() -> None:
+    agents = normalized(AGENTS)
+    for phrase in (
+        "Before reusing any persisted reduction, retirement, refactor, or deletion-candidate inventory",
+        "reconcile every candidate against current `main`",
+        "Treat the persisted inventory as historical evidence until that check completes",
+        "A candidate path absent from current `main` is `HISTORICAL-ONLY / already retired`",
+        "remove it from the active candidate population",
+        "Rebuild the active population from only surviving current paths",
+        "absence alone never proves that a surviving path is safe to delete",
+    ):
+        assert phrase in agents
+
+
+def test_reduction_inventory_currentness_reuses_existing_architecture() -> None:
+    agents = normalized(AGENTS)
+    assert "Reuse existing currentness and retirement discipline" in agents
+    for forbidden in (
+        "another scanner",
+        "registry",
+        "cache",
+        "currentness service",
+        "scheduler",
+        "state store",
+    ):
+        assert forbidden in agents

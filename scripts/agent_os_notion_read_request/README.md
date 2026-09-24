@@ -75,16 +75,43 @@ those canonical booleans onto the existing #973 status vocabulary.
 
 ## Activation state
 
-The shipped catalog declares **no verified binding**: every
-`verification_state` is `unverified` and every identity is `null`. Admission
-therefore fails closed before any secret-bearing step, and the runner reports
-`dispatch_status: "blocked"`.
+The shared Canonical Digital Media Unit Registry and Visual Asset Library
+bindings are verified-current, and the existing Photography Foundations
+requests remain dispatchable. Additional units may be staged in the finite
+catalog with `provider_page_id=null` and `verification_state=unverified`;
+those request ids are known but fail closed with `canonical-unit-unverified`.
 
-Live activation requires separately authorized excluded-surface work: the
-bounded workflow file, the repository secret, the read-only Notion integration,
-Notion source sharing, and re-verified source identities. Historical #962
-identities are planning leads only and are deliberately absent from this
-executable allowlist.
+#2816 stages Candy Branding this way and adds the pure bounded verifier needed
+for an exact-title lookup inside the already-verified Canonical Digital Media
+Unit Registry. This repository change does not route or execute that live
+verification query. Until a separately authorized execution surface runs the
+verifier and a later repository update deliberately binds the freshly verified
+page id, the Candy Branding canonical-unit and visual-assets requests remain
+non-dispatchable.
+
+Historical/exported page ids remain planning evidence only and are never copied
+into the executable catalog as verified-current identity.
+
+## Fixed destination verification
+
+Issue #2871 adds one finite governance read for #249:
+
+```text
+/agent-os notion-read rc6-operator-planning-destination
+```
+
+The catalog binds that slug to the already-approved RC6 operator-planning page.
+The caller cannot supply or override a page id, URL, property, filter, or method.
+The projection publishes only identity/title-match, reachability, archived/trash
+state, last-edited evidence, and whether Notion reports a public URL. It never
+publishes the page URL, public URL value, page body, unrestricted properties, or
+credentials.
+
+The sharing evidence is deliberately labeled `public-url-only`. A successful
+read can prove integration reachability and whether Notion reports a public URL;
+it cannot enumerate every private user/workspace permission. #249 must preserve
+that limitation rather than treating this projection as a complete permissions
+audit.
 
 ## Public API
 

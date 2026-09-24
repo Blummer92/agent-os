@@ -287,6 +287,22 @@ describe('planTutorialFrame framing', () => {
     expect(result.plan?.anchored_rects[0]!.rect.rect).toEqual([48, 98, 512, 144]);
   });
 
+  it('fails closed when a lone instructional target would be tiny inside the crop', () => {
+    const tinyTarget: ReferenceRegion = { ...targetRegion, rect: [0.48, 0.4, 0.01, 0.2] };
+    const result = planTutorialFrame(request({
+      region_set: {
+        reference_id: reference.reference_id,
+        content_fingerprint: reference.asset_reference.content_fingerprint,
+        regions: [tinyTarget],
+      },
+      selection: { ...request().selection, required_ui_claims: ['Add content'] },
+      must_show_claims: ['Add content'],
+    }));
+
+    expect(result.status).toBe('blocked');
+    expect(result.blocker_reasons).toContain(FRAME_PLAN_BLOCKER_REASONS.targetOccupancyTooLow);
+  });
+
   it('binds the plan to the exact reference identity and fingerprint', () => {
     const result = planTutorialFrame(request());
 

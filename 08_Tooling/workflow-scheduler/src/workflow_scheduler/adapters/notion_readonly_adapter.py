@@ -325,6 +325,7 @@ class NotionReadOnlyAdapter(TaskAdapter):
         return {
             "id": data.get("id"),
             "url": data.get("url"),
+            "public_url": data.get("public_url"),
             "archived": data.get("archived"),
             "in_trash": data.get("in_trash"),
             "properties": data.get("properties"),

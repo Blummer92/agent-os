@@ -211,6 +211,7 @@ class NotionContractAdapter:
             metadata={
                 "evidence_source": LIVE_NOTION_SOURCE,
                 "url": payload.get("url"),
+                "public_url": payload.get("public_url"),
                 "archived": archived,
                 "created_time": payload.get("created_time"),
                 "last_edited_time": payload.get("last_edited_time"),

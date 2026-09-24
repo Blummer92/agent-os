@@ -88,3 +88,28 @@ def test_governance_path_set_is_fixed_not_caller_selected() -> None:
         "01_Shared_Standards/global-engineering/testing-and-release.md",
         "01_Shared_Standards/python/INDEX.md",
     )
+
+
+def test_bounded_issue_transport_reuses_one_exact_issue_result() -> None:
+    result = observation.SingleIssueTransportResult(
+        outcome=observation.SingleIssueTransportOutcome.OK,
+        item={"number": 2848, "state": "open", "body": "bounded"},
+    )
+    transport = observation._BoundedIssueTransport(
+        repository="Blummer92/agent-os",
+        issue_number=2848,
+        result=result,
+    )
+
+    assert transport.get_issue("Blummer92/agent-os", 2848) is result
+    mismatch = transport.get_issue("Blummer92/agent-os", 2849)
+    assert mismatch.outcome is observation.SingleIssueTransportOutcome.NOT_FOUND
+    assert mismatch.item is None
+
+
+def test_first_publication_reuses_one_bounded_issue_acquisition() -> None:
+    source = inspect.getsource(observation.activate_first_publication_from_host)
+    assert source.count("github.get_issue(") == 1
+    assert "issue_reader=LiveIssueReader(issue_transport)" in source
+    assert "transport=issue_transport" in source
+    assert "transport=github" not in source[source.index("issue_reader = LiveCurrentIssueSnapshotReader("):]
