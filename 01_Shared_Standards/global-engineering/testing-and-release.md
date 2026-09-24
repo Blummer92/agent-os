@@ -18,13 +18,15 @@
 - One clean aggregate run bound to the exact final pull-request head may satisfy the full-suite requirement, including when that run is performed by GitHub CI.
 - CI evidence from any SHA other than the current required head is stale for that head and cannot satisfy the transition.
 - A focused pass never suppresses, replaces, or impersonates the required final exact-head aggregate.
-- Ready-for-Review, release, or any later transition that consumes required validation must wait for the required exact-head evidence even when Draft PR creation was allowed to stage CI-routed validation.
+- Ordinary Ready-for-Review, release, or any later transition that consumes required validation must wait for the required exact-head evidence even when Draft PR creation was allowed to stage CI-routed validation.
+- When the repository's existing Ready event is itself the only currently capable governed trigger for the required exact-head aggregate, one reversible **provisional Ready** transition may be used solely to stage that aggregate after exact-head currentness, review convergence, focused validation, and Ready authority are proven. Provisional Ready grants no merge or later lifecycle authority. The exact-head aggregate must then succeed before Ready is treated as converged; failure, cancellation, missing evidence, or head drift requires conversion back to Draft before further progression.
 - Release only with required exact-head evidence and checklist status.
 
 ## Version
-0.4.1
+0.5.0
 
 ## Changelog
+- 0.5.0 adds #2852's reversible provisional-Ready validation trigger for the existing Ready-event aggregate path when no other capable governed aggregate trigger is available; exact-head success is still required before Ready converges and any non-success requires Draft rollback. No merge, closure, workflow-edit, permission, production, or external-write authority is added.
 - 0.4.1 rewords the exact-head governed CI aggregate sentence in Developer Loop Validation so its subsuming-evidence phrase is contiguous and test-verifiable, with no change in meaning (#1594).
 - 0.4.0 separates validation obligation from execution location, permits Draft PR staging when an existing governed CI executor is the capable route, forbids false manual-command stops, and preserves exact-head evidence before Ready-for-Review or release (#1595).
 - 0.3.0 makes issue-required developer-loop checks a pre-PR capable-route gate while preserving one authoritative exact-head aggregate.
