@@ -78,11 +78,6 @@ from .image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
-from .ppux_projection_input import (
-    PPUX_INPUT_VERSION,
-    PpuxProjectionInputAssembly,
-    assemble_ppux_projection_input,
-)
 from .request_interpretation import (
     ACTIONS as REQUEST_ACTIONS,
     CONTRACT_VERSION as REQUEST_INTERPRETATION_VERSION,
@@ -137,9 +132,7 @@ __all__ = [
     "REQUEST_ORIGINS",
     "REQUEST_RESOURCE_KINDS",
     "REQUEST_SYSTEMS",
-    "PPUX_INPUT_VERSION",
     "PpuxMissionConstraintDecision",
-    "PpuxProjectionInputAssembly",
     "RequestInterpretation",
     "TOP_LEVEL_FIELDS",
     "ValidatedRecord",
@@ -149,7 +142,6 @@ __all__ = [
     "WorkspaceDriveResult",
     "WorkspaceDriveState",
     "assemble_gemini_manual_prompt",
-    "assemble_ppux_projection_input",
     "canonical_json_bytes",
     "canonical_size",
     "evaluate_ppux_mission_constraint",
