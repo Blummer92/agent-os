@@ -308,6 +308,47 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
             touched.update(exact)
         if set(net_paths) - touched:
             return "lineage-integrity.merge-only-path"
+
+        merges = self.runner.run(
+            (self.git_binary, "rev-list", "--first-parent", "--merges", f"{merge_base_sha}..{expected_head_sha}"),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        if not merges.started or merges.timed_out or not merges.termination_confirmed or merges.return_code != 0:
+            return "lineage-integrity.merge-history-unavailable"
+        merge_shas = tuple(line.strip() for line in merges.stdout.splitlines() if line.strip())
+        if any(_SHA40_RE.fullmatch(sha) is None for sha in merge_shas):
+            return "lineage-integrity.merge-history-malformed"
+        for merge_sha in merge_shas:
+            parents = self.runner.run(
+                (self.git_binary, "rev-list", "--parents", "-n", "1", merge_sha),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if not parents.started or parents.timed_out or not parents.termination_confirmed or parents.return_code != 0:
+                return "lineage-integrity.merge-parents-unavailable"
+            parts = parents.stdout.strip().split()
+            if len(parts) != 3 or parts[0] != merge_sha or any(_SHA40_RE.fullmatch(sha) is None for sha in parts):
+                return "lineage-integrity.merge-parents-ambiguous"
+            deterministic = self.runner.run(
+                (self.git_binary, "merge-tree", "--write-tree", parts[1], parts[2]),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if not deterministic.started or deterministic.timed_out or not deterministic.termination_confirmed:
+                return "lineage-integrity.merge-result-unavailable"
+            if deterministic.return_code != 0:
+                return "lineage-integrity.semantic-conflict"
+            expected_tree = _exact_head(deterministic)
+            if expected_tree is None:
+                return "lineage-integrity.merge-result-unavailable"
+            actual = self.runner.run(
+                (self.git_binary, "rev-parse", "--verify", f"{merge_sha}^{{tree}}"),
+                cwd=self.repository_root,
+                env=dict(self.environment),
+            )
+            if _exact_head(actual) != expected_tree:
+                return "lineage-integrity.stale-merge-tree"
         return None
 
     def _prepare_merge_shaped_candidate(self, *, expected_head_sha: str, current_main_sha: str, admitted_paths: tuple[str, ...]) -> str | BranchRefreshMutationResult:
