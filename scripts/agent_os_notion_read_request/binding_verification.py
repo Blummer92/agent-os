@@ -42,10 +42,6 @@ CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
-BINDING_VERIFICATION_REQUEST_IDS = (
-    VERIFICATION_REQUEST_ID,
-    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-)
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
@@ -81,6 +77,17 @@ def _verification_request_spec(
         canonical_unit_key,
         _ADDITIONAL_UNIT_ALLOWED_ACTIONS,
     )
+
+
+def is_binding_verification_request_id(request_id: object) -> bool:
+    """Return whether one finite request id is eligible for binding verification.
+
+    The repository-owned catalog remains the allowlist. This helper intentionally
+    derives eligibility from the same generic request spec used by admission so
+    adding a staged unit never requires a second workflow routing list.
+    """
+
+    return isinstance(request_id, str) and _verification_request_spec(request_id) is not None
 
 
 def _normalize_notion_id(value: object) -> str:
@@ -472,7 +479,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "BINDING_VERIFICATION_REQUEST_IDS",
+    "is_binding_verification_request_id",
     "CANONICAL_REGISTRY_DATABASE_ID",
     "CANDY_BRANDING_STABLE_ID",
     "CANDY_BRANDING_TITLE",
