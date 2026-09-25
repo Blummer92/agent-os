@@ -194,6 +194,8 @@ def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
         issue_number=2609,
         issue_open=True,
         evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=[
             {
                 "pull_request_number": 2610,
@@ -211,11 +213,27 @@ def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
 
 
 
+def test_primary_pr_creation_tool_rejects_zero_net_diff() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2593,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=[],
+        changed_files=0,
+        in_scope_changed_files=0,
+    )
+    assert result["action"] == "manual-reconciliation"
+    assert result["creation_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.empty-implementation-diff"]
+
+
 def test_primary_pr_creation_tool_fails_closed_for_existing_branch_without_pr() -> None:
     result = mcp_server.admit_agent_os_primary_pr_creation_tool(
         issue_number=2612,
         issue_open=True,
         evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=[],
         branch_exists=True,
     )
@@ -230,6 +248,8 @@ def test_primary_pr_creation_tool_fails_closed_on_2609_duplicate_reproduction() 
         issue_number=2609,
         issue_open=True,
         evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=[
             {
                 "pull_request_number": 2610,
@@ -257,6 +277,8 @@ def test_2447_batch_packaging_tool_rejects_a_second_execution_wave() -> None:
                 "issue_number": 2688,
                 "issue_open": True,
                 "objective_ref": "objective/lp4-zero-comparable-runs",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             }
         ],
@@ -271,6 +293,8 @@ def test_2447_batch_packaging_tool_rejects_a_second_execution_wave() -> None:
                 "issue_number": 2688,
                 "issue_open": True,
                 "objective_ref": "objective/lp4-zero-comparable-runs",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [
                     {
                         "pull_request_number": 2703,
@@ -295,12 +319,16 @@ def test_2447_batch_packaging_tool_keeps_independent_issues_on_separate_prs() ->
                 "issue_number": 2442,
                 "issue_open": True,
                 "objective_ref": "objective/candidate-packet-identity",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             },
             {
                 "issue_number": 2443,
                 "issue_open": True,
                 "objective_ref": "objective/candidate-packet-transport",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             },
         ],
