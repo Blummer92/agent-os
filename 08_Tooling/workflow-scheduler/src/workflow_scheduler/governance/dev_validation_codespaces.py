@@ -31,7 +31,9 @@ SUPPORTED_VALIDATION_IDS = frozenset({VALIDATION_ID})
 _FRAME_START = "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
-_RUN_TIMEOUT_SECONDS = 240
+_REMOTE_MAX_BOUNDED_SECONDS = 350
+_TRANSPORT_OVERHEAD_SECONDS = 70
+_RUN_TIMEOUT_SECONDS = _REMOTE_MAX_BOUNDED_SECONDS + _TRANSPORT_OVERHEAD_SECONDS
 _UNSAFE_DIAGNOSTIC_CHAR_RE = re.compile(r"[^\x09\x0a\x0d\x20-\x7e]")
 
 _REMOTE_RUNNER_SOURCE = r'''import hashlib,json,os,re,shutil,subprocess,sys,tempfile
@@ -318,27 +320,45 @@ def run_dev_validation_over_codespaces(
     *,
     run: Run = _run,
 ) -> dict[str, object]:
-    completed = run(
-        (
-            "gh",
-            "codespace",
-            "ssh",
-            "-c",
-            APPROVED_CODESPACE_NAME,
-            "--",
-            "python3",
-            "-c",
-            _REMOTE_RUNNER_SOURCE,
-            request.repository,
-            str(request.issue_number),
-            request.branch,
-            request.source_sha,
-            request.validation_id,
-            request.request_id,
-            APPROVED_CODESPACE_NAME,
-        ),
-        timeout=_RUN_TIMEOUT_SECONDS,
-    )
+    try:
+        completed = run(
+            (
+                "gh",
+                "codespace",
+                "ssh",
+                "-c",
+                APPROVED_CODESPACE_NAME,
+                "--",
+                "python3",
+                "-c",
+                _REMOTE_RUNNER_SOURCE,
+                request.repository,
+                str(request.issue_number),
+                request.branch,
+                request.source_sha,
+                request.validation_id,
+                request.request_id,
+                APPROVED_CODESPACE_NAME,
+            ),
+            timeout=_RUN_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        evidence = _failure(
+            request, "dev-validation-codespaces-transport-timeout"
+        )
+        stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
+        stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
+        evidence.update(
+            {
+                "ssh_exit_code": None,
+                "ssh_stdout_tail": stdout_tail,
+                "ssh_stdout_truncated": stdout_truncated,
+                "ssh_stderr_tail": stderr_tail,
+                "ssh_stderr_truncated": stderr_truncated,
+                "transport_timeout_seconds": _RUN_TIMEOUT_SECONDS,
+            }
+        )
+        return evidence
     if completed.returncode != 0:
         evidence = _failure(
             request, "dev-validation-codespaces-ssh-failed"
