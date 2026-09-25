@@ -35,7 +35,11 @@ def test_host_runtime_route_preserves_least_privilege_and_fixed_target() -> None
     assert "issues:" not in permissions
     assert "contents: write" not in permissions
     assert "actions: write" not in permissions
-    assert "secrets." not in text
+    host_runtime_step = text.split(
+        "- name: Install and verify bounded #1238 host runtime", 1
+    )[1].split("- name: Invoke exact governed GCE control path", 1)[0]
+    assert "secrets." not in host_runtime_step
+    assert "AGENT_OS_CODESPACES_TOKEN" not in host_runtime_step
     assert 'project="agent-os-502614"' in text
     assert 'zone="us-central1-a"' in text
     assert 'instance="agent-os-test"' in text

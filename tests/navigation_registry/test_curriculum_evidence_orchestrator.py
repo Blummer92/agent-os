@@ -190,6 +190,115 @@ def test_pf010_is_reached_by_relation_and_provider_filter_is_hidden_downstream()
     assert record["authority"]["production_authorized"] is False
 
 
+
+def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        assert step.logical_source == VISUAL_ASSETS
+        assert payload["relation_filter"]["property"] == "Canonical Unit"
+        return {
+            "results": [{
+                "id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
+                "last_edited_time": "2026-09-25T12:00:00Z",
+                "properties": {
+                    "Asset Title": {
+                        "type": "title",
+                        "title": [{"plain_text": "Camera Diagram"}],
+                    },
+                    "Canonical Unit": {
+                        "type": "relation",
+                        "relation": [{"id": UNIT_PAGE}],
+                    },
+                },
+            }]
+        }
+
+    packet = orchestrate_curriculum_evidence(
+        request=CurriculumReadRequest("images", "images"),
+        canonical_unit=unit(),
+        resolve_identity=identity,
+        execute_read=reader,
+    )
+
+    assert packet["asset_evidence"] == [{
+        "asset_id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
+        "approved_for_requested_use": False,
+        "approved_student_reuse": False,
+        "exists": True,
+        "source_revision": "2026-09-25T12:00:00Z",
+    }]
+    state = resolve_current_curriculum_state(packet)
+    assert state.record is not None
+    assert state.record.to_dict()["assets"]["matching_asset_exists"] is True
+    assert state.record.to_dict()["assets"]["approved_reusable_student_facing_exists"] is False
+
+
+
+def test_raw_notion_visual_asset_zero_match_stays_explicitly_empty() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        return {"results": []}
+
+    packet = orchestrate_curriculum_evidence(
+        request=CurriculumReadRequest("images", "images"),
+        canonical_unit=unit(),
+        resolve_identity=identity,
+        execute_read=reader,
+    )
+
+    assert packet["asset_evidence"] == []
+    state = resolve_current_curriculum_state(packet)
+    assert state.record is not None
+    assert state.record.to_dict()["assets"]["matching_asset_exists"] is False
+
+
+
+def test_raw_notion_asset_missing_properties_fails_closed_instead_of_looking_empty() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        return {"results": [{"id": "raw-asset-without-properties"}]}
+
+    with pytest.raises(CurriculumReadError, match="missing required asset_id"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+
+
+def test_raw_notion_owner_page_fails_closed_until_source_schema_is_verified() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        return {
+            "results": [{
+                "id": "3907ac78-3131-8222-9999-bbbbbbbbbbbb",
+                "properties": {
+                    "Decision": {
+                        "type": "rich_text",
+                        "rich_text": [{"plain_text": "ready"}],
+                    }
+                },
+            }]
+        }
+
+    with pytest.raises(
+        CurriculumReadError,
+        match="requires a verified provider-neutral schema mapping",
+    ):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("improve-modeling"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+
+
+
 def test_identity_drift_fails_closed_before_provider_read() -> None:
     calls = []
 

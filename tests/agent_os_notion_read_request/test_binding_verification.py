@@ -21,6 +21,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
+    verify_additional_unit_binding,
     verify_candy_branding_binding,
     verify_live_bindings,
 )
@@ -134,22 +135,45 @@ def test_ambiguous_data_source_identity_fails_closed() -> None:
 
 
 class CandyVerificationAdapter:
-    def __init__(self, results):
+    def __init__(
+        self,
+        results,
+        *,
+        title_properties=("Canonical Unit Name",),
+        data_source_id="canonical-data-source-current",
+    ):
         self.calls = []
         self.results = results
+        self.title_properties = title_properties
+        self.data_source_id = data_source_id
 
     def execute(self, task):
         self.calls.append(dict(task.payload))
-        if task.payload["action"] != "query_data_source":
-            raise AssertionError(task.payload["action"])
-        return {
-            "status": "success",
-            "output": {
-                "results": self.results,
-                "has_more": False,
-                "next_cursor": None,
-            },
-        }
+        action = task.payload["action"]
+        if action == "get_data_source":
+            return {
+                "status": "success",
+                "output": {
+                    "id": self.data_source_id,
+                    "properties": {
+                        **{
+                            name: {"id": f"title-{index}", "type": "title"}
+                            for index, name in enumerate(self.title_properties)
+                        },
+                        "Aliases": {"id": "aliases", "type": "rich_text"},
+                    },
+                },
+            }
+        if action == "query_data_source":
+            return {
+                "status": "success",
+                "output": {
+                    "results": self.results,
+                    "has_more": False,
+                    "next_cursor": None,
+                },
+            }
+        raise AssertionError(action)
 
 
 
@@ -169,16 +193,19 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
         generated_at="run:2816",
     )
 
-    assert len(adapter.calls) == 1
-    call = adapter.calls[0]
-    assert call["action"] == "query_data_source"
-    assert call["data_source_id"] == "canonical-data-source-current"
-    assert call["filter"] == {
-        "property": "Name",
+    assert [call["action"] for call in adapter.calls] == [
+        "get_data_source",
+        "query_data_source",
+    ]
+    schema_call, query_call = adapter.calls
+    assert schema_call["data_source_id"] == "canonical-data-source-current"
+    assert query_call["data_source_id"] == "canonical-data-source-current"
+    assert query_call["filter"] == {
+        "property": "Canonical Unit Name",
         "title": {"equals": CANDY_BRANDING_TITLE},
     }
-    assert call["max_pages"] == 1
-    assert call["max_results"] == 2
+    assert query_call["max_pages"] == 1
+    assert query_call["max_results"] == 2
     assert evidence["canonical_unit"] == {
         "canonical_unit_key": "candy-branding",
         "stable_id": CANDY_BRANDING_STABLE_ID,
@@ -188,6 +215,45 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
     assert evidence["notion_writes_performed"] is False
     assert evidence["drive_writes_performed"] is False
     assert evidence["gce_invoked"] is False
+
+
+@pytest.mark.parametrize(
+    "title_properties",
+    (
+        (),
+        ("First Title", "Second Title"),
+    ),
+)
+def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(
+    title_properties,
+) -> None:
+    with pytest.raises(
+        NotionReadRequestError,
+        match="exactly one title property",
+    ):
+        verify_candy_branding_binding(
+            CandyVerificationAdapter(
+                [],
+                title_properties=title_properties,
+            ),
+            canonical_registry_data_source_id="canonical-data-source-current",
+            generated_at="run:2816",
+        )
+
+
+def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch() -> None:
+    with pytest.raises(
+        NotionReadRequestError,
+        match="data source identity mismatch",
+    ):
+        verify_candy_branding_binding(
+            CandyVerificationAdapter(
+                [],
+                data_source_id="different-data-source",
+            ),
+            canonical_registry_data_source_id="canonical-data-source-current",
+            generated_at="run:2816",
+        )
 
 
 @pytest.mark.parametrize(
@@ -223,7 +289,7 @@ def test_candy_verification_admission_is_finite_and_read_only() -> None:
     )
     assert decision["status"] == "admitted"
     assert decision["canonical_unit_key"] == "candy-branding"
-    assert decision["allowed_read_actions"] == ["query_data_source"]
+    assert decision["allowed_read_actions"] == ["get_data_source", "query_data_source"]
     assert decision["secret_dispatch_authorized"] is True
     assert decision["write_allowed"] is False
     assert decision["production_authorized"] is False
@@ -277,11 +343,82 @@ def test_candy_binding_archived_or_trashed_fails_closed() -> None:
             )
 
 
+def test_motion_typography_reuses_general_additional_unit_verifier() -> None:
+    adapter = CandyVerificationAdapter(
+        [
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "archived": False,
+                "in_trash": False,
+            }
+        ]
+    )
+
+    decision = admit_binding_verification_request(
+        transport(
+            request_id="verify-motion-typography-binding",
+            issue_number=2816,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "motion-typography"
+    assert decision["allowed_read_actions"] == ["get_data_source", "query_data_source"]
+
+    evidence = verify_additional_unit_binding(
+        adapter,
+        canonical_unit_key="motion-typography",
+        canonical_registry_data_source_id="canonical-data-source-current",
+        generated_at="run:motion",
+    )
+    assert adapter.calls[1]["filter"] == {
+        "property": "Canonical Unit Name",
+        "title": {"equals": "Motion Typography"},
+    }
+    assert evidence["canonical_unit"] == {
+        "canonical_unit_key": "motion-typography",
+        "stable_id": "canonical-unit-motion-typography",
+        "provider_page_id": "44444444-4444-4444-4444-444444444444",
+        "verification_state": "verified-current",
+    }
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    (
+        "verify-photography-foundations-binding",
+        "verify-unknown-unit-binding",
+        "verify-candy-branding-anything",
+    ),
+)
+def test_unregistered_or_ineligible_general_verifier_ids_fail_closed(request_id) -> None:
+    decision = admit_binding_verification_request(
+        transport(request_id=request_id, issue_number=2816),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "rejected"
+    assert decision["reason_codes"] == ["verification-request-mismatch"]
+    assert decision["secret_dispatch_authorized"] is False
+
+
+def test_shipped_additional_units_remain_non_dispatchable_before_live_binding() -> None:
+    catalog = binding_verification_module.load_catalog()
+    for key in ("candy-branding", "motion-typography"):
+        unit = catalog.canonical_unit(key)
+        assert unit is not None
+        assert unit.verification_state == "unverified"
+        assert unit.provider_page_id is None
+        assert unit.dispatchable is False
+
+
 def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     )
+    assert "verify-motion-typography-binding" not in BINDING_VERIFICATION_REQUEST_IDS
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -302,6 +439,10 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
 def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
     tmp_path, monkeypatch
 ) -> None:
+    canonical_source = binding_verification_module.load_catalog().source("canonical-unit")
+    assert canonical_source is not None
+    assert canonical_source.data_source_id is not None
+
     adapter = CandyVerificationAdapter(
         [
             {
@@ -309,7 +450,8 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
                 "archived": False,
                 "in_trash": False,
             }
-        ]
+        ],
+        data_source_id=canonical_source.data_source_id,
     )
     monkeypatch.setattr(binding_verification_module, "new_read_adapter", lambda: adapter)
     transport_path = tmp_path / "transport.json"
@@ -347,8 +489,10 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
     assert evidence["canonical_unit"]["provider_page_id"] == (
         "33333333-3333-3333-3333-333333333333"
     )
-    assert len(adapter.calls) == 1
-    assert adapter.calls[0]["action"] == "query_data_source"
+    assert [call["action"] for call in adapter.calls] == [
+        "get_data_source",
+        "query_data_source",
+    ]
     assert evidence["notion_writes_performed"] is False
     assert evidence["drive_writes_performed"] is False
     assert evidence["classroom_artifact_writes_performed"] is False

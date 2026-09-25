@@ -28,6 +28,40 @@ def test_no_active_primary_pr_admits_creation_without_granting_write_authority()
     assert result.github_writes_authorized is False
 
 
+
+
+
+def test_existing_implementation_branch_without_active_pr_fails_closed() -> None:
+    result = evaluate_primary_pr_creation_admission(
+        issue_number=2612,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=(),
+        branch_exists=True,
+    )
+    assert result.creation_admitted is False
+    assert result.action is PrimaryPrCreationAction.MANUAL_RECONCILIATION
+    assert result.reason_codes == ("primary-pr.branch-without-active-pr",)
+
+
+def test_batch_packaging_preserves_branch_without_pr_fail_closed_behavior() -> None:
+    result = evaluate_batch_primary_pr_packaging(
+        issue_evidence=(
+            BatchIssuePrimaryPrEvidence(
+                issue_number=2612,
+                issue_open=True,
+                objective_ref="objective/branch-claim",
+                active_primary_prs=(),
+                branch_exists=True,
+            ),
+        ),
+        evidence_current=True,
+    )
+    assert result.packaging_admitted is False
+    assert result.per_issue_admissions[0][1].action is PrimaryPrCreationAction.MANUAL_RECONCILIATION
+    assert result.reason_codes == ("primary-pr.branch-without-active-pr",)
+
+
 def test_one_active_primary_pr_reuses_existing_lineage() -> None:
     result = evaluate_primary_pr_creation_admission(
         issue_number=2609,

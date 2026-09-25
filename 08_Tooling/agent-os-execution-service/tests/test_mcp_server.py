@@ -208,6 +208,23 @@ def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
     assert result["github_writes_authorized"] is False
 
 
+
+
+
+def test_primary_pr_creation_tool_fails_closed_for_existing_branch_without_pr() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2612,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=[],
+        branch_exists=True,
+    )
+    assert result["action"] == "manual-reconciliation"
+    assert result["creation_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.branch-without-active-pr"]
+    assert result["github_writes_authorized"] is False
+
+
 def test_primary_pr_creation_tool_fails_closed_on_2609_duplicate_reproduction() -> None:
     result = mcp_server.admit_agent_os_primary_pr_creation_tool(
         issue_number=2609,
