@@ -94,15 +94,37 @@ jobs:
           )
           PY
 
+      - name: Attempt read-only Codespaces developer validation
+        id: codespaces
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.dev_validation_codespaces \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --route-output "$RUNNER_TEMP/agent-os-ingress/codespaces-route.json" \
+              --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          route = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "codespaces-route.json").read_text()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"selected={'true' if route.get('selected') is True else 'false'}\n")
+          PY
+
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true') }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true') }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
@@ -280,7 +302,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true' }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -304,8 +326,14 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
           transport_path = root / "transport.json"
           result_path = root / "result.json"
+          codespaces_route_path = root / "codespaces-route.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Agent OS governed invocation\n\n")
+              if codespaces_route_path.exists():
+                  route = json.loads(codespaces_route_path.read_text(encoding="utf-8"))
+                  summary.write(f"Codespaces selected: \`{route.get('selected')}\`\n\n")
+                  summary.write(f"Codespaces reasons: \`{','.join(route.get('reason_codes', []))}\`\n\n")
+                  summary.write(f"Codespaces surface: \`{route.get('execution_surface_id')}\`\n\n")
               if transport_path.exists():
                   transport = json.loads(transport_path.read_text(encoding="utf-8"))
                   summary.write(f"Transport: `{transport['status']}` / `{transport['reason']}`\n\n")
