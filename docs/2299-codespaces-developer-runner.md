@@ -51,6 +51,38 @@ transport evidence; stale or unavailable Codespaces evidence falls back to GCE
 through the same #918 route. Any devcontainer activation change is separately
 validated before being treated as current capability.
 
+## Governed ingress read-only pilot (#2931)
+
+The first production consumer of the Codespaces preference is deliberately
+narrow. The existing governed issue-comment ingress may use Codespaces only for
+the accepted developer-validation envelope when all of these conditions hold:
+
+- the validation identity is the already-qualified `remote-validation-suite`;
+- the target is the exact approved Codespace
+  `literate-system-j4j4pr9g4q7h45q`;
+- GitHub reports that Codespace belongs to `Blummer92/agent-os` and is already
+  `Available`;
+- the credential exposed to the step is the repository-scoped
+  `AGENT_OS_CODESPACES_TOKEN` with Codespaces read permission only; and
+- the remote environment-health result is `agent-os-codespaces-v1`, bound to
+  that exact execution surface.
+
+The workflow never starts, stops, exports, creates, edits, deletes, or publishes
+a Codespace. A stopped, stale, mismatched, unauthenticated, or otherwise
+unqualified Codespaces candidate is treated as unavailable and preserves the
+existing GCE fallback. GitHub CLI is invoked with a fixed trusted command built
+from the existing developer-validation request identity; caller-provided shell
+or argv is not exposed.
+
+Only `remote-validation-suite` participates in this pilot. Other developer-
+validation profiles remain on the existing GCE transport until separately
+qualified for Codespaces. Discovery, first-run validation, Scheduler/control,
+#759 containment, fixed-service-identity, host maintenance, and other VM-specific
+operations remain GCE-owned under #2300.
+
+The read-only token is a transport credential, not routing or execution
+authority. Missing credential material leaves the prior GCE behavior intact.
+
 ## Persistence and continuation
 
 Codespaces repository/worktree files may persist across stop/start, while running
