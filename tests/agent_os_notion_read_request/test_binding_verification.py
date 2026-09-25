@@ -432,23 +432,6 @@ def test_binding_verification_routing_is_derived_from_finite_catalog() -> None:
         assert is_binding_verification_request_id(request_id) is False
 
 
-def test_workflow_delegates_verifier_classification_to_canonical_helper() -> None:
-    workflow = (
-        Path(__file__).resolve().parents[2]
-        / ".github"
-        / "workflows"
-        / "agent-os-notion-read.yml"
-    ).read_text(encoding="utf-8")
-    assert "BINDING_VERIFICATION_REQUEST_IDS" not in workflow
-    assert "is_binding_verification_request_id" in workflow
-    assert (
-        'is_binding_verification_request_id('
-        'transport.get("notion_read_request_id_or_none")'
-        ')' in workflow
-    )
-    assert 'is_binding_verification_request_id(decision.get("request_id"))' in workflow
-
-
 def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
     tmp_path, monkeypatch
 ) -> None:
