@@ -119,10 +119,12 @@ def test_shipped_catalog_preserves_verified_sources_and_fail_closed_unit_binding
     assert photography.provider_page_id is not None
     assert photography.dispatchable is True
 
-    candy = by_key["candy-branding"]
-    assert candy.verification_state == "unverified"
-    assert candy.provider_page_id is None
-    assert candy.dispatchable is False
+    for key in ("candy-branding", "motion-typography"):
+        staged = by_key[key]
+        assert staged.verification_state == "unverified"
+        assert staged.provider_page_id is None
+        assert staged.verification_title is not None
+        assert staged.dispatchable is False
 
 
 def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
@@ -152,6 +154,9 @@ def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
         "rc6-operator-planning-destination": 249,
         "candy-branding-canonical-unit": 2816,
         "candy-branding-visual-assets": 2816,
+        "candy-branding-current-curriculum": 2816,
+        "motion-typography-canonical-unit": 2816,
+        "motion-typography-current-curriculum": 2816,
     }
 
 

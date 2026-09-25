@@ -21,6 +21,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
+    verify_additional_unit_binding,
     verify_candy_branding_binding,
     verify_live_bindings,
 )
@@ -342,11 +343,82 @@ def test_candy_binding_archived_or_trashed_fails_closed() -> None:
             )
 
 
+def test_motion_typography_reuses_general_additional_unit_verifier() -> None:
+    adapter = CandyVerificationAdapter(
+        [
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "archived": False,
+                "in_trash": False,
+            }
+        ]
+    )
+
+    decision = admit_binding_verification_request(
+        transport(
+            request_id="verify-motion-typography-binding",
+            issue_number=2816,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "motion-typography"
+    assert decision["allowed_read_actions"] == ["get_data_source", "query_data_source"]
+
+    evidence = verify_additional_unit_binding(
+        adapter,
+        canonical_unit_key="motion-typography",
+        canonical_registry_data_source_id="canonical-data-source-current",
+        generated_at="run:motion",
+    )
+    assert adapter.calls[1]["filter"] == {
+        "property": "Canonical Unit Name",
+        "title": {"equals": "Motion Typography"},
+    }
+    assert evidence["canonical_unit"] == {
+        "canonical_unit_key": "motion-typography",
+        "stable_id": "canonical-unit-motion-typography",
+        "provider_page_id": "44444444-4444-4444-4444-444444444444",
+        "verification_state": "verified-current",
+    }
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    (
+        "verify-photography-foundations-binding",
+        "verify-unknown-unit-binding",
+        "verify-candy-branding-anything",
+    ),
+)
+def test_unregistered_or_ineligible_general_verifier_ids_fail_closed(request_id) -> None:
+    decision = admit_binding_verification_request(
+        transport(request_id=request_id, issue_number=2816),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "rejected"
+    assert decision["reason_codes"] == ["verification-request-mismatch"]
+    assert decision["secret_dispatch_authorized"] is False
+
+
+def test_shipped_additional_units_remain_non_dispatchable_before_live_binding() -> None:
+    catalog = binding_verification_module.load_catalog()
+    for key in ("candy-branding", "motion-typography"):
+        unit = catalog.canonical_unit(key)
+        assert unit is not None
+        assert unit.verification_state == "unverified"
+        assert unit.provider_page_id is None
+        assert unit.dispatchable is False
+
+
 def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     )
+    assert "verify-motion-typography-binding" not in BINDING_VERIFICATION_REQUEST_IDS
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"

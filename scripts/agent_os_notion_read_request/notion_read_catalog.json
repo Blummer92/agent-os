@@ -15,7 +15,16 @@
       "stable_id": "canonical-unit-candy-branding",
       "provider_page_id": null,
       "verification_state": "unverified",
-      "content_class": "curriculum-metadata"
+      "content_class": "curriculum-metadata",
+      "verification_title": "Candy Branding / Candy Brand Design"
+    },
+    {
+      "canonical_unit_key": "motion-typography",
+      "stable_id": "canonical-unit-motion-typography",
+      "provider_page_id": null,
+      "verification_state": "unverified",
+      "content_class": "curriculum-metadata",
+      "verification_title": "Motion Typography"
     }
   ],
   "sources": [
@@ -79,6 +88,24 @@
       "issue_number": 249,
       "fixed_page_id": "3a57ac78313181068440df5a7fc9ae85",
       "expected_title": "Agent OS / RC6 Participant Pilot / Operator Planning and Readiness"
+    },
+    {
+      "request_id": "candy-branding-current-curriculum",
+      "request_class": "current-curriculum",
+      "canonical_unit_key": "candy-branding",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "motion-typography-canonical-unit",
+      "request_class": "canonical-unit",
+      "canonical_unit_key": "motion-typography",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "motion-typography-current-curriculum",
+      "request_class": "current-curriculum",
+      "canonical_unit_key": "motion-typography",
+      "issue_number": 2816
     }
   ]
 }

@@ -81,21 +81,32 @@ requests remain dispatchable. Additional units may be staged in the finite
 catalog with `provider_page_id=null` and `verification_state=unverified`;
 those request ids are known but fail closed with `canonical-unit-unverified`.
 
-#2816 stages Candy Branding this way and reuses the existing bounded workflow
-for one finite verification request, `verify-candy-branding-binding`. That
-request is admitted only on issue #2816 and executes the existing exact-title
-verifier against the already-verified Canonical Digital Media Unit Registry.
-Before querying, the verifier reads that already-bound data-source schema and
-requires exactly one title-typed property; the exact Candy filter is then built
-against that verified property name instead of assuming the column is named
-`Name`. It accepts no caller-supplied title, filter, page id, data-source id, or
-arbitrary query surface, and it preserves the existing read-only / no-GCE
-authority ceiling.
+#2816 stages additional units this way and reuses the existing bounded workflow
+for finite binding-verification requests derived only from repository-owned
+canonical-unit records. Each staged unit carries its exact verification title in
+the catalog and must have exactly one finite `canonical-unit` request. The
+verifier derives `verify-<canonical-unit-key>-binding` from those records rather
+than maintaining one verifier implementation per unit.
 
-The verification result is evidence only. It does not mutate the catalog or
-make Candy Branding dispatchable. A later separately authorized repository
-change must deliberately bind the freshly verified page id before the Candy
-canonical-unit and visual-assets requests can execute.
+Before querying, the verifier reads the already-bound canonical-registry
+data-source schema and requires exactly one title-typed property; the exact
+repository-owned unit title filter is then built against that verified property
+name. The caller cannot supply a title, filter, page id, data-source id, property
+name, or arbitrary query surface. Unknown units, already-verified units,
+missing/ambiguous canonical requests, zero/multiple title matches, archived
+records, and trashed records all fail closed.
+
+Candy Branding and Motion Typography are staged as unverified #2816 units.
+Their finite `current-curriculum` request records are also staged, but ordinary
+dispatch remains blocked until exact live unit binding succeeds and every
+logical source required by the existing #980 current-curriculum plan is
+verified/allowlisted. Staging a request therefore never bypasses source coverage
+or makes a unit executable.
+
+A verification result is evidence only. It does not mutate the catalog or make
+the unit dispatchable. A later separately authorized repository change must
+deliberately bind the freshly verified page id before that unit's ordinary
+curriculum/asset requests can execute.
 
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
