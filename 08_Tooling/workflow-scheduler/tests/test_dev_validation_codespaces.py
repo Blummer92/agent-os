@@ -12,6 +12,7 @@ from workflow_scheduler.governance.dev_validation_codespaces import (
     APPROVED_CODESPACE_NAME,
     APPROVED_CODESPACE_PROFILE_ID,
     APPROVED_CODESPACE_SURFACE_ID,
+    _RUN_TIMEOUT_SECONDS,
     run_dev_validation_over_codespaces,
     select_codespaces_dev_validation,
 )
@@ -226,6 +227,37 @@ def test_codespaces_ssh_failure_is_fail_closed_and_bounded() -> None:
         "dev-validation-codespaces-ssh-failed"
     ]
     assert evidence["ssh_exit_code"] == 1
+    assert len(evidence["ssh_stderr_tail"]) == 4096
+    assert evidence["ssh_stderr_truncated"] is True
+
+
+def test_codespaces_transport_timeout_returns_bounded_evidence() -> None:
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+
+    def run(argv, *, timeout):
+        assert timeout == _RUN_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(
+            argv,
+            timeout,
+            output="o" * 5000,
+            stderr="e" * 5000,
+        )
+
+    evidence = run_dev_validation_over_codespaces(request, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-transport-timeout"
+    ]
+    assert evidence["ssh_exit_code"] is None
+    assert evidence["transport_timeout_seconds"] == _RUN_TIMEOUT_SECONDS
+    assert len(evidence["ssh_stdout_tail"]) == 4096
+    assert evidence["ssh_stdout_truncated"] is True
     assert len(evidence["ssh_stderr_tail"]) == 4096
     assert evidence["ssh_stderr_truncated"] is True
 
