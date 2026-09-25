@@ -99,8 +99,6 @@ def test_batch_packaging_preserves_branch_without_pr_fail_closed_behavior() -> N
                 changed_files=1,
                 in_scope_changed_files=1,
                 active_primary_prs=(),
-        changed_files=1,
-        in_scope_changed_files=1,
                 branch_exists=True,
             ),
         ),
