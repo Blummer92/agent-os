@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 from workflow_scheduler.governance.codespaces_diagnostic import (
     DIAGNOSTIC_ID,
@@ -21,6 +22,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 
 
 REQUEST_ID = "canva-cdp-1"
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _ingress() -> IssueCommentIngressResult:
@@ -275,3 +277,15 @@ def test_result_identity_mismatch_is_rejected() -> None:
     assert evidence["reason_codes"] == [
         "codespaces-diagnostic-evidence-identity-mismatch"
     ]
+
+
+def test_workflow_handles_diagnostic_without_gce_fallback() -> None:
+    workflow = (
+        ROOT / ".github/workflows/agent-os-governed-invocation.yml"
+    ).read_text(encoding="utf-8")
+    assert "Attempt bounded read-only Codespaces diagnostic" in workflow
+    assert "workflow_scheduler.governance.codespaces_diagnostic" in workflow
+    assert "steps.codespaces_diagnostic.outputs.handled != 'true'" in workflow
+    assert "codespaces-diagnostic-route.json" in workflow
+    assert "Diagnostic status:" in workflow
+    assert "actions/upload-artifact@v7" in workflow
