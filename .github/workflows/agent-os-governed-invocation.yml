@@ -392,18 +392,18 @@ jobs:
                               diagnostic = result.get("diagnostic")
                               if isinstance(diagnostic, dict):
                                   summary.write(f"Diagnostic status: `{diagnostic.get('status')}`\n\n")
-                                  summary.write(f"Diagnostic reasons: `{','.join(diagnostic.get('reason_codes', []))}`\n\n")
+                                  summary.write(f"Diagnostic reasons: `{\',\'.join(diagnostic.get(\'reason_codes\', []))}`\n\n")
                                   summary.write(f"Diagnostic identity: `{diagnostic.get('diagnostic_id')}`\n\n")
                                   summary.write(f"Diagnostic request: `{diagnostic.get('request_id')}`\n\n")
                                   summary.write(f"Diagnostic cleanup complete: `{diagnostic.get('cleanup_complete')}`\n")
                               else:
                                   dev_validation = result.get("dev_validation")
                                   if isinstance(dev_validation, dict):
-                                  summary.write(f"Developer validation: `{dev_validation.get('status')}`\n\n")
-                                  summary.write(f"Reasons: `{','.join(dev_validation.get('reason_codes', []))}`\n\n")
-                                  summary.write(f"Tested SHA: `{dev_validation.get('tested_sha')}`\n\n")
-                                  summary.write(f"Validation identity: `{dev_validation.get('validation_id')}`\n\n")
-                                  summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
+                                      summary.write(f"Developer validation: `{dev_validation.get('status')}`\n\n")
+                                      summary.write(f"Reasons: `{\',\'.join(dev_validation.get(\'reason_codes\', []))}`\n\n")
+                                      summary.write(f"Tested SHA: `{dev_validation.get('tested_sha')}`\n\n")
+                                      summary.write(f"Validation identity: `{dev_validation.get('validation_id')}`\n\n")
+                                      summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
                                       summary.write(f"Cleanup complete: `{dev_validation.get('cleanup_complete')}`\n")
                                   else:
                                       summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
