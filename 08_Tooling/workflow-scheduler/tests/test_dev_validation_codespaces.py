@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 from workflow_scheduler.governance.dev_validation import (
     REPOSITORY,
@@ -20,6 +21,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
     IssueCommentIngressResult,
 )
 
+ROOT = Path(__file__).resolve().parents[3]
 SHA = "a" * 40
 BRANCH = "agent/2931-codespaces-test"
 
@@ -311,10 +313,8 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
 
 
 def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
-    from pathlib import Path
-
-    workflow = Path(
-        ".github/workflows/agent-os-governed-invocation.yml"
+    workflow = (
+        ROOT / ".github/workflows/agent-os-governed-invocation.yml"
     ).read_text(encoding="utf-8")
     selected_guard = (
         "steps.transport.outputs.accepted == 'true' && "
