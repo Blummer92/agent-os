@@ -190,6 +190,38 @@ def test_unregistered_candy_branding_request_ids_still_fail_closed(
     assert decision.reason_codes == ("request-id-unknown",)
     assert decision.secret_dispatch_authorized is False
 
+def test_staged_current_curriculum_requests_fail_closed_until_unit_binding_is_verified(
+    shipped_catalog,
+) -> None:
+    for request_id in (
+        "candy-branding-current-curriculum",
+        "motion-typography-current-curriculum",
+    ):
+        decision = admit(
+            transport(request_id=request_id, issue_number=2816),
+            shipped_catalog,
+        )
+        assert decision.status == "rejected"
+        assert decision.reason_codes == ("canonical-unit-unverified",)
+        assert decision.secret_dispatch_authorized is False
+
+
+def test_motion_typography_current_curriculum_reuses_existing_source_gate(
+    catalog_payload,
+) -> None:
+    payload = verified_payload(catalog_payload)
+    decision = admit(
+        transport(
+            request_id="motion-typography-current-curriculum",
+            issue_number=2816,
+        ),
+        parse_catalog(payload),
+    )
+    assert decision.status == "rejected"
+    assert decision.reason_codes == ("source-not-allowlisted",)
+    assert decision.secret_dispatch_authorized is False
+
+
 def test_catalog_repository_drift_fails_closed(catalog_payload) -> None:
     payload = verified_payload(catalog_payload)
     payload["repository"] = "someone/else"
