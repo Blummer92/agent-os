@@ -21,6 +21,8 @@ def test_no_active_primary_pr_admits_creation_without_granting_write_authority()
         issue_open=True,
         evidence_current=True,
         active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
     )
     assert result.creation_admitted is True
     assert result.action is PrimaryPrCreationAction.CREATE_PRIMARY_PR
@@ -31,12 +33,55 @@ def test_no_active_primary_pr_admits_creation_without_granting_write_authority()
 
 
 
+def test_zero_net_diff_cannot_materialize_an_ordinary_primary_pr() -> None:
+    result = evaluate_primary_pr_creation_admission(
+        issue_number=2593,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=(),
+        changed_files=0,
+        in_scope_changed_files=0,
+    )
+    assert result.creation_admitted is False
+    assert result.action is PrimaryPrCreationAction.MANUAL_RECONCILIATION
+    assert result.reason_codes == ("primary-pr.empty-implementation-diff",)
+
+
+def test_out_of_scope_only_diff_cannot_materialize_primary_pr() -> None:
+    result = evaluate_primary_pr_creation_admission(
+        issue_number=2593,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=(),
+        changed_files=2,
+        in_scope_changed_files=0,
+    )
+    assert result.creation_admitted is False
+    assert result.reason_codes == ("primary-pr.no-in-scope-diff",)
+
+
+def test_explicit_canonical_no_diff_contract_preserves_exception() -> None:
+    result = evaluate_primary_pr_creation_admission(
+        issue_number=2593,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=(),
+        changed_files=0,
+        in_scope_changed_files=0,
+        canonical_no_diff_permitted=True,
+    )
+    assert result.creation_admitted is True
+    assert result.action is PrimaryPrCreationAction.CREATE_PRIMARY_PR
+
+
 def test_existing_implementation_branch_without_active_pr_fails_closed() -> None:
     result = evaluate_primary_pr_creation_admission(
         issue_number=2612,
         issue_open=True,
         evidence_current=True,
         active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
         branch_exists=True,
     )
     assert result.creation_admitted is False
@@ -51,7 +96,11 @@ def test_batch_packaging_preserves_branch_without_pr_fail_closed_behavior() -> N
                 issue_number=2612,
                 issue_open=True,
                 objective_ref="objective/branch-claim",
+                changed_files=1,
+                in_scope_changed_files=1,
                 active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
                 branch_exists=True,
             ),
         ),
@@ -68,6 +117,8 @@ def test_one_active_primary_pr_reuses_existing_lineage() -> None:
         issue_open=True,
         evidence_current=True,
         active_primary_prs=(pr(2610),),
+        changed_files=1,
+        in_scope_changed_files=1,
     )
     assert result.creation_admitted is False
     assert result.action is PrimaryPrCreationAction.REUSE_EXISTING_PRIMARY_PR
@@ -81,6 +132,8 @@ def test_2609_duplicate_pr_reproduction_fails_closed() -> None:
         issue_open=True,
         evidence_current=True,
         active_primary_prs=(pr(2610), pr(2611)),
+        changed_files=1,
+        in_scope_changed_files=1,
     )
     assert result.creation_admitted is False
     assert result.action is PrimaryPrCreationAction.MANUAL_RECONCILIATION
@@ -93,6 +146,8 @@ def test_stale_evidence_never_admits_creation() -> None:
         issue_open=True,
         evidence_current=False,
         active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
     )
     assert result.creation_admitted is False
     assert result.reason_codes == ("primary-pr-evidence.stale",)
@@ -104,6 +159,8 @@ def test_closed_issue_never_admits_creation() -> None:
         issue_open=False,
         evidence_current=True,
         active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
     )
     assert result.creation_admitted is False
     assert result.reason_codes == ("issue.not-open",)
@@ -114,6 +171,8 @@ def issue(number: int, objective_ref: str, *active: ActivePrimaryPr) -> BatchIss
         issue_number=number,
         issue_open=True,
         objective_ref=objective_ref,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=active,
     )
 
@@ -160,7 +219,11 @@ def test_shared_objective_cannot_be_asserted_without_canonical_evidence() -> Non
             issue_number=10,
             issue_open=True,
             objective_ref="",
+            changed_files=1,
+            in_scope_changed_files=1,
             active_primary_prs=(),
+        changed_files=1,
+        in_scope_changed_files=1,
         )
     except ValueError as exc:
         assert "objective_ref" in str(exc)
@@ -199,6 +262,8 @@ def test_2447_a_different_branch_slug_never_admits_a_second_primary_pr() -> None
                 issue_number=2688,
                 issue_open=True,
                 objective_ref="objective/lp4-zero-comparable-runs",
+                changed_files=1,
+                in_scope_changed_files=1,
                 active_primary_prs=(existing,),
             ),
         ),
