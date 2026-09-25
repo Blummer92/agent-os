@@ -255,9 +255,10 @@ def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str,
     assets: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        asset_id = record.get("asset_id")
-        if not isinstance(asset_id, str) or not asset_id:
-            continue
+        if _is_raw_notion_page(record):
+            record = _normalize_raw_notion_asset(record)
+
+        asset_id = _required_record_text(record.get("asset_id"), "asset_id")
         exists = record.get("exists", True)
         approved_for_requested_use = record.get("approved_for_requested_use", False)
         approved_student_reuse = record.get("approved_student_reuse", False)
@@ -296,14 +297,56 @@ def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str,
     owners: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        evidence_id = record.get("evidence_id")
-        decision_key = record.get("decision_key")
-        if not isinstance(evidence_id, str) or not evidence_id:
-            continue
-        if not isinstance(decision_key, str) or not decision_key:
-            continue
+        if _is_raw_notion_page(record):
+            record = _normalize_raw_notion_owner(record)
+
+        _required_record_text(record.get("evidence_id"), "evidence_id")
+        _required_record_text(record.get("decision_key"), "decision_key")
         owners.append(record)
     return owners
+
+
+def _is_raw_notion_page(record: Mapping[str, object]) -> bool:
+    return isinstance(record.get("id"), str) and isinstance(record.get("properties"), Mapping)
+
+
+def _normalize_raw_notion_asset(record: Mapping[str, object]) -> dict[str, object]:
+    """Project only provider facts already proven by the bounded read itself.
+
+    The relation-first query is constructed upstream from the verified canonical
+    unit identity, so a returned page proves existence and relation membership.
+    Property names and approval semantics are not inferred here: those require a
+    separately verified source-schema mapping.
+    """
+    page_id = _required_record_text(record.get("id"), "Notion page id")
+    properties = record.get("properties")
+    if not isinstance(properties, Mapping):
+        raise CurriculumReadError("raw Notion asset is missing properties")
+    return {
+        "asset_id": page_id,
+        "page_id": page_id,
+        "exists": True,
+        "approved_for_requested_use": False,
+        "approved_student_reuse": False,
+        "canonical_unit_relation": True,
+        "source_revision": record.get("last_edited_time") or 1,
+    }
+
+
+def _normalize_raw_notion_owner(record: Mapping[str, object]) -> dict[str, object]:
+    """Fail closed until an exact source-specific owner schema is verified."""
+    _required_record_text(record.get("id"), "Notion page id")
+    if not isinstance(record.get("properties"), Mapping):
+        raise CurriculumReadError("raw Notion owner evidence is missing properties")
+    raise CurriculumReadError(
+        "raw Notion owner evidence requires a verified provider-neutral schema mapping"
+    )
+
+
+def _required_record_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise CurriculumReadError(f"missing required {field}")
+    return value.strip()
 
 
 def _compact_notion_id(value: str) -> str:
