@@ -329,3 +329,87 @@ def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None
         "steps.codespaces.outputs.selected != 'true' }}"
         in workflow
     )
+
+
+def test_2944_ssh_start_timeout_alone_admits_gce_fallback() -> None:
+    from workflow_scheduler.governance.dev_validation_codespaces import (
+        _ssh_start_failed_before_execution,
+    )
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    base = {
+        "schema_version": "1.0",
+        "status": "needs-decision",
+        "reason_codes": ["dev-validation-codespaces-ssh-failed"],
+        "ssh_exit_code": 1,
+        "ssh_stdout_tail": "",
+        "ssh_stderr_tail": (
+            "error connecting to codespace: timed out while waiting "
+            "for the codespace to start"
+        ),
+        "workspace_side_effects_performed": False,
+        "tested_sha": request.source_sha,
+    }
+    assert _ssh_start_failed_before_execution(base)
+    for patch in (
+        {"ssh_stderr_tail": "remote command failed"},
+        {"ssh_stdout_tail": "remote command started"},
+        {"ssh_exit_code": 2},
+        {"workspace_side_effects_performed": True},
+        {"reason_codes": ["dev-validation-codespaces-frame-invalid"]},
+    ):
+        assert not _ssh_start_failed_before_execution({**base, **patch})
+
+
+def test_2944_prestart_timeout_projects_fallback_without_stale_result(
+    monkeypatch, tmp_path,
+) -> None:
+    from dataclasses import asdict
+    from workflow_scheduler.governance import dev_validation_codespaces as provider
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    monkeypatch.setattr(
+        provider, "select_codespaces_dev_validation",
+        lambda ingress: (provider._route(True, "codespaces-capable", state="Available"), request),
+    )
+    monkeypatch.setattr(
+        provider, "run_dev_validation_over_codespaces",
+        lambda unused: {
+            **provider._failure(request, "dev-validation-codespaces-ssh-failed"),
+            "ssh_exit_code": 1,
+            "ssh_stderr_tail": (
+                "error connecting to codespace: timed out while waiting "
+                "for the codespace to start"
+            ),
+        },
+    )
+    transport = tmp_path / "transport.json"
+    transport.write_text(json.dumps(asdict(_ingress())), encoding="utf-8")
+    route_path = tmp_path / "route.json"
+    result_path = tmp_path / "result.json"
+    assert provider.main([
+        "--transport", str(transport),
+        "--route-output", str(route_path),
+        "--result-output", str(result_path),
+    ]) == 0
+    route = json.loads(route_path.read_text(encoding="utf-8"))
+    assert route["selected"] is False
+    assert route["reason_codes"] == ["codespaces-ssh-start-timeout-fallback"]
+    assert route["codespaces_failure_reason"] == "dev-validation-codespaces-ssh-failed"
+    assert route["tested_sha"] == SHA
+    assert route["validation_id"] == VALIDATION_ID
+    assert route["ssh_exit_code"] == 1
+    assert route["cleanup_complete"] is False
+    assert not result_path.exists()
