@@ -117,7 +117,7 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 
 @mcp.tool()
-def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]], branch_exists: bool = False) -> dict[str, object]:
+def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]], changed_files: int, in_scope_changed_files: int, branch_exists: bool = False, canonical_no_diff_permitted: bool = False) -> dict[str, object]:
     """Classify create/reuse/conflict immediately before Draft PR materialization."""
     claims = tuple(
         ActivePrimaryPr(
@@ -132,7 +132,10 @@ def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool,
         issue_open=issue_open,
         evidence_current=evidence_current,
         active_primary_prs=claims,
+        changed_files=changed_files,
+        in_scope_changed_files=in_scope_changed_files,
         branch_exists=branch_exists,
+        canonical_no_diff_permitted=canonical_no_diff_permitted,
     )
     return {
         "action": result.action.value,
@@ -151,7 +154,10 @@ def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object
             issue_number=item["issue_number"],
             issue_open=item["issue_open"],
             objective_ref=item["objective_ref"],
+            changed_files=item["changed_files"],
+            in_scope_changed_files=item["in_scope_changed_files"],
             branch_exists=item.get("branch_exists", False),
+            canonical_no_diff_permitted=item.get("canonical_no_diff_permitted", False),
             active_primary_prs=tuple(
                 ActivePrimaryPr(
                     pull_request_number=claim["pull_request_number"],

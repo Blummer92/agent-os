@@ -53,13 +53,27 @@ def evaluate_primary_pr_creation_admission(
     issue_open: bool,
     evidence_current: bool,
     active_primary_prs: tuple[ActivePrimaryPr, ...],
+    changed_files: int,
+    in_scope_changed_files: int,
     branch_exists: bool = False,
+    canonical_no_diff_permitted: bool = False,
 ) -> PrimaryPrCreationAdmission:
     """Classify create/reuse/conflict from fresh canonical primary-PR evidence."""
     if type(issue_number) is not int or issue_number < 1:
         raise TypeError("issue_number must be a positive built-in integer")
-    if type(issue_open) is not bool or type(evidence_current) is not bool or type(branch_exists) is not bool:
-        raise TypeError("issue_open, evidence_current, and branch_exists must be built-in bools")
+    if (
+        type(issue_open) is not bool
+        or type(evidence_current) is not bool
+        or type(branch_exists) is not bool
+        or type(canonical_no_diff_permitted) is not bool
+    ):
+        raise TypeError("issue_open, evidence_current, branch_exists, and canonical_no_diff_permitted must be built-in bools")
+    if type(changed_files) is not int or changed_files < 0:
+        raise TypeError("changed_files must be a non-negative built-in integer")
+    if type(in_scope_changed_files) is not int or in_scope_changed_files < 0:
+        raise TypeError("in_scope_changed_files must be a non-negative built-in integer")
+    if in_scope_changed_files > changed_files:
+        raise ValueError("in_scope_changed_files cannot exceed changed_files")
     if type(active_primary_prs) is not tuple or any(
         type(item) is not ActivePrimaryPr for item in active_primary_prs
     ):
@@ -87,6 +101,18 @@ def evaluate_primary_pr_creation_admission(
             existing_pull_request_number=None,
             reason_codes=("primary-pr.branch-without-active-pr",),
         )
+    if not ordered and changed_files == 0 and not canonical_no_diff_permitted:
+        return PrimaryPrCreationAdmission(
+            action=PrimaryPrCreationAction.MANUAL_RECONCILIATION,
+            existing_pull_request_number=None,
+            reason_codes=("primary-pr.empty-implementation-diff",),
+        )
+    if not ordered and changed_files > 0 and in_scope_changed_files == 0:
+        return PrimaryPrCreationAdmission(
+            action=PrimaryPrCreationAction.MANUAL_RECONCILIATION,
+            existing_pull_request_number=None,
+            reason_codes=("primary-pr.no-in-scope-diff",),
+        )
     if not ordered:
         return PrimaryPrCreationAdmission(
             action=PrimaryPrCreationAction.CREATE_PRIMARY_PR,
@@ -113,14 +139,27 @@ class BatchIssuePrimaryPrEvidence:
     issue_number: int
     issue_open: bool
     objective_ref: str
+    changed_files: int
+    in_scope_changed_files: int
     active_primary_prs: tuple[ActivePrimaryPr, ...] = ()
     branch_exists: bool = False
+    canonical_no_diff_permitted: bool = False
 
     def __post_init__(self) -> None:
         if type(self.issue_number) is not int or self.issue_number < 1:
             raise TypeError("issue_number must be a positive built-in integer")
-        if type(self.issue_open) is not bool or type(self.branch_exists) is not bool:
-            raise TypeError("issue_open and branch_exists must be built-in bools")
+        if (
+            type(self.issue_open) is not bool
+            or type(self.branch_exists) is not bool
+            or type(self.canonical_no_diff_permitted) is not bool
+        ):
+            raise TypeError("issue_open, branch_exists, and canonical_no_diff_permitted must be built-in bools")
+        if type(self.changed_files) is not int or self.changed_files < 0:
+            raise TypeError("changed_files must be a non-negative built-in integer")
+        if type(self.in_scope_changed_files) is not int or self.in_scope_changed_files < 0:
+            raise TypeError("in_scope_changed_files must be a non-negative built-in integer")
+        if self.in_scope_changed_files > self.changed_files:
+            raise ValueError("in_scope_changed_files cannot exceed changed_files")
         if type(self.objective_ref) is not str or not self.objective_ref:
             raise ValueError("objective_ref must be non-empty canonical issue objective evidence")
         if type(self.active_primary_prs) is not tuple or any(
@@ -171,7 +210,10 @@ def evaluate_batch_primary_pr_packaging(
                 issue_open=item.issue_open,
                 evidence_current=evidence_current,
                 active_primary_prs=item.active_primary_prs,
+                changed_files=item.changed_files,
+                in_scope_changed_files=item.in_scope_changed_files,
                 branch_exists=item.branch_exists,
+                canonical_no_diff_permitted=item.canonical_no_diff_permitted,
             ),
         )
         for item in ordered
