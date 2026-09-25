@@ -329,7 +329,7 @@ def _normalize_raw_notion_asset(record: Mapping[str, object]) -> dict[str, objec
         "approved_for_requested_use": False,
         "approved_student_reuse": False,
         "canonical_unit_relation": True,
-        "source_revision": record.get("last_edited_time") or 1,
+        "source_revision": 1,
     }
 
 

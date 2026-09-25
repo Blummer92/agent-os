@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
 import pytest
 
 from scripts.agent_os_notion_read_request import binding_verification as binding_verification_module
+from scripts.agent_os_notion_read_request import parse_catalog
 from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
@@ -27,6 +29,27 @@ from scripts.agent_os_notion_read_request.binding_verification import (
 )
 from scripts.agent_os_notion_read_request.models import NotionReadRequestError
 from tests.agent_os_notion_read_request.notion_read_support import ACTOR, REPOSITORY, transport
+
+
+@pytest.fixture
+def staged_candy_catalog(monkeypatch):
+    """Recreate the pre-promotion Candy state for verifier regression tests."""
+
+    catalog_path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "agent_os_notion_read_request"
+        / "notion_read_catalog.json"
+    )
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    staged = copy.deepcopy(payload)
+    for unit in staged["canonical_units"]:
+        if unit["canonical_unit_key"] == "candy-branding":
+            unit["provider_page_id"] = None
+            unit["verification_state"] = "unverified"
+    catalog = parse_catalog(staged)
+    monkeypatch.setattr(binding_verification_module, "load_catalog", lambda: catalog)
+    return catalog
 
 
 class VerificationAdapter:
@@ -177,7 +200,7 @@ class CandyVerificationAdapter:
 
 
 
-def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
+def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy_catalog) -> None:
     adapter = CandyVerificationAdapter(
         [
             {
@@ -224,9 +247,7 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only() -> None:
         ("First Title", "Second Title"),
     ),
 )
-def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(
-    title_properties,
-) -> None:
+def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(title_properties, staged_candy_catalog) -> None:
     with pytest.raises(
         NotionReadRequestError,
         match="exactly one title property",
@@ -241,7 +262,7 @@ def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(
         )
 
 
-def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch() -> None:
+def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch(staged_candy_catalog) -> None:
     with pytest.raises(
         NotionReadRequestError,
         match="data source identity mismatch",
@@ -266,7 +287,7 @@ def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch() 
         ],
     ),
 )
-def test_candy_binding_missing_or_ambiguous_fails_closed(results) -> None:
+def test_candy_binding_missing_or_ambiguous_fails_closed(results, staged_candy_catalog) -> None:
     with pytest.raises(
         NotionReadRequestError,
         match="identity is missing or ambiguous",
@@ -278,7 +299,7 @@ def test_candy_binding_missing_or_ambiguous_fails_closed(results) -> None:
         )
 
 
-def test_candy_verification_admission_is_finite_and_read_only() -> None:
+def test_candy_verification_admission_is_finite_and_read_only(staged_candy_catalog) -> None:
     decision = admit_binding_verification_request(
         transport(
             request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
@@ -307,9 +328,7 @@ def test_candy_verification_admission_is_finite_and_read_only() -> None:
         ({"request_id": "verify-something-else"}, "verification-request-mismatch"),
     ),
 )
-def test_candy_verification_admission_rejects_broadened_envelopes(
-    overrides, reason
-) -> None:
+def test_candy_verification_admission_rejects_broadened_envelopes(overrides, reason, staged_candy_catalog) -> None:
     payload = {
         "request_id": CANDY_BRANDING_VERIFICATION_REQUEST_ID,
         "issue_number": CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
@@ -325,7 +344,7 @@ def test_candy_verification_admission_rejects_broadened_envelopes(
     assert decision["secret_dispatch_authorized"] is False
 
 
-def test_candy_binding_archived_or_trashed_fails_closed() -> None:
+def test_candy_binding_archived_or_trashed_fails_closed(staged_candy_catalog) -> None:
     for state in (
         {"archived": True, "in_trash": False},
         {"archived": False, "in_trash": True},
@@ -403,14 +422,20 @@ def test_unregistered_or_ineligible_general_verifier_ids_fail_closed(request_id)
     assert decision["secret_dispatch_authorized"] is False
 
 
-def test_shipped_additional_units_remain_non_dispatchable_before_live_binding() -> None:
+def test_shipped_catalog_promotes_only_freshly_verified_candy_binding() -> None:
     catalog = binding_verification_module.load_catalog()
-    for key in ("candy-branding", "motion-typography"):
-        unit = catalog.canonical_unit(key)
-        assert unit is not None
-        assert unit.verification_state == "unverified"
-        assert unit.provider_page_id is None
-        assert unit.dispatchable is False
+
+    candy = catalog.canonical_unit("candy-branding")
+    assert candy is not None
+    assert candy.provider_page_id == "3907ac78-3131-8132-8f84-f9fd633acba5"
+    assert candy.verification_state == "verified-current"
+    assert candy.dispatchable is True
+
+    motion = catalog.canonical_unit("motion-typography")
+    assert motion is not None
+    assert motion.provider_page_id is None
+    assert motion.verification_state == "unverified"
+    assert motion.dispatchable is False
 
 
 def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
@@ -436,9 +461,7 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
     )
 
 
-def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
-    tmp_path, monkeypatch
-) -> None:
+def test_candy_cli_uses_existing_adapter_and_verified_registry_source(tmp_path, monkeypatch, staged_candy_catalog) -> None:
     canonical_source = binding_verification_module.load_catalog().source("canonical-unit")
     assert canonical_source is not None
     assert canonical_source.data_source_id is not None

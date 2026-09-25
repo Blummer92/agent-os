@@ -31,7 +31,7 @@ def _packet() -> dict:
             {"run_id": "run/2", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 43, "elapsed_minutes": 52, "context_ref": "context/b"},
             {"run_id": "run/3", "objective_ref": "objective/other", "work_mode": "camera", "quality": "usable", "active_minutes": 20, "elapsed_minutes": 40, "context_ref": "context/c"},
         ],
-        "observation_quality": {"status": "usable"},
+        "observation_quality": {"status": "usable", "reason_codes": []},
         "privacy_disposition": "eligible",
         "demand_profile": diagnosis,
         "implementation_stage": "teacher-advisory",
@@ -231,6 +231,7 @@ def test_conflicting_duplicate_prior_run_identity_fails_closed() -> None:
     assert result.reason_codes == ("handoff-duplicate",)
 
 
+
 def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
     packet = _packet()
     packet["prior_runs"] = []
@@ -239,3 +240,34 @@ def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
     assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
     assert payload["routing_recommendation"] == "hold"
     assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
+
+
+def _with_observation(**observation) -> dict:
+    packet = _packet()
+    packet["observation_quality"] = observation
+    return packet
+
+
+def test_observation_quality_unknown_fields_fail_closed() -> None:
+    result = evaluate_lesson_pacing(_with_observation(status="usable", reason_codes=[], contradictory=True))
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-unknown-field",)
+
+
+def test_observer_disagreement_cannot_produce_proceed_to_owner_review() -> None:
+    payload = _payload(evaluate_lesson_pacing(_with_observation(status="usable", reason_codes=["lp-observation-observer-disagreement"])))
+    assert payload["routing_recommendation"] == "hold"
+    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
+    assert "lp-observation-observer-disagreement" in payload["unresolved_uncertainties"]
+
+
+def test_unusable_late_observation_holds() -> None:
+    payload = _payload(evaluate_lesson_pacing(_with_observation(status="too-late", reason_codes=["lp-observation-recorded-too-late"])))
+    assert payload["routing_recommendation"] == "hold"
+    assert "lp-evidence-observation-quality-unusable" in payload["unresolved_uncertainties"]
+    assert "lp-observation-recorded-too-late" in payload["unresolved_uncertainties"]
+
+
+def test_canonical_usable_lp14_projection_is_consumed() -> None:
+    payload = _payload(evaluate_lesson_pacing(_with_observation(status="usable", reason_codes=[])))
+    assert payload["routing_recommendation"] != "hold"
