@@ -2,8 +2,8 @@
 
 Operator guide for issue #891's persistent Agent OS execution profile
 (design approved in #857), extended additively by #972 and #2307. Config:
-`.devcontainer/devcontainer.json`, `.devcontainer/post-create.sh`, and
-`scripts/agent-os-environment-health.py`.
+`.devcontainer/devcontainer.json`, `.devcontainer/Dockerfile`,
+`.devcontainer/post-create.sh`, and `scripts/agent-os-environment-health.py`.
 
 ## Create the Codespace
 
@@ -34,10 +34,14 @@ After creating or rebuilding the exact profile, the bounded health probe is:
 gh codespace ssh -c <codespace> -- "cd /workspaces/agent-os && python3 scripts/agent-os-environment-health.py"
 ```
 
-Closed PR #1215 remains historical qualification evidence. Its local Dockerfile
-workaround for a then-stale inherited Yarn apt source is not part of #2307 unless
-current Codespaces build evidence reproduces that failure. Do not add historical
-base-image workarounds speculatively.
+The 2026-09-25 creation log on `main` reproduces the same failure recorded in
+Closed PR #1215: the official `sshd` feature runs `apt-get update`, which exits
+100 because the inherited Yarn apt source lacks signing key
+`62D54FD4003F6525`. Codespaces then launches its recovery container.
+The local Dockerfile keeps the existing Python 3.11 Bookworm image and removes
+only `/etc/apt/sources.list.d/yarn.list` before features install. It adds no
+replacement key, package, or repository. Rebuild the current Codespace after
+this repair reaches its branch; a recovery-container health result is invalid.
 
 ## Environment health check
 
