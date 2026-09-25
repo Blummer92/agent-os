@@ -234,6 +234,27 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
     assert state.record.to_dict()["assets"]["approved_reusable_student_facing_exists"] is False
 
 
+
+def test_raw_notion_visual_asset_zero_match_stays_explicitly_empty() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        return {"results": []}
+
+    packet = orchestrate_curriculum_evidence(
+        request=CurriculumReadRequest("images", "images"),
+        canonical_unit=unit(),
+        resolve_identity=identity,
+        execute_read=reader,
+    )
+
+    assert packet["asset_evidence"] == []
+    state = resolve_current_curriculum_state(packet)
+    assert state.record is not None
+    assert state.record.to_dict()["assets"]["matching_asset_exists"] is False
+
+
+
 def test_raw_notion_asset_missing_properties_fails_closed_instead_of_looking_empty() -> None:
     def reader(step, payload):
         if step.logical_source == CANONICAL_UNIT:
