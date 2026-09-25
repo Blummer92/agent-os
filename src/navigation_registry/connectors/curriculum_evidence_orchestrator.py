@@ -255,9 +255,10 @@ def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str,
     assets: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        asset_id = record.get("asset_id")
-        if not isinstance(asset_id, str) or not asset_id:
-            continue
+        if _is_raw_notion_page(record):
+            record = _normalize_raw_notion_asset(record)
+
+        asset_id = _required_record_text(record.get("asset_id"), "asset_id")
         exists = record.get("exists", True)
         approved_for_requested_use = record.get("approved_for_requested_use", False)
         approved_student_reuse = record.get("approved_student_reuse", False)
@@ -296,14 +297,110 @@ def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str,
     owners: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        evidence_id = record.get("evidence_id")
-        decision_key = record.get("decision_key")
-        if not isinstance(evidence_id, str) or not evidence_id:
-            continue
-        if not isinstance(decision_key, str) or not decision_key:
-            continue
+        if _is_raw_notion_page(record):
+            record = _normalize_raw_notion_owner(record)
+
+        _required_record_text(record.get("evidence_id"), "evidence_id")
+        _required_record_text(record.get("decision_key"), "decision_key")
         owners.append(record)
     return owners
+
+
+def _is_raw_notion_page(record: Mapping[str, object]) -> bool:
+    return isinstance(record.get("id"), str) and isinstance(record.get("properties"), Mapping)
+
+
+def _normalize_raw_notion_asset(record: Mapping[str, object]) -> dict[str, object]:
+    page_id = _required_record_text(record.get("id"), "Notion page id")
+    properties = _notion_properties(record)
+    drive_file_id = _notion_property_text(properties, "Drive File ID")
+    if not drive_file_id:
+        raise CurriculumReadError("raw Notion asset is missing required Drive File ID")
+
+    approved_use = (_notion_property_text(properties, "Approved Use") or "").casefold()
+    human_review_status = (
+        _notion_property_text(properties, "Human Review Status") or ""
+    ).casefold()
+    return {
+        "asset_id": page_id,
+        "page_id": page_id,
+        "drive_file_id": drive_file_id,
+        "exists": True,
+        "approved_for_requested_use": approved_use == "approved",
+        "approved_student_reuse": approved_use == "approved",
+        "canonical_unit_relation": True,
+        "source_revision": record.get("last_edited_time") or 1,
+        "human_review_required": human_review_status not in {"reviewed", "approved"},
+    }
+
+
+def _normalize_raw_notion_owner(record: Mapping[str, object]) -> dict[str, object]:
+    page_id = _required_record_text(record.get("id"), "Notion page id")
+    properties = _notion_properties(record)
+    evidence_id = _notion_property_text(properties, "Evidence ID") or page_id
+    decision_key = _notion_property_text(properties, "Decision Key")
+    if not decision_key:
+        raise CurriculumReadError("raw Notion owner evidence is missing required Decision Key")
+    return {
+        "evidence_id": evidence_id,
+        "decision_key": decision_key,
+        "owner": _notion_property_text(properties, "Owner"),
+        "value": _notion_property_text(properties, "Value"),
+        "source_revision": record.get("last_edited_time") or 1,
+    }
+
+
+def _notion_properties(record: Mapping[str, object]) -> Mapping[str, object]:
+    properties = record.get("properties")
+    if not isinstance(properties, Mapping):
+        raise CurriculumReadError("raw Notion page is missing properties")
+    return properties
+
+
+def _notion_property_text(
+    properties: Mapping[str, object],
+    property_name: str,
+) -> str | None:
+    value = properties.get(property_name)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise CurriculumReadError(f"malformed Notion property {property_name}")
+
+    property_type = value.get("type")
+    if property_type in {"title", "rich_text"}:
+        items = value.get(property_type)
+        if not isinstance(items, list):
+            raise CurriculumReadError(f"malformed Notion property {property_name}")
+        fragments: list[str] = []
+        for item in items:
+            if not isinstance(item, Mapping) or not isinstance(item.get("plain_text"), str):
+                raise CurriculumReadError(f"malformed Notion property {property_name}")
+            fragments.append(str(item["plain_text"]))
+        return "".join(fragments).strip() or None
+    if property_type in {"select", "status"}:
+        selected = value.get(property_type)
+        if selected is None:
+            return None
+        if not isinstance(selected, Mapping) or not isinstance(selected.get("name"), str):
+            raise CurriculumReadError(f"malformed Notion property {property_name}")
+        return str(selected["name"]).strip() or None
+    if property_type == "url":
+        url = value.get("url")
+        if url is None:
+            return None
+        if not isinstance(url, str):
+            raise CurriculumReadError(f"malformed Notion property {property_name}")
+        return url.strip() or None
+    raise CurriculumReadError(
+        f"unsupported Notion property type for {property_name}: {property_type!r}"
+    )
+
+
+def _required_record_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise CurriculumReadError(f"missing required {field}")
+    return value.strip()
 
 
 def _compact_notion_id(value: str) -> str:
