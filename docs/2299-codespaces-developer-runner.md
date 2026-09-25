@@ -118,6 +118,17 @@ continue the parent mission without owner copy/paste. This result publication is
 separate from developer-validation success and creates no implementation, merge,
 closure, production, credential, or browser-mutation authority.
 
+## Developer-validation SSH start timeout (#2944)
+
+For the developer-validation operation only, the exact `gh codespace ssh`
+error `timed out while waiting for the codespace to start` (exit 1 with no
+remote stdout) proves that the remote command did not begin. The route records
+the requested SHA, validation identity, SSH exit code, and bounded reason,
+then sets `selected=false` so the existing governed GCE fallback can run.
+Other SSH failures, remote-result errors, and the read-only diagnostic operation
+remain fail closed. The GCE result replaces the provisional developer-validation
+result; the Codespaces reason remains in the route artifact.
+
 ## Persistence and continuation
 
 Codespaces repository/worktree files may persist across stop/start, while running
