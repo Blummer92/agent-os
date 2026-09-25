@@ -8,7 +8,9 @@ or lifecycle mutation.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -127,6 +129,41 @@ emit(result)
 '''
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _attach_invocation_metadata(
+    evidence: dict[str, object],
+    *,
+    started_at: str,
+) -> dict[str, object]:
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT")
+    safe_run_id = int(run_id) if type(run_id) is str and run_id.isdigit() else None
+    safe_attempt = (
+        int(run_attempt)
+        if type(run_attempt) is str and run_attempt.isdigit()
+        else None
+    )
+    evidence.update(
+        {
+            "started_at": started_at,
+            "finished_at": _utc_now(),
+            "workflow_run_id": safe_run_id,
+            "workflow_run_attempt": safe_attempt,
+            "workflow_name": "Agent OS Governed Invocation Ingress",
+            "workflow_job_name": "Validate and transport bounded Agent OS invocation",
+            "artifact_name": (
+                f"agent-os-ingress-{safe_run_id}-{safe_attempt}"
+                if safe_run_id is not None and safe_attempt is not None
+                else None
+            ),
+        }
+    )
+    return evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--result-output", type=Path, required=True)
     args = parser.parse_args(argv)
 
+    started_at = _utc_now()
     ingress = _ingress_from_file(args.transport)
     route, request = select_codespaces_diagnostic(ingress)
     args.route_output.parent.mkdir(parents=True, exist_ok=True)
@@ -429,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
             if route["selected"] is True
             else _failure(request, str(route["reason_codes"][0]))
         )
+        evidence = _attach_invocation_metadata(evidence, started_at=started_at)
         args.result_output.write_text(
             json.dumps({"diagnostic": evidence}, sort_keys=True, separators=(",", ":"))
             + "\n",
