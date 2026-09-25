@@ -331,9 +331,9 @@ jobs:
               summary.write("## Agent OS governed invocation\n\n")
               if codespaces_route_path.exists():
                   route = json.loads(codespaces_route_path.read_text(encoding="utf-8"))
-                  summary.write(f"Codespaces selected: \`{route.get('selected')}\`\n\n")
-                  summary.write(f"Codespaces reasons: \`{','.join(route.get('reason_codes', []))}\`\n\n")
-                  summary.write(f"Codespaces surface: \`{route.get('execution_surface_id')}\`\n\n")
+                  summary.write(f"Codespaces selected: `{route.get('selected')}`\n\n")
+                  summary.write(f"Codespaces reasons: `{','.join(route.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Codespaces surface: `{route.get('execution_surface_id')}`\n\n")
               if transport_path.exists():
                   transport = json.loads(transport_path.read_text(encoding="utf-8"))
                   summary.write(f"Transport: `{transport['status']}` / `{transport['reason']}`\n\n")
