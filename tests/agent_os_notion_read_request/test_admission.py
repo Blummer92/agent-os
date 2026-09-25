@@ -128,7 +128,7 @@ def test_arbitrary_notion_identities_cannot_become_request_identities(
 
 
 
-def test_shipped_candy_branding_request_fails_closed_until_live_binding_is_verified(
+def test_shipped_candy_branding_request_uses_fresh_verified_binding(
     shipped_catalog,
 ) -> None:
     decision = admit(
@@ -139,9 +139,14 @@ def test_shipped_candy_branding_request_fails_closed_until_live_binding_is_verif
         shipped_catalog,
     )
 
-    assert decision.status == "rejected"
-    assert decision.reason_codes == ("canonical-unit-unverified",)
-    assert decision.secret_dispatch_authorized is False
+    assert decision.status == "admitted"
+    assert decision.reason_codes == ("admitted",)
+    assert decision.canonical_unit_key == "candy-branding"
+    assert decision.required_logical_sources == (
+        "canonical-unit",
+        "visual-asset-library",
+    )
+    assert decision.secret_dispatch_authorized is True
 
 
 def test_verified_candy_branding_binding_uses_existing_visual_asset_read_plan(
@@ -190,20 +195,24 @@ def test_unregistered_candy_branding_request_ids_still_fail_closed(
     assert decision.reason_codes == ("request-id-unknown",)
     assert decision.secret_dispatch_authorized is False
 
-def test_staged_current_curriculum_requests_fail_closed_until_unit_binding_is_verified(
+def test_staged_current_curriculum_requests_fail_closed_at_their_current_gate(
     shipped_catalog,
 ) -> None:
-    for request_id in (
-        "candy-branding-current-curriculum",
-        "motion-typography-current-curriculum",
-    ):
-        decision = admit(
-            transport(request_id=request_id, issue_number=2816),
-            shipped_catalog,
-        )
-        assert decision.status == "rejected"
-        assert decision.reason_codes == ("canonical-unit-unverified",)
-        assert decision.secret_dispatch_authorized is False
+    candy = admit(
+        transport(request_id="candy-branding-current-curriculum", issue_number=2816),
+        shipped_catalog,
+    )
+    assert candy.status == "rejected"
+    assert candy.reason_codes == ("source-not-allowlisted",)
+    assert candy.secret_dispatch_authorized is False
+
+    motion = admit(
+        transport(request_id="motion-typography-current-curriculum", issue_number=2816),
+        shipped_catalog,
+    )
+    assert motion.status == "rejected"
+    assert motion.reason_codes == ("canonical-unit-unverified",)
+    assert motion.secret_dispatch_authorized is False
 
 
 def test_motion_typography_current_curriculum_reuses_existing_source_gate(
