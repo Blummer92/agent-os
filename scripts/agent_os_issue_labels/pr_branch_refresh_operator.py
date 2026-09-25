@@ -97,28 +97,28 @@ def _output(value: object) -> str:
 
 _REFRESH_VALIDATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "pytest:pr-branch-refresh": (
-        ".venv/bin/python",
+        "python3",
         "-m",
         "pytest",
         "tests/agent_os_issue_labels/test_pr_branch_refresh.py",
         "-q",
     ),
     "pytest:pr-branch-refresh-provider": (
-        ".venv/bin/python",
+        "python3",
         "-m",
         "pytest",
         "tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py",
         "-q",
     ),
     "pytest:branch-update": (
-        ".venv/bin/python",
+        "python3",
         "-m",
         "pytest",
         "tests/agent_os_github_git_objects/test_branch_update.py",
         "-q",
     ),
     "pytest:pr-lifecycle": (
-        ".venv/bin/python",
+        "python3",
         "-m",
         "pytest",
         "tests/agent_os_issue_labels/test_pr_lifecycle.py",
