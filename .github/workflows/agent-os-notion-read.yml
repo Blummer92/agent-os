@@ -42,13 +42,13 @@ jobs:
               load_catalog,
           )
           from scripts.agent_os_notion_read_request.binding_verification import (
+              BINDING_VERIFICATION_REQUEST_IDS,
               admit_binding_verification_request,
-              is_binding_verification_request_id,
           )
 
           root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-notion-read"
           transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
-          if is_binding_verification_request_id(transport.get("notion_read_request_id_or_none")):
+          if transport.get("notion_read_request_id_or_none") in BINDING_VERIFICATION_REQUEST_IDS:
               decision = admit_binding_verification_request(
                   transport,
                   expected_repository=os.environ["GITHUB_REPOSITORY"],
@@ -73,7 +73,7 @@ jobs:
               )
               output.write(
                   "binding_verification="
-                  + ("true" if is_binding_verification_request_id(decision.get("request_id")) else "false")
+                  + ("true" if decision.get("request_id") in BINDING_VERIFICATION_REQUEST_IDS else "false")
                   + "\n"
               )
           PY
