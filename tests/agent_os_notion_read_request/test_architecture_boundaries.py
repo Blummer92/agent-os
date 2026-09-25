@@ -119,12 +119,17 @@ def test_shipped_catalog_preserves_verified_sources_and_fail_closed_unit_binding
     assert photography.provider_page_id is not None
     assert photography.dispatchable is True
 
-    for key in ("candy-branding", "motion-typography"):
-        staged = by_key[key]
-        assert staged.verification_state == "unverified"
-        assert staged.provider_page_id is None
-        assert staged.verification_title is not None
-        assert staged.dispatchable is False
+    candy = by_key["candy-branding"]
+    assert candy.verification_state == "verified-current"
+    assert candy.provider_page_id == "3907ac78-3131-8132-8f84-f9fd633acba5"
+    assert candy.verification_title is not None
+    assert candy.dispatchable is True
+
+    motion = by_key["motion-typography"]
+    assert motion.verification_state == "unverified"
+    assert motion.provider_page_id is None
+    assert motion.verification_title is not None
+    assert motion.dispatchable is False
 
 
 def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
@@ -132,10 +137,10 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
     for verified in ("da5cba48-50fd-4377-9790-8df8f6f2c7dd","c5b202aa-83d1-4cc4-9992-f98af648e461","3907ac78-3131-8129-8c73-cd9f6b8e8a7d"):
         assert verified in raw
     assert "f7f22d33-e1ef-4932-b294-cbe39b24a39a" not in raw
-    # Historical/export evidence for Candy Branding must never be promoted into
-    # the executable catalog before the bounded live verification step.
+    # The only Candy identity allowed in the executable catalog is the exact
+    # dashed page id returned by the bounded live verification on #2816.
     assert "3907ac78313181328f84f9fd633acba5" not in raw
-    assert "3907ac78-3131-8132-8f84-f9fd633acba5" not in raw
+    assert raw.count("3907ac78-3131-8132-8f84-f9fd633acba5") == 1
     assert "notion.so" not in raw; assert "https://" not in raw
 
 
