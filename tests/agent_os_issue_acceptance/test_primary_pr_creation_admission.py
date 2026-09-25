@@ -220,8 +220,6 @@ def test_shared_objective_cannot_be_asserted_without_canonical_evidence() -> Non
             changed_files=1,
             in_scope_changed_files=1,
             active_primary_prs=(),
-        changed_files=1,
-        in_scope_changed_files=1,
         )
     except ValueError as exc:
         assert "objective_ref" in str(exc)
