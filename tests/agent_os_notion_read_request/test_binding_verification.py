@@ -442,7 +442,7 @@ def test_shipped_catalog_promotes_only_freshly_verified_candy_binding() -> None:
 
 def test_binding_verification_routing_is_derived_from_finite_catalog() -> None:
     assert is_binding_verification_request_id(VERIFICATION_REQUEST_ID) is True
-    assert is_binding_verification_request_id(CANDY_BRANDING_VERIFICATION_REQUEST_ID) is True
+    assert is_binding_verification_request_id(CANDY_BRANDING_VERIFICATION_REQUEST_ID) is False
     assert is_binding_verification_request_id("verify-motion-typography-binding") is True
     for request_id in (
         "verify-unknown-unit-binding",
