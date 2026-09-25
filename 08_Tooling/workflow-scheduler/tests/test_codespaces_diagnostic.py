@@ -7,6 +7,7 @@ from pathlib import Path
 from workflow_scheduler.governance.codespaces_diagnostic import (
     DIAGNOSTIC_ID,
     _RUN_TIMEOUT_SECONDS,
+    _attach_invocation_metadata,
     run_codespaces_diagnostic,
     select_codespaces_diagnostic,
 )
@@ -289,3 +290,35 @@ def test_workflow_handles_diagnostic_without_gce_fallback() -> None:
     assert "codespaces-diagnostic-route.json" in workflow
     assert "Diagnostic status:" in workflow
     assert "actions/upload-artifact@v7" in workflow
+
+
+def test_invocation_metadata_binds_result_to_workflow_artifact(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", "36180000000")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    evidence = _attach_invocation_metadata(
+        {"status": "success"},
+        started_at="2026-09-25T19:30:00Z",
+    )
+    assert evidence["started_at"] == "2026-09-25T19:30:00Z"
+    assert isinstance(evidence["finished_at"], str)
+    assert evidence["finished_at"].endswith("Z")
+    assert evidence["workflow_run_id"] == 36180000000
+    assert evidence["workflow_run_attempt"] == 1
+    assert evidence["workflow_name"] == "Agent OS Governed Invocation Ingress"
+    assert (
+        evidence["workflow_job_name"]
+        == "Validate and transport bounded Agent OS invocation"
+    )
+    assert evidence["artifact_name"] == "agent-os-ingress-36180000000-1"
+
+
+def test_invocation_metadata_fails_closed_when_not_in_actions(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+    evidence = _attach_invocation_metadata(
+        {"status": "needs-decision"},
+        started_at="2026-09-25T19:30:00Z",
+    )
+    assert evidence["workflow_run_id"] is None
+    assert evidence["workflow_run_attempt"] is None
+    assert evidence["artifact_name"] is None
