@@ -226,7 +226,7 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
         "approved_for_requested_use": False,
         "approved_student_reuse": False,
         "exists": True,
-        "source_revision": "2026-09-25T12:00:00Z",
+        "source_revision": 1,
     }]
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
