@@ -440,7 +440,7 @@ def test_workflow_delegates_verifier_classification_to_canonical_helper() -> Non
         'transport.get("notion_read_request_id_or_none")'
         ')' in workflow
     )
-    assert "is_binding_verification_request_id(decision.get("request_id"))" in workflow
+    assert 'is_binding_verification_request_id(decision.get("request_id"))' in workflow
 
 
 def test_candy_cli_uses_existing_adapter_and_verified_registry_source(
