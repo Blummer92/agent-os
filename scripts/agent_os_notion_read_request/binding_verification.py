@@ -42,6 +42,10 @@ CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
+BINDING_VERIFICATION_REQUEST_IDS = (
+    VERIFICATION_REQUEST_ID,
+    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+)
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
@@ -479,6 +483,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "BINDING_VERIFICATION_REQUEST_IDS",
     "is_binding_verification_request_id",
     "CANONICAL_REGISTRY_DATABASE_ID",
     "CANDY_BRANDING_STABLE_ID",
