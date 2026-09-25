@@ -13,6 +13,7 @@ from scripts.agent_os_notion_read_request import parse_catalog
 from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
+    BINDING_VERIFICATION_REQUEST_IDS,
     CANDY_BRANDING_STABLE_ID,
     CANDY_BRANDING_TITLE,
     CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
@@ -22,7 +23,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
-    is_binding_verification_request_id,
     verify_additional_unit_binding,
     verify_candy_branding_binding,
     verify_live_bindings,
@@ -430,27 +430,35 @@ def test_shipped_catalog_promotes_only_freshly_verified_candy_binding() -> None:
     assert candy.provider_page_id == "3907ac78-3131-8132-8f84-f9fd633acba5"
     assert candy.verification_state == "verified-current"
     assert candy.dispatchable is True
-    assert is_binding_verification_request_id("verify-candy-branding-binding") is False
 
     motion = catalog.canonical_unit("motion-typography")
     assert motion is not None
     assert motion.provider_page_id is None
     assert motion.verification_state == "unverified"
     assert motion.dispatchable is False
-    assert is_binding_verification_request_id("verify-motion-typography-binding") is True
 
 
-def test_binding_verification_routing_is_derived_from_finite_catalog() -> None:
-    assert is_binding_verification_request_id(VERIFICATION_REQUEST_ID) is True
-    assert is_binding_verification_request_id(CANDY_BRANDING_VERIFICATION_REQUEST_ID) is False
-    assert is_binding_verification_request_id("verify-motion-typography-binding") is True
-    for request_id in (
-        "verify-unknown-unit-binding",
-        "verify-candy-branding-anything",
-        "motion-typography-canonical-unit",
-        None,
-    ):
-        assert is_binding_verification_request_id(request_id) is False
+def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
+    assert BINDING_VERIFICATION_REQUEST_IDS == (
+        VERIFICATION_REQUEST_ID,
+        CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+    )
+    assert "verify-motion-typography-binding" not in BINDING_VERIFICATION_REQUEST_IDS
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "agent-os-notion-read.yml"
+    ).read_text(encoding="utf-8")
+    assert "BINDING_VERIFICATION_REQUEST_IDS" in workflow
+    assert (
+        'transport.get("notion_read_request_id_or_none") '
+        "in BINDING_VERIFICATION_REQUEST_IDS"
+    ) in workflow
+    assert (
+        'decision.get("request_id") in BINDING_VERIFICATION_REQUEST_IDS'
+        in workflow
+    )
 
 
 def test_candy_cli_uses_existing_adapter_and_verified_registry_source(tmp_path, monkeypatch, staged_candy_catalog) -> None:
