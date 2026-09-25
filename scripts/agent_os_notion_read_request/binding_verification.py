@@ -83,17 +83,6 @@ def _verification_request_spec(
     )
 
 
-def is_binding_verification_request_id(request_id: object) -> bool:
-    """Return whether one finite request id is eligible for binding verification.
-
-    The repository-owned catalog remains the allowlist. This helper intentionally
-    derives eligibility from the same generic request spec used by admission so
-    adding a staged unit never requires a second workflow routing list.
-    """
-
-    return isinstance(request_id, str) and _verification_request_spec(request_id) is not None
-
-
 def _normalize_notion_id(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -484,7 +473,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "BINDING_VERIFICATION_REQUEST_IDS",
-    "is_binding_verification_request_id",
     "CANONICAL_REGISTRY_DATABASE_ID",
     "CANDY_BRANDING_STABLE_ID",
     "CANDY_BRANDING_TITLE",
