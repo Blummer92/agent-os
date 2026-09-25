@@ -40,6 +40,7 @@ def _admission(
     plan_base_sha: str = CURRENT_MAIN,
     evidence_sha: str | None = CURRENT_MAIN,
     changed_files: tuple[str, ...] = AGGREGATE_CHANGES,
+    recovery_requested: bool = False,
 ):
     """Reproduce the workflow gate's composition exactly, offline."""
     plan = select_validation_plan(
@@ -57,6 +58,7 @@ def _admission(
         current_main_sha=CURRENT_MAIN,
         evidence_sha=evidence_sha,
         validation_conclusion=validation_conclusion,
+        recovery_requested=recovery_requested,
     )
     return evaluate_final_validation_admission(
         plan,
@@ -130,6 +132,38 @@ def test_unhealthy_current_main_freezes_the_candidate_aggregate():
 
     assert admission.status == "block"
     assert _main_health_blockers(admission) == ("main-health.exact-main-red",)
+
+
+def test_bounded_recovery_lane_allows_only_explicit_recovery_projection():
+    ordinary = _admission("repository-failure")
+    recovery = _admission("repository-failure", recovery_requested=True)
+
+    assert ordinary.status == "block"
+    assert _main_health_blockers(ordinary) == ("main-health.exact-main-red",)
+    assert recovery.status == "require-aggregate"
+    assert _main_health_blockers(recovery) == ()
+
+
+def test_workflow_recovery_binding_is_finite_self_expiring_and_exact():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert 'recovery_main_sha="5fa6fe672c233344e041cbfeac20cfed20130b69"' in step
+    assert 'recovery_run_job_fragment="/actions/runs/36155587326/job/108139205339"' in step
+    assert 'recovery_pr_number="2937"' in step
+    assert (
+        'recovery_failed_path="tests/test_agent_os_host_runtime_install_workflow.py"'
+        in step
+    )
+    assert '[ "$current_main_sha" = "$recovery_main_sha" ]' in step
+    assert '[ "$PR_NUMBER" = "$recovery_pr_number" ]' in step
+    assert '[ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ]' in step
+    assert '[ "$validation_conclusion" = "repository-failure" ]' in step
+    assert '[[ "$details_url" == *"$recovery_run_job_fragment"* ]]' in step
+    assert 'grep -Fxq "$recovery_failed_path"' in step
+    assert 'recovery_requested=true' in step
+    assert 'recovery_requested=os.environ["RECOVERY_REQUESTED"] == "true"' in step
 
 
 def test_unproven_current_main_evidence_fails_closed():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 from workflow_scheduler.governance.dev_validation import (
     REPOSITORY,
@@ -12,6 +13,7 @@ from workflow_scheduler.governance.dev_validation_codespaces import (
     APPROVED_CODESPACE_NAME,
     APPROVED_CODESPACE_PROFILE_ID,
     APPROVED_CODESPACE_SURFACE_ID,
+    _RUN_TIMEOUT_SECONDS,
     run_dev_validation_over_codespaces,
     select_codespaces_dev_validation,
 )
@@ -19,6 +21,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
     IssueCommentIngressResult,
 )
 
+ROOT = Path(__file__).resolve().parents[3]
 SHA = "a" * 40
 BRANCH = "agent/2931-codespaces-test"
 
@@ -230,6 +233,37 @@ def test_codespaces_ssh_failure_is_fail_closed_and_bounded() -> None:
     assert evidence["ssh_stderr_truncated"] is True
 
 
+def test_codespaces_transport_timeout_returns_bounded_evidence() -> None:
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+
+    def run(argv, *, timeout):
+        assert timeout == _RUN_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(
+            argv,
+            timeout,
+            output="o" * 5000,
+            stderr="e" * 5000,
+        )
+
+    evidence = run_dev_validation_over_codespaces(request, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-transport-timeout"
+    ]
+    assert evidence["ssh_exit_code"] is None
+    assert evidence["transport_timeout_seconds"] == _RUN_TIMEOUT_SECONDS
+    assert len(evidence["ssh_stdout_tail"]) == 4096
+    assert evidence["ssh_stdout_truncated"] is True
+    assert len(evidence["ssh_stderr_tail"]) == 4096
+    assert evidence["ssh_stderr_truncated"] is True
+
+
 def test_codespaces_result_identity_mismatch_is_rejected() -> None:
     request = build_dev_validation_request(
         repository=REPOSITORY,
@@ -279,10 +313,8 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
 
 
 def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
-    from pathlib import Path
-
-    workflow = Path(
-        ".github/workflows/agent-os-governed-invocation.yml"
+    workflow = (
+        ROOT / ".github/workflows/agent-os-governed-invocation.yml"
     ).read_text(encoding="utf-8")
     selected_guard = (
         "steps.transport.outputs.accepted == 'true' && "

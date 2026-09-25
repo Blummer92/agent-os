@@ -424,9 +424,24 @@ jobs:
               ;;
           esac
 
+          recovery_requested=false
+          recovery_main_sha="5fa6fe672c233344e041cbfeac20cfed20130b69"
+          recovery_run_job_fragment="/actions/runs/36155587326/job/108139205339"
+          recovery_pr_number="2937"
+          recovery_failed_path="tests/test_agent_os_host_runtime_install_workflow.py"
+          if [ "$current_main_sha" = "$recovery_main_sha" ] && \
+             [ "$PR_NUMBER" = "$recovery_pr_number" ] && \
+             [ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ] && \
+             [ "$validation_conclusion" = "repository-failure" ] && \
+             [[ "$details_url" == *"$recovery_run_job_fragment"* ]] && \
+             grep -Fxq "$recovery_failed_path" "$RUNNER_TEMP/main-health-changed-files.txt"; then
+            recovery_requested=true
+          fi
+
           export CURRENT_MAIN_SHA="$current_main_sha"
           export EVIDENCE_SHA="$evidence_sha"
           export VALIDATION_CONCLUSION="$validation_conclusion"
+          export RECOVERY_REQUESTED="$recovery_requested"
           export CANDIDATE_BASE_SHA
           export CANDIDATE_HEAD_SHA
           export PR_NUMBER
@@ -475,6 +490,7 @@ jobs:
               current_main_sha=os.environ["CURRENT_MAIN_SHA"],
               evidence_sha=os.environ["EVIDENCE_SHA"] or None,
               validation_conclusion=os.environ["VALIDATION_CONCLUSION"],
+              recovery_requested=os.environ["RECOVERY_REQUESTED"] == "true",
           )
           admission = evaluate_final_validation_admission(
               plan,
