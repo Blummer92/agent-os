@@ -403,20 +403,14 @@ def test_unregistered_or_ineligible_general_verifier_ids_fail_closed(request_id)
     assert decision["secret_dispatch_authorized"] is False
 
 
-def test_shipped_units_reflect_only_freshly_verified_bindings() -> None:
+def test_shipped_additional_units_remain_non_dispatchable_before_live_binding() -> None:
     catalog = binding_verification_module.load_catalog()
-
-    candy = catalog.canonical_unit("candy-branding")
-    assert candy is not None
-    assert candy.verification_state == "verified-current"
-    assert candy.provider_page_id == "3907ac78-3131-8132-8f84-f9fd633acba5"
-    assert candy.dispatchable is True
-
-    motion = catalog.canonical_unit("motion-typography")
-    assert motion is not None
-    assert motion.verification_state == "unverified"
-    assert motion.provider_page_id is None
-    assert motion.dispatchable is False
+    for key in ("candy-branding", "motion-typography"):
+        unit = catalog.canonical_unit(key)
+        assert unit is not None
+        assert unit.verification_state == "unverified"
+        assert unit.provider_page_id is None
+        assert unit.dispatchable is False
 
 
 def test_binding_verification_routing_is_derived_from_finite_catalog() -> None:
