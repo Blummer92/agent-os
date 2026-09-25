@@ -247,7 +247,7 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy
         ("First Title", "Second Title"),
     ),
 )
-def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(title_properties,, staged_candy_catalog) -> None:
+def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(title_properties, staged_candy_catalog) -> None:
     with pytest.raises(
         NotionReadRequestError,
         match="exactly one title property",
