@@ -276,3 +276,23 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
     assert evidence["reason_codes"] == [
         "dev-validation-codespaces-evidence-identity-mismatch"
     ]
+
+
+def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
+    from pathlib import Path
+
+    workflow = Path(
+        ".github/workflows/agent-os-governed-invocation.yml"
+    ).read_text(encoding="utf-8")
+    selected_guard = (
+        "steps.transport.outputs.accepted == 'true' && "
+        "steps.codespaces.outputs.selected != 'true'"
+    )
+    assert "Attempt read-only Codespaces developer validation" in workflow
+    assert "secrets.AGENT_OS_CODESPACES_TOKEN" in workflow
+    assert selected_guard in workflow
+    assert "Invoke exact governed GCE control path" in workflow
+    assert (
+        "steps.codespaces.outputs.selected != 'true' }}"
+        in workflow
+    )
