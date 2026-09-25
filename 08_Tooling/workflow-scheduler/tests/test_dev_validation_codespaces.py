@@ -318,6 +318,7 @@ def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None
     ).read_text(encoding="utf-8")
     selected_guard = (
         "steps.transport.outputs.accepted == 'true' && "
+        "steps.codespaces_diagnostic.outputs.handled != 'true' && "
         "steps.codespaces.outputs.selected != 'true'"
     )
     assert "Attempt read-only Codespaces developer validation" in workflow
