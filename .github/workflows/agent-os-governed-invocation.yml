@@ -94,9 +94,32 @@ jobs:
           )
           PY
 
+      - name: Attempt bounded read-only Codespaces diagnostic
+        id: codespaces_diagnostic
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.codespaces_diagnostic \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --route-output "$RUNNER_TEMP/agent-os-ingress/codespaces-diagnostic-route.json" \
+              --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          route = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "codespaces-diagnostic-route.json").read_text()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"handled={'true' if route.get('handled') is True else 'false'}\n")
+              output.write(f"selected={'true' if route.get('selected') is True else 'false'}\n")
+          PY
+
       - name: Attempt read-only Codespaces developer validation
         id: codespaces
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -117,14 +140,14 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true') }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true') }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true') }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true') }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
@@ -302,7 +325,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces.outputs.selected != 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -327,8 +350,14 @@ jobs:
           transport_path = root / "transport.json"
           result_path = root / "result.json"
           codespaces_route_path = root / "codespaces-route.json"
+          diagnostic_route_path = root / "codespaces-diagnostic-route.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Agent OS governed invocation\n\n")
+              if diagnostic_route_path.exists():
+                  diagnostic_route = json.loads(diagnostic_route_path.read_text(encoding="utf-8"))
+                  summary.write(f"Codespaces diagnostic handled: `{diagnostic_route.get('handled')}`\n\n")
+                  summary.write(f"Codespaces diagnostic selected: `{diagnostic_route.get('selected')}`\n\n")
+                  summary.write(f"Codespaces diagnostic reasons: `{','.join(diagnostic_route.get('reason_codes', []))}`\n\n")
               if codespaces_route_path.exists():
                   route = json.loads(codespaces_route_path.read_text(encoding="utf-8"))
                   summary.write(f"Codespaces selected: `{route.get('selected')}`\n\n")
@@ -360,16 +389,24 @@ jobs:
                               summary.write(f"Handoff found: `{discovery.get('handoff_id') is not None}`\n\n")
                               summary.write("Scheduler invoked by discovery: `False`\n")
                           else:
-                              dev_validation = result.get("dev_validation")
-                              if isinstance(dev_validation, dict):
-                                  summary.write(f"Developer validation: `{dev_validation.get('status')}`\n\n")
-                                  summary.write(f"Reasons: `{','.join(dev_validation.get('reason_codes', []))}`\n\n")
-                                  summary.write(f"Tested SHA: `{dev_validation.get('tested_sha')}`\n\n")
-                                  summary.write(f"Validation identity: `{dev_validation.get('validation_id')}`\n\n")
-                                  summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
-                                  summary.write(f"Cleanup complete: `{dev_validation.get('cleanup_complete')}`\n")
+                              diagnostic = result.get("diagnostic")
+                              if isinstance(diagnostic, dict):
+                                  summary.write(f"Diagnostic status: `{diagnostic.get('status')}`\n\n")
+                                  summary.write(f"Diagnostic reasons: `{','.join(diagnostic.get('reason_codes', []))}`\n\n")
+                                  summary.write(f"Diagnostic identity: `{diagnostic.get('diagnostic_id')}`\n\n")
+                                  summary.write(f"Diagnostic request: `{diagnostic.get('request_id')}`\n\n")
+                                  summary.write(f"Diagnostic cleanup complete: `{diagnostic.get('cleanup_complete')}`\n")
                               else:
-                                  summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+                                  dev_validation = result.get("dev_validation")
+                                  if isinstance(dev_validation, dict):
+                                      summary.write(f"Developer validation: `{dev_validation.get('status')}`\n\n")
+                                      summary.write(f"Reasons: `{','.join(dev_validation.get('reason_codes', []))}`\n\n")
+                                      summary.write(f"Tested SHA: `{dev_validation.get('tested_sha')}`\n\n")
+                                      summary.write(f"Validation identity: `{dev_validation.get('validation_id')}`\n\n")
+                                      summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
+                                      summary.write(f"Cleanup complete: `{dev_validation.get('cleanup_complete')}`\n")
+                                  else:
+                                      summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
               else:
                   summary.write("Result evidence unavailable; manual review required.\n")
           PY

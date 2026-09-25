@@ -83,6 +83,52 @@ operations remain GCE-owned under #2300.
 The read-only token is a transport credential, not routing or execution
 authority. Missing credential material leaves the prior GCE behavior intact.
 
+
+## Bounded GitHub MCP diagnostic consumer (#2947)
+
+The governed issue-comment ingress also exposes one finite read-only diagnostic
+identity for ChatGPT-driven Codespaces investigation:
+
+```text
+/agent-os diagnose ppux-canva-cdp-readonly <request-id>
+```
+
+This is not a generic shell. The caller supplies only the fixed diagnostic
+identity plus a bounded request slug. The repository-owned diagnostic implementation
+selects the same approved `agent-os-codespaces-v1` surface and existing
+`gh codespace ssh` transport, then runs a checked-in fixed observation bundle.
+Caller-provided shell, argv, URL, filesystem path, profile, port, or browser action
+is not accepted.
+
+The first diagnostic is deliberately read-only. It records current workspace
+identity, Chrome process count, loopback listener reachability for the already-used
+CDP control ports, and sanitized Chrome DevTools discovery metadata. It does not
+click, navigate, edit Canva, start or stop the Codespace, expose a public port, or
+emit browser-profile/authentication material.
+
+A recognized diagnostic envelope is `handled` by the Codespaces diagnostic path
+even when the approved Codespace is unavailable or the read-only credential cannot
+reach it. In that case the path writes bounded fail-closed result evidence and does
+not fall through to GCE. This keeps a Codespaces-specific diagnostic from silently
+changing execution surfaces.
+
+Result evidence is published through the existing governed-invocation artifact/log
+path so GitHub MCP can read the workflow run, job/log, and JSON evidence and
+continue the parent mission without owner copy/paste. This result publication is
+separate from developer-validation success and creates no implementation, merge,
+closure, production, credential, or browser-mutation authority.
+
+## Developer-validation SSH start timeout (#2944)
+
+For the developer-validation operation only, the exact `gh codespace ssh`
+error `timed out while waiting for the codespace to start` (exit 1 with no
+remote stdout) proves that the remote command did not begin. The route records
+the requested SHA, validation identity, SSH exit code, and bounded reason,
+then sets `selected=false` so the existing governed GCE fallback can run.
+Other SSH failures, remote-result errors, and the read-only diagnostic operation
+remain fail closed. The GCE result replaces the provisional developer-validation
+result; the Codespaces reason remains in the route artifact.
+
 ## Persistence and continuation
 
 Codespaces repository/worktree files may persist across stop/start, while running
