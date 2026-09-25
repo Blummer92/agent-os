@@ -99,7 +99,7 @@ def test_closed_validation_executor_runs_only_known_fixed_profile():
     )
     assert result.status == "green"
     assert runner.calls[1][0] == (
-        ".venv/bin/python", "-m", "pytest",
+        "python3", "-m", "pytest",
         "tests/agent_os_issue_labels/test_pr_branch_refresh.py", "-q",
     )
 
@@ -107,7 +107,7 @@ def test_closed_validation_executor_runs_only_known_fixed_profile():
 def test_closed_validation_executor_uses_available_runner_python_not_repo_venv():
     from scripts.agent_os_issue_labels.pr_branch_refresh_operator import ClosedBranchRefreshValidationExecutor
     sha = "a" * 40
-    runner = _SequenceRunner([_observation(stdout=sha + "\\n"), _observation(), _observation(stdout=sha + "\\n")])
+    runner = _SequenceRunner([_observation(stdout=sha + "\n"), _observation(), _observation(stdout=sha + "\n")])
     result = ClosedBranchRefreshValidationExecutor(runner, "/repo").run_required_validation(
         "Blummer92/agent-os", 2952, head_sha=sha,
         command_ids=("pytest:pr-branch-refresh",),
