@@ -290,10 +290,6 @@ def _bounded_ssh_output(value: object) -> tuple[str, bool]:
     return sanitized[-MAX_RESULT_LOG_CHARS:], len(sanitized) > MAX_RESULT_LOG_CHARS
 
 
-def _bounded_ssh_stderr(stderr: object) -> tuple[str, bool]:
-    return _bounded_ssh_output(stderr)
-
-
 def _ssh_transport_timeout(
     request: DevValidationRequest,
     error: subprocess.TimeoutExpired,
@@ -313,7 +309,7 @@ def _ssh_transport_timeout(
 
 
 def _ssh_failure(request: DevValidationRequest, completed: object) -> dict[str, object]:
-    evidence=_failure(request,"dev-validation-ssh-failed");tail,truncated=_bounded_ssh_stderr(getattr(completed,"stderr",""));returncode=getattr(completed,"returncode",None)
+    evidence=_failure(request,"dev-validation-ssh-failed");tail,truncated=_bounded_ssh_output(getattr(completed,"stderr",""));returncode=getattr(completed,"returncode",None)
     evidence.update({"ssh_exit_code":returncode if type(returncode) is int else None,"ssh_stderr_tail":tail,"ssh_stderr_truncated":truncated});return evidence
 
 
