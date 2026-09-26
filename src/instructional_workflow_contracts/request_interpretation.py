@@ -79,6 +79,19 @@ class RequestInterpretation:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageReferenceBindingDecision:
+    """Non-authorizing binding decision for a current direct image-generation reference."""
+
+    required: bool
+    bound: bool
+    reference: ContractReference | None
+    reason_codes: tuple[str, ...]
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+    authorization_created: Literal[False] = field(default=False, init=False)
+    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
+
+
+@dataclass(frozen=True, slots=True)
 class PpuxMissionConstraintDecision:
     """Non-authorizing continuation decision for runner-authoritative PPUX missions."""
 
@@ -227,6 +240,38 @@ def _constraint_map(interpretation: RequestInterpretation | None) -> dict[str, o
         raise TypeError("interpretation must be an exact RequestInterpretation or None")
     constraints = interpretation.record.to_dict().get("constraints", [])
     return {item["name"]: item["value"] for item in constraints}
+
+
+def bind_current_image_reference(
+    current: RequestInterpretation,
+    *,
+    requested_reference_id: str | None,
+    available_references: tuple[ContractReference, ...],
+) -> ImageReferenceBindingDecision:
+    """Bind an explicit current-turn image reference without stale-context fallback.
+
+    The caller supplies the current request's explicit reference identity and the
+    references actually available to the active execution surface. Previous-turn
+    request/generation state is deliberately not an input.
+    """
+    if type(current) is not RequestInterpretation:
+        raise TypeError("current must be an exact RequestInterpretation")
+    if requested_reference_id is not None:
+        requested_reference_id = validate_stable_id(requested_reference_id, "requested_reference_id")
+    if type(available_references) is not tuple or any(type(ref) is not ContractReference for ref in available_references):
+        raise TypeError("available_references must be an exact tuple of ContractReference values")
+
+    payload = current.record.to_dict()
+    required = payload["action"] == "generate" and requested_reference_id is not None
+    if not required:
+        return ImageReferenceBindingDecision(False, False, None, ())
+
+    matches = tuple(ref for ref in available_references if ref.stable_id == requested_reference_id)
+    if len(matches) == 0:
+        return ImageReferenceBindingDecision(True, False, None, ("image-reference.missing",))
+    if len(matches) > 1:
+        return ImageReferenceBindingDecision(True, False, None, ("image-reference.multiple",))
+    return ImageReferenceBindingDecision(True, True, matches[0], ())
 
 
 def evaluate_ppux_mission_constraint(
