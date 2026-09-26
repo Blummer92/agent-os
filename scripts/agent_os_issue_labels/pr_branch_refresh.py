@@ -26,7 +26,11 @@ class BranchRefreshMutationResult:
 
 @dataclass(frozen=True, slots=True)
 class BranchRefreshValidationResult:
-    head_sha: str; status: str; command_ids: tuple[str, ...]
+    head_sha: str
+    status: str
+    command_ids: tuple[str, ...]
+    failed_command_id: str | None = None
+    failure_reason: str | None = None
 
 class PullRequestBranchRefreshProvider(Protocol):
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot: ...

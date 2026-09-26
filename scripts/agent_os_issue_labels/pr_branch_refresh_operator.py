@@ -10,7 +10,9 @@ accepted here.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -97,40 +99,50 @@ def _output(value: object) -> str:
 
 _REFRESH_VALIDATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "pytest:pr-branch-refresh": (
-        "python3",
-        "-m",
-        "pytest",
-        "tests/agent_os_issue_labels/test_pr_branch_refresh.py",
-        "-q",
+        "-m", "pytest", "tests/agent_os_issue_labels/test_pr_branch_refresh.py", "-q",
     ),
     "pytest:pr-branch-refresh-provider": (
-        "python3",
-        "-m",
-        "pytest",
-        "tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py",
-        "-q",
+        "-m", "pytest", "tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py", "-q",
     ),
     "pytest:branch-update": (
-        "python3",
-        "-m",
-        "pytest",
-        "tests/agent_os_github_git_objects/test_branch_update.py",
-        "-q",
+        "-m", "pytest", "tests/agent_os_github_git_objects/test_branch_update.py", "-q",
     ),
     "pytest:pr-lifecycle": (
-        "python3",
-        "-m",
-        "pytest",
-        "tests/agent_os_issue_labels/test_pr_lifecycle.py",
-        "-q",
+        "-m", "pytest", "tests/agent_os_issue_labels/test_pr_lifecycle.py", "-q",
     ),
     "structure": (
-        "bash",
-        "07_Agent_Tests/validate-repo-structure.sh",
+        "bash", "07_Agent_Tests/validate-repo-structure.sh",
     ),
 }
 
 _CANONICAL_REFRESH_VALIDATION_COMMAND_IDS = tuple(_REFRESH_VALIDATION_COMMANDS)
+_VALIDATION_ENV_KEYS = ("HOME", "LANG", "LC_ALL", "PATH", "PYTHONPATH", "TMPDIR")
+
+
+def _validation_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Project only the non-secret runner environment required by fixed validation."""
+    return {
+        key: value
+        for key in _VALIDATION_ENV_KEYS
+        if isinstance((value := environment.get(key)), str) and value
+    }
+
+
+def _validation_argv(command_id: str) -> tuple[str, ...]:
+    argv = _REFRESH_VALIDATION_COMMANDS[command_id]
+    return (sys.executable, *argv) if command_id.startswith("pytest:") else argv
+
+
+def _failure_reason(observation: BranchUpdateObservation) -> str | None:
+    if not observation.started:
+        return "command-not-started"
+    if observation.timed_out:
+        return "command-timeout"
+    if not observation.termination_confirmed:
+        return "command-termination-unconfirmed"
+    if observation.return_code != 0:
+        return "command-nonzero-exit"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +151,7 @@ class ClosedBranchRefreshValidationExecutor:
 
     runner: SubprocessBranchUpdateRunner
     repository_root: str
+    environment: Mapping[str, str] = field(default_factory=dict)
 
     def run_required_validation(
         self,
@@ -162,46 +175,59 @@ class ClosedBranchRefreshValidationExecutor:
                 head_sha=head_sha,
                 status="failing",
                 command_ids=command_ids,
+                failed_command_id=unknown[0],
+                failure_reason="unknown-command",
             )
 
+        env = _validation_environment(self.environment)
         head = self.runner.run(
             ("git", "rev-parse", "HEAD"),
             cwd=self.repository_root,
-            env={},
+            env=env,
         )
-        if not head.succeeded or head.stdout.strip() != head_sha:
+        head_failure = _failure_reason(head)
+        if head_failure is not None or head.stdout.strip() != head_sha:
             return BranchRefreshValidationResult(
                 head_sha=head_sha,
                 status="failing",
                 command_ids=command_ids,
+                failed_command_id="head:before",
+                failure_reason=head_failure or "head-mismatch",
             )
 
         for command_id in command_ids:
             result = self.runner.run(
-                _REFRESH_VALIDATION_COMMANDS[command_id],
+                _validation_argv(command_id),
                 cwd=self.repository_root,
-                env={},
+                env=env,
             )
-            if not result.succeeded:
+            failure = _failure_reason(result)
+            if failure is not None:
                 return BranchRefreshValidationResult(
                     head_sha=head_sha,
                     status="failing",
                     command_ids=command_ids,
+                    failed_command_id=command_id,
+                    failure_reason=failure,
                 )
 
         final_head = self.runner.run(
             ("git", "rev-parse", "HEAD"),
             cwd=self.repository_root,
-            env={},
+            env=env,
         )
-        status = (
-            "green"
-            if final_head.succeeded and final_head.stdout.strip() == head_sha
-            else "failing"
-        )
+        final_failure = _failure_reason(final_head)
+        if final_failure is not None or final_head.stdout.strip() != head_sha:
+            return BranchRefreshValidationResult(
+                head_sha=head_sha,
+                status="failing",
+                command_ids=command_ids,
+                failed_command_id="head:after",
+                failure_reason=final_failure or "head-moved",
+            )
         return BranchRefreshValidationResult(
             head_sha=head_sha,
-            status=status,
+            status="green",
             command_ids=command_ids,
         )
 
@@ -232,6 +258,8 @@ class PullRequestBranchRefreshReceipt:
     mutation_count: int
     validation_status: str | None
     validation_head_sha: str | None
+    validation_failed_command_id: str | None
+    validation_failure_reason: str | None
     final_current_proven: bool
     blockers: tuple[str, ...]
     reason_codes: tuple[str, ...]
@@ -357,6 +385,7 @@ def run_branch_refresh_operator(
     validation = ClosedBranchRefreshValidationExecutor(
         runner=runner,
         repository_root=repository_root,
+        environment=environment,
     )
 
     preflight = preflight_production_branch_refresh(
@@ -482,6 +511,8 @@ def _blocked_refresh_receipt(
         mutation_count=0,
         validation_status=None,
         validation_head_sha=None,
+        validation_failed_command_id=None,
+        validation_failure_reason=None,
         final_current_proven=False,
         blockers=tuple(sorted(set(reason_codes))),
         reason_codes=tuple(sorted(set(reason_codes))),
@@ -518,6 +549,8 @@ def _receipt_from_result(
         mutation_count=1 if mutation_attempted else 0,
         validation_status=None if validation is None else validation.status,
         validation_head_sha=None if validation is None else validation.head_sha,
+        validation_failed_command_id=None if validation is None else validation.failed_command_id,
+        validation_failure_reason=None if validation is None else validation.failure_reason,
         final_current_proven="branch.current-proven" in reasons,
         blockers=blockers,
         reason_codes=reasons,
