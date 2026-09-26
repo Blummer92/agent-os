@@ -42,10 +42,6 @@ CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
-BINDING_VERIFICATION_REQUEST_IDS = (
-    VERIFICATION_REQUEST_ID,
-    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-)
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
@@ -81,6 +77,28 @@ def _verification_request_spec(
         canonical_unit_key,
         _ADDITIONAL_UNIT_ALLOWED_ACTIONS,
     )
+
+
+def _binding_verification_request_ids() -> tuple[str, ...]:
+    """Return the finite verifier ids admitted by the shipped catalog."""
+
+    catalog = load_catalog()
+    candidates = [
+        VERIFICATION_REQUEST_ID,
+        *(
+            f"verify-{unit.canonical_unit_key}-binding"
+            for unit in catalog.canonical_units
+            if unit.verification_title is not None
+        ),
+    ]
+    return tuple(
+        request_id
+        for request_id in candidates
+        if _verification_request_spec(request_id) is not None
+    )
+
+
+BINDING_VERIFICATION_REQUEST_IDS = _binding_verification_request_ids()
 
 
 def _normalize_notion_id(value: object) -> str:
