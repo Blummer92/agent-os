@@ -90,4 +90,28 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     assert "## Required Order" in text
     assert "## Requested Format Is Part Of The Artifact" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.3" in text.split("## Version", 1)[1]
+    assert "0.1.4" in text.split("## Version", 1)[1]
+
+
+def test_issue_2968_generated_asset_continues_to_exact_approved_drive_handoff() -> None:
+    standard = normalized()
+    for phrase in (
+        "A successful generated classroom visual is intermediate evidence",
+        "Do not stop at image creation merely to ask the teacher to request the already-authorized handoff again.",
+        "use only the already-grounded exact approved Drive folder ID",
+        "require exact Drive file and parent-folder readback",
+        "verify the written metadata against the exact Drive identity",
+    ):
+        assert phrase in standard
+
+
+def test_issue_2968_generated_asset_handoff_fails_closed_without_authority_or_destination() -> None:
+    standard = normalized()
+    for phrase in (
+        "This continuation never creates external-write authority.",
+        "exact Drive destination, current destination evidence, human confirmation, or external-write authorization is absent or stale",
+        "fail closed before upload",
+        "must never manufacture a new folder",
+        "treat metadata registration as student-facing approval",
+    ):
+        assert phrase in standard
