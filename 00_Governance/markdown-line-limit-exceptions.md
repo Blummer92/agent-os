@@ -46,9 +46,7 @@ not a permanent allowance for unlimited growth.
 01_Shared_Standards/navigation/navigation-registry-architecture.md
 01_Shared_Standards/navigation/navigation-registry-data-model.md
 01_Shared_Standards/navigation/connector-adapter-framework.md
-01_Shared_Standards/navigation/notion-smoke-test-target-approval-handoff.md
 01_Shared_Standards/navigation/notion-read-only-connector-pilot-plan.md
-01_Shared_Standards/navigation/notion-live-access-approval-plan.md
 01_Shared_Standards/navigation/workspace-discovery-service.md
 ```
 
@@ -89,3 +87,4 @@ governance review.
   and the Governance v1.0 baseline) for PR C of the Markdown line-limit cleanup
   sequence; each has a stated review trigger and is temporary.
 - 0.1.0 initial exception policy for Issue #62.
+
