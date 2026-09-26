@@ -95,5 +95,5 @@ git diff --check
 
 ## Rollback
 Revert the additive #1986 v2 source contract/tests/docs to restore v1-only execution-authorization source behavior. Existing #811/#1226 v1 authorization, #757 verifier, #761 unified evidence bundle/projection, routing, Scheduler, and external systems require no cleanup.
-## Shadow issue selection
-See `SHADOW_ISSUE_SELECTION.md` for #2832's read-only population-to-selector composition contract.
+## Companion contracts
+See `SHADOW_ISSUE_SELECTION.md` for #2832's read-only population-to-selector composition contract and `CKR6_GITHUB_BRIDGE.md` for #2851's finite GitHub-hosted CKR6 ingress.
