@@ -94,6 +94,66 @@ def test_tampered_authorization_identity_fails_closed():
     assert result.reason_codes == ("source.trusted-record-malformed",)
 
 
+def _tampered_identity_body(record):
+    payload = record.to_dict()
+    payload["authorization_id"] = "refresh-authorization:" + "0" * 64
+    return AUTHORIZATION_MARKER + "\n" + json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    )
+
+
+def test_malformed_historical_authorization_does_not_poison_later_current_record():
+    historical = auth(expected_head_sha="c" * 40, expected_main_sha="d" * 40)
+    current = auth(owner_decision_reference="decision:current")
+    transport = Transport([
+        comment(_tampered_identity_body(historical)),
+        comment(serialize_refresh_authorization_comment(current), cid=2),
+    ])
+    result = reacquire_refresh_authorization_source(
+        transport=transport,
+        repository=REPO,
+        pr_number=1363,
+        current_head_sha=HEAD,
+        current_main_sha=MAIN,
+    )
+    assert result.status is RefreshAuthorizationSourceStatus.CURRENT
+    assert result.records == (current,)
+    assert result.reason_codes == (
+        "current",
+        "source.historical-trusted-record-malformed",
+    )
+    assert result.source_comment_ids == (1, 2)
+
+
+def test_malformed_current_authorization_still_fails_closed():
+    malformed_current = _tampered_identity_body(auth())
+    current = auth(owner_decision_reference="decision:also-current")
+    transport = Transport([
+        comment(malformed_current),
+        comment(serialize_refresh_authorization_comment(current), cid=2),
+    ])
+    result = reacquire_refresh_authorization_source(
+        transport=transport,
+        repository=REPO,
+        pr_number=1363,
+        current_head_sha=HEAD,
+        current_main_sha=MAIN,
+    )
+    assert result.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.trusted-record-malformed",)
+
+
+def test_malformed_historical_authorization_requires_current_binding_evidence():
+    historical = auth(expected_head_sha="c" * 40, expected_main_sha="d" * 40)
+    current = auth(owner_decision_reference="decision:current")
+    result = read([
+        comment(_tampered_identity_body(historical)),
+        comment(serialize_refresh_authorization_comment(current), cid=2),
+    ])
+    assert result.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.trusted-record-malformed",)
+
+
 def test_repository_or_pr_rebinding_fails_closed():
     for record in (auth(repository="other/repo"), auth(pr_number=99)):
         result = read([comment(serialize_refresh_authorization_comment(record))])
