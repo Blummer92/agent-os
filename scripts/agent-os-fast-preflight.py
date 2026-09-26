@@ -8,6 +8,7 @@ merge, closure, production, or external-write authority.
 
 from __future__ import annotations
 
+import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,3 +130,22 @@ def run_fast_preflight(*, repo_root: str | Path, changed_files: tuple[str, ...])
     checks = tuple(_check_file(root, path) for path in normalized)
     passed = all(check.status != "failed" for check in checks)
     return FastPreflightResult(checks=checks, passed=passed)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run bounded mechanical checks across the complete changed-file set."
+    )
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("changed_files", nargs="+")
+    args = parser.parse_args(argv)
+    result = run_fast_preflight(
+        repo_root=args.repo_root,
+        changed_files=tuple(args.changed_files),
+    )
+    print(json.dumps(result.to_dict(), sort_keys=True, separators=(",", ":")))
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
