@@ -482,6 +482,37 @@ def test_refresh_pr_receipt_projects_terminal_result_states(monkeypatch, status,
     assert receipt.validation_status == validation_status
 
 
+def test_refresh_pr_receipt_projects_bounded_validation_failure_evidence(monkeypatch):
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+    from scripts.agent_os_issue_labels.pr_branch_refresh import (
+        BranchRefreshValidationResult,
+        PullRequestBranchRefreshResult,
+    )
+
+    result = PullRequestBranchRefreshResult(
+        repository="Blummer92/agent-os",
+        pr_number=1363,
+        status="validation-failing",
+        old_head_sha="a" * 40,
+        new_head_sha="c" * 40,
+        invalidated_head_evidence=("tested-sha",),
+        validation=BranchRefreshValidationResult(
+            head_sha="c" * 40,
+            status="failing",
+            command_ids=("pytest:pr-branch-refresh",),
+            failed_command_id="pytest:pr-branch-refresh",
+            failure_reason="command-nonzero-exit",
+        ),
+        reason_codes=("branch.current-proven",),
+        branch_refresh_authorized=True,
+        side_effects_performed=True,
+    )
+    monkeypatch.setattr(operator, "run_branch_refresh_operator", lambda **kwargs: result)
+    receipt = operator.refresh_pr(**_facade_kwargs())
+    assert receipt.validation_failed_command_id == "pytest:pr-branch-refresh"
+    assert receipt.validation_failure_reason == "command-nonzero-exit"
+
+
 def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
     from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PullRequestBranchRefreshReceipt
     with pytest.raises(ValueError, match="mutation_count"):
