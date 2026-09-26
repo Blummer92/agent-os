@@ -233,9 +233,41 @@ def _receipt(payload: dict[str, object]) -> RefreshAuthorizationReceipt:
     )
 
 
+def _malformed_authorization_is_provably_historical(
+    payload: dict[str, object],
+    *,
+    repository: str,
+    pr_number: int,
+    current_head_sha: str | None,
+    current_main_sha: str | None,
+) -> bool:
+    """Return true only when malformed trusted evidence is safely historical.
+
+    A malformed record can be ignored only when its repository/PR binding is exact,
+    current head/main evidence is available, and at least one of the record's
+    head/main bindings is a valid SHA that differs from current state.  Missing,
+    malformed, or current bindings remain fail-closed because they could still be
+    the authorization intended for this refresh attempt.
+    """
+    if current_head_sha is None or current_main_sha is None:
+        return False
+    if _SHA40.fullmatch(current_head_sha) is None or _SHA40.fullmatch(current_main_sha) is None:
+        return False
+    if payload.get("repository") != repository or payload.get("pr_number") != pr_number:
+        return False
+    historical_head = payload.get("expected_head_sha")
+    historical_main = payload.get("expected_main_sha")
+    if type(historical_head) is not str or _SHA40.fullmatch(historical_head) is None:
+        return False
+    if type(historical_main) is not str or _SHA40.fullmatch(historical_main) is None:
+        return False
+    return historical_head != current_head_sha or historical_main != current_main_sha
+
+
 def reacquire_refresh_authorization_source(
     *, transport: RefreshAuthorizationSourceTransport, repository: str,
     pr_number: int, expected_authorization_id: str | None = None,
+    current_head_sha: str | None = None, current_main_sha: str | None = None,
 ) -> RefreshAuthorizationSourceResult:
     """Read one complete trusted PR conversation and return bounded immutable history.
 
@@ -263,13 +295,27 @@ def reacquire_refresh_authorization_source(
     records: list[RefreshAuthorization] = []
     receipts: list[RefreshAuthorizationReceipt] = []
     source_ids: list[int] = []
+    historical_invalid_ids: list[int] = []
     try:
         for comment in sorted(snapshot.comments, key=lambda item: (item.created_at, item.comment_id)):
             if comment.author_login.casefold() != snapshot.owner_login.casefold():
                 continue
             payload = _two_line_payload(comment.body, AUTHORIZATION_MARKER)
             if payload is not None:
-                record = _authorization(payload)
+                try:
+                    record = _authorization(payload)
+                except (TypeError, ValueError, KeyError):
+                    if _malformed_authorization_is_provably_historical(
+                        payload,
+                        repository=repository,
+                        pr_number=pr_number,
+                        current_head_sha=current_head_sha,
+                        current_main_sha=current_main_sha,
+                    ):
+                        historical_invalid_ids.append(comment.comment_id)
+                        source_ids.append(comment.comment_id)
+                        continue
+                    raise
                 if record.repository.casefold() != repository.casefold() or record.pr_number != pr_number:
                     raise ValueError("trusted authorization binding mismatch")
                 records.append(record); source_ids.append(comment.comment_id); continue
@@ -292,7 +338,16 @@ def reacquire_refresh_authorization_source(
     if expected_authorization_id is not None:
         unique_records = tuple(item for item in unique_records if item.authorization_id == expected_authorization_id)
     if not unique_records:
-        return RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.BLOCKED, ("authorization.absent",), (), tuple(receipts), tuple(source_ids))
+        reasons = ["authorization.absent"]
+        if historical_invalid_ids:
+            reasons.append("source.historical-trusted-record-malformed")
+        return RefreshAuthorizationSourceResult(
+            RefreshAuthorizationSourceStatus.BLOCKED,
+            tuple(sorted(reasons)),
+            (),
+            tuple(receipts),
+            tuple(source_ids),
+        )
 
     consumed = {item.authorization_id for item in receipts if item.consumes_authorization}
     available = tuple(
@@ -305,8 +360,11 @@ def reacquire_refresh_authorization_source(
             ("authorization.consumed-or-not-current",),
             (), tuple(receipts), tuple(source_ids),
         )
+    current_reasons = ["current"]
+    if historical_invalid_ids:
+        current_reasons.append("source.historical-trusted-record-malformed")
     return RefreshAuthorizationSourceResult(
         RefreshAuthorizationSourceStatus.CURRENT,
-        ("current",),
+        tuple(sorted(current_reasons)),
         available, tuple(receipts), tuple(source_ids),
     )
