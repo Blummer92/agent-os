@@ -136,6 +136,41 @@ def test_partial_parent_or_tracking_issue_stays_open(issue_kind: str) -> None:
     assert result.remove_status_ready is False
 
 
+def test_2642_completed_parent_with_successor_owned_residual_work_reconciles() -> None:
+    """#1241 fixture: kind alone cannot keep a completed parent open forever."""
+    result = evaluate_post_merge_candidate(
+        candidate(
+            issue_number=1241,
+            pull_request_number=2341,
+            issue_kind="parent",
+            issue_complete=True,
+            remaining_scope=False,
+        )
+    )
+    assert result.disposition is TerminalLifecycleDisposition.CLOSED_COMPLETED
+    assert result.publish_final_disposition is True
+    assert result.remove_status_ready is True
+    assert result.close_issue is True
+    assert result.requires_final_readback is True
+
+
+def test_completed_tracking_issue_without_remaining_scope_reconciles() -> None:
+    result = evaluate_post_merge_candidate(
+        candidate(
+            issue_kind="tracking",
+            issue_complete=True,
+            remaining_scope=False,
+            status_ready_present=False,
+            ready_cleanup_admission=admission(
+                "remove-lifecycle-label", AdmissionState.MISSING
+            ),
+        )
+    )
+    assert result.disposition is TerminalLifecycleDisposition.CLOSED_COMPLETED
+    assert result.close_issue is True
+    assert result.remove_status_ready is False
+
+
 def test_investigation_with_unmet_criteria_stays_open() -> None:
     result = evaluate_post_merge_candidate(
         candidate(issue_kind="investigation", issue_complete=False, remaining_scope=True)
