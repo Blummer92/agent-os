@@ -55,7 +55,7 @@ class BulkPostMergeReconciliationProjection:
 def evaluate_post_merge_candidate(e):
     if type(e) is not PostMergeCandidateEvidence: raise TypeError("evidence must be PostMergeCandidateEvidence")
     if e.evidence_conflicting or not e.pr_merged: return _p(e,TerminalLifecycleDisposition.MANUAL_REVIEW,("merged-state-unproven-or-conflicting",))
-    if not (e.issue_complete and not e.remaining_scope and e.issue_kind=="implementation"): return _p(e,TerminalLifecycleDisposition.MERGED_ISSUE_NOT_COMPLETE,("issue-definition-of-done-not-satisfied",))
+    if not (e.issue_complete and not e.remaining_scope): return _p(e,TerminalLifecycleDisposition.MERGED_ISSUE_NOT_COMPLETE,("issue-definition-of-done-not-satisfied",))
     if e.issue_state=="closed":
         if e.status_ready_present:
             ok=e.ready_cleanup_admission.admitted
