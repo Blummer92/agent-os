@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 
 import workflow_scheduler.governance.dev_validation_gce as live
@@ -24,8 +25,8 @@ class Adapter:
  def wait_until_running(self,resource):self.calls.append("wait");return VmState.RUNNING
  def stop(self,resource):self.calls.append("stop");return self.shutdown_enabled
  def wait_until_stopped(self,resource):self.calls.append("wait-stop");return VmState.STOPPED
- def _ssh(self,resource,command):
-  self.calls.append(("ssh",command));body=payload(request()) if self.result is None else self.result
+ def _ssh(self,resource,command,*,timeout=180):
+  self.calls.append(("ssh",command,timeout));body=payload(request()) if self.result is None else self.result
   return SimpleNamespace(returncode=0,stdout=live._FRAME_START+"\n"+json.dumps(body)+"\n"+live._FRAME_END+"\n",stderr="")
 
 def test_host_command_contains_only_fixed_runner_and_validated_identity():
@@ -81,15 +82,46 @@ def test_timeout_withholds_shutdown_even_if_cleanup_flag_is_true():
 
 def test_ssh_failure_preserves_bounded_diagnostics():
  class Failed(Adapter):
-  def _ssh(self,resource,command):return SimpleNamespace(returncode=255,stdout="",stderr="x"*(live.MAX_RESULT_LOG_CHARS+20)+" denied")
+  def _ssh(self,resource,command,*,timeout=180):return SimpleNamespace(returncode=255,stdout="",stderr="x"*(live.MAX_RESULT_LOG_CHARS+20)+" denied")
  e=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Failed())["dev_validation"];assert e["reason_codes"]==["dev-validation-ssh-failed"];assert e["ssh_exit_code"]==255;assert len(e["ssh_stderr_tail"])==live.MAX_RESULT_LOG_CHARS;assert e["ssh_stderr_truncated"] is True
+
+def test_gce_outer_timeout_returns_bounded_structured_evidence():
+ class TimedOut(Adapter):
+  def _ssh(self,resource,command,*,timeout=180):
+   assert timeout==live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS
+   raise subprocess.TimeoutExpired(command,timeout,output="o"*(live.MAX_RESULT_LOG_CHARS+20),stderr="e"*(live.MAX_RESULT_LOG_CHARS+20))
+ e=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=TimedOut())["dev_validation"]
+ assert e["status"]=="needs-decision"
+ assert e["reason_codes"]==["dev-validation-gce-transport-timeout"]
+ assert e["tested_sha"]==SHA
+ assert e["validation_id"]=="remote-validation-suite"
+ assert e["ssh_exit_code"] is None
+ assert e["transport_timeout_seconds"]==live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS
+ assert len(e["ssh_stdout_tail"])==live.MAX_RESULT_LOG_CHARS
+ assert e["ssh_stdout_truncated"] is True
+ assert len(e["ssh_stderr_tail"])==live.MAX_RESULT_LOG_CHARS
+ assert e["ssh_stderr_truncated"] is True
+ assert e["cleanup_complete"] is False
+
+
+def test_gce_dev_validation_uses_larger_fixed_outer_budget():
+ adapter=Adapter()
+ e=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=adapter)["dev_validation"]
+ assert e["status"]=="success"
+ ssh=[call for call in adapter.calls if isinstance(call,tuple) and call[0]=="ssh"]
+ assert len(ssh)==1
+ assert ssh[0][2]==live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS
+ assert live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS>240
+
 
 def test_identity_mismatch_fails_closed():
  bad=payload(request());bad["tested_sha"]="b"*40;result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Adapter(result=bad));assert result["dev_validation"]["reason_codes"]==["dev-validation-evidence-identity-mismatch"]
 
 def test_unframed_output_is_not_trusted():
  class Bad(Adapter):
-  def _ssh(self,resource,command):return SimpleNamespace(returncode=0,stdout='{"status":"success"}',stderr="")
+  def _ssh(self,resource,command,*,timeout=180):
+   assert timeout==live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS
+   return SimpleNamespace(returncode=0,stdout='{"status":"success"}',stderr="")
  assert live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Bad())["dev_validation"]["reason_codes"]==["dev-validation-frame-invalid"]
 
 def test_log_over_bound_is_rejected():

@@ -115,7 +115,9 @@ class GcloudIapAdapter:
    if state not in {VmState.RUNNING,VmState.STOPPING}:return state
    time.sleep(self.poll_seconds)
   return VmState.UNKNOWN
- def _ssh(self,resource:GceResourceTuple,command:str)->subprocess.CompletedProcess[str]:return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=180)
+ def _ssh(self,resource:GceResourceTuple,command:str,*,timeout:int=180)->subprocess.CompletedProcess[str]:
+  if type(timeout) is not int or isinstance(timeout,bool) or not 1<=timeout<=900:raise GcloudCommandError("ssh timeout is outside the bounded range")
+  return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=timeout)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0

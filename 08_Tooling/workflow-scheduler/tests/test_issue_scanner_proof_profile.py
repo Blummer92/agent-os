@@ -58,7 +58,7 @@ def test_scanner_unavailable_evidence_is_bounded_and_non_authorizing():
  req=request()
  evidence={"schema_version":"1.0","status":"needs-decision","reason_codes":["scanner-proof-credential-injector-unavailable"],"repository":req.repository,"issue_number":req.issue_number,"branch":req.branch,"tested_sha":req.source_sha,"validation_id":req.validation_id,"request_id":req.request_id,"exit_code":0,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False,"cleanup_complete":True,"workspace_side_effects_performed":True,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
  framed=live._FRAME_START+"\n"+json.dumps(evidence)+"\n"+live._FRAME_END+"\n"
- adapter=SimpleNamespace(_ssh=lambda *_:SimpleNamespace(returncode=0,stdout=framed,stderr=""))
+ adapter=SimpleNamespace(_ssh=lambda *_,**__:SimpleNamespace(returncode=0,stdout=framed,stderr=""))
  result=live.run_dev_validation_over_ssh(adapter,req)
  assert result["status"]=="needs-decision"
  assert result["reason_codes"]==["scanner-proof-credential-injector-unavailable"]
