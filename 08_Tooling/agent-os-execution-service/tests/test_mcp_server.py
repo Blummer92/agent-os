@@ -97,6 +97,61 @@ def test_request_binding_fails_closed_before_dispatch_for_ambiguous_input() -> N
     assert "action.ambiguous" in result["details"]
 
 
+def _image_generation_request() -> dict[str, object]:
+    payload = _request_interpretation_payload()
+    payload["action"] = "generate"
+    payload["requested_effect"] = "propose"
+    return payload
+
+
+def test_2966_connected_request_binding_selects_exact_current_image_reference() -> None:
+    chair = {
+        "system": "google-drive",
+        "stable_id": "IMG_2116",
+        "exact_location": "drive-file-chair",
+        "verification_evidence": "sha256-chair-current",
+    }
+    stale = {
+        "system": "google-drive",
+        "stable_id": "prior-handoff-infographic",
+        "exact_location": "drive-file-stale",
+        "verification_evidence": "sha256-stale",
+    }
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(),
+        requested_reference_id="IMG_2116",
+        available_references=[stale, chair],
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is True
+    assert result["image_reference_required"] is True
+    assert result["image_reference_bound"] is True
+    assert result["image_reference_id"] == "IMG_2116"
+    assert result["image_reference_reason_codes"] == []
+    assert result["execution_authorized"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_2966_connected_request_binding_blocks_missing_current_image_reference() -> None:
+    stale = {
+        "system": "google-drive",
+        "stable_id": "prior-handoff-infographic",
+        "exact_location": "drive-file-stale",
+        "verification_evidence": "sha256-stale",
+    }
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(),
+        requested_reference_id="IMG_2116",
+        available_references=[stale],
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is False
+    assert result["image_reference_required"] is True
+    assert result["image_reference_bound"] is False
+    assert result["image_reference_id"] is None
+    assert result["image_reference_reason_codes"] == ["image-reference.missing"]
+
+
 CONNECTED_ISSUE_BODY = """### Issue tier
 
 tier:1-standard-implementation
