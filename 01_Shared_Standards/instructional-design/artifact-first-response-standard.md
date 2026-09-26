@@ -90,6 +90,38 @@ claim. A placeholder box, generated stand-in, or metadata-only asset reference
 cannot satisfy that check when the required role is bound to an existing
 governed reusable asset.
 
+## Generated Asset Delivery Continuation
+
+A successful generated classroom visual is intermediate evidence when the active
+teacher mission already includes a current, exact, explicitly approved Drive
+destination and the external write remains authorized. Do not stop at image
+creation merely to ask the teacher to request the already-authorized handoff
+again.
+
+After the teacher accepts the generated visual, or the active mission otherwise
+contains the required explicit human acceptance, continue the same bounded
+mission through the existing governed visual-asset ingestion path:
+
+1. preserve the generated image as the exact returned asset for the active
+   generation/intake lineage;
+2. use only the already-grounded exact approved Drive folder ID; never infer a
+   destination from a folder name, search for a replacement, or create a folder;
+3. execute the separately authorized Drive write through the existing visual
+   asset writer/coordinator boundary;
+4. require exact Drive file and parent-folder readback before treating the upload
+   as persisted;
+5. continue through the already-authorized metadata/registry handoff when that
+   handoff is part of the active mission; and
+6. verify the written metadata against the exact Drive identity before reporting
+   the handoff complete.
+
+This continuation never creates external-write authority. If the exact Drive
+destination, current destination evidence, human confirmation, or external-write
+authorization is absent or stale, fail closed before upload and report the
+specific blocker. A successful generation must never manufacture a new folder,
+choose a nearby destination, change sharing, or treat metadata registration as
+student-facing approval.
+
 ## Blocked-Production Behavior
 
 When production is blocked, show a clearly labeled preview or content
@@ -122,4 +154,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.3
+0.1.4
