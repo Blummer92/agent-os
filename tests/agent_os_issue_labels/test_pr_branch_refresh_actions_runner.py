@@ -13,6 +13,7 @@ from scripts.agent_os_issue_labels.pr_branch_refresh_authorization import (
     RefreshAuthorizationState,
 )
 from scripts.agent_os_issue_labels.pr_branch_refresh_authorization_source import (
+    AUTHORIZATION_MARKER,
     RECEIPT_MARKER,
     serialize_refresh_authorization_comment,
 )
@@ -219,6 +220,33 @@ def test_actions_runner_post_mutation_nonconverged_receipts_never_claim_success(
         assert receipt["terminal_status"] == status
         assert receipt["reason_codes"] == [reason]
         assert len(calls) == 1
+
+
+def test_actions_runner_ignores_only_provably_historical_malformed_authorization():
+    historical = authorization(
+        expected_head_sha="4" * 40,
+        expected_main_sha="5" * 40,
+        owner_decision_reference="historical",
+    )
+    payload = historical.to_dict()
+    payload["authorization_id"] = "refresh-authorization:" + "0" * 64
+    malformed = AUTHORIZATION_MARKER + "\n" + json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    )
+    current = authorization(owner_decision_reference="fresh-main")
+    github = FakeGithub([
+        FakeComment(10, malformed),
+        FakeComment(11, serialize_refresh_authorization_comment(current)),
+    ])
+    calls = []
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:2950:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=converged_refresh(current, calls),
+    )
+    assert result.status == "converged"
+    assert result.authorization_id == current.authorization_id
+    assert len(calls) == 1
 
 
 def test_actions_runner_selects_fresh_authorization_over_stale_main_record():
