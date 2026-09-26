@@ -63,11 +63,6 @@ class Validation:
         raise AssertionError("not used")
 
 
-class Reviews:
-    def blocking_review_threads(self, *args, **kwargs):
-        return 0
-
-
 class Pull:
     base = SimpleNamespace(ref="main")
     head = SimpleNamespace(ref="agent/1849", sha=OLD)
@@ -130,7 +125,16 @@ class Runner:
     calls: list[tuple[str, ...]] = field(default_factory=list)
 
     def run(self, argv, *, cwd, env):
-        self.calls.append(tuple(argv))
+        argv = tuple(argv)
+        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
+            return obs(f"{PATH}\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
+            return obs(f"{OLD}\n")
+        if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
+            return obs(f"{PATH}\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+            return obs()
+        self.calls.append(argv)
         return self.observations.pop(0)
 
 
@@ -149,7 +153,6 @@ def test_github_conflict_preserves_proven_diverged_branch_state():
         github_client=Github(),
         request=request(),
         validation_executor=Validation(),
-        review_threads_reader=Reviews(),
     )
     result = backing.read_branch("Blummer92/agent-os", 1849)
     assert result.branch_state == "behind"

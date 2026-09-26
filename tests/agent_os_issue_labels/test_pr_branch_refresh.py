@@ -7,9 +7,6 @@ from scripts.agent_os_issue_labels.pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
-from scripts.agent_os_issue_labels.pr_planner import managed_labels
-from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
-from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 OLD = "a" * 40
 BASE = "b" * 40
@@ -41,11 +38,8 @@ class FakeProvider:
         )
         self.mutation_status = mutation_status
         self.validation_status = validation_status
-        self.labels = {"human:keep"}
-        self.available = tuple(managed_labels())
         self.rebases = 0
         self.validations = 0
-        self.validation_state = "green"
 
     def read_branch(self, repository, pr_number):
         return self.branch
@@ -64,31 +58,7 @@ class FakeProvider:
 
     def run_required_validation(self, repository, pr_number, *, head_sha, command_ids):
         self.validations += 1
-        self.validation_state = self.validation_status
         return BranchRefreshValidationResult(head_sha, self.validation_status, command_ids)
-
-    def read(self, repository, pr_number):
-        return LivePullRequestSnapshot(
-            repository,
-            pr_number,
-            self.branch.head_sha,
-            True,
-            True,
-            self.branch.mergeability == "conflicted",
-            self.branch.branch_state == "behind",
-            self.validation_state,
-            0,
-            tuple(sorted(self.labels)),
-        )
-
-    def available_labels(self, repository):
-        return self.available
-
-    def add_label(self, repository, pr_number, label):
-        self.labels.add(label)
-
-    def remove_label(self, repository, pr_number, label):
-        self.labels.remove(label)
 
 
 def request(**overrides):
@@ -105,22 +75,19 @@ def request(**overrides):
         forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
         branch_refresh_authorized=True,
-        lifecycle_admission=admitted_lifecycle_labels(),
     )
     values.update(overrides)
     return PullRequestBranchRefreshRequest(**values)
 
 
-def test_successful_refresh_invalidates_old_head_evidence_validates_and_reconciles_labels():
+def test_successful_refresh_invalidates_old_head_evidence_validates_and_proves_current_branch():
     provider = FakeProvider()
     result = refresh_pull_request_branch(provider, request())
     assert result.status == "converged"
     assert result.old_head_sha == OLD and result.new_head_sha == NEW
     assert provider.rebases == 1 and provider.validations == 1
     assert "tested-sha" in result.invalidated_head_evidence
-    assert "branch:current" in provider.labels
-    assert "human:keep" in provider.labels
-    assert result.lifecycle_reconciliation.reconciliation_status == "converged"
+    assert "branch.current-proven" in result.reason_codes
 
 
 def test_current_branch_is_noop_blocked_before_mutation():
@@ -191,20 +158,11 @@ def test_post_refresh_scope_expansion_blocks_before_validation():
     assert result.side_effects_performed is True
 
 
-def test_validation_failure_still_reconciles_terminal_label_state():
+def test_validation_failure_reports_failure_without_label_reconciliation():
     provider = FakeProvider(validation_status="failing")
     result = refresh_pull_request_branch(provider, request())
     assert result.status == "validation-failing"
-    assert "validation:failing" in provider.labels
-    assert "pr:blocked" in provider.labels
-
-
-def test_label_convergence_failure_blocks_after_refresh_without_retry():
-    provider = FakeProvider()
-    provider.available = tuple(label for label in provider.available if label != "branch:current")
-    result = refresh_pull_request_branch(provider, request())
-    assert result.reason_codes == ("labels.convergence-not-proven",)
-    assert provider.rebases == 1
+    assert result.validation.status == "failing"
 
 
 def test_main_moves_before_final_proof_returns_stale_not_second_refresh():

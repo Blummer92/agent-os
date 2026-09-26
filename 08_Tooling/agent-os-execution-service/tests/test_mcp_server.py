@@ -97,6 +97,74 @@ def test_request_binding_fails_closed_before_dispatch_for_ambiguous_input() -> N
     assert "action.ambiguous" in result["details"]
 
 
+def _image_generation_request(
+    *,
+    include_chair: bool,
+    duplicate_chair: bool = False,
+) -> dict[str, object]:
+    payload = _request_interpretation_payload()
+    payload["action"] = "generate"
+    payload["requested_effect"] = "propose"
+    payload["constraints"] = [{"name": "image-reference-id", "value": "IMG_2116"}]
+    references = [
+        {
+            "system": "google-drive",
+            "stable_id": "prior-handoff-infographic",
+            "exact_location": "drive-file-stale",
+            "verification_evidence": "sha256-stale",
+        }
+    ]
+    if include_chair:
+        references.append(
+            {
+                "system": "google-drive",
+                "stable_id": "IMG_2116",
+                "exact_location": "drive-file-chair",
+                "verification_evidence": "sha256-chair-current",
+            }
+        )
+    if duplicate_chair:
+        references.append(
+            {
+                "system": "google-drive",
+                "stable_id": "IMG_2116",
+                "exact_location": "drive-file-chair-duplicate",
+                "verification_evidence": "sha256-chair-duplicate",
+            }
+        )
+    payload["evidence_references"] = references
+    return payload
+
+
+def test_2966_connected_request_binding_selects_exact_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=True)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is True
+    assert result["details"] == []
+    assert result["execution_authorized"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_2966_connected_request_binding_blocks_missing_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=False)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is False
+    assert result["details"] == ["image-reference.missing"]
+
+
+def test_2966_connected_request_binding_blocks_ambiguous_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=True, duplicate_chair=True)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is False
+    assert result["details"] == ["image-reference.multiple"]
+
+
 CONNECTED_ISSUE_BODY = """### Issue tier
 
 tier:1-standard-implementation
@@ -194,6 +262,8 @@ def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
         issue_number=2609,
         issue_open=True,
         evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=[
             {
                 "pull_request_number": 2610,
@@ -208,11 +278,46 @@ def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
     assert result["github_writes_authorized"] is False
 
 
+
+
+
+def test_primary_pr_creation_tool_rejects_zero_net_diff() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2593,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=[],
+        changed_files=0,
+        in_scope_changed_files=0,
+    )
+    assert result["action"] == "manual-reconciliation"
+    assert result["creation_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.empty-implementation-diff"]
+
+
+def test_primary_pr_creation_tool_fails_closed_for_existing_branch_without_pr() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2612,
+        issue_open=True,
+        evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
+        active_primary_prs=[],
+        branch_exists=True,
+    )
+    assert result["action"] == "manual-reconciliation"
+    assert result["creation_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.branch-without-active-pr"]
+    assert result["github_writes_authorized"] is False
+
+
 def test_primary_pr_creation_tool_fails_closed_on_2609_duplicate_reproduction() -> None:
     result = mcp_server.admit_agent_os_primary_pr_creation_tool(
         issue_number=2609,
         issue_open=True,
         evidence_current=True,
+        changed_files=1,
+        in_scope_changed_files=1,
         active_primary_prs=[
             {
                 "pull_request_number": 2610,
@@ -240,6 +345,8 @@ def test_2447_batch_packaging_tool_rejects_a_second_execution_wave() -> None:
                 "issue_number": 2688,
                 "issue_open": True,
                 "objective_ref": "objective/lp4-zero-comparable-runs",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             }
         ],
@@ -254,6 +361,8 @@ def test_2447_batch_packaging_tool_rejects_a_second_execution_wave() -> None:
                 "issue_number": 2688,
                 "issue_open": True,
                 "objective_ref": "objective/lp4-zero-comparable-runs",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [
                     {
                         "pull_request_number": 2703,
@@ -278,12 +387,16 @@ def test_2447_batch_packaging_tool_keeps_independent_issues_on_separate_prs() ->
                 "issue_number": 2442,
                 "issue_open": True,
                 "objective_ref": "objective/candidate-packet-identity",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             },
             {
                 "issue_number": 2443,
                 "issue_open": True,
                 "objective_ref": "objective/candidate-packet-transport",
+                "changed_files": 1,
+                "in_scope_changed_files": 1,
                 "active_primary_prs": [],
             },
         ],

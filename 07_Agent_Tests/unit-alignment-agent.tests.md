@@ -4,8 +4,11 @@ Score against `common-test-checklist.md` first, then these checks; teacher-facin
 
 Overlay: `02_Agent_Overlays/unit-alignment-agent.md`.
 
-Required output keys for every test: `status`, `blockers`, `checks_passed`,
+Required internal verification/report evidence for every test: `status`, `blockers`, `checks_passed`,
 `checks_failed`, `next_owner`, `handoff_artifacts`, `files_changed`, `tests_run`.
+These fields are not automatically required as visible teacher-facing prose;
+teacher-facing tune-ups follow the canonical interaction-output presentation
+profile and expose audit/handoff fields only when material.
 
 ## Test 1 — In-Scope Request
 

@@ -18,7 +18,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Dashboard Migration Verification | 0.1.0 |
 | Instructional Design Standards | 0.17.0 |
 | Agent Orchestrator | 0.3.0 |
-| GitHub Service Agent | 0.11.0 |
+| GitHub Service Agent | 0.14.0 |
 | Unit Alignment Agent | 0.7.0 |
 | Teacher Modeling Coach | 0.7.0 |
 | Instructional Materials Coach | 0.6.0 |
@@ -31,7 +31,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | GitHub Issue Lifecycle Standard | 0.3.0 |
 | Safe Implementation Lane | 0.7.0 |
 | Agent OS Execution Service | 0.6.0 |
-| Artifact-First Response Standard | 0.1.0 |
+| Artifact-First Response Standard | 0.1.4 |
 | Teacher Decision Studio Standard | 0.1.0 |
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
@@ -64,7 +64,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 
-**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops.
+**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821; generated-asset continuation #2968) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops. Version 0.1.4 also makes an accepted generated visual intermediate evidence when an exact approved Drive destination and external-write authorization are already current: continue through the existing governed asset-ingestion/readback/metadata handoff, while failing closed rather than inventing a destination or authority.
 
 **Teacher Decision Studio Standard** (`01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md` plus `teacher-decision-studio-previews-standard.md`, #823/#824) defines table-first rubric/assessment consultation, explanation-risk analysis, and per-option previews; it recommends without auto-approving or writing governed fields.
 
@@ -78,7 +78,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **GitHub Issue Lifecycle Standard** `0.3.0` adds Promotion In Place as a canonical issue-body classification using the existing Child-Issue Creation Test and explicitly forbids a parallel promotion issue-state snapshot/model; it also generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
 
-**GitHub Service Agent** `0.11.0` requires connected Draft -> Ready-for-Review and other lifecycle mutations to reacquire canonical PR/head state and prove managed-label convergence through the existing lifecycle before terminal success (#2661). `0.10.0` consumes #2644's finite protected-setting execution contract while keeping generic administration blocked. `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
+**GitHub Service Agent** `0.14.0` retires managed PR labels as required lifecycle state (#2904): PR lifecycle decisions use canonical PR/head/check/branch/review evidence directly, while issue-label convergence remains governed separately. `0.10.0` consumes #2644's finite protected-setting execution contract while keeping generic administration blocked. `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.

@@ -204,6 +204,17 @@ def _verify_pdf(path: Path) -> None:
     data = path.read_bytes()
     if len(data) < 64 or not data.startswith(b"%PDF-") or b"%%EOF" not in data[-1024:]:
         raise StudentMaterialPdfError("PDF render verification failed")
+    trailer_index = data.rfind(b"trailer")
+    startxref_index = data.rfind(b"startxref")
+    eof_index = data.rfind(b"%%EOF")
+    if trailer_index < 0 or startxref_index < trailer_index or eof_index < startxref_index:
+        raise StudentMaterialPdfError("PDF render verification failed")
+    offset_text = data[startxref_index + len(b"startxref"):eof_index].strip().splitlines()
+    if not offset_text or not offset_text[0].isdigit():
+        raise StudentMaterialPdfError("PDF render verification failed")
+    xref_offset = int(offset_text[0])
+    if xref_offset <= 0 or xref_offset >= len(data) or not data[xref_offset:].startswith(b"xref"):
+        raise StudentMaterialPdfError("PDF render verification failed")
 
 
 def _esc(value: str) -> str:

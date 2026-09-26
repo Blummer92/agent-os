@@ -347,9 +347,9 @@ def test_classroom_fixture_preserves_artifact_first_and_decision_studio() -> Non
     assert "never fabricated" in classroom
 
     # The consumed standards keep their canonical shape; the artifact-first
-    # standard is at 0.1.3 after #2334 binds reuse-first visual recovery to
-    # classroom artifact completion.
-    assert "0.1.3" in section(ARTIFACT_FIRST, "Version")
+    # standard is at 0.1.4 after #2968 adds generated-asset delivery continuation
+    # while preserving the existing artifact-first classroom contract.
+    assert "0.1.4" in section(ARTIFACT_FIRST, "Version")
     assert "0.1.0" in section(TEACHER_STUDIO, "Version")
     assert "Required Order" in read(ARTIFACT_FIRST)
     assert "Locked Interaction Model" in read(TEACHER_STUDIO)
@@ -409,3 +409,20 @@ def test_standard_is_registered_and_navigable() -> None:
     navigation = read(NAVIGATION)
     assert "@interaction-output" in navigation
     assert CANONICAL_PATH in navigation
+
+
+def test_curriculum_agent_fixtures_distinguish_internal_evidence_from_visible_output() -> None:
+    fixture_paths = (
+        ROOT / "07_Agent_Tests/agent-orchestrator.tests.md",
+        ROOT / "07_Agent_Tests/unit-alignment-agent.tests.md",
+        ROOT / "07_Agent_Tests/teacher-modeling-coach.tests.md",
+    )
+    for path in fixture_paths:
+        fixture = read(path)
+        assert "internal" in fixture
+        assert "not automatically" in fixture or "only when material" in fixture
+        assert "Required output keys" not in fixture
+
+    standard = section(STANDARD, "Conditional Field Groups")
+    assert "only when routing is material" in standard
+    assert "No profile is required to display every field." in standard

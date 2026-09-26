@@ -24,6 +24,7 @@ from typing import Any
 
 from agent_os_notion_binding import NotionBindingError, build_read_task, new_read_adapter
 
+from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
 
@@ -41,7 +42,63 @@ CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 
-_ALLOWED_ACTIONS = ("get_database", "get_page")
+_PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
+_ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
+
+
+def _verification_request_spec(
+    request_id: str | None,
+) -> tuple[int, str, tuple[str, ...]] | None:
+    if request_id == VERIFICATION_REQUEST_ID:
+        return (
+            VERIFICATION_ISSUE_NUMBER,
+            "photography-foundations",
+            _PHOTOGRAPHY_ALLOWED_ACTIONS,
+        )
+    if request_id is None or not request_id.startswith("verify-") or not request_id.endswith("-binding"):
+        return None
+
+    canonical_unit_key = request_id.removeprefix("verify-").removesuffix("-binding")
+    catalog = load_catalog()
+    unit = catalog.canonical_unit(canonical_unit_key)
+    if unit is None or unit.dispatchable or unit.verification_title is None:
+        return None
+
+    canonical_requests = [
+        record
+        for record in catalog.requests
+        if record.request_class == "canonical-unit"
+        and record.canonical_unit_key == canonical_unit_key
+    ]
+    if len(canonical_requests) != 1:
+        return None
+    return (
+        canonical_requests[0].issue_number,
+        canonical_unit_key,
+        _ADDITIONAL_UNIT_ALLOWED_ACTIONS,
+    )
+
+
+def _binding_verification_request_ids() -> tuple[str, ...]:
+    """Return the finite verifier ids admitted by the shipped catalog."""
+
+    catalog = load_catalog()
+    candidates = [
+        VERIFICATION_REQUEST_ID,
+        *(
+            f"verify-{unit.canonical_unit_key}-binding"
+            for unit in catalog.canonical_units
+            if unit.verification_title is not None
+        ),
+    ]
+    return tuple(
+        request_id
+        for request_id in candidates
+        if _verification_request_spec(request_id) is not None
+    )
+
+
+BINDING_VERIFICATION_REQUEST_IDS = _binding_verification_request_ids()
 
 
 def _normalize_notion_id(value: object) -> str:
@@ -56,11 +113,20 @@ def admit_binding_verification_request(
     expected_repository: str,
     expected_actor: str,
 ) -> dict[str, object]:
-    """Admit only the exact owner-authorized #2283 bootstrap request."""
-
+    """Admit only a finite repository-owned binding-verification request."""
     reason = "admitted"
     authorized = True
     issue_number: int | None = None
+    request_id = (
+        transport.get("notion_read_request_id_or_none")
+        if isinstance(transport, Mapping)
+        and isinstance(transport.get("notion_read_request_id_or_none"), str)
+        else None
+    )
+    spec = _verification_request_spec(request_id)
+    expected_issue, canonical_unit_key, allowed_actions = (
+        spec if spec is not None else (None, None, ())
+    )
 
     if not isinstance(transport, Mapping):
         reason, authorized = "transport-malformed", False
@@ -79,13 +145,13 @@ def admit_binding_verification_request(
         reason, authorized = "run-attempt-replay", False
     elif transport.get("actor") != expected_actor:
         reason, authorized = "actor-not-allowed", False
-    elif transport.get("notion_read_request_id_or_none") != VERIFICATION_REQUEST_ID:
+    elif spec is None:
         reason, authorized = "verification-request-mismatch", False
     elif type(transport.get("issue_number")) is not int:
         reason, authorized = "issue-target-mismatch", False
     else:
         issue_number = int(transport["issue_number"])
-        if issue_number != VERIFICATION_ISSUE_NUMBER:
+        if issue_number != expected_issue:
             reason, authorized = "issue-target-mismatch", False
 
     return {
@@ -94,17 +160,16 @@ def admit_binding_verification_request(
         "reason_codes": [reason],
         "repository": expected_repository,
         "issue_number": issue_number,
-        "request_id": VERIFICATION_REQUEST_ID,
+        "request_id": request_id,
         "request_class": "binding-verification",
-        "canonical_unit_key": "photography-foundations",
-        "allowed_read_actions": list(_ALLOWED_ACTIONS),
+        "canonical_unit_key": canonical_unit_key,
+        "allowed_read_actions": list(allowed_actions),
         "secret_dispatch_authorized": authorized,
         "write_allowed": False,
         "production_authorized": False,
         "notion_write_reachable": False,
         "gce_required": False,
     }
-
 
 
 
@@ -136,10 +201,41 @@ def _execute_read(adapter: object, action: str, **payload: object) -> dict[str, 
 
 
 
+def _resolve_title_property_name(adapter: object, *, data_source_id: str) -> str:
+    """Resolve the one title-typed property from the verified registry schema."""
+
+    output = _execute_read(
+        adapter,
+        "get_data_source",
+        data_source_id=data_source_id,
+    )
+    if _normalize_notion_id(output.get("id")) != _normalize_notion_id(data_source_id):
+        raise NotionReadRequestError("canonical registry data source identity mismatch")
+
+    properties = output.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("canonical registry schema is missing properties")
+
+    title_properties = [
+        name
+        for name, metadata in properties.items()
+        if isinstance(name, str)
+        and name.strip()
+        and isinstance(metadata, Mapping)
+        and metadata.get("type") == "title"
+    ]
+    if len(title_properties) != 1:
+        raise NotionReadRequestError(
+            "canonical registry schema must expose exactly one title property"
+        )
+    return title_properties[0]
+
+
 def _execute_registry_query(
     adapter: object,
     *,
     data_source_id: str,
+    title_property_name: str,
     exact_title: str,
 ) -> list[dict[str, Any]]:
     """Query one verified registry source by one repository-owned exact title."""
@@ -148,7 +244,10 @@ def _execute_registry_query(
         adapter,
         "query_data_source",
         data_source_id=data_source_id,
-        filter={"property": "Name", "title": {"equals": exact_title}},
+        filter={
+            "property": title_property_name,
+            "title": {"equals": exact_title},
+        },
         page_size=2,
         max_pages=1,
         max_results=2,
@@ -159,40 +258,61 @@ def _execute_registry_query(
     return [dict(item) for item in results]
 
 
-def verify_candy_branding_binding(
+def verify_additional_unit_binding(
     adapter: object,
     *,
+    canonical_unit_key: str,
     canonical_registry_data_source_id: str,
     generated_at: str,
 ) -> dict[str, object]:
-    """Discover one exact Candy Branding page identity without making it dispatchable."""
+    """Discover one finite catalog-declared unit identity without promoting it."""
+
+    catalog = load_catalog()
+    unit = catalog.canonical_unit(canonical_unit_key)
+    if unit is None or unit.dispatchable or unit.verification_title is None:
+        raise NotionReadRequestError("canonical unit is not eligible for binding verification")
+
+    canonical_requests = [
+        record
+        for record in catalog.requests
+        if record.request_class == "canonical-unit"
+        and record.canonical_unit_key == canonical_unit_key
+    ]
+    if len(canonical_requests) != 1:
+        raise NotionReadRequestError("canonical unit verification request is missing or ambiguous")
 
     if not isinstance(canonical_registry_data_source_id, str) or not canonical_registry_data_source_id.strip():
         raise NotionReadRequestError("canonical registry data source id is missing")
 
+    data_source_id = canonical_registry_data_source_id.strip()
+    title_property_name = _resolve_title_property_name(
+        adapter,
+        data_source_id=data_source_id,
+    )
     matches = _execute_registry_query(
         adapter,
-        data_source_id=canonical_registry_data_source_id.strip(),
-        exact_title=CANDY_BRANDING_TITLE,
+        data_source_id=data_source_id,
+        title_property_name=title_property_name,
+        exact_title=unit.verification_title,
     )
     if len(matches) != 1:
-        raise NotionReadRequestError("Candy Branding canonical-unit identity is missing or ambiguous")
+        raise NotionReadRequestError("canonical-unit identity is missing or ambiguous")
 
     page = matches[0]
     page_id = page.get("id")
     if not isinstance(page_id, str) or not page_id.strip():
-        raise NotionReadRequestError("Candy Branding canonical-unit page id is missing")
+        raise NotionReadRequestError("canonical-unit page id is missing")
     if page.get("archived") is True or page.get("in_trash") is True:
-        raise NotionReadRequestError("Candy Branding canonical page is archived or trashed")
+        raise NotionReadRequestError("canonical page is archived or trashed")
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "request_id": CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+        "request_id": f"verify-{canonical_unit_key}-binding",
         "dispatch_status": "completed",
         "dispatch_reason": "canonical-unit-binding-verification-complete",
         "canonical_unit": {
-            "canonical_unit_key": CANDY_BRANDING_UNIT_KEY,
-            "stable_id": CANDY_BRANDING_STABLE_ID,
+            "canonical_unit_key": unit.canonical_unit_key,
+            "stable_id": unit.stable_id,
             "provider_page_id": page_id.strip(),
             "verification_state": "verified-current",
         },
@@ -202,6 +322,22 @@ def verify_candy_branding_binding(
         "gce_invoked": False,
         "generated_at": generated_at,
     }
+
+
+def verify_candy_branding_binding(
+    adapter: object,
+    *,
+    canonical_registry_data_source_id: str,
+    generated_at: str,
+) -> dict[str, object]:
+    """Compatibility wrapper for the first #2816 additional-unit verifier."""
+
+    return verify_additional_unit_binding(
+        adapter,
+        canonical_unit_key=CANDY_BRANDING_UNIT_KEY,
+        canonical_registry_data_source_id=canonical_registry_data_source_id,
+        generated_at=generated_at,
+    )
 
 
 def _verified_database(
@@ -323,10 +459,22 @@ def main(argv: list[str] | None = None) -> int:
             adapter = new_read_adapter()
         except NotionBindingError as exc:
             raise NotionReadRequestError(str(exc)) from exc
-        evidence = {
-            "admission": admission,
-            **verify_live_bindings(adapter, generated_at=args.generated_at),
-        }
+        if admission.get("request_id") == VERIFICATION_REQUEST_ID:
+            result = verify_live_bindings(adapter, generated_at=args.generated_at)
+        else:
+            canonical_source = load_catalog().source("canonical-unit")
+            if canonical_source is None or not canonical_source.dispatchable or canonical_source.data_source_id is None:
+                raise NotionReadRequestError("canonical registry source binding is not verified-current")
+            canonical_unit_key = admission.get("canonical_unit_key")
+            if not isinstance(canonical_unit_key, str):
+                raise NotionReadRequestError("binding verification canonical unit key is missing")
+            result = verify_additional_unit_binding(
+                adapter,
+                canonical_unit_key=canonical_unit_key,
+                canonical_registry_data_source_id=canonical_source.data_source_id,
+                generated_at=args.generated_at,
+            )
+        evidence = {"admission": admission, **result}
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
@@ -342,6 +490,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "BINDING_VERIFICATION_REQUEST_IDS",
     "CANONICAL_REGISTRY_DATABASE_ID",
     "CANDY_BRANDING_STABLE_ID",
     "CANDY_BRANDING_TITLE",
@@ -351,6 +500,7 @@ __all__ = [
     "VERIFICATION_REQUEST_ID",
     "VISUAL_ASSET_LIBRARY_DATABASE_ID",
     "admit_binding_verification_request",
+    "verify_additional_unit_binding",
     "verify_candy_branding_binding",
     "verify_live_bindings",
 ]

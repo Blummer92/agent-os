@@ -268,3 +268,45 @@ def test_batch_continues_past_item_local_failure():
     )
     assert results[0].convergence_status == "manual-review"
     assert results[1].convergence_status == "would-change"
+
+
+def test_issue_closed_during_label_write_cannot_report_convergence():
+    class ClosingProvider(Provider):
+        def add_label(self, repository, issue_number, label):
+            super().add_label(repository, issue_number, label)
+            current = self.snapshots[issue_number]
+            self.snapshots[issue_number] = LiveIssueSnapshot(
+                current.repository, current.issue_number, current.body,
+                current.labels, "closed",
+            )
+
+    provider = ClosingProvider({1: snap(labels=("human-note",))})
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
+    assert result.convergence_status == "blocked"
+    assert result.reason_codes == ("issue-state-changed-during-mutation",)
+    assert result.side_effects_performed is True
+    assert "human-note" in provider.snapshots[1].labels
+
+    # The existing reconciler can clean the terminal projection on reacquisition.
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
+    assert result.convergence_status == "converged"
+    assert "status:ready" not in provider.snapshots[1].labels
+    assert "human-note" in provider.snapshots[1].labels
+
+
+def test_readiness_body_changed_during_write_cannot_report_convergence():
+    class EditingProvider(Provider):
+        def add_label(self, repository, issue_number, label):
+            super().add_label(repository, issue_number, label)
+            current = self.snapshots[issue_number]
+            self.snapshots[issue_number] = LiveIssueSnapshot(
+                current.repository, current.issue_number,
+                current.body.replace("status:ready", "status:blocked"),
+                current.labels, current.state,
+            )
+
+    provider = EditingProvider({1: snap()})
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
+    assert result.convergence_status == "blocked"
+    assert result.reason_codes == ("issue-state-changed-during-mutation",)
+    assert result.side_effects_performed is True

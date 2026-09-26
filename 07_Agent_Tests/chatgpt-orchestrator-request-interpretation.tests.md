@@ -97,3 +97,16 @@ Expect: discover the Adobe Express capability while preserving create/build inte
 ## Test 52 - Explicit Screen Walkthrough Remains Distinct
 Fixture: the direct user explicitly asks `Walk me through the Adobe Express tutorial screen by screen; I am not asking you to create it.`
 Expect: screen/UI guidance may route as guidance when otherwise supported. The #1637 guard preserves task type; it does not force creation when the user explicitly requests a walkthrough.
+
+
+## Test 53 - Current Image Reference Outranks Stale Generation Context
+Fixture: a fresh direct image-generation request explicitly names current reference asset `IMG_2116`; the active execution surface contains exactly that reference plus an unrelated prior handoff infographic from the preceding generation context.
+Expect: bind `IMG_2116` as the one current generation reference; prior generation intent/artifact state is not selected as fallback and creates no authority.
+
+## Test 54 - Missing Current Image Reference Fails Closed
+Fixture: the same fresh generation request explicitly names `IMG_2116`, but the active execution surface cannot supply that reference and only stale prior-generation evidence is available.
+Expect: `image-reference.missing`; generation blocks before provider execution. Do not substitute the stale prior artifact, invent a lookalike, or silently continue without the requested reference.
+
+## Test 55 - Ambiguous Current Image Reference Fails Closed
+Fixture: two available reference records claim the exact requested current reference identity.
+Expect: `image-reference.multiple`; generation blocks until one current exact reference is resolved. No conversation-memory tie-breaker is permitted.

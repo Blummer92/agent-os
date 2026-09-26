@@ -15,7 +15,7 @@ Authorized merge method: `<merge|squash|rebase>`
 Current Ready-for-Review / merge / closure authorization projections: `<booleans + evidence refs>`
 Canonical required checks and authoritative aggregate: `<source-backed identities>`
 Observed check conclusions: `<name -> conclusion>`
-#1038 lifecycle reconciliation receipt: `<current receipt>`
+#1038 canonical PR currentness evidence: `<current receipt>`
 #1187 branch-refresh receipt when applicable: `<receipt | none>`
 #988 failure-attribution evidence when applicable: `<bounded evidence | none>`
 Terminal checkpoint/ResumePlan and exact lease-disposition receipts after merge: `<receipts | not yet applicable>`

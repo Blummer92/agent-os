@@ -1,4 +1,5 @@
 import json
+from itertools import permutations
 
 import pytest
 
@@ -121,6 +122,24 @@ def test_tie_order_is_deterministic_by_identity():
     second = candidate("b", library_name="hypothesis")
     result = select_coding_knowledge(request(), (second, first))
     assert result.knowledge_refs == ("a", "b")
+
+
+def test_casefold_collisions_have_deterministic_order_and_selection_at_limit():
+    # Identity is case-sensitive; neither ASCII nor Unicode fold collisions
+    # may make the retained three candidates depend on provider arrival order.
+    values = tuple(candidate(identity) for identity in ("A", "a", "SS", "ss", "ß"))
+    expected = select_coding_knowledge(request(), values)
+    assert expected.knowledge_refs == ("A", "a", "SS")
+    for ordering in permutations(values):
+        assert select_coding_knowledge(request(), ordering).to_json() == expected.to_json()
+
+
+def test_casefold_collision_preserves_distinct_case_sensitive_identities():
+    values = (candidate("a"), candidate("A"))
+    result = select_coding_knowledge(request(), values)
+    assert result.candidate_count == 2
+    assert result.selected_count == 2
+    assert result.knowledge_refs == ("A", "a")
 
 
 def test_identical_duplicate_identity_deduplicates():

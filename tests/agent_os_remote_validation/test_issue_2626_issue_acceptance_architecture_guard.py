@@ -1,9 +1,10 @@
 """#2626: a new Issue Acceptance production module must reach its architecture guard.
 
-PR #2613 (`primary_pr_creation_admission.py`) and PR #2619
-(`draft_pr_materialization_admission.py`) both reached validation without a
+PR #2613 (`primary_pr_creation_admission.py`) reached validation without a
 `DOMAIN_RULES` registration and failed with "must have exactly one
-architecture-domain classification; found none".
+architecture-domain classification; found none". The former #2619 materialization
+contract was retired by #2926 after its live invariants moved into the canonical
+primary-PR admission owner.
 
 The governed path is already correct: the canonical selector maps this file
 family to the package-level focused command, and that command contains
@@ -58,17 +59,6 @@ def test_2613_new_production_module_selects_the_guard_carrying_command() -> None
     assert plan.commands == (PACKAGE_COMMAND,)
     assert plan.reason_codes == ("profile.focused-package",)
     assert validate_validation_plan(plan) == ()
-
-
-def test_2619_new_production_module_selects_the_guard_carrying_command() -> None:
-    plan = _select(
-        (
-            "scripts/agent_os_issue_acceptance/draft_pr_materialization_admission.py",
-            "tests/agent_os_issue_acceptance/test_draft_pr_materialization_admission.py",
-        )
-    )
-    assert plan.profile == "focused"
-    assert plan.commands == (PACKAGE_COMMAND,)
 
 
 def test_production_module_without_any_focused_test_still_selects_the_guard() -> None:

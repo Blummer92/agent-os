@@ -8,11 +8,14 @@ import os
 from pathlib import Path
 import sys
 
+from .artifact_structure import PASS, validate_required_worksheet_sections
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials
-from .generation_context import compose_generation_context
+from .generation_context import compose_generation_context, curriculum_decision_token
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
+from instructional_workflow_contracts.current_curriculum_state import resolve_current_curriculum_state
+from instructional_workflow_contracts.material_requirement import validate_material_requirement
 from .live_build import LiveBuildInput, build_live_materials
 from .slides_requests import build_slides_replace_requests
 from .visual_reuse import plan_governed_visual_reuse
@@ -131,6 +134,29 @@ def main(argv: list[str] | None = None) -> int:
         )
         context["generation_context_tokens"] = sorted(content.context_tokens)
 
+        requirement_result = validate_material_requirement(material_requirement)
+        requirement = requirement_result.record.to_dict() if requirement_result.record is not None else {}
+        state_result = resolve_current_curriculum_state(current_curriculum_evidence)
+        state = state_result.record.to_dict() if state_result.record is not None else {}
+        decision_tokens = {
+            item["decision_key"]: curriculum_decision_token(item["decision_key"])
+            for item in state.get("owner_states", [])
+            if isinstance(item.get("decision_key"), str)
+        }
+        docs_requests = tuple(build_docs_replace_requests(content))
+        worksheet_qa = validate_required_worksheet_sections(
+            required_sections=requirement.get("instructional", {}).get("required_sections", ()),
+            curriculum_decision_tokens=decision_tokens,
+            docs_requests=docs_requests,
+        )
+        context["worksheet_generation_plan_qa"] = worksheet_qa.status
+        if worksheet_qa.status != PASS:
+            details = "; ".join(finding.message for finding in worksheet_qa.findings)
+            raise RuntimeError(
+                "Worksheet generation-plan completeness requires resolution before external write: "
+                f"{worksheet_qa.status}; {details}"
+            )
+
         credentials = get_credentials(args.client_secret, args.token_path)
         receipt = build_live_materials(
             LiveBuildInput(
@@ -139,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                 doc_name=f"{content.title} - Worksheet",
                 idempotency_key=_build_idempotency_key(args, content.title, material_requirement),
                 slides_requests=tuple(build_slides_replace_requests(content)),
-                docs_requests=tuple(build_docs_replace_requests(content)),
+                docs_requests=docs_requests,
             ),
             drive_service=build_drive_service(credentials),
             slides_service=build_slides_service(credentials),

@@ -370,7 +370,7 @@ def _deduplicate(
         if existing is not None and existing != candidate:
             return (), True
         by_id[candidate.knowledge_id] = candidate
-    return tuple(by_id[key] for key in sorted(by_id, key=str.casefold)), False
+    return tuple(by_id[key] for key in sorted(by_id, key=lambda key: (key.casefold(), key))), False
 
 
 def _match_candidate(

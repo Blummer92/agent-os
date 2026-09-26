@@ -406,3 +406,19 @@ def test_discovery_wrong_claims_fail_before_host_access() -> None:
     assert adapter.calls == []
     assert result["discovery"]["status"] == "blocked"
     assert result["discovery"]["handoff_id"] is None
+
+
+def test_ssh_timeout_override_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_run(argv, *, timeout=60):
+        calls.append((argv, timeout))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    adapter = live.GcloudIapAdapter()
+    adapter._ssh(live.RESOURCE, "fixed-command", timeout=420)
+    assert calls[0][1] == 420
+    for invalid in (0, 901, True):
+        with pytest.raises(live.GcloudCommandError, match="timeout"):
+            adapter._ssh(live.RESOURCE, "fixed-command", timeout=invalid)

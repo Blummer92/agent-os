@@ -91,6 +91,15 @@ The assembler preserves `owner-governed`, `display-derived`, `agent-suggested`, 
 
 The assembler performs no Notion, Drive, GitHub, filesystem, environment, credential, model, or network access; it creates no persistence or write proposal and grants no readiness, approval, source, production, publication, or external-write authority. #963 remains the owner of conversational persistence/write proposals.
 
+
+## PPUX Projection Input Assembler
+
+`assemble_ppux_projection_input` is the pure #2755 adapter from already-resolved canonical instructional evidence to the existing Picture Perfect consumer envelope `picture-perfect-prompt-projection-input-v1`.
+
+The adapter reconstructs the supplied `curriculum-workflow-handoff-v1`, `curriculum-material-requirement-v2`, and `curriculum-visual-needs-plan-v1` evidence through their existing validators/planner. The MaterialRequirement must bind the exact handoff, and the supplied VisualNeedsPlan must reconstruct exactly from that MaterialRequirement. Reviewed tutorial evidence and routed tutorial steps remain PPUX consumer projections: retained step/recording identity, Teacher Modeling source-step provenance, visual-role identity, fulfillment disposition, and existing PromptAuthoringInput evidence must all agree before an envelope is emitted.
+
+The output is the exact bounded PPUX envelope plus canonical JSON bytes, SHA-256, and byte length. Missing, mismatched, duplicate, stale/non-valid upstream evidence, invented visual-role references, incomplete routed-step coverage, or non-false execution authority fail closed without a partial envelope. The adapter does not infer prompt authoring from prose, substitute Tutorial 0, retrieve Notion/Drive data, persist an input, dispatch the PPUX runner, call an image provider, or grant execution/publication/external-write authority. #2673 remains the governed runtime consumer.
+
 ## Authority and downstream behavior
 
 All retrieval, generation, production, publication, approval, readiness, and external-write authority remains false.

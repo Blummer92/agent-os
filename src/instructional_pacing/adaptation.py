@@ -200,24 +200,28 @@ def _adapted_range(timing: dict[str, float], savings: float) -> dict[str, float]
     return {"lower": lower, "expected": expected, "upper": upper}
 
 
-def _split_plan(functions: list[dict[str, Any]], available: float) -> dict[str, Any] | None:
+def _split_plan(
+    functions: list[dict[str, Any]],
+    available: float,
+    adapted_durations: dict[str, float],
+) -> dict[str, Any] | None:
+    """Name the split point and both halves from one adapted representation."""
     cumulative = 0.0
     split_after: str | None = None
     for item in functions:
-        expected = float(item["expected_minutes"])
-        if cumulative + expected > available:
+        duration = adapted_durations[item["name"]]
+        if cumulative + duration > available:
             break
-        cumulative += expected
+        cumulative += duration
         split_after = item["name"]
 
     if split_after is None or split_after == functions[-1]["name"]:
         return None
 
-    total = sum(float(item["expected_minutes"]) for item in functions)
     return {
         "split_after": split_after,
         "first_period_expected_minutes": cumulative,
-        "continuation_expected_minutes": max(0.0, total - cumulative),
+        "continuation_expected_minutes": max(0.0, sum(adapted_durations.values()) - cumulative),
         "teacher_review_required": True,
     }
 
@@ -241,6 +245,7 @@ def plan_lesson_adaptation(
     operational_budget = float(packet["operational_minutes"])
     operational_savings = 0.0
     instructional_savings = 0.0
+    attributed: dict[str, float] = {}
 
     for section in ADAPTATION_SECTIONS:
         if required_savings <= operational_savings + instructional_savings:
@@ -256,6 +261,8 @@ def plan_lesson_adaptation(
                 operational_savings += candidate_savings
             else:
                 instructional_savings += candidate_savings
+                if "function_name" in candidate:
+                    attributed[candidate["function_name"]] = attributed.get(candidate["function_name"], 0.0) + candidate_savings
             if section == "evidence_formats":
                 changed_formats.append(
                     {
@@ -280,11 +287,18 @@ def plan_lesson_adaptation(
 
     adapted = _adapted_range(timing, instructional_savings)
     effective_available = available + operational_savings
+    adapted_durations = {
+        item["name"]: float(item["expected_minutes"]) - attributed.get(item["name"], 0.0)
+        for item in packet["instructional_functions"]
+    }
     split_plan = None
     split_unresolved = False
-    if adapted["expected"] > available and packet["continuation_allowed"]:
-        split_plan = _split_plan(packet["instructional_functions"], available)
-        split_unresolved = split_plan is None
+    if adapted["expected"] > effective_available and packet["continuation_allowed"]:
+        if abs(sum(adapted_durations.values()) - adapted["expected"]) > 1e-9:
+            split_unresolved = True
+        else:
+            split_plan = _split_plan(packet["instructional_functions"], effective_available, adapted_durations)
+            split_unresolved = split_plan is None
 
     return {
         "adapted_range": adapted,

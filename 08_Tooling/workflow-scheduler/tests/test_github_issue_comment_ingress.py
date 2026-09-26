@@ -15,6 +15,9 @@ SOURCE_CAPSULE = "pre-publication-evidence:" + "c" * 64
 DEV_SHA = "b" * 40
 FIRST_RUN_SHA = "d" * 40
 DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-coverage {DEV_SHA} remote-validation-suite"
+DIAGNOSTIC_ID = "ppux-canva-cdp-readonly"
+DIAGNOSTIC_REQUEST_ID = "canva-cdp-1"
+DIAGNOSTIC_TRIGGER = f"/agent-os diagnose {DIAGNOSTIC_ID} {DIAGNOSTIC_REQUEST_ID}"
 
 
 def event(body: str, *, action: str = "created", actor: str = ACTOR) -> dict[str, object]:
@@ -247,5 +250,36 @@ def test_duplicate_first_run_validation_comments_converge_but_sha_change_does_no
     duplicate_event["comment"]["id"] = 9982
     duplicate = admit(duplicate_event)
     changed = admit(event(f"/agent-os validate-first-run {'e' * 40}"))
+    assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
+    assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
+
+
+def test_exact_codespaces_diagnostic_trigger_is_bounded_and_non_authorizing() -> None:
+    result = admit(event(DIAGNOSTIC_TRIGGER))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-codespaces-diagnostic-envelope"
+    assert result.diagnostic_id_or_none == DIAGNOSTIC_ID
+    assert result.diagnostic_request_id_or_none == DIAGNOSTIC_REQUEST_ID
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_codespaces_diagnostic_rejects_unknown_identity_shell_and_extra_tokens() -> None:
+    unknown = admit(event("/agent-os diagnose arbitrary canva-cdp-1"))
+    shell = admit(event(f"{DIAGNOSTIC_TRIGGER}; rm -rf /"))
+    extra = admit(event(f"{DIAGNOSTIC_TRIGGER} extra"))
+    assert (unknown.status, unknown.reason) == ("ignored", "malformed-trigger")
+    assert (shell.status, shell.reason) == ("ignored", "malformed-trigger")
+    assert (extra.status, extra.reason) == ("ignored", "malformed-trigger")
+
+
+def test_duplicate_codespaces_diagnostic_comments_share_identity_but_request_change_does_not() -> None:
+    first = admit(event(DIAGNOSTIC_TRIGGER))
+    duplicate_event = event(DIAGNOSTIC_TRIGGER)
+    duplicate_event["comment"]["id"] = 9982
+    duplicate = admit(duplicate_event)
+    changed = admit(event(f"/agent-os diagnose {DIAGNOSTIC_ID} canva-cdp-2"))
     assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
     assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none

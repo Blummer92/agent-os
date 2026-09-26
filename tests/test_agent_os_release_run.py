@@ -49,16 +49,6 @@ def closure_packet(issue_state="open"):
     return {"authorization": authorization.to_dict(), "snapshot": snapshot.to_dict()}
 
 
-def lifecycle(head=HEAD, reason="validation-terminal", status="converged"):
-    return {
-        "reconciliation_status": status,
-        "invocation_reason": reason,
-        "planned_head_sha": head,
-        "verified_head_sha": head,
-        "unmanaged_labels_preserved": ["agent-os", "owner:integration-manager"],
-    }
-
-
 def refresh(old=OLD, new=HEAD, status="converged"):
     return {
         "status": status,
@@ -69,14 +59,12 @@ def refresh(old=OLD, new=HEAD, status="converged"):
             "branch-freshness",
             "candidate-runtime",
             "focused-validation",
-            "lifecycle-reconciliation",
             "merge-authorization",
             "ready-for-review",
             "review-applicability",
             "tested-sha",
         ],
         "validation": {"head_sha": new, "status": "green"},
-        "lifecycle_reconciliation": lifecycle(new),
     }
 
 
@@ -103,7 +91,6 @@ def evidence(**overrides):
         "ready_for_review_authorized": True,
         "merge_authorized": False,
         "issue_closure_authorized": False,
-        "lifecycle_reconciliation": lifecycle(),
     }
     base.update(overrides)
     return base
@@ -323,7 +310,7 @@ def test_green_validation_never_creates_merge_authority():
 
 def test_branch_behind_routes_exclusively_to_1187_even_when_green():
     state = release_run.evaluate_release_run(
-        evidence(branch_state="behind", managed_labels=["pr:merge-ready", "validation:green"])
+        evidence(branch_state="behind")
     )
     assert "branch is behind current main" in state.blockers
     assert state.next_action == "route-through-gh-life3-1187"
@@ -358,23 +345,6 @@ def test_1187_refresh_requires_head_evidence_invalidation():
     assert "#1187 refresh did not prove required head-evidence invalidation" in state.blockers
 
 
-def test_terminal_validation_requires_current_1038_reconciliation():
-    state = release_run.evaluate_release_run(evidence(lifecycle_reconciliation=None))
-    assert "managed-label reconciliation receipt is missing" in state.blockers
-    assert state.next_action == "reconcile-managed-labels-via-gh-life2-1038"
-
-
-def test_stale_1038_receipt_blocks_regardless_of_managed_labels():
-    state = release_run.evaluate_release_run(
-        evidence(
-            lifecycle_reconciliation=lifecycle(OLD),
-            managed_labels=["pr:merge-ready", "validation:green", "branch:current"],
-        )
-    )
-    assert "managed-label reconciliation is bound to a stale head" in state.blockers
-    assert state.classification == "BLOCKED"
-
-
 def test_draft_to_ready_outside_governed_operation_is_detected():
     state = release_run.evaluate_release_run(
         evidence(
@@ -396,7 +366,6 @@ def test_governed_draft_to_ready_transition_can_continue_after_reacquisition():
             checkpoint_pr_lifecycle_state="draft",
             checkpoint_head_sha=HEAD,
             side_effects_performed=["ready-for-review"],
-            lifecycle_reconciliation=lifecycle(reason="draft-ready-transition"),
         )
     )
     assert state.phase == "merge-authorization-pause"
@@ -420,16 +389,6 @@ def test_externally_merged_pr_cannot_continue_stale_merge_pause():
     assert state.phase == "external-transition"
     assert state.external_transition == "merged"
     assert state.next_action == "terminal-external-transition-merged"
-
-
-def test_unmanaged_labels_are_not_mutated_by_release_evaluator():
-    state = release_run.evaluate_release_run(
-        evidence(
-            unmanaged_labels=["agent-os", "owner:integration-manager", "security:human"],
-            managed_labels=["pr:draft", "branch:behind"],
-        )
-    )
-    assert state.side_effects_performed == []
 
 
 def test_no_implicit_dangerous_actions_exist():

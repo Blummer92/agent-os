@@ -241,3 +241,44 @@ def test_operational_friction_increases_available_time_without_compressing_instr
     assert payload["available_lesson_minutes"] == 45.0
     assert payload["adapted_range"]["expected"] == 45.0
     assert payload["compressed_instances"] == [{"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 5.0}]
+
+
+
+def _split_packet(**adaptations) -> dict:
+    packet = _packet()
+    packet["period_minutes"] = 50
+    packet["operational_minutes"] = 5
+    packet["instructional_functions"] = [
+        {"name": name, "protected": False, "lower_minutes": 5, "expected_minutes": 30, "upper_minutes": 30}
+        for name in ("model", "practice", "closing")
+    ]
+    packet["prior_runs"] = [
+        {"run_id": f"run/{index}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 90, "elapsed_minutes": 95, "context_ref": f"context/{index}"}
+        for index in (1, 2)
+    ]
+    if adaptations:
+        packet["adaptations"] = adaptations
+    return packet
+
+
+def test_split_point_follows_savings_taken_before_it() -> None:
+    payload = _payload(_split_packet(repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]))
+    split = payload["split_plan"]
+    assert split["split_after"] == "practice"
+    assert split["first_period_expected_minutes"] == 40.0
+    assert split["continuation_expected_minutes"] == 30.0
+    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
+
+
+def test_split_point_follows_savings_taken_after_it() -> None:
+    payload = _payload(_split_packet(repetitions=[{"id": "closing-repeat", "function_name": "closing", "minutes_saved": 20, "preserves_function": True}]))
+    split = payload["split_plan"]
+    assert split["split_after"] == "model"
+    assert split["first_period_expected_minutes"] == 30.0
+    assert split["continuation_expected_minutes"] == 40.0
+
+
+def test_unattributable_savings_leave_the_split_unresolved_instead_of_guessing() -> None:
+    payload = _payload(_split_packet(extraneous_material=[{"id": "extra-demo", "minutes_saved": 20}]))
+    assert payload["split_plan"] is None
+    assert "lp-pacing-continuation-unresolved" in payload["unresolved_uncertainties"]

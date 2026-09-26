@@ -155,11 +155,17 @@ def run_branch_refresh_actions(*, trigger: BranchRefreshActionsTrigger, github_c
         raise TypeError("environment must be a mapping")
 
     transport = PyGithubRefreshAuthorizationSourceTransport(github_client)
-    source = reacquire_refresh_authorization_source(transport=transport, repository=trigger.repository, pr_number=trigger.pr_number)
-    if source.status is not RefreshAuthorizationSourceStatus.CURRENT:
-        return _blocked(trigger, *source.reason_codes)
     try:
         head_sha, main_sha, changed_paths = _current_pr_evidence(github_client, trigger.repository, trigger.pr_number)
+        source = reacquire_refresh_authorization_source(
+            transport=transport,
+            repository=trigger.repository,
+            pr_number=trigger.pr_number,
+            current_head_sha=head_sha,
+            current_main_sha=main_sha,
+        )
+        if source.status is not RefreshAuthorizationSourceStatus.CURRENT:
+            return _blocked(trigger, *source.reason_codes)
         resolved = resolve_branch_refresh_authorization(source.records, repository=trigger.repository, pr_number=trigger.pr_number, current_head_sha=head_sha, current_main_sha=main_sha, current_changed_paths=changed_paths)
     except (TypeError, ValueError, RuntimeError):
         return _blocked(trigger, "actions.current-evidence-unavailable")

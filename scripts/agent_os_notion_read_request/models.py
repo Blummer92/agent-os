@@ -144,6 +144,7 @@ class CanonicalUnitBinding:
     provider_page_id: str | None
     verification_state: str
     content_class: str
+    verification_title: str | None = None
 
     @property
     def dispatchable(self) -> bool:

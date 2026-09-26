@@ -148,7 +148,7 @@ def compose_generation_context(
             continue
         value = item.get("value")
         if isinstance(value, str):
-            tokens[_decision_token(decision_key)] = value
+            tokens[curriculum_decision_token(decision_key)] = value
             student_token = _STUDENT_ASSESSMENT_TOKENS.get(decision_key)
             if student_token is not None:
                 tokens[student_token] = value
@@ -160,7 +160,7 @@ def compose_generation_context(
             continue
         value = item.get("value")
         if isinstance(value, str):
-            tokens.setdefault(_decision_token(decision_key), value)
+            tokens.setdefault(curriculum_decision_token(decision_key), value)
             student_token = _STUDENT_ASSESSMENT_TOKENS.get(decision_key)
             if student_token is not None:
                 tokens.setdefault(student_token, value)
@@ -274,7 +274,7 @@ def _visual_context(value: object | None) -> tuple[tuple[str, ...], str]:
     return tuple(sorted(asset_ids)), encoded
 
 
-def _decision_token(decision_key: str) -> str:
+def curriculum_decision_token(decision_key: str) -> str:
     safe = "".join(char if char.isalnum() else "_" for char in decision_key.lower())
     return f"curriculum_{safe.strip('_')}"
 

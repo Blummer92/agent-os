@@ -141,8 +141,11 @@ def test_invalid_bounds_fail_without_network():
     assert http_post.calls == []
 
 
-def test_legacy_query_database_is_explicitly_deprecated_compatibility_only():
+def test_retired_query_database_action_is_not_registered():
     http_post = FakePost([{"results": [], "has_more": False, "next_cursor": None}])
-    result = NotionReadOnlyAdapter(http_post_query_database=http_post).execute(make_task({"action": "query_database", "database_id": "db-1"}))
-    assert result["output"]["deprecated"] == "Use query_data_source with data_source_id"
-    assert http_post.calls[0][0] == "https://api.notion.com/v1/databases/db-1/query"
+    result = NotionReadOnlyAdapter(http_post_query_data_source=http_post).execute(
+        make_task({"action": "query_database", "database_id": "db-1"})
+    )
+    assert result["status"] == "failure"
+    assert "Unsupported action" in result["message"]
+    assert http_post.calls == []

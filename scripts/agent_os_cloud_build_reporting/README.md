@@ -1,79 +1,71 @@
 # Agent OS Cloud Build Reporting
 
-Pure-local, deterministic, supplied-evidence-only core for Cloud Build
-reporting. Implements immutable models and functions for:
+Deterministic Cloud Build reporting contracts for the #685/#686 sequence.
 
-- normalizing terminal/non-terminal Cloud Build evidence;
-- resolving pull-request identity only from an exact repository-and-SHA
-  match;
-- rendering a bounded, deterministic, secret-redacted comment projection.
+## Core contract (#685)
 
-## Scope
+The core is supplied-evidence-only and performs no network, GitHub, Cloud Build,
+credential, filesystem, subprocess, environment, or clock access. It owns:
 
-Owned by issue #685. No network, GitHub, Cloud Build, credential,
-filesystem, subprocess, environment, or clock access exists in this
-package. All inputs are supplied by the caller; nothing is fabricated,
-inferred, or persisted.
+- terminal/non-terminal Cloud Build evidence normalization;
+- exact repository + tested-SHA pull-request resolution;
+- bounded, secret-safe comment rendering and stable managed markers.
 
-Connected lookup and live PR comment publication belong to #686. Live
-credential, trigger, and smoke-test activation belongs to #687.
-Provider-neutral failure projection belongs to #694.
+Automatic PR resolution requires an authoritative supplied PR number matching
+the exact repository and tested SHA, or exactly one supplied open candidate with
+that exact identity. Ambiguous, closed, incomplete, malformed, wrong-repository,
+or wrong-SHA evidence never resolves automatically.
 
-## Public contract
+Candidate intake is bounded by `MAX_PR_CANDIDATES` (64). Public rendered text
+is sanitized and bounded; authority and side-effect flags remain false.
 
-- `CloudBuildResultEvidence` — immutable evidence: build id, full 40-char
-  tested SHA, repository, trigger/invocation ids, `overall_result`
-  (`success`, `failure`, `timeout`, `cancelled`, `internal-error`,
-  `unavailable`, `pending`, `malformed`), `failed_step`, `exit_code`,
-  `observed_at`, `terminal`, `source_complete`.
-- `PullRequestResolutionCandidate` — a supplied open/closed PR candidate:
-  repository, PR number, head SHA, state, evidence source.
-- `PullRequestResolutionResult` — `resolved | skipped | manual-review |
-  invalid`, resolved PR number, bounded reason codes.
-- `CloudBuildCommentProjection` — deterministic hidden marker, bounded
-  rendered body, `side_effects_performed = False`,
-  `execution_authorized = False`.
+## Publication policy (#686)
 
-Functions: `normalize_cloud_build_evidence`, `resolve_pull_request`,
-`render_comment_projection`, `serialize_projection`,
-`compute_stable_marker`, `evidence_semantic_identity`, `is_same_build`.
+`publication.py` is the thin domain policy around the canonical GitHub comment
+operation. It does **not** implement a GitHub client, authentication, pagination,
+retry transport, or a second comment API abstraction.
 
-## Resolution rules
+A connected caller supplies:
 
-Automatic resolution requires an authoritative supplied PR number that
-matches the exact repository and tested SHA, or exactly one supplied open
-candidate matching the exact repository and tested SHA. No match, multiple
-matches, closed candidates, wrong repository, wrong SHA, or incomplete or
-malformed evidence route to `skipped`, `manual-review`, or `invalid`.
-Resolution never uses issue numbers, branch names, titles, comments, or
-semantic similarity.
+1. #685 evidence, exact-SHA PR resolution, and rendered projection;
+2. a complete bounded snapshot of current PR conversation comments;
+3. the result and complete canonical readback after any admitted mutation.
 
-Candidate intake is bounded by `MAX_PR_CANDIDATES` (64): at most
-`MAX_PR_CANDIDATES + 1` items are ever read from the supplied iterable, so an
-unbounded or hostile generator is never fully consumed. Exceeding the bound
-fails closed to `invalid` with the stable reason code
-`resolution.too-many-candidates`.
+`plan_publication(...)` returns exactly one bounded action:
 
-## Secret-safe output
+- `create` when no managed marker exists;
+- `update` when exactly one managed marker exists with stale body content;
+- `noop` when that managed comment is already byte-for-byte current;
+- `manual-review` when target proof, comment completeness, marker identity, or
+  uniqueness is not proven.
 
-`render_comment_projection` and `serialize_projection` route every public
-text field — `build_id`, `failed_step`, and the rendered body — through one
-bounded sanitization path. Known secret shapes (bearer tokens, GitHub-style
-tokens, AWS keys, `key=value`/`password=` assignments, signed-URL query
-parameters, sensitive credential paths) are redacted, oversized text is
-truncated, and multi-line text is treated as unrestricted log/exception
-content and replaced outright. No raw supplied value is stored unredacted in
-the projection merely because it is also redacted in the rendered body.
+Unrelated human comments are ignored and never selected for edit/removal.
+Multiple managed-marker matches fail closed rather than guessing.
 
-## Non-goals
+Connected execution must use the existing canonical Agent OS GitHub operation
+and shared request infrastructure established by #2507. The policy itself
+performs zero writes. After a create/update attempt,
+`reconcile_publication(...)` reuses the canonical #2785 comment-mutation
+readback classifier and requires exact-body canonical readback before reporting
+`converged`. An update additionally requires the same managed comment identity;
+a matching body on a different comment is `uncertain`, not success.
 
-No GitHub or Cloud Build API calls, no live PR comments, no `cloudbuild.yaml`
-changes, no credentials, no persistence, and no merge, approval, or
-required-check authorization. All authority and side-effect flags are fixed
-`False`.
+Provider failure with complete evidence may be reported as safely retryable by
+the shared readback contract. Incomplete/duplicate/mismatched readback is
+uncertain and never authorizes a blind retry.
+
+## Authority boundary
+
+Cloud Build comments are supplemental informational evidence only. This package
+does not authorize merge, review approval, required-check status, readiness,
+issue lifecycle mutation, workflows, credentials, provider activation, or
+production/external writes. Live credential/activation and bounded smoke tests
+remain #687.
 
 ## Tests
 
 ```bash
 python -m pytest -q tests/agent_os_cloud_build_reporting/test_core.py
+python -m pytest -q tests/agent_os_cloud_build_reporting/test_publication.py
+python -m pytest -q tests/agent_os_issue_acceptance/test_comment_mutation_readback.py
 ```

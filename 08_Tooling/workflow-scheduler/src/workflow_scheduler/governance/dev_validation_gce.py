@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Mapping
 
@@ -37,6 +38,9 @@ DEV_VALIDATION_VITEST_VERSION = "5.0.0"
 _FRAME_START = "===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
+# The fixed remote runner can consume two 120-second git/test phases plus
+# bounded setup and cleanup. Keep the outer transport above that finite budget.
+GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS = 420
 _UNSAFE_DIAGNOSTIC_CHAR_RE = re.compile(r"[^\x09\x0a\x0d\x20-\x7e]")
 
 _HOST_RUNNER_SOURCE = r'''import json,os,re,shutil,subprocess,sys,tempfile
@@ -278,18 +282,46 @@ def _failure(request: DevValidationRequest, reason: str) -> dict[str, object]:
     return {"schema_version":"1.0","status":"needs-decision","reason_codes":[reason],"repository":request.repository,"issue_number":request.issue_number,"branch":request.branch,"tested_sha":request.source_sha,"validation_id":request.validation_id,"request_id":request.request_id,"cleanup_complete":False,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
 
 
-def _bounded_ssh_stderr(stderr: object) -> tuple[str, bool]:
-    text=stderr if type(stderr) is str else "";sanitized=_UNSAFE_DIAGNOSTIC_CHAR_RE.sub("?",text)
-    return sanitized[-MAX_RESULT_LOG_CHARS:],len(sanitized)>MAX_RESULT_LOG_CHARS
+def _bounded_ssh_output(value: object) -> tuple[str, bool]:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = value if type(value) is str else ""
+    sanitized = _UNSAFE_DIAGNOSTIC_CHAR_RE.sub("?", text)
+    return sanitized[-MAX_RESULT_LOG_CHARS:], len(sanitized) > MAX_RESULT_LOG_CHARS
+
+
+def _ssh_transport_timeout(
+    request: DevValidationRequest,
+    error: subprocess.TimeoutExpired,
+) -> dict[str, object]:
+    evidence = _failure(request, "dev-validation-gce-transport-timeout")
+    stdout, stdout_truncated = _bounded_ssh_output(error.stdout)
+    stderr, stderr_truncated = _bounded_ssh_output(error.stderr)
+    evidence.update({
+        "ssh_exit_code": None,
+        "transport_timeout_seconds": GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS,
+        "ssh_stdout_tail": stdout,
+        "ssh_stdout_truncated": stdout_truncated,
+        "ssh_stderr_tail": stderr,
+        "ssh_stderr_truncated": stderr_truncated,
+    })
+    return evidence
 
 
 def _ssh_failure(request: DevValidationRequest, completed: object) -> dict[str, object]:
-    evidence=_failure(request,"dev-validation-ssh-failed");tail,truncated=_bounded_ssh_stderr(getattr(completed,"stderr",""));returncode=getattr(completed,"returncode",None)
+    evidence=_failure(request,"dev-validation-ssh-failed");tail,truncated=_bounded_ssh_output(getattr(completed,"stderr",""));returncode=getattr(completed,"returncode",None)
     evidence.update({"ssh_exit_code":returncode if type(returncode) is int else None,"ssh_stderr_tail":tail,"ssh_stderr_truncated":truncated});return evidence
 
 
 def run_dev_validation_over_ssh(adapter: GcloudIapAdapter, request: DevValidationRequest) -> dict[str, object]:
-    completed=adapter._ssh(RESOURCE,_host_command(request))
+    try:
+        completed = adapter._ssh(
+            RESOURCE,
+            _host_command(request),
+            timeout=GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        return _ssh_transport_timeout(request, error)
     if completed.returncode!=0:return _ssh_failure(request,completed)
     framed=_extract_framed_payload(completed.stdout)
     if framed is None:return _failure(request,"dev-validation-frame-invalid")

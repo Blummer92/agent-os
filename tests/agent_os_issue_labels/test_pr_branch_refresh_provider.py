@@ -17,7 +17,6 @@ from scripts.agent_os_issue_labels.pr_branch_refresh_provider import (
     ProductionPullRequestBranchRefreshProvider,
     run_production_pull_request_branch_refresh,
 )
-from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
 
 OLD = "1" * 40
 BASE = "2" * 40
@@ -37,6 +36,17 @@ class FakeRunner:
 
     def run(self, argv, *, cwd, env):
         argv = tuple(argv)
+        # #2921 adds read-only lineage probes before the existing preparation
+        # sequence. Legacy provider tests model one admitted feature path and keep
+        # their historical call assertions focused on the mutation lifecycle.
+        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
+            return observation(stdout="scripts/example.py\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
+            return observation(stdout=f"{OLD}\n")
+        if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
+            return observation(stdout="scripts/example.py\n")
+        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+            return observation()
         self.calls.append((argv, cwd, dict(env)))
         if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
             return observation(stdout=f"{self.head_subject}\n")
@@ -46,11 +56,8 @@ class FakeRunner:
 @dataclass
 class FakeBacking:
     branch_snapshot: PullRequestBranchSnapshot
-    labels: tuple[str, ...] = ("branch:behind",)
     branch_reads: int = 0
     validation_calls: list[tuple[str, int, str, tuple[str, ...]]] = field(default_factory=list)
-    added: list[str] = field(default_factory=list)
-    removed: list[str] = field(default_factory=list)
 
     def read_branch(self, repository, pr_number):
         self.branch_reads += 1
@@ -60,30 +67,6 @@ class FakeBacking:
         self.validation_calls.append((repository, pr_number, head_sha, command_ids))
         return BranchRefreshValidationResult(head_sha=head_sha, status="green", command_ids=command_ids)
 
-    def read(self, repository, pr_number):
-        snapshot = self.branch_snapshot
-        return LivePullRequestSnapshot(
-            repository=repository,
-            pr_number=pr_number,
-            head_sha=snapshot.head_sha,
-            draft=True,
-            mergeable=True,
-            conflicted=False,
-            behind=snapshot.branch_state == "behind",
-            validation_state="pending",
-            blocking_review_threads=0,
-            labels=self.labels,
-        )
-
-    def available_labels(self, repository):
-        return ("branch:behind", "branch:current", "status:ready")
-
-    def add_label(self, repository, pr_number, label):
-        self.added.append(label)
-
-    def remove_label(self, repository, pr_number, label):
-        self.removed.append(label)
-
 
 @dataclass
 class FakeValidationExecutor:
@@ -91,14 +74,6 @@ class FakeValidationExecutor:
 
     def run_required_validation(self, repository, pr_number, *, head_sha, command_ids):
         return BranchRefreshValidationResult(head_sha=head_sha, status=self.status, command_ids=command_ids)
-
-
-@dataclass
-class FakeReviewThreadsReader:
-    count: int = 0
-
-    def blocking_review_threads(self, repository, pr_number):
-        return self.count
 
 
 class FakeIssue:
@@ -141,10 +116,6 @@ class FakeRepo:
     def compare(self, base, head):
         return SimpleNamespace(status="diverged")
 
-    def get_issue(self, pr_number):
-        return self.issue
-
-    def get_labels(self):
         return [SimpleNamespace(name=label) for label in ("branch:behind", "branch:current", "pr:draft", "validation:pending", "review:clear")]
 
 
@@ -486,34 +457,26 @@ def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     assert sum("push" in call[0] for call in runner.calls) == 1
 
 
-def test_label_and_validation_operations_delegate_to_existing_backing_provider():
+def test_validation_operation_delegates_to_existing_backing_provider():
     backing = FakeBacking(snapshot())
     subject = provider(backing, FakeRunner([]))
-    subject.add_label("Blummer92/agent-os", 1363, "branch:current")
-    subject.remove_label("Blummer92/agent-os", 1363, "branch:behind")
-    validation = subject.run_required_validation("Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused", "aggregate"))
-    assert backing.added == ["branch:current"] and backing.removed == ["branch:behind"]
+    validation = subject.run_required_validation(
+        "Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused", "aggregate")
+    )
     assert validation.status == "green"
 
 
-def test_live_github_backing_normalizes_branch_scope_and_label_evidence():
+def test_live_github_backing_normalizes_branch_scope_evidence():
     repo = FakeRepo()
     backing = GitHubPullRequestBranchRefreshBackingProvider(
         github_client=FakeGithub(repo),
         request=request(),
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     branch = backing.read_branch("Blummer92/agent-os", 1363)
     assert branch.head_sha == OLD and branch.current_main_sha == MAIN
     assert branch.branch_state == "behind" and branch.mergeability == "mergeable"
     assert branch.changed_paths == ("scripts/example.py",)
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.draft is True and live.behind is True and live.blocking_review_threads == 0
-    assert live.labels == ("branch:behind",)
-    backing.add_label("Blummer92/agent-os", 1363, "branch:current")
-    backing.remove_label("Blummer92/agent-os", 1363, "branch:behind")
-    assert repo.issue.added == ["branch:current"] and repo.issue.removed == ["branch:behind"]
 
 
 def test_live_github_read_failure_is_fail_closed_unknown_not_authority():
@@ -521,30 +484,11 @@ def test_live_github_read_failure_is_fail_closed_unknown_not_authority():
         github_client=FakeGithub(fail=True),
         request=request(),
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     branch = backing.read_branch("Blummer92/agent-os", 1363)
     assert branch.branch_state == "unknown" and branch.mergeability == "unknown"
     assert branch.changed_paths == ()
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.mergeable is False and live.behind is False
-    assert backing.available_labels("Blummer92/agent-os") == ()
 
-
-def test_uncertain_branch_evidence_blocks_managed_label_catalog_before_write():
-    repo = FakeRepo()
-    repo.pull.mergeable = None
-    repo.pull.mergeable_state = "unknown"
-    backing = GitHubPullRequestBranchRefreshBackingProvider(
-        github_client=FakeGithub(repo),
-        request=request(),
-        validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
-    )
-    live = backing.read("Blummer92/agent-os", 1363)
-    assert live.mergeable is False
-    assert backing.available_labels("Blummer92/agent-os") == ()
-    assert repo.issue.added == [] and repo.issue.removed == []
 
 
 def test_validation_failure_is_projected_for_existing_lifecycle_owner():
@@ -552,7 +496,6 @@ def test_validation_failure_is_projected_for_existing_lifecycle_owner():
         github_client=FakeGithub(),
         request=request(),
         validation_executor=FakeValidationExecutor(status="failing"),
-        review_threads_reader=FakeReviewThreadsReader(),
     )
     result = backing.run_required_validation("Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused",))
     assert result.status == "failing"
@@ -573,7 +516,6 @@ def test_production_entrypoint_delegates_exactly_once_to_1187(monkeypatch):
         github_client=FakeGithub(),
         runner=runner,
         validation_executor=FakeValidationExecutor(),
-        review_threads_reader=FakeReviewThreadsReader(),
         request=supplied_request,
         repository_root="/workspace/agent-os",
         invocation_id="invocation-1365",
@@ -743,3 +685,120 @@ def test_merge_shaped_local_git_fixture_reproduces_old_rebase_rejection_and_v2_s
     assert _git_out(repo, "rev-parse", f"{candidate}^1") == current_main
     assert _git_out(repo, "diff", "--name-only", "--no-renames", current_main, candidate) == "scripts/example.py"
     assert (repo / "scripts" / "example.py").read_text(encoding="utf-8") == "B\nrepair\n"
+
+
+def _commit_file(repo, path, content, message):
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    _git(repo, "add", path)
+    _git(repo, "commit", "-qm", message)
+    return _git_out(repo, "rev-parse", "HEAD")
+
+
+def _local_integrity_provider(repo):
+    return ProductionPullRequestBranchRefreshProvider(
+        backing=FakeBacking(snapshot()),
+        runner=LocalGitRunner(),
+        repository_root=str(repo),
+        invocation_id="invocation-2921",
+        authorization_id="authorization-2921",
+        authorization_current=True,
+        branch_update_authorized=True,
+        environment=dict(os.environ),
+    )
+
+
+def test_lineage_integrity_rejects_path_introduced_only_by_hand_built_merge(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "main-line", base)
+    main_head = _commit_file(repo, "protected.txt", "new-main\n", "main fix")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_commit = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    # Manufacture the incident shape: two parents, but reuse main's tree wholesale.
+    # protected.txt now appears in the PR net diff even though no non-merge feature
+    # commit ever touched it.
+    main_tree = _git_out(repo, "rev-parse", f"{main_head}^{{tree}}")
+    stale_merge = _git_out(
+        repo,
+        "commit-tree",
+        main_tree,
+        "-p",
+        feature_commit,
+        "-p",
+        main_head,
+        "-m",
+        "hand-built reconcile",
+    )
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=stale_merge,
+        admitted_paths=("protected.txt",),
+    )
+    assert blocker == "lineage-integrity.merge-only-path"
+
+
+def test_lineage_integrity_accepts_paths_owned_by_non_merge_feature_commits(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_head = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=feature_head,
+        admitted_paths=("feature.txt",),
+    )
+    assert blocker is None
+
+
+
+def test_lineage_integrity_rejects_merge_commit_tree_that_differs_from_clean_git_merge(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "shared.txt", "base\n", "base")
+
+    _git(repo, "switch", "-qc", "main-line", base)
+    main_head = _commit_file(repo, "main.txt", "main\n", "main work")
+
+    _git(repo, "switch", "-qc", "feature", base)
+    feature_head = _commit_file(repo, "feature.txt", "feature\n", "feature work")
+
+    # Parents merge cleanly, but manufacture a merge commit with only the
+    # feature parent's tree. This drops main.txt despite there being no conflict.
+    feature_tree = _git_out(repo, "rev-parse", f"{feature_head}^{{tree}}")
+    stale_merge = _git_out(
+        repo,
+        "commit-tree",
+        feature_tree,
+        "-p",
+        feature_head,
+        "-p",
+        main_head,
+        "-m",
+        "stale reconcile tree",
+    )
+
+    blocker = _local_integrity_provider(repo)._lineage_integrity_blocker(
+        merge_base_sha=base,
+        expected_head_sha=stale_merge,
+        admitted_paths=("feature.txt",),
+    )
+    assert blocker == "lineage-integrity.stale-merge-tree"

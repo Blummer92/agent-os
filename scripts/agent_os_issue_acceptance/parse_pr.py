@@ -106,12 +106,20 @@ def _mask_non_authoritative_markdown(text: str) -> str:
         if line.startswith(("    ", "\t")):
             output.append(_mask_text(line)); continue
         stripped = line.lstrip()
-        marker = stripped[:3] if stripped.startswith(("```", "~~~")) else None
-        if marker:
-            if fence_marker is None: fence_marker = marker
-            elif marker == fence_marker: fence_marker = None
+        fence = re.match(r"(`{3,}|~{3,})(.*)$", stripped.rstrip("\r\n"))
+        if fence_marker is not None:
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_marker[0]
+                and len(fence.group(1)) >= len(fence_marker)
+                and not fence.group(2).strip(" \t")
+            ):
+                fence_marker = None
             output.append(_mask_text(line)); continue
-        if fence_marker is not None or stripped.startswith(">"):
+        if fence is not None:
+            fence_marker = fence.group(1)
+            output.append(_mask_text(line)); continue
+        if stripped.startswith(">"):
             output.append(_mask_text(line)); continue
         output.append(_INLINE_CODE_RE.sub(lambda match: _mask_text(match.group(0)), line))
     return "".join(output)

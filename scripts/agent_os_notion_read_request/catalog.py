@@ -67,6 +67,14 @@ def parse_catalog(payload: object) -> NotionReadCatalog:
     )
     _reject_duplicates([source.logical_source for source in sources], "logical source")
     _reject_duplicates([record.request_id for record in requests], "request id")
+    _reject_duplicates(
+        [
+            unit.verification_title
+            for unit in canonical_units
+            if unit.verification_title is not None
+        ],
+        "canonical unit verification title",
+    )
 
     known_units = {unit.canonical_unit_key for unit in canonical_units}
     for record in requests:
@@ -78,6 +86,24 @@ def parse_catalog(payload: object) -> NotionReadCatalog:
         elif record.canonical_unit_key not in known_units:
             raise NotionReadRequestError(
                 f"request {record.request_id!r} names an unknown canonical unit"
+            )
+
+    for unit in canonical_units:
+        if unit.verification_state == VERIFIED_STATE:
+            continue
+        canonical_requests = [
+            record
+            for record in requests
+            if record.request_class == "canonical-unit"
+            and record.canonical_unit_key == unit.canonical_unit_key
+        ]
+        if unit.verification_title is None:
+            raise NotionReadRequestError(
+                f"unverified canonical unit {unit.canonical_unit_key!r} requires verification_title"
+            )
+        if len(canonical_requests) != 1:
+            raise NotionReadRequestError(
+                f"unverified canonical unit {unit.canonical_unit_key!r} requires exactly one canonical-unit request"
             )
 
     return NotionReadCatalog(
@@ -106,6 +132,10 @@ def _canonical_unit(value: object) -> CanonicalUnitBinding:
         provider_page_id=_optional_identity(item.get("provider_page_id"), "provider_page_id"),
         verification_state=_verification_state(item.get("verification_state")),
         content_class=_content_class(item.get("content_class")),
+        verification_title=_optional_text(
+            item.get("verification_title"),
+            "canonical unit verification_title",
+        ),
     )
 
 
@@ -171,6 +201,15 @@ def _content_class(value: object) -> str:
             f"content class is not public-projectable: {content_class!r}"
         )
     return content_class
+
+
+def _optional_text(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    text = _text(value, label)
+    if len(text) > 160:
+        raise NotionReadRequestError(f"{label} exceeds bounded length")
+    return text
 
 
 def _optional_identity(value: object, label: str) -> str | None:

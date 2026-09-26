@@ -109,6 +109,8 @@ def reconcile_issue_labels(
         return _result(initial, desired_managed, to_add, to_remove, "blocked", (f"provider-write-failure:{type(exc).__name__}",), False, unmanaged, changed)
 
     after = provider.read(repository, issue_number)
+    if after.body != initial.body or after.state != initial.state:
+        return _result(initial, desired_managed, to_add, to_remove, "blocked", ("issue-state-changed-during-mutation",), False, unmanaged, changed)
     actual = frozenset(after.labels)
     actual_managed = frozenset(label for label in actual if _is_managed(label))
     if actual_managed != desired_managed or not set(unmanaged).issubset(actual):

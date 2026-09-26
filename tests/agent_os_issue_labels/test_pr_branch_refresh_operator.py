@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import subprocess
-from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -72,58 +72,6 @@ def test_subprocess_runner_rejects_malformed_argv():
             runner.run(argv, cwd="/repo", env={})
 
 
-class _Requester:
-    def __init__(self, payload):
-        self.payload = payload
-        self.calls = []
-
-    def requestJsonAndCheck(self, method, url, **kwargs):
-        self.calls.append((method, url, kwargs))
-        return {}, self.payload
-
-
-class _Client:
-    def __init__(self, payload):
-        self.requester = _Requester(payload)
-
-
-def _review_payload(*, resolved=False, has_next=False):
-    return {
-        "data": {"repository": {"pullRequest": {"reviewThreads": {
-            "pageInfo": {"hasNextPage": has_next},
-            "nodes": [{
-                "id": "PRRT_1", "isResolved": resolved, "isOutdated": False,
-                "path": "x.py", "line": 7, "originalLine": 7,
-                "diffSide": "RIGHT", "startLine": None, "startDiffSide": None,
-                "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [{
-                    "databaseId": 123, "id": "PRRC_1", "body": "blocking review",
-                    "createdAt": "2026-08-25T00:00:00Z",
-                    "updatedAt": "2026-08-25T00:00:00Z",
-                    "author": {"login": "reviewer"},
-                }]},
-            }],
-        }}}}
-    }
-
-
-def test_review_reader_counts_current_unresolved_threads():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    client = _Client(_review_payload())
-    assert PyGithubBlockingReviewThreadsReader(client).blocking_review_threads("Blummer92/agent-os", 1363) == 1
-    assert len(client.requester.calls) == 1
-
-
-def test_review_reader_does_not_count_resolved_thread():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    assert PyGithubBlockingReviewThreadsReader(_Client(_review_payload(resolved=True))).blocking_review_threads("Blummer92/agent-os", 1363) == 0
-
-
-def test_review_reader_fails_closed_on_incomplete_pagination():
-    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PyGithubBlockingReviewThreadsReader
-    with pytest.raises(RuntimeError, match="incomplete"):
-        PyGithubBlockingReviewThreadsReader(_Client(_review_payload(has_next=True))).blocking_review_threads("Blummer92/agent-os", 1363)
-
-
 class _SequenceRunner:
     def __init__(self, observations):
         self.observations = list(observations)
@@ -152,9 +100,30 @@ def test_closed_validation_executor_runs_only_known_fixed_profile():
     )
     assert result.status == "green"
     assert runner.calls[1][0] == (
-        ".venv/bin/python", "-m", "pytest",
+        sys.executable, "-m", "pytest",
         "tests/agent_os_issue_labels/test_pr_branch_refresh.py", "-q",
     )
+
+
+def test_closed_validation_executor_uses_exact_current_python_and_bounded_environment():
+    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import ClosedBranchRefreshValidationExecutor
+    sha = "a" * 40
+    runner = _SequenceRunner([_observation(stdout=sha + "\n"), _observation(), _observation(stdout=sha + "\n")])
+    environment = {
+        "PATH": "/runner/bin:/usr/bin",
+        "HOME": "/runner/home",
+        "GITHUB_TOKEN": "must-not-leak",
+        "NOTION_TOKEN": "must-not-leak",
+    }
+    result = ClosedBranchRefreshValidationExecutor(
+        runner, "/repo", environment=environment
+    ).run_required_validation(
+        "Blummer92/agent-os", 2962, head_sha=sha,
+        command_ids=("pytest:pr-branch-refresh",),
+    )
+    assert result.status == "green"
+    assert runner.calls[1][0][0] == sys.executable
+    assert runner.calls[1][2] == {"HOME": "/runner/home", "PATH": "/runner/bin:/usr/bin"}
 
 
 def test_closed_validation_executor_rejects_unknown_id_without_execution():
@@ -165,6 +134,8 @@ def test_closed_validation_executor_rejects_unknown_id_without_execution():
         command_ids=("operator-supplied-shell-command",),
     )
     assert result.status == "failing"
+    assert result.failed_command_id == "operator-supplied-shell-command"
+    assert result.failure_reason == "unknown-command"
     assert runner.calls == []
 
 
@@ -176,6 +147,8 @@ def test_closed_validation_executor_fails_on_stale_checkout_before_test():
         command_ids=("pytest:pr-branch-refresh",),
     )
     assert result.status == "failing"
+    assert result.failed_command_id == "head:before"
+    assert result.failure_reason == "head-mismatch"
     assert len(runner.calls) == 1
 
 
@@ -188,7 +161,62 @@ def test_closed_validation_executor_stops_after_first_failure():
         command_ids=("pytest:pr-branch-refresh", "pytest:pr-branch-refresh-provider"),
     )
     assert result.status == "failing"
+    assert result.failed_command_id == "pytest:pr-branch-refresh"
+    assert result.failure_reason == "command-nonzero-exit"
     assert len(runner.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected_reason"),
+    [
+        (
+            lambda: __import__("scripts.agent_os_github_git_objects.branch_update", fromlist=["BranchUpdateObservation"]).BranchUpdateObservation(
+                started=False, return_code=None, timed_out=False, termination_confirmed=True
+            ),
+            "command-not-started",
+        ),
+        (
+            lambda: __import__("scripts.agent_os_github_git_objects.branch_update", fromlist=["BranchUpdateObservation"]).BranchUpdateObservation(
+                started=True, return_code=None, timed_out=True, termination_confirmed=False
+            ),
+            "command-timeout",
+        ),
+        (
+            lambda: __import__("scripts.agent_os_github_git_objects.branch_update", fromlist=["BranchUpdateObservation"]).BranchUpdateObservation(
+                started=True, return_code=None, timed_out=False, termination_confirmed=False
+            ),
+            "command-termination-unconfirmed",
+        ),
+    ],
+)
+def test_closed_validation_executor_projects_safe_command_failure_reason(observation, expected_reason):
+    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import ClosedBranchRefreshValidationExecutor
+    sha = "a" * 40
+    runner = _SequenceRunner([_observation(stdout=sha + "\n"), observation()])
+    result = ClosedBranchRefreshValidationExecutor(runner, "/repo").run_required_validation(
+        "Blummer92/agent-os", 2962, head_sha=sha,
+        command_ids=("pytest:pr-branch-refresh",),
+    )
+    assert result.status == "failing"
+    assert result.failed_command_id == "pytest:pr-branch-refresh"
+    assert result.failure_reason == expected_reason
+
+
+def test_closed_validation_executor_projects_post_validation_head_movement():
+    from scripts.agent_os_issue_labels.pr_branch_refresh_operator import ClosedBranchRefreshValidationExecutor
+    sha = "a" * 40
+    runner = _SequenceRunner([
+        _observation(stdout=sha + "\n"),
+        _observation(),
+        _observation(stdout=("b" * 40) + "\n"),
+    ])
+    result = ClosedBranchRefreshValidationExecutor(runner, "/repo").run_required_validation(
+        "Blummer92/agent-os", 2962, head_sha=sha,
+        command_ids=("pytest:pr-branch-refresh",),
+    )
+    assert result.status == "failing"
+    assert result.failed_command_id == "head:after"
+    assert result.failure_reason == "head-moved"
 
 
 def test_missing_github_credentials_fail_before_composition():
@@ -303,12 +331,11 @@ def _result(*, status="converged", side_effects=True, reasons=None, validation_s
         head_sha="c" * 40, status=validation_status,
         command_ids=("pytest:pr-branch-refresh",),
     )
-    lifecycle = None if not side_effects else SimpleNamespace(reconciliation_status="converged")
     return PullRequestBranchRefreshResult(
         repository="Blummer92/agent-os", pr_number=1363, status=status,
         old_head_sha="a" * 40, new_head_sha="c" * 40 if side_effects else None,
         invalidated_head_evidence=("tested-sha",) if side_effects else (),
-        validation=validation, lifecycle_reconciliation=lifecycle,
+        validation=validation,
         reason_codes=tuple(reasons), branch_refresh_authorized=True,
         side_effects_performed=side_effects,
     )
@@ -326,7 +353,7 @@ def test_refresh_pr_signature_hides_internal_composition_and_validation_profile(
     from scripts.agent_os_issue_labels.pr_branch_refresh_operator import refresh_pr
     parameters = set(inspect.signature(refresh_pr).parameters)
     for hidden in (
-        "request", "provider", "runner", "review_threads_reader",
+        "request", "provider", "runner",
         "validation_executor", "required_validation_command_ids",
     ):
         assert hidden not in parameters
@@ -418,7 +445,8 @@ def test_refresh_pr_success_receipt_is_bounded_and_non_authorizing(monkeypatch):
     assert receipt.mutation_count == 1
     assert receipt.validation_status == "green"
     assert receipt.validation_head_sha == "c" * 40
-    assert receipt.lifecycle_reconciliation_status == "converged"
+    assert receipt.validation_failed_command_id is None
+    assert receipt.validation_failure_reason is None
     assert receipt.final_current_proven is True
     assert receipt.blockers == ()
     assert receipt.rollback_posture == "restore-old-head-with-separate-authorization"
@@ -454,6 +482,37 @@ def test_refresh_pr_receipt_projects_terminal_result_states(monkeypatch, status,
     assert receipt.validation_status == validation_status
 
 
+def test_refresh_pr_receipt_projects_bounded_validation_failure_evidence(monkeypatch):
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+    from scripts.agent_os_issue_labels.pr_branch_refresh import (
+        BranchRefreshValidationResult,
+        PullRequestBranchRefreshResult,
+    )
+
+    result = PullRequestBranchRefreshResult(
+        repository="Blummer92/agent-os",
+        pr_number=1363,
+        status="validation-failing",
+        old_head_sha="a" * 40,
+        new_head_sha="c" * 40,
+        invalidated_head_evidence=("tested-sha",),
+        validation=BranchRefreshValidationResult(
+            head_sha="c" * 40,
+            status="failing",
+            command_ids=("pytest:pr-branch-refresh",),
+            failed_command_id="pytest:pr-branch-refresh",
+            failure_reason="command-nonzero-exit",
+        ),
+        reason_codes=("branch.current-proven",),
+        branch_refresh_authorized=True,
+        side_effects_performed=True,
+    )
+    monkeypatch.setattr(operator, "run_branch_refresh_operator", lambda **kwargs: result)
+    receipt = operator.refresh_pr(**_facade_kwargs())
+    assert receipt.validation_failed_command_id == "pytest:pr-branch-refresh"
+    assert receipt.validation_failure_reason == "command-nonzero-exit"
+
+
 def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
     from scripts.agent_os_issue_labels.pr_branch_refresh_operator import PullRequestBranchRefreshReceipt
     with pytest.raises(ValueError, match="mutation_count"):
@@ -462,7 +521,8 @@ def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
             authorization_id="auth:1363", authorization_consumed=False,
             admitted_main_sha="b" * 40, old_head_sha="a" * 40, new_head_sha=None,
             mutation_count=2, validation_status=None, validation_head_sha=None,
-            lifecycle_reconciliation_status=None, final_current_proven=False,
+            validation_failed_command_id=None, validation_failure_reason=None,
+            final_current_proven=False,
             blockers=("blocked",), reason_codes=("blocked",),
             rollback_posture="no-branch-mutation", side_effects_performed=False,
         )
