@@ -7,7 +7,6 @@ from dataclasses import asdict
 from mcp.server import MCPServer
 
 from instructional_workflow_contracts import (
-    ContractReference,
     RequestInterpretation,
     ValidationStatus,
     bind_current_image_reference,
@@ -79,55 +78,33 @@ def _deferred_lesson_read():
 
 
 @mcp.tool()
-def bind_agent_os_request_interpretation_tool(
-    request: dict[str, object],
-    requested_reference_id: str | None = None,
-    available_references: list[dict[str, str]] | None = None,
-) -> dict[str, object]:
-    """Bind current request identity and any explicit image reference before dispatch."""
+def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dict[str, object]:
+    """Bind an event/intake request and current image reference before dispatch."""
     result = validate_request_interpretation(request)
     record = result.record
-    image_binding = None
+    image_reference_admitted = True
+    image_reference_details: tuple[str, ...] = ()
     if record is not None:
         try:
-            references = tuple(
-                ContractReference(
-                    system=item["system"],
-                    stable_id=item["stable_id"],
-                    exact_location=item["exact_location"],
-                    verification_evidence=item["verification_evidence"],
-                )
-                for item in (available_references or [])
+            image_binding = bind_current_image_reference(
+                RequestInterpretation(record=record)
             )
-        except (KeyError, TypeError, ValueError):
-            references = ()
-        image_binding = bind_current_image_reference(
-            RequestInterpretation(record=record),
-            requested_reference_id=requested_reference_id,
-            available_references=references,
-        )
-    image_reference_admitted = (
-        image_binding is None
-        or not image_binding.required
-        or image_binding.bound
-    )
+            image_reference_admitted = (
+                not image_binding.required or image_binding.bound
+            )
+            image_reference_details = image_binding.reason_codes
+        except (TypeError, ValueError):
+            image_reference_admitted = False
+            image_reference_details = ("image-reference.missing",)
     return {
         "status": result.status.value,
         "record_id": record.record_id if record is not None else None,
         "record_fingerprint": record.fingerprint if record is not None else None,
         "raw_input_digest": record.to_dict()["raw_input_digest"] if record is not None else None,
         "reason_codes": list(result.reason_codes),
-        "details": list(result.details),
-        "dispatch_admitted": result.status is ValidationStatus.VALID and image_reference_admitted,
-        "image_reference_required": image_binding.required if image_binding is not None else False,
-        "image_reference_bound": image_binding.bound if image_binding is not None else False,
-        "image_reference_id": (
-            image_binding.reference.stable_id
-            if image_binding is not None and image_binding.reference is not None
-            else None
-        ),
-        "image_reference_reason_codes": (
-            list(image_binding.reason_codes) if image_binding is not None else []
+        "details": [*result.details, *image_reference_details],
+        "dispatch_admitted": (
+            result.status is ValidationStatus.VALID and image_reference_admitted
         ),
         "execution_authorized": False,
         "github_writes_authorized": False,
@@ -135,7 +112,6 @@ def bind_agent_os_request_interpretation_tool(
         "closure_authorized": False,
         "side_effects_performed": False,
     }
-
 
 @mcp.tool()
 def plan_connected_issue_creation_tool(
