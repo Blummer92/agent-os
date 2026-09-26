@@ -23,6 +23,12 @@ This detail file is part of `chatgpt-orchestrator.md` and owns only the #925 con
 - Provider/destination constraints are orthogonal. A value such as `provider=canva` cannot clear runner authority or alter canonical tutorial application identity.
 - Use `evaluate_ppux_mission_constraint(previous, current)` from the existing request-interpretation owner to project the bounded continuation decision. Its authority and side-effect fields remain fixed false. Do not create a PPUX-specific store, memory layer, phrase parser, router, Scheduler, or second conversation-state framework.
 
+## Current Image Reference Binding
+- For a fresh direct image-generation request that explicitly names an existing reference asset, bind that current requested reference identity before provider execution. The current reference wins over prior generation intent; prior-turn prompt/artifact state is never a fallback reference.
+- Use `bind_current_image_reference(current, requested_reference_id=..., available_references=...)` from the canonical request-interpretation owner. Supply only references actually available to the active execution surface; the helper does not read conversation memory or perform retrieval.
+- Exactly one matching current reference is required. A missing match returns `image-reference.missing`; multiple matching identities return `image-reference.multiple`. Both block generation until current reference evidence is resolved.
+- The binding creates no generation, provider, external-write, publication, or classroom-readiness authority and does not create a second image/reference state model.
+
 ## Continuation Freshness
 - The authoritative target source is the live canonical system named by the validated #924 `target`; for GitHub, refetch the repository resource identified by `repository`, `resource_kind`, and `resource_id`. Conversation memory is never authoritative target state.
 - `record_revision` and `observed_at` version the interpretation record; they are not target-freshness evidence. Target freshness must come from the record's existing `evidence_references` plus freshly fetched canonical context.
