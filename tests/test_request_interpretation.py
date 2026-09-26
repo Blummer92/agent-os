@@ -322,11 +322,9 @@ def test_ppux_guard_rejects_unstructured_provenance_change_values():
 
 
 def test_issue_2966_current_image_reference_binds_exact_available_asset():
-    current = interpretation(
-        action="generate",
-        requested_effect="propose",
-        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
-    )
+    current_result = validate_request_interpretation(payload(action="generate", requested_effect="propose"))
+    assert current_result.record is not None
+    current = RequestInterpretation(record=current_result.record)
     chair = ContractReference(
         system="google-drive",
         stable_id="IMG_2116",
@@ -352,11 +350,9 @@ def test_issue_2966_current_image_reference_binds_exact_available_asset():
 
 
 def test_issue_2966_missing_current_image_reference_fails_closed_without_stale_fallback():
-    current = interpretation(
-        action="generate",
-        requested_effect="propose",
-        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
-    )
+    current_result = validate_request_interpretation(payload(action="generate", requested_effect="propose"))
+    assert current_result.record is not None
+    current = RequestInterpretation(record=current_result.record)
     stale_infographic = ContractReference(
         system="google-drive",
         stable_id="prior-handoff-infographic",
@@ -375,11 +371,9 @@ def test_issue_2966_missing_current_image_reference_fails_closed_without_stale_f
 
 
 def test_issue_2966_duplicate_current_reference_identity_fails_closed():
-    current = interpretation(
-        action="generate",
-        requested_effect="propose",
-        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
-    )
+    current_result = validate_request_interpretation(payload(action="generate", requested_effect="propose"))
+    assert current_result.record is not None
+    current = RequestInterpretation(record=current_result.record)
     refs = tuple(
         ContractReference("google-drive", "IMG_2116", f"drive-file-{suffix}", f"sha256-{suffix}")
         for suffix in ("a", "b")
