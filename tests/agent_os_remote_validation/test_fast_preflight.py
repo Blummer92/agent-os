@@ -12,6 +12,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 run_fast_preflight = MODULE.run_fast_preflight
+main = MODULE.main
 
 
 def test_valid_mechanical_inputs_pass_and_aggregate_remains_required(tmp_path: Path) -> None:
@@ -101,3 +102,28 @@ def test_repository_escape_is_rejected_before_file_access(tmp_path: Path) -> Non
         assert "inside the repository" in str(exc)
     else:
         raise AssertionError("repository escape must fail closed")
+
+
+def test_cli_checks_every_changed_python_file_before_retry(tmp_path: Path, capsys) -> None:
+    (tmp_path / "first.py").write_text(
+        "f(a=1, a=2)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "second.py").write_text(
+        "g(b=1, b=2)\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "--repo-root",
+        str(tmp_path),
+        "first.py",
+        "second.py",
+    ])
+
+    assert exit_code == 1
+    payload = __import__("json").loads(capsys.readouterr().out)
+    assert payload["passed"] is False
+    assert [item["path"] for item in payload["checks"]] == ["first.py", "second.py"]
+    assert all(item["status"] == "failed" for item in payload["checks"])
+    assert all("SyntaxError" in item["reason"] for item in payload["checks"])
