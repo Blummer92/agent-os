@@ -6,11 +6,10 @@ from dataclasses import asdict
 
 from mcp.server import MCPServer
 
-from instructional_workflow_contracts import (
+from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts.request_interpretation import (
     RequestInterpretation,
-    ValidationStatus,
     bind_current_image_reference,
-    validate_request_interpretation,
 )
 
 from scripts.agent_os_execution_interface.continuation_driver import completion_continuation_payload
