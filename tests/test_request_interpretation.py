@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from instructional_workflow_contracts import ContractReference, ValidationStatus, bind_current_image_reference, validate_request_interpretation
-from instructional_workflow_contracts.request_interpretation import RequestInterpretation, evaluate_ppux_mission_constraint
+from instructional_workflow_contracts import ContractReference, ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts.request_interpretation import (
+    RequestInterpretation,
+    bind_current_image_reference,
+    evaluate_ppux_mission_constraint,
+)
 from instructional_workflow_contracts.common import sha256_hex
 
 MODULE = Path("src/instructional_workflow_contracts/request_interpretation.py")
