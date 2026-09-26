@@ -7,6 +7,10 @@ from dataclasses import asdict
 from mcp.server import MCPServer
 
 from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts.request_interpretation import (
+    RequestInterpretation,
+    bind_current_image_reference,
+)
 
 from scripts.agent_os_execution_interface.continuation_driver import completion_continuation_payload
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
@@ -74,24 +78,39 @@ def _deferred_lesson_read():
 
 @mcp.tool()
 def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dict[str, object]:
-    """Bind an event/intake request to the canonical #924 identity before dispatch."""
+    """Bind an event/intake request and current image reference before dispatch."""
     result = validate_request_interpretation(request)
     record = result.record
+    image_reference_admitted = True
+    image_reference_details: tuple[str, ...] = ()
+    if record is not None:
+        try:
+            image_binding = bind_current_image_reference(
+                RequestInterpretation(record=record)
+            )
+            image_reference_admitted = (
+                not image_binding.required or image_binding.bound
+            )
+            image_reference_details = image_binding.reason_codes
+        except (TypeError, ValueError):
+            image_reference_admitted = False
+            image_reference_details = ("image-reference.missing",)
     return {
         "status": result.status.value,
         "record_id": record.record_id if record is not None else None,
         "record_fingerprint": record.fingerprint if record is not None else None,
         "raw_input_digest": record.to_dict()["raw_input_digest"] if record is not None else None,
         "reason_codes": list(result.reason_codes),
-        "details": list(result.details),
-        "dispatch_admitted": result.status is ValidationStatus.VALID,
+        "details": [*result.details, *image_reference_details],
+        "dispatch_admitted": (
+            result.status is ValidationStatus.VALID and image_reference_admitted
+        ),
         "execution_authorized": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
         "closure_authorized": False,
         "side_effects_performed": False,
     }
-
 
 @mcp.tool()
 def plan_connected_issue_creation_tool(

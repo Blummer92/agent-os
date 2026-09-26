@@ -97,6 +97,74 @@ def test_request_binding_fails_closed_before_dispatch_for_ambiguous_input() -> N
     assert "action.ambiguous" in result["details"]
 
 
+def _image_generation_request(
+    *,
+    include_chair: bool,
+    duplicate_chair: bool = False,
+) -> dict[str, object]:
+    payload = _request_interpretation_payload()
+    payload["action"] = "generate"
+    payload["requested_effect"] = "propose"
+    payload["constraints"] = [{"name": "image-reference-id", "value": "IMG_2116"}]
+    references = [
+        {
+            "system": "google-drive",
+            "stable_id": "prior-handoff-infographic",
+            "exact_location": "drive-file-stale",
+            "verification_evidence": "sha256-stale",
+        }
+    ]
+    if include_chair:
+        references.append(
+            {
+                "system": "google-drive",
+                "stable_id": "IMG_2116",
+                "exact_location": "drive-file-chair",
+                "verification_evidence": "sha256-chair-current",
+            }
+        )
+    if duplicate_chair:
+        references.append(
+            {
+                "system": "google-drive",
+                "stable_id": "IMG_2116",
+                "exact_location": "drive-file-chair-duplicate",
+                "verification_evidence": "sha256-chair-duplicate",
+            }
+        )
+    payload["evidence_references"] = references
+    return payload
+
+
+def test_2966_connected_request_binding_selects_exact_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=True)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is True
+    assert result["details"] == []
+    assert result["execution_authorized"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_2966_connected_request_binding_blocks_missing_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=False)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is False
+    assert result["details"] == ["image-reference.missing"]
+
+
+def test_2966_connected_request_binding_blocks_ambiguous_current_image_reference() -> None:
+    result = mcp_server.bind_agent_os_request_interpretation_tool(
+        _image_generation_request(include_chair=True, duplicate_chair=True)
+    )
+    assert result["status"] == "valid"
+    assert result["dispatch_admitted"] is False
+    assert result["details"] == ["image-reference.multiple"]
+
+
 CONNECTED_ISSUE_BODY = """### Issue tier
 
 tier:1-standard-implementation

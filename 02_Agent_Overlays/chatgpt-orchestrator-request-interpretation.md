@@ -23,6 +23,13 @@ This detail file is part of `chatgpt-orchestrator.md` and owns only the #925 con
 - Provider/destination constraints are orthogonal. A value such as `provider=canva` cannot clear runner authority or alter canonical tutorial application identity.
 - Use `evaluate_ppux_mission_constraint(previous, current)` from the existing request-interpretation owner to project the bounded continuation decision. Its authority and side-effect fields remain fixed false. Do not create a PPUX-specific store, memory layer, phrase parser, router, Scheduler, or second conversation-state framework.
 
+## Current Image Reference Binding
+- For a fresh direct image-generation request that explicitly names an existing reference asset, encode that exact current identity in the existing structured constraint `image-reference-id` and include only references actually available to the active execution surface in the canonical `evidence_references` list.
+- The existing connected `bind_agent_os_request_interpretation_tool(request)` remains the production binding surface. It consumes the unchanged #924 request envelope, calls `bind_current_image_reference(current)`, and must block dispatch when the requested current reference is missing or ambiguous.
+- The current requested reference wins over prior generation intent; prior-turn prompt/artifact state is never a fallback reference and is not an input to the binding decision.
+- Exactly one matching current reference is required. A missing match surfaces `image-reference.missing`; multiple matching identities surface `image-reference.multiple`. Both block generation before provider execution.
+- The binding creates no generation, provider, external-write, publication, or classroom-readiness authority and adds no MCP argument, second image/reference state model, router, or memory store.
+
 ## Continuation Freshness
 - The authoritative target source is the live canonical system named by the validated #924 `target`; for GitHub, refetch the repository resource identified by `repository`, `resource_kind`, and `resource_id`. Conversation memory is never authoritative target state.
 - `record_revision` and `observed_at` version the interpretation record; they are not target-freshness evidence. Target freshness must come from the record's existing `evidence_references` plus freshly fetched canonical context.
