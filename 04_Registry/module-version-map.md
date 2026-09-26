@@ -31,7 +31,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | GitHub Issue Lifecycle Standard | 0.3.0 |
 | Safe Implementation Lane | 0.7.0 |
 | Agent OS Execution Service | 0.6.0 |
-| Artifact-First Response Standard | 0.1.0 |
+| Artifact-First Response Standard | 0.1.4 |
 | Teacher Decision Studio Standard | 0.1.0 |
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
@@ -64,7 +64,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 
-**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops.
+**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821; generated-asset continuation #2968) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops. Version 0.1.4 also makes an accepted generated visual intermediate evidence when an exact approved Drive destination and external-write authorization are already current: continue through the existing governed asset-ingestion/readback/metadata handoff, while failing closed rather than inventing a destination or authority.
 
 **Teacher Decision Studio Standard** (`01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md` plus `teacher-decision-studio-previews-standard.md`, #823/#824) defines table-first rubric/assessment consultation, explanation-risk analysis, and per-option previews; it recommends without auto-approving or writing governed fields.
 
