@@ -61,6 +61,7 @@ PPUX_AUTHORITY_CONSTRAINT = "ppux-authority"
 PPUX_TUTORIAL_CONSTRAINT = "ppux-tutorial-id"
 PPUX_RESULT_STATE_CONSTRAINT = "ppux-result-state"
 PPUX_PROVENANCE_CHANGE_CONSTRAINT = "ppux-provenance-change"
+IMAGE_REFERENCE_CONSTRAINT = "image-reference-id"
 
 PPUX_RESULT_STATES = frozenset({
     "pending", "ready", "blocked", "source-unresolved", "execution-unavailable", "manual-review",
@@ -245,34 +246,63 @@ def _constraint_map(interpretation: RequestInterpretation | None) -> dict[str, o
 def bind_current_image_reference(
     current: RequestInterpretation,
     *,
-    requested_reference_id: str | None,
-    available_references: tuple[ContractReference, ...],
+    requested_reference_id: str | None = None,
+    available_references: tuple[ContractReference, ...] | None = None,
 ) -> ImageReferenceBindingDecision:
-    """Bind an explicit current-turn image reference without stale-context fallback.
+    """Bind a current image reference from the canonical request record.
 
-    The caller supplies the current request's explicit reference identity and the
-    references actually available to the active execution surface. Previous-turn
-    request/generation state is deliberately not an input.
+    The connected caller may omit the explicit arguments. In that production path,
+    the requested identity comes from the existing `image-reference-id` constraint
+    and available references come from the record's canonical
+    `evidence_references`. Previous-turn request/generation state is never an input.
     """
     if type(current) is not RequestInterpretation:
         raise TypeError("current must be an exact RequestInterpretation")
-    if requested_reference_id is not None:
-        requested_reference_id = validate_stable_id(requested_reference_id, "requested_reference_id")
-    if type(available_references) is not tuple or any(type(ref) is not ContractReference for ref in available_references):
-        raise TypeError("available_references must be an exact tuple of ContractReference values")
 
     payload = current.record.to_dict()
+    if requested_reference_id is None:
+        candidate = _constraint_map(current).get(IMAGE_REFERENCE_CONSTRAINT)
+        if candidate is not None and type(candidate) is not str:
+            raise ValueError("image-reference-id must be text")
+        requested_reference_id = candidate
+    if requested_reference_id is not None:
+        requested_reference_id = validate_stable_id(
+            requested_reference_id, "requested_reference_id"
+        )
+
+    if available_references is None:
+        available_references = tuple(
+            ContractReference(
+                system=item["system"],
+                stable_id=item["stable_id"],
+                exact_location=item["exact_location"],
+                verification_evidence=item["verification_evidence"],
+            )
+            for item in payload["evidence_references"]
+        )
+    if type(available_references) is not tuple or any(
+        type(ref) is not ContractReference for ref in available_references
+    ):
+        raise TypeError(
+            "available_references must be an exact tuple of ContractReference values"
+        )
+
     required = payload["action"] == "generate" and requested_reference_id is not None
     if not required:
         return ImageReferenceBindingDecision(False, False, None, ())
 
-    matches = tuple(ref for ref in available_references if ref.stable_id == requested_reference_id)
+    matches = tuple(
+        ref for ref in available_references if ref.stable_id == requested_reference_id
+    )
     if len(matches) == 0:
-        return ImageReferenceBindingDecision(True, False, None, ("image-reference.missing",))
+        return ImageReferenceBindingDecision(
+            True, False, None, ("image-reference.missing",)
+        )
     if len(matches) > 1:
-        return ImageReferenceBindingDecision(True, False, None, ("image-reference.multiple",))
+        return ImageReferenceBindingDecision(
+            True, False, None, ("image-reference.multiple",)
+        )
     return ImageReferenceBindingDecision(True, True, matches[0], ())
-
 
 def evaluate_ppux_mission_constraint(
     previous: RequestInterpretation | None,
