@@ -6,7 +6,13 @@ from dataclasses import asdict
 
 from mcp.server import MCPServer
 
-from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts import (
+    ContractReference,
+    RequestInterpretation,
+    ValidationStatus,
+    bind_current_image_reference,
+    validate_request_interpretation,
+)
 
 from scripts.agent_os_execution_interface.continuation_driver import completion_continuation_payload
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
@@ -73,10 +79,38 @@ def _deferred_lesson_read():
 
 
 @mcp.tool()
-def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dict[str, object]:
-    """Bind an event/intake request to the canonical #924 identity before dispatch."""
+def bind_agent_os_request_interpretation_tool(
+    request: dict[str, object],
+    requested_reference_id: str | None = None,
+    available_references: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    """Bind current request identity and any explicit image reference before dispatch."""
     result = validate_request_interpretation(request)
     record = result.record
+    image_binding = None
+    if record is not None:
+        try:
+            references = tuple(
+                ContractReference(
+                    system=item["system"],
+                    stable_id=item["stable_id"],
+                    exact_location=item["exact_location"],
+                    verification_evidence=item["verification_evidence"],
+                )
+                for item in (available_references or [])
+            )
+        except (KeyError, TypeError, ValueError):
+            references = ()
+        image_binding = bind_current_image_reference(
+            RequestInterpretation(record=record),
+            requested_reference_id=requested_reference_id,
+            available_references=references,
+        )
+    image_reference_admitted = (
+        image_binding is None
+        or not image_binding.required
+        or image_binding.bound
+    )
     return {
         "status": result.status.value,
         "record_id": record.record_id if record is not None else None,
@@ -84,7 +118,17 @@ def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dic
         "raw_input_digest": record.to_dict()["raw_input_digest"] if record is not None else None,
         "reason_codes": list(result.reason_codes),
         "details": list(result.details),
-        "dispatch_admitted": result.status is ValidationStatus.VALID,
+        "dispatch_admitted": result.status is ValidationStatus.VALID and image_reference_admitted,
+        "image_reference_required": image_binding.required if image_binding is not None else False,
+        "image_reference_bound": image_binding.bound if image_binding is not None else False,
+        "image_reference_id": (
+            image_binding.reference.stable_id
+            if image_binding is not None and image_binding.reference is not None
+            else None
+        ),
+        "image_reference_reason_codes": (
+            list(image_binding.reason_codes) if image_binding is not None else []
+        ),
         "execution_authorized": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
