@@ -1,0 +1,147 @@
+name: Agent OS CKR6 Lessons Bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-ckr6-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    name: Classify finite CKR6 request
+    if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
+    runs-on: ubuntu-latest
+    outputs:
+      retrieval_required: ${{ steps.classify.outputs.retrieval_required }}
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install existing Agent OS runtime
+        run: python -m pip install -e 08_Tooling/agent-os-execution-service
+
+      - name: Parse and classify bounded CKR6 envelope
+        id: classify
+        env:
+          AGENT_OS_EVENT: ${{ github.event_path }}
+          AGENT_OS_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agent-os-ckr6"
+          python -m agent_os_execution_service.ckr6_github_bridge \
+            --phase classify \
+            --event "$AGENT_OS_EVENT" \
+            --repository "$AGENT_OS_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --output "$RUNNER_TEMP/agent-os-ckr6/classification.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "agent-os-ckr6" / "classification.json").read_text()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(
+                  "retrieval_required="
+                  + ("true" if payload["retrieval_required"] else "false")
+                  + "\n"
+              )
+          PY
+
+  execute:
+    name: Execute finite CKR6 request
+    needs: classify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install existing Agent OS runtime
+        run: python -m pip install -e 08_Tooling/agent-os-execution-service
+
+      - name: Execute zero-read CKR6 request
+        if: ${{ needs.classify.outputs.retrieval_required == 'false' }}
+        env:
+          AGENT_OS_EVENT: ${{ github.event_path }}
+          AGENT_OS_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agent-os-ckr6"
+          python -m agent_os_execution_service.ckr6_github_bridge \
+            --phase execute \
+            --event "$AGENT_OS_EVENT" \
+            --repository "$AGENT_OS_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --retrieval-required false \
+            --output "$RUNNER_TEMP/agent-os-ckr6/result.json"
+
+      - name: Execute read-only Lessons Learned CKR6 request
+        if: ${{ needs.classify.outputs.retrieval_required == 'true' }}
+        env:
+          AGENT_OS_EVENT: ${{ github.event_path }}
+          AGENT_OS_REPOSITORY: ${{ github.repository }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"
+          test -n "$NOTION_TOKEN"
+          mkdir -p "$RUNNER_TEMP/agent-os-ckr6"
+          python -m agent_os_execution_service.ckr6_github_bridge \
+            --phase execute \
+            --event "$AGENT_OS_EVENT" \
+            --repository "$AGENT_OS_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --retrieval-required true \
+            --output "$RUNNER_TEMP/agent-os-ckr6/result.json"
+
+      - name: Publish bounded CKR6 summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ckr6" / "result.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS CKR6\n\n")
+              if not path.exists():
+                  summary.write("Result evidence unavailable; manual review required.\n")
+              else:
+                  result = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Operation: `{result.get('operation')}`\n\n")
+                  summary.write(f"Status: `{result.get('status')}`\n\n")
+                  summary.write(
+                      "Reasons: `"
+                      + ",".join(str(item) for item in result.get("reason_codes", []))
+                      + "`\n\n"
+                  )
+                  summary.write(
+                      f"Selected lesson count: `{len(result.get('selected_lesson_ids', []))}`\n"
+                  )
+          PY
+
+      - name: Publish bounded CKR6 evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-ckr6-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-ckr6/result.json
+          if-no-files-found: warn
+          retention-days: 3
