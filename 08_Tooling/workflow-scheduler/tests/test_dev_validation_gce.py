@@ -119,7 +119,9 @@ def test_identity_mismatch_fails_closed():
 
 def test_unframed_output_is_not_trusted():
  class Bad(Adapter):
-  def _ssh(self,resource,command):return SimpleNamespace(returncode=0,stdout='{"status":"success"}',stderr="")
+  def _ssh(self,resource,command,*,timeout=180):
+   assert timeout==live.GCE_DEV_VALIDATION_TRANSPORT_TIMEOUT_SECONDS
+   return SimpleNamespace(returncode=0,stdout='{"status":"success"}',stderr="")
  assert live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Bad())["dev_validation"]["reason_codes"]==["dev-validation-frame-invalid"]
 
 def test_log_over_bound_is_rejected():
