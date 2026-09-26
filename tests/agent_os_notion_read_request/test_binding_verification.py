@@ -441,9 +441,9 @@ def test_shipped_catalog_promotes_only_freshly_verified_candy_binding() -> None:
 def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
-        CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+        "verify-motion-typography-binding",
     )
-    assert "verify-motion-typography-binding" not in BINDING_VERIFICATION_REQUEST_IDS
+    assert CANDY_BRANDING_VERIFICATION_REQUEST_ID not in BINDING_VERIFICATION_REQUEST_IDS
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"
