@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts import ContractReference, ValidationStatus, bind_current_image_reference, validate_request_interpretation
 from instructional_workflow_contracts.request_interpretation import RequestInterpretation, evaluate_ppux_mission_constraint
 from instructional_workflow_contracts.common import sha256_hex
 
@@ -319,3 +319,71 @@ def test_ppux_guard_rejects_unstructured_provenance_change_values():
     )
     with pytest.raises(ValueError, match="ppux-provenance-change"):
         evaluate_ppux_mission_constraint(previous, current)
+
+
+def test_issue_2966_current_image_reference_binds_exact_available_asset():
+    current = interpretation(
+        action="generate",
+        requested_effect="propose",
+        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
+    )
+    chair = ContractReference(
+        system="google-drive",
+        stable_id="IMG_2116",
+        exact_location="drive-file-1KnItqKv2zOtA3Fu23zzgg0aYaTvSOXHk",
+        verification_evidence="sha256-chair-current",
+    )
+    stale_infographic = ContractReference(
+        system="google-drive",
+        stable_id="prior-handoff-infographic",
+        exact_location="drive-file-stale",
+        verification_evidence="sha256-stale",
+    )
+    decision = bind_current_image_reference(
+        current,
+        requested_reference_id="IMG_2116",
+        available_references=(stale_infographic, chair),
+    )
+    assert decision.required is True
+    assert decision.bound is True
+    assert decision.reference == chair
+    assert decision.reason_codes == ()
+    assert decision.authorization_created is False
+
+
+def test_issue_2966_missing_current_image_reference_fails_closed_without_stale_fallback():
+    current = interpretation(
+        action="generate",
+        requested_effect="propose",
+        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
+    )
+    stale_infographic = ContractReference(
+        system="google-drive",
+        stable_id="prior-handoff-infographic",
+        exact_location="drive-file-stale",
+        verification_evidence="sha256-stale",
+    )
+    decision = bind_current_image_reference(
+        current,
+        requested_reference_id="IMG_2116",
+        available_references=(stale_infographic,),
+    )
+    assert decision.required is True
+    assert decision.bound is False
+    assert decision.reference is None
+    assert decision.reason_codes == ("image-reference.missing",)
+
+
+def test_issue_2966_duplicate_current_reference_identity_fails_closed():
+    current = interpretation(
+        action="generate",
+        requested_effect="propose",
+        target={"system": "google-drive", "resource_kind": "unknown", "repository": None, "resource_id": None},
+    )
+    refs = tuple(
+        ContractReference("google-drive", "IMG_2116", f"drive-file-{suffix}", f"sha256-{suffix}")
+        for suffix in ("a", "b")
+    )
+    decision = bind_current_image_reference(current, requested_reference_id="IMG_2116", available_references=refs)
+    assert decision.bound is False
+    assert decision.reason_codes == ("image-reference.multiple",)
