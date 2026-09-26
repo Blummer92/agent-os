@@ -5,9 +5,8 @@
 # real object IDs. The adapter remains read-only: GET endpoints plus the fixed
 # POST /v1/data_sources/{data_source_id}/query read endpoint.
 #
-# Migration: new callers should use get_data_source/query_data_source. The
-# query_database action remains temporarily available for legacy Scheduler
-# payloads and should not be used for new work.
+# Collection reads use get_data_source/query_data_source. Database identifiers
+# remain metadata-container identities and are not accepted for collection queries.
 
 workflow_id: "notion-readonly-smoke-test-v2"
 title: "Notion Read-Only Adapter Smoke Test"

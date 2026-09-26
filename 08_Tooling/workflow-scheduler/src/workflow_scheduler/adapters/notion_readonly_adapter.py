@@ -2,12 +2,8 @@
 
 The canonical read path targets Notion API ``2026-03-11``. All network calls are
 structurally restricted to GET requests plus POST requests to allowlisted query
-endpoints. The current query model is ``/v1/data_sources/{id}/query``.
-
-``query_database`` remains as a temporary compatibility action for existing
-Scheduler callers. New callers must use ``get_data_source`` and
-``query_data_source``; the compatibility action is intentionally isolated and
-must not be expanded.
+endpoints. The collection query model is ``/v1/data_sources/{id}/query``;
+database identifiers remain metadata-container identities only.
 """
 from __future__ import annotations
 
@@ -116,9 +112,6 @@ def _default_http_post_read(
         ) from exc
 
 
-# Backward-compatible helper name used by existing offline tests/callers.
-_default_http_post_query_database = _default_http_post_read
-
 
 def _plain_text(rich_text: Any) -> str:
     if not isinstance(rich_text, list):
@@ -135,9 +128,6 @@ class NotionReadOnlyAdapter(TaskAdapter):
         self,
         token: Optional[str] = None,
         http_get: Optional[Callable[[str, Dict[str, str], float], Any]] = None,
-        http_post_query_database: Optional[
-            Callable[[str, Dict[str, str], Dict[str, Any], float], Any]
-        ] = None,
         http_post_query_data_source: Optional[
             Callable[[str, Dict[str, str], Dict[str, Any], float], Any]
         ] = None,
@@ -150,9 +140,8 @@ class NotionReadOnlyAdapter(TaskAdapter):
             raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("NOTION_TOKEN")
         self._http_get = http_get or _default_http_get
-        self._http_post_query_database = http_post_query_database or _default_http_post_read
         self._http_post_query_data_source = (
-            http_post_query_data_source or http_post_query_database or _default_http_post_read
+            http_post_query_data_source or _default_http_post_read
         )
         self.timeout = timeout
         self.notion_version = notion_version
@@ -200,14 +189,6 @@ class NotionReadOnlyAdapter(TaskAdapter):
     def _get(self, path: str) -> Dict[str, Any]:
         data = self._http_get(
             f"{NOTION_API_BASE}{path}", self._headers(), self.timeout
-        )
-        return self._require_object(data)
-
-    def _post_query_database(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Temporary legacy query endpoint used only by ``query_database``."""
-        url = f"{NOTION_API_BASE}/databases/{database_id}/query"
-        data = self._http_post_query_database(
-            url, {**self._headers(), "Content-Type": "application/json"}, body, self.timeout
         )
         return self._require_object(data)
 
@@ -447,33 +428,6 @@ class NotionReadOnlyAdapter(TaskAdapter):
             output["property_item"] = data
         return output
 
-    def _action_query_database(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Temporary compatibility action; new callers use query_data_source."""
-        database_id = self._require(payload, "database_id")
-        body: Dict[str, Any] = {}
-        if "filter" in payload and payload["filter"] is not None:
-            body["filter"] = payload["filter"]
-        if "page_size" in payload and payload["page_size"] is not None:
-            body["page_size"] = payload["page_size"]
-        data = self._post_query_database(database_id, body)
-        rows = [
-            {
-                "id": row.get("id"),
-                "url": row.get("url"),
-                "properties": row.get("properties"),
-                "archived": row.get("archived"),
-                "in_trash": row.get("in_trash"),
-            }
-            for row in self._require_results(data)
-        ]
-        return {
-            "results": rows,
-            "has_more": data.get("has_more"),
-            "next_cursor": data.get("next_cursor"),
-            "request_id": data.get("request_id"),
-            "deprecated": "Use query_data_source with data_source_id",
-        }
-
     ACTIONS: Dict[
         str, Callable[["NotionReadOnlyAdapter", Dict[str, Any]], Dict[str, Any]]
     ] = {
@@ -483,5 +437,4 @@ class NotionReadOnlyAdapter(TaskAdapter):
         "get_data_source": _action_get_data_source,
         "query_data_source": _action_query_data_source,
         "get_page_property": _action_get_page_property,
-        "query_database": _action_query_database,
     }
