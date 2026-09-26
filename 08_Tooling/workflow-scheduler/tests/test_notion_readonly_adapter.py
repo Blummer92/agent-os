@@ -1,7 +1,7 @@
 """Tests for Phase 3B: NotionReadOnlyAdapter, the second real external
 adapter, proving the Phase 2F/3A adapter pattern generalizes to a system
 whose read operations aren't all GET. All network access is mocked via
-injected http_get / http_post_query_database callables -- no live
+injected HTTP callables -- no live
 Notion access required.
 
 Phase 3F migrated this adapter's result shape from success/error/
@@ -47,19 +47,6 @@ class FakeHttpGet:
 
     def __call__(self, url, headers, timeout):
         self.calls.append((url, headers, timeout))
-        if self.exc is not None:
-            raise self.exc
-        return self.response
-
-
-class FakeHttpPostQueryDatabase:
-    def __init__(self, response=None, exc: Exception = None):
-        self.response = response
-        self.exc = exc
-        self.calls = []
-
-    def __call__(self, url, headers, body, timeout):
-        self.calls.append((url, headers, body, timeout))
         if self.exc is not None:
             raise self.exc
         return self.response
@@ -170,62 +157,6 @@ class TestSupportedActionsSucceed:
         assert result["output"]["title"] == "My Database"
         assert http_get.calls[0][0] == "https://api.notion.com/v1/databases/db-1"
 
-    def test_query_database(self):
-        http_post = FakeHttpPostQueryDatabase(response={
-            "results": [
-                {"id": "row-1", "url": "https://notion.so/row-1", "properties": {"Name": {"title": []}}},
-            ],
-            "has_more": False,
-            "next_cursor": None,
-        })
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
-
-        result = adapter.execute(task)
-
-        assert result["status"] == "success"
-        assert len(result["output"]["results"]) == 1
-        assert result["output"]["results"][0]["id"] == "row-1"
-        assert http_post.calls[0][0] == "https://api.notion.com/v1/databases/db-1/query"
-
-    def test_query_database_passes_filter_and_page_size_in_body(self):
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={
-            "action": "query_database",
-            "database_id": "db-1",
-            "filter": {"property": "Status", "select": {"equals": "Done"}},
-            "page_size": 25,
-        })
-
-        adapter.execute(task)
-
-        body = http_post.calls[0][2]
-        assert body["filter"] == {"property": "Status", "select": {"equals": "Done"}}
-        assert body["page_size"] == 25
-
-    def test_query_database_omits_optional_fields_when_not_given(self):
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
-
-        adapter.execute(task)
-
-        body = http_post.calls[0][2]
-        assert "filter" not in body
-        assert "page_size" not in body
-
-    def test_query_database_sends_content_type_and_notion_version_headers(self):
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
-
-        adapter.execute(task)
-
-        headers = http_post.calls[0][1]
-        assert headers["Content-Type"] == "application/json"
-        assert headers["Notion-Version"] == nrao_module.NOTION_VERSION
-
     def test_token_sets_authorization_header(self):
         http_get = FakeHttpGet(response={"id": "page-1"})
         adapter = NotionReadOnlyAdapter(token="secret-token", http_get=http_get)
@@ -251,8 +182,7 @@ class TestSupportedActionsSucceed:
 class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
     def test_missing_action(self):
         http_get = FakeHttpGet(response={"ok": True})
-        http_post = FakeHttpPostQueryDatabase(response={"ok": True})
-        adapter = NotionReadOnlyAdapter(http_get=http_get, http_post_query_database=http_post)
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"page_id": "page-1"})
 
         result = adapter.execute(task)
@@ -260,12 +190,10 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
         assert result["status"] == "failure"
         assert "action" in result["message"]
         assert http_get.calls == []
-        assert http_post.calls == []
 
     def test_unsupported_action_fails_before_network_call(self):
         http_get = FakeHttpGet(response={"ok": True})
-        http_post = FakeHttpPostQueryDatabase(response={"ok": True})
-        adapter = NotionReadOnlyAdapter(http_get=http_get, http_post_query_database=http_post)
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"action": "create_page", "page_id": "page-1"})
 
         result = adapter.execute(task)
@@ -273,7 +201,6 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
         assert result["status"] == "failure"
         assert "Unsupported action" in result["message"]
         assert http_get.calls == []
-        assert http_post.calls == []
 
     @pytest.mark.parametrize(
         "action",
@@ -281,15 +208,13 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
     )
     def test_write_like_action_names_are_all_unsupported(self, action):
         http_get = FakeHttpGet(response={"ok": True})
-        http_post = FakeHttpPostQueryDatabase(response={"ok": True})
-        adapter = NotionReadOnlyAdapter(http_get=http_get, http_post_query_database=http_post)
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"action": action, "page_id": "page-1", "database_id": "db-1"})
 
         result = adapter.execute(task)
 
         assert result["status"] == "failure"
         assert http_get.calls == []
-        assert http_post.calls == []
 
     def test_get_page_missing_page_id(self):
         http_get = FakeHttpGet(response={"ok": True})
@@ -324,46 +249,16 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
         assert "database_id" in result["message"]
         assert http_get.calls == []
 
-    def test_query_database_missing_database_id(self):
-        http_post = FakeHttpPostQueryDatabase(response={"ok": True})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={"action": "query_database"})
+    def test_retired_query_database_action_is_unsupported(self):
+        http_get = FakeHttpGet(response={"ok": True})
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
 
         result = adapter.execute(task)
 
         assert result["status"] == "failure"
-        assert "database_id" in result["message"]
-        assert http_post.calls == []
-
-
-class TestQueryDatabaseUsesOnlyTheHardcodedAllowlistedEndpoint:
-    def test_url_matches_exact_template_regardless_of_other_payload_fields(self):
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={
-            "action": "query_database",
-            "database_id": "db-with-weird-id_123",
-            "filter": {"anything": "goes-in-the-body-not-the-url"},
-        })
-
-        adapter.execute(task)
-
-        assert http_post.calls[0][0] == "https://api.notion.com/v1/databases/db-with-weird-id_123/query"
-
-    def test_only_query_database_action_ever_calls_http_post(self):
-        http_get = FakeHttpGet(response={"id": "x", "results": [], "properties": {}, "title": []})
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_get=http_get, http_post_query_database=http_post)
-
-        for action, extra in [
-            ("get_page", {"page_id": "p1"}),
-            ("get_block_children", {"block_id": "b1"}),
-            ("get_database", {"database_id": "d1"}),
-        ]:
-            task = make_task(task_id=action, payload={"action": action, **extra})
-            adapter.execute(task)
-
-        assert http_post.calls == []
+        assert "Unsupported action" in result["message"]
+        assert http_get.calls == []
 
 
 class TestConnectorFailuresBecomeControlledResults:
@@ -376,16 +271,6 @@ class TestConnectorFailuresBecomeControlledResults:
 
         assert result["status"] == "failure"
         assert "boom" in result["message"]
-
-    def test_post_query_database_raising_transient_becomes_retryable(self):
-        http_post = FakeHttpPostQueryDatabase(exc=NotionReadOnlyAdapterError("boom", is_transient=True))
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
-
-        result = adapter.execute(task)  # must not raise
-
-        assert result["status"] == "retryable"
-        assert "retry_after" in result
 
     @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
     def test_5xx_and_429_are_transient_via_real_http_get(self, monkeypatch, status):
@@ -414,21 +299,6 @@ class TestConnectorFailuresBecomeControlledResults:
             nrao_module._default_http_get("https://api.notion.com/v1/x", {}, 10.0)
 
         assert exc_info.value.is_transient is False
-
-    def test_5xx_is_transient_via_real_http_post_query_database(self, monkeypatch):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, 503, "server error", {}, None)
-
-        monkeypatch.setattr(nrao_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
-            nrao_module._default_http_post_query_database(
-                "https://api.notion.com/v1/databases/db-1/query", {}, {}, 10.0
-            )
-
-        assert exc_info.value.is_transient is True
 
     def test_url_error_is_transient_via_real_http_get(self, monkeypatch):
         import urllib.error
@@ -512,17 +382,6 @@ class TestResultsPassContractValidationAndAreRecognizedAsContractResults:
 
         assert result.success is True
 
-    def test_query_database_success_round_trips_through_executor(self, repository):
-        http_post = FakeHttpPostQueryDatabase(response={"results": []})
-        adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
-        executor = make_executor(repository, adapter)
-        task = make_task(payload={"action": "query_database", "database_id": "db-1"})
-        repository.create_task(task)
-
-        result = executor.execute(task)
-
-        assert result.success is True
-
     def test_transient_failure_enters_retry_flow_through_executor(self, repository):
         http_get = FakeHttpGet(exc=NotionReadOnlyAdapterError("rate limited", is_transient=True))
         adapter = NotionReadOnlyAdapter(http_get=http_get)
@@ -561,9 +420,10 @@ class TestNoWriteOperationsExposed:
         source = inspect.getsource(nrao_module)
         assert source.count('method="POST"') == 1
 
-    def test_post_url_is_the_fixed_query_database_template(self):
+    def test_legacy_database_query_endpoint_is_absent(self):
         source = inspect.getsource(nrao_module)
-        assert 'f"{NOTION_API_BASE}/databases/{database_id}/query"' in source
+        assert "/databases/{database_id}/query" not in source
+        assert '"query_database"' not in source
 
     def test_only_two_places_issue_http_requests(self):
         source = inspect.getsource(nrao_module)
