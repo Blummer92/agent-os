@@ -13,6 +13,6 @@ A normal converged implementation candidate therefore reaches terminal accountin
 3. any separately admitted `status:ready` cleanup and/or issue closure through the existing GitHub Service Agent write path; and
 4. canonical final readback proving the PR remains merged, the issue is closed, and stale readiness is absent.
 
-Item-local lifecycle blockers (for example remaining issue scope, missing/stale closure authority, parent/tracking identity, or manual-review evidence) are recorded for that candidate and do not stop later independent PRs. Shared provider/currentness failures continue to halt the bounded batch.
+Item-local lifecycle blockers (for example remaining issue scope, missing/stale closure authority, or manual-review evidence) are recorded for that candidate and do not stop later independent PRs. A parent or tracking identity is not itself a blocker: when current canonical evidence proves that issue's own Definition of Done is complete and it retains no remaining scope, it follows the same separately authorized terminal-reconciliation path. Parent/tracking issues that still own unfinished scope remain open. Shared provider/currentness failures continue to halt the bounded batch.
 
 This composition creates no `merge => close` shortcut. `batch_post_merge_reconciliation.py`, lifecycle mutation authorization/admission, `IssueOperationalState`, and the GitHub Service Agent remain the canonical owners of completion, authority, currentness, mutation, and readback. The coordinator only sequences those existing owners.
