@@ -45,11 +45,12 @@ def _host_evidence(**overrides: object) -> dict[str, object]:
 
 
 class Adapter:
-    FORBIDDEN = ("invoke", "stop", "activate_first_publication", "probe_activation_ready", "discover")
+    FORBIDDEN = ("invoke", "activate_first_publication", "probe_activation_ready", "discover")
 
-    def __init__(self, *, state=VmState.RUNNING, wait_state=VmState.RUNNING, start_ok=True, ready=True, evidence=None, ssh_result=None):
+    def __init__(self, *, state=VmState.RUNNING, wait_state=VmState.RUNNING, start_ok=True, ready=True, evidence=None, ssh_result=None, shutdown_enabled=True, stop_ok=True, stopped_state=VmState.STOPPED):
         self.state = state; self.wait_state = wait_state; self.start_ok = start_ok; self.ready = ready
         self.evidence = evidence if evidence is not None else _host_evidence(); self.ssh_result = ssh_result
+        self.shutdown_enabled = shutdown_enabled; self.stop_ok = stop_ok; self.stopped_state = stopped_state
         self.calls: list[str] = []; self.commands: list[str] = []
 
     def observe_state(self, resource):
@@ -58,6 +59,10 @@ class Adapter:
         assert resource == RESOURCE; self.calls.append("start"); return self.start_ok
     def wait_until_running(self, resource):
         assert resource == RESOURCE; self.calls.append("wait_until_running"); return self.wait_state
+    def stop(self, resource):
+        assert resource == RESOURCE; self.calls.append("stop"); return self.stop_ok
+    def wait_until_stopped(self, resource):
+        assert resource == RESOURCE; self.calls.append("wait_until_stopped"); return self.stopped_state
     def probe_first_run_validation_ready(self, resource):
         self.calls.append("probe_first_run_validation_ready"); return self.ready
     def _ssh(self, resource, command):
@@ -92,13 +97,15 @@ def test_valid_running_host_reaches_only_fixed_first_run_path_without_start() ->
     assert adapter.commands == [f"/usr/bin/python3 -m {FIRST_RUN_VALIDATION_MODULE} --repository {REPOSITORY} --issue-number {ISSUE} --candidate-sha {SHA}"]
 
 
-def test_terminated_host_cold_starts_once_then_validates() -> None:
+def test_terminated_host_cold_starts_once_then_validates_and_restores_stopped_state() -> None:
     adapter = Adapter(state=VmState.STOPPED)
     evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=adapter)["first_run_validation"]
     assert evidence["host_started"] is True
-    assert adapter.calls == ["observe_state", "start", "wait_until_running", "probe_first_run_validation_ready", "validate_first_run", "_ssh"]
+    assert evidence["shutdown_issued"] is True
+    assert evidence["vm_final_state"] == "stopped"
+    assert adapter.calls == ["observe_state", "start", "wait_until_running", "probe_first_run_validation_ready", "validate_first_run", "_ssh", "stop", "wait_until_stopped"]
     assert adapter.calls.count("start") == 1
-    assert "stop" not in adapter.calls
+    assert adapter.calls.count("stop") == 1
 
 
 def test_cold_start_failure_and_nonrunning_wait_fail_closed_without_duplicate_start() -> None:
@@ -111,24 +118,62 @@ def test_cold_start_failure_and_nonrunning_wait_fail_closed_without_duplicate_st
     evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=failed_wait)["first_run_validation"]
     assert evidence["reason_codes"] == ["host-not-running"]
     assert evidence["host_started"] is True
-    assert failed_wait.calls == ["observe_state", "start", "wait_until_running"]
+    assert evidence["shutdown_issued"] is True
+    assert failed_wait.calls == ["observe_state", "start", "wait_until_running", "stop", "wait_until_stopped"]
 
 
-def test_entrypoint_missing_preserves_start_ownership_and_never_stops() -> None:
+def test_entrypoint_missing_restores_only_operation_started_host() -> None:
     cold = Adapter(state=VmState.STOPPED, ready=False)
     evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=cold)["first_run_validation"]
     assert evidence["reason_codes"] == ["first-run-validation-entrypoint-unavailable"]
     assert evidence["host_started"] is True
-    assert cold.calls == ["observe_state", "start", "wait_until_running", "probe_first_run_validation_ready"]
-    assert "stop" not in cold.calls
+    assert evidence["shutdown_issued"] is True
+    assert cold.calls == ["observe_state", "start", "wait_until_running", "probe_first_run_validation_ready", "stop", "wait_until_stopped"]
 
     already_running = Adapter(ready=False)
     evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=already_running)["first_run_validation"]
     assert evidence["host_started"] is False
+    assert evidence["shutdown_issued"] is False
     assert "start" not in already_running.calls and "stop" not in already_running.calls
 
 
-def test_no_scheduler_publication_or_shutdown_path_is_reached() -> None:
+def test_operation_started_host_reports_withheld_or_failed_shutdown() -> None:
+    withheld = Adapter(state=VmState.STOPPED, shutdown_enabled=False)
+    evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=withheld)["first_run_validation"]
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == ["shutdown-withheld"]
+    assert evidence["shutdown_issued"] is False
+    assert "stop" not in withheld.calls
+
+    failed = Adapter(state=VmState.STOPPED, stop_ok=False)
+    evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=failed)["first_run_validation"]
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == ["shutdown-failed"]
+    assert evidence["shutdown_issued"] is False
+    assert failed.calls.count("stop") == 1
+    assert "wait_until_stopped" not in failed.calls
+
+    unconfirmed = Adapter(state=VmState.STOPPED, stopped_state=VmState.STOPPING)
+    evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=unconfirmed)["first_run_validation"]
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == ["shutdown-failed"]
+    assert evidence["shutdown_issued"] is True
+    assert evidence["vm_final_state"] == "stopping"
+
+
+def test_host_validation_failure_still_restores_operation_started_host() -> None:
+    failed = Adapter(
+        state=VmState.STOPPED,
+        ssh_result=SimpleNamespace(returncode=1, stdout="", stderr="boom"),
+    )
+    evidence = live.execute_first_run_validation_transport(_ingress(), claims=CLAIMS, adapter=failed)["first_run_validation"]
+    assert evidence["reason_codes"] == ["first-run-validation-host-failed"]
+    assert evidence["host_started"] is True
+    assert evidence["shutdown_issued"] is True
+    assert failed.calls[-2:] == ["stop", "wait_until_stopped"]
+
+
+def test_no_scheduler_publication_or_unowned_shutdown_path_is_reached() -> None:
     adapter = Adapter(); evidence = execute_transport(_ingress(), claims=CLAIMS, adapter=adapter)["first_run_validation"]
     assert evidence["scheduler_invoked"] is False
     assert evidence["publication_invoked"] is False
