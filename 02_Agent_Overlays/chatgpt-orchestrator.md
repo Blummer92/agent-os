@@ -1,6 +1,13 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
+
+### Internal tool-call ceilings in finite missions
+
+An internal Code Mode/tool-call ceiling is a bounded execution-batch boundary, not mission completion. Preserve the existing finite-mission cursor, already-processed identities, current canonical evidence, and remaining population; resume the next bounded tool batch from that cursor without requiring a new owner prompt and without reprocessing completed identities.
+
+A tool-call ceiling grants no retry/mutation authority and does not justify a scheduler, queue, mission store, retry daemon, or background worker. If the host exposes no callable continuation after the bounded batch boundary, report that exact native continuation capability as the blocker rather than claiming the finite audit/campaign is complete.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 ## Inherited Standards
