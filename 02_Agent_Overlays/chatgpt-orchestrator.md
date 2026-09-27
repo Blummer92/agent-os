@@ -10,6 +10,12 @@ Do not start duplicate validation merely to keep the turn alive, and do not poll
 
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
+
+### Governed PR-refresh campaign handoffs
+
+A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
+
+Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
 ## Inherited Standards
 See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
@@ -170,10 +176,3 @@ Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
 - 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling, while preserving existing execution-surface preflight, Safe-Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
-
-
-### Governed PR-refresh campaign handoffs
-
-A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
-
-Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
