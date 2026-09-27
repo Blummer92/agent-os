@@ -194,3 +194,11 @@ Expect: classify the reported site as a repeatable transformation defect, inspec
 ## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
 Fixture: the repeated-edit defect requires another mutation after failed validation.
 Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
+
+## Test 62 - Pending Exact-Head CI Is Nonterminal
+Fixture: a finite PR-reduction campaign has a repaired current head whose authoritative exact-head validation is queued or in progress.
+Expect: do not emit the terminal campaign report. Boundedly reacquire the same exact head/check state without starting duplicate validation; terminal green continues through the existing authorized merge path and terminal red through failed-repair re-entry.
+
+## Test 63 - CI Reacquisition Remains Finite
+Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
+Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
