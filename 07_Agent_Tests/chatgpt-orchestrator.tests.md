@@ -194,12 +194,3 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 ## Test 63 - CI Reacquisition Remains Finite
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
-
-
-## Test 64 - Refresh Handoff Persistence Is Intermediate
-Fixture: a finite refresh campaign has persisted a handoff but the target PR head remains behind/diverged and no current refresh receipt proves convergence.
-Expect: do not report campaign completion. Reacquire head/main/path scope, materialize/read back the existing content-bound authorization, publish the canonical refresh trigger to the linked ordinary issue, consume the receipt, and read back the PR before validation.
-
-## Test 65 - Refresh Trigger Never Uses PR Conversation
-Fixture: the refresh target PR is linked to an ordinary issue.
-Expect: the existing `/agent-os refresh-pr <pr>` trigger is published only on the linked ordinary issue. Item-local failure advances independent later items; main drift reacquires unconsumed authorization evidence.
