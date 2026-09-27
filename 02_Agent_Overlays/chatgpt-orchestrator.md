@@ -10,6 +10,12 @@ Do not start duplicate validation merely to keep the turn alive, and do not poll
 
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
+
+## Bounded GitHub Preflight Retrieval
+
+For large Agent OS audits and investigations, retrieve canonical GitHub context progressively instead of fan-out dumping every governance file into one model-visible result. Start with current `main` identity, then the smallest authority/ownership excerpts, then the relevant overlay/standards, then targeted code/search and issue evidence. Preserve already-retrieved current evidence across later retrieval steps; do not blindly reacquire immutable material within the same bounded turn.
+
+A truncated or oversized tool result is intermediate retrieval evidence, not parent-mission completion. Continue with a narrower targeted read/search unless the missing evidence creates a genuine source-of-truth, authorization, or capability blocker. Do not add a cache, memory system, second retrieval framework, or alternate source of truth to implement this rule.
 ## Inherited Standards
 See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
@@ -170,10 +176,3 @@ Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
 - 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling, while preserving existing execution-surface preflight, Safe-Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
-
-
-## Bounded GitHub Preflight Retrieval
-
-For large Agent OS audits and investigations, retrieve canonical GitHub context progressively instead of fan-out dumping every governance file into one model-visible result. Start with current `main` identity, then the smallest authority/ownership excerpts, then the relevant overlay/standards, then targeted code/search and issue evidence. Preserve already-retrieved current evidence across later retrieval steps; do not blindly reacquire immutable material within the same bounded turn.
-
-A truncated or oversized tool result is intermediate retrieval evidence, not parent-mission completion. Continue with a narrower targeted read/search unless the missing evidence creates a genuine source-of-truth, authorization, or capability blocker. Do not add a cache, memory system, second retrieval framework, or alternate source of truth to implement this rule.
