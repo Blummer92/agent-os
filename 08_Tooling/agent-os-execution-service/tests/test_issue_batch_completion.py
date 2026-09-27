@@ -68,6 +68,20 @@ def test_repository_ready_lane_without_canonical_pr_readback_keeps_batch_unfinis
     assert result["agent_os_continuation"]["action"] == "continue-incomplete-issue-lanes"
 
 
+
+def test_2981_pr_required_lane_cannot_terminalize_without_draft_pr() -> None:
+    lane = pr_lane(2981, 2998)
+    lane["draft_pr_exists"] = False
+    lane["canonical_pr_readback_verified"] = False
+    result = classify_issue_batch_completion(
+        repository=REPOSITORY,
+        issue_number=2981,
+        lane_evidence=[lane],
+    )
+    assert result["terminal"] is False
+    assert result["unfinished_issue_numbers"] == [2981]
+    assert "required-implementation-pr-not-proven" in result["lanes"][0]["reason_codes"]
+
 def test_external_lane_without_canonical_no_pr_evidence_is_not_terminal() -> None:
     lane = no_pr_lane(1386)
     lane["canonical_no_pr_evidence_verified"] = False

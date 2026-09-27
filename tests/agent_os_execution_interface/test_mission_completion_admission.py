@@ -95,6 +95,27 @@ def test_no_capable_route_reports_exact_blocker_without_false_completion():
     )
 
 
+
+def test_2981_subordinate_handoff_cannot_complete_pr_delivery_without_canonical_pr():
+    result = admission(
+        implementation_commit_count=0,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        subordinate_writes_only=True,
+        implementation_pr_required=True,
+    )
+    assert result.completion_admissible is False
+    assert "subordinate-write-is-not-parent-completion" in result.reason_codes
+    assert "required-implementation-pr-not-proven" in result.reason_codes
+    assert result.next_action == "continue-same-lineage-on-capable-implementation-route"
+
+
+def test_2981_pr_delivery_can_complete_only_after_canonical_pr_readback():
+    result = admission(implementation_pr_required=True)
+    assert result.completion_admissible is True
+    assert result.reason_codes == ("canonical-implementation-delivery-proven",)
+
+
 def test_guard_grants_no_dangerous_authority():
     result = admission()
     assert result.github_writes_authorized is False
@@ -200,3 +221,70 @@ def test_repository_only_issue_does_not_require_live_consumer_evidence():
         live_consumer_reachability_proven=False,
     )
     assert result.completion_admissible is True
+
+
+
+def test_parallel_mission_cannot_complete_while_any_lane_remains_actionable():
+    from scripts.agent_os_execution_interface.mission_completion_admission import (
+        evaluate_parallel_mission_completion_admission,
+    )
+
+    delivered = admission(issue_number=2826)
+    actionable = admission(
+        issue_number=2981,
+        implementation_commit_count=0,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        capable_route_available=True,
+        subordinate_writes_only=True,
+    )
+    result = evaluate_parallel_mission_completion_admission((delivered, actionable))
+    assert result.completion_admissible is False
+    assert result.terminal_lane_count == 1
+    assert "lane-2981-nonterminal" in result.reason_codes
+    assert result.next_actions == ("continue-same-lineage-on-capable-implementation-route",)
+
+
+def test_parallel_mission_allows_independent_terminal_blocker_without_blocking_sibling_delivery():
+    from scripts.agent_os_execution_interface.mission_completion_admission import (
+        evaluate_parallel_mission_completion_admission,
+    )
+
+    host_only = admission(
+        issue_number=2826,
+        implementation_commit_count=0,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        capable_route_available=False,
+        subordinate_writes_only=False,
+    )
+    delivered = admission(issue_number=2981)
+    result = evaluate_parallel_mission_completion_admission((host_only, delivered))
+    assert result.completion_admissible is True
+    assert result.terminal_lane_count == 2
+    assert "lane-2826-terminal-capability-blocker" in result.reason_codes
+    assert "all-parallel-lanes-terminal" in result.reason_codes
+    assert result.next_actions == ()
+
+
+def test_parallel_projection_grants_no_write_merge_or_closure_authority():
+    from scripts.agent_os_execution_interface.mission_completion_admission import (
+        evaluate_parallel_mission_completion_admission,
+    )
+
+    result = evaluate_parallel_mission_completion_admission((admission(issue_number=2826),))
+    assert result.github_writes_authorized is False
+    assert result.merge_authorized is False
+    assert result.issue_closure_authorized is False
+
+
+def test_parallel_projection_rejects_empty_or_untyped_lane_sets():
+    import pytest
+    from scripts.agent_os_execution_interface.mission_completion_admission import (
+        evaluate_parallel_mission_completion_admission,
+    )
+
+    with pytest.raises(ValueError, match="non-empty tuple"):
+        evaluate_parallel_mission_completion_admission(())
+    with pytest.raises(TypeError, match="exact MissionCompletionAdmission"):
+        evaluate_parallel_mission_completion_admission((object(),))

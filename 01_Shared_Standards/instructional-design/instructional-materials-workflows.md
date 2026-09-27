@@ -37,6 +37,15 @@ Assessment language requires explicit instruction or guided or independent
 practice; exposure or appearance in material is insufficient.
 ## Assessment Criteria Integration Gate
 For student-facing assessment materials, preserve the validated MaterialRequirement learning-objective, success-criteria, and evidence-target references as dependency identity. Render success criteria, rubrics, checklists, observation criteria, self-check criteria, or completion criteria only from current governed student-facing evidence supplied by the canonical owner; a reference alone is not student-facing copy. Keep teacher scoring notes and calibration guidance separate and do not project them into student materials. Do not invent a rubric for formative work when no governed student-facing criteria are supplied. Inherit `student-language-standard.md` for rubric language and preserve the upstream assessment meaning rather than rewriting it inside material generation.
+
+## Exact Unit/Lesson Provenance Gate
+
+When a teacher asks which sources provide lesson content and visuals for a named unit/lesson/day, resolve the validated `MaterialRequirement` course/unit/lesson identity before source retrieval. Lesson-content evidence and visual-asset evidence are separate source roles and must remain separately attributable.
+
+A source bound to a different unit or lesson may not be presented as authority or as a fallback candidate merely because it is available in conversation/project context. Visual retrieval must use the same validated unit/lesson identity carried by the material requirement; lesson retrieval must use the current governed curriculum route for that identity. If either exact role cannot be resolved, return a bounded missing/ambiguous result for that role only after its governed route is exhausted. Never substitute memory, prior-chat text, a neighboring-unit file, or arbitrary prose for exact source identity.
+
+This gate composes with the existing Reusable Visual Gate and current curriculum source owners. It adds no second curriculum reader, visual registry, scheduler, persistence layer, or external-write authority.
+
 ## Reusable Visual Gate
 Before visual retrieval, start from a validated `MaterialRequirement` and use the governed visual-needs decision. `no-visual-needed` continues with no asset query or image-gap work. `visuals-required` may perform one bounded Visual Asset Library read only when separately authorized, then filters to eligible, human-reviewed candidates and consumes one cohesive visual plan.
 For teacher-language reuse selection, inherit `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`. The Asset Picker resolves reuse-first selection and preserves selected asset identity/constraints; this workflow consumes that handoff without reinterpreting the teacher's original selection request.
