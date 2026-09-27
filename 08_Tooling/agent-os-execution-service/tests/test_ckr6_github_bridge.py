@@ -132,6 +132,26 @@ def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeyp
     assert result["github_writes_authorized"] is False
 
 
+def test_workflow_installs_repository_local_agent_os_runtime_graph_before_ckr6():
+    root = Path(__file__).resolve().parents[3]
+    text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
+    local_projects = (
+        "08_Tooling/reusable-capability-registry",
+        "08_Tooling/agent-memory-context-manager",
+        "08_Tooling/workflow-scheduler",
+        "08_Tooling/agent-os-execution-service",
+    )
+    install_blocks = text.split("- name: Install existing Agent OS runtime")[1:]
+    assert len(install_blocks) == 2
+    for block in install_blocks:
+        bounded = block.split("\n\n", 1)[0]
+        for project in local_projects:
+            assert f"-e {project}" in bounded
+        assert bounded.index("reusable-capability-registry") < bounded.index("workflow-scheduler")
+        assert bounded.index("agent-memory-context-manager") < bounded.index("agent-os-execution-service")
+        assert bounded.index("workflow-scheduler") < bounded.index("agent-os-execution-service")
+    assert "pip install -e 08_Tooling/agent-os-execution-service" not in text
+
 def test_workflow_keeps_secret_post_classification_and_avoids_gce():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
