@@ -31,3 +31,12 @@ Expect: `Best execution:` appears only in (a), not (b); `Next:` appears only in 
 ## Test 35 - Classroom Presentation Contracts Remain Unchanged
 Fixtures: artifact-first classroom material response and Teacher Decision Studio consultation.
 Expect: existing artifact-first and table-first Teacher Decision Studio ordering remains controlling for those profiles; compact GitHub implementation rendering does not override either domain presentation contract.
+
+
+## Test 60 - Finite Campaign Narration Is Nonterminal
+Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
+Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
+
+## Test 61 - Campaign Continues After Existing PR Or Stale Head Discovery
+Fixture: one candidate resolves to an existing repairable PR and another resolves to a stale head.
+Expect: existing-PR discovery and stale-head detection are intermediate reads. Reuse the existing repair/refresh/currentness paths and continue the finite campaign without a user prompt; do not create a second campaign controller or state store.
