@@ -56,7 +56,7 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
 
 def test_2896_content_first_visual_planning_order_is_explicit() -> None:
     text = normalized().lower()
-    assert "content-first visual planning for worksheets" in text
+    assert "Content-First Visual Planning For Worksheets" in ARTIFACT_FIRST.read_text(encoding="utf-8")
     assert "student-facing content first and visual selection second" in text
     assert "proposed / needs confirmation" in text
     assert "needed, optional, or unnecessary" in text
@@ -66,5 +66,5 @@ def test_2896_content_first_visual_planning_order_is_explicit() -> None:
 
 def test_2896_content_first_rule_does_not_widen_external_write_authority() -> None:
     text = normalized().lower()
-    assert "does not change classroom artifact destinations" in text
-    assert "authorize drive, notion, publication, or other external writes" in text
+    assert "This sequencing does not change classroom artifact destinations" in text
+    assert "authorize Drive, Notion, publication, or other external writes" in text
