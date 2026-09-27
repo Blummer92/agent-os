@@ -40,3 +40,11 @@ Expect: retrieve current main first, then the smallest authority/ownership excer
 ## Test 59 - Oversized Retrieval Is Intermediate
 Fixture: one GitHub retrieval result is truncated or oversized while the bounded parent audit still has targeted evidence routes available.
 Expect: preserve already-retrieved current evidence, narrow the next retrieval, and continue the parent mission. Do not treat truncation as mission completion and do not invent a cache, memory system, second retrieval framework, or alternate source of truth.
+
+## Test 60 - Finite Campaign Narration Is Nonterminal
+Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
+Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
+
+## Test 61 - Campaign Continues After Existing PR Or Stale Head Discovery
+Fixture: one candidate resolves to an existing repairable PR and another resolves to a stale head.
+Expect: existing-PR discovery and stale-head detection are intermediate reads. Reuse the existing repair/refresh/currentness paths and continue the finite campaign without a user prompt; do not create a second campaign controller or state store.
