@@ -31,3 +31,12 @@ Expect: `Best execution:` appears only in (a), not (b); `Next:` appears only in 
 ## Test 35 - Classroom Presentation Contracts Remain Unchanged
 Fixtures: artifact-first classroom material response and Teacher Decision Studio consultation.
 Expect: existing artifact-first and table-first Teacher Decision Studio ordering remains controlling for those profiles; compact GitHub implementation rendering does not override either domain presentation contract.
+
+
+## Test 64 - Refresh Handoff Persistence Is Intermediate
+Fixture: a finite refresh campaign has persisted a handoff but the target PR head remains behind/diverged and no current refresh receipt proves convergence.
+Expect: do not report campaign completion. Reacquire head/main/path scope, materialize/read back the existing content-bound authorization, publish the canonical refresh trigger to the linked ordinary issue, consume the receipt, and read back the PR before validation.
+
+## Test 65 - Refresh Trigger Never Uses PR Conversation
+Fixture: the refresh target PR is linked to an ordinary issue.
+Expect: the existing `/agent-os refresh-pr <pr>` trigger is published only on the linked ordinary issue. Item-local failure advances independent later items; main drift reacquires unconsumed authorization evidence.
