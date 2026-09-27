@@ -1,18 +1,15 @@
 """Read-only GitHub REST API adapter."""
 from __future__ import annotations
 
-import json
 import math
 import os
-import urllib.error
-import urllib.request
 from typing import Any, Callable, Dict, Optional
 
 from workflow_scheduler.adapters.base_adapter import TaskAdapter
 from workflow_scheduler.models import Task
 
-GITHUB_API_BASE = "https://api.github.com"
-_TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+from scripts.agent_os_github_issue_provider.auth import build_token_client
+from scripts.agent_os_github_issue_provider.request import GitHubRequestError, request_json
 
 _VALID_PR_LIST_STATES = {"open", "closed", "all"}
 _MAX_RECENT_PRS_LIMIT = 100
@@ -24,22 +21,27 @@ class GitHubReadOnlyAdapterError(Exception):
         self.is_transient = is_transient
 
 
-def _default_http_get(url: str, headers: Dict[str, str], timeout: float) -> Any:
-    request = urllib.request.Request(url, headers=headers, method="GET")
+def _default_http_get(path: str, token: Optional[str], timeout: float) -> Any:
+    """Use the canonical Agent OS PyGithub requester for one bounded GET."""
+    del timeout
+    environment = dict(os.environ)
+    if token is not None:
+        environment["GITHUB_TOKEN"] = token
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
+        client = build_token_client(environment, user_agent="agent-os-workflow-scheduler/1")
+        return request_json(client, "GET", path, max_attempts=1).payload
+    except GitHubRequestError as exc:
+        status = exc.status
+        transient = exc.kind in {"rate-limited", "transport-unavailable"} or (
+            status is not None and status in {429, 500, 502, 503, 504}
+        )
         raise GitHubReadOnlyAdapterError(
-            f"GitHub API returned HTTP {exc.code}: {exc.reason}",
-            is_transient=exc.code in _TRANSIENT_HTTP_STATUS_CODES,
+            f"GitHub API request failed: {exc.kind}"
+            + (f" (HTTP {status})" if status is not None else ""),
+            is_transient=transient,
         ) from exc
-    except urllib.error.URLError as exc:
-        raise GitHubReadOnlyAdapterError(f"GitHub API connection error: {exc.reason}", is_transient=True) from exc
-    except TimeoutError as exc:
-        raise GitHubReadOnlyAdapterError(f"GitHub API request timed out: {exc}", is_transient=True) from exc
-    except json.JSONDecodeError as exc:
-        raise GitHubReadOnlyAdapterError(f"GitHub API returned invalid JSON: {exc}") from exc
+    except RuntimeError as exc:
+        raise GitHubReadOnlyAdapterError(str(exc)) from exc
 
 
 class GitHubReadOnlyAdapter(TaskAdapter):
@@ -49,7 +51,7 @@ class GitHubReadOnlyAdapter(TaskAdapter):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
-        self._http_get = http_get or _default_http_get
+        self._http_get = http_get
         self.timeout = timeout
 
     def execute(self, task: Task) -> Dict[str, Any]:
@@ -89,10 +91,12 @@ class GitHubReadOnlyAdapter(TaskAdapter):
         return value
 
     def _get(self, path: str) -> Any:
-        headers = {"Accept": "application/vnd.github+json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return self._http_get(f"{GITHUB_API_BASE}{path}", headers, self.timeout)
+        if self._http_get is not None:
+            headers = {"Accept": "application/vnd.github+json"}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            return self._http_get(f"https://api.github.com{path}", headers, self.timeout)
+        return _default_http_get(path, self.token, self.timeout)
 
     def _action_get_repo(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
