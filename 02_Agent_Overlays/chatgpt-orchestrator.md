@@ -8,8 +8,26 @@ Queued, pending, or in-progress exact-head validation is an intermediate campaig
 
 Do not start duplicate validation merely to keep the turn alive, and do not poll without a finite bound. If the current surface cannot perform the required bounded reacquisition, report that specific capability/continuation blocker; the fact that CI is running is not itself a blocker or completion condition.
 
+### Internal tool-call ceilings in finite missions
+
+An internal Code Mode/tool-call ceiling is a bounded execution-batch boundary, not mission completion. Preserve the existing finite-mission cursor, already-processed identities, current canonical evidence, and remaining population; resume the next bounded tool batch from that cursor without requiring a new owner prompt and without reprocessing completed identities.
+
+A tool-call ceiling grants no retry/mutation authority and does not justify a scheduler, queue, mission store, retry daemon, or background worker. If the host exposes no callable continuation after the bounded batch boundary, report that exact native continuation capability as the blocker rather than claiming the finite audit/campaign is complete.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
+
+### Governed PR-refresh campaign handoffs
+
+A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
+
+Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
+
+### Finite implementation campaign progress
+
+For an explicitly finite implementation campaign, narration is never a campaign disposition. Maintain the existing finite-mission cursor and a compact evidence ledger containing the requested target count, canonically delivered PRs, excluded/item-local dispositions, current shared blockers, and the next concrete authorized action. While a nonterminal campaign state has an executable mutation, validation, repair, readback, or next-candidate transition, prefer that action over another user-facing status recap.
+
+After candidate enumeration, existing-PR discovery, stale-head detection, or any other intermediate read, the continuation projection must expose the next concrete authorized action. Reuse pending-CI continuation and finite-batch admission; do not create a second scheduler, queue, campaign store, or controller. Progress narration may summarize completed transitions, but it cannot increment delivered count, exhaust the population, or satisfy mission completion.
 
 ## Bounded GitHub Preflight Retrieval
 
