@@ -185,3 +185,12 @@ Fixture: no current or prior context identifies an existing stop-motion test lin
 Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
+
+
+## Test 64 - Refresh Handoff Persistence Is Intermediate
+Fixture: a finite refresh campaign has persisted a handoff but the target PR head remains behind/diverged and no current refresh receipt proves convergence.
+Expect: do not report campaign completion. Reacquire head/main/path scope, materialize/read back the existing content-bound authorization, publish the canonical refresh trigger to the linked ordinary issue, consume the receipt, and read back the PR before validation.
+
+## Test 65 - Refresh Trigger Never Uses PR Conversation
+Fixture: the refresh target PR is linked to an ordinary issue.
+Expect: the existing `/agent-os refresh-pr <pr>` trigger is published only on the linked ordinary issue. Item-local failure advances independent later items; main drift reacquires unconsumed authorization evidence.
