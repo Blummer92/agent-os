@@ -32,6 +32,23 @@ The core compares explicit enums and identities only. `equivalent` and `overlaps
 
 A valid unambiguous canonical risk owner takes precedence over downstream issue candidates. Conflicting canonical owners fail closed to `needs-decision`. Closed, stale, retired-scope, and unknown candidates cannot be selected as current targets.
 
+## Downstream handoff
+
+`plan_risk_triage_handoff(...)` is the pure-local RIT2 composition seam. It consumes an existing `RiskTriageResult` and projects exactly one advisory route without retrieving or mutating GitHub.
+
+The mapping is fixed:
+
+- `no-action` -> `no-action`;
+- `record-in-current-work` -> `current-work`;
+- `link-canonical-risk-owner` -> `canonical-risk-owner`;
+- `update-existing-issue-candidate` -> `existing-issue`;
+- `create-child-issue-candidate` and `create-new-issue-candidate` -> `issue-draft-admission`;
+- `needs-decision` -> `manual-review`.
+
+Targeted routes preserve the exact caller-supplied target identity, kind, and evidence. Missing or incompatible target evidence fails closed to `manual-review`.
+
+The create-candidate route names the existing downstream contracts in `scripts.agent_os_issue_labels.draft`, `validation`, and `connected_issue_creation`. It does not call them and does not create an issue. Duplicate admission, issue drafting/validation, connected creation, canonical readback, and label convergence remain owned by those existing contracts.
+
 ## Side-effect boundary
 
 The package imports no GitHub client, HTTP library, credential provider, subprocess helper, workflow adapter, or external service. `mutation_performed` and `write_authorized` are fixed false on results. Child/new issue dispositions are candidates only; later issue drafting or submission remains governed by the existing issue-draft architecture.
