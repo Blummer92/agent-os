@@ -1,6 +1,13 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
+
+### Finite implementation campaign progress
+
+For an explicitly finite implementation campaign, narration is never a campaign disposition. Maintain the existing finite-mission cursor and a compact evidence ledger containing the requested target count, canonically delivered PRs, excluded/item-local dispositions, current shared blockers, and the next concrete authorized action. While a nonterminal campaign state has an executable mutation, validation, repair, readback, or next-candidate transition, prefer that action over another user-facing status recap.
+
+After candidate enumeration, existing-PR discovery, stale-head detection, or any other intermediate read, the continuation projection must expose the next concrete authorized action. Reuse pending-CI continuation and finite-batch admission; do not create a second scheduler, queue, campaign store, or controller. Progress narration may summarize completed transitions, but it cannot increment delivered count, exhaust the population, or satisfy mission completion.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 ## Inherited Standards
