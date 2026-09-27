@@ -66,5 +66,5 @@ def test_2896_content_first_visual_planning_order_is_explicit() -> None:
 
 def test_2896_content_first_rule_does_not_widen_external_write_authority() -> None:
     text = normalized().lower()
-    assert "This sequencing does not change classroom artifact destinations" in text
-    assert "authorize Drive, Notion, publication, or other external writes" in text
+    assert "this sequencing does not change classroom artifact destinations" in text
+    assert "authorize drive, notion, publication, or other external writes" in text
