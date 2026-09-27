@@ -1,6 +1,13 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
+
+### Pending exact-head CI in finite PR campaigns
+
+Queued, pending, or in-progress exact-head validation is an intermediate campaign state, never a terminal queue disposition. Reacquire the exact current PR head and its validation state through bounded same-lineage continuation; when terminal evidence appears, consume green heads through the existing authorized merge path or route failed heads through the existing failed-repair path. Reacquire queue state after each merge or repair.
+
+Do not start duplicate validation merely to keep the turn alive, and do not poll without a finite bound. If the current surface cannot perform the required bounded reacquisition, report that specific capability/continuation blocker; the fact that CI is running is not itself a blocker or completion condition.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 ## Inherited Standards

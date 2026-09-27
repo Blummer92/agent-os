@@ -185,3 +185,12 @@ Fixture: no current or prior context identifies an existing stop-motion test lin
 Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
+
+
+## Test 62 - Pending Exact-Head CI Is Nonterminal
+Fixture: a finite PR-reduction campaign has a repaired current head whose authoritative exact-head validation is queued or in progress.
+Expect: do not emit the terminal campaign report. Boundedly reacquire the same exact head/check state without starting duplicate validation; terminal green continues through the existing authorized merge path and terminal red through failed-repair re-entry.
+
+## Test 63 - CI Reacquisition Remains Finite
+Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
+Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
