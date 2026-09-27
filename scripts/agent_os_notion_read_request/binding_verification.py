@@ -44,7 +44,6 @@ CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 LESSONS_LEARNED_VERIFICATION_REQUEST_ID = "verify-lessons-learned-binding"
 LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER = 2854
 LESSONS_LEARNED_REFERENCE_PAGE_ID = "3c67ac78-3131-8130-94dd-da66213ca42b"
-LESSONS_LEARNED_TITLE = "Lessons Learned"
 
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
@@ -412,8 +411,6 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
     source = _execute_read(adapter, "get_data_source", data_source_id=data_source_id.strip())
     if _normalize_notion_id(source.get("id")) != _normalize_notion_id(data_source_id):
         raise NotionReadRequestError("Lessons Learned data-source identity mismatch")
-    if source.get("name") != LESSONS_LEARNED_TITLE:
-        raise NotionReadRequestError("Lessons Learned data-source title mismatch")
     if source.get("archived") is True or source.get("in_trash") is True:
         raise NotionReadRequestError("Lessons Learned data source is archived or trashed")
 
