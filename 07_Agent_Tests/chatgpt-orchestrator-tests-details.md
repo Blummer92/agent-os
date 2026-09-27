@@ -33,6 +33,14 @@ Fixtures: artifact-first classroom material response and Teacher Decision Studio
 Expect: existing artifact-first and table-first Teacher Decision Studio ordering remains controlling for those profiles; compact GitHub implementation rendering does not override either domain presentation contract.
 
 
+## Test 58 - Large Audit Preflight Retrieval Is Progressive
+Fixture: a read-only architecture audit needs current main, governance, one relevant overlay, targeted code/search, and issue evidence.
+Expect: retrieve current main first, then the smallest authority/ownership excerpts, then relevant overlay/standards, then targeted code/search and issue evidence. Do not fan-out dump every governance file into one model-visible result.
+
+## Test 59 - Oversized Retrieval Is Intermediate
+Fixture: one GitHub retrieval result is truncated or oversized while the bounded parent audit still has targeted evidence routes available.
+Expect: preserve already-retrieved current evidence, narrow the next retrieval, and continue the parent mission. Do not treat truncation as mission completion and do not invent a cache, memory system, second retrieval framework, or alternate source of truth.
+
 ## Test 60 - Finite Campaign Narration Is Nonterminal
 Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
 Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.

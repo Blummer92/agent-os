@@ -138,6 +138,27 @@ def test_admitted_create_projects_nonterminal_readback_convergence_contract() ->
     assert result["terminal_success_requires_label_convergence"] is True
 
 
+
+def test_2905_ready_label_is_bound_into_required_post_create_readback():
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=BODY,
+        duplicate_review_disposition="NEW_DISTINCT_BUG",
+    )
+    assert "status:ready" in result["required_managed_label_readback"]
+    assert set(result["required_managed_label_readback"]) == set(result["proposed_labels"])
+    assert result["missing_required_managed_label_action"] == "reconcile-via-1962-before-terminal"
+
+
+def test_2905_blocked_create_has_no_post_create_label_obligation():
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=BODY,
+    )
+    assert result["required_managed_label_readback"] == []
+    assert result["missing_required_managed_label_action"] is None
+
+
 def test_blocked_create_does_not_project_post_create_work() -> None:
     result = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",

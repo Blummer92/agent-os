@@ -122,6 +122,15 @@ specific blocker. A successful generation must never manufacture a new folder,
 choose a nearby destination, change sharing, or treat metadata registration as
 student-facing approval.
 
+
+## Content-First Visual Planning For Worksheets
+
+When a teacher explicitly requests student-facing content first and visual selection second, preserve that sequence. Establish the bounded worksheet content or clearly labeled content specification before selecting visuals. A missing lesson-day detail does not by itself erase the requested deliverable when a safe bounded draft can be produced; mark unsupported lesson specifics as proposed / needs confirmation rather than silently inventing them.
+
+After the content exists, evaluate visuals against the actual student tasks and learning targets. For each worksheet section, record whether a visual is needed, optional, or unnecessary; the proposed or reusable asset; its instructional purpose; curriculum/learning-target alignment; source/evidence status; and create/reuse disposition. Decorative availability alone is not instructional justification. If source uncertainty makes a bounded draft unsafe, use the existing blocked-production/source rules instead of fabricating curriculum facts.
+
+This sequencing does not change classroom artifact destinations or authorize Drive, Notion, publication, or other external writes.
+
 ## Blocked-Production Behavior
 
 When production is blocked, show a clearly labeled preview or content
@@ -154,4 +163,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.4
+0.1.5

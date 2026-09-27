@@ -16,6 +16,12 @@ ChatGPT-facing implementation router for Agent OS.
 For an explicitly finite implementation campaign, narration is never a campaign disposition. Maintain the existing finite-mission cursor and a compact evidence ledger containing the requested target count, canonically delivered PRs, excluded/item-local dispositions, current shared blockers, and the next concrete authorized action. While a nonterminal campaign state has an executable mutation, validation, repair, readback, or next-candidate transition, prefer that action over another user-facing status recap.
 
 After candidate enumeration, existing-PR discovery, stale-head detection, or any other intermediate read, the continuation projection must expose the next concrete authorized action. Reuse pending-CI continuation and finite-batch admission; do not create a second scheduler, queue, campaign store, or controller. Progress narration may summarize completed transitions, but it cannot increment delivered count, exhaust the population, or satisfy mission completion.
+
+## Bounded GitHub Preflight Retrieval
+
+For large Agent OS audits and investigations, retrieve canonical GitHub context progressively instead of fan-out dumping every governance file into one model-visible result. Start with current `main` identity, then the smallest authority/ownership excerpts, then the relevant overlay/standards, then targeted code/search and issue evidence. Preserve already-retrieved current evidence across later retrieval steps; do not blindly reacquire immutable material within the same bounded turn.
+
+A truncated or oversized tool result is intermediate retrieval evidence, not parent-mission completion. Continue with a narrower targeted read/search unless the missing evidence creates a genuine source-of-truth, authorization, or capability blocker. Do not add a cache, memory system, second retrieval framework, or alternate source of truth to implement this rule.
 ## Inherited Standards
 See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
