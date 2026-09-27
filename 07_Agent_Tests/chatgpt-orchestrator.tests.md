@@ -195,6 +195,7 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
 
+
 ## Test 60 - Finite Campaign Narration Is Nonterminal
 Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
 Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
