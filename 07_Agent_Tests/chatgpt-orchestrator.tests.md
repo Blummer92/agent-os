@@ -185,3 +185,12 @@ Fixture: no current or prior context identifies an existing stop-motion test lin
 Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
+
+
+## Test 58 - Large Audit Preflight Retrieval Is Progressive
+Fixture: a read-only architecture audit needs current main, governance, one relevant overlay, targeted code/search, and issue evidence.
+Expect: retrieve current main first, then the smallest authority/ownership excerpts, then relevant overlay/standards, then targeted code/search and issue evidence. Do not fan-out dump every governance file into one model-visible result.
+
+## Test 59 - Oversized Retrieval Is Intermediate
+Fixture: one GitHub retrieval result is truncated or oversized while the bounded parent audit still has targeted evidence routes available.
+Expect: preserve already-retrieved current evidence, narrow the next retrieval, and continue the parent mission. Do not treat truncation as mission completion and do not invent a cache, memory system, second retrieval framework, or alternate source of truth.
