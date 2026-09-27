@@ -222,6 +222,62 @@ def evaluate_mission_completion_admission(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ParallelMissionCompletionAdmission:
+    lane_count: int
+    terminal_lane_count: int
+    completion_admissible: bool
+    reason_codes: tuple[str, ...]
+    next_actions: tuple[str, ...]
+    github_writes_authorized: bool = field(default=False, init=False)
+    merge_authorized: bool = field(default=False, init=False)
+    issue_closure_authorized: bool = field(default=False, init=False)
+
+
+def evaluate_parallel_mission_completion_admission(
+    lanes: tuple[MissionCompletionAdmission, ...],
+) -> ParallelMissionCompletionAdmission:
+    """Require every finite lane to reach its own terminal disposition.
+
+    This is a completion projection, not a parallel executor. A lane is terminal
+    only when canonical delivery is proven or when its own current evidence says
+    no capable implementation route exists. One blocked lane never converts an
+    independently actionable sibling into completion.
+    """
+    if type(lanes) is not tuple or not lanes:
+        raise ValueError("lanes must be a non-empty tuple")
+    if any(type(lane) is not MissionCompletionAdmission for lane in lanes):
+        raise TypeError("every lane must be an exact MissionCompletionAdmission")
+
+    reasons: list[str] = []
+    next_actions: list[str] = []
+    terminal_count = 0
+    for lane in lanes:
+        if lane.completion_admissible:
+            terminal_count += 1
+            continue
+        if not lane.capable_route_available:
+            terminal_count += 1
+            reasons.append(f"lane-{lane.issue_number}-terminal-capability-blocker")
+            continue
+        reasons.append(f"lane-{lane.issue_number}-nonterminal")
+        next_actions.append(lane.next_action)
+
+    complete = terminal_count == len(lanes)
+    if complete:
+        reasons.append("all-parallel-lanes-terminal")
+    else:
+        reasons.append("parallel-mission-has-actionable-lanes")
+
+    return ParallelMissionCompletionAdmission(
+        lane_count=len(lanes),
+        terminal_lane_count=terminal_count,
+        completion_admissible=complete,
+        reason_codes=tuple(reasons),
+        next_actions=tuple(next_actions),
+    )
+
+
 def _validate_identity(repository: str, issue_number: int) -> None:
     if type(repository) is not str or "/" not in repository or not repository.strip():
         raise ValueError("repository must be non-empty owner/name text")
