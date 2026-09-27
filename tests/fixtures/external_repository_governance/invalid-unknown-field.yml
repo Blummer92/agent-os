@@ -1,0 +1,5 @@
+apiVersion: agent-os.external-repository-governance/v1alpha1
+kind: ExternalRepositoryProfile
+governanceDocuments:
+  repository-policy: AGENTS.md
+generatedStatus: pass

@@ -39,6 +39,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Agent OS Codespaces Profile | 0.2.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
+| External Repository Governance | 0.1.0 |
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
@@ -79,6 +80,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 **GitHub Issue Lifecycle Standard** `0.3.0` adds Promotion In Place as a canonical issue-body classification using the existing Child-Issue Creation Test and explicitly forbids a parallel promotion issue-state snapshot/model; it also generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
 
 **GitHub Service Agent** `0.14.0` retires managed PR labels as required lifecycle state (#2904): PR lifecycle decisions use canonical PR/head/check/branch/review evidence directly, while issue-label convergence remains governed separately. `0.10.0` consumes #2644's finite protected-setting execution contract while keeping generic administration blocked. `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
+
+**External Repository Governance** `0.1.0` establishes ERG1 (#580): the canonical shared policy, strict Draft 2020-12 consumer-profile and central-registry schemas, specification-only registry container, safe-path/YAML bounds, non-authorizing routing/result semantics, compatibility window, lifecycle rules, adversarial fixtures, and structural contract tests. ERG2/#581 remains the owner of executable offline parsing and validation; no workflow, credential, consumer-repository write, enforcement, or external-system mutation is introduced.
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.

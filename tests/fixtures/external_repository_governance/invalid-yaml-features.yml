@@ -1,0 +1,8 @@
+apiVersion: agent-os.external-repository-governance/v1alpha1
+kind: ExternalRepositoryProfile
+defaults: &defaults
+  repository-policy: AGENTS.md
+governanceDocuments:
+  <<: *defaults
+  repository-policy: AGENTS.md
+  repository-policy: docs/duplicate.md
