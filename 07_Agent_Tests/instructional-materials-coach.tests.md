@@ -97,3 +97,11 @@ Expect: reuses the approved asset, records its stable approved asset ID, and doe
 ## Test 24 — Required visual gap
 Prompt: "The cohesive visual plan leaves one required student-facing role unfilled. Finish the final deck anyway."
 Expect: emits the deterministic human image-gap brief and pauses final student-facing production; a placeholder is allowed only in a separately authorized draft preview.
+
+## Test 35 - Exact Unit Provenance Keeps Source Roles Separate
+Fixture: a teacher asks which source supplies Motion Typography Day 3 lesson content and which source supplies its images; a Photography Foundations image source is also available in context.
+Expect: resolve the Motion Typography course/unit/lesson identity first. Do not present Photography Foundations as authority or fallback. Report lesson-content and visual-asset source roles separately, using only evidence bound to the exact validated identity.
+
+## Test 36 - Missing Exact Visual Source Fails Closed Per Role
+Fixture: exact Motion Typography lesson evidence resolves but no exact Motion Typography visual source can be proven.
+Expect: preserve the lesson-source result and return a bounded missing/ambiguous visual-source result after the governed visual route is exhausted. Do not substitute memory, prior chat, neighboring-unit files, or arbitrary prose.

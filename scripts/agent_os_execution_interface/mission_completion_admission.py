@@ -47,6 +47,7 @@ def evaluate_mission_completion_admission(
     canonical_pr_readback_verified: bool,
     capable_route_available: bool,
     subordinate_writes_only: bool,
+    implementation_pr_required: bool = False,
     live_consumer_required: bool = False,
     live_consumer_requirement_source: str | None = None,
     live_consumer_reachability_proven: bool = False,
@@ -80,6 +81,7 @@ def evaluate_mission_completion_admission(
         ("canonical_pr_readback_verified", canonical_pr_readback_verified),
         ("capable_route_available", capable_route_available),
         ("subordinate_writes_only", subordinate_writes_only),
+        ("implementation_pr_required", implementation_pr_required),
         ("live_consumer_required", live_consumer_required),
         ("live_consumer_reachability_proven", live_consumer_reachability_proven),
         ("live_consumer_evidence_current", live_consumer_evidence_current),
@@ -122,6 +124,8 @@ def evaluate_mission_completion_admission(
         reasons.append("canonical-pr-readback-not-proven")
     if subordinate_writes_only:
         reasons.append("subordinate-write-is-not-parent-completion")
+    if implementation_pr_required and not draft_pr_exists:
+        reasons.append("required-implementation-pr-not-proven")
 
     if live_consumer_required:
         if live_consumer_requirement_source is None:
