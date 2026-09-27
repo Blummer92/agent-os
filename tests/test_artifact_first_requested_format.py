@@ -51,11 +51,11 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     assert "## Required Order" in text
     assert "## Required Visual Components" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.4" in text.split("## Version", 1)[1]
+    assert "0.1.5" in text.split("## Version", 1)[1]
 
 
 def test_2896_content_first_visual_planning_order_is_explicit() -> None:
-    text = normalized()
+    text = normalized().lower()
     assert "content-first visual planning for worksheets" in text
     assert "student-facing content first and visual selection second" in text
     assert "proposed / needs confirmation" in text
@@ -65,6 +65,6 @@ def test_2896_content_first_visual_planning_order_is_explicit() -> None:
 
 
 def test_2896_content_first_rule_does_not_widen_external_write_authority() -> None:
-    text = normalized()
+    text = normalized().lower()
     assert "does not change classroom artifact destinations" in text
     assert "authorize drive, notion, publication, or other external writes" in text
