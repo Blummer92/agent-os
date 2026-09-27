@@ -2,6 +2,13 @@
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
 
+### Pending exact-head CI in finite PR campaigns
+
+Queued, pending, or in-progress exact-head validation is an intermediate campaign state, never a terminal queue disposition. Reacquire the exact current PR head and its validation state through bounded same-lineage continuation; when terminal evidence appears, consume green heads through the existing authorized merge path or route failed heads through the existing failed-repair path. Reacquire queue state after each merge or repair.
+
+Do not start duplicate validation merely to keep the turn alive, and do not poll without a finite bound. If the current surface cannot perform the required bounded reacquisition, report that specific capability/continuation blocker; the fact that CI is running is not itself a blocker or completion condition.
+
+
 ### Governed PR-refresh campaign handoffs
 
 A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
