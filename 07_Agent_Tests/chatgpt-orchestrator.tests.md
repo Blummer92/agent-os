@@ -195,6 +195,7 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
 
+
 ## Test 58 - Large Audit Preflight Retrieval Is Progressive
 Fixture: a read-only architecture audit needs current main, governance, one relevant overlay, targeted code/search, and issue evidence.
 Expect: retrieve current main first, then the smallest authority/ownership excerpts, then relevant overlay/standards, then targeted code/search and issue evidence. Do not fan-out dump every governance file into one model-visible result.
