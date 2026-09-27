@@ -1,6 +1,13 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
+
+### Governed PR-refresh campaign handoffs
+
+A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
+
+Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 ## Inherited Standards
