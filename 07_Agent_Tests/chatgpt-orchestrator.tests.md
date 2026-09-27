@@ -194,12 +194,3 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 ## Test 63 - CI Reacquisition Remains Finite
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
-
-
-## Test 60 - Finite Campaign Narration Is Nonterminal
-Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
-Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
-
-## Test 61 - Campaign Continues After Existing PR Or Stale Head Discovery
-Fixture: one candidate resolves to an existing repairable PR and another resolves to a stale head.
-Expect: existing-PR discovery and stale-head detection are intermediate reads. Reuse the existing repair/refresh/currentness paths and continue the finite campaign without a user prompt; do not create a second campaign controller or state store.
