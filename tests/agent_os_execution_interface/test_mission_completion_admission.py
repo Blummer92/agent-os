@@ -95,6 +95,27 @@ def test_no_capable_route_reports_exact_blocker_without_false_completion():
     )
 
 
+
+def test_2981_subordinate_handoff_cannot_complete_pr_delivery_without_canonical_pr():
+    result = admission(
+        implementation_commit_count=0,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        subordinate_writes_only=True,
+        implementation_pr_required=True,
+    )
+    assert result.completion_admissible is False
+    assert "subordinate-write-is-not-parent-completion" in result.reason_codes
+    assert "required-implementation-pr-not-proven" in result.reason_codes
+    assert result.next_action == "continue-same-lineage-on-capable-implementation-route"
+
+
+def test_2981_pr_delivery_can_complete_only_after_canonical_pr_readback():
+    result = admission(implementation_pr_required=True)
+    assert result.completion_admissible is True
+    assert result.reason_codes == ("canonical-implementation-delivery-proven",)
+
+
 def test_guard_grants_no_dangerous_authority():
     result = admission()
     assert result.github_writes_authorized is False
