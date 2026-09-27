@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://external-repository-registry/v1alpha1",
+  "title": "External Repository Registry v1alpha1",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "repositories"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "agent-os.external-repository-governance-registry/v1alpha1"
+    },
+    "kind": {
+      "const": "ExternalRepositoryRegistry"
+    },
+    "repositories": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/repositoryRecord"
+      }
+    }
+  },
+  "$defs": {
+    "safeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*\\\\\\\\)(?!.*//)(?!.*(?:^|/)\\\\.{1,2}(?:/|$))(?!.*\\\\u0000)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+    },
+    "repositoryName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "routing": {
+      "type": "object",
+      "required": [
+        "ownerAgent"
+      ],
+      "properties": {
+        "ownerAgent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "supportingAgents": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "tombstone": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "successorRegistryId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "repositoryRecord": {
+      "type": "object",
+      "required": [
+        "registryId",
+        "repository",
+        "admission",
+        "lifecycle",
+        "profilePath",
+        "contractVersion",
+        "routing"
+      ],
+      "properties": {
+        "registryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "repository": {
+          "$ref": "#/$defs/repositoryName"
+        },
+        "admission": {
+          "enum": [
+            "admitted",
+            "suspended",
+            "removed"
+          ]
+        },
+        "lifecycle": {
+          "enum": [
+            "active",
+            "archived",
+            "removed"
+          ]
+        },
+        "profilePath": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "contractVersion": {
+          "const": "agent-os.external-repository-governance/v1alpha1"
+        },
+        "routing": {
+          "$ref": "#/$defs/routing"
+        },
+        "aliases": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryName"
+          }
+        },
+        "tombstone": {
+          "$ref": "#/$defs/tombstone"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lifecycle": {
+                "const": "removed"
+              }
+            },
+            "required": [
+              "lifecycle"
+            ]
+          },
+          "then": {
+            "required": [
+              "tombstone"
+            ],
+            "properties": {
+              "admission": {
+                "const": "removed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "lifecycle": {
+                "enum": [
+                  "active",
+                  "archived"
+                ]
+              }
+            },
+            "required": [
+              "lifecycle"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "tombstone"
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

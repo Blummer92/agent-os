@@ -1,0 +1,3 @@
+apiVersion: agent-os.external-repository-governance-registry/v1alpha1
+kind: ExternalRepositoryRegistry
+repositories: []
