@@ -6,14 +6,18 @@ identity come from the trusted GitHub event envelope, never from comment text.
 
 This module reuses the existing #1217 GCE lifecycle adapter. A stopped host is
 started at most once and waited to RUNNING before the fixed validation probe.
-It defines no argv surface, second transport, retry, Scheduler admission,
-publication path, or independent shutdown authority.
+When this operation owns that cold start, terminal cleanup reuses the adapter's
+existing opt-in stop + provider-state verification capability; a pre-existing
+RUNNING host is never claimed as operation-started. It defines no argv surface,
+second transport, retry, Scheduler admission, publication path, or independent
+shutdown authority.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Mapping
 
@@ -61,6 +65,47 @@ def _failure(
         "github_writes_authorized": False,
         "side_effects_performed": host_started,
     }
+
+
+def _finish_operation_owned_lifecycle(
+    evidence: dict[str, object],
+    *,
+    adapter: GcloudIapAdapter,
+    host_started: bool,
+) -> dict[str, object]:
+    """Restore an operation-started host through the existing bounded stop capability."""
+    result = dict(evidence)
+    result["host_started"] = host_started
+    result.setdefault("shutdown_issued", False)
+    if not host_started:
+        return result
+
+    if not bool(getattr(adapter, "shutdown_enabled", False)):
+        result["status"] = "needs-decision"
+        result["reason_codes"] = ["shutdown-withheld"]
+        return result
+
+    try:
+        stopped = adapter.stop(RESOURCE)
+    except (TypeError, ValueError, RuntimeError, OSError, subprocess.TimeoutExpired):
+        stopped = False
+    if stopped is not True:
+        result["status"] = "needs-decision"
+        result["reason_codes"] = ["shutdown-failed"]
+        return result
+
+    result["shutdown_issued"] = True
+    try:
+        observed = adapter.wait_until_stopped(RESOURCE)
+    except (TypeError, ValueError, RuntimeError, OSError, subprocess.TimeoutExpired):
+        observed = VmState.UNKNOWN
+    if type(observed) is not VmState:
+        observed = VmState.UNKNOWN
+    result["vm_final_state"] = observed.value
+    if observed is not VmState.STOPPED:
+        result["status"] = "needs-decision"
+        result["reason_codes"] = ["shutdown-failed"]
+    return result
 
 
 def execute_first_run_validation_transport(
@@ -114,21 +159,33 @@ def execute_first_run_validation_transport(
         if adapter.start(RESOURCE) is not True:
             return {"first_run_validation": _failure("vm-start-failed", **bounds)}
         host_started = True
-        state = adapter.wait_until_running(RESOURCE)
+        try:
+            state = adapter.wait_until_running(RESOURCE)
+        except (TypeError, ValueError, RuntimeError, OSError, subprocess.TimeoutExpired):
+            state = VmState.UNKNOWN
     else:
         state = initial_state
     if state is not VmState.RUNNING:
+        evidence = _failure("host-not-running", host_started=host_started, **bounds)
         return {
-            "first_run_validation": _failure(
-                "host-not-running", host_started=host_started, **bounds
+            "first_run_validation": _finish_operation_owned_lifecycle(
+                evidence, adapter=adapter, host_started=host_started
             )
         }
-    if not adapter.probe_first_run_validation_ready(RESOURCE):
+
+    try:
+        ready = adapter.probe_first_run_validation_ready(RESOURCE)
+    except (GcloudCommandError, OSError, subprocess.TimeoutExpired):
+        ready = False
+    if not ready:
+        evidence = _failure(
+            "first-run-validation-entrypoint-unavailable",
+            host_started=host_started,
+            **bounds,
+        )
         return {
-            "first_run_validation": _failure(
-                "first-run-validation-entrypoint-unavailable",
-                host_started=host_started,
-                **bounds,
+            "first_run_validation": _finish_operation_owned_lifecycle(
+                evidence, adapter=adapter, host_started=host_started
             )
         }
     try:
@@ -138,14 +195,19 @@ def execute_first_run_validation_transport(
             issue_number=issue_number,
             candidate_sha=candidate_sha,
         )
-    except GcloudCommandError:
+    except (GcloudCommandError, OSError, subprocess.TimeoutExpired):
+        evidence = _failure(
+            "first-run-validation-host-failed", host_started=host_started, **bounds
+        )
         return {
-            "first_run_validation": _failure(
-                "first-run-validation-host-failed", host_started=host_started, **bounds
+            "first_run_validation": _finish_operation_owned_lifecycle(
+                evidence, adapter=adapter, host_started=host_started
             )
         }
-    evidence = dict(evidence)
-    evidence["host_started"] = host_started
+
+    evidence = _finish_operation_owned_lifecycle(
+        dict(evidence), adapter=adapter, host_started=host_started
+    )
     return {
         "first_run_validation": evidence,
         "logical_trigger_id": ingress.logical_trigger_id_or_none,

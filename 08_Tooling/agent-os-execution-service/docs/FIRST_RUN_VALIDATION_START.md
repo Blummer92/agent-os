@@ -24,12 +24,21 @@ loses its candidate identity and falls through to the Scheduler control path,
 which cannot carry it.
 
 The transport performs, in order: ingress identity validation, OIDC claims
-check, host-running check, fixed-entrypoint readiness probe, then exactly one
-`GcloudIapAdapter.validate_first_run` call. That method builds the fixed host
-command from the trusted repository/issue plus the 40-hex SHA — there is no argv
-parameter — and rejects returned evidence whose repository, issue, or candidate
-identity drifts, or that reports a crossed Scheduler/publication/lease/resume
-boundary. Every other outcome is a bounded non-authorizing envelope.
+check, bounded cold start when the approved host is STOPPED, fixed-entrypoint
+readiness probe, then exactly one `GcloudIapAdapter.validate_first_run` call.
+That method builds the fixed host command from the trusted repository/issue plus
+the 40-hex SHA — there is no argv parameter — and rejects returned evidence
+whose repository, issue, or candidate identity drifts, or that reports a crossed
+Scheduler/publication/lease/resume boundary.
+
+When this first-run operation owns the cold start, #2428 composes the adapter's
+existing opt-in stop capability and independently waits for provider-observed
+STOPPED before reporting cleanup. A host that was already RUNNING is never
+claimed or stopped by this first-run transport. Missing shutdown capability,
+stop failure, or unconfirmed provider terminal state is reported as bounded
+`needs-decision` evidence rather than as successful cleanup. No independent
+shutdown authority, second lifecycle controller, or unconditional `finally:
+stop` path is introduced.
 
 ## Trusted-host composition
 
