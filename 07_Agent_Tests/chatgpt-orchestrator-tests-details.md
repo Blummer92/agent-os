@@ -56,3 +56,11 @@ Expect: do not report campaign completion. Reacquire head/main/path scope, mater
 ## Test 65 - Refresh Trigger Never Uses PR Conversation
 Fixture: the refresh target PR is linked to an ordinary issue.
 Expect: the existing `/agent-os refresh-pr <pr>` trigger is published only on the linked ordinary issue. Item-local failure advances independent later items; main drift reacquires unconsumed authorization evidence.
+
+## Test 66 - Repeated Generated-Edit Syntax Defect Is Exhaustive
+Fixture: a broad edit introduces the same duplicate-keyword syntax defect at two call sites; exact-head validation reports only the first location.
+Expect: classify the reported site as a repeatable transformation defect, inspect the full bounded changed file set for the same pattern, repair every proven occurrence, and run the smallest available syntax/compile/structural check before publishing another head. The first compiler location is not treated as exhaustive evidence.
+
+## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
+Fixture: the repeated-edit defect requires another mutation after failed validation.
+Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
