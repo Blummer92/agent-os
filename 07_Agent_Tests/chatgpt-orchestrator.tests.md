@@ -187,14 +187,6 @@ Expect: treats the request as fresh work and does not perform broad history retr
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
 
 
-## Test 66 - Repeated Generated-Edit Syntax Defect Is Exhaustive
-Fixture: a broad edit introduces the same duplicate-keyword syntax defect at two call sites; exact-head validation reports only the first location.
-Expect: classify the reported site as a repeatable transformation defect, inspect the full bounded changed file set for the same pattern, repair every proven occurrence, and run the smallest available syntax/compile/structural check before publishing another head. The first compiler location is not treated as exhaustive evidence.
-
-## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
-Fixture: the repeated-edit defect requires another mutation after failed validation.
-Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
-
 ## Test 62 - Pending Exact-Head CI Is Nonterminal
 Fixture: a finite PR-reduction campaign has a repaired current head whose authoritative exact-head validation is queued or in progress.
 Expect: do not emit the terminal campaign report. Boundedly reacquire the same exact head/check state without starting duplicate validation; terminal green continues through the existing authorized merge path and terminal red through failed-repair re-entry.
@@ -202,3 +194,12 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 ## Test 63 - CI Reacquisition Remains Finite
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
+
+
+## Test 66 - Repeated Generated-Edit Syntax Defect Is Exhaustive
+Fixture: a broad edit introduces the same duplicate-keyword syntax defect at two call sites; exact-head validation reports only the first location.
+Expect: classify the reported site as a repeatable transformation defect, inspect the full bounded changed file set for the same pattern, repair every proven occurrence, and run the smallest available syntax/compile/structural check before publishing another head. The first compiler location is not treated as exhaustive evidence.
+
+## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
+Fixture: the repeated-edit defect requires another mutation after failed validation.
+Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
