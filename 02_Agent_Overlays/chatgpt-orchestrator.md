@@ -11,6 +11,12 @@ Do not start duplicate validation merely to keep the turn alive, and do not poll
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 
+### Governed PR-refresh campaign handoffs
+
+A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
+
+Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
+
 ### Finite implementation campaign progress
 
 For an explicitly finite implementation campaign, narration is never a campaign disposition. Maintain the existing finite-mission cursor and a compact evidence ledger containing the requested target count, canonically delivered PRs, excluded/item-local dispositions, current shared blockers, and the next concrete authorized action. While a nonterminal campaign state has an executable mutation, validation, repair, readback, or next-candidate transition, prefer that action over another user-facing status recap.
