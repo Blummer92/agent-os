@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from scripts.agent_os_issue_acceptance.issue_operational_state import ReadinessState
 from scripts.agent_os_issue_labels.issue_reconciler import (
     LiveIssueSnapshot,
     reconcile_issue_batch,
@@ -146,6 +147,55 @@ def test_stale_managed_label_removed_but_human_label_preserved():
     assert result.convergence_status == "converged"
     assert ("remove", 1, "status:blocked") in provider.writes
     assert "human-note" in provider.snapshots[1].labels
+
+
+
+def test_2972_canonical_ready_replaces_stale_needs_decision_and_preserves_human_label():
+    provider = Provider({1: snap(labels=(
+        "agent-os", "owner:github-service-agent", "status:needs-decision", "type:bug", "human-note",
+    ))})
+    result = reconcile(
+        provider,
+        dry_run=False,
+        lifecycle_admission=admitted_lifecycle_labels(),
+        canonical_readiness=ReadinessState.READY,
+    )
+    assert result.convergence_status == "converged"
+    assert ("add", 1, "status:ready") in provider.writes
+    assert ("remove", 1, "status:needs-decision") in provider.writes
+    assert "human-note" in provider.snapshots[1].labels
+
+
+def test_2972_canonical_blocked_replaces_stale_needs_decision():
+    provider = Provider({1: snap(labels=(
+        "agent-os", "owner:github-service-agent", "status:needs-decision", "type:bug",
+    ))})
+    result = reconcile(
+        provider,
+        dry_run=False,
+        lifecycle_admission=admitted_lifecycle_labels(),
+        canonical_readiness=ReadinessState.BLOCKED,
+    )
+    assert result.convergence_status == "converged"
+    assert ("add", 1, "status:blocked") in provider.writes
+    assert ("remove", 1, "status:needs-decision") in provider.writes
+
+
+def test_2972_canonical_needs_decision_keeps_genuine_decision_state():
+    provider = Provider({1: snap(labels=(
+        "agent-os", "owner:github-service-agent", "status:needs-decision", "type:bug",
+    ))})
+    result = reconcile(provider, canonical_readiness=ReadinessState.NEEDS_DECISION)
+    assert result.convergence_status == "already-current"
+    assert provider.writes == []
+
+
+def test_2972_canonical_readiness_override_is_fail_closed_for_noncanonical_value():
+    provider = Provider({1: snap(labels=("status:needs-decision",))})
+    result = reconcile(provider, canonical_readiness="ready")
+    assert result.convergence_status == "manual-review"
+    assert result.reason_codes == ("canonical-readiness-invalid",)
+    assert provider.writes == []
 
 
 def test_ambiguous_or_incomplete_metadata_routes_to_manual_review():

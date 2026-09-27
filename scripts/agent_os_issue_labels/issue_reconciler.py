@@ -5,12 +5,18 @@ from pathlib import Path
 from typing import Protocol
 
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
+from scripts.agent_os_issue_acceptance.issue_operational_state import ReadinessState
 
 from .issue_metadata import load_issue_form_fields, metadata_contract, parse_issue_form_body
 from .label_map import expected_labels, load_label_map
 
 _MANAGED_PREFIXES = ("owner:", "status:", "type:", "epic:")
 _MANAGED_EXACT = {"agent-os"}
+_ACTIVE_READINESS_LABELS = {
+    ReadinessState.READY: "status:ready",
+    ReadinessState.BLOCKED: "status:blocked",
+    ReadinessState.NEEDS_DECISION: "status:needs-decision",
+}
 
 
 class IssueLabelProvider(Protocol):
@@ -52,6 +58,7 @@ def reconcile_issue_labels(
     label_map_path: str | Path,
     dry_run: bool = True,
     lifecycle_admission: LifecycleMutationAdmissionResult | None = None,
+    canonical_readiness: ReadinessState | None = None,
 ) -> IssueLabelReconciliationResult:
     initial = provider.read(repository, issue_number)
     fields = load_issue_form_fields(issue_form_path)
@@ -65,6 +72,15 @@ def reconcile_issue_labels(
         return _result(initial, (), (), (), "manual-review", ("unmapped-metadata-value",), dry_run)
 
     desired_managed = frozenset(label for label in desired if _is_managed(label))
+    if canonical_readiness is not None:
+        if type(canonical_readiness) is not ReadinessState:
+            return _result(initial, (), (), (), "manual-review", ("canonical-readiness-invalid",), dry_run)
+        readiness_label = _ACTIVE_READINESS_LABELS.get(canonical_readiness)
+        if readiness_label is None:
+            return _result(initial, (), (), (), "manual-review", ("canonical-readiness-not-active",), dry_run)
+        desired_managed = frozenset(
+            label for label in desired_managed if not label.startswith("status:")
+        ) | {readiness_label}
     owners = tuple(sorted(label for label in desired_managed if label.startswith("owner:")))
     statuses = tuple(sorted(label for label in desired_managed if label.startswith("status:")))
     if len(owners) != 1 or len(statuses) != 1:
