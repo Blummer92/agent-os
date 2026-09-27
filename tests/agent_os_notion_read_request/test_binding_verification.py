@@ -19,7 +19,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
     CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     LESSONS_LEARNED_REFERENCE_PAGE_ID,
-    LESSONS_LEARNED_TITLE,
     LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
     LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
     PHOTOGRAPHY_FOUNDATIONS_PAGE_ID,
@@ -152,10 +151,17 @@ def test_live_verification_uses_exactly_two_databases_and_one_page() -> None:
 
 
 class LessonsVerificationAdapter:
-    def __init__(self, *, source_name=LESSONS_LEARNED_TITLE, parent_id="lessons-source-current"):
+    def __init__(
+        self,
+        *,
+        source_name="Current Lessons Knowledge",
+        parent_id="lessons-source-current",
+        returned_source_id=None,
+    ):
         self.calls = []
         self.source_name = source_name
         self.parent_id = parent_id
+        self.returned_source_id = returned_source_id or parent_id
 
     def execute(self, task):
         self.calls.append(dict(task.payload))
@@ -173,7 +179,7 @@ class LessonsVerificationAdapter:
             return {
                 "status": "success",
                 "output": {
-                    "id": self.parent_id,
+                    "id": self.returned_source_id,
                     "name": self.source_name,
                     "archived": False,
                     "in_trash": False,
@@ -216,10 +222,20 @@ def test_lessons_learned_binding_is_live_derived_from_reference_page_parent() ->
     assert evidence["gce_invoked"] is False
 
 
-def test_lessons_learned_binding_rejects_wrong_source_title() -> None:
-    with pytest.raises(NotionReadRequestError, match="title mismatch"):
+def test_lessons_learned_binding_accepts_renamed_current_source() -> None:
+    evidence = verify_lessons_learned_binding(
+        LessonsVerificationAdapter(source_name="Renamed Lessons Source"),
+        generated_at="run:2854",
+    )
+
+    assert evidence["lessons_learned"]["data_source_id"] == "lessons-source-current"
+    assert evidence["lessons_learned"]["verification_state"] == "verified-current"
+
+
+def test_lessons_learned_binding_rejects_source_identity_mismatch() -> None:
+    with pytest.raises(NotionReadRequestError, match="identity mismatch"):
         verify_lessons_learned_binding(
-            LessonsVerificationAdapter(source_name="Different Source"),
+            LessonsVerificationAdapter(returned_source_id="different-source"),
             generated_at="run:2854",
         )
 
