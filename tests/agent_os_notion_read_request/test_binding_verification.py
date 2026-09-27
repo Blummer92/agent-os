@@ -240,6 +240,17 @@ def test_lessons_learned_binding_rejects_source_identity_mismatch() -> None:
         )
 
 
+def test_public_exports_resolve_after_title_contract_removal() -> None:
+    missing = [
+        name
+        for name in binding_verification_module.__all__
+        if not hasattr(binding_verification_module, name)
+    ]
+
+    assert missing == []
+    assert "LESSONS_LEARNED_TITLE" not in binding_verification_module.__all__
+
+
 def test_ambiguous_data_source_identity_fails_closed() -> None:
     adapter = VerificationAdapter(
         visual_sources=[
