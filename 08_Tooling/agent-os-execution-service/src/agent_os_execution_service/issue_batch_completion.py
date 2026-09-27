@@ -129,6 +129,7 @@ def _classify_lane(repository: str, value: object) -> dict[str, object]:
             subordinate_writes_only=_bool(
                 value.get("subordinate_writes_only"), "subordinate_writes_only"
             ),
+            implementation_pr_required=True,
         )
         result["pr_number"] = pr_number
         result["terminal"] = admission.completion_admissible

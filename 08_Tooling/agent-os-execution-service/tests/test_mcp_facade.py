@@ -43,6 +43,24 @@ def test_mission_completion_is_terminal_only_after_pr_readback() -> None:
     assert result["agent_os_continuation"]["terminal"] is True
 
 
+
+def test_2981_mcp_facade_consumes_explicit_pr_delivery_requirement() -> None:
+    result = classify_agent_os_mission_completion(
+        repository="Blummer92/agent-os",
+        issue_number=2981,
+        branch_exists=True,
+        implementation_commit_count=1,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        capable_route_available=True,
+        subordinate_writes_only=True,
+        implementation_pr_required=True,
+    )
+    assert result["completion_admissible"] is False
+    assert "required-implementation-pr-not-proven" in result["reason_codes"]
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["action"] == "continue-same-lineage-on-capable-implementation-route"
+
 def test_failed_repair_admission_is_consumed_after_lesson_activation() -> None:
     result = admit_agent_os_failed_repair(activation_result={"attempt_id": "attempt-1", "retry_reentry_outcome": "consumed", "selected_lesson_ids": ["63"], "mutation_admissible": True}, check_state="red", required_check_configuration_state="current", review_state="clear", branch_freshness="current", mergeability="mergeable")
     assert result["mutation_admissible"] is True

@@ -1,8 +1,33 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
+
+### Pending exact-head CI in finite PR campaigns
+
+Queued, pending, or in-progress exact-head validation is an intermediate campaign state, never a terminal queue disposition. Reacquire the exact current PR head and its validation state through bounded same-lineage continuation; when terminal evidence appears, consume green heads through the existing authorized merge path or route failed heads through the existing failed-repair path. Reacquire queue state after each merge or repair.
+
+Do not start duplicate validation merely to keep the turn alive, and do not poll without a finite bound. If the current surface cannot perform the required bounded reacquisition, report that specific capability/continuation blocker; the fact that CI is running is not itself a blocker or completion condition.
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
+
+### Governed PR-refresh campaign handoffs
+
+A persisted PR-refresh handoff is intermediate bookkeeping while any authorized refresh item remains nonterminal. For each such item, continue through the existing BM2/#1403 path in order: reacquire exact PR head/main/path scope, materialize the current content-bound refresh authorization, canonically read it back, publish the existing `/agent-os refresh-pr <pr>` trigger only to the linked ordinary issue, consume the matching refresh receipt, read back the refreshed PR, then continue to exact-head validation.
+
+Never publish the refresh trigger to a PR conversation. An item-local conflict/rejection advances the existing finite cursor to independent later items; shared source/currentness unavailability may halt according to the existing BM2 contract. Current-main drift invalidates unconsumed authorization evidence and requires reacquisition; it does not make a persisted handoff terminal.
+
+### Finite implementation campaign progress
+
+For an explicitly finite implementation campaign, narration is never a campaign disposition. Maintain the existing finite-mission cursor and a compact evidence ledger containing the requested target count, canonically delivered PRs, excluded/item-local dispositions, current shared blockers, and the next concrete authorized action. While a nonterminal campaign state has an executable mutation, validation, repair, readback, or next-candidate transition, prefer that action over another user-facing status recap.
+
+After candidate enumeration, existing-PR discovery, stale-head detection, or any other intermediate read, the continuation projection must expose the next concrete authorized action. Reuse pending-CI continuation and finite-batch admission; do not create a second scheduler, queue, campaign store, or controller. Progress narration may summarize completed transitions, but it cannot increment delivered count, exhaust the population, or satisfy mission completion.
+
+## Bounded GitHub Preflight Retrieval
+
+For large Agent OS audits and investigations, retrieve canonical GitHub context progressively instead of fan-out dumping every governance file into one model-visible result. Start with current `main` identity, then the smallest authority/ownership excerpts, then the relevant overlay/standards, then targeted code/search and issue evidence. Preserve already-retrieved current evidence across later retrieval steps; do not blindly reacquire immutable material within the same bounded turn.
+
+A truncated or oversized tool result is intermediate retrieval evidence, not parent-mission completion. Continue with a narrower targeted read/search unless the missing evidence creates a genuine source-of-truth, authorization, or capability blocker. Do not add a cache, memory system, second retrieval framework, or alternate source of truth to implement this rule.
 ## Inherited Standards
 See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
