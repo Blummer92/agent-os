@@ -282,46 +282,51 @@ class TestConnectorFailuresBecomeControlledResults:
         assert result["status"] == "failure"
         assert "boom" in result["message"]
 
-    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
-    def test_5xx_and_429_are_transient_via_real_http_get(self, monkeypatch, status):
-        import urllib.error
+    def test_default_transport_uses_canonical_requester(self, monkeypatch):
+        calls = []
 
-        def raising_urlopen(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, status, "server error", {}, None)
+        class Result:
+            payload = {"full_name": "x/y"}
 
-        monkeypatch.setattr(grao_module.urllib.request, "urlopen", raising_urlopen)
+        monkeypatch.setattr(grao_module, "build_token_client", lambda environment, user_agent: object())
+
+        def fake_request_json(client, method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return Result()
+
+        monkeypatch.setattr(grao_module, "request_json", fake_request_json)
+
+        adapter = GitHubReadOnlyAdapter(token="secret-token")
+        result = adapter.execute(
+            make_task(payload={"action": "get_repo", "repository_full_name": "x/y"})
+        )
+
+        assert result["status"] == "success"
+        assert calls == [("GET", "/repos/x/y", {"max_attempts": 1})]
+
+    @pytest.mark.parametrize(
+        ("kind", "status", "transient"),
+        [
+            ("rate-limited", 429, True),
+            ("http-error", 500, True),
+            ("http-error", 404, False),
+            ("transport-unavailable", None, True),
+        ],
+    )
+    def test_canonical_request_failures_preserve_scheduler_retry_classification(
+        self, monkeypatch, kind, status, transient
+    ):
+        monkeypatch.setattr(grao_module, "build_token_client", lambda environment, user_agent: object())
+
+        def fail(*args, **kwargs):
+            raise grao_module.GitHubRequestError(kind, status=status, attempts=())
+
+        monkeypatch.setattr(grao_module, "request_json", fail)
 
         with pytest.raises(GitHubReadOnlyAdapterError) as exc_info:
-            grao_module._default_http_get("https://api.github.com/x", {}, 10.0)
+            grao_module._default_http_get("/repos/x/y", "token", 10.0)
 
-        assert exc_info.value.is_transient is True
-
-    @pytest.mark.parametrize("status", [404, 401, 403])
-    def test_4xx_client_errors_are_not_transient_via_real_http_get(self, monkeypatch, status):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, status, "client error", {}, None)
-
-        monkeypatch.setattr(grao_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubReadOnlyAdapterError) as exc_info:
-            grao_module._default_http_get("https://api.github.com/x", {}, 10.0)
-
-        assert exc_info.value.is_transient is False
-
-    def test_url_error_is_transient_via_real_http_get(self, monkeypatch):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(grao_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubReadOnlyAdapterError) as exc_info:
-            grao_module._default_http_get("https://api.github.com/x", {}, 10.0)
-
-        assert exc_info.value.is_transient is True
+        assert exc_info.value.is_transient is transient
 
     def test_transient_failure_returns_retryable_with_retry_after(self):
         http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("rate limited", is_transient=True))
@@ -436,10 +441,11 @@ class TestNoWriteOperationsExposed:
             assert f'method="{verb}"' not in source
             assert f"method='{verb}'" not in source
 
-    def test_only_one_place_issues_http_requests(self):
+    def test_adapter_contains_no_raw_urllib_transport(self):
         source = inspect.getsource(grao_module)
-        assert source.count("urllib.request.Request(") == 1
-        assert source.count("urllib.request.urlopen(") == 1
+        assert "urllib.request" not in source
+        assert "urllib.error" not in source
+        assert "request_json(" in source
 
     def test_adapter_has_no_write_public_methods(self):
         write_verbs = ("create", "update", "delete", "merge", "comment", "review", "label", "push", "edit")
