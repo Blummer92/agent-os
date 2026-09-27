@@ -185,3 +185,12 @@ Fixture: no current or prior context identifies an existing stop-motion test lin
 Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
+
+
+## Test 68 - Tool-Call Ceiling Is A Finite Batch Boundary
+Fixture: a known finite audit population is partially processed when Code Mode reaches its internal tool-call ceiling.
+Expect: preserve processed identities, canonical evidence, mission cursor, and remaining population; resume the next bounded batch without a user prompt and without duplicate processing.
+
+## Test 69 - Tool-Call Ceiling Does Not Invent Persistence Or Authority
+Fixture: the current host cannot automatically re-enter after the bounded tool-call ceiling.
+Expect: report the exact native continuation capability blocker. Do not call the parent mission complete and do not add a scheduler, queue, mission store, retry daemon, background worker, or mutation authority.
