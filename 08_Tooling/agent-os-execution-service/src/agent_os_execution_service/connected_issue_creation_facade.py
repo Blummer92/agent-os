@@ -59,6 +59,8 @@ def plan_connected_issue_creation_for_host(
         "create_response_terminal": False,
         "post_create_readback_required": duplicate_review.create_allowed,
         "post_create_reconciliation_required_on_mismatch": duplicate_review.create_allowed,
+        "required_managed_label_readback": list(labels) if duplicate_review.create_allowed else [],
+        "missing_required_managed_label_action": "reconcile-via-1962-before-terminal" if duplicate_review.create_allowed else None,
         "terminal_success_requires_label_convergence": duplicate_review.create_allowed,
         "reconciliation_owner": "#1962",
         "implementation_authorized": False,

@@ -53,6 +53,23 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
 
 
 
+
+def test_2981_mcp_tool_exposes_pr_delivery_requirement() -> None:
+    result = mcp_server.classify_agent_os_mission_completion_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2981,
+        branch_exists=True,
+        implementation_commit_count=1,
+        draft_pr_exists=False,
+        canonical_pr_readback_verified=False,
+        capable_route_available=True,
+        subordinate_writes_only=True,
+        implementation_pr_required=True,
+    )
+    assert result["completion_admissible"] is False
+    assert "required-implementation-pr-not-proven" in result["reason_codes"]
+    assert result["agent_os_continuation"]["terminal"] is False
+
 def _request_interpretation_payload() -> dict[str, object]:
     import hashlib
     raw = "work on #2821"

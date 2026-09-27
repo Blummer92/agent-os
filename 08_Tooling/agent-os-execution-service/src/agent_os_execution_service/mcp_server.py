@@ -237,8 +237,8 @@ def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], chec
 
 
 @mcp.tool()
-def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool) -> dict[str, object]:
-    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only)
+def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False) -> dict[str, object]:
+    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required)
 
 
 @mcp.tool()
