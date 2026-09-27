@@ -40,3 +40,10 @@ If specialized knowledge is required and lesson activation returns insufficient/
 
 ## Source
 Issue #1901 established the retry-specific CKR6 boundary. Issue #2635 sharpens the existing subordinate-bug continuation/readback contract without creating a second continuation mechanism.
+
+
+## Repeated generated-edit defect containment
+
+When failed validation proves a syntax, parse, collection, or structural defect introduced by a broad/generated edit and the same transformation can recur elsewhere in the changed file set, the first reported location is evidence of a defect class, not evidence that the class occurs only once. Before the next repair mutation, inspect the full bounded changed file set for the same transformation pattern. After repair, run the smallest available syntax/compile/structural check that can detect another occurrence before publishing a new head.
+
+This requirement composes with the existing failed-repair CKR6 re-entry boundary; it does not authorize a retry, create a parser framework, or replace exact-head validation. If the active execution surface cannot perform the bounded same-pattern inspection/check, preserve that capability blocker rather than claiming the first-site repair is exhaustive.
