@@ -194,3 +194,11 @@ Expect: do not emit the terminal campaign report. Boundedly reacquire the same e
 ## Test 63 - CI Reacquisition Remains Finite
 Fixture: exact-head validation remains nonterminal through the current bounded continuation window.
 Expect: do not unboundedly poll and do not call running CI a terminal blocker. If no capable bounded reacquisition route remains, report that exact continuation capability blocker.
+
+## Test 68 - Tool-Call Ceiling Is A Finite Batch Boundary
+Fixture: a known finite audit population is partially processed when Code Mode reaches its internal tool-call ceiling.
+Expect: preserve processed identities, canonical evidence, mission cursor, and remaining population; resume the next bounded batch without a user prompt and without duplicate processing.
+
+## Test 69 - Tool-Call Ceiling Does Not Invent Persistence Or Authority
+Fixture: the current host cannot automatically re-enter after the bounded tool-call ceiling.
+Expect: report the exact native continuation capability blocker. Do not call the parent mission complete and do not add a scheduler, queue, mission store, retry daemon, background worker, or mutation authority.
