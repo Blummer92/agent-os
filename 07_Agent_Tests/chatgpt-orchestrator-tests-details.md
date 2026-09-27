@@ -40,3 +40,27 @@ Expect: retrieve current main first, then the smallest authority/ownership excer
 ## Test 59 - Oversized Retrieval Is Intermediate
 Fixture: one GitHub retrieval result is truncated or oversized while the bounded parent audit still has targeted evidence routes available.
 Expect: preserve already-retrieved current evidence, narrow the next retrieval, and continue the parent mission. Do not treat truncation as mission completion and do not invent a cache, memory system, second retrieval framework, or alternate source of truth.
+
+## Test 60 - Finite Campaign Narration Is Nonterminal
+Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
+Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
+
+## Test 61 - Campaign Continues After Existing PR Or Stale Head Discovery
+Fixture: one candidate resolves to an existing repairable PR and another resolves to a stale head.
+Expect: existing-PR discovery and stale-head detection are intermediate reads. Reuse the existing repair/refresh/currentness paths and continue the finite campaign without a user prompt; do not create a second campaign controller or state store.
+
+## Test 64 - Refresh Handoff Persistence Is Intermediate
+Fixture: a finite refresh campaign has persisted a handoff but the target PR head remains behind/diverged and no current refresh receipt proves convergence.
+Expect: do not report campaign completion. Reacquire head/main/path scope, materialize/read back the existing content-bound authorization, publish the canonical refresh trigger to the linked ordinary issue, consume the receipt, and read back the PR before validation.
+
+## Test 65 - Refresh Trigger Never Uses PR Conversation
+Fixture: the refresh target PR is linked to an ordinary issue.
+Expect: the existing `/agent-os refresh-pr <pr>` trigger is published only on the linked ordinary issue. Item-local failure advances independent later items; main drift reacquires unconsumed authorization evidence.
+
+## Test 66 - Repeated Generated-Edit Syntax Defect Is Exhaustive
+Fixture: a broad edit introduces the same duplicate-keyword syntax defect at two call sites; exact-head validation reports only the first location.
+Expect: classify the reported site as a repeatable transformation defect, inspect the full bounded changed file set for the same pattern, repair every proven occurrence, and run the smallest available syntax/compile/structural check before publishing another head. The first compiler location is not treated as exhaustive evidence.
+
+## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
+Fixture: the repeated-edit defect requires another mutation after failed validation.
+Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
