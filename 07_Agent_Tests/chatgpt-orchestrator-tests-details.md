@@ -31,3 +31,12 @@ Expect: `Best execution:` appears only in (a), not (b); `Next:` appears only in 
 ## Test 35 - Classroom Presentation Contracts Remain Unchanged
 Fixtures: artifact-first classroom material response and Teacher Decision Studio consultation.
 Expect: existing artifact-first and table-first Teacher Decision Studio ordering remains controlling for those profiles; compact GitHub implementation rendering does not override either domain presentation contract.
+
+
+## Test 66 - Repeated Generated-Edit Syntax Defect Is Exhaustive
+Fixture: a broad edit introduces the same duplicate-keyword syntax defect at two call sites; exact-head validation reports only the first location.
+Expect: classify the reported site as a repeatable transformation defect, inspect the full bounded changed file set for the same pattern, repair every proven occurrence, and run the smallest available syntax/compile/structural check before publishing another head. The first compiler location is not treated as exhaustive evidence.
+
+## Test 67 - Exhaustive Repair Does Not Bypass CKR6 Re-entry
+Fixture: the repeated-edit defect requires another mutation after failed validation.
+Expect: preserve the existing failed-repair CKR6 re-entry/admission boundary and exact-head validation; same-pattern inspection adds no retry authority or parser framework.
