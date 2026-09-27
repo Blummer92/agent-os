@@ -185,3 +185,12 @@ Fixture: no current or prior context identifies an existing stop-motion test lin
 Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
+
+
+## Test 60 - Finite Campaign Narration Is Nonterminal
+Fixture: a 10-bug implementation campaign has enumerated candidates and at least one authorized concrete next action.
+Expect: status narration cannot increment delivered count or satisfy completion; the existing finite-mission cursor exposes the next mutation/validation/repair/readback/next-candidate action.
+
+## Test 61 - Campaign Continues After Existing PR Or Stale Head Discovery
+Fixture: one candidate resolves to an existing repairable PR and another resolves to a stale head.
+Expect: existing-PR discovery and stale-head detection are intermediate reads. Reuse the existing repair/refresh/currentness paths and continue the finite campaign without a user prompt; do not create a second campaign controller or state store.
