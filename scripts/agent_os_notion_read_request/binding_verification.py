@@ -41,6 +41,10 @@ CANDY_BRANDING_STABLE_ID = "canonical-unit-candy-branding"
 CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
 CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
 CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
+LESSONS_LEARNED_VERIFICATION_REQUEST_ID = "verify-lessons-learned-binding"
+LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER = 2854
+LESSONS_LEARNED_REFERENCE_PAGE_ID = "3c67ac78-3131-8130-94dd-da66213ca42b"
+LESSONS_LEARNED_TITLE = "Lessons Learned"
 
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
@@ -49,6 +53,12 @@ _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 def _verification_request_spec(
     request_id: str | None,
 ) -> tuple[int, str, tuple[str, ...]] | None:
+    if request_id == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
+        return (
+            LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
+            "lessons-learned",
+            ("get_page", "get_data_source"),
+        )
     if request_id == VERIFICATION_REQUEST_ID:
         return (
             VERIFICATION_ISSUE_NUMBER,
@@ -85,6 +95,7 @@ def _binding_verification_request_ids() -> tuple[str, ...]:
     catalog = load_catalog()
     candidates = [
         VERIFICATION_REQUEST_ID,
+        LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
         *(
             f"verify-{unit.canonical_unit_key}-binding"
             for unit in catalog.canonical_units
@@ -383,6 +394,46 @@ def _verified_database(
     }
 
 
+def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
+    """Live-verify the current Lessons Learned data-source identity from one known record."""
+
+    page = _execute_read(adapter, "get_page", page_id=LESSONS_LEARNED_REFERENCE_PAGE_ID)
+    if _normalize_notion_id(page.get("id")) != _normalize_notion_id(LESSONS_LEARNED_REFERENCE_PAGE_ID):
+        raise NotionReadRequestError("Lessons Learned reference page identity mismatch")
+    if page.get("archived") is True or page.get("in_trash") is True:
+        raise NotionReadRequestError("Lessons Learned reference page is archived or trashed")
+    parent = page.get("parent")
+    if not isinstance(parent, Mapping):
+        raise NotionReadRequestError("Lessons Learned reference page parent is missing")
+    data_source_id = parent.get("data_source_id")
+    if not isinstance(data_source_id, str) or not data_source_id.strip():
+        raise NotionReadRequestError("Lessons Learned parent data-source identity is missing")
+
+    source = _execute_read(adapter, "get_data_source", data_source_id=data_source_id.strip())
+    if _normalize_notion_id(source.get("id")) != _normalize_notion_id(data_source_id):
+        raise NotionReadRequestError("Lessons Learned data-source identity mismatch")
+    if source.get("name") != LESSONS_LEARNED_TITLE:
+        raise NotionReadRequestError("Lessons Learned data-source title mismatch")
+    if source.get("archived") is True or source.get("in_trash") is True:
+        raise NotionReadRequestError("Lessons Learned data source is archived or trashed")
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        "dispatch_status": "completed",
+        "dispatch_reason": "lessons-learned-binding-verification-complete",
+        "lessons_learned": {
+            "data_source_id": data_source_id.strip(),
+            "verification_state": "verified-current",
+        },
+        "notion_writes_performed": False,
+        "drive_writes_performed": False,
+        "classroom_artifact_writes_performed": False,
+        "gce_invoked": False,
+        "generated_at": generated_at,
+    }
+
+
 def verify_live_bindings(adapter: object, *, generated_at: str) -> dict[str, object]:
     """Return sanitized current identities from exactly three live Notion reads."""
 
@@ -461,6 +512,8 @@ def main(argv: list[str] | None = None) -> int:
             raise NotionReadRequestError(str(exc)) from exc
         if admission.get("request_id") == VERIFICATION_REQUEST_ID:
             result = verify_live_bindings(adapter, generated_at=args.generated_at)
+        elif admission.get("request_id") == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
+            result = verify_lessons_learned_binding(adapter, generated_at=args.generated_at)
         else:
             canonical_source = load_catalog().source("canonical-unit")
             if canonical_source is None or not canonical_source.dispatchable or canonical_source.data_source_id is None:
@@ -496,11 +549,16 @@ __all__ = [
     "CANDY_BRANDING_TITLE",
     "CANDY_BRANDING_UNIT_KEY",
     "CANDY_BRANDING_VERIFICATION_REQUEST_ID",
+    "LESSONS_LEARNED_REFERENCE_PAGE_ID",
+    "LESSONS_LEARNED_TITLE",
+    "LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER",
+    "LESSONS_LEARNED_VERIFICATION_REQUEST_ID",
     "PHOTOGRAPHY_FOUNDATIONS_PAGE_ID",
     "VERIFICATION_REQUEST_ID",
     "VISUAL_ASSET_LIBRARY_DATABASE_ID",
     "admit_binding_verification_request",
     "verify_additional_unit_binding",
     "verify_candy_branding_binding",
+    "verify_lessons_learned_binding",
     "verify_live_bindings",
 ]

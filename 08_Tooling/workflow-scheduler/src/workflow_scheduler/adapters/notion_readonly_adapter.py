@@ -310,6 +310,7 @@ class NotionReadOnlyAdapter(TaskAdapter):
             "archived": data.get("archived"),
             "in_trash": data.get("in_trash"),
             "properties": data.get("properties"),
+            "parent": data.get("parent"),
             "created_time": data.get("created_time"),
             "last_edited_time": data.get("last_edited_time"),
             "request_id": data.get("request_id"),

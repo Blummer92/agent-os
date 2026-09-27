@@ -18,6 +18,10 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     CANDY_BRANDING_TITLE,
     CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
     CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+    LESSONS_LEARNED_REFERENCE_PAGE_ID,
+    LESSONS_LEARNED_TITLE,
+    LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
+    LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
     PHOTOGRAPHY_FOUNDATIONS_PAGE_ID,
     VERIFICATION_REQUEST_ID,
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
@@ -25,6 +29,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     admit_binding_verification_request,
     verify_additional_unit_binding,
     verify_candy_branding_binding,
+    verify_lessons_learned_binding,
     verify_live_bindings,
 )
 from scripts.agent_os_notion_read_request.models import NotionReadRequestError
@@ -144,6 +149,79 @@ def test_live_verification_uses_exactly_two_databases_and_one_page() -> None:
     assert evidence["notion_writes_performed"] is False
     assert evidence["drive_writes_performed"] is False
     assert evidence["gce_invoked"] is False
+
+
+class LessonsVerificationAdapter:
+    def __init__(self, *, source_name=LESSONS_LEARNED_TITLE, parent_id="lessons-source-current"):
+        self.calls = []
+        self.source_name = source_name
+        self.parent_id = parent_id
+
+    def execute(self, task):
+        self.calls.append(dict(task.payload))
+        if task.payload["action"] == "get_page":
+            return {
+                "status": "success",
+                "output": {
+                    "id": LESSONS_LEARNED_REFERENCE_PAGE_ID,
+                    "parent": {"type": "data_source_id", "data_source_id": self.parent_id},
+                    "archived": False,
+                    "in_trash": False,
+                },
+            }
+        if task.payload["action"] == "get_data_source":
+            return {
+                "status": "success",
+                "output": {
+                    "id": self.parent_id,
+                    "name": self.source_name,
+                    "archived": False,
+                    "in_trash": False,
+                    "properties": {},
+                },
+            }
+        raise AssertionError(task.payload["action"])
+
+
+def test_lessons_learned_verification_is_finite_and_read_only() -> None:
+    decision = admit_binding_verification_request(
+        transport(
+            request_id=LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+            issue_number=LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "lessons-learned"
+    assert decision["allowed_read_actions"] == ["get_page", "get_data_source"]
+    assert decision["secret_dispatch_authorized"] is True
+    assert decision["write_allowed"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+def test_lessons_learned_binding_is_live_derived_from_reference_page_parent() -> None:
+    adapter = LessonsVerificationAdapter()
+    evidence = verify_lessons_learned_binding(adapter, generated_at="run:2854")
+
+    assert [call["action"] for call in adapter.calls] == ["get_page", "get_data_source"]
+    assert adapter.calls[0]["page_id"] == LESSONS_LEARNED_REFERENCE_PAGE_ID
+    assert adapter.calls[1]["data_source_id"] == "lessons-source-current"
+    assert evidence["lessons_learned"] == {
+        "data_source_id": "lessons-source-current",
+        "verification_state": "verified-current",
+    }
+    assert evidence["notion_writes_performed"] is False
+    assert evidence["drive_writes_performed"] is False
+    assert evidence["gce_invoked"] is False
+
+
+def test_lessons_learned_binding_rejects_wrong_source_title() -> None:
+    with pytest.raises(NotionReadRequestError, match="title mismatch"):
+        verify_lessons_learned_binding(
+            LessonsVerificationAdapter(source_name="Different Source"),
+            generated_at="run:2854",
+        )
 
 
 def test_ambiguous_data_source_identity_fails_closed() -> None:
@@ -441,6 +519,7 @@ def test_shipped_catalog_promotes_only_freshly_verified_candy_binding() -> None:
 def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None:
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
+        LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
     assert CANDY_BRANDING_VERIFICATION_REQUEST_ID not in BINDING_VERIFICATION_REQUEST_IDS

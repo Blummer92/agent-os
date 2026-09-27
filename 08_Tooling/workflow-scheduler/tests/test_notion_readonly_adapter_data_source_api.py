@@ -88,6 +88,20 @@ def test_page_property_retrieval_is_bounded_and_cursor_aware():
     assert "start_cursor=opaque+cursor" in http_get.calls[0][0]
 
 
+def test_get_page_preserves_parent_data_source_identity_for_bounded_source_verification():
+    parent = {
+        "type": "data_source_id",
+        "data_source_id": "lessons-source-current",
+        "database_id": "lessons-database-current",
+    }
+    result = NotionReadOnlyAdapter(
+        http_get=FakeGet([{"id": "lesson-page", "parent": parent, "archived": False, "in_trash": False}])
+    ).execute(make_task({"action": "get_page", "page_id": "lesson-page"}))
+
+    assert result["status"] == "success"
+    assert result["output"]["parent"] == parent
+
+
 def test_archive_and_trash_compatibility_fields_are_preserved():
     result = NotionReadOnlyAdapter(http_get=FakeGet([{"id": "page-1", "archived": False, "in_trash": True}])).execute(make_task({"action": "get_page", "page_id": "page-1"}))
     assert result["output"]["archived"] is False
