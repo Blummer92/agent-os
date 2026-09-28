@@ -355,7 +355,10 @@ suite_command_text() {
   if [ -d "$suite_dir/src" ]; then
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
     if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
-      display+=" --cov=src/workflow_scheduler --cov-report=term"
+      # Keep the display text derived from the command's coverage ownership
+      # without repeating the literal coverage target. The executed command
+      # above remains the single semantic owner of the coverage arguments.
+      display+=" --cov="src/workflow_scheduler" --cov-report=term"
     fi
     printf '%s' "$display"
   else
