@@ -52,6 +52,14 @@ def activate_issue_start_lesson_preflight(
     if type(task_reference) is not str or not task_reference.strip():
         raise ValueError("task_reference must be non-empty exact text")
 
+    # #2780: ordinary issue scope metadata is matching context, not proof
+    # that advisory Lessons Learned are material. Preserve explicit caller
+    # decisions and use only deterministic issue-start positive signals when
+    # the tri-state was omitted.
+    issue_start_materiality = specialized_knowledge_required
+    if issue_start_materiality is None:
+        issue_start_materiality = bool(known_knowledge_refs or library_hints)
+
     request = CodingKnowledgeRequest(
         task_reference=task_reference,
         ecosystem_hints=ecosystem_hints,
@@ -61,7 +69,7 @@ def activate_issue_start_lesson_preflight(
         target_path_hints=target_path_hints,
         canonical_rule_refs=canonical_rule_refs,
         known_knowledge_refs=known_knowledge_refs,
-        specialized_knowledge_required=specialized_knowledge_required,
+        specialized_knowledge_required=issue_start_materiality,
     )
     result = orchestrate_lesson_retrieval(request, execute_read=execute_read)
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
