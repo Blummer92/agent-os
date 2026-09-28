@@ -565,6 +565,7 @@ jobs:
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
           RUN_REQUIRED: ${{ steps.aggregate_evidence.outputs.run_required }}
           REUSE_STATE: ${{ steps.aggregate_evidence.outputs.state }}
+          MAIN_HEALTH_CONCLUSION: ${{ steps.main_health.outputs.validation_conclusion }}
         run: |
           tested_sha="not-executed-in-this-run"
           if [ "${RUN_REQUIRED:-true}" != "false" ]; then
@@ -584,6 +585,9 @@ jobs:
                 echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
               fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
+            fi
+            if [ -n "${MAIN_HEALTH_CONCLUSION:-}" ] && [ "${MAIN_HEALTH_CONCLUSION}" != "success" ]; then
+              echo "- Failure class: `main-health-admission` (`main-health.validation-${MAIN_HEALTH_CONCLUSION}`). Candidate aggregate tests did not establish this failure."
             fi
             if [ "${RUN_REQUIRED:-true}" = "false" ]; then
               echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
