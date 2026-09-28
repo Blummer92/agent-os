@@ -260,6 +260,9 @@ dependency_edges:
   - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
     to: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     type: governed_by
+  - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
+    to: "01_Shared_Standards/global-engineering/external-client-integration-patterns.md"
+    type: governed_by
   - from: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     to: "04_Registry/reusable-capabilities.yml"
     type: governs
