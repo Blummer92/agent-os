@@ -9,6 +9,8 @@ description = "Agent OS Workflow Scheduler: dependency-ordered task execution, g
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0,<7",
+  "PyGithub>=2.9.1,<3",
+  "requests>=2.31,<3",
 ]
 
 # #1300 (AOS-GCE2C): the Scheduler runtime already imports canonical
@@ -37,7 +39,10 @@ packages = [
   "scripts.agent_os_execution_checkpoint",
   "scripts.agent_os_execution_interface",
   "scripts.agent_os_issue_acceptance",
+  "scripts.agent_os_github_git_objects",
+  "scripts.agent_os_github_issue_provider",
   "scripts.agent_os_issue_acceptance.checks",
+  "scripts.agent_os_issue_acceptance.typed_subject_approval",
   "scripts.agent_os_remote_validation",
 ]
 ext-modules = [
@@ -50,4 +55,7 @@ ext-modules = [
 "scripts.agent_os_execution_checkpoint" = "../../scripts/agent_os_execution_checkpoint"
 "scripts.agent_os_execution_interface" = "../../scripts/agent_os_execution_interface"
 "scripts.agent_os_issue_acceptance" = "../../scripts/agent_os_issue_acceptance"
+"scripts.agent_os_github_git_objects" = "../../scripts/agent_os_github_git_objects"
+"scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"
+"scripts.agent_os_issue_acceptance.typed_subject_approval" = "../../scripts/agent_os_issue_acceptance/typed_subject_approval"
 "scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"
