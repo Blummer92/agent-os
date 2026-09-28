@@ -24,6 +24,10 @@ Companion to `../material-design-defaults.md`.
 - Keep repeated components in consistent locations when materials are connected.
 - When student identification is needed, keep `Name`, `Hour`, `Date`, and any
   supplied `Unit/Day` identifier together near the top of the first page.
+- On worksheets, render the title and identification fields as one compact top
+  band by default: modest title scale, tight title-to-identification spacing, and
+  no unrelated lesson section inside the band. Keep Warm-Up, Exit Ticket,
+  learning-target, and challenge content below it.
 
 ## Scaffolding Defaults
 

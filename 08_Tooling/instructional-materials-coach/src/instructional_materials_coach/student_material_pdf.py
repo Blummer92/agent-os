@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 from typing import Literal
 
 from reportlab.lib.pagesizes import LETTER
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from .visual_placement import PlacementReceipt
@@ -29,6 +29,9 @@ class StudentMaterialPdfSource:
     paragraphs: tuple[str, ...]
     required_visual_role_ids: tuple[str, ...] = ()
     verified_visual_placements: tuple[PlacementReceipt, ...] = ()
+    compact_worksheet_header: bool = True
+    student_identification_labels: tuple[str, ...] = ("Name", "Hour", "Date")
+    unit_day: str = ""
 
 
 @dataclass(frozen=True)
@@ -84,9 +87,7 @@ def render_student_material_pdf_preview(
         ) as handle:
             temp_target = Path(handle.name)
         styles = getSampleStyleSheet()
-        story = [Paragraph(_esc(source.title), styles["Title"]), Spacer(1, 10)]
-        for paragraph in source.paragraphs:
-            story.extend([Paragraph(_esc(paragraph), styles["BodyText"]), Spacer(1, 7)])
+        story = _build_story(source, styles)
         story.extend([
             Spacer(1, 10),
             Paragraph("PDF draft/preview - derived artifact. The native Google Drive file remains the canonical editable final.", styles["Italic"]),
@@ -142,10 +143,94 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
     if not source.paragraphs or any(not isinstance(item, str) or not item.strip() for item in source.paragraphs):
         raise StudentMaterialPdfError("paragraphs must contain non-empty text")
     _validate_role_ids(source.required_visual_role_ids)
+    if not isinstance(source.compact_worksheet_header, bool):
+        raise StudentMaterialPdfError("compact_worksheet_header must be boolean")
+    _validate_student_identification_labels(source.student_identification_labels)
+    if not isinstance(source.unit_day, str):
+        raise StudentMaterialPdfError("unit_day must be text")
+    if source.unit_day and (source.unit_day != source.unit_day.strip() or len(source.unit_day) > 32):
+        raise StudentMaterialPdfError("unit_day must be trimmed text no longer than 32 characters")
     if not isinstance(source.verified_visual_placements, tuple) or any(
         not isinstance(item, PlacementReceipt) for item in source.verified_visual_placements
     ):
         raise StudentMaterialPdfError("verified_visual_placements must contain PlacementReceipt values")
+
+
+
+def _build_story(source: StudentMaterialPdfSource, styles) -> list[object]:
+    """Build the bounded preview story, using the compact worksheet header by default."""
+    artifact_type = _preview_artifact_type(source.artifact_role)
+    body_paragraphs = source.paragraphs
+    if artifact_type == "docs" and source.compact_worksheet_header:
+        story = _compact_worksheet_header_flowables(source, styles)
+        body_paragraphs = _without_legacy_identification_paragraph(body_paragraphs)
+    else:
+        story = [Paragraph(_esc(source.title), styles["Title"]), Spacer(1, 10)]
+
+    for paragraph in body_paragraphs:
+        story.extend([Paragraph(_esc(paragraph), styles["BodyText"]), Spacer(1, 7)])
+    return story
+
+
+def _compact_worksheet_header_flowables(source: StudentMaterialPdfSource, styles) -> list[object]:
+    """Render title + identification as one compact first-page band."""
+    title_style = ParagraphStyle(
+        "CompactWorksheetTitle",
+        parent=styles["Heading2"],
+        fontSize=14,
+        leading=16,
+        spaceAfter=0,
+    )
+    meta_style = ParagraphStyle(
+        "CompactWorksheetMeta",
+        parent=styles["BodyText"],
+        fontSize=9,
+        leading=11,
+        spaceAfter=0,
+    )
+    flowables: list[object] = [Paragraph(_esc(source.title), title_style)]
+    fields: list[str] = []
+    for index, label in enumerate(source.student_identification_labels):
+        blank = "____________________" if index == 0 else "________"
+        fields.append(f"{_esc(label)}: {blank}")
+    if source.unit_day:
+        fields.append(f"Unit/Day: {_esc(source.unit_day)}")
+    if fields:
+        flowables.append(Paragraph(" &nbsp;&nbsp; ".join(fields), meta_style))
+    flowables.append(Spacer(1, 6))
+    return flowables
+
+
+def _without_legacy_identification_paragraph(paragraphs: tuple[str, ...]) -> tuple[str, ...]:
+    """Suppress only the old first-line Name blank when the compact band replaces it."""
+    if paragraphs and _looks_like_legacy_identification_line(paragraphs[0]):
+        return paragraphs[1:]
+    return paragraphs
+
+
+def _looks_like_legacy_identification_line(value: str) -> bool:
+    normalized = " ".join(value.strip().split())
+    return (
+        len(normalized) <= 160
+        and normalized.casefold().startswith("name:")
+        and "_" in normalized
+    )
+
+
+def _validate_student_identification_labels(labels: object) -> None:
+    if not isinstance(labels, tuple):
+        raise StudentMaterialPdfError("student_identification_labels must be a tuple")
+    if len(labels) > 4:
+        raise StudentMaterialPdfError("student_identification_labels exceeds the bounded header limit")
+    seen: set[str] = set()
+    for label in labels:
+        if not isinstance(label, str) or not label.strip():
+            raise StudentMaterialPdfError("student identification labels must be non-empty text")
+        if label != label.strip() or len(label) > 32:
+            raise StudentMaterialPdfError("student identification labels must be trimmed text no longer than 32 characters")
+        if label in seen:
+            raise StudentMaterialPdfError("student identification labels must be unique")
+        seen.add(label)
 
 
 def _validate_role_ids(role_ids: object) -> None:

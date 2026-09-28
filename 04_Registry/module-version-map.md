@@ -16,7 +16,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
-| Instructional Design Standards | 0.17.0 |
+| Instructional Design Standards | 0.18.0 |
 | Agent Orchestrator | 0.3.0 |
 | GitHub Service Agent | 0.14.0 |
 | Unit Alignment Agent | 0.7.0 |
@@ -40,9 +40,6 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
 | External Repository Governance | 0.1.0 |
-| External-Client Integration Patterns | 0.1.0 |
-
-**External-Client Integration Patterns** `0.1.0` defines the provider-neutral external-client request/result boundary from #898, preserves ADR 0004 non-authority and canonical write/source-of-truth controls, and keeps client ingress/egress distinct from Navigation Registry resource connectors.
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
@@ -52,7 +49,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
-**Instructional Design Standards** `0.17.0` adds the synthetic/noncanonical Assessment Cross-Unit Validation and Regression Standard (#846), proving portability across Photography, Typography, Graphic Design, Branding, Video Production, and AI Media while rejecting domain-name defaults and cross-domain assessment-rule leakage. `0.16.0` added the Unit 0 Assessment Reference Validation Standard (#842); `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
+**Instructional Design Standards** `0.18.0` makes the compact worksheet title + student-identification top band the default (#1567), keeps Warm-Up/Exit Ticket and other lesson sections below it, and preserves an explicit layout opt-out. `0.17.0` adds the synthetic/noncanonical Assessment Cross-Unit Validation and Regression Standard (#846), proving portability across Photography, Typography, Graphic Design, Branding, Video Production, and AI Media while rejecting domain-name defaults and cross-domain assessment-rule leakage. `0.16.0` added the Unit 0 Assessment Reference Validation Standard (#842); `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
 **Testing And Release** `0.6.0` adds governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.
 

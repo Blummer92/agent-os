@@ -62,6 +62,15 @@ identification row near the top of the first page rather than at the bottom. Use
 unit sequence provides one. Prefer notation such as `1.1` for Unit 1, Day 1 so
 printed work can be sorted and traced to the lesson sequence without a long label.
 
+Treat the worksheet title and that identification row as one compact first-page
+top band by default. Keep the title clearly larger than body text without using a
+display-scale heading that consumes substantial work space; keep the
+identification fields immediately adjacent to the title with minimal vertical
+separation. A renderer or approved template may opt out when the teacher requests
+a different layout or the material type needs a distinct first-page treatment.
+Do not let Warm-Up, Exit Ticket, learning-target, or challenge components expand
+the identification band; those remain lesson sections below it.
+
 When a lesson uses differentiated challenge cards, use neutral student-facing
 labels `Challenge A`, `Challenge B`, and `Challenge C`. Do not expose ability
 labels such as `Beginning`, `Middle`, `On Grade`, or `Advanced`. Students should
@@ -131,10 +140,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
+- 0.3.0 makes a compact title + student-identification top band the default for worksheets, keeps lesson sections below that band, and preserves an explicit layout opt-out (#1567).
 - 0.2.0 adds reusable worksheet identification, neutral Challenge A/B/C
   differentiation, unit/day notation, quick-score guidance, and rendered-review
   boundaries from the Typography Business Card worksheet review (#1805).
