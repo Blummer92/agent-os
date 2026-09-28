@@ -1,4 +1,9 @@
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 
 from scripts.agent_os_remote_validation import (
     SelectionInput,
@@ -273,3 +278,109 @@ def test_recovery_lookup_filters_aggregate_check_server_side_before_page_limit()
         in recovery
     )
     assert 'check-runs?per_page=100' not in recovery
+
+
+
+def _summary_step_script() -> str:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    (step,) = [
+        step
+        for step in workflow["jobs"]["validate"]["steps"]
+        if step.get("name") == "Publish validation summary"
+    ]
+    return step["run"]
+
+
+def _render_summary(tmp_path, **outcomes: str) -> str:
+    summary = tmp_path / "summary.md"
+    env = {
+        "PATH": os.environ["PATH"],
+        "GITHUB_SHA": CANDIDATE_HEAD,
+        "GITHUB_EVENT_NAME": "pull_request",
+        "GITHUB_STEP_SUMMARY": str(summary),
+        "PR_HEAD_SHA": CANDIDATE_HEAD,
+        "RUN_REQUIRED": "true",
+        **outcomes,
+    }
+    completed = subprocess.run(
+        ["bash", "-e", "-c", _summary_step_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    # Unescaped backticks would execute words as commands and lose the label.
+    assert "command not found" not in completed.stderr
+    return summary.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("reason", "conclusion"),
+    [
+        ("main-health.validation-pending", "pending"),  # #2779 shape
+        ("main-health.exact-main-red", "repository-failure"),  # #2768 shape
+    ],
+)
+def test_2783_main_health_block_is_summarized_as_admission_not_candidate_failure(
+    tmp_path, reason, conclusion
+):
+    rendered = _render_summary(
+        tmp_path,
+        MAIN_HEALTH_OUTCOME="failure",
+        MAIN_HEALTH_CONCLUSION=conclusion,
+        MAIN_HEALTH_REASONS=reason,
+        AGGREGATE_OUTCOME="skipped",
+    )
+
+    assert f"- Failure class: `main-health-admission` (reason: `{reason}`;" in rendered
+    assert f"exact-current main validation: `{conclusion}`" in rendered
+    assert "Candidate aggregate tests were not executed" in rendered
+    assert "candidate-aggregate" not in rendered
+    assert "executed in GitHub Actions" not in rendered
+
+
+def test_2783_missing_main_recovery_is_summarized_as_admission(tmp_path):
+    rendered = _render_summary(
+        tmp_path,
+        MAIN_RECOVERY_STOP_OUTCOME="failure",
+        AGGREGATE_OUTCOME="skipped",
+    )
+
+    assert "- Failure class: `main-health-admission` (reason: `main-health.validation-missing`;" in rendered
+    assert "executed in GitHub Actions" not in rendered
+
+
+def test_2783_real_candidate_failure_stays_classified_as_candidate(tmp_path):
+    # #2762 shape: main is healthy and the candidate aggregate itself failed.
+    rendered = _render_summary(
+        tmp_path,
+        MAIN_HEALTH_OUTCOME="success",
+        MAIN_HEALTH_CONCLUSION="success",
+        AGGREGATE_OUTCOME="failure",
+    )
+
+    assert "- Failure class: `candidate-aggregate`. Candidate aggregate tests executed and failed." in rendered
+    assert "main-health-admission" not in rendered
+    assert "executed in GitHub Actions" in rendered
+
+
+def test_2783_healthy_passing_run_reports_no_failure_class(tmp_path):
+    rendered = _render_summary(
+        tmp_path,
+        MAIN_HEALTH_OUTCOME="success",
+        MAIN_HEALTH_CONCLUSION="success",
+        AGGREGATE_OUTCOME="success",
+    )
+
+    assert "Failure class" not in rendered
+    assert "executed in GitHub Actions" in rendered
+
+
+def test_2783_main_health_reason_is_published_before_the_step_can_fail():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    conclusion_output = 'echo "validation_conclusion=$validation_conclusion" >> "$GITHUB_OUTPUT"'
+    assert step.index(conclusion_output) < step.index("python3 - <<'PY'")
+    assert step.index('output.write("reason_codes="') < step.index("raise SystemExit(")
