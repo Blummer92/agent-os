@@ -165,6 +165,7 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 ## Response Ordering Rule
 Select the presentation profile, visible ordering, progress labeling, compact operator semantics, and report fields from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`; routing and handoff fields stay internal evidence unless the profile requires them and never displace the requested answer or artifact.
 For ordinary Agent OS implementation, review, repair, and terminal handoff turns, enforce that canonical compact operator rendering at runtime. `Complete handoff` and `Complete the handoff` select compact implementation/review rendering; `Next step` leads with the single supported next action; `Work on #<issue>` selects the issue-implementation profile; PR review leads with exact-head, check, and blocking-review state before any bounded compact status block.
+When a response, campaign ledger, or cross-session handoff reports GitHub issue/PR linkage, preserve the canonical entity identities as distinct typed facts: issue number, pull-request number, and closing target are never interchangeable. Derive any reported `Closes` / `Fixes` / `Resolves` target from current canonical PR linkage/body evidence, not from the PR number or surrounding prose. For example, if issue `#3020` is implemented by PR `#3048` whose canonical body says `Closes #3020`, render `Issue #3020 -> PR #3048` or `PR #3048 closes #3020`; never render `PR #3048 closes #3048` unless canonical evidence independently proves that exact same-number relationship.
 Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice. These domain standards refine the classroom profile and do not create a competing output schema.
 
 ## Stop Conditions
@@ -174,10 +175,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.10
+0.3.11
 Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.11 preserves typed GitHub identities in campaign/report rendering (#3053): issue number, PR number, and canonical closing target remain distinct; reported `Closes` / `Fixes` / `Resolves` targets must come from current canonical PR linkage/body evidence rather than substituting the PR number. This constrains the existing model-visible Orchestrator response seam and adds no parser, identity registry, campaign store, scheduler, queue, or mutation authority.
 - 0.3.10 consumes #2872's governed test-campaign reconciliation before next-test recommendations, preventing semantically completed conditions from being presented as new work and preserving conversational/manual test metadata without adding test-state persistence.
 - 0.3.9 makes concurrent same-PR head movement a reacquire-and-classify transition instead of an automatic foreign-active stop: compatible authorized lineage continues on the new exact head, while stale writes, conflicting same-invariant edits, unknown lineage, scope/authority drift, and active/ambiguous lease collisions remain fail-closed and item-local (#2883).
 - 0.3.8 makes #2752 managed-label convergence a universal Agent OS issue-creation routing invariant: every supported create path uses canonical tiered metadata and duplicate admission, native/direct create results remain provisional until exact readback and #1962 convergence, and missing/partial labels cannot be reported as terminal creation success.
