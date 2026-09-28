@@ -51,7 +51,7 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     assert "## Required Order" in text
     assert "## Required Visual Components" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.5" in text.split("## Version", 1)[1]
+    assert "0.1.6" in text.split("## Version", 1)[1]
 
 
 def test_2896_content_first_visual_planning_order_is_explicit() -> None:
@@ -68,3 +68,38 @@ def test_2896_content_first_rule_does_not_widen_external_write_authority() -> No
     text = normalized().lower()
     assert "this sequencing does not change classroom artifact destinations" in text
     assert "authorize drive, notion, publication, or other external writes" in text
+
+
+def test_2885_requested_artifact_role_survives_candidate_selection() -> None:
+    text = normalized().lower()
+    for phrase in (
+        "requested artifact role is authoritative",
+        "student worksheet or worksheet preview",
+        "teacher-modeling package",
+        "generated illustration",
+        "game/activity board",
+        "candidate title similarity also does not override the resolved artifact role",
+        "verify that its artifact role matches the resolved request",
+    ):
+        assert phrase in text
+
+
+def test_2885_look_like_and_with_images_do_not_imply_image_generation() -> None:
+    text = normalized().lower()
+    assert "look like" in text
+    assert "with images" in text
+    assert "do not independently change a worksheet request into image generation" in text
+
+
+def test_2885_mismatch_fails_to_worksheet_specific_preview_or_blocker() -> None:
+    text = normalized().lower()
+    assert "worksheet-specific blocker" in text
+    assert "clearly labeled worksheet preview/content specification" in text
+    assert "rather than substituting another artifact role" in text
+
+
+def test_2885_role_rule_does_not_duplicate_source_order_or_widen_authority() -> None:
+    text = normalized().lower()
+    assert "downstream of the existing source-order contract" in text
+    assert "does not replace or duplicate the notion-first / drive-second retrieval rule" in text
+    assert "grants no external-write authority" in text
