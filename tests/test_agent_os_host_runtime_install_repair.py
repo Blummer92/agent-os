@@ -45,7 +45,6 @@ REFUSAL_REASONS = {
     "sudo unavailable": "host-sudo-unavailable",
     "passwordless bounded sudo unavailable": "host-passwordless-sudo-unavailable",
     "python3 pip unavailable": "host-python-pip-unavailable",
-    "expected one reusable-capability-registry wheel": "host-runtime-wheel-shape-invalid",
     "expected one agent-memory-context-manager wheel": "host-runtime-wheel-shape-invalid",
     "expected one workflow-scheduler wheel": "host-runtime-wheel-shape-invalid",
     "expected one agent-os-execution-service wheel": "host-runtime-wheel-shape-invalid",
