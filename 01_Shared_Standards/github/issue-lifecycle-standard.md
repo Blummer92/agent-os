@@ -73,6 +73,8 @@ Do not create per-issue-number GitHub labels such as `parent:<n>` or `root-cause
 
 #2660 remains the pre-create duplicate/root-cause admission owner. The existing issue-body parser/currentness rules and #1962/#2752 creation/reconciliation architecture are reused; this contract creates no second registry, database, reconciler, classifier, daemon, readiness state, or execution authority.
 
+For bounded migration/backfill planning, the existing #1962 reconciler module also owns the non-mutating lineage projection. It parses these canonical body fields, permits closed original parents as historical evidence, requires an asserted or proposed current root-cause target to be open, and reports `already-current`, `would-change`, `manual-review`, or `blocked` without writing issue bodies or labels. Finite dry-run batches continue past item-local unresolved records. A live body backfill remains a separately authorized GitHub mutation and must reacquire the current open bug population plus each mutable root-cause target immediately before writing; dry-run output is never mutation authority.
+
 ## Risk Ownership
 
 Each cross-cutting risk has exactly one canonical owner issue, recorded in `04_Registry/risk-owner-map.md`; other issues and PRs link to the owner instead of copying risk text.

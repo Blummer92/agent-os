@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Protocol
 
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
@@ -36,6 +37,17 @@ class LiveIssueSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class LineageProjectionResult:
+    repository: str
+    issue_number: int
+    original_parent_issue_number: int | None
+    root_cause_issue_number: int | None
+    projection_status: str
+    reason_codes: tuple[str, ...]
+    would_change_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class IssueLabelReconciliationResult:
     repository: str
     issue_number: int
@@ -48,6 +60,94 @@ class IssueLabelReconciliationResult:
     dry_run: bool
     side_effects_performed: bool
 
+
+
+_LINEAGE_REF_RE = re.compile(r"^#([1-9][0-9]*)$")
+
+
+def project_issue_lineage(
+    provider: IssueLabelProvider,
+    repository: str,
+    issue_number: int,
+    *,
+    issue_form_path: str | Path,
+    expected_original_parent: int | None = None,
+    expected_root_cause: int | None = None,
+) -> LineageProjectionResult:
+    """Validate canonical body lineage and produce a non-mutating backfill projection."""
+    snapshot = provider.read(repository, issue_number)
+    fields = load_issue_form_fields(issue_form_path)
+    metadata = parse_issue_form_body(snapshot.body, fields)
+    if metadata_contract(metadata) != "tiered":
+        return LineageProjectionResult(repository, issue_number, None, None, "manual-review", ("canonical-tiered-metadata-required",), ())
+
+    parent, parent_reason = _single_lineage_ref(metadata, "original_parent_issue_number")
+    root, root_reason = _single_lineage_ref(metadata, "root_cause_issue_number")
+    reasons = tuple(reason for reason in (parent_reason, root_reason) if reason)
+    if reasons:
+        return LineageProjectionResult(repository, issue_number, parent, root, "manual-review", reasons, ())
+
+    if root is not None:
+        try:
+            root_snapshot = provider.read(repository, root)
+        except Exception as exc:
+            return LineageProjectionResult(repository, issue_number, parent, root, "blocked", (f"root-cause-read-failure:{type(exc).__name__}",), ())
+        if root_snapshot.state != "open":
+            return LineageProjectionResult(repository, issue_number, parent, root, "blocked", ("root-cause-not-open",), ())
+
+    changes: list[str] = []
+    if expected_original_parent is not None and parent != expected_original_parent:
+        changes.append("original_parent_issue_number")
+    if expected_root_cause is not None and root != expected_root_cause:
+        try:
+            expected_root = provider.read(repository, expected_root_cause)
+        except Exception as exc:
+            return LineageProjectionResult(repository, issue_number, parent, root, "blocked", (f"expected-root-cause-read-failure:{type(exc).__name__}",), ())
+        if expected_root.state != "open":
+            return LineageProjectionResult(repository, issue_number, parent, root, "blocked", ("expected-root-cause-not-open",), ())
+        changes.append("root_cause_issue_number")
+
+    status = "would-change" if changes else "already-current"
+    return LineageProjectionResult(repository, issue_number, parent, root, status, (), tuple(changes))
+
+
+def project_issue_lineage_batch(
+    provider: IssueLabelProvider,
+    repository: str,
+    issue_numbers: tuple[int, ...],
+    *,
+    issue_form_path: str | Path,
+    expected_lineage: dict[int, tuple[int | None, int | None]] | None = None,
+) -> tuple[LineageProjectionResult, ...]:
+    """Finite dry-run projection that continues past item-local unresolved records."""
+    expected_lineage = expected_lineage or {}
+    results: list[LineageProjectionResult] = []
+    for issue_number in issue_numbers:
+        parent, root = expected_lineage.get(issue_number, (None, None))
+        try:
+            results.append(project_issue_lineage(
+                provider,
+                repository,
+                issue_number,
+                issue_form_path=issue_form_path,
+                expected_original_parent=parent,
+                expected_root_cause=root,
+            ))
+        except Exception as exc:
+            results.append(LineageProjectionResult(repository, issue_number, None, None, "blocked", (f"provider-read-failure:{type(exc).__name__}",), ()))
+    return tuple(results)
+
+
+def _single_lineage_ref(metadata: dict[str, list[str]], field: str) -> tuple[int | None, str | None]:
+    values = metadata.get(field, [])
+    if not values:
+        return None, None
+    if len(values) != 1:
+        return None, f"{field}-ambiguous"
+    match = _LINEAGE_REF_RE.fullmatch(values[0].strip())
+    if match is None:
+        return None, f"{field}-invalid"
+    return int(match.group(1)), None
 
 def reconcile_issue_labels(
     provider: IssueLabelProvider,
