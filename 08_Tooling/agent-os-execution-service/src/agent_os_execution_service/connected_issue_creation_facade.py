@@ -8,13 +8,35 @@ non-authorizing host projection for the existing GitHub create/readback flow.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from scripts.agent_os_issue_labels.connected_issue_creation import (
     DuplicateReviewDisposition,
     evaluate_duplicate_review_admission,
     managed_labels_for_create,
 )
+
+
+class ConnectedIssueCreateProvider(Protocol):
+    """Minimal native-create/readback surface used by the host adapter."""
+
+    def create(self, repository: str, title: str, body: str, labels: tuple[str, ...]) -> int: ...
+    def read_labels(self, repository: str, issue_number: int) -> tuple[str, ...]: ...
+    def reconcile(self, repository: str, issue_number: int) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectedIssueCreateResult:
+    repository: str
+    issue_number: int
+    required_managed_labels: tuple[str, ...]
+    observed_managed_labels: tuple[str, ...]
+    terminal_success: bool
+    reconciliation_performed: bool
+    reason_codes: tuple[str, ...]
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -69,3 +91,54 @@ def plan_connected_issue_creation_for_host(
         "external_write_authorized": False,
         "side_effects_performed": False,
     }
+
+
+def create_connected_issue_for_host(
+    provider: ConnectedIssueCreateProvider,
+    *,
+    repository: str,
+    title: str,
+    issue_body: str,
+    duplicate_review_disposition: DuplicateReviewDisposition | str | None = None,
+    canonical_issue_number: int | None = None,
+    distinct_repair_seam: bool = False,
+    issue_form_path: str | Path = _REPO_ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml",
+    label_map_path: str | Path = _REPO_ROOT / ".github/labeler/agent-os-issue-label-map.yml",
+) -> ConnectedIssueCreateResult:
+    """Consume create -> canonical readback -> existing #1962 reconciliation."""
+    plan = plan_connected_issue_creation_for_host(
+        repository=repository,
+        issue_body=issue_body,
+        duplicate_review_disposition=duplicate_review_disposition,
+        canonical_issue_number=canonical_issue_number,
+        distinct_repair_seam=distinct_repair_seam,
+        issue_form_path=issue_form_path,
+        label_map_path=label_map_path,
+    )
+    if not plan["create_allowed"]:
+        raise ValueError("connected issue creation not admitted: " + str(plan["next_operation"]))
+    if type(title) is not str or not title.strip():
+        raise ValueError("title must be non-empty canonical text")
+
+    required = tuple(sorted(plan["required_managed_label_readback"]))
+    issue_number = provider.create(repository, title.strip(), issue_body, required)
+    if type(issue_number) is not int or issue_number <= 0:
+        raise ValueError("native create did not return a valid issue number")
+
+    observed = tuple(sorted(provider.read_labels(repository, issue_number)))
+    reconciled = False
+    if not set(required).issubset(observed):
+        provider.reconcile(repository, issue_number)
+        reconciled = True
+        observed = tuple(sorted(provider.read_labels(repository, issue_number)))
+
+    missing = tuple(sorted(set(required) - set(observed)))
+    terminal = not missing
+    reasons = (
+        ("connected-create-label-convergence-proven",)
+        if terminal
+        else ("connected-create-label-convergence-not-proven",)
+    )
+    return ConnectedIssueCreateResult(
+        repository, issue_number, required, observed, terminal, reconciled, reasons
+    )
