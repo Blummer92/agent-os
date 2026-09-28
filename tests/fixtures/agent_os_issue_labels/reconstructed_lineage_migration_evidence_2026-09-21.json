@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "reconstructed-lineage-migration-evidence",
+  "original_audit_checkpoint": "2026-09-21",
+  "reconstructed_at": "2026-09-28",
+  "provenance": {
+    "issue": 3028,
+    "contract_issue": 2750,
+    "projection_issue": 2751,
+    "note": "The original 58-row audit was not durably recoverable. This bounded fixture contains only relationships independently supported by surviving canonical GitHub evidence. Missing entries and null fields are unresolved, not inferred."
+  },
+  "mutation_authority": false,
+  "entries": [
+    {
+      "issue_number": 2153,
+      "original_parent_issue_number": 2090,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2153 body — Parent investigation: #2090"]
+    },
+    {
+      "issue_number": 2636,
+      "original_parent_issue_number": 2595,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2636 body — Parent implementation issue: #2595"]
+    },
+    {
+      "issue_number": 2666,
+      "original_parent_issue_number": 2652,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2666 body — discovered during repair/revalidation of PR #2653 for #2652"]
+    },
+    {
+      "issue_number": 2669,
+      "original_parent_issue_number": 2659,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2669 body — Split from #2659"]
+    },
+    {
+      "issue_number": 2681,
+      "original_parent_issue_number": null,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2751 acceptance fixture — #2681/#2682 dependency distinction; no parent/root-cause value reconstructed"]
+    },
+    {
+      "issue_number": 2682,
+      "original_parent_issue_number": 1621,
+      "root_cause_issue_number": null,
+      "evidence": ["issue:2682 body — Parent feature: completed #1621 / PR #1623"]
+    },
+    {
+      "issue_number": 2741,
+      "original_parent_issue_number": null,
+      "root_cause_issue_number": 2288,
+      "evidence": ["issue:2751 body — #2741 -> current root-cause #2288", "issue:2741 body — closed-owner currentness failure and open-owner search requirement"]
+    }
+  ]
+}

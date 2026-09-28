@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import re
 from typing import Protocol
 
@@ -64,6 +65,63 @@ class IssueLabelReconciliationResult:
 
 _LINEAGE_REF_RE = re.compile(r"^#([1-9][0-9]*)$")
 
+
+
+@dataclass(frozen=True, slots=True)
+class LineageMigrationEvidenceEntry:
+    issue_number: int
+    original_parent_issue_number: int | None
+    root_cause_issue_number: int | None
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LineageMigrationEvidence:
+    schema_version: int
+    artifact_kind: str
+    mutation_authority: bool
+    entries: tuple[LineageMigrationEvidenceEntry, ...]
+
+
+def load_lineage_migration_evidence(path: str | Path) -> LineageMigrationEvidence:
+    """Load finite historical migration evidence; this artifact never grants mutation authority."""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if raw.get("schema_version") != 1:
+        raise ValueError("unsupported-lineage-migration-evidence-version")
+    if raw.get("artifact_kind") != "reconstructed-lineage-migration-evidence":
+        raise ValueError("invalid-lineage-migration-evidence-kind")
+    if raw.get("mutation_authority") is not False:
+        raise ValueError("lineage-migration-evidence-must-be-non-authorizing")
+
+    entries: list[LineageMigrationEvidenceEntry] = []
+    seen: set[int] = set()
+    for item in raw.get("entries", []):
+        issue_number = item.get("issue_number")
+        parent = item.get("original_parent_issue_number")
+        root = item.get("root_cause_issue_number")
+        evidence = item.get("evidence")
+        if not isinstance(issue_number, int) or issue_number < 1 or issue_number in seen:
+            raise ValueError("invalid-or-duplicate-lineage-issue")
+        if parent is not None and (not isinstance(parent, int) or parent < 1):
+            raise ValueError("invalid-lineage-parent")
+        if root is not None and (not isinstance(root, int) or root < 1):
+            raise ValueError("invalid-lineage-root-cause")
+        if not isinstance(evidence, list) or not evidence or not all(isinstance(value, str) and value.strip() for value in evidence):
+            raise ValueError("lineage-provenance-required")
+        seen.add(issue_number)
+        entries.append(LineageMigrationEvidenceEntry(issue_number, parent, root, tuple(evidence)))
+
+    return LineageMigrationEvidence(1, raw["artifact_kind"], False, tuple(entries))
+
+
+def expected_lineage_from_evidence(
+    evidence: LineageMigrationEvidence,
+) -> dict[int, tuple[int | None, int | None]]:
+    """Project historical evidence into #2751 expected-lineage input without adding authority."""
+    return {
+        entry.issue_number: (entry.original_parent_issue_number, entry.root_cause_issue_number)
+        for entry in evidence.entries
+    }
 
 def project_issue_lineage(
     provider: IssueLabelProvider,
