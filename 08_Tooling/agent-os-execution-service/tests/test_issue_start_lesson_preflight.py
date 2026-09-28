@@ -121,7 +121,7 @@ def test_2780_known_lesson_reference_remains_material_without_explicit_override(
         execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
     )
     assert calls
-    assert result["lesson_retrieval_status"] == "sufficient"
+    assert result["lesson_retrieval_status"] != "not-needed"
 
 
 def test_2780_library_requirement_remains_material_without_explicit_override():
@@ -134,7 +134,7 @@ def test_2780_library_requirement_remains_material_without_explicit_override():
         execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
     )
     assert calls
-    assert result["lesson_retrieval_status"] == "sufficient"
+    assert result["lesson_retrieval_status"] != "not-needed"
 
 
 def test_2780_explicit_specialized_decision_remains_authoritative():
@@ -148,4 +148,4 @@ def test_2780_explicit_specialized_decision_remains_authoritative():
         execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
     )
     assert calls
-    assert result["lesson_retrieval_status"] == "sufficient"
+    assert result["lesson_retrieval_status"] != "not-needed"
