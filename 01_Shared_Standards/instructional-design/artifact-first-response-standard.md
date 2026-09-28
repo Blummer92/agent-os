@@ -25,6 +25,31 @@ procedural and suggesting the request was not understood.
 4. Never describe a routing record, Notion handoff, readiness report, or
    authorization request as though it were the requested classroom artifact.
 
+## Requested Artifact Role Is Authoritative
+
+Resolve the teacher's requested artifact role before candidate selection and
+preserve that role through retrieval, rendering, and final response. A request
+for a student worksheet or worksheet preview must not silently resolve to a
+teacher-modeling package, tutorial/modeling material, generated illustration,
+composite image, game/activity board, or another artifact category merely
+because it shares the same unit name or appears visually related.
+
+Words such as `look like` or `with images` describe preview or visual-support
+intent; they do not independently change a worksheet request into image
+generation. Candidate title similarity also does not override the resolved
+artifact role.
+
+Before presenting a retrieved or generated candidate, verify that its artifact
+role matches the resolved request. If no matching candidate can be retrieved or
+produced under current source and authorization rules, use Blocked-Production
+Behavior and return a worksheet-specific blocker or clearly labeled worksheet
+preview/content specification rather than substituting another artifact role.
+
+This role check is downstream of the existing source-order contract in
+`instructional-materials-sources.md`; it does not replace or duplicate the
+Notion-first / Drive-second retrieval rule and grants no external-write
+authority.
+
 ## Requested Format Is Part Of The Artifact
 
 When the teacher explicitly requests an artifact format such as PDF, DOCX, or
@@ -163,4 +188,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.5
+0.1.6

@@ -346,10 +346,13 @@ def test_classroom_fixture_preserves_artifact_first_and_decision_studio() -> Non
     assert "destinations are unchanged" in classroom
     assert "never fabricated" in classroom
 
-    # The consumed standards keep their canonical shape; the artifact-first
-    # standard is at 0.1.5 after #2896 adds content-first visual planning
-    # while preserving the existing artifact-first classroom contract.
-    assert "0.1.5" in section(ARTIFACT_FIRST, "Version")
+    # The consumed standards keep their canonical shape. Avoid pinning a
+    # patch version here: artifact-first regressions own their own semantic
+    # version checks, while this integration fixture verifies the contract
+    # remains consumable by the interaction-output standard.
+    artifact_version = section(ARTIFACT_FIRST, "Version").strip().splitlines()[0]
+    major, minor, patch = (int(part) for part in artifact_version.split("."))
+    assert (major, minor, patch) >= (0, 1, 5)
     assert "0.1.0" in section(TEACHER_STUDIO, "Version")
     assert "Required Order" in read(ARTIFACT_FIRST)
     assert "Locked Interaction Model" in read(TEACHER_STUDIO)
