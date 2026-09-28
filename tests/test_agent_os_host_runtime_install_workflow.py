@@ -35,11 +35,7 @@ def test_host_runtime_route_preserves_least_privilege_and_fixed_target() -> None
     assert "issues:" not in permissions
     assert "contents: write" not in permissions
     assert "actions: write" not in permissions
-    host_runtime_step = text.split(
-        "- name: Install and verify bounded #1238 host runtime", 1
-    )[1].split("- name: Invoke exact governed GCE control path", 1)[0]
-    assert "secrets." not in host_runtime_step
-    assert "AGENT_OS_CODESPACES_TOKEN" not in host_runtime_step
+    assert "secrets." not in text
     assert 'project="agent-os-502614"' in text
     assert 'zone="us-central1-a"' in text
     assert 'instance="agent-os-test"' in text
@@ -86,12 +82,12 @@ def test_privileged_host_installer_owns_the_bounded_install_and_never_dispatches
     assert "STAGING_ROOT=/var/lib/agent-os/host-install-staging" in text
     assert "apt-get install -y build-essential python3-dev" in text
     for package in (
-        "./08_Tooling/reusable-capability-registry",
         "./08_Tooling/agent-memory-context-manager",
         "./08_Tooling/workflow-scheduler",
         "./08_Tooling/agent-os-execution-service",
     ):
         assert package in text
+    assert "./08_Tooling/reusable-capability-registry" not in text
     # Flags now sit one per line so --no-index/--no-deps could be added
     # legibly; check each token rather than an exact adjacent substring.
     assert "--break-system-packages" in text
