@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "07_Agent_Tests/fixtures/handoff-progress-is-not-completion.md"
 CONTRACT = ROOT / "01_Shared_Standards/github/tool-discovery-continuation.md"
+MISSION_CONTINUITY = ROOT / "01_Shared_Standards/github/mission-continuity.md"
 
 
 def normalized(path: Path) -> str:
@@ -56,3 +57,41 @@ def test_fixture_does_not_create_excluded_authority() -> None:
         "native-product mutation",
     ):
         assert phrase in fixture
+
+
+def test_3038_handoff_persistence_requires_parent_continuation() -> None:
+    continuity = normalized(MISSION_CONTINUITY)
+    for phrase in (
+        "handoff, evidence comment, bug record, route discovery, or bounded investigation checkpoint is intermediate",
+        "reacquire the parent issue",
+        "consume the already-identified capable route or bounded evidence gate",
+        "one canonically read-back Draft PR",
+    ):
+        assert phrase in continuity
+
+
+def test_3038_does_not_require_owner_to_repeat_continuation_phrases() -> None:
+    continuity = normalized(MISSION_CONTINUITY)
+    for phrase in (
+        "complete the handoff",
+        "make the PR",
+        "repeat `work on`",
+        "merely because the previous operation persisted a handoff",
+    ):
+        assert phrase in continuity
+
+
+def test_3038_cleared_blocker_cannot_be_reused_as_terminal_disposition() -> None:
+    continuity = normalized(MISSION_CONTINUITY)
+    assert "current evidence proves cleared is no longer a terminal disposition" in continuity
+    assert "rather than returning the stale blocker again" in continuity
+
+
+def test_3038_preserves_real_gates_and_existing_authority_ceiling() -> None:
+    continuity = normalized(MISSION_CONTINUITY)
+    for phrase in (
+        "does not bypass a genuine compatibility, authorization, source-of-truth, excluded-surface, or material-decision gate",
+        "does not turn a handoff into implementation authority",
+        "only authority already present in the current parent mission",
+    ):
+        assert phrase in continuity

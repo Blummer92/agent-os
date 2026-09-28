@@ -73,3 +73,12 @@ def test_classroom_profiles_remain_explicitly_unchanged() -> None:
     assert "Classroom-material responses follow `artifact-first-response-standard.md`" in ordering
     assert "`teacher-decision-studio-standard.md`" in ordering
     assert "do not create a competing output schema" in ordering
+
+
+def test_campaign_handoffs_preserve_issue_pr_and_closure_target_identities() -> None:
+    ordering = section(ORCHESTRATOR, "Response Ordering Rule")
+    assert "issue number, pull-request number, and closing target are never interchangeable" in ordering
+    assert "Derive any reported `Closes` / `Fixes` / `Resolves` target from current canonical PR linkage/body evidence" in ordering
+    assert "Issue #3020 -> PR #3048" in ordering
+    assert "PR #3048 closes #3020" in ordering
+    assert "never render `PR #3048 closes #3048`" in ordering

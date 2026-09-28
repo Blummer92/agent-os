@@ -78,6 +78,18 @@ def _specialized(value: object) -> bool | None:
     raise ValueError("specialized_knowledge_required must be true, false, or null")
 
 
+
+def _repair_context(value: object) -> str:
+    context = _text(value, "repair_context")
+    try:
+        parsed = RepairContext(context)
+    except ValueError as exc:
+        raise ValueError("repair_context must be failed-pr-repair or ci-diagnosis") from exc
+    if parsed is RepairContext.NONE:
+        raise ValueError("failed-repair must use a repair or CI diagnosis context")
+    return parsed.value
+
+
 def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
     if not isinstance(payload, Mapping):
         raise TypeError("CKR6 envelope must be a mapping")
@@ -112,7 +124,7 @@ def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
         attempt_id=_text(payload.get("attempt_id"), "attempt_id") if failed else None,
         failed_hypothesis=_text(payload.get("failed_hypothesis"), "failed_hypothesis") if failed else None,
         result_summary=_text(payload.get("result_summary"), "result_summary") if failed else None,
-        repair_context=_text(payload.get("repair_context", "failed-pr-repair"), "repair_context") if failed else "failed-pr-repair",
+        repair_context=_repair_context(payload.get("repair_context", "failed-pr-repair")) if failed else "failed-pr-repair",
         **kwargs,
     )
 

@@ -206,3 +206,18 @@ def test_terminal_reconciliation_finishes_with_one_final_report_idempotently():
     assert first.classification == "COMPLETED"
     assert first.terminal_reconciliation_status == "converged"
     assert first.next_action == "none"
+
+
+
+def test_3023_explicit_close_authorization_is_consumed_without_extra_prompt():
+    packet = closure_packet()
+    state = release_run.evaluate_release_run(
+        evidence(
+            issue_closure_lifecycle=packet,
+            side_effects_performed=terminal_side_effects(),
+            lease_release_required=False,
+            lease_release_observation=lease_observation(),
+        )
+    )
+    assert state.issue_closure_authorized is True
+    assert state.next_action != "request-issue-closure-authorization"

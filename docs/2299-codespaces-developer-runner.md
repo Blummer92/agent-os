@@ -58,10 +58,12 @@ narrow. The existing governed issue-comment ingress may use Codespaces only for
 the accepted developer-validation envelope when all of these conditions hold:
 
 - the validation identity is the already-qualified `remote-validation-suite`;
-- the target is the exact approved Codespace
-  `literate-system-j4j4pr9g4q7h45q`;
-- GitHub reports that Codespace belongs to `Blummer92/agent-os` and is already
-  `Available`;
+- the target is the one current Codespace resolved from live GitHub evidence
+  (#2965): the read-only repository Codespaces listing must contain exactly one
+  `Blummer92`-owned `Blummer92/agent-os` Codespace that is already `Available`.
+  No Codespace identity is compiled in; zero, multiple, truncated, or malformed
+  candidates are unavailable (the historical `literate-system-j4j4pr9g4q7h45q`
+  pin could report `Shutdown` while a newer surface was current);
 - the credential exposed to the step is the repository-scoped
   `AGENT_OS_CODESPACES_TOKEN` with Codespaces read permission only; and
 - the remote environment-health result is `agent-os-codespaces-v1`, bound to

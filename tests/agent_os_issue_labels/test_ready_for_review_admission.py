@@ -150,3 +150,19 @@ def test_provisional_ready_requires_focused_green():
     assert result.transition_admissible is False
     assert result.provisional_ready is False
     assert "focused-validation-not-green" in result.reason_codes
+
+
+def test_3037_successful_provisional_ready_never_requests_draft_rollback():
+    result = evaluate_provisional_ready_reconciliation(
+        repository="Blummer92/agent-os",
+        pr_number=3037,
+        pr_lifecycle_state="ready",
+        expected_head_sha=HEAD,
+        observed_head_sha=HEAD,
+        validation_head_sha=HEAD,
+        aggregate_status="success",
+    )
+    assert result.ready_converged is True
+    assert result.rollback_to_draft_required is False
+    assert "provisional-ready-aggregate-converged" in result.reason_codes
+    assert result.next_action == "retain-ready-and-reacquire-later-gates"
