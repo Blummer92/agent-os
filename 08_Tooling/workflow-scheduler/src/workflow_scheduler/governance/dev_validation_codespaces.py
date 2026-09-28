@@ -25,7 +25,7 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 
 APPROVED_CODESPACE_NAME = "literate-system-j4j4pr9g4q7h45q"
 APPROVED_CODESPACE_PROFILE_ID = "agent-os-codespaces-v1"
-APPROVED_CODESPACE_SURFACE_ID = f"codespace:{APPROVED_CODESPACE_NAME}"
+APPROVED_CODESPACE_SURFACE_ID = f"codespace:{APPROVED_CODESPACE_NAME}"  # legacy compatibility only
 APPROVED_OWNER = "Blummer92"
 SUPPORTED_VALIDATION_IDS = frozenset({VALIDATION_ID})
 _FRAME_START = "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN==="
@@ -143,7 +143,7 @@ def _bounded_text(value: object) -> tuple[str, bool]:
     return sanitized[-MAX_RESULT_LOG_CHARS:], len(sanitized) > MAX_RESULT_LOG_CHARS
 
 
-def _failure(request: DevValidationRequest, reason: str) -> dict[str, object]:
+def _surface_id(codespace_name: str) -> str:\n    return f"codespace:{codespace_name}"\n\n\ndef _failure(\n    request: DevValidationRequest, reason: str, *, codespace_name: str = APPROVED_CODESPACE_NAME\n) -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "status": "needs-decision",
@@ -168,22 +168,17 @@ def _failure(request: DevValidationRequest, reason: str) -> dict[str, object]:
         "publication_invoked": False,
         "merge_authorized": False,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": _surface_id(codespace_name),
         "environment_health_evidence_id": None,
     }
 
 
-def _route(
-    selected: bool, reason: str, *, state: str | None = None
-) -> dict[str, object]:
+def _route(\n    selected: bool, reason: str, *, state: str | None = None, codespace_name: str = APPROVED_CODESPACE_NAME\n) -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "selected": selected,
         "reason_codes": [reason],
-        "codespace_name": APPROVED_CODESPACE_NAME,
-        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
-        "repository": REPOSITORY,
+        "codespace_name": codespace_name,\n        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,\n        "execution_surface_id": _surface_id(codespace_name),\n        "repository": REPOSITORY,
         "state": state,
         "credential_permission": "codespaces:read",
         "lifecycle_mutation_authorized": False,
@@ -227,6 +222,7 @@ def _request_from_ingress(
 def _inspect_approved_codespace(
     run: Run = _run,
 ) -> tuple[dict[str, object] | None, str]:
+    """Select exactly one current Agent OS Codespace from live GitHub evidence."""
     if not os.environ.get("GH_TOKEN"):
         return None, "codespaces-credential-unavailable"
     completed = run(
@@ -235,7 +231,7 @@ def _inspect_approved_codespace(
             "api",
             "-H",
             "Accept: application/vnd.github+json",
-            f"/user/codespaces/{APPROVED_CODESPACE_NAME}",
+            "/user/codespaces?per_page=100",
         ),
         timeout=30,
     )
@@ -245,9 +241,28 @@ def _inspect_approved_codespace(
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
         return None, "codespaces-read-evidence-invalid"
-    if type(payload) is not dict:
+    if type(payload) is not dict or type(payload.get("codespaces")) is not list:
         return None, "codespaces-read-evidence-invalid"
-    return payload, "codespaces-read-proven"
+    candidates = []
+    for item in payload["codespaces"]:
+        if type(item) is not dict:
+            return None, "codespaces-read-evidence-invalid"
+        repository = item.get("repository")
+        owner = item.get("owner")
+        if (
+            type(repository) is dict
+            and repository.get("full_name") == REPOSITORY
+            and type(owner) is dict
+            and owner.get("login") == APPROVED_OWNER
+            and type(item.get("name")) is str
+            and item.get("state") == "Available"
+        ):
+            candidates.append(item)
+    if not candidates:
+        return None, "codespaces-not-available"
+    if len(candidates) != 1:
+        return None, "codespaces-current-surface-ambiguous"
+    return candidates[0], "codespaces-read-proven"
 
 
 def select_codespaces_dev_validation(
@@ -263,10 +278,7 @@ def select_codespaces_dev_validation(
     request = _request_from_ingress(ingress)
     if request.validation_id not in SUPPORTED_VALIDATION_IDS:
         return _route(False, "codespaces-profile-not-qualified"), request
-    payload, reason = _inspect_approved_codespace(run)
-    if payload is None:
-        return _route(False, reason), request
-    repository = payload.get("repository")
+    payload, reason = _inspect_approved_codespace(run)\n    if payload is None:\n        return _route(False, reason), request\n    repository = payload.get("repository")
     owner = payload.get("owner")
     repo_name = (
         repository.get("full_name") if type(repository) is dict else None
@@ -274,17 +286,12 @@ def select_codespaces_dev_validation(
     owner_login = owner.get("login") if type(owner) is dict else None
     name = payload.get("name")
     state = payload.get("state")
-    if (
-        name != APPROVED_CODESPACE_NAME
-        or repo_name != REPOSITORY
-        or owner_login != APPROVED_OWNER
-    ):
+    if (\n        type(name) is not str\n        or repo_name != REPOSITORY\n        or owner_login != APPROVED_OWNER\n    ):
         return (
             _route(
                 False,
                 "codespaces-identity-mismatch",
-                state=state if type(state) is str else None,
-            ),
+                state=state if type(state) is str else None,\n                codespace_name=name if type(name) is str else APPROVED_CODESPACE_NAME,\n            ),
             request,
         )
     if state != "Available":
@@ -292,11 +299,10 @@ def select_codespaces_dev_validation(
             _route(
                 False,
                 "codespaces-not-available",
-                state=state if type(state) is str else None,
-            ),
+                state=state if type(state) is str else None,\n                codespace_name=name,\n            ),
             request,
         )
-    return _route(True, "codespaces-capable", state="Available"), request
+    return _route(True, "codespaces-capable", state="Available", codespace_name=name), request
 
 
 def _extract_framed_payload(stdout: object) -> str | None:
@@ -315,11 +321,7 @@ def _extract_framed_payload(stdout: object) -> str | None:
     )
 
 
-def run_dev_validation_over_codespaces(
-    request: DevValidationRequest,
-    *,
-    run: Run = _run,
-) -> dict[str, object]:
+def run_dev_validation_over_codespaces(\n    request: DevValidationRequest,\n    *,\n    codespace_name: str = APPROVED_CODESPACE_NAME,\n    run: Run = _run,\n) -> dict[str, object]:
     try:
         completed = run(
             (
@@ -327,8 +329,7 @@ def run_dev_validation_over_codespaces(
                 "codespace",
                 "ssh",
                 "-c",
-                APPROVED_CODESPACE_NAME,
-                "--",
+                codespace_name,\n                "--",
                 "python3",
                 "-c",
                 _REMOTE_RUNNER_SOURCE,
@@ -338,14 +339,12 @@ def run_dev_validation_over_codespaces(
                 request.source_sha,
                 request.validation_id,
                 request.request_id,
-                APPROVED_CODESPACE_NAME,
-            ),
+                codespace_name,\n            ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
         evidence = _failure(
-            request, "dev-validation-codespaces-transport-timeout"
-        )
+            request, "dev-validation-codespaces-transport-timeout", codespace_name=codespace_name\n        )
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
         evidence.update(
@@ -361,8 +360,7 @@ def run_dev_validation_over_codespaces(
         return evidence
     if completed.returncode != 0:
         evidence = _failure(
-            request, "dev-validation-codespaces-ssh-failed"
-        )
+            request, "dev-validation-codespaces-ssh-failed", codespace_name=codespace_name\n        )
         tail, truncated = _bounded_text(completed.stderr)
         evidence.update(
             {
@@ -395,7 +393,7 @@ def run_dev_validation_over_codespaces(
         "validation_id": request.validation_id,
         "request_id": request.request_id,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": _surface_id(codespace_name),
         "external_side_effects_performed": False,
         "production_state_mutated": False,
         "execution_authorized": False,
@@ -487,11 +485,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if route["selected"] is True:
         assert request is not None
-        result = run_dev_validation_over_codespaces(request)
+        codespace_name = str(route["codespace_name"])\n        result = run_dev_validation_over_codespaces(request, codespace_name=codespace_name)
         # This exact gh error occurs before the remote command starts. Other SSH
         # failures may have executed work and must remain fail closed.
         if _ssh_start_failed_before_execution(result):
-            route = _route(False, "codespaces-ssh-start-timeout-fallback", state="Available")
+            route = _route(\n                False, "codespaces-ssh-start-timeout-fallback", state="Available",\n                codespace_name=codespace_name,\n            )
             route.update({
                 "codespaces_failure_reason": "dev-validation-codespaces-ssh-failed",
                 "ssh_exit_code": 1,
