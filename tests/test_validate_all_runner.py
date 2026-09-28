@@ -35,7 +35,7 @@ def repo(tmp_path: Path) -> Path:
     shim = root / "fake-python"
     shim.write_text(
         "#!" + sys._base_executable + "\n"
-        "import os, pathlib, sys\n"
+        "import os, pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
         "if args and args[0] == '-':\n"
         "    sys.argv = args\n"
@@ -49,6 +49,18 @@ def repo(tmp_path: Path) -> Path:
         "    print('PYTEST_MARKER ' + target)\n"
         "    print('CWD_MARKER ' + os.getcwd())\n"
         "    print('PYTHONPATH_MARKER ' + os.environ.get('PYTHONPATH', ''))\n"
+        "    barrier = os.environ.get('PYTEST_BARRIER_DIR')\n"
+        "    cwd_name = pathlib.Path.cwd().name\n"
+        "    if barrier and cwd_name.startswith('pkg-'):\n"
+        "        barrier_path = pathlib.Path(barrier)\n"
+        "        barrier_path.mkdir(parents=True, exist_ok=True)\n"
+        "        (barrier_path / cwd_name).touch()\n"
+        "        deadline = time.monotonic() + 3\n"
+        "        while len(list(barrier_path.iterdir())) < 2 and time.monotonic() < deadline:\n"
+        "            time.sleep(0.02)\n"
+        "        if len(list(barrier_path.iterdir())) < 2:\n"
+        "            print('BARRIER_TIMEOUT ' + cwd_name)\n"
+        "            raise SystemExit(6)\n"
         "    should_fail = 'fail' in target\n"
         "    if pathlib.Path(target).is_dir():\n"
         "        should_fail = should_fail or any(pathlib.Path(target).rglob('test_*fail.py'))\n"
@@ -364,3 +376,38 @@ def test_pr_template_names_focused_and_aggregate_evidence_without_duplication() 
     assert "synthetic-merge SHA" in template
     assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in template
     assert template.count("./scripts/validate-all.sh") == 1
+
+
+def test_aggregate_runs_isolated_suites_concurrently_and_reports_discovery_order(
+    repo: Path, tmp_path: Path
+) -> None:
+    _write_test(repo / "pkg-a" / "tests" / "test_a.py")
+    _write_test(repo / "pkg-b" / "tests" / "test_b.py")
+    barrier = tmp_path / "barrier"
+
+    result = run(
+        repo,
+        env={
+            "PYTEST_BARRIER_DIR": str(barrier),
+            "VALIDATE_ALL_MAX_PARALLEL": "2",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "BARRIER_TIMEOUT" not in result.stdout
+    checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    assert checks.index("PASS | pkg-a") < checks.index("PASS | pkg-b") < checks.index("PASS | root")
+
+
+@pytest.mark.parametrize("value", ["0", "9", "abc"])
+def test_invalid_parallelism_fails_before_validation(repo: Path, value: str) -> None:
+    result = run(repo, env={"VALIDATE_ALL_MAX_PARALLEL": value})
+    assert result.returncode == 2
+    assert "VALIDATE_ALL_MAX_PARALLEL" in result.stderr
+    assert "STRUCTURE_MARKER" not in result.stdout
+
+
+def test_instructional_materials_suite_is_explicitly_kept_out_of_parallel_batch() -> None:
+    content = SOURCE_SCRIPT.read_text(encoding="utf-8")
+    assert 'if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then' in content
+    assert "flush_parallel_batch" in content
