@@ -40,6 +40,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
 | External Repository Governance | 0.1.0 |
+| External-Client Integration Patterns | 0.1.0 |
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
