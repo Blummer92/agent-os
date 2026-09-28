@@ -13,9 +13,7 @@ from workflow_scheduler.governance.codespaces_diagnostic import (
 )
 from workflow_scheduler.governance.dev_validation import REPOSITORY
 from workflow_scheduler.governance.dev_validation_codespaces import (
-    APPROVED_CODESPACE_NAME,
     APPROVED_CODESPACE_PROFILE_ID,
-    APPROVED_CODESPACE_SURFACE_ID,
 )
 from workflow_scheduler.governance.github_issue_comment_ingress import (
     IssueCommentIngressResult,
@@ -23,6 +21,8 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 
 
 REQUEST_ID = "canva-cdp-1"
+APPROVED_CODESPACE_NAME = "fluffy-current-agentos-7x9q"
+APPROVED_CODESPACE_SURFACE_ID = f"codespace:{APPROVED_CODESPACE_NAME}"
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -44,14 +44,38 @@ def _ingress() -> IssueCommentIngressResult:
 
 
 def _codespace_payload(*, state: str = "Available") -> str:
-    return json.dumps(
-        {
-            "name": APPROVED_CODESPACE_NAME,
-            "state": state,
-            "owner": {"login": "Blummer92"},
-            "repository": {"full_name": REPOSITORY},
-        }
+    item = {
+        "name": APPROVED_CODESPACE_NAME,
+        "state": state,
+        "owner": {"login": "Blummer92"},
+        "repository": {"full_name": REPOSITORY},
+    }
+    return json.dumps({"total_count": 1, "codespaces": [item]})
+
+
+def test_2965_diagnostic_delegates_to_the_shared_current_surface_resolver(monkeypatch) -> None:
+    # One decision owner: the diagnostic route must reach the same selection as
+    # dev-validation for the same live evidence, including stale-literal masking.
+    from workflow_scheduler.governance import codespaces_diagnostic, dev_validation_codespaces
+
+    assert codespaces_diagnostic.resolve_current_codespace is dev_validation_codespaces.resolve_current_codespace
+    assert not hasattr(dev_validation_codespaces, "APPROVED_CODESPACE_NAME")
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stale = {
+        "name": "literate-system-j4j4pr9g4q7h45q",
+        "state": "Shutdown",
+        "owner": {"login": "Blummer92"},
+        "repository": {"full_name": REPOSITORY},
+    }
+    current = json.loads(_codespace_payload())["codespaces"][0]
+    stdout = json.dumps({"total_count": 2, "codespaces": [stale, current]})
+
+    route, _ = select_codespaces_diagnostic(
+        _ingress(),
+        run=lambda argv, timeout: subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=""),
     )
+    assert route["selected"] is True
+    assert route["codespace_name"] == APPROVED_CODESPACE_NAME
 
 
 def test_non_diagnostic_ingress_is_not_handled() -> None:
@@ -180,7 +204,7 @@ def test_successful_diagnostic_uses_fixed_ssh_target_and_no_caller_shell() -> No
         calls.append((argv, timeout))
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
-    evidence = run_codespaces_diagnostic(request, run=run)
+    evidence = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert evidence["status"] == "success"
     assert evidence["workspace_side_effects_performed"] is False
     assert evidence["external_side_effects_performed"] is False
@@ -222,7 +246,7 @@ def test_transport_timeout_returns_bounded_failure_evidence() -> None:
             stderr="e" * 5000,
         )
 
-    evidence = run_codespaces_diagnostic(request, run=run)
+    evidence = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert evidence["status"] == "needs-decision"
     assert evidence["reason_codes"] == ["codespaces-diagnostic-transport-timeout"]
     assert evidence["cleanup_complete"] is True
@@ -270,6 +294,7 @@ def test_result_identity_mismatch_is_rejected() -> None:
 
     evidence = run_codespaces_diagnostic(
         request,
+        codespace_name=APPROVED_CODESPACE_NAME,
         run=lambda argv, timeout: subprocess.CompletedProcess(
             argv, 0, stdout=stdout, stderr=""
         ),
