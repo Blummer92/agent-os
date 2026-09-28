@@ -73,3 +73,19 @@ def test_material_scope_or_excluded_surface_still_needs_decision() -> None:
 def test_stop_conditions_do_not_treat_bounded_correction_as_a_stop() -> None:
     section = _normalized_section("Stop Conditions")
     assert "bounded diagnosis correction under the contract above" in section
+
+
+def test_zero_diff_stale_branch_is_fast_forwarded_before_implementation() -> None:
+    section = _normalized_section("Execution Continuation")
+    assert "no open primary PR" in section
+    assert "zero unique implementation commits" in section
+    assert "strict ancestor of current `main`" in section
+    assert "fast-forward that same non-protected branch to exact current `main`" in section
+    assert "read the branch back and continue the same issue lineage" in section
+
+
+def test_unique_or_diverged_branch_is_never_force_reset() -> None:
+    section = _normalized_section("Execution Continuation")
+    assert "contains unique commits, is diverged, or cannot be proven ancestor-safe" in section
+    assert "do not reset or force-move it" in section
+    assert "existing governed reconciliation/refresh path" in section
