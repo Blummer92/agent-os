@@ -3,6 +3,8 @@ from pathlib import Path
 from scripts.agent_os_issue_acceptance.issue_operational_state import ReadinessState
 from scripts.agent_os_issue_labels.issue_reconciler import (
     LiveIssueSnapshot,
+    expected_lineage_from_evidence,
+    load_lineage_migration_evidence,
     project_issue_lineage,
     project_issue_lineage_batch,
     reconcile_issue_batch,
@@ -13,6 +15,7 @@ from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_l
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
 MAP = ROOT / ".github/labeler/agent-os-issue-label-map.yml"
+LINEAGE_EVIDENCE = ROOT / "tests/fixtures/agent_os_issue_labels/reconstructed_lineage_migration_evidence_2026-09-21.json"
 
 BODY = """### Issue tier
 
@@ -443,4 +446,60 @@ def test_lineage_projection_does_not_touch_labels_or_create_authority():
     result = project_issue_lineage(provider, "Blummer92/agent-os", 10, issue_form_path=FORM)
     assert result.projection_status == "already-current"
     assert provider.snapshots[10].labels == ("human-note", "status:blocked")
+    assert provider.writes == []
+
+
+def test_3028_reconstructed_lineage_fixture_is_finite_provenance_bound_and_non_authorizing():
+    evidence = load_lineage_migration_evidence(LINEAGE_EVIDENCE)
+    assert evidence.schema_version == 1
+    assert evidence.artifact_kind == "reconstructed-lineage-migration-evidence"
+    assert evidence.mutation_authority is False
+    assert len(evidence.entries) == 7
+    assert all(entry.evidence for entry in evidence.entries)
+
+
+def test_3028_fixture_projects_only_explicit_relationships_and_preserves_unresolved_values():
+    evidence = load_lineage_migration_evidence(LINEAGE_EVIDENCE)
+    expected = expected_lineage_from_evidence(evidence)
+    assert expected[2153] == (2090, None)
+    assert expected[2636] == (2595, None)
+    assert expected[2669] == (2659, None)
+    assert expected[2681] == (None, None)
+    assert expected[2741] == (None, 2288)
+    assert 3028 not in expected
+
+
+def test_3028_current_closed_root_overrides_historical_fixture_evidence():
+    provider = Provider({
+        2741: snap(2741),
+        2288: LiveIssueSnapshot("Blummer92/agent-os", 2288, BODY, (), "closed"),
+    })
+    expected = expected_lineage_from_evidence(load_lineage_migration_evidence(LINEAGE_EVIDENCE))
+    result = project_issue_lineage_batch(
+        provider,
+        "Blummer92/agent-os",
+        (2741,),
+        issue_form_path=FORM,
+        expected_lineage=expected,
+    )[0]
+    assert result.projection_status == "blocked"
+    assert result.reason_codes == ("expected-root-cause-not-open",)
+    assert provider.writes == []
+
+
+def test_3028_closed_historical_parent_does_not_block_projection():
+    provider = Provider({
+        2153: snap(2153),
+        2090: LiveIssueSnapshot("Blummer92/agent-os", 2090, BODY, (), "closed"),
+    })
+    expected = expected_lineage_from_evidence(load_lineage_migration_evidence(LINEAGE_EVIDENCE))
+    result = project_issue_lineage_batch(
+        provider,
+        "Blummer92/agent-os",
+        (2153,),
+        issue_form_path=FORM,
+        expected_lineage=expected,
+    )[0]
+    assert result.projection_status == "would-change"
+    assert result.would_change_fields == ("original_parent_issue_number",)
     assert provider.writes == []
