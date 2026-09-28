@@ -271,7 +271,7 @@ jobs:
           )"
           echo "state=$evidence_state" >> "$GITHUB_OUTPUT"
           case "$evidence_state" in
-            active|passed)
+            passed)
               echo "run_required=false" >> "$GITHUB_OUTPUT"
               ;;
             *)

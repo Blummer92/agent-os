@@ -1,4 +1,10 @@
+import json
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,14 +81,17 @@ def test_ready_event_queries_only_current_head_aggregate_check_evidence() -> Non
 def test_historical_1904_shape_reuses_completed_exact_head_success() -> None:
     step = _ready_evidence_step(_workflow())
     assert 'any(.status == "completed" and .conclusion == "success") then "passed"' in step
-    assert "active|passed)" in step
+    assert "passed)" in step
+    assert "active|passed)" not in step
     assert 'echo "run_required=false" >> "$GITHUB_OUTPUT"' in step
 
 
-def test_queued_or_in_progress_exact_head_aggregate_is_not_duplicated() -> None:
+def test_queued_or_in_progress_exact_head_aggregate_is_not_reusable_success() -> None:
     step = _ready_evidence_step(_workflow())
     assert 'any(.status == "queued" or .status == "in_progress") then "active"' in step
-    assert "active|passed)" in step
+    assert "active|passed)" not in step
+    assert 'active)' not in step
+    assert 'echo "run_required=true" >> "$GITHUB_OUTPUT"' in step
 
 
 def test_missing_failed_or_cancelled_current_head_evidence_requires_aggregate() -> None:
@@ -130,3 +139,90 @@ def test_manual_diagnostic_and_final_candidate_dispatch_do_not_use_ready_reuse_g
     assert "workflow_dispatch" not in step
     assert "mode=diagnostic" in _workflow()
     assert "mode=final-candidate" in _workflow()
+
+
+CURRENT_RUN = "/actions/runs/200"
+
+
+def _reuse_step_script() -> str:
+    workflow = yaml.safe_load(_workflow())
+    (step,) = [
+        step
+        for step in workflow["jobs"]["validate"]["steps"]
+        if step.get("name") == "Reuse valid exact-head aggregate evidence"
+    ]
+    return step["run"]
+
+
+def _run_reuse_step(tmp_path: Path, check_runs: list[dict]) -> dict[str, str]:
+    """Execute the real reuse step against a stubbed `gh api` check-run response."""
+    fixture = tmp_path / "check-runs.json"
+    fixture.write_text(json.dumps({"check_runs": check_runs}), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = --jq ]; then exec jq -r \"$2\" \"$GH_FIXTURE\"; fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    subprocess.run(
+        ["bash", "-e", "-c", _reuse_step_script()],
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GH_FIXTURE": str(fixture),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "Blummer92/agent-os",
+            "HEAD_SHA": "d3501c232181963deda648483c9c65f4290f8ba7",
+            "CURRENT_RUN_URL_FRAGMENT": CURRENT_RUN,
+        },
+        check=True,
+    )
+    return dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+
+
+def _check(run: str, status: str, conclusion: str | None) -> dict:
+    return {
+        "name": "Run aggregate validation",
+        "status": status,
+        "conclusion": conclusion,
+        "details_url": f"https://github.com/Blummer92/agent-os/actions/runs/{run}/job/1",
+    }
+
+
+def test_2631_chronology_draft_skipped_job_is_not_reusable_evidence(tmp_path: Path) -> None:
+    # PR #2631: the Draft-time run skipped the aggregate job; the Ready run must
+    # execute it rather than treat the skipped job as accepted evidence.
+    outputs = _run_reuse_step(
+        tmp_path,
+        [_check("35349164504", "completed", "skipped"), _check("200", "in_progress", None)],
+    )
+    assert outputs == {"state": "missing-or-nonpassing", "run_required": "true"}
+
+
+def test_completed_exact_head_success_is_reused_once(tmp_path: Path) -> None:
+    outputs = _run_reuse_step(tmp_path, [_check("100", "completed", "success")])
+    assert outputs == {"state": "passed", "run_required": "false"}
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_active_other_run_is_never_reported_as_satisfied_evidence(tmp_path: Path, status: str) -> None:
+    # Skipping here would publish a green aggregate check for this run while the
+    # other run could still fail (#2920 / #2589 masking shape).
+    outputs = _run_reuse_step(
+        tmp_path,
+        [_check("100", "completed", "success"), _check("101", status, None)],
+    )
+    assert outputs == {"state": "active", "run_required": "true"}
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped"])
+def test_nonpassing_exact_head_evidence_requires_aggregate(tmp_path: Path, conclusion: str) -> None:
+    outputs = _run_reuse_step(tmp_path, [_check("100", "completed", conclusion)])
+    assert outputs == {"state": "missing-or-nonpassing", "run_required": "true"}
