@@ -30,6 +30,7 @@ shared cross-system capability, not a separate canonical technical agent.
 | Connector health and errors | `connector-adapter-framework.md` |
 | Discovery workflow | `workspace-discovery-service.md` |
 | Drift and repair recommendations | `workspace-discovery-service.md` |
+| External-client request/result boundary | `../global-engineering/external-client-integration-patterns.md` |
 
 ## Conformance Rules
 
@@ -45,6 +46,7 @@ Implementation work must preserve these rules:
 - QA / Test Agent owns independent validation evidence.
 - System owners retain live-system approval authority.
 - Historical `Integration Manager` references resolve through the legacy alias registry and do not recreate an executable agent.
+- External-client ingress/egress follows the provider-neutral external-client integration standard and does not redefine Navigation Registry resource connectors.
 
 ## Bounded Notion Intent Projection
 
@@ -125,10 +127,11 @@ into companion files without changing the canonical authority map.
 
 ## Version
 
-0.4.0
+0.4.1
 
 ## Changelog
 
+- 0.4.1 indexes the provider-neutral external-client integration boundary from #898 while keeping external-client ingress/egress distinct from Navigation Registry resource connectors.
 - 0.4.0 removes native/direct ChatGPT Notion connector routing, documents the GitHub-controlled Agent OS reader as the single current Notion execution path, and preserves a provider-neutral boundary for separately governed sibling reads such as future Google Drive access without granting Drive write authority (#2303).
 - 0.3.0 documented the former dual execution-surface routing introduced by #2282.
 - 0.2.0 preserves the detailed Navigation Registry contracts while replacing Integration Manager execution ownership with ChatGPT Orchestrator + shared Navigation capability routing (#1324).

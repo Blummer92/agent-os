@@ -101,6 +101,13 @@ documents:
     action: reuse
     duplicate_risk: high
     canonical_for: [reusable-capability-registry-contract, admission, lifecycle, validation-severity]
+  - repo_path: "01_Shared_Standards/global-engineering/external-client-integration-patterns.md"
+    owner: ChatGPT Orchestrator
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [external-client-integration, client-ingress-egress-boundary]
   - repo_path: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     owner: ChatGPT Orchestrator
     source_of_truth: GitHub
@@ -201,6 +208,11 @@ concepts:
     owner: ChatGPT Orchestrator
     duplicate_risk: high
     extend_at: same-standard-or-registry-data
+  - concept: external-client-integration
+    canonical: "01_Shared_Standards/global-engineering/external-client-integration-patterns.md"
+    owner: ChatGPT Orchestrator
+    duplicate_risk: high
+    extend_at: same-standard
   - concept: navigation-registry-purpose
     canonical: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     owner: ChatGPT Orchestrator
@@ -248,6 +260,9 @@ dependency_edges:
   - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
     to: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     type: governed_by
+  - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
+    to: "01_Shared_Standards/global-engineering/external-client-integration-patterns.md"
+    type: governed_by
   - from: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     to: "04_Registry/reusable-capabilities.yml"
     type: governs
@@ -287,6 +302,7 @@ reading_paths:
     - "04_Registry/legacy-agent-alias-registry.md"
     - "02_Agent_Overlays/chatgpt-orchestrator.md"
     - "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+  - "01_Shared_Standards/global-engineering/external-client-integration-patterns.md"
     - "04_Registry/reusable-capabilities.yml"
     - "02_Agent_Overlays/github-service-agent.md"
     - "07_Agent_Tests/"

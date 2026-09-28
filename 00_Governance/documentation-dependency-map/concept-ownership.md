@@ -14,6 +14,7 @@ and extend at the recommended location instead of creating a parallel authority.
 | Write authorization | `00_Governance/write-authorization-policy.md` | GitHub Service Agent | High | governance, or overlay exception |
 | Agent routing | `04_Registry/agent-inheritance-registry.md`; `04_Registry/responsibility-matrix.md`; `04_Registry/legacy-agent-alias-registry.md` | ChatGPT Orchestrator | High | registry files |
 | Reusable capability registry | `01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md`; `04_Registry/reusable-capabilities.yml` | ChatGPT Orchestrator | High | same standard or registry data |
+| External-client integration | `01_Shared_Standards/global-engineering/external-client-integration-patterns.md` | ChatGPT Orchestrator | High | same standard; provider-specific implementation docs may consume it without redefining authority |
 | Navigation Registry purpose | `01_Shared_Standards/navigation/navigation-registry-standard.md` | ChatGPT Orchestrator | High | same standard |
 | Registry schema | `navigation-registry-architecture.md`; `navigation-registry-data-model.md` | ChatGPT Orchestrator | Medium | data model for entity/field changes |
 | Relationships | `navigation-registry-data-model.md` (types); `navigation-registry-architecture.md` (traversal) | ChatGPT Orchestrator | Medium | data model for types |
