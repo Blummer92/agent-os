@@ -340,6 +340,7 @@ jobs:
           echo "main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
 
       - name: Stop candidate while exact-current main recovery runs
+        id: main_recovery_stop
         if: ${{ steps.main_evidence_recovery.outputs.recovery_required == 'true' }}
         env:
           RECOVERY_MAIN_SHA: ${{ steps.main_evidence_recovery.outputs.main_sha }}
@@ -446,6 +447,9 @@ jobs:
           export CANDIDATE_HEAD_SHA
           export PR_NUMBER
 
+          echo "main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
+          echo "validation_conclusion=$validation_conclusion" >> "$GITHUB_OUTPUT"
+
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -523,14 +527,13 @@ jobs:
               reason for reason in admission.reason_codes if reason.startswith("main-health.")
           )
           if main_health_blockers:
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("reason_codes=" + ",".join(main_health_blockers) + "\n")
               raise SystemExit(
                   "ordinary final candidate aggregate blocked by exact-current main health: "
                   + ",".join(main_health_blockers)
               )
           PY
-
-          echo "main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
-          echo "validation_conclusion=$validation_conclusion" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
@@ -554,6 +557,7 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 
       - name: Run aggregate validation
+        id: aggregate
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         run: ./scripts/validate-all.sh
 
@@ -565,7 +569,11 @@ jobs:
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
           RUN_REQUIRED: ${{ steps.aggregate_evidence.outputs.run_required }}
           REUSE_STATE: ${{ steps.aggregate_evidence.outputs.state }}
+          MAIN_HEALTH_OUTCOME: ${{ steps.main_health.outcome }}
           MAIN_HEALTH_CONCLUSION: ${{ steps.main_health.outputs.validation_conclusion }}
+          MAIN_HEALTH_REASONS: ${{ steps.main_health.outputs.reason_codes }}
+          MAIN_RECOVERY_STOP_OUTCOME: ${{ steps.main_recovery_stop.outcome }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
         run: |
           tested_sha="not-executed-in-this-run"
           if [ "${RUN_REQUIRED:-true}" != "false" ]; then
@@ -586,13 +594,19 @@ jobs:
               fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
             fi
-            if [ -n "${MAIN_HEALTH_CONCLUSION:-}" ] && [ "${MAIN_HEALTH_CONCLUSION}" != "success" ]; then
-              echo "- Failure class: `main-health-admission` (`main-health.validation-${MAIN_HEALTH_CONCLUSION}`). Candidate aggregate tests did not establish this failure."
+            if [ "${MAIN_HEALTH_OUTCOME:-}" = "failure" ]; then
+              echo "- Failure class: \`main-health-admission\` (reason: \`${MAIN_HEALTH_REASONS:-unreported}\`; exact-current main validation: \`${MAIN_HEALTH_CONCLUSION:-unreported}\`). Candidate aggregate tests were not executed and did not establish this failure."
+            elif [ "${MAIN_RECOVERY_STOP_OUTCOME:-}" = "failure" ]; then
+              echo "- Failure class: \`main-health-admission\` (reason: \`main-health.validation-missing\`; exact-current main recovery dispatched). Candidate aggregate tests were not executed and did not establish this failure."
+            elif [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
+              echo "- Failure class: \`candidate-aggregate\`. Candidate aggregate tests executed and failed."
             fi
             if [ "${RUN_REQUIRED:-true}" = "false" ]; then
               echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
-            else
+            elif [ "${AGGREGATE_OUTCOME:-}" = "success" ] || [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
               echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
+            else
+              echo "- Candidate aggregate validation was not executed in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`)."
             fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
