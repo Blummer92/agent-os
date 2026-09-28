@@ -41,6 +41,11 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Issue Quality Taxonomy | 0.1.0 |
 | External Repository Governance | 0.1.0 |
 | External-Client Integration Patterns | 0.1.0 |
+| Navigation Shared Standards Index | 0.4.1 |
+
+**External-Client Integration Patterns** `0.1.0` defines the provider-neutral external-client request/result boundary from #898, preserves ADR 0004 non-authority and canonical write/source-of-truth controls, and keeps client ingress/egress distinct from Navigation Registry resource connectors.
+
+**Navigation Shared Standards Index** `0.4.1` cross-references the #898 external-client boundary without changing connector semantics or authority.
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
