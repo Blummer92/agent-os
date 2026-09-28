@@ -47,6 +47,8 @@ def test_canva_profile_identity_display_and_ports_are_isolated() -> None:
         assert "agent-os-canva-capture" not in other
         assert "canva-capture-home" not in other
         assert "browser-profiles/canva" not in other
+        assert "DISPLAY_ID=:99" not in other
+        assert "VNC_PORT=5903" not in other
         assert "NOVNC_PORT=6082" not in other
 
 
@@ -148,3 +150,12 @@ def test_bootstrap_does_not_invoke_capture_replay_scheduler_or_provider() -> Non
         "notion.so",
     ):
         assert forbidden not in combined.lower()
+
+
+def test_runbook_preserves_manual_auth_and_iap_only_activation_boundary() -> None:
+    runbook = _text(ROOT / "08_Tooling/agent-os-execution-service/docs/CANVA_BROWSER_BOOTSTRAP.md")
+    assert "--tunnel-through-iap" in runbook
+    assert "-L 127.0.0.1:6082:127.0.0.1:6082" in runbook
+    assert "manual Canva / SSO / MFA interaction" in runbook
+    assert "landing page; manual login; authenticated dashboard; create/open" in runbook
+    assert "does not replace this fixed GCE lane" in runbook
