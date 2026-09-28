@@ -70,6 +70,16 @@ REQUIRED_LESSON_PROPERTIES = (
 
 # Live finite Status vocabulary (#1516 point 4 / notion-learning-databases.md).
 _STATUS_VOCABULARY = frozenset({"New", "Applied", "Needs follow-up", "Archived note"})
+_APPLIES_TO_VOCABULARY = (
+    "Apps Script",
+    "Google Workspace",
+    "Drive",
+    "Notion",
+    "Curriculum",
+    "Dashboard",
+    "Deployment",
+    "Instructional Materials",
+)
 
 # Finite deterministic Area -> ecosystem mapping. Anything outside this map
 # fails closed as ambiguous activation vocabulary rather than being guessed.
@@ -171,13 +181,18 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
                 {"property": _LEARNING_TYPE_PROPERTY, "select": {"equals": learning_type}}
             )
 
-    applies_to_terms = dict.fromkeys(
-        request.capability_keywords + request.library_hints + request.target_path_hints
+    # Applies To is a controlled multi-select.  Only values from the canonical
+    # finite vocabulary may be sent to Notion.  Request paths and arbitrary
+    # capability/library text remain useful to CKR2's in-memory matcher after
+    # rows are returned, but they are not provider option identities and must
+    # never be projected into a schema-sensitive multi_select filter.
+    applies_to_hints = _normalized(
+        request.capability_keywords + request.library_hints + request.ecosystem_hints
     )
-    for term in applies_to_terms:
-        if term.strip():
+    for term in _APPLIES_TO_VOCABULARY:
+        if term.casefold() in applies_to_hints:
             clauses.append(
-                {"property": _APPLIES_TO_PROPERTY, "multi_select": {"contains": term.strip()}}
+                {"property": _APPLIES_TO_PROPERTY, "multi_select": {"contains": term}}
             )
     return clauses
 
