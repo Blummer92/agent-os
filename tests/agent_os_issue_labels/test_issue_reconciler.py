@@ -2,11 +2,14 @@ from pathlib import Path
 
 from scripts.agent_os_issue_acceptance.issue_operational_state import ReadinessState
 from scripts.agent_os_issue_labels.issue_reconciler import (
+    LegacyNormalizationEvidence,
     LiveIssueSnapshot,
     expected_lineage_from_evidence,
     load_lineage_migration_evidence,
     project_issue_lineage,
     project_issue_lineage_batch,
+    project_legacy_issue_normalization,
+    project_legacy_issue_normalization_batch,
     reconcile_issue_batch,
     reconcile_issue_labels,
 )
@@ -502,4 +505,161 @@ def test_3028_closed_historical_parent_does_not_block_projection():
     )[0]
     assert result.projection_status == "would-change"
     assert result.would_change_fields == ("original_parent_issue_number",)
+    assert provider.writes == []
+
+
+def proven_normalization(number=1, **overrides):
+    values = dict(
+        issue_number=number,
+        tier="tier:1-standard-implementation",
+        owner="owner:github-service-agent",
+        status="status:ready",
+        source_of_truth="GitHub",
+        external_write="no-external-write",
+        evidence_refs=(f"issue:{number}:canonical-evidence",),
+    )
+    values.update(overrides)
+    return LegacyNormalizationEvidence(**values)
+
+
+def legacy_body():
+    return "## Historical reproduction\n\nKeep this content byte-for-byte.\n"
+
+
+def test_3031_normalization_batch_accepts_25_and_rejects_26():
+    provider = Provider({n: snap(n, body=legacy_body()) for n in range(1, 27)})
+    results = project_legacy_issue_normalization_batch(
+        provider, "Blummer92/agent-os",
+        tuple(proven_normalization(n) for n in range(1, 26)),
+        issue_form_path=FORM,
+    )
+    assert len(results) == 25
+    assert all(result.projection_status == "would-change" for result in results)
+    try:
+        project_legacy_issue_normalization_batch(
+            provider, "Blummer92/agent-os",
+            tuple(proven_normalization(n) for n in range(1, 27)),
+            issue_form_path=FORM,
+        )
+    except ValueError as exc:
+        assert str(exc) == "normalization-batch-too-large"
+    else:
+        raise AssertionError("26-item normalization batch must fail closed")
+
+
+def test_3031_empty_and_duplicate_batches_fail_closed():
+    provider = Provider({1: snap(1, body=legacy_body())})
+    for evidence, reason in (
+        ((), "normalization-batch-empty"),
+        ((proven_normalization(), proven_normalization()), "normalization-batch-duplicate-issue"),
+    ):
+        try:
+            project_legacy_issue_normalization_batch(
+                provider, "Blummer92/agent-os", evidence, issue_form_path=FORM
+            )
+        except ValueError as exc:
+            assert str(exc) == reason
+        else:
+            raise AssertionError(reason)
+
+
+def test_3031_projection_preserves_historical_body_and_appends_only_proven_metadata():
+    original = legacy_body()
+    provider = Provider({1: snap(1, body=original)})
+    result = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os", proven_normalization(), issue_form_path=FORM
+    )
+    assert result.projection_status == "would-change"
+    assert result.projected_body.startswith(original.rstrip())
+    assert result.projected_body[: len(original.rstrip())] == original.rstrip()
+    assert dict(result.fields_to_append) == {
+        "Issue tier": "tier:1-standard-implementation",
+        "Primary owner": "owner:github-service-agent",
+        "Readiness candidate": "status:ready",
+        "Source of truth": "GitHub",
+        "External write boundary": "no-external-write",
+    }
+    assert provider.writes == []
+
+
+def test_3031_missing_proven_required_metadata_is_manual_review_without_partial_projection():
+    provider = Provider({1: snap(1, body=legacy_body())})
+    result = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os",
+        proven_normalization(owner=None),
+        issue_form_path=FORM,
+    )
+    assert result.projection_status == "manual-review"
+    assert result.reason_codes == ("missing-proven-owner",)
+    assert result.fields_to_append == ()
+    assert result.projected_body is None
+    assert provider.writes == []
+
+
+def test_3031_explicit_provenance_is_required():
+    provider = Provider({1: snap(1, body=legacy_body())})
+    result = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os",
+        proven_normalization(evidence_refs=()),
+        issue_form_path=FORM,
+    )
+    assert result.projection_status == "manual-review"
+    assert result.reason_codes == ("explicit-evidence-required",)
+
+
+def test_3031_conflicting_existing_metadata_is_not_overwritten():
+    body = legacy_body() + "\n### Primary owner\n\nowner:chatgpt-orchestrator\n"
+    provider = Provider({1: snap(1, body=body)})
+    result = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os", proven_normalization(), issue_form_path=FORM
+    )
+    assert result.projection_status == "manual-review"
+    assert result.reason_codes == ("conflicting-existing-owner",)
+    assert result.projected_body is None
+
+
+def test_3031_batch_continues_past_manual_review_without_writes_or_inference():
+    provider = Provider({
+        1: snap(1, body=legacy_body()),
+        2: snap(2, body=legacy_body()),
+    })
+    results = project_legacy_issue_normalization_batch(
+        provider, "Blummer92/agent-os",
+        (proven_normalization(1, owner=None), proven_normalization(2)),
+        issue_form_path=FORM,
+    )
+    assert results[0].projection_status == "manual-review"
+    assert results[1].projection_status == "would-change"
+    assert provider.writes == []
+
+
+def test_3031_closed_issue_is_blocked_and_projection_never_creates_authority():
+    provider = Provider({
+        1: LiveIssueSnapshot("Blummer92/agent-os", 1, legacy_body(), ("human-note",), "closed")
+    })
+    result = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os", proven_normalization(), issue_form_path=FORM
+    )
+    assert result.projection_status == "blocked"
+    assert result.reason_codes == ("issue-not-open",)
+    assert result.side_effects_performed is False
+    assert provider.snapshots[1].labels == ("human-note",)
+    assert provider.writes == []
+
+
+def test_3031_normalized_projection_becomes_tiered_then_2751_remains_lineage_owner():
+    provider = Provider({1: snap(1, body=legacy_body()), 2288: snap(2288)})
+    normalization = project_legacy_issue_normalization(
+        provider, "Blummer92/agent-os", proven_normalization(), issue_form_path=FORM
+    )
+    assert normalization.projection_status == "would-change"
+    provider.snapshots[1] = LiveIssueSnapshot(
+        "Blummer92/agent-os", 1, normalization.projected_body, (), "open"
+    )
+    lineage = project_issue_lineage(
+        provider, "Blummer92/agent-os", 1,
+        issue_form_path=FORM, expected_root_cause=2288,
+    )
+    assert lineage.projection_status == "would-change"
+    assert lineage.would_change_fields == ("root_cause_issue_number",)
     assert provider.writes == []

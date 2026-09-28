@@ -49,6 +49,28 @@ class LineageProjectionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class LegacyNormalizationEvidence:
+    issue_number: int
+    tier: str | None = None
+    owner: str | None = None
+    status: str | None = None
+    source_of_truth: str | None = None
+    external_write: str | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyNormalizationProjection:
+    repository: str
+    issue_number: int
+    projection_status: str
+    reason_codes: tuple[str, ...]
+    fields_to_append: tuple[tuple[str, str], ...]
+    projected_body: str | None
+    side_effects_performed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class IssueLabelReconciliationResult:
     repository: str
     issue_number: int
@@ -122,6 +144,107 @@ def expected_lineage_from_evidence(
         entry.issue_number: (entry.original_parent_issue_number, entry.root_cause_issue_number)
         for entry in evidence.entries
     }
+
+_NORMALIZATION_REQUIRED = (
+    ("tier", "Issue tier"),
+    ("owner", "Primary owner"),
+    ("status", "Readiness candidate"),
+    ("source-of-truth", "Source of truth"),
+    ("external-write", "External write boundary"),
+)
+_MAX_NORMALIZATION_BATCH = 25
+
+
+def project_legacy_issue_normalization(
+    provider: IssueLabelProvider,
+    repository: str,
+    evidence: LegacyNormalizationEvidence,
+    *,
+    issue_form_path: str | Path,
+) -> LegacyNormalizationProjection:
+    """Project minimum proven tiered metadata without rewriting historical body content."""
+    snapshot = provider.read(repository, evidence.issue_number)
+    if snapshot.state != "open":
+        return LegacyNormalizationProjection(repository, evidence.issue_number, "blocked", ("issue-not-open",), (), None)
+
+    fields = load_issue_form_fields(issue_form_path)
+    metadata = parse_issue_form_body(snapshot.body, fields)
+    if metadata_contract(metadata) == "tiered":
+        return LegacyNormalizationProjection(repository, evidence.issue_number, "already-current", (), (), snapshot.body)
+
+    if not evidence.evidence_refs or not all(ref.strip() for ref in evidence.evidence_refs):
+        return LegacyNormalizationProjection(repository, evidence.issue_number, "manual-review", ("explicit-evidence-required",), (), None)
+
+    proposed = {
+        "tier": evidence.tier,
+        "owner": evidence.owner,
+        "status": evidence.status,
+        "source-of-truth": evidence.source_of_truth,
+        "external-write": evidence.external_write,
+    }
+    missing = tuple(key for key, _ in _NORMALIZATION_REQUIRED if not proposed[key])
+    if missing:
+        return LegacyNormalizationProjection(
+            repository,
+            evidence.issue_number,
+            "manual-review",
+            tuple(f"missing-proven-{key}" for key in missing),
+            (),
+            None,
+        )
+
+    additions: list[tuple[str, str]] = []
+    for key, heading in _NORMALIZATION_REQUIRED:
+        current = metadata.get(key, [])
+        value = proposed[key]
+        if current:
+            if len(current) != 1 or current[0] != value:
+                return LegacyNormalizationProjection(
+                    repository, evidence.issue_number, "manual-review",
+                    (f"conflicting-existing-{key}",), (), None
+                )
+            continue
+        additions.append((heading, value))
+
+    if not additions:
+        return LegacyNormalizationProjection(repository, evidence.issue_number, "already-current", (), (), snapshot.body)
+
+    suffix = "".join(f"\n\n### {heading}\n\n{value}" for heading, value in additions)
+    projected = snapshot.body.rstrip() + suffix + "\n"
+    return LegacyNormalizationProjection(
+        repository, evidence.issue_number, "would-change", (), tuple(additions), projected
+    )
+
+
+def project_legacy_issue_normalization_batch(
+    provider: IssueLabelProvider,
+    repository: str,
+    evidence: tuple[LegacyNormalizationEvidence, ...],
+    *,
+    issue_form_path: str | Path,
+) -> tuple[LegacyNormalizationProjection, ...]:
+    """Project one finite <=25 normalization batch with zero writes."""
+    if not evidence:
+        raise ValueError("normalization-batch-empty")
+    if len(evidence) > _MAX_NORMALIZATION_BATCH:
+        raise ValueError("normalization-batch-too-large")
+    numbers = tuple(item.issue_number for item in evidence)
+    if len(set(numbers)) != len(numbers):
+        raise ValueError("normalization-batch-duplicate-issue")
+
+    results: list[LegacyNormalizationProjection] = []
+    for item in evidence:
+        try:
+            results.append(project_legacy_issue_normalization(
+                provider, repository, item, issue_form_path=issue_form_path
+            ))
+        except Exception as exc:
+            results.append(LegacyNormalizationProjection(
+                repository, item.issue_number, "blocked",
+                (f"provider-read-failure:{type(exc).__name__}",), (), None
+            ))
+    return tuple(results)
+
 
 def project_issue_lineage(
     provider: IssueLabelProvider,
