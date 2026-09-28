@@ -66,18 +66,18 @@ def test_privileged_build_uses_hash_pinned_offline_backend() -> None:
     assert "--no-deps" in system_install
 
 
-def test_final_install_names_exactly_the_four_built_wheels_and_nothing_else() -> None:
+def test_final_install_names_exactly_the_three_built_wheels_and_nothing_else() -> None:
     text = PRIVILEGED.read_text(encoding="utf-8")
     system_install = text.split("PIP_NO_INDEX=1 python3 -m pip install", 1)[1]
     system_install = system_install.split("(", 1)[0]
     for var in (
-        '"$capability_wheel"',
         '"$context_wheel"',
         '"$scheduler_wheel"',
         '"$service_wheel"',
     ):
         assert var in system_install
-    # No directory or glob install: only the four named, already-verified files.
+    assert '"$capability_wheel"' not in system_install
+    # No directory or glob install: only the three named, already-verified files.
     assert "*.whl" not in system_install
     assert "$wheel_dir" not in system_install
 
