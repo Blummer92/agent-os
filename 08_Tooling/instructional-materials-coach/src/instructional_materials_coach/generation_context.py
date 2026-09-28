@@ -50,6 +50,16 @@ _STUDENT_ASSESSMENT_TOKENS = {
 _ASSESSMENT_DEPENDENCY_TOKEN = "context_assessment_dependency_fingerprint"
 _ASSESSMENT_CURRENTNESS_TOKEN = "context_assessment_dependency_currentness"
 
+_STANDARD_WORKSHEET_SECTION_TOKENS = {
+    "warm-up": "curriculum_warm_up",
+    "exit-ticket": "curriculum_exit_ticket",
+}
+_EXIT_TICKET_EQUIVALENT_KEYS = (
+    "self-critique",
+    "self-reflection",
+    "lesson-reflection",
+)
+
 
 def compose_generation_context(
     content: LessonContent,
@@ -165,12 +175,66 @@ def compose_generation_context(
             if student_token is not None:
                 tokens.setdefault(student_token, value)
 
+    _apply_standard_worksheet_section_defaults(tokens, content)
+
     # Keep authority evidence visible and fixed false; never infer authorization.
     tokens["context_production_authorized"] = "false"
     tokens["context_publication_authorized"] = "false"
     tokens["context_external_write_authorized"] = "false"
 
     return content.with_context_tokens(tokens)
+
+
+
+def _apply_standard_worksheet_section_defaults(
+    tokens: dict[str, str],
+    content: LessonContent,
+) -> None:
+    """Project standard worksheet opening/closing sections without duplicating governed copy.
+
+    Current curriculum evidence wins. When a standard section has no supplied
+    governed value, the fallback is derived only from already-authored lesson
+    content. An explicitly designated reflection/self-critique is reused as the
+    exit ticket rather than adding a second closing prompt.
+    """
+    warm_token = _STANDARD_WORKSHEET_SECTION_TOKENS["warm-up"]
+    exit_token = _STANDARD_WORKSHEET_SECTION_TOKENS["exit-ticket"]
+
+    if not _has_nonempty_token(tokens, warm_token):
+        tokens[warm_token] = _default_warm_up(content)
+
+    if not _has_nonempty_token(tokens, exit_token):
+        for decision_key in _EXIT_TICKET_EQUIVALENT_KEYS:
+            equivalent = tokens.get(curriculum_decision_token(decision_key))
+            if isinstance(equivalent, str) and equivalent.strip():
+                tokens[exit_token] = equivalent
+                tokens["context_exit_ticket_source"] = decision_key
+                break
+        else:
+            tokens[exit_token] = _default_exit_ticket(content)
+            tokens["context_exit_ticket_source"] = "authored-lesson-default"
+
+
+def _default_warm_up(content: LessonContent) -> str:
+    objective = next((item.strip() for item in content.objectives if isinstance(item, str) and item.strip()), "")
+    if objective:
+        return f"Warm-Up: What do you already notice, know, or wonder about this goal: {objective}"
+    return f"Warm-Up: What do you already notice, know, or wonder about {content.title}?"
+
+
+def _default_exit_ticket(content: LessonContent) -> str:
+    question = next(
+        (item.strip() for item in reversed(content.worksheet_questions) if isinstance(item, str) and item.strip()),
+        "",
+    )
+    if question:
+        return f"Exit Ticket: Looking back at today's work, {question}"
+    return f"Exit Ticket: What is one choice or idea from {content.title} you can explain now?"
+
+
+def _has_nonempty_token(tokens: dict[str, str], token: str) -> bool:
+    value = tokens.get(token)
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _assessment_dependency_fingerprint(

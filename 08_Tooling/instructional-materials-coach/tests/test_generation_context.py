@@ -115,6 +115,122 @@ def _governed_visual_plan():
     return plan
 
 
+def test_standard_worksheet_defaults_add_lesson_specific_opening_and_closing_when_unsupplied():
+    evidence = _photography_evidence()
+    evidence["owner_evidence"] = [
+        item
+        for item in evidence["owner_evidence"]
+        if item["decision_key"] not in {"warm-up", "exit-ticket"}
+    ]
+
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=evidence,
+    )
+    tokens = content.placeholder_tokens()
+
+    assert tokens["curriculum_warm_up"].startswith("Warm-Up:")
+    assert "Make intentional composition choices." in tokens["curriculum_warm_up"]
+    assert tokens["curriculum_exit_ticket"].startswith("Exit Ticket:")
+    assert "What did you change and why?" in tokens["curriculum_exit_ticket"]
+    assert tokens["context_exit_ticket_source"] == "authored-lesson-default"
+
+
+def test_governed_warm_up_and_exit_ticket_override_defaults_without_duplication():
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_photography_evidence(),
+    )
+    tokens = content.placeholder_tokens()
+
+    assert tokens["curriculum_warm_up"] == "Notice what changes when the photographer moves closer."
+    assert tokens["curriculum_exit_ticket"] == "Explain one framing decision you made today."
+    assert "context_exit_ticket_source" not in tokens
+
+
+def test_designated_self_critique_is_reused_as_exit_ticket():
+    evidence = _photography_evidence()
+    evidence["owner_evidence"] = [
+        item for item in evidence["owner_evidence"] if item["decision_key"] != "exit-ticket"
+    ]
+    evidence["owner_evidence"].append(
+        _owner(
+            "self-critique",
+            "self-critique",
+            "Name the strongest composition choice and one revision you would make.",
+        )
+    )
+
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=evidence,
+    )
+    tokens = content.placeholder_tokens()
+
+    assert tokens["curriculum_exit_ticket"] == tokens["curriculum_self_critique"]
+    assert tokens["context_exit_ticket_source"] == "self-critique"
+
+
+def test_standard_opening_and_closing_survive_neutral_challenge_variants():
+    for variant in ("Challenge A", "Challenge B", "Challenge C"):
+        base = _content()
+        variant_content = content_from_dict(
+            {
+                "title": f"{base.title} - {variant}",
+                "objectives": base.objectives,
+                "slides": base.slides,
+                "worksheet_questions": base.worksheet_questions,
+            }
+        )
+        evidence = _photography_evidence()
+        evidence["owner_evidence"] = [
+            item
+            for item in evidence["owner_evidence"]
+            if item["decision_key"] not in {"warm-up", "exit-ticket"}
+        ]
+        tokens = compose_generation_context(
+            variant_content,
+            material_requirement=_requirement(),
+            current_curriculum_evidence=evidence,
+        ).placeholder_tokens()
+
+        assert tokens["curriculum_warm_up"].startswith("Warm-Up:")
+        assert tokens["curriculum_exit_ticket"].startswith("Exit Ticket:")
+
+
+def test_distinct_day_worksheets_each_receive_opening_and_closing_defaults():
+    for day, question in (
+        ("1.1", "What did you notice about framing?"),
+        ("1.2", "Which focal-point choice worked best?"),
+        ("1.3", "How did negative space change your image?"),
+    ):
+        content = content_from_dict(
+            {
+                "title": f"Photography Foundations {day}",
+                "objectives": [f"Make one intentional composition decision for {day}."],
+                "slides": [],
+                "worksheet_questions": [question],
+            }
+        )
+        evidence = _photography_evidence()
+        evidence["owner_evidence"] = [
+            item
+            for item in evidence["owner_evidence"]
+            if item["decision_key"] not in {"warm-up", "exit-ticket"}
+        ]
+        tokens = compose_generation_context(
+            content,
+            material_requirement=_requirement(),
+            current_curriculum_evidence=evidence,
+        ).placeholder_tokens()
+
+        assert day in tokens["curriculum_warm_up"]
+        assert question in tokens["curriculum_exit_ticket"]
+
+
 def test_photography_context_augments_instead_of_replacing_authored_content():
     visual_plan = _governed_visual_plan()
     content = compose_generation_context(

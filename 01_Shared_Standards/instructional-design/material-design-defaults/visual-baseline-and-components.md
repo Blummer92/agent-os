@@ -28,6 +28,10 @@ Companion to `../material-design-defaults.md`.
   band by default: modest title scale, tight title-to-identification spacing, and
   no unrelated lesson section inside the band. Keep Warm-Up, Exit Ticket,
   learning-target, and challenge content below it.
+- Treat Warm-Up and Exit Ticket as compact, repeatable worksheet sections below
+  that band. Preserve visible core-task/response space; when a one-page layout
+  would become cramped, use another page or remove redundancy rather than
+  shrinking required student work areas to fit the opening/closing sections.
 
 ## Scaffolding Defaults
 
