@@ -20,6 +20,35 @@ Rules:
 
 Before substantive continuation, canonical GitHub state must be reread. Conversation/project context locates the mission; GitHub determines current repository truth.
 
+## Handoff Continuation
+
+A handoff, evidence comment, bug record, route discovery, or bounded
+investigation checkpoint is intermediate while the current authorized issue
+still has an admitted repository implementation path.
+
+After persisting a subordinate handoff:
+
+1. read back the handoff target when persistence/currentness matters;
+2. reacquire the parent issue and any branch/PR/currentness evidence required
+   by the next transition;
+3. consume the already-identified capable route or bounded evidence gate; and
+4. continue to implementation, validation, and one canonically read-back Draft
+   PR when the gate clears.
+
+Do not require the owner to say `complete the handoff`, `make the PR`, or
+repeat `work on` merely because the previous operation persisted a handoff.
+If the bounded evidence gate does not clear, report the exact current terminal
+blocker and its clearing condition instead of rewriting the same handoff.
+
+A previously reported blocker that current evidence proves cleared is no longer
+a terminal disposition. Reacquire the parent state and continue the same
+authorized lineage rather than returning the stale blocker again.
+
+This continuation does not bypass a genuine compatibility, authorization,
+source-of-truth, excluded-surface, or material-decision gate. It also does not
+turn a handoff into implementation authority; it consumes only authority already
+present in the current parent mission.
+
 ## Boundaries
 
 Continuity grants no new implementation, merge, closure, workflow, protected-setting, credential, production, or external-write authority. This contract creates no persistent autonomous task engine, hidden mission database, second issue tracker, poller, or background worker.
@@ -30,4 +59,4 @@ Continuity grants no new implementation, merge, closure, workflow, protected-set
 
 ## Version
 
-0.1.0
+0.2.0
