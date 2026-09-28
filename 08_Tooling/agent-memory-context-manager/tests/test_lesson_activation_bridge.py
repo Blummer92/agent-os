@@ -168,6 +168,7 @@ def test_known_reference_is_attempted_before_filtered_query():
     orchestrate_lesson_activation(req, execute_read=executor)
     assert len(calls) == 1
     assert calls[0] == build_known_reference_query(("LL-42",))
+    assert "filter_properties" not in calls[0]
     assert {"property": "Lesson ID", "rich_text": {"equals": "LL-42"}} in calls[0]["filter"]["or"]
 
 
@@ -176,6 +177,8 @@ def test_filtered_query_uses_request_relevance_signals():
     deployment_query = build_filtered_query(request(ecosystem_hints=("agent-os",), capability_keywords=("deployment",)))
     assert testing_query != deployment_query
     assert testing_query["page_size"] == MAX_RETRIEVAL_ROWS
+    assert "filter_properties" not in testing_query
+    assert "filter_properties" not in deployment_query
     assert {"property": "Learning Type", "select": {"equals": "Testing lesson"}} in testing_query["filter"]["and"][-1]["or"]
     assert {"property": "Learning Type", "select": {"equals": "Deployment lesson"}} in deployment_query["filter"]["and"][-1]["or"]
 

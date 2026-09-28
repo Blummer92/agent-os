@@ -108,13 +108,19 @@ ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 def build_known_reference_query(known_ids: Sequence[str]) -> dict[str, Any]:
-    """Smallest bounded query for an explicit known lesson identity lookup."""
+    """Smallest bounded query for an explicit known lesson identity lookup.
+
+    Provider response projection is deliberately omitted here. The canonical
+    source binding gives us a data-source identity, not provider property IDs;
+    projecting by stable display names can make an otherwise valid live query
+    fail before CKR6 can normalize the bounded rows. Row normalization below
+    still consumes only ``REQUIRED_LESSON_PROPERTIES``.
+    """
     ids = [value for value in dict.fromkeys(known_ids) if value][:MAX_LESSON_RECORDS]
     if not ids:
         raise LessonActivationError("known_ids must contain at least one non-empty value")
     return {
         "page_size": MAX_LESSON_RECORDS,
-        "filter_properties": list(REQUIRED_LESSON_PROPERTIES),
         "filter": {
             "or": [
                 {"property": _LESSON_ID_PROPERTY, "rich_text": {"equals": value}}
@@ -155,7 +161,12 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
 
 
 def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:
-    """Build a bounded task-specific read query without inventing vocabulary."""
+    """Build a bounded task-specific read query without inventing vocabulary.
+
+    Do not emit a provider ``filter_properties`` projection from property
+    display names. The live source binding does not carry provider property
+    IDs, while bounded row normalization already drops every unknown field.
+    """
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
 
@@ -172,7 +183,6 @@ def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:
 
     return {
         "page_size": MAX_RETRIEVAL_ROWS if relevance_clauses else MAX_LESSON_RECORDS,
-        "filter_properties": list(REQUIRED_LESSON_PROPERTIES),
         "filter": {"and": base_filter},
     }
 
