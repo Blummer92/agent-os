@@ -69,6 +69,14 @@ The timing instrumentation does not add a second pytest collection or execution
 pass. Collection-versus-execution separation is therefore not reported by this
 runner unless it can be added later without changing validation behavior.
 
+Aggregate pytest suites run with bounded cross-suite concurrency (default: 3,
+configurable from 1 through 8 with `VALIDATE_ALL_MAX_PARALLEL`). Each suite keeps
+its existing pytest command and isolated output capture; results and timings are
+rendered in deterministic discovery order after each bounded batch completes.
+The Workflow Scheduler remains one suite with its existing coverage command.
+`08_Tooling/instructional-materials-coach` remains sequential because its
+shared-working-tree sentinel is not proven safe for concurrent execution.
+
 ## agent_os_github_git_objects
 
 Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/blob identities, plans a deterministic operation fingerprint, requires explicit matching confirmation, validates an unattached commit before ref movement, and updates only a non-protected branch with `force=false`. Tests use injected fakes; live execution requires separate authorization. See `scripts/agent_os_github_git_objects/README.md`.
