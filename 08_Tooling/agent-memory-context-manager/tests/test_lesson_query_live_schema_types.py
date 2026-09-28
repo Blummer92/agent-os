@@ -112,3 +112,26 @@ def test_non_lesson_reference_skips_known_lookup_and_reaches_live_typed_query() 
     for query in calls:
         _assert_live_typed(query)
         assert all(c["property"] != "Lesson ID" for c in _clauses(query["filter"]))
+
+
+def test_provider_relevance_filters_use_only_controlled_applies_to_options() -> None:
+    query = build_filtered_query(
+        request(
+            ecosystem_hints=("agent-os",),
+            capability_keywords=("lessons-learned", "Notion"),
+            library_hints=("custom-library",),
+            target_path_hints=("08_Tooling/agent-memory-context-manager",),
+        )
+    )
+    applies_to = [
+        clause
+        for clause in _clauses(query["filter"])
+        if clause["property"] == "Applies To"
+    ]
+    assert applies_to == [
+        {"property": "Applies To", "multi_select": {"contains": "Notion"}}
+    ]
+    serialized = repr(query)
+    assert "lessons-learned" not in serialized
+    assert "custom-library" not in serialized
+    assert "08_Tooling/agent-memory-context-manager" not in serialized
