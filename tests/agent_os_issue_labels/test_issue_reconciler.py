@@ -3,6 +3,8 @@ from pathlib import Path
 from scripts.agent_os_issue_acceptance.issue_operational_state import ReadinessState
 from scripts.agent_os_issue_labels.issue_reconciler import (
     LiveIssueSnapshot,
+    project_issue_lineage,
+    project_issue_lineage_batch,
     reconcile_issue_batch,
     reconcile_issue_labels,
 )
@@ -360,3 +362,85 @@ def test_readiness_body_changed_during_write_cannot_report_convergence():
     assert result.convergence_status == "blocked"
     assert result.reason_codes == ("issue-state-changed-during-mutation",)
     assert result.side_effects_performed is True
+
+
+def lineage_body(*, parent=None, root=None):
+    body = BODY
+    if parent is not None:
+        body += f"\n### Original parent\n\n#{parent}\n"
+    if root is not None:
+        body += f"\n### Current root-cause owner\n\n#{root}\n"
+    return body
+
+
+def test_lineage_projection_keeps_parent_history_distinct_from_shared_root_cause():
+    provider = Provider({
+        10: snap(10, body=lineage_body(parent=100, root=1401)),
+        11: snap(11, body=lineage_body(parent=101, root=1401)),
+        100: snap(100), 101: snap(101), 1401: snap(1401),
+    })
+    first = project_issue_lineage(provider, "Blummer92/agent-os", 10, issue_form_path=FORM)
+    second = project_issue_lineage(provider, "Blummer92/agent-os", 11, issue_form_path=FORM)
+    assert (first.original_parent_issue_number, second.original_parent_issue_number) == (100, 101)
+    assert first.root_cause_issue_number == second.root_cause_issue_number == 1401
+
+
+def test_closed_parent_is_historical_but_closed_root_cause_blocks_projection():
+    provider = Provider({
+        10: snap(10, body=lineage_body(parent=100, root=1401)),
+        100: LiveIssueSnapshot("Blummer92/agent-os", 100, BODY, (), "closed"),
+        1401: LiveIssueSnapshot("Blummer92/agent-os", 1401, BODY, (), "closed"),
+    })
+    result = project_issue_lineage(provider, "Blummer92/agent-os", 10, issue_form_path=FORM)
+    assert result.projection_status == "blocked"
+    assert result.reason_codes == ("root-cause-not-open",)
+    assert result.original_parent_issue_number == 100
+
+
+def test_unresolved_lineage_is_not_guessed_and_is_idempotent():
+    provider = Provider({10: snap(10)})
+    result = project_issue_lineage(provider, "Blummer92/agent-os", 10, issue_form_path=FORM)
+    assert result.projection_status == "already-current"
+    assert result.original_parent_issue_number is None
+    assert result.root_cause_issue_number is None
+    assert provider.writes == []
+
+
+def test_expected_backfill_is_dry_run_only_and_validates_expected_root_currentness():
+    provider = Provider({
+        10: snap(10, body=lineage_body(parent=100)),
+        100: snap(100),
+        1401: snap(1401),
+    })
+    result = project_issue_lineage(
+        provider, "Blummer92/agent-os", 10, issue_form_path=FORM,
+        expected_original_parent=100, expected_root_cause=1401,
+    )
+    assert result.projection_status == "would-change"
+    assert result.would_change_fields == ("root_cause_issue_number",)
+    assert provider.writes == []
+
+
+def test_lineage_batch_continues_past_item_local_closed_root():
+    provider = Provider({
+        10: snap(10, body=lineage_body(root=1401)),
+        11: snap(11, body=lineage_body(root=2288)),
+        1401: LiveIssueSnapshot("Blummer92/agent-os", 1401, BODY, (), "closed"),
+        2288: snap(2288),
+    })
+    results = project_issue_lineage_batch(
+        provider, "Blummer92/agent-os", (10, 11), issue_form_path=FORM
+    )
+    assert results[0].projection_status == "blocked"
+    assert results[1].projection_status == "already-current"
+
+
+def test_lineage_projection_does_not_touch_labels_or_create_authority():
+    provider = Provider({
+        10: snap(10, labels=("human-note", "status:blocked"), body=lineage_body(root=1401)),
+        1401: snap(1401),
+    })
+    result = project_issue_lineage(provider, "Blummer92/agent-os", 10, issue_form_path=FORM)
+    assert result.projection_status == "already-current"
+    assert provider.snapshots[10].labels == ("human-note", "status:blocked")
+    assert provider.writes == []
