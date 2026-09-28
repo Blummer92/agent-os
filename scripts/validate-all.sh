@@ -12,6 +12,14 @@ runner_error() {
   exit 2
 }
 
+VALIDATE_ALL_MAX_PARALLEL="${VALIDATE_ALL_MAX_PARALLEL:-3}"
+case "$VALIDATE_ALL_MAX_PARALLEL" in
+  *[!0-9]*|'') runner_error "VALIDATE_ALL_MAX_PARALLEL must be a positive integer." ;;
+esac
+if [ "$VALIDATE_ALL_MAX_PARALLEL" -lt 1 ] || [ "$VALIDATE_ALL_MAX_PARALLEL" -gt 8 ]; then
+  runner_error "VALIDATE_ALL_MAX_PARALLEL must be between 1 and 8."
+fi
+
 focused_targets=()
 focused_maxfail=""
 
@@ -263,6 +271,7 @@ run_check() {
     check_results+=("FAIL|$name|$command_text|$code")
     record_failure "$name" "$command_text" "$code"
   fi
+  return "$code"
 }
 
 run_focused_target() {
@@ -340,6 +349,56 @@ run_pytest_suite() {
   fi
 }
 
+suite_command_text() {
+  local suite_dir="$1"
+  local suite_name="$2"
+  if [ -d "$suite_dir/src" ]; then
+    local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
+    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
+      display+=" --cov=src/workflow_scheduler --cov-report=term"
+    fi
+    printf '%s' "$display"
+  else
+    printf 'cd %s && %s -m pytest tests' "$suite_dir" "$PYTHON_BIN"
+  fi
+}
+
+run_captured_suite() {
+  local suite_dir="$1"
+  local suite_name="$2"
+  local output_file="$3"
+  local status_file="$4"
+  local started_us
+  local ended_us
+  local code
+
+  started_us="$(timer_now_us || true)"
+  run_pytest_suite "$suite_dir" "$suite_name" >"$output_file" 2>&1
+  code=$?
+  ended_us="$(timer_now_us || true)"
+  printf '%s|%s|%s\n' "$code" "$started_us" "$ended_us" >"$status_file"
+  return 0
+}
+
+consume_captured_suite() {
+  local suite_name="$1"
+  local command_text="$2"
+  local output_file="$3"
+  local status_file="$4"
+  local code started_us ended_us
+
+  cat "$output_file"
+  IFS='|' read -r code started_us ended_us <"$status_file"
+  commands_executed+=("$command_text")
+  record_timing "$suite_name" "$started_us" "$ended_us"
+  if [ "$code" -eq 0 ]; then
+    check_results+=("PASS|$suite_name|$command_text|$code")
+  else
+    check_results+=("FAIL|$suite_name|$command_text|$code")
+    record_failure "$suite_name" "$command_text" "$code"
+  fi
+}
+
 aggregate_started_us="$(timer_now_us || true)"
 
 echo "AGGREGATE VALIDATION START"
@@ -371,6 +430,30 @@ if [ "${#test_dirs[@]}" -eq 0 ]; then
   runner_error "no pytest test directories discovered."
 fi
 
+parallel_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-os-validate.XXXXXX")" || runner_error "unable to create validation capture directory."
+trap 'rm -rf "$parallel_tmp"' EXIT
+
+pending_names=()
+pending_commands=()
+pending_outputs=()
+pending_statuses=()
+pending_pids=()
+
+flush_parallel_batch() {
+  local i
+  for i in "${!pending_pids[@]}"; do
+    wait "${pending_pids[$i]}" || true
+  done
+  for i in "${!pending_names[@]}"; do
+    consume_captured_suite "${pending_names[$i]}" "${pending_commands[$i]}" "${pending_outputs[$i]}" "${pending_statuses[$i]}"
+  done
+  pending_names=()
+  pending_commands=()
+  pending_outputs=()
+  pending_statuses=()
+  pending_pids=()
+}
+
 for test_dir in "${test_dirs[@]}"; do
   suite_dir="$(dirname "$test_dir")"
   if [ "$suite_dir" = "." ]; then
@@ -379,8 +462,29 @@ for test_dir in "${test_dirs[@]}"; do
   else
     suite_name="${suite_dir#./}"
   fi
-  run_pytest_suite "$suite_dir" "$suite_name"
+
+  if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then
+    flush_parallel_batch
+    run_pytest_suite "$suite_dir" "$suite_name"
+    continue
+  fi
+
+  index="${#pending_names[@]}"
+  output_file="$parallel_tmp/output-$index"
+  status_file="$parallel_tmp/status-$index"
+  command_text="$(suite_command_text "$suite_dir" "$suite_name")"
+  pending_names+=("$suite_name")
+  pending_commands+=("$command_text")
+  pending_outputs+=("$output_file")
+  pending_statuses+=("$status_file")
+  run_captured_suite "$suite_dir" "$suite_name" "$output_file" "$status_file" &
+  pending_pids+=("$!")
+
+  if [ "${#pending_pids[@]}" -ge "$VALIDATE_ALL_MAX_PARALLEL" ]; then
+    flush_parallel_batch
+  fi
 done
+flush_parallel_batch
 
 aggregate_ended_us="$(timer_now_us || true)"
 record_timing "aggregate total" "$aggregate_started_us" "$aggregate_ended_us"
