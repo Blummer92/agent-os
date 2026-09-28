@@ -208,13 +208,16 @@ def test_terminal_reconciliation_finishes_with_one_final_report_idempotently():
     assert first.next_action == "none"
 
 
+
 def test_3023_explicit_close_authorization_is_consumed_without_extra_prompt():
-    snapshot = lifecycle_snapshot(issue_number=1737, issue_state="open")
-    decision = lifecycle_decision(
-        issue_number=1737,
-        requested_mutations=("close-issue",),
-        authorizer_id="repository-owner",
+    packet = closure_packet()
+    state = release_run.evaluate_release_run(
+        evidence(
+            issue_closure_lifecycle=packet,
+            side_effects_performed=terminal_side_effects(),
+            lease_release_required=False,
+            lease_release_observation=lease_observation(),
+        )
     )
-    authorization = produce_lifecycle_mutation_authorization(decision, snapshot)
-    admission = evaluate_lifecycle_mutation(authorization, snapshot, "close-issue")
-    assert admission.status is AdmissionStatus.ADMITTED
+    assert state.issue_closure_authorized is True
+    assert state.next_action != "request-issue-closure-authorization"
