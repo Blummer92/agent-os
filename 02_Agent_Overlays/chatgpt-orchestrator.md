@@ -175,10 +175,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.11
+0.3.12
 Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.12 consumes #3020's zero-diff stale-branch resume rule: before implementation resumes with no open primary PR, current `main` is reacquired and an ancestor-safe branch with zero unique commits is non-force fast-forwarded/read back; unique, diverged, or ambiguous branches are never force-reset and remain on the existing governed reconciliation route.
 - 0.3.11 preserves typed GitHub identities in campaign/report rendering (#3053): issue number, PR number, and canonical closing target remain distinct; reported `Closes` / `Fixes` / `Resolves` targets must come from current canonical PR linkage/body evidence rather than substituting the PR number. This constrains the existing model-visible Orchestrator response seam and adds no parser, identity registry, campaign store, scheduler, queue, or mutation authority.
 - 0.3.10 consumes #2872's governed test-campaign reconciliation before next-test recommendations, preventing semantically completed conditions from being presented as new work and preserving conversational/manual test metadata without adding test-state persistence.
 - 0.3.9 makes concurrent same-PR head movement a reacquire-and-classify transition instead of an automatic foreign-active stop: compatible authorized lineage continues on the new exact head, while stale writes, conflicting same-invariant edits, unknown lineage, scope/authority drift, and active/ambiguous lease collisions remain fail-closed and item-local (#2883).
