@@ -76,6 +76,7 @@ classroom use, production, publication, or writes.
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
 - `material-quality-rubric.md` — QA contract for slides and worksheets
+- `material-design-defaults.md` — shared classroom-material defaults including the compact worksheet title + student-identification top band
 - `artifact-first-response-standard.md` — response ordering for classroom-material requests
 - `teacher-decision-studio-standard.md` — table-first rubric/assessment consultation protocol
 - `teacher-decision-studio-previews-standard.md` — per-option worksheet and PDF preview rules
@@ -88,4 +89,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.17.0
+0.18.0

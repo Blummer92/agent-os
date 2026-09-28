@@ -1,6 +1,9 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from reportlab.lib.styles import getSampleStyleSheet
+
+import instructional_materials_coach.student_material_pdf as student_pdf
 from instructional_materials_coach.student_material_pdf import (
     StudentMaterialPdfSource,
     render_student_material_pdf_preview,
@@ -45,6 +48,82 @@ def test_exact_source_revision_produces_render_verified_noncanonical_preview(tmp
     assert receipt.source_target_folder_id == "approved-folder"
     assert receipt.unresolved_visual_role_ids == ()
     assert Path(receipt.path).read_bytes().startswith(b"%PDF-")
+
+
+def test_default_worksheet_story_uses_compact_header_and_integrated_student_info():
+    story = student_pdf._build_story(_source(), getSampleStyleSheet())
+
+    assert story[0].getPlainText() == "Photography Foundations - Worksheet"
+    assert story[0].style.fontSize == 14
+    assert story[0].style.leading == 16
+    meta = story[1].getPlainText()
+    assert "Name:" in meta and "Hour:" in meta and "Date:" in meta
+
+    paragraph_text = [item.getPlainText() for item in story if hasattr(item, "getPlainText")]
+    assert "Name: ____________________" not in paragraph_text
+    assert "Explain aperture in your own words." in paragraph_text
+
+
+def test_compact_header_reclaims_vertical_space_against_legacy_title_plus_name_line():
+    styles = getSampleStyleSheet()
+    source = _source()
+    compact = student_pdf._compact_worksheet_header_flowables(source, styles)
+    legacy = [
+        student_pdf.Paragraph(source.title, styles["Title"]),
+        student_pdf.Spacer(1, 10),
+        student_pdf.Paragraph(source.paragraphs[0], styles["BodyText"]),
+        student_pdf.Spacer(1, 7),
+    ]
+
+    def height(flowables):
+        return sum(item.wrap(468, 1000)[1] for item in flowables)
+
+    assert height(compact) <= height(legacy) - 12
+
+
+def test_compact_header_can_be_opted_out_without_suppressing_legacy_identification():
+    story = student_pdf._build_story(
+        _source(compact_worksheet_header=False),
+        getSampleStyleSheet(),
+    )
+
+    assert story[0].style.name == "Title"
+    assert story[2].getPlainText() == "Name: ____________________"
+
+
+def test_unit_day_and_lesson_sections_stay_below_compact_header_for_1568_coordination():
+    source = _source(
+        unit_day="1.1",
+        paragraphs=(
+            "Warm-Up: What do you notice?",
+            "Core task: photograph one object five ways.",
+            "Exit Ticket: Which choice was strongest and why?",
+        ),
+    )
+    story = student_pdf._build_story(source, getSampleStyleSheet())
+
+    assert "Unit/Day: 1.1" in story[1].getPlainText()
+    paragraph_text = [item.getPlainText() for item in story if hasattr(item, "getPlainText")]
+    assert paragraph_text[0] == "Photography Foundations - Worksheet"
+    assert paragraph_text[1].startswith("Name:")
+    assert "Warm-Up: What do you notice?" in paragraph_text[2:]
+    assert "Exit Ticket: Which choice was strongest and why?" in paragraph_text[2:]
+
+
+def test_compact_header_inputs_are_bounded_and_fail_closed(tmp_path):
+    cases = (
+        _source(compact_worksheet_header="yes"),
+        _source(student_identification_labels=("Name",) * 5),
+        _source(student_identification_labels=("Name", "Name")),
+        _source(unit_day=" " + ("1" * 33)),
+    )
+    for index, source in enumerate(cases):
+        receipt = render_student_material_pdf_preview(
+            source,
+            tmp_path / f"invalid-header-{index}.pdf",
+            expected_revision_id="rev-7",
+        )
+        assert receipt.state == "blocked" and not receipt.available
 
 
 def test_stale_source_revision_is_blocked_without_pdf(tmp_path):
