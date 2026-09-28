@@ -273,3 +273,11 @@ def test_recovery_lookup_filters_aggregate_check_server_side_before_page_limit()
         in recovery
     )
     assert 'check-runs?per_page=100' not in recovery
+
+
+def test_2783_summary_distinguishes_main_health_admission_from_candidate_failure():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    summary = workflow[workflow.index("      - name: Publish validation summary") :]
+    assert "MAIN_HEALTH_CONCLUSION" in summary
+    assert "Failure class: `main-health-admission`" in summary
+    assert "Candidate aggregate tests did not establish this failure." in summary
