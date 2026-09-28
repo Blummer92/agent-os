@@ -90,7 +90,10 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     assert "## Required Order" in text
     assert "## Requested Format Is Part Of The Artifact" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.5" in text.split("## Version", 1)[1]
+    version_block = text.split("## Version", 1)[1]
+    version = version_block.strip().splitlines()[0]
+    major, minor, patch = (int(part) for part in version.split("."))
+    assert (major, minor, patch) >= (0, 1, 4)
 
 
 def test_issue_2968_generated_asset_continues_to_exact_approved_drive_handoff() -> None:

@@ -21,6 +21,7 @@ module adds no duplicate provenance guard or relevance vocabulary.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
@@ -107,6 +108,24 @@ class LessonActivationSkip:
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
+_LESSON_ID_REFERENCE = re.compile(r"(?:[A-Za-z][A-Za-z0-9_]*-)?([0-9]{1,9})")
+
+
+def known_lesson_numbers(known_ids: Sequence[str]) -> tuple[int, ...]:
+    """Lesson ID numbers named by explicit references, in first-seen order.
+
+    The live ``Lesson ID`` is a Notion ``unique_id`` (auto-increment) property,
+    rendered by row normalization as ``<prefix>-<number>``. Only that shape (or a
+    bare number) names a lesson; other references such as ``#2638`` do not.
+    """
+    numbers: dict[int, None] = {}
+    for value in known_ids:
+        match = _LESSON_ID_REFERENCE.fullmatch(value.strip()) if isinstance(value, str) else None
+        if match is not None:
+            numbers[int(match.group(1))] = None
+    return tuple(numbers)[:MAX_LESSON_RECORDS]
+
+
 def build_known_reference_query(known_ids: Sequence[str]) -> dict[str, Any]:
     """Smallest bounded query for an explicit known lesson identity lookup.
 
@@ -115,16 +134,19 @@ def build_known_reference_query(known_ids: Sequence[str]) -> dict[str, Any]:
     projecting by stable display names can make an otherwise valid live query
     fail before CKR6 can normalize the bounded rows. Row normalization below
     still consumes only ``REQUIRED_LESSON_PROPERTIES``.
+
+    Filter types must match the live property types (#3032): a type-mismatched
+    Notion filter is rejected with HTTP 400.
     """
-    ids = [value for value in dict.fromkeys(known_ids) if value][:MAX_LESSON_RECORDS]
-    if not ids:
-        raise LessonActivationError("known_ids must contain at least one non-empty value")
+    numbers = known_lesson_numbers(known_ids)
+    if not numbers:
+        raise LessonActivationError("known_ids must contain at least one lesson identifier")
     return {
         "page_size": MAX_LESSON_RECORDS,
         "filter": {
             "or": [
-                {"property": _LESSON_ID_PROPERTY, "rich_text": {"equals": value}}
-                for value in ids
+                {"property": _LESSON_ID_PROPERTY, "unique_id": {"equals": number}}
+                for number in numbers
             ]
         },
     }
@@ -174,7 +196,7 @@ def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:
         {"property": _SURFACE_PROPERTY, "checkbox": {"equals": True}},
         {
             "property": _STATUS_PROPERTY,
-            "status": {"does_not_equal": "Archived note"},
+            "select": {"does_not_equal": "Archived note"},
         },
     ]
     relevance_clauses = _relevance_filter_clauses(request)
@@ -335,7 +357,9 @@ def orchestrate_lesson_activation(
     if execute_read is None:
         return consume_lesson_preflight(request, (), retrieval_available=False)
 
-    if plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE and request.known_knowledge_refs:
+    if plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE and known_lesson_numbers(
+        request.known_knowledge_refs
+    ):
         query = build_known_reference_query(request.known_knowledge_refs)
     else:
         query = build_filtered_query(request)

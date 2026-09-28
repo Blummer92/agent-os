@@ -25,6 +25,7 @@ from .lesson_activation_bridge import (
     _extract_bounded_rows,
     build_filtered_query,
     build_known_reference_query,
+    known_lesson_numbers,
     normalize_lesson_row,
 )
 from .lesson_preflight import (
@@ -200,6 +201,14 @@ def orchestrate_lesson_retrieval(
             if result is not None:
                 return result
             return consume_lesson_preflight(current_request, ())
+
+        if step is RetrievalEscalation.KNOWN_REFERENCE and not known_lesson_numbers(
+            current_request.known_knowledge_refs
+        ):
+            # References such as ``#2638`` name no Lesson ID; there is nothing to
+            # look up, so advance the existing ledger without a provider read.
+            current_request = record_retrieval_attempt(current_request, step)
+            continue
 
         query = build_escalation_query(current_request, step)
         try:
