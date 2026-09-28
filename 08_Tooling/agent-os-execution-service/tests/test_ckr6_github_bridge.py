@@ -82,6 +82,33 @@ def test_issue_start_not_needed_classification_performs_zero_provider_reads(monk
     assert executed["side_effects_performed"] is False
 
 
+def test_failed_repair_rejects_unsupported_repair_context_at_ingress():
+    with pytest.raises(ValueError, match="repair_context must be failed-pr-repair or ci-diagnosis"):
+        bridge.parse_envelope(
+            payload(
+                operation="failed-repair",
+                attempt_id="attempt-1",
+                failed_hypothesis="bounded hypothesis",
+                result_summary="bounded result",
+                repair_context="failed-ci-diagnosis",
+            )
+        )
+
+
+@pytest.mark.parametrize("repair_context", ["failed-pr-repair", "ci-diagnosis"])
+def test_failed_repair_accepts_supported_repair_contexts(repair_context):
+    envelope = bridge.parse_envelope(
+        payload(
+            operation="failed-repair",
+            attempt_id="attempt-1",
+            failed_hypothesis="bounded hypothesis",
+            result_summary="bounded result",
+            repair_context=repair_context,
+        )
+    )
+    assert envelope.repair_context == repair_context
+
+
 def test_failed_repair_uses_existing_repair_context_to_force_material_retrieval():
     envelope = bridge.parse_envelope(
         payload(
