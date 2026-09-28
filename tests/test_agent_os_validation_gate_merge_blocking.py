@@ -75,14 +75,17 @@ def test_ready_event_queries_only_current_head_aggregate_check_evidence() -> Non
 def test_historical_1904_shape_reuses_completed_exact_head_success() -> None:
     step = _ready_evidence_step(_workflow())
     assert 'any(.status == "completed" and .conclusion == "success") then "passed"' in step
-    assert "active|passed)" in step
+    assert "passed)" in step
+    assert "active|passed)" not in step
     assert 'echo "run_required=false" >> "$GITHUB_OUTPUT"' in step
 
 
 def test_queued_or_in_progress_exact_head_aggregate_is_not_duplicated() -> None:
     step = _ready_evidence_step(_workflow())
     assert 'any(.status == "queued" or .status == "in_progress") then "active"' in step
-    assert "active|passed)" in step
+    assert "active|passed)" not in step
+    assert 'active)' not in step
+    assert 'echo "run_required=true" >> "$GITHUB_OUTPUT"' in step
 
 
 def test_missing_failed_or_cancelled_current_head_evidence_requires_aggregate() -> None:
