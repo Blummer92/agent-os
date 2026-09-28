@@ -183,3 +183,25 @@ def test_2668_missing_receipt_is_item_local_and_batch_continues():
     assert c.current_pull_request==12
     assert c.results[-1].disposition is BatchItemDisposition.SKIPPED_ITEM_LOCAL
     assert c.results[-1].reason_codes==("refresh-receipt-missing-or-ambiguous",)
+
+
+def test_2920_pending_ready_triggered_validation_is_item_local_and_never_reaches_merge():
+    main = "a" * 40
+    head = "b" * 40
+    c = start_batch_execution(plan(2915, 2916))
+    c = apply_current_state(c, current(2915, main, head, "current"))
+    assert c.action is BatchMergeAction.VALIDATE
+    c = apply_validation(
+        c,
+        ItemAdmissionEvidence(
+            pull_request_number=2915,
+            main_sha=main,
+            head_sha=head,
+            validation_status="pending",
+            authorization_status="missing",
+        ),
+    )
+    assert c.current_pull_request == 2916
+    assert c.results[-1].disposition is BatchItemDisposition.SKIPPED_ITEM_LOCAL
+    assert c.results[-1].reason_codes == ("validation-pending",)
+    assert c.action is BatchMergeAction.REACQUIRE
