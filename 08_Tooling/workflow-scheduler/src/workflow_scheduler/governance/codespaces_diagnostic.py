@@ -19,13 +19,12 @@ from typing import Callable
 
 from .dev_validation import REPOSITORY
 from .dev_validation_codespaces import (
-    APPROVED_CODESPACE_NAME,
     APPROVED_CODESPACE_PROFILE_ID,
-    APPROVED_CODESPACE_SURFACE_ID,
-    APPROVED_OWNER,
+    _CODESPACE_NAME_RE,
     _bounded_text,
-    _inspect_approved_codespace,
     _run,
+    resolve_current_codespace,
+    surface_id,
 )
 from .github_issue_comment_ingress import IssueCommentIngressResult
 
@@ -180,15 +179,16 @@ def _route(
     selected: bool,
     reason: str,
     state: str | None = None,
+    codespace_name: str | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "handled": handled,
         "selected": selected,
         "reason_codes": [reason],
-        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespace_name": codespace_name,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": surface_id(codespace_name),
         "repository": REPOSITORY,
         "state": state,
         "credential_permission": "codespaces:read",
@@ -226,6 +226,7 @@ def _request_from_ingress(
 def _failure(
     request: CodespacesDiagnosticRequest,
     reason: str,
+    codespace_name: str | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": "1.0",
@@ -235,9 +236,9 @@ def _failure(
         "issue_number": request.issue_number,
         "diagnostic_id": request.diagnostic_id,
         "request_id": request.request_id,
-        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespace_name": codespace_name,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": surface_id(codespace_name),
         "environment_health_evidence_id": None,
         "cleanup_complete": True,
         "workspace_side_effects_performed": False,
@@ -259,46 +260,14 @@ def select_codespaces_diagnostic(
         return _route(handled=False, selected=False, reason="not-codespaces-diagnostic"), None
 
     request = _request_from_ingress(ingress)
-    payload, reason = _inspect_approved_codespace(run)
-    if payload is None:
-        return _route(handled=True, selected=False, reason=reason), request
-
-    repository = payload.get("repository")
-    owner = payload.get("owner")
-    repo_name = repository.get("full_name") if type(repository) is dict else None
-    owner_login = owner.get("login") if type(owner) is dict else None
-    name = payload.get("name")
-    state = payload.get("state")
-    if (
-        name != APPROVED_CODESPACE_NAME
-        or repo_name != REPOSITORY
-        or owner_login != APPROVED_OWNER
-    ):
-        return (
-            _route(
-                handled=True,
-                selected=False,
-                reason="codespaces-identity-mismatch",
-                state=state if type(state) is str else None,
-            ),
-            request,
-        )
-    if state != "Available":
-        return (
-            _route(
-                handled=True,
-                selected=False,
-                reason="codespaces-not-available",
-                state=state if type(state) is str else None,
-            ),
-            request,
-        )
+    selection = resolve_current_codespace(run)
     return (
         _route(
             handled=True,
-            selected=True,
-            reason="codespaces-capable",
-            state="Available",
+            selected=selection.selected,
+            reason=selection.reason,
+            state=selection.state,
+            codespace_name=selection.codespace_name,
         ),
         request,
     )
@@ -323,8 +292,11 @@ def _extract_framed_payload(stdout: object) -> str | None:
 def run_codespaces_diagnostic(
     request: CodespacesDiagnosticRequest,
     *,
+    codespace_name: str,
     run: Run = _run,
 ) -> dict[str, object]:
+    if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
+        raise ValueError("a resolved current Codespace name is required")
     try:
         completed = run(
             (
@@ -332,7 +304,7 @@ def run_codespaces_diagnostic(
                 "codespace",
                 "ssh",
                 "-c",
-                APPROVED_CODESPACE_NAME,
+                codespace_name,
                 "--",
                 "python3",
                 "-c",
@@ -340,12 +312,12 @@ def run_codespaces_diagnostic(
                 str(request.issue_number),
                 request.diagnostic_id,
                 request.request_id,
-                APPROVED_CODESPACE_NAME,
+                codespace_name,
             ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        evidence = _failure(request, "codespaces-diagnostic-transport-timeout")
+        evidence = _failure(request, "codespaces-diagnostic-transport-timeout", codespace_name)
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
         evidence.update(
@@ -361,7 +333,7 @@ def run_codespaces_diagnostic(
         return evidence
 
     if completed.returncode != 0:
-        evidence = _failure(request, "codespaces-diagnostic-ssh-failed")
+        evidence = _failure(request, "codespaces-diagnostic-ssh-failed", codespace_name)
         stderr_tail, stderr_truncated = _bounded_text(completed.stderr)
         evidence.update(
             {
@@ -374,22 +346,22 @@ def run_codespaces_diagnostic(
 
     framed = _extract_framed_payload(completed.stdout)
     if framed is None:
-        return _failure(request, "codespaces-diagnostic-frame-invalid")
+        return _failure(request, "codespaces-diagnostic-frame-invalid", codespace_name)
     try:
         payload = json.loads(framed)
     except json.JSONDecodeError:
-        return _failure(request, "codespaces-diagnostic-evidence-not-json")
+        return _failure(request, "codespaces-diagnostic-evidence-not-json", codespace_name)
     if type(payload) is not dict:
-        return _failure(request, "codespaces-diagnostic-evidence-malformed")
+        return _failure(request, "codespaces-diagnostic-evidence-malformed", codespace_name)
 
     fixed = {
         "repository": request.repository,
         "issue_number": request.issue_number,
         "diagnostic_id": request.diagnostic_id,
         "request_id": request.request_id,
-        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespace_name": codespace_name,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": surface_id(codespace_name),
         "workspace_side_effects_performed": False,
         "external_side_effects_performed": False,
         "production_state_mutated": False,
@@ -399,11 +371,11 @@ def run_codespaces_diagnostic(
         "merge_authorized": False,
     }
     if any(payload.get(key) != value for key, value in fixed.items()):
-        return _failure(request, "codespaces-diagnostic-evidence-identity-mismatch")
+        return _failure(request, "codespaces-diagnostic-evidence-identity-mismatch", codespace_name)
     if payload.get("status") not in {"success", "needs-decision"}:
-        return _failure(request, "codespaces-diagnostic-status-invalid")
+        return _failure(request, "codespaces-diagnostic-status-invalid", codespace_name)
     if payload.get("cleanup_complete") is not True:
-        return _failure(request, "codespaces-diagnostic-cleanup-invalid")
+        return _failure(request, "codespaces-diagnostic-cleanup-invalid", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         payload.get("status") == "success"
@@ -412,7 +384,7 @@ def run_codespaces_diagnostic(
             or not environment_id.startswith("sha256:")
         )
     ):
-        return _failure(request, "codespaces-environment-health-evidence-invalid")
+        return _failure(request, "codespaces-environment-health-evidence-invalid", codespace_name)
     return payload
 
 
@@ -463,9 +435,13 @@ def main(argv: list[str] | None = None) -> int:
     if route["handled"] is True:
         assert request is not None
         evidence = (
-            run_codespaces_diagnostic(request)
+            run_codespaces_diagnostic(request, codespace_name=str(route["codespace_name"]))
             if route["selected"] is True
-            else _failure(request, str(route["reason_codes"][0]))
+            else _failure(
+                request,
+                str(route["reason_codes"][0]),
+                route["codespace_name"] if type(route["codespace_name"]) is str else None,
+            )
         )
         evidence = _attach_invocation_metadata(evidence, started_at=started_at)
         args.result_output.write_text(

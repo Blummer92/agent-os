@@ -10,10 +10,9 @@ from workflow_scheduler.governance.dev_validation import (
     build_dev_validation_request,
 )
 from workflow_scheduler.governance.dev_validation_codespaces import (
-    APPROVED_CODESPACE_NAME,
     APPROVED_CODESPACE_PROFILE_ID,
-    APPROVED_CODESPACE_SURFACE_ID,
     _RUN_TIMEOUT_SECONDS,
+    resolve_current_codespace,
     run_dev_validation_over_codespaces,
     select_codespaces_dev_validation,
 )
@@ -24,6 +23,10 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 ROOT = Path(__file__).resolve().parents[3]
 SHA = "a" * 40
 BRANCH = "agent/2931-codespaces-test"
+# #2965: the historical literal identity that was compiled into the provider.
+STALE_NAME = "literate-system-j4j4pr9g4q7h45q"
+CURRENT_NAME = "fluffy-current-agentos-7x9q"
+CURRENT_SURFACE_ID = f"codespace:{CURRENT_NAME}"
 
 
 def _ingress(validation_id: str = VALIDATION_ID) -> IssueCommentIngressResult:
@@ -44,15 +47,34 @@ def _ingress(validation_id: str = VALIDATION_ID) -> IssueCommentIngressResult:
     )
 
 
-def _codespace_payload(*, state: str = "Available") -> str:
+def _codespace(name: str = CURRENT_NAME, *, state: str = "Available", **overrides) -> dict:
+    item = {
+        "name": name,
+        "state": state,
+        "owner": {"login": "Blummer92"},
+        "repository": {"full_name": REPOSITORY},
+    }
+    item.update(overrides)
+    return item
+
+
+def _codespace_payload(*items: dict, total_count: int | None = None) -> str:
+    listed = list(items) if items else [_codespace()]
     return json.dumps(
         {
-            "name": APPROVED_CODESPACE_NAME,
-            "state": state,
-            "owner": {"login": "Blummer92"},
-            "repository": {"full_name": REPOSITORY},
+            "total_count": len(listed) if total_count is None else total_count,
+            "codespaces": listed,
         }
     )
+
+
+def _listing_run(stdout: str, calls: list | None = None):
+    def run(argv, *, timeout):
+        if calls is not None:
+            calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    return run
 
 
 def test_missing_read_only_credential_falls_back_without_probe(monkeypatch) -> None:
@@ -97,7 +119,7 @@ def test_stopped_codespace_falls_back_without_lifecycle_mutation(monkeypatch) ->
     def run(argv, *, timeout):
         calls.append(argv)
         return subprocess.CompletedProcess(
-            argv, 0, stdout=_codespace_payload(state="Shutdown"), stderr=""
+            argv, 0, stdout=_codespace_payload(_codespace(state="Shutdown")), stderr=""
         )
 
     route, _ = select_codespaces_dev_validation(_ingress(), run=run)
@@ -122,24 +144,114 @@ def test_exact_running_codespace_is_selected(monkeypatch) -> None:
     assert request is not None
     assert route["selected"] is True
     assert route["reason_codes"] == ["codespaces-capable"]
-    assert route["codespace_name"] == APPROVED_CODESPACE_NAME
+    assert route["codespace_name"] == CURRENT_NAME
+    assert route["execution_surface_id"] == CURRENT_SURFACE_ID
     assert route["credential_permission"] == "codespaces:read"
     assert route["lifecycle_mutation_authorized"] is False
 
 
 def test_codespace_identity_mismatch_falls_back(monkeypatch) -> None:
     monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stdout = _codespace_payload(
+        _codespace(repository={"full_name": "Blummer92/not-agent-os"}),
+        _codespace("someone-else", owner={"login": "not-the-owner"}),
+    )
 
-    def run(argv, *, timeout):
-        payload = json.loads(_codespace_payload())
-        payload["repository"]["full_name"] = "Blummer92/not-agent-os"
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=json.dumps(payload), stderr=""
-        )
-
-    route, _ = select_codespaces_dev_validation(_ingress(), run=run)
+    route, _ = select_codespaces_dev_validation(_ingress(), run=_listing_run(stdout))
     assert route["selected"] is False
-    assert route["reason_codes"] == ["codespaces-identity-mismatch"]
+    assert route["reason_codes"] == ["codespaces-no-qualified-surface"]
+    assert route["codespace_name"] is None
+
+
+def test_2965_stale_historical_codespace_does_not_mask_current_surface(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    calls: list = []
+    stdout = _codespace_payload(
+        _codespace(STALE_NAME, state="Shutdown"), _codespace(CURRENT_NAME)
+    )
+
+    route, _ = select_codespaces_dev_validation(_ingress(), run=_listing_run(stdout, calls))
+    assert route["selected"] is True
+    assert route["codespace_name"] == CURRENT_NAME
+    assert route["execution_surface_id"] == CURRENT_SURFACE_ID
+    assert calls == [
+        (
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            f"/repos/{REPOSITORY}/codespaces?per_page=100",
+        )
+    ]
+
+
+def test_2965_zero_qualified_surfaces_fall_back(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stdout = json.dumps({"total_count": 0, "codespaces": []})
+
+    selection = resolve_current_codespace(_listing_run(stdout))
+    assert selection.selected is False
+    assert selection.reason == "codespaces-no-qualified-surface"
+    assert selection.codespace_name is None
+
+
+def test_2965_multiple_available_surfaces_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stdout = _codespace_payload(_codespace(CURRENT_NAME), _codespace("another-agentos-surface"))
+
+    selection = resolve_current_codespace(_listing_run(stdout))
+    assert selection.selected is False
+    assert selection.reason == "codespaces-selection-ambiguous"
+    assert selection.codespace_name is None
+
+
+def test_2965_current_qualified_surface_shutdown_preserves_2935_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stdout = _codespace_payload(_codespace(CURRENT_NAME, state="Shutdown"))
+
+    selection = resolve_current_codespace(_listing_run(stdout))
+    assert selection.selected is False
+    assert selection.reason == "codespaces-not-available"
+    assert selection.codespace_name == CURRENT_NAME
+    assert selection.state == "Shutdown"
+
+
+def test_2965_truncated_or_malformed_listing_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    for stdout in (
+        _codespace_payload(_codespace(), total_count=101),
+        json.dumps({"codespaces": [_codespace()]}),
+        json.dumps({"total_count": 1, "codespaces": ["not-an-object"]}),
+        json.dumps(_codespace()),
+        "not json",
+    ):
+        selection = resolve_current_codespace(_listing_run(stdout))
+        assert selection.selected is False
+        assert selection.reason == "codespaces-read-evidence-invalid"
+
+
+def test_2965_unsafe_codespace_name_is_never_selected(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    stdout = _codespace_payload(_codespace("bad name; rm -rf /"))
+
+    selection = resolve_current_codespace(_listing_run(stdout))
+    assert selection.selected is False
+    assert selection.reason == "codespaces-no-qualified-surface"
+
+
+def test_2965_execution_requires_a_resolved_codespace_name() -> None:
+    import pytest
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    for name in (None, "", "bad name"):
+        with pytest.raises(ValueError):
+            run_dev_validation_over_codespaces(request, codespace_name=name)
 
 
 def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
@@ -174,7 +286,7 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         "publication_invoked": False,
         "merge_authorized": False,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": CURRENT_SURFACE_ID,
         "environment_health_evidence_id": "sha256:" + ("b" * 64),
     }
     stdout = (
@@ -189,10 +301,10 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
-    evidence = run_dev_validation_over_codespaces(request, run=run)
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
     assert evidence["status"] == "success"
     assert evidence["cleanup_complete"] is True
-    assert evidence["execution_surface_id"] == APPROVED_CODESPACE_SURFACE_ID
+    assert evidence["execution_surface_id"] == CURRENT_SURFACE_ID
     assert len(calls) == 1
     argv = calls[0]
     assert argv[:5] == (
@@ -200,8 +312,9 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         "codespace",
         "ssh",
         "-c",
-        APPROVED_CODESPACE_NAME,
+        CURRENT_NAME,
     )
+    assert argv[-1] == CURRENT_NAME
     assert argv[5:8] == ("--", "python3", "-c")
     assert "start" not in argv
     assert "stop" not in argv
@@ -223,7 +336,7 @@ def test_codespaces_ssh_failure_is_fail_closed_and_bounded() -> None:
             argv, 1, stdout="", stderr="x" * 5000
         )
 
-    evidence = run_dev_validation_over_codespaces(request, run=run)
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
     assert evidence["status"] == "needs-decision"
     assert evidence["reason_codes"] == [
         "dev-validation-codespaces-ssh-failed"
@@ -251,7 +364,7 @@ def test_codespaces_transport_timeout_returns_bounded_evidence() -> None:
             stderr="e" * 5000,
         )
 
-    evidence = run_dev_validation_over_codespaces(request, run=run)
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
     assert evidence["status"] == "needs-decision"
     assert evidence["reason_codes"] == [
         "dev-validation-codespaces-transport-timeout"
@@ -293,7 +406,7 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
         "publication_invoked": False,
         "merge_authorized": False,
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
-        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "execution_surface_id": CURRENT_SURFACE_ID,
         "environment_health_evidence_id": "sha256:" + ("b" * 64),
     }
     stdout = (
@@ -305,7 +418,7 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
     def run(argv, *, timeout):
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
-    evidence = run_dev_validation_over_codespaces(request, run=run)
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
     assert evidence["status"] == "needs-decision"
     assert evidence["reason_codes"] == [
         "dev-validation-codespaces-evidence-identity-mismatch"
@@ -382,12 +495,17 @@ def test_2944_prestart_timeout_projects_fallback_without_stale_result(
     )
     monkeypatch.setattr(
         provider, "select_codespaces_dev_validation",
-        lambda ingress: (provider._route(True, "codespaces-capable", state="Available"), request),
+        lambda ingress: (
+            provider._route(
+                True, "codespaces-capable", state="Available", codespace_name=CURRENT_NAME
+            ),
+            request,
+        ),
     )
     monkeypatch.setattr(
         provider, "run_dev_validation_over_codespaces",
-        lambda unused: {
-            **provider._failure(request, "dev-validation-codespaces-ssh-failed"),
+        lambda unused, *, codespace_name: {
+            **provider._failure(request, "dev-validation-codespaces-ssh-failed", codespace_name),
             "ssh_exit_code": 1,
             "ssh_stderr_tail": (
                 "error connecting to codespace: timed out while waiting "
