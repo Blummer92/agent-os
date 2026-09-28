@@ -87,3 +87,24 @@ def test_unavailable_executor_uses_existing_ckr6_unavailability_contract():
     result = orchestrate_lesson_retrieval(request(), execute_read=None)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
+
+
+def test_sanitized_provider_failure_reason_survives_unavailable_projection():
+    def read(_query):
+        raise RuntimeError("notion-http-400")
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-retrieval-unavailable-specialized-knowledge-required" in result.selection_reason_codes
+    assert "notion-http-400" in result.selection_reason_codes
+
+
+def test_arbitrary_runtime_error_text_is_not_exposed_in_ckr6_evidence():
+    def read(_query):
+        raise RuntimeError("secret-token=must-not-leak")
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+
+    assert "lesson-read-runtime-error" in result.selection_reason_codes
+    assert all("secret-token" not in reason for reason in result.selection_reason_codes)

@@ -16,6 +16,7 @@ remains the compatibility wrapper used by existing callers.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping
@@ -27,9 +28,45 @@ LESSONS_LEARNED_DATA_SOURCE_ENV = "AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
+_HTTP_FAILURE_RE = re.compile(r"^Notion API returned HTTP ([1-5][0-9]{2}):")
+
 
 class LessonReadUnavailableError(RuntimeError):
-    """The existing read-only Notion surface could not return lesson rows."""
+    """The existing read-only Notion surface could not return lesson rows.
+
+    The exception message is always one finite sanitized reason code. Raw
+    provider text is deliberately not propagated across the CKR6 boundary.
+    """
+
+
+def _sanitized_notion_failure_reason(result: Mapping[str, Any]) -> str:
+    """Project one adapter failure into a bounded non-secret reason code."""
+
+    message = result.get("message")
+    if isinstance(message, str):
+        match = _HTTP_FAILURE_RE.match(message)
+        if match:
+            return f"notion-http-{match.group(1)}"
+        if message.startswith("Notion API connection error:"):
+            return "notion-connection-error"
+        if message.startswith("Notion API request timed out:"):
+            return "notion-timeout"
+        if (
+            message.startswith("Notion API returned invalid JSON:")
+            or message.startswith("Notion API returned a non-object JSON payload")
+            or message.startswith("Notion API returned a malformed response")
+            or message.startswith("Notion API response is missing required")
+            or message.startswith("Notion API response 'results' contains a malformed")
+        ):
+            return "notion-malformed-response"
+        if (
+            message.startswith("Missing required payload field:")
+            or message.startswith("Unsupported action:")
+            or "must be between" in message
+            or "must be an integer" in message
+        ):
+            return "notion-adapter-contract-error"
+    return "notion-read-failure"
 
 
 class LessonReadRouteStatus(str, Enum):
@@ -128,10 +165,10 @@ def resolve_lesson_read_route(
         )
         result = notion.execute(task)
         if result.get("status") != "success":
-            raise LessonReadUnavailableError(str(result.get("message") or "Notion lesson read unavailable"))
+            raise LessonReadUnavailableError(_sanitized_notion_failure_reason(result))
         output = result.get("output")
         if not isinstance(output, Mapping):
-            raise LessonReadUnavailableError("Notion lesson read returned malformed output")
+            raise LessonReadUnavailableError("notion-malformed-output")
         return output
 
     return LessonReadRouteResolution(

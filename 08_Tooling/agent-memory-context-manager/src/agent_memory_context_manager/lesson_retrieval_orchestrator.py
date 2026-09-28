@@ -11,6 +11,7 @@ unbounded raw Notion workspace scan.
 from __future__ import annotations
 
 from dataclasses import replace
+import re
 from typing import Any, Callable, Mapping
 
 from .coding_knowledge_selection import (
@@ -44,6 +45,34 @@ _EXECUTABLE_STEPS = (
     RetrievalEscalation.WORKSPACE_SEARCH,
 )
 MAX_ESCALATION_STEPS = len(_EXECUTABLE_STEPS)
+_SANITIZED_PROVIDER_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
+
+
+def _sanitized_read_failure_reason(exc: BaseException) -> str:
+    """Keep only finite provider reason codes; never expose raw exception text."""
+
+    if isinstance(exc, TimeoutError):
+        return "lesson-read-timeout"
+    if isinstance(exc, ConnectionError):
+        return "lesson-read-connection-error"
+    message = str(exc)
+    if _SANITIZED_PROVIDER_REASON_RE.fullmatch(message):
+        return message
+    return "lesson-read-runtime-error"
+
+
+def _unavailable_result(
+    request: CodingKnowledgeRequest,
+    exc: BaseException,
+) -> LessonPreflightResult:
+    result = consume_lesson_preflight(request, (), retrieval_available=False)
+    reason = _sanitized_read_failure_reason(exc)
+    if reason in result.selection_reason_codes:
+        return result
+    return replace(
+        result,
+        selection_reason_codes=result.selection_reason_codes + (reason,),
+    )
 
 
 def record_retrieval_attempt(
@@ -175,12 +204,8 @@ def orchestrate_lesson_retrieval(
         query = build_escalation_query(current_request, step)
         try:
             raw = execute_read(query)
-        except (ConnectionError, TimeoutError, RuntimeError):
-            return consume_lesson_preflight(
-                current_request,
-                (),
-                retrieval_available=False,
-            )
+        except (ConnectionError, TimeoutError, RuntimeError) as exc:
+            return _unavailable_result(current_request, exc)
 
         current_request = record_retrieval_attempt(current_request, step)
         rows = _extract_bounded_rows(raw)

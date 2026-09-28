@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from agent_os_execution_service.lesson_reader_composition import (
     LESSONS_LEARNED_DATA_SOURCE_ENV,
     LessonReadRouteStatus,
+    LessonReadUnavailableError,
     build_lesson_read_executor,
     resolve_lesson_read_route,
 )
@@ -96,3 +99,29 @@ def test_missing_local_binding_resolves_governed_github_route_before_fallback(mo
     assert route.execute_read is None
     assert route.canonical_source_unavailable is False
     assert route.side_effects_performed is False
+
+
+def test_provider_http_failure_is_projected_as_finite_sanitized_reason():
+    adapter = SpyNotionAdapter(
+        result={
+            "status": "failure",
+            "message": "Notion API returned HTTP 400: Bad Request secret=must-not-leak",
+        }
+    )
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError) as exc_info:
+        reader({"page_size": 5, "filter": {"and": []}})
+
+    assert str(exc_info.value) == "notion-http-400"
+    assert "secret" not in str(exc_info.value)
+
+
+def test_malformed_success_output_uses_bounded_failure_reason():
+    adapter = SpyNotionAdapter(result={"status": "success", "message": "ok", "output": []})
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError, match="^notion-malformed-output$"):
+        reader({"page_size": 5, "filter": {"and": []}})
