@@ -82,3 +82,70 @@ def test_required_issue_start_lessons_fail_closed_when_reader_unavailable():
     assert result["lesson_retrieval_status"] == "insufficient"
     assert result["substantial_hypothesis_admissible"] is False
     assert result["handoff_projection"]["stop_conditions"]
+
+
+
+def test_2780_ordinary_paths_do_not_make_issue_start_lessons_material():
+    calls = []
+    result = activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os",
+        issue_number=2780,
+        task_reference="issue:#2780",
+        target_path_hints=("src/example.py",),
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+    )
+    assert calls == []
+    assert result["lesson_retrieval_status"] == "not-needed"
+
+
+def test_2780_generic_capability_metadata_does_not_make_lessons_material():
+    calls = []
+    result = activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os",
+        issue_number=2780,
+        task_reference="issue:#2780",
+        capability_keywords=("validation",),
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+    )
+    assert calls == []
+    assert result["lesson_retrieval_status"] == "not-needed"
+
+
+def test_2780_known_lesson_reference_remains_material_without_explicit_override():
+    calls = []
+    result = activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os",
+        issue_number=2780,
+        task_reference="issue:#2780",
+        known_knowledge_refs=("LL-63",),
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+    )
+    assert calls
+    assert result["lesson_retrieval_status"] != "not-needed"
+
+
+def test_2780_library_requirement_remains_material_without_explicit_override():
+    calls = []
+    result = activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os",
+        issue_number=2780,
+        task_reference="issue:#2780",
+        library_hints=("specialized-library",),
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+    )
+    assert calls
+    assert result["lesson_retrieval_status"] != "not-needed"
+
+
+def test_2780_explicit_specialized_decision_remains_authoritative():
+    calls = []
+    result = activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os",
+        issue_number=2780,
+        task_reference="issue:#2780 architecture-sensitive",
+        capability_keywords=("architecture",),
+        specialized_knowledge_required=True,
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+    )
+    assert calls
+    assert result["lesson_retrieval_status"] != "not-needed"
