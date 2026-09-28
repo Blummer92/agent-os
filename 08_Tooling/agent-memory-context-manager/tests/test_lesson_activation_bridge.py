@@ -169,7 +169,7 @@ def test_known_reference_is_attempted_before_filtered_query():
     assert len(calls) == 1
     assert calls[0] == build_known_reference_query(("LL-42",))
     assert "filter_properties" not in calls[0]
-    assert {"property": "Lesson ID", "rich_text": {"equals": "LL-42"}} in calls[0]["filter"]["or"]
+    assert {"property": "Lesson ID", "unique_id": {"equals": 42}} in calls[0]["filter"]["or"]
 
 
 def test_filtered_query_uses_request_relevance_signals():
