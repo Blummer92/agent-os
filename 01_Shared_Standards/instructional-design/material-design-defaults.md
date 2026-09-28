@@ -103,6 +103,34 @@ challenge task; student work/response space; and quick-score area. Rendered
 judgments such as spacing, writing-room adequacy, and scanability require visual
 or manual review when they cannot be proven structurally.
 
+## Worksheet Opening And Closing
+
+Ordinary student worksheets should include a concise, lesson-specific `Warm-Up`
+near the beginning and a concise `Exit Ticket` near the end by default.
+
+Use current teacher/lesson-spec content when it explicitly supplies either
+component; do not add a generated duplicate. When the lesson deliberately
+designates an equivalent lesson-specific self-critique or reflection as its
+closing evidence, reuse that component as the Exit Ticket instead of adding a
+second closing prompt.
+
+When a worksheet needs a safe default because current governed evidence does not
+supply one, derive it only from already-authored lesson content such as the
+learning objective, worksheet task, or existing response prompt. Do not invent a
+new learning target, assessment criterion, or unrelated generic activity.
+
+Differentiation may change scaffolding, independence, response support, transfer,
+or depth, but it must not silently remove the opening or closing component from
+an otherwise standard worksheet. For multi-day packets, apply the rule to each
+day worksheet independently.
+
+Keep these components below the compact #1567 title/identification band and
+protect useful core-task and response space. If adding the components would make
+the worksheet cramped, prefer another page or a more compact redundant element
+rather than shrinking required work space below usable levels. Rendered
+space/scanability judgments still require visual or manual review when structural
+evidence cannot prove them.
+
 ## Visual Baseline And Components
 
 See `material-design-defaults/visual-baseline-and-components.md` for the token
@@ -140,10 +168,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Changelog
 
+- 0.4.0 makes concise lesson-specific Warm-Up and Exit Ticket sections standard worksheet defaults, preserves supplied/equivalent closing evidence without duplication, applies the rule per differentiated/day worksheet, and keeps both below #1567's compact header without sacrificing core response space (#1568).
 - 0.3.0 makes a compact title + student-identification top band the default for worksheets, keeps lesson sections below that band, and preserves an explicit layout opt-out (#1567).
 - 0.2.0 adds reusable worksheet identification, neutral Challenge A/B/C
   differentiation, unit/day notation, quick-score guidance, and rendered-review

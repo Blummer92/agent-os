@@ -143,6 +143,11 @@ def main(argv: list[str] | None = None) -> int:
             for item in state.get("owner_states", [])
             if isinstance(item.get("decision_key"), str)
         }
+        # #1568 standard worksheet sections are guaranteed by the shared generation
+        # context even when current curriculum evidence does not explicitly author
+        # them. Existing governed values still win and are never duplicated.
+        decision_tokens.setdefault("warm-up", "curriculum_warm_up")
+        decision_tokens.setdefault("exit-ticket", "curriculum_exit_ticket")
         docs_requests = tuple(build_docs_replace_requests(content))
         worksheet_qa = validate_required_worksheet_sections(
             required_sections=requirement.get("instructional", {}).get("required_sections", ()),

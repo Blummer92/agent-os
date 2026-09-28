@@ -195,6 +195,34 @@ def _docs_request(token: str) -> dict:
     }
 
 
+def test_standard_worksheet_default_tokens_satisfy_required_plan_coverage() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("warm-up", "exit-ticket"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(
+            _docs_request("curriculum_warm_up"),
+            _docs_request("curriculum_exit_ticket"),
+        ),
+    )
+    assert result.status == PASS
+
+
+def test_one_compliant_section_cannot_mask_missing_other_standard_section() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("warm-up", "exit-ticket"),
+        curriculum_decision_tokens={
+            "warm-up": "curriculum_warm_up",
+            "exit-ticket": "curriculum_exit_ticket",
+        },
+        docs_requests=(_docs_request("curriculum_warm_up"),),
+    )
+    assert result.status == FAIL
+    assert "worksheet-required-section-missing-from-plan" in _codes(result)
+
+
 def test_required_worksheet_sections_pass_with_exact_plan_coverage() -> None:
     result = validate_required_worksheet_sections(
         required_sections=("warm-up", "exit-ticket"),
