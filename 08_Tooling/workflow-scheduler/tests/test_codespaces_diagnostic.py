@@ -536,6 +536,51 @@ def test_3094_adobe_result_identity_url_cleanup_and_secret_material_fail_closed(
     ]
 
 
+
+def test_3094_shared_resolver_fail_closed_cases_apply_to_adobe(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    cases = (
+        (json.dumps({"total_count": 0, "codespaces": []}), "codespaces-no-qualified-surface"),
+        (json.dumps({
+            "total_count": 2,
+            "codespaces": [
+                json.loads(_codespace_payload())["codespaces"][0],
+                {
+                    "name": "another-agentos-surface",
+                    "state": "Available",
+                    "owner": {"login": "Blummer92"},
+                    "repository": {"full_name": REPOSITORY},
+                },
+            ],
+        }), "codespaces-selection-ambiguous"),
+        (_codespace_payload(state="Shutdown"), "codespaces-not-available"),
+        ("not-json", "codespaces-read-evidence-invalid"),
+    )
+    for stdout, reason in cases:
+        route, request = select_codespaces_diagnostic(
+            _adobe_ingress(),
+            run=lambda argv, timeout, stdout=stdout: subprocess.CompletedProcess(
+                argv, 0, stdout=stdout, stderr=""
+            ),
+        )
+        assert request is not None
+        assert route["handled"] is True
+        assert route["selected"] is False
+        assert route["reason_codes"] == [reason]
+
+
+def test_3094_environment_health_mismatch_remains_fail_closed() -> None:
+    assert "codespaces-environment-health-invalid" in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert 'health_payload.get("profile_id")!=PROFILE_ID' in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert 'health_payload.get("execution_surface_id")!=f"codespace:{codespace_name}"' in _ADOBE_REMOTE_RUNNER_SOURCE
+
+
+def test_3094_existing_canva_remote_runner_is_behaviorally_unchanged() -> None:
+    assert 'DIAGNOSTIC_ID="ppux-canva-cdp-readonly"' in _REMOTE_RUNNER_SOURCE
+    assert ADOBE_EXPRESS_URL not in _REMOTE_RUNNER_SOURCE
+    assert "loopback" in _REMOTE_RUNNER_SOURCE
+    assert "cdp" in _REMOTE_RUNNER_SOURCE
+
 def test_3094_adobe_evidence_contract_is_bounded_and_fixed() -> None:
     assert ADOBE_EXPRESS_URL == "https://new.express.adobe.com/"
     assert "ADOBE_URL=\"https://new.express.adobe.com/\"" in _ADOBE_REMOTE_RUNNER_SOURCE
