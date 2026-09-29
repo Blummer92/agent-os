@@ -168,6 +168,18 @@ Keep benchmark controls outside the simulated teacher utterance. The harness may
 
 Give both comparison arms the same teacher utterance and equivalent harness controls unless the prompt itself is the intended independent variable. Details the teacher actually supplied remain part of the utterance and must not be removed merely to make it shorter.
 
+## Comparative Artifact Test Context Isolation
+
+When a teacher asks to compare classroom-artifact generation approaches as independent runs, keep the experimental execution context explicit and separate from the classroom task itself.
+
+For an independent A/B comparison:
+
+- state the clean-context or fresh-chat condition explicitly so prior worksheet discussion, candidate choices, or earlier outputs cannot leak into the comparison;
+- give both arms the same fixed source packet and equivalent model/configuration, blinding, and evaluation controls unless one of those controls is the intended independent variable; and
+- do not add fresh-chat boilerplate to ordinary single-artifact generation when no independent comparison is being run.
+
+A fresh chat is one control, not proof of a valid experiment. Source evidence and the intended independent variable must still be held constant.
+
 ## Override Conditions
 
 Override these defaults when the user asks for compact, print-efficient,
@@ -176,10 +188,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.5.0
+0.6.0
 
 ## Changelog
 
+- 0.6.0 requires explicit clean-context isolation for independent comparative artifact tests while keeping fixed-source/config/evaluation controls equivalent across arms (#3090).
 - 0.5.0 separates realistic teacher utterances from benchmark harness controls so comparative artifact tests do not hide teacher-facing UX burden through prompt-engineering leakage (#3091).
 - 0.4.0 makes concise lesson-specific Warm-Up and Exit Ticket sections standard worksheet defaults, preserves supplied/equivalent closing evidence without duplication, applies the rule per differentiated/day worksheet, and keeps both below #1567's compact header without sacrificing core response space (#1568).
 - 0.3.0 makes a compact title + student-identification top band the default for worksheets, keeps lesson sections below that band, and preserves an explicit layout opt-out (#1567).
