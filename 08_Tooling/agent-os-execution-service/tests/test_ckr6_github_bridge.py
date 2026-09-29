@@ -191,3 +191,18 @@ def test_workflow_keeps_secret_post_classification_and_avoids_gce():
         "NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}"
     )
     assert "AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}" in text
+
+
+def test_2984_bridge_contract_distinguishes_transport_from_retrieval_activation() -> None:
+    root = Path(__file__).resolve().parents[3]
+    contract = (root / "08_Tooling/agent-os-execution-service/CKR6_GITHUB_BRIDGE.md").read_text(encoding="utf-8")
+    for phrase in (
+        "merged/callable transport is not evidence",
+        "retrieval-required CKR6 path is usable",
+        "AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID",
+        "finite retrieval-required canary",
+        "activation incomplete / binding pending",
+        "do not guess a source identity",
+        "#2854 as the binding owner",
+    ):
+        assert phrase in contract
