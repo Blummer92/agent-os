@@ -216,3 +216,65 @@ def test_runtime_module_uses_public_contract_boundaries_without_policy_copies() 
         "cohesion_profile",
     ):
         assert duplicated_policy_field not in source
+
+
+def test_photography_chair_conflicting_asset_ids_fail_closed_before_reuse() -> None:
+    chair_drive_id = "1JIVpByUkuUDVO1BtGmIYbQS_QDTqt2y_"
+    candidates = []
+    for asset_id in (
+        "DMIMG-1JIVpByUkuUDVO1BtGmIYbQS_QDTqt2y_",
+        "VA-20260926-0044",
+    ):
+        candidate = copy.deepcopy(_fixture("valid_visual_asset_compatibility_v2.json"))
+        candidate["compatibility_evidence"]["asset_reference"]["asset_id"] = asset_id
+        candidate["compatibility_evidence"]["library_reference"] = {
+            "page_id": "photography-chair-library-record",
+            "drive_file_id": chair_drive_id,
+        }
+        candidates.append(candidate)
+
+    current_asset_evidence = [
+        {
+            "asset_id": "DMIMG-1JIVpByUkuUDVO1BtGmIYbQS_QDTqt2y_",
+            "library_reference": {
+                "page_id": "photography-chair-library-record",
+                "drive_file_id": chair_drive_id,
+            },
+        },
+        {
+            "asset_id": "VA-20260926-0044",
+            "library_reference": {
+                "page_id": "photography-chair-library-record",
+                "drive_file_id": chair_drive_id,
+            },
+        },
+    ]
+
+    scoped = visual_reuse._scope_candidates_to_current_assets(
+        candidates,
+        current_asset_evidence,
+    )
+    assert scoped == []
+
+
+def test_photography_chair_exact_current_identity_survives_reuse_scoping() -> None:
+    chair_drive_id = "1JIVpByUkuUDVO1BtGmIYbQS_QDTqt2y_"
+    asset_id = "VA-20260926-0044"
+    candidate = copy.deepcopy(_fixture("valid_visual_asset_compatibility_v2.json"))
+    candidate["compatibility_evidence"]["asset_reference"]["asset_id"] = asset_id
+    candidate["compatibility_evidence"]["library_reference"] = {
+        "page_id": "photography-chair-library-record",
+        "drive_file_id": chair_drive_id,
+    }
+
+    scoped = visual_reuse._scope_candidates_to_current_assets(
+        [candidate],
+        [{
+            "asset_id": asset_id,
+            "library_reference": {
+                "page_id": "photography-chair-library-record",
+                "drive_file_id": chair_drive_id,
+            },
+        }],
+    )
+    assert scoped == [candidate]
