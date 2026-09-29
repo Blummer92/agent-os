@@ -74,7 +74,11 @@ def refresh_pull_request_branch(provider: PullRequestBranchRefreshProvider, requ
     final=provider.read_branch(request.repository,request.pr_number)
     if final.current_main_sha != request.current_main_sha: return _result(request,"stale",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("main.moved-before-final-proof",),side_effects=True,mutation_attempted=True)
     if final.head_sha != mutation.new_head_sha or final.branch_state != "current" or final.mergeability == "conflicted": return _result(request,"blocked",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("branch.current-not-proven",),side_effects=True,mutation_attempted=True)
-    return _result(request,"converged" if validation.status=="green" else "validation-failing",before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=("refresh.rebased","head-evidence.invalidated","branch.current-proven"),side_effects=True,mutation_attempted=True)
+    terminal_status = "converged" if validation.status == "green" else "validation-failing" if validation.status == "failing" else "manual-review"
+    reasons = ("refresh.rebased","head-evidence.invalidated","branch.current-proven")
+    if terminal_status == "manual-review":
+        reasons += (f"validation.{validation.status}",)
+    return _result(request,terminal_status,before.head_sha,new_head=mutation.new_head_sha,validation=validation,reasons=reasons,side_effects=True,mutation_attempted=True)
 
 def _validate_request(request):
     for value,name in ((request.expected_base_sha,"expected_base_sha"),(request.expected_head_sha,"expected_head_sha"),(request.current_main_sha,"current_main_sha")):
