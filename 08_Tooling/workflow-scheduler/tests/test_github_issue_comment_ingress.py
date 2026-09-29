@@ -18,6 +18,8 @@ DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-covera
 DIAGNOSTIC_ID = "ppux-canva-cdp-readonly"
 DIAGNOSTIC_REQUEST_ID = "canva-cdp-1"
 DIAGNOSTIC_TRIGGER = f"/agent-os diagnose {DIAGNOSTIC_ID} {DIAGNOSTIC_REQUEST_ID}"
+ADOBE_DIAGNOSTIC_ID = "ppux-adobe-minimum-probe"
+ADOBE_DIAGNOSTIC_TRIGGER = f"/agent-os diagnose {ADOBE_DIAGNOSTIC_ID} adobe-minimum-1"
 
 
 def event(body: str, *, action: str = "created", actor: str = ACTOR) -> dict[str, object]:
@@ -283,3 +285,30 @@ def test_duplicate_codespaces_diagnostic_comments_share_identity_but_request_cha
     changed = admit(event(f"/agent-os diagnose {DIAGNOSTIC_ID} canva-cdp-2"))
     assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
     assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
+
+
+
+def test_3094_exact_adobe_diagnostic_identity_is_bounded_and_non_authorizing() -> None:
+    result = admit(event(ADOBE_DIAGNOSTIC_TRIGGER))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-codespaces-diagnostic-envelope"
+    assert result.diagnostic_id_or_none == ADOBE_DIAGNOSTIC_ID
+    assert result.diagnostic_request_id_or_none == "adobe-minimum-1"
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_3094_adobe_diagnostic_cannot_accept_shell_url_argv_or_browser_flags() -> None:
+    for suffix in (
+        " https://example.invalid",
+        " --url https://example.invalid",
+        " --disable-web-security",
+        " --user-data-dir=/tmp/profile",
+        " --remote-debugging-port=9222",
+        " ; rm -rf /",
+        " --eval alert(1)",
+    ):
+        result = admit(event(ADOBE_DIAGNOSTIC_TRIGGER + suffix))
+        assert (result.status, result.reason) == ("ignored", "malformed-trigger")
+        assert result.diagnostic_id_or_none is None
