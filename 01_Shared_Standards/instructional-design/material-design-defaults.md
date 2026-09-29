@@ -160,6 +160,20 @@ duplication, weak design elements, and clutter.
 Use direct edits when the source is available. Otherwise give concise,
 high-value audit feedback.
 
+## Comparative Artifact Test Controls
+
+When a teacher asks to compare two classroom-artifact generation approaches, keep the simulated teacher request separate from the test harness.
+
+For an independent A/B comparison:
+
+- preserve the teacher utterance at the level of detail the teacher actually supplied; do not silently expand it into a system-style specification;
+- place experiment controls outside that utterance, including clean-context / fresh-chat isolation, the fixed source packet, model or configuration controls, blinding, and evaluation criteria;
+- give both arms the same teacher utterance and equivalent controls unless the prompt itself is the intended independent variable;
+- state the clean-context condition explicitly when independence is required so prior worksheet discussion, candidate choices, or earlier outputs cannot leak into the comparison; and
+- do not add fresh-chat boilerplate to ordinary single-artifact generation when no independent comparison is being run.
+
+A fresh chat is one control, not proof of a valid experiment. Source evidence and the intended independent variable must still be held constant.
+
 ## Override Conditions
 
 Override these defaults when the user asks for compact, print-efficient,
