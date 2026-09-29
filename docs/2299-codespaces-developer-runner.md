@@ -142,6 +142,23 @@ not authenticate to Adobe, inspect a stored browser profile, expose CDP, modify 
 Adobe project, or mutate Codespace lifecycle state. Ordinary CI exercises only
 synthetic/offline fixtures and never contacts Adobe.
 
+The diagnostic does not install browser tooling. It first proves that a normal
+Chrome/Chromium executable, Node, and the Playwright module are already available
+on the selected surface; a missing prerequisite is
+`CODESPACES_EXECUTION_PATH_BLOCKED`, not an Adobe compatibility result. The
+base `agent-os-codespaces-v1` profile currently guarantees Python/Git/GitHub CLI
+developer tooling but does not itself declare Node, Playwright, or Chrome/Chromium,
+so live-probe readiness requires current evidence for those prerequisites.
+
+A minimum-probe pass additionally requires a successful HTTP response below 400,
+an allowlisted Adobe Express/account/auth surface, a non-empty bounded title, no
+navigation error, and no bounded error/challenge/consent title classification.
+An Adobe-origin error or generic page is therefore not sufficient for PASS.
+Graphics-blocked classification requires an actually reachable response plus
+explicit WebGL=false and WebGL2=false evidence. Browser cleanup is observed from
+the fixed runner; an unconfirmed close or outer timeout is execution-path failure
+rather than `cleanup_complete=true`.
+
 Its disposition vocabulary is limited to
 `CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM`, `CODESPACES_BLOCKED_GRAPHICS`,
 `CODESPACES_ADOBE_MINIMUM_PROBE_PASS`, `CODESPACES_NETWORK_ONLY`,
