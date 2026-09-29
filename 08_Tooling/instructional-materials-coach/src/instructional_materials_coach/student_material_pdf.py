@@ -168,7 +168,10 @@ def _build_story(source: StudentMaterialPdfSource, styles) -> list[object]:
         story = [Paragraph(_esc(source.title), styles["Title"]), Spacer(1, 10)]
 
     for paragraph in body_paragraphs:
-        story.extend([Paragraph(_esc(paragraph), styles["BodyText"]), Spacer(1, 7)])
+        flowable = Paragraph(_esc(paragraph), styles["BodyText"])
+        # Paragraph owns its wrapped height; spacing is a separate following flowable.
+        # Never position the next question from a single-line height assumption.
+        story.extend([flowable, Spacer(1, 7)])
     return story
 
 
