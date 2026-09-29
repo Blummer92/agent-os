@@ -27,7 +27,6 @@ _RULESET_ADMIN_RE = re.compile(r"/agent-os apply-required-validation-gate (?P<pr
 RULESET_ADMIN_ISSUE = 2234
 _VALIDATION_IDS = (
     "remote-validation-suite",
-    "workflow-scheduler",
     "instructional-materials-current-curriculum-suite",
     "semantic-ownership-advisory",
     "ppux-picture-perfect-ts-vitest",
