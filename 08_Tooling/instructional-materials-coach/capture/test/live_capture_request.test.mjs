@@ -113,7 +113,7 @@ test('Canva request admits only canva-default and delegates unchanged to existin
     browserSessionCapability: capability('AUTH_READY', CANVA_BROWSER_SESSION_REF),
     invokeCapture: async (input) => { received = input; return successTransport(); },
   });
-  assert.deepEqual(BROWSER_SESSION_REFS, ['adobe-express-default', 'canva-default']);
+  assert.deepEqual(BROWSER_SESSION_REFS, ['adobe-express-default', 'canva-default', 'schoology-default']);
   assert.equal(calls, 1);
   assert.equal(received.operation, 'captureFlow');
   assert.equal(received.browser_session_ref, 'canva-default');
