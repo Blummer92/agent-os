@@ -37,7 +37,7 @@ GitHub implementation fields apply only when repository implementation or review
 | Issue implementation | bounded state-based progress when canonical stages exist, then completed, current, remaining, blockers rendered as `Completed`, `Current`, `Remaining`, `Blockers`, then a material execution route as `Best execution`, then one supported next action |
 | PR review or terminal handoff | review state and exact-head evidence, then the same compact block when bounded stages exist, then handoff |
 | Blocked work | the controlling blocker and its exact unblock condition |
-| Prompt or command delivery | one reusable copy/paste artifact — the smallest reusable context packet that executes safely |
+| Prompt or command delivery | one reusable copy/paste artifact — the smallest reusable context packet that executes safely; when the user explicitly asks for a prompt to paste elsewhere, render the complete prompt as one dedicated fenced copy-ready block with explanation outside it, never as a blockquote |
 | Architecture review | the verdict, then evidence, risks, roadmap, and report |
 | Classroom artifact | the requested artifact, preview, or content specification |
 | Scheduled monitoring | the resolved target and its actual scheduled behavior |
