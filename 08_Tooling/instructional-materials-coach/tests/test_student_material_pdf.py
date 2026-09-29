@@ -298,3 +298,20 @@ def test_pdf_verifier_rejects_header_and_eof_garbage(tmp_path):
         assert "verification failed" in str(exc)
     else:
         raise AssertionError("PDF-shaped garbage must not pass verification")
+
+
+def test_2736_wrapped_mission_prompt_uses_paragraph_owned_height_before_followup() -> None:
+    source = _source(
+        paragraphs=(
+            "You finished a worksheet but are not sure it submitted. " * 4,
+            "What should you check?",
+        )
+    )
+    story = student_pdf._build_story(source, getSampleStyleSheet())
+    paragraphs = [item for item in story if hasattr(item, "getPlainText")]
+    prompt = next(item for item in paragraphs if item.getPlainText().startswith("You finished"))
+    followup = next(item for item in paragraphs if item.getPlainText() == "What should you check?")
+    assert prompt.wrap(240, 1000)[1] > prompt.style.leading
+    assert story.index(followup) > story.index(prompt)
+    between = story[story.index(prompt) + 1 : story.index(followup)]
+    assert any(isinstance(item, student_pdf.Spacer) and item.height >= 7 for item in between)
