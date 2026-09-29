@@ -5,7 +5,11 @@ import subprocess
 from pathlib import Path
 
 from workflow_scheduler.governance.codespaces_diagnostic import (
+    ADOBE_DIAGNOSTIC_ID,
+    ADOBE_EXPRESS_URL,
     DIAGNOSTIC_ID,
+    _ADOBE_REMOTE_RUNNER_SOURCE,
+    _REMOTE_RUNNER_SOURCE,
     _RUN_TIMEOUT_SECONDS,
     _attach_invocation_metadata,
     run_codespaces_diagnostic,
@@ -347,3 +351,178 @@ def test_invocation_metadata_fails_closed_when_not_in_actions(monkeypatch) -> No
     assert evidence["workflow_run_id"] is None
     assert evidence["workflow_run_attempt"] is None
     assert evidence["artifact_name"] is None
+
+
+
+def _adobe_ingress() -> IssueCommentIngressResult:
+    base = _ingress()
+    return IssueCommentIngressResult(
+        schema_version=base.schema_version,
+        status=base.status,
+        reason=base.reason,
+        repository=base.repository,
+        issue_number=3094,
+        comment_id=base.comment_id,
+        actor=base.actor,
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none=base.logical_trigger_id_or_none,
+        run_attempt=1,
+        diagnostic_id_or_none=ADOBE_DIAGNOSTIC_ID,
+        diagnostic_request_id_or_none="adobe-minimum-1",
+    )
+
+
+def _diagnostic_stdout(payload: dict[str, object]) -> str:
+    return (
+        "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END===\n"
+    )
+
+
+def _adobe_payload(*, disposition: str, final_url: str, title: str, unsupported: bool = False) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["adobe-minimum-probe-passed"],
+        "disposition": disposition,
+        "repository": REPOSITORY,
+        "issue_number": 3094,
+        "diagnostic_id": ADOBE_DIAGNOSTIC_ID,
+        "request_id": "adobe-minimum-1",
+        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + ("c" * 64),
+        "workspace_head": "d" * 40,
+        "workspace_branch": "agent/3094-adobe-minimum-probe",
+        "os_distribution": "Ubuntu 24.04",
+        "kernel": "6.8.0",
+        "cpu_architecture": "x86_64",
+        "cpu_count": 4,
+        "ram_bytes": 8589934592,
+        "available_disk_bytes": 10737418240,
+        "browser_executable": "google-chrome",
+        "browser_version": "Google Chrome 153.0.0.0",
+        "display_mode": "headless",
+        "graphics_renderer": "ANGLE",
+        "webgl": "yes",
+        "webgl2": "yes",
+        "requested_url": ADOBE_EXPRESS_URL,
+        "final_url": final_url,
+        "network_application_reachability": "reachable",
+        "page_title": title,
+        "browser_process_exit_classification": "exit-0",
+        "redirect_classification": "same-adobe",
+        "unsupported_browser_detected": unsupported,
+        "unsupported_system_detected": False,
+        "normal_login_or_application_surface_detected": not unsupported,
+        "fatal_browser_error": None,
+        "fatal_renderer_error": None,
+        "cleanup_complete": True,
+        "workspace_side_effects_performed": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+    }
+
+
+def test_3094_adobe_and_existing_canva_diagnostics_select_distinct_fixed_runners(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    calls = []
+    adobe_payload = _adobe_payload(
+        disposition="CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+        final_url="https://new.express.adobe.com/",
+        title="Adobe Express",
+    )
+
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if argv[:3] == ("gh", "api", "-H"):
+            return subprocess.CompletedProcess(argv, 0, stdout=_codespace_payload(), stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(adobe_payload), stderr="")
+
+    route, request = select_codespaces_diagnostic(_adobe_ingress(), run=run)
+    assert route["selected"] is True
+    assert request is not None
+    evidence = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert evidence["disposition"] == "CODESPACES_ADOBE_MINIMUM_PROBE_PASS"
+    ssh_argv = calls[-1]
+    assert ssh_argv[8] == _ADOBE_REMOTE_RUNNER_SOURCE
+    assert ADOBE_EXPRESS_URL in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "userAgent" not in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "--disable-web-security" not in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert _REMOTE_RUNNER_SOURCE != _ADOBE_REMOTE_RUNNER_SOURCE
+
+
+def test_3094_unsupported_adobe_surface_preserves_bounded_disposition() -> None:
+    _, request = select_codespaces_diagnostic(
+        _adobe_ingress(),
+        run=lambda argv, timeout: subprocess.CompletedProcess(argv, 0, stdout=_codespace_payload(), stderr=""),
+    )
+    assert request is not None
+    payload = _adobe_payload(
+        disposition="CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
+        final_url="https://new.express.adobe.com/unsupported-browser",
+        title="Unsupported browser",
+        unsupported=True,
+    )
+    payload["reason_codes"] = ["adobe-unsupported-platform-observed"]
+    evidence = run_codespaces_diagnostic(
+        request,
+        codespace_name=APPROVED_CODESPACE_NAME,
+        run=lambda argv, timeout: subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr=""),
+    )
+    assert evidence["disposition"] == "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM"
+    assert evidence["unsupported_browser_detected"] is True
+    assert evidence["cleanup_complete"] is True
+
+
+def test_3094_adobe_result_identity_url_cleanup_and_secret_material_fail_closed() -> None:
+    _, request = select_codespaces_diagnostic(
+        _adobe_ingress(),
+        run=lambda argv, timeout: subprocess.CompletedProcess(argv, 0, stdout=_codespace_payload(), stderr=""),
+    )
+    assert request is not None
+    for patch in (
+        {"requested_url": "https://example.invalid/"},
+        {"diagnostic_id": DIAGNOSTIC_ID},
+        {"cleanup_complete": False},
+    ):
+        payload = {**_adobe_payload(
+            disposition="CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+            final_url=ADOBE_EXPRESS_URL,
+            title="Adobe Express",
+        ), **patch}
+        evidence = run_codespaces_diagnostic(
+            request,
+            codespace_name=APPROVED_CODESPACE_NAME,
+            run=lambda argv, timeout, payload=payload: subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr=""),
+        )
+        assert evidence["status"] == "needs-decision"
+
+    forbidden = ("cookie", "token", "password", "authorization", "profile")
+    source = _ADOBE_REMOTE_RUNNER_SOURCE.lower()
+    assert "raw html" not in source
+    assert "document.documentelement" not in source
+    assert "localstorage" not in source
+    assert "sessionstorage" not in source
+    assert "cookies()" not in source
+    assert all(term not in json.dumps(_adobe_payload(
+        disposition="CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+        final_url=ADOBE_EXPRESS_URL,
+        title="Adobe Express",
+    )).lower() for term in forbidden)
+
+
+def test_3094_adobe_evidence_contract_is_bounded_and_fixed() -> None:
+    assert ADOBE_EXPRESS_URL == "https://new.express.adobe.com/"
+    assert "ADOBE_URL=\"https://new.express.adobe.com/\"" in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "raw html" not in _ADOBE_REMOTE_RUNNER_SOURCE.lower()
+    assert len(_ADOBE_REMOTE_RUNNER_SOURCE.encode("utf-8")) < 16000
+    assert "cleanup_complete" in _ADOBE_REMOTE_RUNNER_SOURCE
