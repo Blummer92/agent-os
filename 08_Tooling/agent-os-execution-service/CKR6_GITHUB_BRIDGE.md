@@ -1,3 +1,7 @@
 # Finite GitHub CKR6 Bridge (#2851)
 
 Issue #2851 adds the separately authorized GitHub-hosted Actions ingress in `.github/workflows/agent-os-ckr6.yml`. The comment form is `/agent-os ckr6 <json-object>`; `ckr6_github_bridge.py` strictly validates the bounded issue-start or failed-repair envelope, then delegates materiality to the existing CKR6 `plan_lesson_preflight` owner. A not-needed request reaches zero Lessons Learned provider reads. Only a request the existing CKR6 plan marks retrieval-required enters the step that exposes the existing `NOTION_TOKEN` and the live-verified repository variable `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID`. The bridge never guesses that source identity, never routes through GCE, and publishes only bounded sanitized CKR6 result evidence. It creates no merge, closure, GitHub-write, Notion-write, or execution authority.
+
+## Activation completeness
+
+A merged/callable transport is not evidence that the retrieval-required CKR6 path is usable. Activation evidence for that path must prove the existing live-verified `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID` binding is present and that a finite retrieval-required canary reaches bounded CKR6 result evidence. When the binding is absent or still pending, report `activation incomplete / binding pending`; do not project the retrieval path as usable and do not guess a source identity. This reuses #2854 as the binding owner and adds no second reader, registry, source store, or binding mechanism.
