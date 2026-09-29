@@ -33,6 +33,7 @@ def _scope_candidates_to_current_assets(
         return []
 
     admitted: set[tuple[str, str, str]] = set()
+    asset_ids_by_external_identity: dict[tuple[str, str], set[str]] = {}
     for item in current_asset_evidence:
         if type(item) is not dict:
             continue
@@ -44,6 +45,13 @@ def _scope_candidates_to_current_assets(
         drive_file_id = reference.get("drive_file_id")
         if all(isinstance(value, str) and value for value in (asset_id, page_id, drive_file_id)):
             admitted.add((asset_id, page_id, drive_file_id))
+            asset_ids_by_external_identity.setdefault((page_id, drive_file_id), set()).add(asset_id)
+
+    # #3104: one exact library page + Drive identity cannot authorize two
+    # competing Asset IDs. Canonical reconciliation belongs to #1387; this
+    # consumer must fail closed instead of inventing precedence.
+    if any(len(asset_ids) > 1 for asset_ids in asset_ids_by_external_identity.values()):
+        return []
 
     scoped: list[object] = []
     for candidate in visual_candidates:
