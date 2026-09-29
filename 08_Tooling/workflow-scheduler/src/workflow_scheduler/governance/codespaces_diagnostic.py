@@ -480,6 +480,31 @@ def run_codespaces_diagnostic(
         return _failure(request, "codespaces-diagnostic-status-invalid", codespace_name)
     if payload.get("cleanup_complete") is not True:
         return _failure(request, "codespaces-diagnostic-cleanup-invalid", codespace_name)
+    if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID:
+        allowed_dispositions = {
+            "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
+            "CODESPACES_BLOCKED_GRAPHICS",
+            "CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+            "CODESPACES_NETWORK_ONLY",
+            "CODESPACES_EXECUTION_PATH_BLOCKED",
+            "MANUAL_REVIEW",
+        }
+        if payload.get("requested_url") != ADOBE_EXPRESS_URL:
+            return _failure(request, "codespaces-diagnostic-evidence-identity-mismatch", codespace_name)
+        if payload.get("disposition") not in allowed_dispositions:
+            return _failure(request, "codespaces-diagnostic-status-invalid", codespace_name)
+        serialized = json.dumps(payload, sort_keys=True).lower()
+        forbidden_evidence_keys = (
+            "\"cookie\"",
+            "\"cookies\"",
+            "\"token\"",
+            "\"password\"",
+            "\"authorization\"",
+            "\"profile_contents\"",
+            "\"raw_html\"",
+        )
+        if any(key in serialized for key in forbidden_evidence_keys):
+            return _failure(request, "codespaces-diagnostic-sensitive-evidence-rejected", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         payload.get("status") == "success"
