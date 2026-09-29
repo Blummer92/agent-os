@@ -7,6 +7,7 @@ from pathlib import Path
 from workflow_scheduler.governance.codespaces_diagnostic import (
     ADOBE_DIAGNOSTIC_ID,
     ADOBE_EXPRESS_URL,
+    ADOBE_DISPOSITIONS,
     DIAGNOSTIC_ID,
     _ADOBE_REMOTE_RUNNER_SOURCE,
     _REMOTE_RUNNER_SOURCE,
@@ -599,3 +600,101 @@ def test_3094_adobe_evidence_contract_is_bounded_and_fixed() -> None:
         "sessionstorage",
     ):
         assert forbidden not in _ADOBE_REMOTE_RUNNER_SOURCE.lower()
+
+
+
+def test_3094_adobe_pass_requires_bounded_normal_surface_evidence() -> None:
+    source = _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "200<=result[\"http_status\"]<400" in source
+    assert "normal_path" in source
+    assert "bad_title" in source
+    assert "navigationError" in source
+    for marker in ("access denied", "captcha", "challenge", "cookie", "consent", "forbidden"):
+        assert marker in source
+
+
+def test_3094_adobe_unsupported_detection_is_bounded_to_url_and_title() -> None:
+    source = _ADOBE_REMOTE_RUNNER_SOURCE
+    assert '"/unsupported-browser" in final_url.lower()' in source
+    assert '"unsupported browser" in title.lower()' in source
+    assert '"system is not supported"' in source
+    assert '"unsupported system"' in source
+    assert '"system not supported"' in source
+    assert "document.documentelement" not in source.lower()
+
+
+def test_3094_graphics_block_requires_reachable_application_response() -> None:
+    source = _ADOBE_REMOTE_RUNNER_SOURCE
+    assert 'result["network_application_reachability"]=="reachable" and observed.get("webgl") is False' in source
+
+
+def test_3094_runtime_dependencies_fail_closed_without_installing_anything() -> None:
+    source = _ADOBE_REMOTE_RUNNER_SOURCE
+    assert 'shutil.which("node")' in source
+    assert "require.resolve('playwright')" in source
+    assert "adobe-node-runtime-unavailable" in source
+    assert "adobe-playwright-runtime-unavailable" in source
+    for installer in ("npm install", "npm ci", "npx playwright install", "apt-get", "pip install"):
+        assert installer not in source
+
+
+def test_3094_cleanup_is_observed_not_assumed() -> None:
+    source = _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "cleanup=false" in source
+    assert "await b.close();b=null;cleanup=true" in source
+    assert 'result["cleanup_complete"]=observed.get("cleanup") is True' in source
+    assert "adobe-browser-cleanup-unconfirmed" in source
+    assert 'result["cleanup_complete"]=False' in source
+    assert "adobe-browser-probe-timeout" in source
+
+
+def test_3094_adobe_disposition_vocabulary_is_exact() -> None:
+    assert ADOBE_DISPOSITIONS == {
+        "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
+        "CODESPACES_BLOCKED_GRAPHICS",
+        "CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+        "CODESPACES_NETWORK_ONLY",
+        "CODESPACES_EXECUTION_PATH_BLOCKED",
+        "MANUAL_REVIEW",
+    }
+
+
+def test_3094_existing_canva_behavioral_payload_still_round_trips() -> None:
+    _, request = select_codespaces_diagnostic(
+        _ingress(),
+        run=lambda argv, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=_codespace_payload(), stderr=""
+        ),
+    )
+    assert request is not None
+    payload = {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["diagnostic-observed"],
+        "repository": REPOSITORY,
+        "issue_number": 2455,
+        "diagnostic_id": DIAGNOSTIC_ID,
+        "request_id": REQUEST_ID,
+        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + ("e" * 64),
+        "cleanup_complete": True,
+        "workspace_side_effects_performed": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "loopback": {"9222": False, "9444": False},
+        "cdp": {"browser": None, "target_count": 0, "targets": []},
+    }
+    evidence = run_codespaces_diagnostic(
+        request,
+        codespace_name=APPROVED_CODESPACE_NAME,
+        run=lambda argv, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=_diagnostic_stdout(payload), stderr=""
+        ),
+    )
+    assert evidence == payload
