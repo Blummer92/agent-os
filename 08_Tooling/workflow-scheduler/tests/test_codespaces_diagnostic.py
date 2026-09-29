@@ -505,18 +505,30 @@ def test_3094_adobe_result_identity_url_cleanup_and_secret_material_fail_closed(
         )
         assert evidence["status"] == "needs-decision"
 
-    forbidden = ("cookie", "token", "password", "authorization", "profile")
     source = _ADOBE_REMOTE_RUNNER_SOURCE.lower()
     assert "raw html" not in source
     assert "document.documentelement" not in source
     assert "localstorage" not in source
     assert "sessionstorage" not in source
     assert "cookies()" not in source
-    assert all(term not in json.dumps(_adobe_payload(
+
+    sensitive = _adobe_payload(
         disposition="CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
         final_url=ADOBE_EXPRESS_URL,
         title="Adobe Express",
-    )).lower() for term in forbidden)
+    )
+    sensitive["cookie"] = "session=secret"
+    evidence = run_codespaces_diagnostic(
+        request,
+        codespace_name=APPROVED_CODESPACE_NAME,
+        run=lambda argv, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=_diagnostic_stdout(sensitive), stderr=""
+        ),
+    )
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "codespaces-diagnostic-sensitive-evidence-rejected"
+    ]
 
 
 def test_3094_adobe_evidence_contract_is_bounded_and_fixed() -> None:
