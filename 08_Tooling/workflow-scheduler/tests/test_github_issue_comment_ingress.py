@@ -312,3 +312,15 @@ def test_3094_adobe_diagnostic_cannot_accept_shell_url_argv_or_browser_flags() -
         result = admit(event(ADOBE_DIAGNOSTIC_TRIGGER + suffix))
         assert (result.status, result.reason) == ("ignored", "malformed-trigger")
         assert result.diagnostic_id_or_none is None
+
+
+
+def test_3094_existing_workflow_scheduler_validation_profile_is_admitted() -> None:
+    trigger = (
+        f"/agent-os dev-validate agent/3094-adobe-minimum-probe "
+        f"{DEV_SHA} workflow-scheduler"
+    )
+    result = admit(event(trigger))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-dev-validation-envelope"
+    assert result.dev_validation_id_or_none == "workflow-scheduler"
