@@ -82,6 +82,41 @@ def test_issue_start_not_needed_classification_performs_zero_provider_reads(monk
     assert executed["side_effects_performed"] is False
 
 
+def test_3032_issue_start_projects_bounded_rejected_candidate_provenance(monkeypatch):
+    envelope = bridge.parse_envelope(payload(specialized_knowledge_required=True))
+    monkeypatch.setattr(
+        bridge,
+        "resolve_lesson_read_route",
+        lambda: type("Route", (), {"execute_read": lambda query: {"results": []}})(),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "activate_issue_start_lesson_preflight",
+        lambda **kwargs: {
+            "lesson_retrieval_status": "manual-review",
+            "selection_reason_codes": ["unverifiable-relevant-candidate"],
+            "selected_lesson_ids": [],
+            "canonical_github_refs": [],
+            "rejected_candidate_provenance": [{
+                "lesson_id": "LL-42",
+                "source_revision": "2026-09-29T12:00:00Z",
+                "currentness": "unverifiable",
+                "provenance": "canonical-github-ref-missing-or-rejected",
+            }],
+            "substantial_hypothesis_admissible": False,
+        },
+    )
+    result = bridge.execute_envelope(envelope, retrieval_required=True)
+    assert result["rejected_candidate_provenance"] == [{
+        "lesson_id": "LL-42",
+        "source_revision": "2026-09-29T12:00:00Z",
+        "currentness": "unverifiable",
+        "provenance": "canonical-github-ref-missing-or-rejected",
+    }]
+    assert result["mutation_admissible"] is False
+    assert result["side_effects_performed"] is False
+
+
 def test_failed_repair_rejects_unsupported_repair_context_at_ingress():
     with pytest.raises(ValueError, match="repair_context must be failed-pr-repair or ci-diagnosis"):
         bridge.parse_envelope(

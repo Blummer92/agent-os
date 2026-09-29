@@ -126,6 +126,33 @@ def test_stale_relevant_lesson_fails_closed():
     assert result.stale_or_conflicting_count == 1
 
 
+def test_3032_unverifiable_candidate_projects_only_bounded_sanitized_provenance():
+    result = consume_lesson_preflight(
+        request(),
+        (lesson(currentness=KnowledgeCurrentness.UNVERIFIABLE, canonical_github_refs=()),),
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selection_reason_codes == ("unverifiable-relevant-candidate",)
+    assert result.rejected_candidate_provenance == (
+        {
+            "lesson_id": "lesson:authorization-currentness",
+            "source_revision": "2026-08-23T21:00:00Z",
+            "currentness": "unverifiable",
+            "provenance": "canonical-github-ref-missing-or-rejected",
+        },
+    )
+    projected = result.to_dict()["rejected_candidate_provenance"]
+    assert projected == [dict(result.rejected_candidate_provenance[0])]
+    assert "guardrail" not in projected[0]
+    assert "what_to_do_next_time" not in projected[0]
+
+
+def test_3032_sufficient_candidate_does_not_emit_rejected_provenance():
+    result = consume_lesson_preflight(request(), (lesson(),))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.rejected_candidate_provenance == ()
+
+
 def test_notion_unavailable_can_fall_back_to_github_only():
     result = consume_lesson_preflight(request(), retrieval_available=False)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.UNAVAILABLE_SAFE_FALLBACK
