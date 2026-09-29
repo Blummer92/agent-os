@@ -85,6 +85,9 @@ When a still-current direct repository-owner `work on #<issue>` instruction reac
 Keep issue-creation evidence, canonical readback evidence, label-reconciliation evidence, and implementation authorization evidence distinct. Label convergence is a projection and never creates implementation, merge, closure, protected-setting, production, credential, or external-write authority.
 The connected pre-create host projection must explicitly mark the native create response non-terminal and require canonical post-create readback plus #1962 reconciliation on any managed-label mismatch before the parent operation can report terminal issue-creation success. A host that bypasses that projection is non-conformant; direct/native create success alone is never sufficient evidence.
 
+## Governed PR Refresh Safety
+For an authorized pull-request refresh, use only the existing governed branch-refresh path and its content-bound authorization/currentness checks. The absence of a direct refresh primitive on the active connector never authorizes composing a merge commit from the stale PR tree, attaching current `main` as a parent, or moving the branch ref through ad-hoc Git-object operations. If the governed refresh route cannot execute, fail closed or reroute through the registered capability. After refresh, compare the resulting tree/scope against current `main`; `behind_by=0` or topological currentness alone is not proof that current-main content was preserved.
+
 ## Repository-State Verification
 When a local checkout is available, use `scripts/verify-repo-state.sh`; usage is
 in `scripts/verify-repo-state.md`, and stdout follows
