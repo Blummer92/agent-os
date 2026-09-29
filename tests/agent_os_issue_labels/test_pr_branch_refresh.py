@@ -165,6 +165,16 @@ def test_validation_failure_reports_failure_without_label_reconciliation():
     assert result.validation.status == "failing"
 
 
+def test_3056_missing_or_pending_validation_is_not_reported_as_test_failure():
+    for status in ("unavailable", "pending", "not-triggered"):
+        provider = FakeProvider(validation_status=status)
+        result = refresh_pull_request_branch(provider, request())
+        assert result.status == "manual-review"
+        assert result.side_effects_performed is True
+        assert "refresh.rebased" in result.reason_codes
+        assert f"validation.{status}" in result.reason_codes
+
+
 def test_main_moves_before_final_proof_returns_stale_not_second_refresh():
     class MovingMainProvider(FakeProvider):
         def __init__(self):
