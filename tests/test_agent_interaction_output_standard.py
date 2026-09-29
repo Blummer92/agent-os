@@ -429,3 +429,16 @@ def test_curriculum_agent_fixtures_distinguish_internal_evidence_from_visible_ou
     standard = section(STANDARD, "Conditional Field Groups")
     assert "only when routing is material" in standard
     assert "No profile is required to display every field." in standard
+
+
+def test_2985_explicit_reusable_prompt_is_copy_ready() -> None:
+    standard = read(STANDARD)
+    for phrase in (
+        "reusable next-step prompt",
+        "one fenced copy-ready block",
+        "explanation outside the fence",
+        "Do not use a Markdown blockquote",
+        "do not place citations, UI markup, or commentary inside it",
+        "Ordinary prose remains unchanged",
+    ):
+        assert phrase in standard
