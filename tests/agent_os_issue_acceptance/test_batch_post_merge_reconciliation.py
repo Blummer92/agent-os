@@ -239,7 +239,9 @@ def test_admission_must_bind_current_lifecycle_snapshot() -> None:
 
 
 def test_2642_completed_parent_cannot_be_kept_open_by_historical_blocker_prose() -> None:
-    from pathlib import Path\n    root = Path(__file__).resolve().parents[2]\n    contract = (root / "scripts/agent_os_issue_acceptance/batch-merge-terminal-reconciliation.md").read_text(encoding="utf-8")
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    contract = (root / "scripts/agent_os_issue_acceptance/batch-merge-terminal-reconciliation.md").read_text(encoding="utf-8")
     for phrase in (
         "Historical prerequisite text or previously owned blockers cannot keep an implementation parent open",
         "every residual live/qualification obligation is explicitly bound to current successor or external owners",
