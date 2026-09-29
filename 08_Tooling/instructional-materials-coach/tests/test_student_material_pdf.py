@@ -315,3 +315,81 @@ def test_2736_wrapped_mission_prompt_uses_paragraph_owned_height_before_followup
     assert story.index(followup) > story.index(prompt)
     between = story[story.index(prompt) + 1 : story.index(followup)]
     assert any(isinstance(item, student_pdf.Spacer) and item.height >= 7 for item in between)
+
+def _adobe_foundations_source(**overrides):
+    values = dict(
+        title="Adobe Express Foundations - Burger Builder",
+        paragraphs=(
+            "Use the taught Adobe Express moves to build the Burger Builder.",
+            "Transfer the same moves into Mumford Market.",
+        ),
+        required_visual_role_ids=(
+            "worked-hamburger-example",
+            "build-icon",
+            "check-icon",
+        ),
+    )
+    values.update(overrides)
+    return _source(**values)
+
+
+def test_adobe_foundations_3059_missing_worked_image_and_icons_block_preview(tmp_path):
+    target = tmp_path / "adobe-foundations-missing-visuals.pdf"
+
+    receipt = render_student_material_pdf_preview(
+        _adobe_foundations_source(),
+        target,
+        expected_revision_id="rev-7",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert receipt.unresolved_visual_role_ids == (
+        "worked-hamburger-example",
+        "build-icon",
+        "check-icon",
+    )
+    assert "required visual placement is unresolved" in receipt.error
+
+
+def test_adobe_foundations_3059_partial_icons_preserve_exact_missing_role(tmp_path):
+    target = tmp_path / "adobe-foundations-partial-visuals.pdf"
+    source = _adobe_foundations_source(
+        verified_visual_placements=(
+            _placement("worked-hamburger-example"),
+            _placement("build-icon"),
+        ),
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source,
+        target,
+        expected_revision_id="rev-7",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert receipt.unresolved_visual_role_ids == ("check-icon",)
+    assert "check-icon" in receipt.error
+    assert "worked-hamburger-example" not in receipt.error
+
+
+def test_adobe_foundations_3059_placement_intent_is_not_rendered_image_evidence(tmp_path):
+    target = tmp_path / "adobe-foundations-placement-only.pdf"
+    source = _adobe_foundations_source(
+        verified_visual_placements=(
+            _placement("worked-hamburger-example"),
+            _placement("build-icon"),
+            _placement("check-icon"),
+        ),
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source,
+        target,
+        expected_revision_id="rev-7",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert receipt.unresolved_visual_role_ids == ()
+    assert "visual render evidence is unavailable" in receipt.error
+
+
