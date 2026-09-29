@@ -22,6 +22,9 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
     LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
     PHOTOGRAPHY_FOUNDATIONS_PAGE_ID,
+    TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID,
+    TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER,
+    TEACHER_MODELING_VERIFICATION_REQUEST_ID,
     VERIFICATION_REQUEST_ID,
     VISUAL_ASSET_LIBRARY_DATABASE_ID,
     VISUAL_ASSET_LIBRARY_TITLE,
@@ -30,6 +33,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     verify_candy_branding_binding,
     verify_lessons_learned_binding,
     verify_live_bindings,
+    verify_teacher_modeling_binding,
 )
 from scripts.agent_os_notion_read_request.models import NotionReadRequestError
 from tests.agent_os_notion_read_request.notion_read_support import ACTOR, REPOSITORY, transport
@@ -187,6 +191,73 @@ class LessonsVerificationAdapter:
                 },
             }
         raise AssertionError(task.payload["action"])
+
+
+class TeacherModelingVerificationAdapter:
+    def __init__(self, *, returned_id=TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID, archived=False):
+        self.calls = []
+        self.returned_id = returned_id
+        self.archived = archived
+
+    def execute(self, task):
+        self.calls.append(dict(task.payload))
+        assert task.payload["action"] == "get_data_source"
+        return {
+            "status": "success",
+            "output": {
+                "id": self.returned_id,
+                "archived": self.archived,
+                "in_trash": False,
+                "properties": {},
+            },
+        }
+
+
+def test_teacher_modeling_verification_is_finite_and_read_only() -> None:
+    decision = admit_binding_verification_request(
+        transport(
+            request_id=TEACHER_MODELING_VERIFICATION_REQUEST_ID,
+            issue_number=TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "admitted"
+    assert decision["canonical_unit_key"] == "teacher-modeling"
+    assert decision["allowed_read_actions"] == ["get_data_source"]
+    assert decision["secret_dispatch_authorized"] is True
+    assert decision["write_allowed"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+def test_teacher_modeling_binding_verifies_only_fixed_candidate() -> None:
+    adapter = TeacherModelingVerificationAdapter()
+    evidence = verify_teacher_modeling_binding(adapter, generated_at="run:2756")
+    assert adapter.calls == [{
+        "action": "get_data_source",
+        "data_source_id": TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID,
+    }]
+    assert evidence["teacher_modeling"] == {
+        "data_source_id": TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID,
+        "verification_state": "verified-current",
+    }
+    assert evidence["notion_writes_performed"] is False
+    assert evidence["drive_writes_performed"] is False
+    assert evidence["classroom_artifact_writes_performed"] is False
+    assert evidence["gce_invoked"] is False
+
+
+def test_teacher_modeling_binding_fails_closed_on_identity_or_lifecycle_mismatch() -> None:
+    with pytest.raises(NotionReadRequestError, match="identity mismatch"):
+        verify_teacher_modeling_binding(
+            TeacherModelingVerificationAdapter(returned_id="different-source"),
+            generated_at="run:2756",
+        )
+    with pytest.raises(NotionReadRequestError, match="archived or trashed"):
+        verify_teacher_modeling_binding(
+            TeacherModelingVerificationAdapter(archived=True),
+            generated_at="run:2756",
+        )
 
 
 def test_lessons_learned_verification_is_finite_and_read_only() -> None:
@@ -547,6 +618,7 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
     assert CANDY_BRANDING_VERIFICATION_REQUEST_ID not in BINDING_VERIFICATION_REQUEST_IDS
