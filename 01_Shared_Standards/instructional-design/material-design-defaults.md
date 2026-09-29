@@ -160,6 +160,14 @@ duplication, weak design elements, and clutter.
 Use direct edits when the source is available. Otherwise give concise,
 high-value audit feedback.
 
+## Realistic Teacher-Input Benchmarking
+
+When a comparison is intended to measure the normal teacher-facing workflow, preserve the simulated teacher utterance at the level of detail the teacher actually supplied. Do not silently upgrade a short natural request into an expert or system-style specification.
+
+Keep benchmark controls outside the simulated teacher utterance. The harness may define source packets, execution conditions, model/configuration, blinding, and evaluation criteria, but those controls must not be disguised as teacher-authored instructional or design requirements.
+
+Give both comparison arms the same teacher utterance and equivalent harness controls unless the prompt itself is the intended independent variable. Details the teacher actually supplied remain part of the utterance and must not be removed merely to make it shorter.
+
 ## Override Conditions
 
 Override these defaults when the user asks for compact, print-efficient,
@@ -168,10 +176,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.4.0
+0.5.0
 
 ## Changelog
 
+- 0.5.0 separates realistic teacher utterances from benchmark harness controls so comparative artifact tests do not hide teacher-facing UX burden through prompt-engineering leakage (#3091).
 - 0.4.0 makes concise lesson-specific Warm-Up and Exit Ticket sections standard worksheet defaults, preserves supplied/equivalent closing evidence without duplication, applies the rule per differentiated/day worksheet, and keeps both below #1567's compact header without sacrificing core response space (#1568).
 - 0.3.0 makes a compact title + student-identification top band the default for worksheets, keeps lesson sections below that band, and preserves an explicit layout opt-out (#1567).
 - 0.2.0 adds reusable worksheet identification, neutral Challenge A/B/C
