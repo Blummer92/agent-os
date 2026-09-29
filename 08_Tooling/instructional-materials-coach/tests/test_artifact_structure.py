@@ -309,3 +309,61 @@ def test_exit_ticket_identity_is_not_reinterpreted_as_artifact_type() -> None:
         docs_requests=(_docs_request("curriculum_exit_ticket"),),
     )
     assert result.status == PASS
+
+
+def test_adobe_foundations_3059_required_components_are_exact_and_independent() -> None:
+    required = ("portfolio", "sentence-starters", "worked-example")
+    tokens = {
+        "portfolio": "curriculum_portfolio",
+        "sentence-starters": "curriculum_sentence_starters",
+        "worked-example": "curriculum_worked_example",
+    }
+    complete = tuple(_docs_request(tokens[section]) for section in required)
+
+    assert validate_required_worksheet_sections(
+        required_sections=required,
+        curriculum_decision_tokens=tokens,
+        docs_requests=complete,
+    ).status == PASS
+
+    for omitted in required:
+        result = validate_required_worksheet_sections(
+            required_sections=required,
+            curriculum_decision_tokens=tokens,
+            docs_requests=tuple(
+                _docs_request(tokens[section]) for section in required if section != omitted
+            ),
+        )
+        assert result.status == FAIL
+        assert "worksheet-required-section-missing-from-plan" in _codes(result)
+
+
+def test_adobe_foundations_3059_unobservable_worked_example_never_false_passes() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("portfolio", "sentence-starters", "worked-example"),
+        curriculum_decision_tokens={
+            "portfolio": "curriculum_portfolio",
+            "sentence-starters": "curriculum_sentence_starters",
+        },
+        docs_requests=(
+            _docs_request("curriculum_portfolio"),
+            _docs_request("curriculum_sentence_starters"),
+        ),
+    )
+
+    assert result.status == MANUAL_REVIEW
+    assert "worksheet-required-section-unobservable" in _codes(result)
+
+
+def test_adobe_foundations_3059_shared_component_token_is_manual_review() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("portfolio", "sentence-starters"),
+        curriculum_decision_tokens={
+            "portfolio": "curriculum_shared_scaffold",
+            "sentence-starters": "curriculum_shared_scaffold",
+        },
+        docs_requests=(_docs_request("curriculum_shared_scaffold"),),
+    )
+
+    assert result.status == MANUAL_REVIEW
+    assert "worksheet-required-section-token-ambiguous" in _codes(result)
