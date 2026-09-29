@@ -356,7 +356,7 @@ result["browser_executable"]=browser
 version=run((browser,"--version"),timeout=10)
 if version.returncode==0:result["browser_version"]=text(version.stdout,160)
 
-js="""const { chromium } = require('playwright'); (async()=>{let b;try{b=await chromium.launch({headless:true,executablePath:process.argv[1]});const p=await b.newPage();let response=null;try{response=await p.goto(process.argv[2],{waitUntil:'domcontentloaded',timeout:30000});}catch(e){}const finalUrl=p.url();const title=(await p.title()).slice(0,240);const gpu=await p.evaluate(()=>{const c=document.createElement('canvas');const g2=c.getContext('webgl2');const g=c.getContext('webgl')||c.getContext('experimental-webgl');let renderer=null;try{const x=g2||g;if(x){const d=x.getExtension('WEBGL_debug_renderer_info');if(d)renderer=x.getParameter(d.UNMASKED_RENDERER_WEBGL);}}catch(e){}return {webgl:!!g,webgl2:!!g2,renderer};});console.log(JSON.stringify({ok:true,status:response?response.status():null,finalUrl,title,...gpu}));}catch(e){console.log(JSON.stringify({ok:false,error:String(e).slice(0,240)}));}finally{if(b)await b.close();}})();"""
+js="""const { chromium } = require('playwright'); (async()=>{let b;try{b=await chromium.launch({headless:true,executablePath:process.argv[1]});const p=await b.newPage();let response=null;let navigationError=null;try{response=await p.goto(process.argv[2],{waitUntil:'domcontentloaded',timeout:30000});}catch(e){navigationError=String(e).slice(0,240);}const finalUrl=p.url();const title=(await p.title()).slice(0,240);const gpu=await p.evaluate(()=>{const c=document.createElement('canvas');const g2=c.getContext('webgl2');const g=c.getContext('webgl')||c.getContext('experimental-webgl');let renderer=null;try{const x=g2||g;if(x){const d=x.getExtension('WEBGL_debug_renderer_info');if(d)renderer=x.getParameter(d.UNMASKED_RENDERER_WEBGL);}}catch(e){}return {webgl:!!g,webgl2:!!g2,renderer};});console.log(JSON.stringify({ok:true,status:response?response.status():null,finalUrl,title,navigationError,...gpu}));}catch(e){console.log(JSON.stringify({ok:false,error:String(e).slice(0,240)}));}finally{if(b)await b.close();}})();"""
 probe=run(("node","-e",js,browser,ADOBE_URL),cwd=primary,timeout=45)
 result["browser_process_exit_classification"]="exit-0" if probe.returncode==0 else f"exit-{probe.returncode}"
 try: observed=json.loads((probe.stdout or "").strip().splitlines()[-1])
@@ -366,7 +366,8 @@ if not isinstance(observed,dict) or not observed.get("ok"):
 
 final_url=text(observed.get("finalUrl"),500);title=text(observed.get("title"))
 result["final_url"]=final_url;result["page_title"]=title
-result["network_application_reachability"]="reachable" if observed.get("status") is not None or final_url else "unknown"
+result["network_application_reachability"]="reachable" if observed.get("status") is not None else ("failed" if observed.get("navigationError") else "unknown")
+if observed.get("navigationError"):result["fatal_browser_error"]=text(observed.get("navigationError"))
 result["graphics_renderer"]=text(observed.get("renderer"),240)
 result["webgl"]="yes" if observed.get("webgl") is True else ("no" if observed.get("webgl") is False else "unknown")
 result["webgl2"]="yes" if observed.get("webgl2") is True else ("no" if observed.get("webgl2") is False else "unknown")
@@ -376,7 +377,7 @@ unsupported_system="unsupported system" in lower or "system requirements" in low
 result["unsupported_browser_detected"]=unsupported_browser;result["unsupported_system_detected"]=unsupported_system
 if final_url and final_url!=ADOBE_URL:result["redirect_classification"]="same-adobe" if "adobe.com" in final_url.lower() else "other-origin"
 else:result["redirect_classification"]="none"
-normal=bool(final_url and "adobe.com" in final_url.lower() and not unsupported_browser and not unsupported_system)
+normal=bool(result["network_application_reachability"]=="reachable" and final_url and "adobe.com" in final_url.lower() and not unsupported_browser and not unsupported_system)
 result["normal_login_or_application_surface_detected"]=normal
 if unsupported_browser or unsupported_system:
  result["status"]="success";result["reason_codes"]=["adobe-unsupported-platform-observed"];result["disposition"]="CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM"
