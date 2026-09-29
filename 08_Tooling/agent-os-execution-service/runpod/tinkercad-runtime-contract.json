@@ -1,0 +1,54 @@
+{
+  "schema_name": "agent-os-runpod-tinkercad-runtime",
+  "schema_version": "1.0",
+  "provider": "runpod",
+  "cloud_type": "COMMUNITY",
+  "gpu": "NVIDIA RTX A5000",
+  "container_contract": {
+    "gpu_runtime": "NVIDIA Container Toolkit",
+    "display": ":0",
+    "display_requirement": "GPU-backed Xorg/X11 display supplied by the fixed runtime image",
+    "browser": "Chromium"
+  },
+  "viewer": {
+    "vnc_host": "127.0.0.1",
+    "vnc_port": 5902,
+    "novnc_host": "127.0.0.1",
+    "novnc_port": 6081,
+    "transport": "SSH local forwarding only"
+  },
+  "authentication": {
+    "mode": "manual",
+    "profile": "ephemeral-per-pod",
+    "persistent_storage_allowed": false
+  },
+  "lifecycle": {
+    "max_seconds": 7200,
+    "deterministic_cleanup": true,
+    "provider_stop_after_required": true
+  },
+  "persistent_storage": {
+    "allowed": [
+      "non-secret runtime assets",
+      "non-secret configuration"
+    ],
+    "forbidden": [
+      "cookies",
+      "tokens",
+      "browser profile",
+      "authentication state"
+    ]
+  },
+  "prohibited": [
+    "CDP",
+    "remote debugging",
+    "--enable-unsafe-swiftshader",
+    "--ignore-gpu-blocklist",
+    "--disable-gpu-sandbox",
+    "--disable-web-security",
+    "public VNC",
+    "public noVNC",
+    "automated login"
+  ],
+  "live_provider_mutation_authorized": false
+}
