@@ -117,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             args.doc_template = pair.docs_template_id
         if not args.slides_template or not args.doc_template:
             raise RuntimeError("Provide both exact approved template IDs or --template-candidates governed evidence.")
+        context["slides_template"] = args.slides_template
+        context["doc_template"] = args.doc_template
         if not args.material_requirement:
             raise RuntimeError("Governed MaterialRequirement JSON is required before a connected build.")
         if not args.current_curriculum_evidence:
