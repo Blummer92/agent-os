@@ -70,6 +70,9 @@ class RefreshTriggerProjection:
 class ItemAdmissionEvidence:
     pull_request_number:int; main_sha:str; head_sha:str; validation_status:Literal["passed","failed","pending","missing","manual-review"]
     authorization_status:Literal["authorized","blocked","stale","missing","manual-review"]
+    validation_current:bool=True
+    def __post_init__(self):
+        if type(self.validation_current) is not bool: raise TypeError("validation_current must be bool")
 @dataclass(frozen=True, slots=True)
 class MergeReadbackEvidence:
     pull_request_number:int; expected_head_sha:str; merged:bool; new_main_sha:str; provider_available:bool=True
@@ -206,6 +209,7 @@ def apply_refresh_readback(c,e):
 def apply_validation(c,e):
     _expect(c,BatchMergeAction.VALIDATE,e.pull_request_number)
     if not _same(c,e.main_sha,e.head_sha):return _restart(c)
+    if not e.validation_current:return _restart(c)
     if e.validation_status=="passed":return _replace(c,action=BatchMergeAction.AUTHORIZE)
     d=BatchItemDisposition.MANUAL_REVIEW if e.validation_status=="manual-review" else BatchItemDisposition.SKIPPED_ITEM_LOCAL
     return _advance(c,_result(e.pull_request_number,d,f"validation-{e.validation_status}",cursor=c))

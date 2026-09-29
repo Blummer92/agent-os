@@ -78,6 +78,23 @@ def test_no_background_or_auto_merge_actions_exist():
     assert {a.value for a in BatchMergeAction}.isdisjoint({"auto-merge","poll","retry","queue"})
 
 
+def test_2920_stale_same_head_success_restarts_for_current_validation_population():
+    c=start_batch_execution(plan(11))
+    c=apply_current_state(c,current(11,"m1","h11"))
+    stale=ItemAdmissionEvidence(11,"m1","h11","passed","authorized",validation_current=False)
+    c=apply_validation(c,stale)
+    assert c.action is BatchMergeAction.REACQUIRE
+    assert c.current_head_sha is None and c.current_main_sha is None
+
+
+def test_2920_current_pending_ready_trigger_cannot_advance_to_merge_authorization():
+    c=start_batch_execution(plan(11))
+    c=apply_current_state(c,current(11,"m1","h11"))
+    c=apply_validation(c,ItemAdmissionEvidence(11,"m1","h11","pending","authorized",validation_current=True))
+    assert c.action is BatchMergeAction.COMPLETE
+    assert c.results[-1].reason_codes == ("validation-pending",)
+
+
 def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_trigger():
     main="a"*40; head="b"*40; new_head="c"*40
     c=start_batch_execution(plan(11,12),linked_issues={11:101})
