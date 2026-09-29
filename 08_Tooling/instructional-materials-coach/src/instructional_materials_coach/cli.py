@@ -18,6 +18,7 @@ from instructional_workflow_contracts.current_curriculum_state import resolve_cu
 from instructional_workflow_contracts.material_requirement import validate_material_requirement
 from .live_build import LiveBuildInput, build_live_materials
 from .slides_requests import build_slides_replace_requests
+from .template_resolution import TemplateCandidate, resolve_approved_template_pair
 from .visual_reuse import plan_governed_visual_reuse
 from .workspace_clients import build_docs_service, build_slides_service
 
@@ -29,8 +30,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     build = subparsers.add_parser("build", help="Build a slide deck and worksheet from an approved template and lesson content.")
     build.add_argument("--content", required=True)
-    build.add_argument("--slides-template", required=True)
-    build.add_argument("--doc-template", required=True)
+    build.add_argument("--slides-template", default="")
+    build.add_argument("--doc-template", default="")
+    build.add_argument("--template-candidates", default="")
     build.add_argument("--target-folder", required=True)
     build.add_argument("--material-requirement", default="")
     build.add_argument("--current-curriculum-evidence", default="")
@@ -99,6 +101,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
+        if args.template_candidates:
+            raw_candidates = _load_json(args.template_candidates, default=[])
+            if not isinstance(raw_candidates, list):
+                raise RuntimeError("template candidates must be a JSON list")
+            candidates = tuple(TemplateCandidate(
+                template_id=item["template_id"], kind=item["kind"],
+                approval_state=item["approval_state"], access_state=item["access_state"],
+                supported_placeholders=tuple(item.get("supported_placeholders", ())),
+            ) for item in raw_candidates)
+            pair = resolve_approved_template_pair(
+                candidates, required_placeholders=tuple(sorted(content.placeholder_tokens()))
+            )
+            args.slides_template = pair.slides_template_id
+            args.doc_template = pair.docs_template_id
+        if not args.slides_template or not args.doc_template:
+            raise RuntimeError("Provide both exact approved template IDs or --template-candidates governed evidence.")
+        context["slides_template"] = args.slides_template
+        context["doc_template"] = args.doc_template
         if not args.material_requirement:
             raise RuntimeError("Governed MaterialRequirement JSON is required before a connected build.")
         if not args.current_curriculum_evidence:
