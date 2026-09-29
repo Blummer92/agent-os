@@ -453,6 +453,7 @@ def test_3094_adobe_and_existing_canva_diagnostics_select_distinct_fixed_runners
     ssh_argv = calls[-1]
     assert ssh_argv[8] == _ADOBE_REMOTE_RUNNER_SOURCE
     assert ADOBE_EXPRESS_URL in _ADOBE_REMOTE_RUNNER_SOURCE
+    assert "p.goto(process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "userAgent" not in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "--disable-web-security" not in _ADOBE_REMOTE_RUNNER_SOURCE
