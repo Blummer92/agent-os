@@ -120,6 +120,56 @@ continue the parent mission without owner copy/paste. This result publication is
 separate from developer-validation success and creates no implementation, merge,
 closure, production, credential, or browser-mutation authority.
 
+### Adobe Express minimum probe (#3094)
+
+The same dispatcher now admits one additional fixed identity:
+
+```text
+/agent-os diagnose ppux-adobe-minimum-probe <request-id>
+```
+
+The caller still supplies only the registered identity and bounded request slug.
+The Adobe Express entry URL is fixed in repository code as
+`https://new.express.adobe.com/`; URL, shell, argv, browser flags, profile paths,
+ports, JavaScript, credentials, cookies, tokens, passwords, and MFA material are
+not ingress fields.
+
+The probe reuses `resolve_current_codespace()`, the existing
+`agent-os-codespaces-v1` environment-health binding, and the existing
+`gh codespace ssh` transport. It records only bounded platform, browser,
+graphics, WebGL/WebGL2, navigation/classification, and cleanup evidence. It does
+not authenticate to Adobe, inspect a stored browser profile, expose CDP, modify an
+Adobe project, or mutate Codespace lifecycle state. Ordinary CI exercises only
+synthetic/offline fixtures and never contacts Adobe.
+
+The diagnostic does not install browser tooling. It first proves that a normal
+Chrome/Chromium executable, Node, and the Playwright module are already available
+on the selected surface; a missing prerequisite is
+`CODESPACES_EXECUTION_PATH_BLOCKED`, not an Adobe compatibility result. The
+base `agent-os-codespaces-v1` profile currently guarantees Python/Git/GitHub CLI
+developer tooling but does not itself declare Node, Playwright, or Chrome/Chromium,
+so live-probe readiness requires current evidence for those prerequisites.
+
+A minimum-probe pass additionally requires a successful HTTP response below 400,
+an allowlisted Adobe Express/account/auth surface, a non-empty bounded title, no
+navigation error, and no bounded error/challenge/consent title classification.
+An Adobe-origin error or generic page is therefore not sufficient for PASS.
+Graphics-blocked classification requires an actually reachable response plus
+explicit WebGL=false and WebGL2=false evidence. Browser cleanup is observed from
+the fixed runner; an unconfirmed close or outer timeout is execution-path failure
+rather than `cleanup_complete=true`.
+
+Its disposition vocabulary is limited to
+`CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM`, `CODESPACES_BLOCKED_GRAPHICS`,
+`CODESPACES_ADOBE_MINIMUM_PROBE_PASS`, `CODESPACES_NETWORK_ONLY`,
+`CODESPACES_EXECUTION_PATH_BLOCKED`, and `MANUAL_REVIEW`. Reaching
+`/unsupported-browser` or an equivalent unsupported-system surface is an
+unsupported-platform result. Reaching a normal Adobe login/application surface
+without that rejection is only a minimum-probe pass; it does not prove
+authentication, editor or capture functionality, general PPUX suitability, or
+Tinkercad suitability. Transport failures remain execution-path failures rather
+than Adobe compatibility failures.
+
 ## Developer-validation SSH start timeout (#2944)
 
 For the developer-validation operation only, the exact `gh codespace ssh`

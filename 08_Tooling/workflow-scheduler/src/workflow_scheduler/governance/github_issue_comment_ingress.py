@@ -45,7 +45,7 @@ _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 _NOTION_READ_RE = re.compile(
     r"/agent-os notion-read (?P<request_id>[a-z0-9][a-z0-9-]{0,62})", re.ASCII
 )
-_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly",)
+_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe")
 _DIAGNOSTIC_RE = re.compile(
     r"/agent-os diagnose (?P<diagnostic_id>"
     + "|".join(re.escape(value) for value in _DIAGNOSTIC_IDS)

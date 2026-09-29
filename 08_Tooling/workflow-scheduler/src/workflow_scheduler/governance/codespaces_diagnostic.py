@@ -29,6 +29,17 @@ from .dev_validation_codespaces import (
 from .github_issue_comment_ingress import IssueCommentIngressResult
 
 DIAGNOSTIC_ID = "ppux-canva-cdp-readonly"
+ADOBE_DIAGNOSTIC_ID = "ppux-adobe-minimum-probe"
+ADOBE_EXPRESS_URL = "https://new.express.adobe.com/"
+ADOBE_DISPOSITIONS = frozenset({
+    "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
+    "CODESPACES_BLOCKED_GRAPHICS",
+    "CODESPACES_ADOBE_MINIMUM_PROBE_PASS",
+    "CODESPACES_NETWORK_ONLY",
+    "CODESPACES_EXECUTION_PATH_BLOCKED",
+    "MANUAL_REVIEW",
+})
+DIAGNOSTIC_IDS = frozenset({DIAGNOSTIC_ID, ADOBE_DIAGNOSTIC_ID})
 DIAGNOSTIC_REASON = "accepted-codespaces-diagnostic-envelope"
 _FRAME_START = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
@@ -211,7 +222,7 @@ def _request_from_ingress(
         raise ValueError("diagnostic issue identity missing")
     diagnostic_id = ingress.diagnostic_id_or_none
     request_id = ingress.diagnostic_request_id_or_none
-    if diagnostic_id != DIAGNOSTIC_ID:
+    if diagnostic_id not in DIAGNOSTIC_IDS:
         raise ValueError("diagnostic identity is not approved")
     if type(request_id) is not str or _REQUEST_ID_RE.fullmatch(request_id) is None:
         raise ValueError("diagnostic request identity is invalid")
@@ -289,6 +300,123 @@ def _extract_framed_payload(stdout: object) -> str | None:
     )
 
 
+_ADOBE_REMOTE_RUNNER_SOURCE = r'''import json,os,platform,re,shutil,subprocess,sys
+PROFILE_ID="agent-os-codespaces-v1"
+DIAGNOSTIC_ID="ppux-adobe-minimum-probe"
+ADOBE_URL="https://new.express.adobe.com/"
+FRAME_START="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
+FRAME_END="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
+REQ=re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$",re.ASCII)
+SENSITIVE=re.compile(r"(?i)(cookie|token|password|secret|authorization|credential|profile)")
+MAX_TEXT=240
+
+def run(argv,*,cwd=None,timeout=20):
+ return subprocess.run(tuple(argv),cwd=cwd,check=False,capture_output=True,text=True,timeout=timeout)
+
+def emit(payload):
+ print(FRAME_START);print(json.dumps(payload,sort_keys=True,separators=(",",":")));print(FRAME_END)
+
+def text(value,limit=MAX_TEXT):
+ value=str(value or "").replace("\r"," ").replace("\n"," ").strip()
+ return "[redacted]" if SENSITIVE.search(value) else value[:limit]
+
+def base(status,reason,issue,request_id,codespace_name):
+ return {"schema_version":"1.0","status":status,"reason_codes":[reason],"disposition":"MANUAL_REVIEW","repository":"Blummer92/agent-os","issue_number":issue,"diagnostic_id":DIAGNOSTIC_ID,"request_id":request_id,"codespace_name":codespace_name,"codespaces_profile_id":PROFILE_ID,"execution_surface_id":f"codespace:{codespace_name}","environment_health_evidence_id":None,"workspace_head":None,"workspace_branch":None,"os_distribution":None,"kernel":None,"cpu_architecture":None,"cpu_count":os.cpu_count(),"ram_bytes":None,"available_disk_bytes":None,"browser_executable":None,"browser_version":None,"display_mode":"headless","graphics_renderer":None,"webgl":"unknown","webgl2":"unknown","requested_url":ADOBE_URL,"final_url":None,"http_status":None,"network_application_reachability":"unknown","page_title":None,"browser_process_exit_classification":"not-started","redirect_classification":"unknown","unsupported_browser_detected":False,"unsupported_system_detected":False,"normal_login_or_application_surface_detected":False,"fatal_browser_error":None,"fatal_renderer_error":None,"cleanup_complete":True,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
+
+if len(sys.argv)!=5:
+ emit(base("needs-decision","invalid-codespaces-diagnostic-argv",0,"unavailable","unavailable"));raise SystemExit(0)
+issue_text,diagnostic_id,request_id,codespace_name=sys.argv[1:]
+try: issue=int(issue_text)
+except ValueError: issue=0
+result=base("needs-decision","codespaces-diagnostic-failed",issue,request_id,codespace_name)
+if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
+ result["reason_codes"]=["invalid-codespaces-diagnostic-identity"];emit(result);raise SystemExit(0)
+if os.environ.get("CODESPACE_NAME")!=codespace_name:
+ result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
+primary="/workspaces/agent-os"
+if not os.path.isdir(primary):
+ result["reason_codes"]=["codespaces-workspace-unavailable"];emit(result);raise SystemExit(0)
+
+health=run(("python3","scripts/agent-os-environment-health.py","--execution-surface-id",f"codespace:{codespace_name}"),cwd=primary,timeout=20)
+try: health_payload=json.loads(health.stdout)
+except Exception: health_payload={}
+authority=health_payload.get("authority") if isinstance(health_payload,dict) else None
+safe_authority=isinstance(authority,dict) and authority and all(value is False for value in authority.values())
+if health.returncode!=0 or health_payload.get("status")!="pass" or health_payload.get("profile_id")!=PROFILE_ID or health_payload.get("execution_surface_id")!=f"codespace:{codespace_name}" or not safe_authority:
+ result["reason_codes"]=["codespaces-environment-health-invalid"];emit(result);raise SystemExit(0)
+result["environment_health_evidence_id"]=health_payload.get("environment_health_evidence_id")
+
+head=run(("git","rev-parse","HEAD"),cwd=primary,timeout=10);branch=run(("git","branch","--show-current"),cwd=primary,timeout=10)
+if head.returncode==0:result["workspace_head"]=text(head.stdout,40)
+if branch.returncode==0:result["workspace_branch"]=text(branch.stdout,180)
+try:result["os_distribution"]=text(" ".join(platform.freedesktop_os_release().get(k,"") for k in ("NAME","VERSION_ID")))
+except OSError:pass
+result["kernel"]=text(platform.release());result["cpu_architecture"]=text(platform.machine(),80)
+try:
+ pages=os.sysconf("SC_PHYS_PAGES");page_size=os.sysconf("SC_PAGE_SIZE");result["ram_bytes"]=int(pages*page_size)
+except (ValueError,OSError,AttributeError):pass
+try:result["available_disk_bytes"]=int(shutil.disk_usage(primary).free)
+except OSError:pass
+
+browser=next((p for p in ("google-chrome","google-chrome-stable","chromium","chromium-browser") if shutil.which(p)),None)
+if browser is None:
+ result["reason_codes"]=["adobe-browser-unavailable"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";emit(result);raise SystemExit(0)
+result["browser_executable"]=text(browser,120)
+version=run((browser,"--version"),timeout=10)
+if version.returncode==0:result["browser_version"]=text(version.stdout,160)
+
+node=shutil.which("node")
+if node is None:
+ result["reason_codes"]=["adobe-node-runtime-unavailable"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";emit(result);raise SystemExit(0)
+playwright=run((node,"-e","require.resolve('playwright')"),cwd=primary,timeout=10)
+if playwright.returncode!=0:
+ result["reason_codes"]=["adobe-playwright-runtime-unavailable"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";emit(result);raise SystemExit(0)
+
+js="""const { chromium } = require('playwright'); (async()=>{let b;let cleanup=false;try{b=await chromium.launch({headless:true,executablePath:process.argv[1]});const p=await b.newPage();let response=null;let navigationError=null;try{response=await p.goto(process.argv[2],{waitUntil:'domcontentloaded',timeout:30000});}catch(e){navigationError=String(e).slice(0,240);}const finalUrl=p.url();const title=(await p.title()).slice(0,240);const gpu=await p.evaluate(()=>{const c=document.createElement('canvas');const g2=c.getContext('webgl2');const g=c.getContext('webgl')||c.getContext('experimental-webgl');let renderer=null;try{const x=g2||g;if(x){const d=x.getExtension('WEBGL_debug_renderer_info');if(d)renderer=x.getParameter(d.UNMASKED_RENDERER_WEBGL);}}catch(e){}return {webgl:!!g,webgl2:!!g2,renderer};});await b.close();b=null;cleanup=true;console.log(JSON.stringify({ok:true,cleanup,status:response?response.status():null,finalUrl,title,navigationError,...gpu}));}catch(e){console.log(JSON.stringify({ok:false,cleanup,error:String(e).slice(0,240)}));}finally{if(b){try{await b.close();cleanup=true;}catch(e){}}}})();"""
+try:probe=run((node,"-e",js,browser,ADOBE_URL),cwd=primary,timeout=45)
+except subprocess.TimeoutExpired:
+ result["reason_codes"]=["adobe-browser-probe-timeout"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";result["cleanup_complete"]=False;result["browser_process_exit_classification"]="timeout";emit(result);raise SystemExit(0)
+result["browser_process_exit_classification"]="exit-0" if probe.returncode==0 else f"exit-{probe.returncode}"
+try: observed=json.loads((probe.stdout or "").strip().splitlines()[-1])
+except Exception: observed={}
+if not isinstance(observed,dict) or not observed.get("ok"):
+ result["reason_codes"]=["adobe-browser-probe-failed"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";result["fatal_browser_error"]=text(observed.get("error") if isinstance(observed,dict) else None);result["cleanup_complete"]=bool(isinstance(observed,dict) and observed.get("cleanup") is True);emit(result);raise SystemExit(0)
+
+result["cleanup_complete"]=observed.get("cleanup") is True
+if not result["cleanup_complete"]:
+ result["reason_codes"]=["adobe-browser-cleanup-unconfirmed"];result["disposition"]="CODESPACES_EXECUTION_PATH_BLOCKED";emit(result);raise SystemExit(0)
+status=observed.get("status");result["http_status"]=status if type(status) is int and 100<=status<=599 else None
+final_url=text(observed.get("finalUrl"),500);title=text(observed.get("title"))
+result["final_url"]=final_url;result["page_title"]=title
+result["network_application_reachability"]="reachable" if result["http_status"] is not None else ("failed" if observed.get("navigationError") else "unknown")
+if observed.get("navigationError"):result["fatal_browser_error"]=text(observed.get("navigationError"))
+result["graphics_renderer"]=text(observed.get("renderer"),240)
+result["webgl"]="yes" if observed.get("webgl") is True else ("no" if observed.get("webgl") is False else "unknown")
+result["webgl2"]="yes" if observed.get("webgl2") is True else ("no" if observed.get("webgl2") is False else "unknown")
+lower=(final_url+" "+title).lower()
+unsupported_browser="/unsupported-browser" in final_url.lower() or "unsupported browser" in title.lower()
+unsupported_system=any(marker in title.lower() for marker in ("system is not supported","unsupported system","system not supported"))
+result["unsupported_browser_detected"]=unsupported_browser;result["unsupported_system_detected"]=unsupported_system
+if final_url and final_url!=ADOBE_URL:result["redirect_classification"]="same-adobe" if final_url.lower().startswith(("https://new.express.adobe.com/","https://express.adobe.com/","https://auth.services.adobe.com/","https://account.adobe.com/")) else "other-origin"
+else:result["redirect_classification"]="none"
+bad_title=any(marker in title.lower() for marker in ("error","access denied","captcha","challenge","cookie","consent","forbidden","not found"))
+normal_path=final_url.lower().startswith(("https://new.express.adobe.com/","https://express.adobe.com/","https://auth.services.adobe.com/","https://account.adobe.com/"))
+normal=bool(result["http_status"] is not None and 200<=result["http_status"]<400 and normal_path and title and not bad_title and not unsupported_browser and not unsupported_system and not observed.get("navigationError"))
+result["normal_login_or_application_surface_detected"]=normal
+if unsupported_browser or unsupported_system:
+ result["status"]="success";result["reason_codes"]=["adobe-unsupported-platform-observed"];result["disposition"]="CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM"
+elif result["network_application_reachability"]=="reachable" and observed.get("webgl") is False and observed.get("webgl2") is False:
+ result["status"]="success";result["reason_codes"]=["adobe-graphics-blocked"];result["disposition"]="CODESPACES_BLOCKED_GRAPHICS"
+elif normal:
+ result["status"]="success";result["reason_codes"]=["adobe-minimum-probe-passed"];result["disposition"]="CODESPACES_ADOBE_MINIMUM_PROBE_PASS"
+elif result["network_application_reachability"]=="reachable":
+ result["status"]="success";result["reason_codes"]=["adobe-network-only"];result["disposition"]="CODESPACES_NETWORK_ONLY"
+else:
+ result["reason_codes"]=["adobe-manual-review"];result["disposition"]="MANUAL_REVIEW"
+emit(result)
+'''
+
+
 def run_codespaces_diagnostic(
     request: CodespacesDiagnosticRequest,
     *,
@@ -308,7 +436,7 @@ def run_codespaces_diagnostic(
                 "--",
                 "python3",
                 "-c",
-                _REMOTE_RUNNER_SOURCE,
+                _ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE,
                 str(request.issue_number),
                 request.diagnostic_id,
                 request.request_id,
@@ -376,6 +504,24 @@ def run_codespaces_diagnostic(
         return _failure(request, "codespaces-diagnostic-status-invalid", codespace_name)
     if payload.get("cleanup_complete") is not True:
         return _failure(request, "codespaces-diagnostic-cleanup-invalid", codespace_name)
+    if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID:
+        allowed_dispositions = ADOBE_DISPOSITIONS
+        if payload.get("requested_url") != ADOBE_EXPRESS_URL:
+            return _failure(request, "codespaces-diagnostic-evidence-identity-mismatch", codespace_name)
+        if payload.get("disposition") not in allowed_dispositions:
+            return _failure(request, "codespaces-diagnostic-status-invalid", codespace_name)
+        serialized = json.dumps(payload, sort_keys=True).lower()
+        forbidden_evidence_keys = (
+            "\"cookie\"",
+            "\"cookies\"",
+            "\"token\"",
+            "\"password\"",
+            "\"authorization\"",
+            "\"profile_contents\"",
+            "\"raw_html\"",
+        )
+        if any(key in serialized for key in forbidden_evidence_keys):
+            return _failure(request, "codespaces-diagnostic-sensitive-evidence-rejected", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         payload.get("status") == "success"
