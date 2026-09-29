@@ -50,6 +50,14 @@ If the available evidence cannot prove a rendered judgment, return
 A structurally valid deck with visible occlusion, clipping, unreadable contrast,
 or broken hierarchy cannot satisfy this gate.
 
+### Worksheet density and hierarchy review
+
+For worksheets, a mechanically valid page may still require revision when the rendered hierarchy asks students to process too many competing sections at once. Review density from the instructional roles present, not from universal row, box, word, or fill-percentage limits.
+
+When the render is overloaded, identify the specific competing directions, banks, tables, reflections, checklists, scoring controls, or visual regions creating the conflict. Prefer simplifying, consolidating, or deleting redundant simultaneous elements before adding pages or decorative structure. Preserve required student evidence, usable response space, and intentional whitespace.
+
+Intentional whitespace is not a defect by itself. When structural evidence cannot establish whether density, hierarchy, or whitespace is instructionally manageable, route that dimension to rendered/manual review rather than assigning a mechanical pass.
+
 ## Quick QA Heuristics
 
 Legacy `agent_tools/material_qa.py` checks are advisory heuristics, not a full rubric.
@@ -78,10 +86,11 @@ or a gate violation is discovered.
 
 ## Version
 
-0.3.1
+0.3.2
 
 ## Changelog
 
+- 0.3.2 makes worksheet cognitive-density/hierarchy an explicit rendered-review dimension, names competing instructional regions, prefers simplification over added structure, preserves evidence/response space, and rejects universal fill/box/word thresholds (#3098).
 - 0.3.1 added the rendered classroom review gate for phone/projector quality
   and explicit separation of mechanical evidence from manual visual judgment
   (#1835).
