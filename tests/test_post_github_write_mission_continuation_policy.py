@@ -70,3 +70,23 @@ def test_existing_continuation_architecture_remains_canonical() -> None:
     assert "Final finite-mission reconciliation" in orchestrator
     assert "Mission continuation never widens authority" in orchestrator
     assert "Successful tool/schema/capability discovery during an unfinished authorized mission is intermediate evidence" in orchestrator
+
+
+def test_content_edit_requires_exact_head_semantic_readback() -> None:
+    workflow = normalized(AGENTS)
+    for phrase in (
+        "bind the pre-edit content identity and intended transformation before mutation",
+        "reread the exact file on the exact mutated head",
+        "prove the intended form is present",
+        "triggering/rejected form is absent",
+        "unchanged content/blob identity",
+        "no-op transformation",
+        "failed-repair evidence",
+    ):
+        assert phrase in workflow
+
+
+def test_3065_noop_file_update_cannot_be_reported_as_applied() -> None:
+    workflow = normalized(AGENTS)
+    assert "do not report the edit as applied" in workflow
+    assert "re-enter the existing failed-repair path before another mutation" in workflow
