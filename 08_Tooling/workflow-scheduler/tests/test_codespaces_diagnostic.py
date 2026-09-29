@@ -588,3 +588,14 @@ def test_3094_adobe_evidence_contract_is_bounded_and_fixed() -> None:
     assert "raw html" not in _ADOBE_REMOTE_RUNNER_SOURCE.lower()
     assert len(_ADOBE_REMOTE_RUNNER_SOURCE.encode("utf-8")) < 16000
     assert "cleanup_complete" in _ADOBE_REMOTE_RUNNER_SOURCE
+    for forbidden in (
+        "--user-data-dir",
+        "--remote-debugging-port",
+        "--disable-web-security",
+        "--use-gl=",
+        "--use-angle=",
+        "cookies()",
+        "localstorage",
+        "sessionstorage",
+    ):
+        assert forbidden not in _ADOBE_REMOTE_RUNNER_SOURCE.lower()
