@@ -439,9 +439,13 @@ def test_3094_adobe_and_existing_canva_diagnostics_select_distinct_fixed_runners
         title="Adobe Express",
     )
 
+    call_count = 0
+
     def run(argv, *, timeout):
+        nonlocal call_count
+        call_count += 1
         calls.append(argv)
-        if argv[:3] == ("gh", "api", "-H"):
+        if call_count == 1:
             return subprocess.CompletedProcess(argv, 0, stdout=_codespace_payload(), stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(adobe_payload), stderr="")
 
