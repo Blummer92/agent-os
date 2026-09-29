@@ -142,6 +142,7 @@ class LessonPreflightResult:
     retrieval_escalation: RetrievalEscalation
     source_authority: str
     handoff_projection: dict[str, list[str]]
+    rejected_candidate_provenance: tuple[dict[str, str], ...] = ()
     selection: CodingKnowledgeSelectionResult | None = None
     notion_write_performed: bool = field(default=False, init=False)
     github_write_performed: bool = field(default=False, init=False)
@@ -160,6 +161,7 @@ class LessonPreflightResult:
             "retrieval_escalation": self.retrieval_escalation.value,
             "source_authority": self.source_authority,
             "handoff_projection": self.handoff_projection,
+            "rejected_candidate_provenance": [dict(item) for item in self.rejected_candidate_provenance],
             "notion_write_performed": self.notion_write_performed,
             "github_write_performed": self.github_write_performed,
             "authority_created": self.authority_created,
@@ -354,7 +356,32 @@ def _from_selection(
         retrieval_escalation=selection.recommended_escalation,
         source_authority="advisory-only",
         handoff_projection=selection.to_handoff_projection(),
+        rejected_candidate_provenance=_rejected_candidate_provenance(selection, eligible),
         selection=selection,
+    )
+
+
+
+def _rejected_candidate_provenance(
+    selection: CodingKnowledgeSelectionResult,
+    eligible: tuple[LessonRecordEvidence, ...],
+) -> tuple[dict[str, str], ...]:
+    """Project finite sanitized identity/currentness for candidates CKR2 rejected."""
+    if selection.sufficiency_status not in (
+        SufficiencyStatus.INSUFFICIENT,
+        SufficiencyStatus.MANUAL_REVIEW,
+    ):
+        return ()
+    return tuple(
+        {
+            "lesson_id": lesson.lesson_id,
+            "source_revision": lesson.source_revision,
+            "currentness": lesson.currentness.value,
+            "provenance": "canonical-github-ref-present"
+            if lesson.canonical_github_refs
+            else "canonical-github-ref-missing-or-rejected",
+        }
+        for lesson in eligible[:MAX_LESSON_RECORDS]
     )
 
 
