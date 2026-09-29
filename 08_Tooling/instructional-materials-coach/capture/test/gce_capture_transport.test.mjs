@@ -88,35 +88,6 @@ function lifecycleSpawn(observed, {
   };
 }
 
-function successfulSpawn(observed, responseOverrides = {}) {
-  return (command, argv, options) => {
-    observed.command = command;
-    observed.argv = argv;
-    observed.options = options;
-    const child = new EventEmitter();
-    child.stdin = new PassThrough();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    observed.stdin = '';
-    child.stdin.on('data', (chunk) => { observed.stdin += chunk.toString('utf8'); });
-    child.kill = () => {};
-    queueMicrotask(() => {
-      child.stdout.end(JSON.stringify({
-        transport_status: 'succeeded',
-        execution_surface: EXECUTION_SURFACE,
-        capture_result: { status: 'blocked', capture: null },
-        screenshots: [],
-        evidence_persisted: false,
-        side_effects_performed: false,
-        ...responseOverrides,
-      }));
-      child.stderr.end();
-      child.emit('close', 0);
-    });
-    return child;
-  };
-}
-
 test('GCE capture argv is fixed to one host and one session-owned entrypoint', () => {
   assert.equal(captureHostEntrypoint(CANVA_BROWSER_SESSION_REF), CAPTURE_HOST_ENTRYPOINTS[CANVA_BROWSER_SESSION_REF]);
   assert.equal(captureHostEntrypoint(BROWSER_SESSION_REF), CAPTURE_HOST_ENTRYPOINTS[BROWSER_SESSION_REF]);
