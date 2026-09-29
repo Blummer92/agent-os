@@ -70,3 +70,25 @@ def test_existing_continuation_architecture_remains_canonical() -> None:
     assert "Final finite-mission reconciliation" in orchestrator
     assert "Mission continuation never widens authority" in orchestrator
     assert "Successful tool/schema/capability discovery during an unfinished authorized mission is intermediate evidence" in orchestrator
+
+
+def test_3065_repository_content_edit_requires_semantic_readback() -> None:
+    workflow = normalized(AGENTS)
+    orchestrator = normalized(ORCHESTRATOR)
+    for phrase in (
+        "prove the intended replacement bytes differ from the pre-edit bytes",
+        "canonically reread the exact file on the resulting head",
+        "prove both that the intended content is present and that the triggering/rejected content is absent",
+        "unchanged blob/content identity",
+        "failed-repair evidence",
+        "Exact-head validation remains independently required",
+    ):
+        assert phrase in workflow
+    for phrase in (
+        "require a pre-edit byte difference",
+        "canonical exact-file/head readback",
+        "triggering/rejected content is absent",
+        "unchanged content identity or mismatched readback is failed-repair evidence",
+        "exact-head validation remains independently required",
+    ):
+        assert phrase in orchestrator
