@@ -182,10 +182,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.4.0
+0.5.0
 
 ## Changelog
 
+- 0.5.0 separates realistic teacher utterances from independent A/B test-harness controls, requires explicit clean-context isolation only when independence is part of the comparison, and keeps fixed-source/config/evaluation controls outside simulated teacher prose (#3090, #3091).
 - 0.4.0 makes concise lesson-specific Warm-Up and Exit Ticket sections standard worksheet defaults, preserves supplied/equivalent closing evidence without duplication, applies the rule per differentiated/day worksheet, and keeps both below #1567's compact header without sacrificing core response space (#1568).
 - 0.3.0 makes a compact title + student-identification top band the default for worksheets, keeps lesson sections below that band, and preserves an explicit layout opt-out (#1567).
 - 0.2.0 adds reusable worksheet identification, neutral Challenge A/B/C
