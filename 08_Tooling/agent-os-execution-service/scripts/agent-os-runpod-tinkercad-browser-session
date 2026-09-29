@@ -1,0 +1,88 @@
+#!/bin/sh
+# Fixed Runpod Community Tinkercad GPU-browser session for #2787.
+# Repository source only; this script does not create or mutate a Runpod Pod.
+set -eu
+
+PROVIDER=runpod-community
+GPU_CLASS=NVIDIA_RTX_A5000
+DISPLAY_ID=:0
+VNC_PORT=5902
+NOVNC_PORT=6081
+SESSION_TTL_SECONDS=7200
+START_URL=https://www.tinkercad.com/3d-design/
+PROFILE_ROOT=${XDG_RUNTIME_DIR:-/tmp}/agent-os-tinkercad-profile
+CHROMIUM=/usr/bin/chromium
+X11VNC=/usr/bin/x11vnc
+WEBSOCKIFY=/usr/bin/websockify
+NVIDIA_SMI=/usr/bin/nvidia-smi
+DATE=/usr/bin/date
+SLEEP=/usr/bin/sleep
+
+fail() { printf '%s\n' "runpod tinkercad session refused: $1" >&2; exit 64; }
+
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ -x "$NVIDIA_SMI" ] || fail "NVIDIA GPU runtime unavailable"
+[ -x "$CHROMIUM" ] || fail "Chromium unavailable"
+[ -x "$X11VNC" ] || fail "x11vnc unavailable"
+[ -x "$WEBSOCKIFY" ] || fail "websockify unavailable"
+[ -n "${DISPLAY:-}" ] || fail "GPU-backed display unavailable"
+[ "$DISPLAY" = "$DISPLAY_ID" ] || fail "unexpected display identity"
+
+gpu_name=$("$NVIDIA_SMI" --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || true)
+[ "$gpu_name" = "NVIDIA RTX A5000" ] || fail "fixed RTX A5000 GPU unavailable"
+
+rm -rf "$PROFILE_ROOT"
+mkdir -p "$PROFILE_ROOT"
+chmod 0700 "$PROFILE_ROOT"
+
+chromium_pid=
+x11vnc_pid=
+websockify_pid=
+cleanup() {
+  trap - EXIT HUP INT TERM
+  for pid in "$websockify_pid" "$x11vnc_pid" "$chromium_pid"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; fi
+  done
+  for pid in "$websockify_pid" "$x11vnc_pid" "$chromium_pid"; do
+    if [ -n "$pid" ]; then wait "$pid" 2>/dev/null || true; fi
+  done
+  rm -rf "$PROFILE_ROOT"
+}
+trap cleanup EXIT HUP INT TERM
+
+"$CHROMIUM" \
+  --user-data-dir="$PROFILE_ROOT" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --start-maximized \
+  "$START_URL" >/dev/null 2>&1 &
+chromium_pid=$!
+
+"$X11VNC" -display "$DISPLAY_ID" -rfbport "$VNC_PORT" -localhost -forever -shared -nopw -nosel -noclipboard -nosetclipboard -notightfilexfer -noxrecord -quiet >/dev/null 2>&1 &
+x11vnc_pid=$!
+"$WEBSOCKIFY" --web=/usr/share/novnc "127.0.0.1:$NOVNC_PORT" "127.0.0.1:$VNC_PORT" >/dev/null 2>&1 &
+websockify_pid=$!
+
+"$SLEEP" 1
+for pid in "$chromium_pid" "$x11vnc_pid" "$websockify_pid"; do kill -0 "$pid" 2>/dev/null || fail "browser component failed to start"; done
+
+started_at=$("$DATE" -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' "{\"schema_name\":\"agent-os-runpod-tinkercad-session\",\"schema_version\":\"1.0\",\"status\":\"operator-session-started\",\"provider\":\"$PROVIDER\",\"gpu_class\":\"$GPU_CLASS\",\"browser_session_ref\":\"tinkercad-runpod-ephemeral\",\"operator_view_url\":\"http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale\",\"started_at\":\"$started_at\",\"auth_ready_asserted\":false,\"profile_persisted\":false,\"provider_mutation_authorized\":false}"
+
+deadline=$(( $("$DATE" +%s) + SESSION_TTL_SECONDS ))
+status=operator-session-complete
+reason=operator-browser-closed
+while :; do
+  now=$("$DATE" +%s)
+  if [ "$now" -ge "$deadline" ]; then status=operator-session-timeout; reason=bounded-ttl-reached; break; fi
+  if ! "$NVIDIA_SMI" --query-gpu=name --format=csv,noheader 2>/dev/null | grep -Fx "NVIDIA RTX A5000" >/dev/null; then status=operator-session-failed; reason=gpu-lost; break; fi
+  for pid in "$x11vnc_pid" "$websockify_pid"; do
+    if ! kill -0 "$pid" 2>/dev/null; then status=operator-session-failed; reason=browser-component-exited; break 2; fi
+  done
+  if ! kill -0 "$chromium_pid" 2>/dev/null; then break; fi
+  "$SLEEP" 2
+done
+finished_at=$("$DATE" -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' "{\"schema_name\":\"agent-os-runpod-tinkercad-session\",\"schema_version\":\"1.0\",\"status\":\"$status\",\"reason_codes\":[\"$reason\"],\"browser_session_ref\":\"tinkercad-runpod-ephemeral\",\"finished_at\":\"$finished_at\",\"auth_ready_asserted\":false,\"profile_persisted\":false,\"provider_mutation_authorized\":false}"
+[ "$status" != operator-session-failed ]
