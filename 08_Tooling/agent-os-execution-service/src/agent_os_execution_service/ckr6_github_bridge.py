@@ -246,6 +246,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "reason_codes": raw["selection_reason_codes"],
             "selected_lesson_ids": raw["selected_lesson_ids"],
             "canonical_github_refs": raw["canonical_github_refs"],
+            "rejected_candidate_provenance": raw.get("rejected_candidate_provenance", []),
             "substantial_hypothesis_admissible": raw["substantial_hypothesis_admissible"],
             "mutation_admissible": False,
             "execution_authorized": False,
