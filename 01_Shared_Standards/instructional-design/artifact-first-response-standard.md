@@ -148,6 +148,42 @@ choose a nearby destination, change sharing, or treat metadata registration as
 student-facing approval.
 
 
+## Source Retrieval Delivery Continuation
+
+A successful project/source retrieval is intermediate evidence when the active
+teacher mission already requests a classroom artifact and that artifact has not
+yet been produced. Do not stop at retrieval merely to report that relevant
+Photography Foundations (or other unit) source material was found, that a
+production skill was loaded, or that the evidence is sufficient. Loading a
+DOCX-generation skill or summarizing retrieved composition concepts is not
+worksheet delivery.
+
+After retrieving the needed source evidence in the same mission, continue
+immediately into worksheet generation:
+
+1. treat the retrieved source context as input to production, not as the
+   response's terminal deliverable;
+2. consume the retrieved project materials and composition vocabulary directly,
+   without requiring the teacher to restate what the project already contains;
+3. produce the usable student-facing worksheet artifact, or complete
+   artifact-ready student-facing content, before backend status or governance
+   reporting per the Required Order above;
+4. when no explicit Drive destination is supplied and no authorized production
+   write is available, finish with a bounded local/chat artifact -- complete
+   student-facing worksheet content or a clearly labeled content specification --
+   rather than stopping after retrieval.
+
+Do not ask an unnecessary clarifying question when the supplied project
+materials are sufficient for a bounded worksheet. Ask only when source
+uncertainty makes a bounded draft unsafe, and then use Blocked-Production
+Behavior instead of fabricating curriculum facts.
+
+This continuation never creates external-write authority. It does not change
+classroom artifact destinations, does not authorize Drive, Notion, publication,
+or other external writes, and does not weaken source-grounding requirements.
+A missing Drive destination never authorizes writing the lesson artifact to
+GitHub.
+
 ## Content-First Visual Planning For Worksheets
 
 When a teacher explicitly requests student-facing content first and visual selection second, preserve that sequence. Establish the bounded worksheet content or clearly labeled content specification before selecting visuals. A missing lesson-day detail does not by itself erase the requested deliverable when a safe bounded draft can be produced; mark unsupported lesson specifics as proposed / needs confirmation rather than silently inventing them.
@@ -188,4 +224,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.6
+0.1.7
