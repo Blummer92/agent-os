@@ -44,6 +44,9 @@ CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 LESSONS_LEARNED_VERIFICATION_REQUEST_ID = "verify-lessons-learned-binding"
 LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER = 2854
 LESSONS_LEARNED_REFERENCE_PAGE_ID = "3c67ac78-3131-8130-94dd-da66213ca42b"
+TEACHER_MODELING_VERIFICATION_REQUEST_ID = "verify-teacher-modeling-binding"
+TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER = 2756
+TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID = "e4a9f806-88ea-4487-aaea-ce6c2af72aab"
 
 _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
@@ -52,6 +55,12 @@ _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 def _verification_request_spec(
     request_id: str | None,
 ) -> tuple[int, str, tuple[str, ...]] | None:
+    if request_id == TEACHER_MODELING_VERIFICATION_REQUEST_ID:
+        return (
+            TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER,
+            "teacher-modeling",
+            ("get_data_source",),
+        )
     if request_id == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
         return (
             LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
@@ -95,6 +104,7 @@ def _binding_verification_request_ids() -> tuple[str, ...]:
     candidates = [
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         *(
             f"verify-{unit.canonical_unit_key}-binding"
             for unit in catalog.canonical_units
@@ -431,6 +441,38 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
     }
 
 
+def verify_teacher_modeling_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
+    """Freshly verify the one fixed Teacher Modeling source candidate without promoting it."""
+
+    source = _execute_read(
+        adapter,
+        "get_data_source",
+        data_source_id=TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID,
+    )
+    if _normalize_notion_id(source.get("id")) != _normalize_notion_id(
+        TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID
+    ):
+        raise NotionReadRequestError("Teacher Modeling data-source identity mismatch")
+    if source.get("archived") is True or source.get("in_trash") is True:
+        raise NotionReadRequestError("Teacher Modeling data source is archived or trashed")
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": TEACHER_MODELING_VERIFICATION_REQUEST_ID,
+        "dispatch_status": "completed",
+        "dispatch_reason": "teacher-modeling-binding-verification-complete",
+        "teacher_modeling": {
+            "data_source_id": TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID,
+            "verification_state": "verified-current",
+        },
+        "notion_writes_performed": False,
+        "drive_writes_performed": False,
+        "classroom_artifact_writes_performed": False,
+        "gce_invoked": False,
+        "generated_at": generated_at,
+    }
+
+
 def verify_live_bindings(adapter: object, *, generated_at: str) -> dict[str, object]:
     """Return sanitized current identities from exactly three live Notion reads."""
 
@@ -511,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_live_bindings(adapter, generated_at=args.generated_at)
         elif admission.get("request_id") == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
             result = verify_lessons_learned_binding(adapter, generated_at=args.generated_at)
+        elif admission.get("request_id") == TEACHER_MODELING_VERIFICATION_REQUEST_ID:
+            result = verify_teacher_modeling_binding(adapter, generated_at=args.generated_at)
         else:
             canonical_source = load_catalog().source("canonical-unit")
             if canonical_source is None or not canonical_source.dispatchable or canonical_source.data_source_id is None:
@@ -550,11 +594,15 @@ __all__ = [
     "LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER",
     "LESSONS_LEARNED_VERIFICATION_REQUEST_ID",
     "PHOTOGRAPHY_FOUNDATIONS_PAGE_ID",
+    "TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID",
+    "TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER",
+    "TEACHER_MODELING_VERIFICATION_REQUEST_ID",
     "VERIFICATION_REQUEST_ID",
     "VISUAL_ASSET_LIBRARY_DATABASE_ID",
     "admit_binding_verification_request",
     "verify_additional_unit_binding",
     "verify_candy_branding_binding",
     "verify_lessons_learned_binding",
+    "verify_teacher_modeling_binding",
     "verify_live_bindings",
 ]
