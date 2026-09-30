@@ -166,3 +166,33 @@ def test_3037_successful_provisional_ready_never_requests_draft_rollback():
     assert result.rollback_to_draft_required is False
     assert "provisional-ready-aggregate-converged" in result.reason_codes
     assert result.next_action == "retain-ready-and-reacquire-later-gates"
+
+
+def test_3106_pending_provisional_ready_requires_immediate_draft_projection():
+    result = evaluate_provisional_ready_reconciliation(
+        repository="Blummer92/agent-os",
+        pr_number=3106,
+        pr_lifecycle_state="ready",
+        expected_head_sha=HEAD,
+        observed_head_sha=HEAD,
+        validation_head_sha=HEAD,
+        aggregate_status="in_progress",
+    )
+    assert result.ready_converged is False
+    assert result.rollback_to_draft_required is True
+    assert "provisional-ready-aggregate-pending" in result.reason_codes
+    assert result.next_action == "convert-pull-request-back-to-draft-and-await-exact-head-aggregate"
+
+
+def test_queued_provisional_ready_is_also_non_converged():
+    result = evaluate_provisional_ready_reconciliation(
+        repository="Blummer92/agent-os",
+        pr_number=3106,
+        pr_lifecycle_state="ready",
+        expected_head_sha=HEAD,
+        observed_head_sha=HEAD,
+        validation_head_sha=HEAD,
+        aggregate_status="queued",
+    )
+    assert result.rollback_to_draft_required is True
+    assert "provisional-ready-aggregate-pending" in result.reason_codes

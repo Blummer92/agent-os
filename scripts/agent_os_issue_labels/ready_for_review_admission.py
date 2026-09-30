@@ -202,7 +202,11 @@ def evaluate_provisional_ready_reconciliation(
         if aggregate_status != "success":
             reasons.append("authoritative-aggregate-not-green")
         rollback = True
-        next_action = "convert-pull-request-back-to-draft"
+        if aggregate_status in {"pending", "queued", "in_progress"}:
+            reasons.append("provisional-ready-aggregate-pending")
+            next_action = "convert-pull-request-back-to-draft-and-await-exact-head-aggregate"
+        else:
+            next_action = "convert-pull-request-back-to-draft"
 
     return ProvisionalReadyReconciliationResult(
         repository=repository,
