@@ -19,7 +19,7 @@ def _asset(index: int=1) -> dict[str, object]:
     return {'asset_id': f'asset-{index}', 'stable_ref': f'asset-ref-{index}', 'content_fingerprint': 'c' * 64, 'perceptual_match_evidence': None, 'duplicate_group_id': None, 'duplicate_relationship': 'unique', 'disposition': 'canonical', 'canonical_asset_ref': None, 'comparison_evidence': 'supplied comparison evidence', 'confidence': 1.0, 'rights_classification': 'permission-documented', 'rights_basis': 'permission-evidence', 'warning_signals': [], 'privacy_observations': [], 'privacy_mitigation': 'none', 'privacy_resolved': True, 'residual_privacy_risk': False, 'content_findings': [], 'repair_source_status': 'not-needed', 'direct_use_status': 'student-ready', 'correction_requirement': None, 'replacement_required': False, 'transformations': [], 'required_context_flags': [], 'preserved_context_flags': [], 'context_preservation_complete': True}
 
 def valid_manifest() -> dict[str, object]:
-    value: dict[str, object] = {'identity': {'contract_version': 'curriculum-artifact-manifest-v1', 'manifest_id': 'manifest-1', 'record_revision': 1, 'created_at': '2026-07-30T00:00:00Z', 'modified_at': '2026-07-30T00:00:00Z', 'verified_at': '2026-07-30T00:00:00Z', 'source_fingerprint': '0' * 64}, 'requirement_reference': {'requirement_id': 'requirement-1', 'contract_version': 'curriculum-material-requirement-v1', 'record_revision': 1, 'fingerprint': 'a' * 64}, 'artifact': {'artifact_type': 'worksheet', 'mime_type': 'application/pdf'}, 'external_identity': {'provider': 'google-drive', 'file_id': 'file-1', 'drive_id': 'drive-1', 'resource_key_required': True, 'resource_key': 'resource-1', 'parent_folder_ref': 'folder-1', 'exact_reference': 'drive:file-1', 'web_view_link': 'https://example.invalid/file-1', 'external_revision': 'drive-revision-1', 'modified_time': '2026-07-30T00:00:00Z', 'last_verified_at': '2026-07-30T00:00:00Z', 'verification_scope': 'shared-drive', 'access_state': 'verified', 'trashed': False}, 'source_snapshot': {'handoff_id': 'handoff-1', 'source_fingerprint': 'b' * 64, 'dependency_fingerprint': 'd' * 64, 'dependency_keys': ['source.unit', 'material.requirement'], 'dependency_values': {'source.unit': 'unit-1', 'material.requirement': 'requirement-1'}, 'source_changed': False}, 'operation': {'kind': 'discover-existing', 'idempotency_key': 'manifest-requirement-operation-target', 'approved_request_id': None, 'approved_scope': None, 'current_file_ref': None, 'template_ref': None, 'template_permission_state': None, 'discovery_evidence': ['supplied provider/file identity']}, 'duplicates': {'candidates': [], 'selected_candidate_ref': None}, 'lineage': {'revisions': [], 'predecessor_ref': None, 'successor_ref': None, 'supersession_reason': None}, 'statuses': {'quality_state': 'pass', 'teacher_approval': 'approved', 'classroom_readiness': 'ready', 'production_state': 'not-authorized', 'publication_state': 'not-published', 'sharing_state': 'private-observed'}, 'quality_rows': [{'row_id': 'quality-1', 'state': 'pass', 'reason_codes': []}], 'assets': [_asset()], 'references': [{'reference_id': 'reference-1', 'kind': 'material-requirement', 'stable_ref': 'requirement-1', 'fingerprint': 'e' * 64}], 'custom_properties': {'manifest_id': 'manifest-1', 'requirement_id': 'requirement-1', 'contract_version': 'curriculum-artifact-manifest-v1', 'idempotency_key': 'manifest-requirement-operation-target'}, 'authority': {'execution_authorized': False, 'external_write_authorized': False, 'production_authorized': False, 'publication_authorized': False, 'side_effects_performed': False}}
+    value: dict[str, object] = {'identity': {'contract_version': 'curriculum-artifact-manifest-v1', 'manifest_id': 'manifest-1', 'record_revision': 1, 'created_at': '2026-07-30T00:00:00Z', 'modified_at': '2026-07-30T00:00:00Z', 'verified_at': '2026-07-30T00:00:00Z', 'source_fingerprint': '0' * 64}, 'requirement_reference': {'requirement_id': 'requirement-1', 'contract_version': 'curriculum-material-requirement-v1', 'record_revision': 1, 'fingerprint': 'a' * 64}, 'artifact': {'artifact_type': 'worksheet', 'mime_type': 'application/pdf', 'observed_sections': ['directions', 'practice']}, 'external_identity': {'provider': 'google-drive', 'file_id': 'file-1', 'drive_id': 'drive-1', 'resource_key_required': True, 'resource_key': 'resource-1', 'parent_folder_ref': 'folder-1', 'exact_reference': 'drive:file-1', 'web_view_link': 'https://example.invalid/file-1', 'external_revision': 'drive-revision-1', 'modified_time': '2026-07-30T00:00:00Z', 'last_verified_at': '2026-07-30T00:00:00Z', 'verification_scope': 'shared-drive', 'access_state': 'verified', 'trashed': False}, 'source_snapshot': {'handoff_id': 'handoff-1', 'source_fingerprint': 'b' * 64, 'dependency_fingerprint': 'd' * 64, 'dependency_keys': ['source.unit', 'material.requirement'], 'dependency_values': {'source.unit': 'unit-1', 'material.requirement': 'requirement-1'}, 'source_changed': False}, 'operation': {'kind': 'discover-existing', 'idempotency_key': 'manifest-requirement-operation-target', 'approved_request_id': None, 'approved_scope': None, 'current_file_ref': None, 'template_ref': None, 'template_permission_state': None, 'discovery_evidence': ['supplied provider/file identity']}, 'duplicates': {'candidates': [], 'selected_candidate_ref': None}, 'lineage': {'revisions': [], 'predecessor_ref': None, 'successor_ref': None, 'supersession_reason': None}, 'statuses': {'quality_state': 'pass', 'teacher_approval': 'approved', 'classroom_readiness': 'ready', 'production_state': 'not-authorized', 'publication_state': 'not-published', 'sharing_state': 'private-observed'}, 'quality_rows': [{'row_id': 'quality-1', 'state': 'pass', 'reason_codes': []}], 'assets': [_asset()], 'references': [{'reference_id': 'reference-1', 'kind': 'material-requirement', 'stable_ref': 'requirement-1', 'fingerprint': 'e' * 64}], 'custom_properties': {'manifest_id': 'manifest-1', 'requirement_id': 'requirement-1', 'contract_version': 'curriculum-artifact-manifest-v1', 'idempotency_key': 'manifest-requirement-operation-target'}, 'authority': {'execution_authorized': False, 'external_write_authorized': False, 'production_authorized': False, 'publication_authorized': False, 'side_effects_performed': False}}
     _refresh(value)
     return value
 
@@ -414,3 +414,31 @@ def test_no_duplicate_generic_framework_or_import_side_effects() -> None:
     assert classes.isdisjoint({'AuthorityEvidence', 'ValidationResult', 'ValidationStatus', 'ValidatedRecord'})
     assert functions.isdisjoint({'canonical_json_bytes', 'canonical_size', 'sha256_hex', 'freeze_json', 'sanitize_detail'})
     assert calls.isdisjoint({'open', 'getenv', 'Popen', 'run', 'system', 'basicConfig', 'register', 'import_module', 'eval', 'exec'})
+
+def test_observed_sections_are_required_and_normalized() -> None:
+    value = valid_manifest()
+    result = _result(value)
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.record.to_dict()['artifact']['observed_sections'] == ['directions', 'practice']
+
+def test_missing_observed_sections_fail_closed() -> None:
+    value = valid_manifest()
+    del value['artifact']['observed_sections']
+    assert 'artifact-missing-required-field' in _result(value).reason_codes
+
+def test_empty_observed_sections_are_allowed() -> None:
+    value = valid_manifest()
+    value['artifact']['observed_sections'] = []
+    assert _result(value).status is ValidationStatus.VALID
+
+def test_observed_sections_reject_duplicates_and_oversized_lists() -> None:
+    duplicated = valid_manifest()
+    duplicated['artifact']['observed_sections'] = ['directions', 'directions']
+    assert 'handoff-duplicate' in _result(duplicated).reason_codes
+    oversized = valid_manifest()
+    oversized['artifact']['observed_sections'] = [f'section-{index}' for index in range(manifest_module.MAX_OBSERVED_SECTIONS + 1)]
+    assert 'handoff-oversized' in _result(oversized).reason_codes
+
+def test_observed_sections_bound_is_finite() -> None:
+    assert manifest_module.MAX_OBSERVED_SECTIONS == 32
