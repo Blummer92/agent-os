@@ -115,6 +115,16 @@ claim. A placeholder box, generated stand-in, or metadata-only asset reference
 cannot satisfy that check when the required role is bound to an existing
 governed reusable asset.
 
+Required visual roles are revision-bound, not render-bound. When a prior
+revision declared required visual roles, a later revision must preserve every
+one of them unless the teacher or the governing source explicitly removes the
+role. Silently dropping a required role during a vocabulary, content, or
+layout revision is a completion regression: the artifact cannot receive a
+complete/classroom-ready claim until the role is restored or its explicit
+removal is recorded. Render QA for a revised artifact verifies required-visual
+presence against the preserved role set, not merely against the roles the
+revision happened to declare.
+
 ## Required Visual Placement And Companion-File Boundary
 
 When worksheet content references a required visual asset — for example, a
@@ -268,4 +278,13 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.7
+0.1.8
+
+## Changelog
+
+- 0.1.8 combines the 0.1.7 additions: required visual placement and
+  companion-file boundary (#2888) plus revision-bound required visual roles
+  (#2890).
+- 0.1.7 binds required visual roles across revisions: a later revision must
+  preserve every prior required role unless the teacher or governing source
+  explicitly removes it; silent drops are completion regressions (#2890).
