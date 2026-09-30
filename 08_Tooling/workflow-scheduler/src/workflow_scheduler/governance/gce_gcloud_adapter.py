@@ -197,7 +197,7 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  # Every optional selector identity the ingress can accept must survive
  # reconstruction. Dropping one silently converts an accepted fixed-operation
  # envelope into an identity-less one that can only fail downstream (#1972).
- for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none","source_capsule_id_or_none","first_run_candidate_sha_or_none","notion_read_request_id_or_none"):
+ for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none","ppux_projection_branch_or_none","ppux_projection_sha_or_none","ppux_projection_input_ref_or_none","source_capsule_id_or_none","first_run_candidate_sha_or_none","notion_read_request_id_or_none"):
   values[key]=payload.get(key)
  return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
@@ -253,6 +253,13 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
  if ingress.reason=="accepted-first-run-validation-envelope":
   from .first_run_validation_gce import execute_first_run_validation_transport
   return execute_first_run_validation_transport(ingress,claims=claims,adapter=adapter)
+ # #2673: an accepted PPUX projection envelope must reach only the fixed
+ # prompt-projection host operation. Without this branch it falls through to
+ # the generic Scheduler control binding below, which cannot carry the
+ # branch/SHA/input-ref identity at all.
+ if ingress.reason=="accepted-ppux-projection-envelope":
+  from .ppux_projection_gce import execute_ppux_projection_transport
+  return execute_ppux_projection_transport(ingress,claims=claims,adapter=adapter)
  if ingress.reason=="accepted-runtime-inspection-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("runtime inspection requires accepted canonical issue evidence")
   if ingress.handoff_id_or_none is not None:raise ValueError("runtime inspection must not carry a handoff identity")
