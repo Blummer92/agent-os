@@ -11,6 +11,13 @@ from enum import Enum
 from typing import Literal
 from .pr_batch_merge_plan import PrBatchDisposition, PrBatchMergePlan
 from .batch_post_merge_reconciliation import PostMergeCandidateProjection, TerminalLifecycleDisposition
+from .zero_job_validation_recovery import (
+    MAX_ZERO_JOB_RECOVERY_ATTEMPTS,
+    WorkflowRunConclusionEvidence,
+    ZeroJobRecoveryProjection,
+    ZeroJobRunDisposition,
+    classify_workflow_run_evidence,
+)
 from scripts.agent_os_issue_labels.pr_branch_refresh_authorization import (
     SCHEMA_VERSION as REFRESH_AUTHORIZATION_SCHEMA_VERSION,
     RefreshAuthorization,
@@ -26,6 +33,7 @@ class BatchMergeAction(str, Enum):
     REACQUIRE="reacquire-current-state"; REFRESH_AUTHORIZE="materialize-refresh-authorization"
     REFRESH_AUTH_READBACK="read-back-refresh-authorization"; REFRESH_TRIGGER="invoke-governed-refresh"
     REFRESH_RECEIPT="read-back-refresh-receipt"; REFRESH="read-back-refreshed-pr"; VALIDATE="obtain-exact-head-validation"
+    RECOVER_STALE_VALIDATION="recover-stale-validation"
     AUTHORIZE="obtain-content-bound-merge-authorization"; MERGE="merge-exact-expected-head"; READBACK="read-back-merged-pr-and-main"
     POST_MERGE="reconcile-linked-issue"; LIFECYCLE_MUTATE="perform-admitted-lifecycle-mutations"; LIFECYCLE_READBACK="read-back-linked-issue"
     COMPLETE="complete"; HALT="halt"
@@ -71,8 +79,10 @@ class ItemAdmissionEvidence:
     pull_request_number:int; main_sha:str; head_sha:str; validation_status:Literal["passed","failed","pending","missing","manual-review"]
     authorization_status:Literal["authorized","blocked","stale","missing","manual-review"]
     validation_current:bool=True
+    workflow_runs:tuple[WorkflowRunConclusionEvidence,...]=()
     def __post_init__(self):
         if type(self.validation_current) is not bool: raise TypeError("validation_current must be bool")
+        if type(self.workflow_runs) is not tuple or any(type(run) is not WorkflowRunConclusionEvidence for run in self.workflow_runs): raise TypeError("workflow_runs must be an exact tuple of WorkflowRunConclusionEvidence values")
 @dataclass(frozen=True, slots=True)
 class MergeReadbackEvidence:
     pull_request_number:int; expected_head_sha:str; merged:bool; new_main_sha:str; provider_available:bool=True
@@ -89,6 +99,7 @@ class BatchMergeCursor:
     action:BatchMergeAction=BatchMergeAction.REACQUIRE; halted:bool=False
     pending_lifecycle_snapshot_id:str|None=None; pending_operational_state_id:str|None=None
     pending_refresh_authorization_id:str|None=None
+    zero_job_recovery_attempts:int=0
     merge_authorized:Literal[False]=field(default=False,init=False); side_effects_performed:Literal[False]=field(default=False,init=False)
     @property
     def current_pull_request(self): return None if self.index>=len(self.requested_pull_requests) else self.requested_pull_requests[self.index]
@@ -211,8 +222,31 @@ def apply_validation(c,e):
     if not _same(c,e.main_sha,e.head_sha):return _restart(c)
     if not e.validation_current:return _restart(c)
     if e.validation_status=="passed":return _replace(c,action=BatchMergeAction.AUTHORIZE)
+    if classify_workflow_run_evidence(e.workflow_runs) is ZeroJobRunDisposition.STALE_NON_EXECUTED:
+        return _enter_zero_job_recovery(c,e)
     d=BatchItemDisposition.MANUAL_REVIEW if e.validation_status=="manual-review" else BatchItemDisposition.SKIPPED_ITEM_LOCAL
     return _advance(c,_result(e.pull_request_number,d,f"validation-{e.validation_status}",cursor=c))
+def _enter_zero_job_recovery(c,e):
+    if c.zero_job_recovery_attempts>=MAX_ZERO_JOB_RECOVERY_ATTEMPTS:
+        return _advance(c,_result(e.pull_request_number,BatchItemDisposition.SKIPPED_ITEM_LOCAL,"zero-job-recovery-exhausted",e))
+    return _replace(c,zero_job_recovery_attempts=c.zero_job_recovery_attempts+1,action=BatchMergeAction.RECOVER_STALE_VALIDATION)
+def expected_zero_job_recovery(c):
+    if type(c) is not BatchMergeCursor or c.action is not BatchMergeAction.RECOVER_STALE_VALIDATION or c.current_pull_request is None or c.current_head_sha is None:
+        raise ValueError("cursor is not ready for zero-job validation recovery")
+    return ZeroJobRecoveryProjection(
+        pull_request_number=c.current_pull_request,
+        expected_head_sha=c.current_head_sha,
+        expected_main_sha=c.current_main_sha,
+        recovery_operation="reinvoke-governed-exact-head-validation",
+        attempt=c.zero_job_recovery_attempts,
+        max_attempts=MAX_ZERO_JOB_RECOVERY_ATTEMPTS,
+    )
+def record_zero_job_recovery(c,*,pull_request_number,expected_head_sha,accepted):
+    _expect(c,BatchMergeAction.RECOVER_STALE_VALIDATION,pull_request_number)
+    if type(accepted) is not bool: raise TypeError("accepted must be bool")
+    if expected_head_sha!=c.current_head_sha:return _restart(c)
+    if not accepted:return _advance(c,_result(pull_request_number,BatchItemDisposition.SKIPPED_ITEM_LOCAL,"zero-job-recovery-rejected",cursor=c))
+    return _replace(c,action=BatchMergeAction.VALIDATE)
 def apply_merge_authorization(c,e):
     _expect(c,BatchMergeAction.AUTHORIZE,e.pull_request_number)
     if not _same(c,e.main_sha,e.head_sha) or e.validation_status!="passed":return _restart(c)
@@ -262,7 +296,7 @@ def _finish_linked(c,d,reasons):return _advance(c,BatchItemResult(c.current_pull
 def _expect(c,a,pr):
     if type(c) is not BatchMergeCursor or c.action is not a or c.current_pull_request!=pr:raise ValueError("evidence does not match the current batch transition")
 def _same(c,main,head):return main==c.current_main_sha and head==c.current_head_sha
-def _restart(c):return _replace(c,current_main_sha=None,current_head_sha=None,pending_merged_main_sha=None,pending_lifecycle_snapshot_id=None,pending_operational_state_id=None,pending_refresh_authorization_id=None,action=BatchMergeAction.REACQUIRE)
+def _restart(c):return _replace(c,current_main_sha=None,current_head_sha=None,pending_merged_main_sha=None,pending_lifecycle_snapshot_id=None,pending_operational_state_id=None,pending_refresh_authorization_id=None,zero_job_recovery_attempts=0,action=BatchMergeAction.REACQUIRE)
 def _advance(c,r,*,new_main=None):
     idx=c.index+1; action=BatchMergeAction.COMPLETE if idx>=len(c.requested_pull_requests) else BatchMergeAction.REACQUIRE
     return BatchMergeCursor(c.requested_pull_requests,c.linked_issues,idx,new_main,None,None,c.results+(r,),action,False)
@@ -271,7 +305,7 @@ def _halt(c,e,reason):
     if pr is not None:results+=(_result(pr,BatchItemDisposition.BLOCKED_SHARED,reason,e,c),)
     return BatchMergeCursor(c.requested_pull_requests,c.linked_issues,c.index,c.current_main_sha,c.current_head_sha,c.pending_merged_main_sha,results,BatchMergeAction.HALT,True,c.pending_lifecycle_snapshot_id,c.pending_operational_state_id)
 def _replace(c,**changes):
-    v={"requested_pull_requests":c.requested_pull_requests,"linked_issues":c.linked_issues,"index":c.index,"current_main_sha":c.current_main_sha,"current_head_sha":c.current_head_sha,"pending_merged_main_sha":c.pending_merged_main_sha,"results":c.results,"action":c.action,"halted":c.halted,"pending_lifecycle_snapshot_id":c.pending_lifecycle_snapshot_id,"pending_operational_state_id":c.pending_operational_state_id,"pending_refresh_authorization_id":c.pending_refresh_authorization_id};v.update(changes);return BatchMergeCursor(**v)
+    v={"requested_pull_requests":c.requested_pull_requests,"linked_issues":c.linked_issues,"index":c.index,"current_main_sha":c.current_main_sha,"current_head_sha":c.current_head_sha,"pending_merged_main_sha":c.pending_merged_main_sha,"results":c.results,"action":c.action,"halted":c.halted,"pending_lifecycle_snapshot_id":c.pending_lifecycle_snapshot_id,"pending_operational_state_id":c.pending_operational_state_id,"pending_refresh_authorization_id":c.pending_refresh_authorization_id,"zero_job_recovery_attempts":c.zero_job_recovery_attempts};v.update(changes);return BatchMergeCursor(**v)
 def _result(pr,d,reason,e=None,cursor=None):
     head=e.head_sha if e else (cursor.current_head_sha if cursor else None);main=e.main_sha if e else (cursor.current_main_sha if cursor else None)
     return BatchItemResult(pr,d,head,head,main,main,(reason,))
