@@ -393,3 +393,138 @@ def test_adobe_foundations_3059_placement_intent_is_not_rendered_image_evidence(
     assert "visual render evidence is unavailable" in receipt.error
 
 
+
+
+def _typography_review_leak_source(**overrides):
+    values = dict(
+        title="Typography Foundations - Day 1",
+        paragraphs=(
+            "PDF DRAFT - review before Google Drive",
+            "Explain the difference between serif and sans-serif.",
+        ),
+    )
+    values.update(overrides)
+    return _source(**values)
+
+
+def _decompressed_pdf_text(path):
+    import base64
+    import re
+    import zlib
+
+    data = Path(path).read_bytes()
+    text = b""
+    for match in re.finditer(rb"stream\r?\n(.*?)endstream", data, re.S):
+        raw = match.group(1).strip().rstrip(b"~>")
+        try:
+            text += zlib.decompress(base64.a85decode(raw, adobe=False))
+        except Exception:
+            text += raw
+    return text.decode("latin-1", "replace")
+
+
+def test_typography_2890_review_workflow_language_in_paragraphs_blocks_preview(tmp_path):
+    target = tmp_path / "typography-review-leak.pdf"
+
+    receipt = render_student_material_pdf_preview(
+        _typography_review_leak_source(),
+        target,
+        expected_revision_id="rev-7",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert "review/workflow language" in receipt.error
+    assert "PDF DRAFT" in receipt.error
+    assert "review before Google Drive" in receipt.error
+
+
+def test_typography_2890_review_language_in_title_blocks_preview(tmp_path):
+    target = tmp_path / "typography-title-leak.pdf"
+    source = _typography_review_leak_source(
+        title="Typography Worksheet PDF DRAFT",
+        paragraphs=("Explain the difference between serif and sans-serif.",),
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source, target, expected_revision_id="rev-7"
+    )
+
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert "PDF DRAFT" in receipt.error
+
+
+def test_typography_2890_backend_handoff_and_authorization_language_blocked(tmp_path):
+    source = _source(paragraphs=(
+        "Backend handoff: production authorized for period 3.",
+        "Routing notes are in the teacher folder.",
+    ))
+
+    receipt = render_student_material_pdf_preview(
+        source, tmp_path / "handoff.pdf", expected_revision_id="rev-7"
+    )
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert "backend handoff" in receipt.error
+    assert "production authorized" in receipt.error
+    assert "routing notes" in receipt.error
+
+
+def test_explicit_student_copy_review_phrases_allow_intended_copy(tmp_path):
+    # The Typography string matches three guarded phrases; each must be
+    # explicitly declared student-facing before the preview is allowed.
+    source = _typography_review_leak_source(
+        explicit_student_copy_review_phrases=(
+            "PDF DRAFT",
+            "review before Google Drive",
+            "Google Drive",
+        )
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source, tmp_path / "typography-explicit.pdf", expected_revision_id="rev-7"
+    )
+
+    assert receipt.available and receipt.render_verified
+
+
+def test_unknown_explicit_review_phrase_fails_closed(tmp_path):
+    source = _source(explicit_student_copy_review_phrases=("totally ordinary words",))
+
+    receipt = render_student_material_pdf_preview(
+        source, tmp_path / "unknown-phrase.pdf", expected_revision_id="rev-7"
+    )
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert "unknown student-copy review phrase" in receipt.error
+
+
+def test_renderer_no_longer_prints_review_language_on_student_pages(tmp_path):
+    target = tmp_path / "typography-clean.pdf"
+
+    receipt = render_student_material_pdf_preview(
+        _typography_review_leak_source(
+            paragraphs=("Explain the difference between serif and sans-serif.",),
+        ),
+        target,
+        expected_revision_id="rev-7",
+    )
+
+    assert receipt.available
+    rendered = _decompressed_pdf_text(target)
+    assert "derived artifact" not in rendered
+    assert "PDF draft/preview" not in rendered
+    assert "Google Drive" not in rendered
+
+
+def test_provenance_lives_in_pdf_document_properties_not_student_pages(tmp_path):
+    target = tmp_path / "typography-provenance.pdf"
+
+    receipt = render_student_material_pdf_preview(
+        _source(), target, expected_revision_id="rev-7"
+    )
+
+    assert receipt.available
+    raw = Path(target).read_bytes()
+    assert b"/Subject" in raw
+    rendered = _decompressed_pdf_text(target)
+    assert "canonical editable final" not in rendered

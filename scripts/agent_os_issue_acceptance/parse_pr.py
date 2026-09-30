@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from .models import LinkedIssueCandidate, LinkedIssueParseResult, LinkedIssueParseStatus
 
@@ -150,6 +151,105 @@ def _format_target(repository: str | None, issue_number: int) -> str:
 def _target_sort_key(target: tuple[str | None, int]) -> tuple[str, int]:
     repository, issue_number = target
     return repository or "", issue_number
+
+
+# GitHub-effective closing-reference detection (#3157). This is deliberately
+# separate from parse_linked_issue_result: the authoritative parser answers
+# "which issue does this PR implement" with stricter-than-GitHub routing
+# semantics (#2160), while this detector answers "which issues would GitHub
+# close if this PR merged", mirroring GitHub's broader closing semantics.
+# GitHub matches a closing keyword anywhere in the PR title or body,
+# case-insensitively, and ignores negation — PR #3156's prose "does **not**
+# close #2772" closed #2772 at merge. Code spans and fenced code blocks are
+# masked because GitHub's auto-close parser ignores closing keywords inside
+# them; nothing else is masked, so uncertain prose fails closed.
+_GITHUB_EFFECTIVE_CLOSING_RE = re.compile(
+    rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+){_TARGET}\b",
+    re.IGNORECASE,
+)
+_FENCED_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_SPAN_RE = re.compile(r"`[^`\n]+`")
+_CANONICAL_CLOSING_KEYWORD = {
+    "close": "close", "closes": "close", "closed": "close",
+    "fix": "fix", "fixes": "fix", "fixed": "fix",
+    "resolve": "resolve", "resolves": "resolve", "resolved": "resolve",
+}
+_NORMALIZED_TARGET_RE = re.compile(
+    rf"^(?:(?P<repository>{_REPOSITORY})#(?P<number>\d+)|#(?P<short_number>\d+))$"
+)
+_FULL_URL_TARGET_RE = re.compile(rf"^{_URL_TARGET}$")
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubEffectiveClosingReference:
+    """One issue reference GitHub would treat as a merge-time closing reference."""
+
+    keyword: str  # canonical base verb: "close", "fix", or "resolve"
+    target: str  # normalized target: "#123" or "owner/repo#123"
+    source: str  # "title" or "body"
+
+    def __post_init__(self) -> None:
+        if self.keyword not in _CANONICAL_CLOSING_KEYWORD.values():
+            raise ValueError("GitHub-effective closing keyword is unsupported")
+        if self.source not in {"title", "body"}:
+            raise ValueError("GitHub-effective closing source is unsupported")
+        if normalize_issue_target(self.target) != self.target:
+            raise ValueError("GitHub-effective closing target is not normalized")
+
+
+def normalize_issue_target(raw_target: str) -> str:
+    """Return the canonical `#123` / `owner/repo#123` form of one issue target."""
+    text = (raw_target or "").strip()
+    url_match = _FULL_URL_TARGET_RE.match(text)
+    if url_match is not None:
+        repository: str | None = url_match.group("url_repository")
+        number = int(url_match.group("url_number"))
+    else:
+        short_match = _NORMALIZED_TARGET_RE.match(text)
+        if short_match is None:
+            raise ValueError("issue target must use '#123' or 'owner/repo#123' form")
+        repository = short_match.group("repository")
+        number = int(short_match.group("number") or short_match.group("short_number"))
+    if repository is not None and repository.lower() == _CANONICAL_REPOSITORY:
+        repository = None
+    return f"{repository.lower()}#{number}" if repository else f"#{number}"
+
+
+def _mask_code_spans(text: str) -> str:
+    masked = _FENCED_CODE_BLOCK_RE.sub(lambda match: " " * len(match.group(0)), text or "")
+    return _INLINE_CODE_SPAN_RE.sub(lambda match: " " * len(match.group(0)), masked)
+
+
+def detect_github_effective_closing_references(
+    pr_body: str, pr_title: str = ""
+) -> tuple[GitHubEffectiveClosingReference, ...]:
+    """Detect every GitHub-effective closing reference in the PR title/body.
+
+    This is the single canonical GitHub-closing-semantics parser: closing
+    keyword plus issue target anywhere in the title or body, negation ignored.
+    It must not be duplicated elsewhere; merge admission and the linked-issue
+    check both consume this function.
+    """
+    found: list[GitHubEffectiveClosingReference] = []
+    for source, text in (("title", pr_title or ""), ("body", pr_body or "")):
+        masked = _mask_code_spans(text)
+        for match in _GITHUB_EFFECTIVE_CLOSING_RE.finditer(masked):
+            keyword = _CANONICAL_CLOSING_KEYWORD[match.group("keyword").lower()]
+            repository, issue_number = _target_identity(match)
+            target = f"{repository.lower()}#{issue_number}" if repository else f"#{issue_number}"
+            found.append(
+                GitHubEffectiveClosingReference(keyword=keyword, target=target, source=source)
+            )
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[GitHubEffectiveClosingReference] = []
+    for reference in sorted(
+        found, key=lambda item: (0 if item.source == "title" else 1, item.target, item.keyword)
+    ):
+        key = (reference.keyword, reference.target, reference.source)
+        if key not in seen:
+            seen.add(key)
+            unique.append(reference)
+    return tuple(unique)
 
 
 def has_markdown_heading(text: str, heading: str) -> bool:

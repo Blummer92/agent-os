@@ -44,6 +44,7 @@ MAX_RISK_FINDINGS = MAX_FINDINGS
 MAX_TRANSFORMATION_FLAGS = MAX_TRANSFORMATIONS
 MAX_CANDIDATES = 32
 MAX_DISCOVERY_EVIDENCE = 32
+MAX_OBSERVED_SECTIONS = 32
 
 PROVIDERS = frozenset({"google-drive", "local-reference", "other-manual-review"})
 ACCESS_STATES = frozenset(
@@ -276,6 +277,9 @@ def validate_artifact_manifest(value: object) -> ValidationResult:
         _custom_properties(groups["custom_properties"], groups)
         _authority(groups["authority"])
 
+        data["artifact"]["observed_sections"] = list(
+            _strings(groups["artifact"]["observed_sections"], "observed sections", MAX_OBSERVED_SECTIONS)
+        )
         data["source_snapshot"]["dependency_keys"] = list(
             canonical_strings(
                 groups["source_snapshot"]["dependency_keys"],
@@ -404,9 +408,10 @@ def _requirement(value: dict[str, Any]) -> None:
 
 
 def _artifact(value: dict[str, Any]) -> None:
-    _fields(value, frozenset({"artifact_type", "mime_type"}), "artifact")
+    _fields(value, frozenset({"artifact_type", "mime_type", "observed_sections"}), "artifact")
     validate_stable_id(value["artifact_type"], "artifact_type")
     validate_text(value["mime_type"], "mime_type", max_length=128)
+    _strings(value["observed_sections"], "observed sections", MAX_OBSERVED_SECTIONS)
 
 
 def _external(value: dict[str, Any]) -> None:

@@ -2,7 +2,11 @@
   "artifact_manifest": {
     "artifact": {
       "artifact_type": "worksheet",
-      "mime_type": "application/pdf"
+      "mime_type": "application/pdf",
+      "observed_sections": [
+        "directions",
+        "practice"
+      ]
     },
     "assets": [
       {
@@ -73,7 +77,7 @@
       "manifest_id": "manifest-1",
       "modified_at": "2026-07-30T00:00:00Z",
       "record_revision": 1,
-      "source_fingerprint": "07da027c8ffa65d64601d940e30f1b915b7503d163a226a3325378f5c9184cc8",
+      "source_fingerprint": "a7a0f326d854f2184f7d43563bfa795c37bdf2efbdbd93b7291aa707b8f59ecb",
       "verified_at": "2026-07-30T00:00:00Z"
     },
     "lineage": {
@@ -188,7 +192,7 @@
     "contract_version": "curriculum-visual-asset-compatibility-v2",
     "freshness": {
       "compatibility_verified_at": "2026-07-30T00:00:00Z",
-      "manifest_fingerprint": "ceb8e59cfa9f8e41ad671ef4d2e90c0d675af9adb2dda1dc60396d46ab49c00b",
+      "manifest_fingerprint": "39864f6351338a9b97ca8587ffada8dde4ffe5393f55d89734cbde17e7c55af0",
       "manifest_record_revision": 1,
       "manifest_verified_at": "2026-07-30T00:00:00Z",
       "stale": false
@@ -199,7 +203,7 @@
     },
     "manifest_reference": {
       "external_file_id": "file-1",
-      "fingerprint": "ceb8e59cfa9f8e41ad671ef4d2e90c0d675af9adb2dda1dc60396d46ab49c00b",
+      "fingerprint": "39864f6351338a9b97ca8587ffada8dde4ffe5393f55d89734cbde17e7c55af0",
       "manifest_id": "manifest-1",
       "record_revision": 1,
       "verified_at": "2026-07-30T00:00:00Z"

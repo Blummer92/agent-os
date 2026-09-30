@@ -14,6 +14,14 @@ An internal Code Mode/tool-call ceiling is a bounded execution-batch boundary, n
 
 A tool-call ceiling grants no retry/mutation authority and does not justify a scheduler, queue, mission store, retry daemon, or background worker. If the host exposes no callable continuation after the bounded batch boundary, report that exact native continuation capability as the blocker rather than claiming the finite audit/campaign is complete.
 
+### Interrupted retrieval in finite artifact missions
+
+A client/streaming interruption — or a source-retrieval tool call that ends with no consumed result — during a finite classroom-artifact mission is an intermediate retrieval boundary, not mission completion and not by itself failure evidence. Correlate the last successfully completed operation before the interruption and classify the interrupted retrieval as result pending, returned-but-unconsumed, or never returned.
+
+Preserve the artifact-mission plan state across the interruption: completed phases (source retrieval, instructional decisions, visual/source reconciliation, artifact generation, artifact verification, final delivery/report), canonical evidence already gathered, and the retrieval cursor. When the host permits re-entry, resume from the last completed operation boundary: re-issue only the uncompleted retrieval step, do not reprocess completed phases, and do not require a new owner prompt for already-authorized work. If the host exposes no callable continuation after the interruption, report that exact native continuation capability as the blocker rather than claiming the finite artifact mission is complete.
+
+This reuses the existing finite-mission cursor and the #2826 continuation architecture; it adds no scheduler, queue, mission store, polling loop, retry daemon, background worker, or second continuation framework (#3152).
+
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
 
@@ -175,10 +183,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.12
+0.3.13
 Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.13 governs interrupted retrieval in finite artifact missions (#3152): a client/streaming interruption or a source-retrieval tool call with no consumed result is an intermediate retrieval boundary, never mission completion; on re-entry, correlate the last completed operation, classify the interrupted result as pending/returned-but-unconsumed/never-returned, preserve the artifact-mission plan state and retrieval cursor, and resume from the last completed operation boundary without a new owner prompt. Reuses the existing finite-mission cursor and the #2826 continuation architecture; adds no scheduler, queue, mission store, polling loop, or second continuation framework.
 - 0.3.12 consumes #3020's zero-diff stale-branch resume rule: before implementation resumes with no open primary PR, current `main` is reacquired and an ancestor-safe branch with zero unique commits is non-force fast-forwarded/read back; unique, diverged, or ambiguous branches are never force-reset and remain on the existing governed reconciliation route.
 - 0.3.11 preserves typed GitHub identities in campaign/report rendering (#3053): issue number, PR number, and canonical closing target remain distinct; reported `Closes` / `Fixes` / `Resolves` targets must come from current canonical PR linkage/body evidence rather than substituting the PR number. This constrains the existing model-visible Orchestrator response seam and adds no parser, identity registry, campaign store, scheduler, queue, or mutation authority.
 - 0.3.10 consumes #2872's governed test-campaign reconciliation before next-test recommendations, preventing semantically completed conditions from being presented as new work and preserving conversational/manual test metadata without adding test-state persistence.
