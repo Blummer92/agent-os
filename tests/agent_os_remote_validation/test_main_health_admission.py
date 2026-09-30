@@ -2,7 +2,10 @@ from dataclasses import replace
 
 from scripts.agent_os_remote_validation.advisory_gate import AdvisoryEvidenceResult
 from scripts.agent_os_remote_validation.main_health import project_main_health
-from scripts.agent_os_remote_validation.main_health_admission import evaluate_final_validation_admission
+from scripts.agent_os_remote_validation.main_health_admission import (
+    BRANCH_REFRESH_REQUIRED_REASON,
+    evaluate_final_validation_admission,
+)
 from scripts.agent_os_remote_validation.models import SelectionInput
 from scripts.agent_os_remote_validation.selector import load_rule_map, select_validation_plan, validation_plan_id
 
@@ -10,6 +13,7 @@ REPOSITORY = "Blummer92/agent-os"
 BASE = "a" * 40
 HEAD = "b" * 40
 OLD_MAIN = "c" * 40
+STALE_BASE = "e" * 40
 
 
 def plan_for(paths: tuple[str, ...]):
@@ -116,9 +120,87 @@ def test_infrastructure_unproven_main_fails_closed_without_false_red_attribution
 
 
 def test_old_green_main_evidence_cannot_admit_newer_base():
+    """#2637: a candidate behind exact-current main routes to branch refresh.
+
+    The health projection is always against exact-current main by contract, so
+    when the candidate's recorded base (which the plan agrees with) is not
+    exact-current main, the governed next action is the #1187 branch-refresh
+    path -- not candidate repair. The disposition must say so explicitly
+    instead of misattributing the block to main-health evidence staleness.
+    """
     plan = plan_for(("scripts/agent_os_issue_acceptance/operating_mode.py",))
     stale = health(current=OLD_MAIN, evidence=OLD_MAIN, conclusion="success")
     result = evaluate(plan, evidence_for(plan), stale)
+    assert result.status == "block"
+    assert result.reason_codes == (BRANCH_REFRESH_REQUIRED_REASON,)
+    assert result.merge_authorized is False
+
+
+def test_2637_stale_pr_base_with_healthy_main_routes_to_branch_refresh():
+    """Exact #2637 shape: healthy exact-current main, plan bound to stale base.
+
+    Regression for PR #2620: the Ready final-validation path failed red with
+    ``main-health.evidence-stale`` even though the head was mergeable and the
+    governed next action was branch refresh.
+    """
+    plan = select_validation_plan(
+        SelectionInput(
+            repository=REPOSITORY,
+            pull_request=2620,
+            base_sha=STALE_BASE,
+            head_sha=HEAD,
+            changed_files=(".github/workflows/agent-os-validation.yml",),
+        ),
+        load_rule_map(),
+    )
+    healthy_main = health()  # projected against exact-current main BASE
+    result = evaluate_final_validation_admission(
+        plan,
+        evidence_for(plan),
+        main_health=healthy_main,
+        current_base_sha=STALE_BASE,
+        current_head_sha=HEAD,
+    )
+    assert result.status == "block"
+    assert result.reason_codes == (BRANCH_REFRESH_REQUIRED_REASON,)
+    assert not any(reason.startswith("main-health.") for reason in result.reason_codes)
+    assert result.merge_authorized is False
+    assert result.authoritative is False
+
+
+def test_2637_refreshed_base_binds_exact_current_main_health():
+    """After a governed refresh the admission binds to the refreshed base."""
+    plan = plan_for((".github/workflows/agent-os-validation.yml",))
+    result = evaluate(plan, None, health())
+    assert result.status == "require-aggregate"
+    assert result.validation_obligation == "aggregate"
+    assert result.reason_codes == ("admission.aggregate-required",)
+
+
+def test_plan_bound_to_stale_base_keeps_evidence_stale_disposition():
+    """A plan disagreeing with the candidate's recorded base is a rebind, not drift.
+
+    Here the candidate's recorded base is already exact-current main; only the
+    plan was bound to an older base. That is genuine plan/health staleness and
+    keeps ``main-health.evidence-stale``.
+    """
+    plan = select_validation_plan(
+        SelectionInput(
+            repository=REPOSITORY,
+            pull_request=2620,
+            base_sha=STALE_BASE,
+            head_sha=HEAD,
+            changed_files=(".github/workflows/agent-os-validation.yml",),
+        ),
+        load_rule_map(),
+    )
+    result = evaluate_final_validation_admission(
+        plan,
+        None,
+        main_health=health(),
+        current_base_sha=BASE,
+        current_head_sha=HEAD,
+    )
     assert result.status == "block"
     assert result.reason_codes == ("main-health.evidence-stale",)
 

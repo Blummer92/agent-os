@@ -4,6 +4,15 @@ from .main_health import MainHealthResult, serialize_main_health
 from .merge_admission import MergeAdmissionResult, evaluate_merge_admission
 from .models import ValidationPlan
 
+#: Explicit routing disposition for a candidate whose recorded base is behind
+#: exact-current main (#2637). The governed next action is the existing #1187
+#: branch-refresh path, not candidate implementation repair. This reason is
+#: deliberately *not* namespaced ``main-health.*``: the main-health gate owns
+#: only the health question, while branch drift belongs to the refresh owner,
+#: so a ``branch-refresh-required`` block must never be misread as a
+#: main-health failure.
+BRANCH_REFRESH_REQUIRED_REASON = "branch-refresh-required"
+
 
 def evaluate_final_validation_admission(
     plan: object,
@@ -24,6 +33,14 @@ def evaluate_final_validation_admission(
     requested. A separately requested recovery-only health projection may still
     evaluate the candidate so recovery validation remains representable; this
     function never grants merge, revert, closure, or execution authority.
+
+    Stale-base routing (#2637): when the candidate's recorded base -- which the
+    validation plan agrees with -- is not exact-current main, the block is
+    reported as ``branch-refresh-required`` so the governed #1187
+    branch-refresh path is invoked instead of misattributing the failure to
+    main-health evidence staleness. A plan bound to a different base than the
+    candidate's recorded base keeps the ``main-health.evidence-stale``
+    disposition: that is a plan/health rebind, not branch drift.
     """
     health = _validated_main_health(main_health)
     if not isinstance(plan, ValidationPlan):
@@ -39,6 +56,15 @@ def evaluate_final_validation_admission(
     if health.repository != plan.repository:
         return _blocked(plan, evidence, current_base_sha, current_head_sha, "main-health.repository-mismatch")
     if health.main_sha != current_base_sha or health.main_sha != plan.base_sha:
+        if plan.base_sha == current_base_sha:
+            # Branch drift, not a candidate-health failure: the candidate's
+            # recorded base (which the plan agrees with) is behind
+            # exact-current main, so the governed next action is the #1187
+            # branch-refresh path. Surface the explicit refresh-required
+            # disposition before ordinary final aggregate admission.
+            return _blocked(
+                plan, evidence, current_base_sha, current_head_sha, BRANCH_REFRESH_REQUIRED_REASON
+            )
         return _blocked(plan, evidence, current_base_sha, current_head_sha, "main-health.evidence-stale")
 
     if health.ordinary_admission_allowed:
