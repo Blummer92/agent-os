@@ -21,6 +21,7 @@ update path here.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol, runtime_checkable
 
@@ -43,6 +44,12 @@ from .pr_branch_refresh import (
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TOPOLOGY_COMMIT_MESSAGE = "Agent OS governed PR refresh candidate"
+# #3127: GitHub computes `mergeable` asynchronously after the base branch
+# moves, so the first PR read after main advances commonly reports
+# `mergeable=None` ("unknown"). A bounded warm-up gives GitHub a chance to
+# finish computing before the refresh treats the PR as not eligible.
+_MERGEABILITY_WARMUP_ATTEMPTS = 3
+_MERGEABILITY_WARMUP_DELAY_SECONDS = 5.0
 _PROVIDER_GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "Agent OS Branch Refresh",
     "GIT_AUTHOR_EMAIL": "agent-os-branch-refresh@localhost",
@@ -81,12 +88,13 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
         try:
             repo = self.github_client.get_repo(repository)
             pr = repo.get_pull(pr_number)
+            # #3127: warm a transiently-unknown mergeability before snapshotting.
+            pr, mergeability = _mergeability_with_warmup(repo, pr_number, pr)
             base_branch = str(pr.base.ref)
             head_branch = str(pr.head.ref)
             head_sha = _require_sha40(str(pr.head.sha), "head_sha")
             base_sha = _require_sha40(str(repo.get_branch(base_branch).commit.sha), "base_sha")
             current_main_sha = _require_sha40(str(repo.get_branch("main").commit.sha), "current_main_sha")
-            mergeability = _mergeability(pr)
             comparison = repo.compare(current_main_sha, head_sha)
             comparison_status = str(getattr(comparison, "status", "unknown"))
             if comparison_status in {"ahead", "identical"}:
@@ -416,8 +424,12 @@ def _preparation_blocker(snapshot: PullRequestBranchSnapshot, *, repository: str
         return "head.moved-before-preparation"
     if snapshot.base_sha != expected_base_sha or snapshot.current_main_sha != current_main_sha:
         return "base.moved-before-preparation"
-    if snapshot.branch_state != "behind" or snapshot.mergeability == "unknown":
+    if snapshot.branch_state != "behind":
         return "branch.refresh-not-eligible-before-preparation"
+    if snapshot.mergeability == "unknown":
+        # #3127: name the actual condition so the blocked receipt distinguishes
+        # GitHub mergeability-computation lag from genuine refresh ineligibility.
+        return "branch.mergeability-unknown-before-preparation"
     return None
 
 
@@ -429,6 +441,30 @@ def _mergeability(pr: object) -> str:
     if mergeable is None or mergeable_state == "unknown":
         return "unknown"
     return "mergeable"
+
+
+def _mergeability_with_warmup(repo: object, pr_number: int, pr: object) -> tuple[object, str]:
+    """Re-read a transiently-unknown mergeability a bounded number of times.
+
+    GitHub computes `mergeable` asynchronously after the base branch moves;
+    the first read after main advances commonly reports `mergeable=None`
+    (#3127). The warm-up re-fetches the PR up to
+    `_MERGEABILITY_WARMUP_ATTEMPTS` times so a merely-slow computation does
+    not fail the refresh preflight. Fail-closed: a re-fetch error keeps the
+    last observed state, and a still-unknown mergeability stays "unknown" so
+    the caller blocks with `branch.mergeability-unknown-before-preparation`.
+    """
+    mergeability = _mergeability(pr)
+    attempts = 0
+    while mergeability == "unknown" and attempts < _MERGEABILITY_WARMUP_ATTEMPTS:
+        time.sleep(_MERGEABILITY_WARMUP_DELAY_SECONDS)
+        attempts += 1
+        try:
+            pr = repo.get_pull(pr_number)
+        except Exception:
+            break
+        mergeability = _mergeability(pr)
+    return pr, mergeability
 
 
 def _require_sha40(value: str, name: str) -> str:
