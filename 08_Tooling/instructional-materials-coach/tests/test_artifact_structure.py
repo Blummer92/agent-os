@@ -367,3 +367,41 @@ def test_adobe_foundations_3059_shared_component_token_is_manual_review() -> Non
 
     assert result.status == MANUAL_REVIEW
     assert "worksheet-required-section-token-ambiguous" in _codes(result)
+
+
+def test_photography_five_ways_required_worked_model_is_not_optional() -> None:
+    tokens = {
+        "directions": "curriculum_directions",
+        "practice": "curriculum_practice",
+        "reflection": "curriculum_reflection",
+        "worked-example": "curriculum_worked_example",
+    }
+    required = tuple(tokens)
+    complete = tuple(_docs_request(tokens[section]) for section in required)
+    assert validate_required_worksheet_sections(
+        required_sections=required,
+        curriculum_decision_tokens=tokens,
+        docs_requests=complete,
+    ).status == PASS
+
+    missing_model = validate_required_worksheet_sections(
+        required_sections=required,
+        curriculum_decision_tokens=tokens,
+        docs_requests=tuple(
+            _docs_request(tokens[section])
+            for section in required
+            if section != "worked-example"
+        ),
+    )
+    assert missing_model.status == FAIL
+    assert "worksheet-required-section-missing-from-plan" in _codes(missing_model)
+
+
+def test_photography_five_ways_missing_model_source_never_hallucinates_completion() -> None:
+    result = validate_required_worksheet_sections(
+        required_sections=("worked-example",),
+        curriculum_decision_tokens={},
+        docs_requests=(),
+    )
+    assert result.status == MANUAL_REVIEW
+    assert "worksheet-required-section-unobservable" in _codes(result)
