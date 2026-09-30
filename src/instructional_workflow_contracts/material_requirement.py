@@ -48,8 +48,8 @@ MAX_VISUAL_ROLES = 8
 SUPPORTED_ARTIFACT_TYPES = frozenset(
     {
         "slide-deck", "worksheet", "guided-notes", "handout", "rubric",
-        "assessment", "exit-ticket", "teacher-guide", "image-library",
-        "exemplar-set", "critique-set", "portfolio-material",
+        "assessment", "exit-ticket", "teacher-guide", "teacher-modeling-package",
+        "image-library", "exemplar-set", "critique-set", "portfolio-material",
         "unsupported-manual-review",
     }
 )

@@ -343,7 +343,19 @@ def _decide(
     rejections: list[str] = []
     missing = sorted({item for candidate in ranked for item in candidate["missing"]})
     conflicts = sorted({item for candidate in ranked for item in candidate["conflicts"]})
-    selected = ranked[0] if ranked else None
+    # Issue #2885: the requested artifact role is authoritative through candidate
+    # selection. A candidate whose artifact type conflicts with the requested role
+    # (e.g. a teacher-modeling package offered for a student worksheet request)
+    # is inadmissible for selection even when its title/unit name is the closest
+    # match; it can never resolve to the final/preview artifact.
+    role_excluded = tuple(
+        item["manifest_id"] for item in ranked if "artifact-type-conflict" in item["conflicts"]
+    )
+    selected = next(
+        (item for item in ranked if "artifact-type-conflict" not in item["conflicts"]), None
+    )
+    for manifest_id in role_excluded:
+        rejections.append(f"artifact-reuse-rejected-role-conflict:{manifest_id}")
     visual = [] if selected is None else selected["visual"]
 
     if not supported_executor:
@@ -353,7 +365,7 @@ def _decide(
         rejections.extend(("artifact-reuse-rejected-unmapped-dependency", "artifact-revision-rejected-unmapped-dependency"))
         return "manual-review-required", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual
     if selected is not None and selected["safe"] and not changed:
-        return "reuse-existing-approved", selected, (), tuple(missing), tuple(conflicts), visual
+        return "reuse-existing-approved", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual
     rejections.append("artifact-reuse-rejected-change-or-evidence")
     if selected is not None and selected["safe"] and changed:
         return "revise-existing-bounded", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual
