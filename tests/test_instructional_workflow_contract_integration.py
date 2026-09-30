@@ -29,6 +29,7 @@ COMPONENT_BLOBS = {
 EXPECTED_PUBLIC_EXPORTS = (
     "AuthorityEvidence",
     "CANONICAL_OWNERS",
+    "CLASSROOM_ARTIFACT_CANDIDATE_VERIFICATION_CONTRACT_ID",
     "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
     "CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID",
     "CLASSROOM_WORKSPACE_BINDING_STATES",
@@ -99,6 +100,7 @@ EXPECTED_PUBLIC_EXPORTS = (
     "validate_revision",
     "validate_stable_id",
     "validate_version",
+    "verify_classroom_artifact_candidates",
 )
 
 
