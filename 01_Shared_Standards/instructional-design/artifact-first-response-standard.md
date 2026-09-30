@@ -115,6 +115,50 @@ claim. A placeholder box, generated stand-in, or metadata-only asset reference
 cannot satisfy that check when the required role is bound to an existing
 governed reusable asset.
 
+## Required Visual Placement And Companion-File Boundary
+
+When worksheet content references a required visual asset — for example, a
+worksheet that tells students they will receive or must analyze a specific
+intentionally designed visual — that reference binds an explicit required
+visual role before artifact generation. Name the role, its instructional
+purpose, and its intended placement alongside the analysis prompts it
+supports.
+
+Resolve the bound asset through the current Notion Visual Asset Library
+working record and the exact Drive file identity. Do not infer a different
+file, substitute a nearby asset, or treat folder co-location as identity.
+
+A required visual that exists only as a separate file in the same Drive folder
+proves discovery at most. Discovery, selection, or folder co-location cannot
+be reported as visual fulfillment. When the current lesson requires inline
+analysis, the required visual slot is satisfied only by the asset bytes or a
+usable source reference materialized and placed in the worksheet at the
+instructional point where students need it. The separate companion file
+remains a candidate for companion-file placement only when the current plan
+explicitly requires a separate companion file; it never silently converts an
+inline-analysis slot into a satisfied visual.
+
+Never silently deliver a text-only artifact for a visually required worksheet.
+When required visual placement is missing — including when the only evidence
+is an unplaced companion file in the same folder — surface the gap as an
+explicit blocker, label the artifact as incomplete/preview, and use
+Blocked-Production Behavior. Asset discovery/selection cannot be reported as
+visual fulfillment without materialization and placement.
+
+Render QA for a visually required worksheet must verify required visual
+presence, readable scale, no clipping, and usable proximity to the analysis
+prompts the visual supports, in addition to layout integrity. The worksheet
+layout must preserve intentional hierarchy, section grouping, adequate
+response space, and visual scaffolding rather than collapsing into raw
+headings, text, and response lines.
+
+Final-delivery QA fails the classroom-ready claim when required visuals are
+absent or unplaced.
+
+This section creates no external-write authority. It does not authorize
+Drive, Notion, publication, or other external writes, and it does not change
+classroom artifact destinations or ownership boundaries.
+
 ## Generated Asset Delivery Continuation
 
 A successful generated classroom visual is intermediate evidence when the active
