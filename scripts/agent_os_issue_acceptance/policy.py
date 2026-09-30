@@ -42,7 +42,7 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
     diff_evidence_unavailable = data.diff_supplied and not data.diff_text.strip()
 
     checks: list[CheckResult] = [
-        linked_issue.check(parse_result=linked_issue_result),
+        linked_issue.check(data.pr_body, pr_title, parse_result=linked_issue_result),
         final_report_fields.check(data.pr_body),
         (
             _unavailable_evidence_check("required files", "changed-files")

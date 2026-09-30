@@ -125,6 +125,50 @@ removal is recorded. Render QA for a revised artifact verifies required-visual
 presence against the preserved role set, not merely against the roles the
 revision happened to declare.
 
+## Required Visual Placement And Companion-File Boundary
+
+When worksheet content references a required visual asset — for example, a
+worksheet that tells students they will receive or must analyze a specific
+intentionally designed visual — that reference binds an explicit required
+visual role before artifact generation. Name the role, its instructional
+purpose, and its intended placement alongside the analysis prompts it
+supports.
+
+Resolve the bound asset through the current Notion Visual Asset Library
+working record and the exact Drive file identity. Do not infer a different
+file, substitute a nearby asset, or treat folder co-location as identity.
+
+A required visual that exists only as a separate file in the same Drive folder
+proves discovery at most. Discovery, selection, or folder co-location cannot
+be reported as visual fulfillment. When the current lesson requires inline
+analysis, the required visual slot is satisfied only by the asset bytes or a
+usable source reference materialized and placed in the worksheet at the
+instructional point where students need it. The separate companion file
+remains a candidate for companion-file placement only when the current plan
+explicitly requires a separate companion file; it never silently converts an
+inline-analysis slot into a satisfied visual.
+
+Never silently deliver a text-only artifact for a visually required worksheet.
+When required visual placement is missing — including when the only evidence
+is an unplaced companion file in the same folder — surface the gap as an
+explicit blocker, label the artifact as incomplete/preview, and use
+Blocked-Production Behavior. Asset discovery/selection cannot be reported as
+visual fulfillment without materialization and placement.
+
+Render QA for a visually required worksheet must verify required visual
+presence, readable scale, no clipping, and usable proximity to the analysis
+prompts the visual supports, in addition to layout integrity. The worksheet
+layout must preserve intentional hierarchy, section grouping, adequate
+response space, and visual scaffolding rather than collapsing into raw
+headings, text, and response lines.
+
+Final-delivery QA fails the classroom-ready claim when required visuals are
+absent or unplaced.
+
+This section creates no external-write authority. It does not authorize
+Drive, Notion, publication, or other external writes, and it does not change
+classroom artifact destinations or ownership boundaries.
+
 ## Generated Asset Delivery Continuation
 
 A successful generated classroom visual is intermediate evidence when the active
@@ -157,6 +201,42 @@ specific blocker. A successful generation must never manufacture a new folder,
 choose a nearby destination, change sharing, or treat metadata registration as
 student-facing approval.
 
+
+## Source Retrieval Delivery Continuation
+
+A successful project/source retrieval is intermediate evidence when the active
+teacher mission already requests a classroom artifact and that artifact has not
+yet been produced. Do not stop at retrieval merely to report that relevant
+Photography Foundations (or other unit) source material was found, that a
+production skill was loaded, or that the evidence is sufficient. Loading a
+DOCX-generation skill or summarizing retrieved composition concepts is not
+worksheet delivery.
+
+After retrieving the needed source evidence in the same mission, continue
+immediately into worksheet generation:
+
+1. treat the retrieved source context as input to production, not as the
+   response's terminal deliverable;
+2. consume the retrieved project materials and composition vocabulary directly,
+   without requiring the teacher to restate what the project already contains;
+3. produce the usable student-facing worksheet artifact, or complete
+   artifact-ready student-facing content, before backend status or governance
+   reporting per the Required Order above;
+4. when no explicit Drive destination is supplied and no authorized production
+   write is available, finish with a bounded local/chat artifact -- complete
+   student-facing worksheet content or a clearly labeled content specification --
+   rather than stopping after retrieval.
+
+Do not ask an unnecessary clarifying question when the supplied project
+materials are sufficient for a bounded worksheet. Ask only when source
+uncertainty makes a bounded draft unsafe, and then use Blocked-Production
+Behavior instead of fabricating curriculum facts.
+
+This continuation never creates external-write authority. It does not change
+classroom artifact destinations, does not authorize Drive, Notion, publication,
+or other external writes, and does not weaken source-grounding requirements.
+A missing Drive destination never authorizes writing the lesson artifact to
+GitHub.
 
 ## Content-First Visual Planning For Worksheets
 
@@ -198,10 +278,13 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.7
+0.1.8
 
 ## Changelog
 
+- 0.1.8 combines the 0.1.7 additions: required visual placement and
+  companion-file boundary (#2888) plus revision-bound required visual roles
+  (#2890).
 - 0.1.7 binds required visual roles across revisions: a later revision must
   preserve every prior required role unless the teacher or governing source
   explicitly removes it; silent drops are completion regressions (#2890).

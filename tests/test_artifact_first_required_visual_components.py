@@ -85,6 +85,58 @@ def test_issue_2334_known_eligible_asset_recovery_failure_blocks_instead_of_subs
     assert "Retrieval, materialization, placement, or connector failure is not such proof." in picker
 
 
+def test_issue_2888_content_reference_binds_required_visual_role_before_generation() -> None:
+    standard = normalized()
+    assert "## Required Visual Placement And Companion-File Boundary" in ARTIFACT_FIRST.read_text(encoding="utf-8")
+    for phrase in (
+        "that reference binds an explicit required visual role before artifact generation",
+        "Name the role, its instructional purpose, and its intended placement alongside the analysis prompts it supports",
+        "Resolve the bound asset through the current Notion Visual Asset Library working record and the exact Drive file identity",
+    ):
+        assert phrase in standard
+
+
+def test_issue_2888_unplaced_companion_file_does_not_satisfy_inline_analysis_slot() -> None:
+    standard = normalized()
+    for phrase in (
+        "A required visual that exists only as a separate file in the same Drive folder proves discovery at most",
+        "Discovery, selection, or folder co-location cannot be reported as visual fulfillment",
+        "the required visual slot is satisfied only by the asset bytes or a usable source reference materialized and placed in the worksheet",
+        "it never silently converts an inline-analysis slot into a satisfied visual",
+    ):
+        assert phrase in standard
+
+
+def test_issue_2888_missing_placement_surfaces_explicit_blocker_not_silent_text_only() -> None:
+    standard = normalized()
+    for phrase in (
+        "Never silently deliver a text-only artifact for a visually required worksheet",
+        "surface the gap as an explicit blocker, label the artifact as incomplete/preview, and use Blocked-Production Behavior",
+        "Asset discovery/selection cannot be reported as visual fulfillment without materialization and placement",
+    ):
+        assert phrase in standard
+
+
+def test_issue_2888_render_qa_checks_scale_clipping_proximity_and_layout() -> None:
+    standard = normalized()
+    for phrase in (
+        "must verify required visual presence, readable scale, no clipping, and usable proximity to the analysis prompts the visual supports",
+        "intentional hierarchy, section grouping, adequate response space, and visual scaffolding",
+        "rather than collapsing into raw headings, text, and response lines",
+        "Final-delivery QA fails the classroom-ready claim when required visuals are absent or unplaced",
+    ):
+        assert phrase in standard
+
+
+def test_issue_2888_placement_section_creates_no_external_write_authority() -> None:
+    standard = normalized()
+    assert "This section creates no external-write authority." in standard
+    assert (
+        "It does not authorize Drive, Notion, publication, or other external writes"
+        in standard
+    )
+
+
 def test_required_order_and_blocked_production_behavior_remain_canonical() -> None:
     text = ARTIFACT_FIRST.read_text(encoding="utf-8")
     assert "## Required Order" in text
@@ -93,7 +145,7 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     version_block = text.split("## Version", 1)[1]
     version = version_block.strip().splitlines()[0]
     major, minor, patch = (int(part) for part in version.split("."))
-    assert (major, minor, patch) >= (0, 1, 4)
+    assert (major, minor, patch) >= (0, 1, 7)
 
 
 def test_issue_2968_generated_asset_continues_to_exact_approved_drive_handoff() -> None:
