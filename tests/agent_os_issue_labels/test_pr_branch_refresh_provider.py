@@ -802,3 +802,110 @@ def test_lineage_integrity_rejects_merge_commit_tree_that_differs_from_clean_git
         admitted_paths=("feature.txt",),
     )
     assert blocker == "lineage-integrity.stale-merge-tree"
+
+
+class SequencedPullRepo(FakeRepo):
+    """#3127: get_pull returns a scripted sequence of mergeability states."""
+
+    def __init__(self, states):
+        super().__init__()
+        self.states = list(states)
+        self.get_pull_calls = 0
+
+    def get_pull(self, pr_number):
+        self.get_pull_calls += 1
+        index = min(self.get_pull_calls - 1, len(self.states) - 1)
+        state = self.states[index]
+        pull = FakePull()
+        if state == "unknown":
+            pull.mergeable = None
+            pull.mergeable_state = "unknown"
+        elif state == "conflicted":
+            pull.mergeable = False
+            pull.mergeable_state = "dirty"
+        else:
+            pull.mergeable = True
+            pull.mergeable_state = "clean"
+        return pull
+
+
+def _no_sleep(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(provider_module, "time", SimpleNamespace(sleep=lambda s: sleeps.append(s)))
+    return sleeps
+
+
+def test_read_branch_warms_transient_unknown_mergeability(monkeypatch):
+    sleeps = _no_sleep(monkeypatch)
+    repo = SequencedPullRepo(["unknown", "unknown", "mergeable"])
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=FakeGithub(repo),
+        request=request(),
+        validation_executor=FakeValidationExecutor(),
+    )
+    branch = backing.read_branch("Blummer92/agent-os", 1363)
+    assert branch.mergeability == "mergeable"
+    assert repo.get_pull_calls == 3
+    assert sleeps == [provider_module._MERGEABILITY_WARMUP_DELAY_SECONDS] * 2
+
+
+def test_read_branch_keeps_unknown_after_bounded_warmup(monkeypatch):
+    sleeps = _no_sleep(monkeypatch)
+    repo = SequencedPullRepo(["unknown"] * 10)
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=FakeGithub(repo),
+        request=request(),
+        validation_executor=FakeValidationExecutor(),
+    )
+    branch = backing.read_branch("Blummer92/agent-os", 1363)
+    assert branch.mergeability == "unknown"
+    assert repo.get_pull_calls == 1 + provider_module._MERGEABILITY_WARMUP_ATTEMPTS
+    assert len(sleeps) == provider_module._MERGEABILITY_WARMUP_ATTEMPTS
+
+
+def test_read_branch_warmup_tolerates_refetch_error(monkeypatch):
+    _no_sleep(monkeypatch)
+    repo = SequencedPullRepo(["unknown"])
+    real_get_pull = repo.get_pull
+    calls = {"n": 0}
+
+    def flaky(pr_number):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("transient refetch failure")
+        return real_get_pull(pr_number)
+
+    repo.get_pull = flaky
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=FakeGithub(repo),
+        request=request(),
+        validation_executor=FakeValidationExecutor(),
+    )
+    branch = backing.read_branch("Blummer92/agent-os", 1363)
+    assert branch.mergeability == "unknown"
+
+
+def test_read_branch_does_not_warm_conflicted_mergeability(monkeypatch):
+    sleeps = _no_sleep(monkeypatch)
+    repo = SequencedPullRepo(["conflicted"])
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=FakeGithub(repo),
+        request=request(),
+        validation_executor=FakeValidationExecutor(),
+    )
+    branch = backing.read_branch("Blummer92/agent-os", 1363)
+    assert branch.mergeability == "conflicted"
+    assert repo.get_pull_calls == 1
+    assert sleeps == []
+
+
+def test_preparation_blocker_names_mergeability_unknown():
+    snap = snapshot(state="behind", mergeability="unknown")
+    assert provider_module._preparation_blocker(
+        snap,
+        repository="Blummer92/agent-os",
+        pr_number=1363,
+        expected_head_sha=OLD,
+        expected_base_sha=BASE,
+        current_main_sha=MAIN,
+    ) == "branch.mergeability-unknown-before-preparation"
