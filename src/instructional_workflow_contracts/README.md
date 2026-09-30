@@ -110,4 +110,29 @@ Issue #849 may consume only a validated `visuals-required` plan. A `no-visual-ne
 
 Rollback for the live-operation subject is removal of the additive validator, tests, exports, and this documentation section. It performs no external writes and requires no provider cleanup or migration.
 
+## Artifact reuse required-lesson-component gate
+
+`plan_instructional_artifact_reuse` compares the candidate artifact's
+`artifact.observed_sections` (the sections the retrieved artifact actually
+contains, recorded by final-delivery QA on the ArtifactManifest) against the
+MaterialRequirement's `instructional.required_sections` (the current
+instructional plan's required lesson components, e.g. Warm-Up and Exit Ticket
+per the #1568 worksheet default).
+
+- When every required section is observed, section evidence adds nothing and
+  existing decisions are unchanged.
+- When required sections are absent from the observed sections, the candidate
+  carries `artifact-required-sections-missing` in `missing_required_evidence`,
+  loses "safe" status, and can never be `reuse-existing-approved`: the partial
+  activity sheet is explicitly classified as incomplete rather than presented
+  as the complete lesson artifact.
+- When the manifest carries no observed-section evidence at all while the
+  requirement declares required sections, the candidate carries
+  `artifact-sections-unevidenced` and is likewise never approved for reuse.
+
+An authoritative-sounding Drive title never overrides this evidence: titles
+are not completeness evidence. No second lesson-state system, curriculum
+database, or generic checklist framework is introduced; the check wires the
+two existing contract fields together at the existing reuse decision seam.
+
 Rollback for the visual eligibility lane is removal or reversion of the additive planner-consumer modules, focused fixtures and tests, and documentation sections. `MaterialRequirement`, `VisualNeedsPlan`, `ArtifactManifest`, and Visual Asset Sync remain independently valid and require no external cleanup or migration.

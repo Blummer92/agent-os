@@ -262,6 +262,7 @@ def _candidate_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -
         missing.append("readiness-teacher-approval-missing")
     if statuses["classroom_readiness"] != "ready":
         missing.append("readiness-classroom-missing")
+    missing.extend(_required_section_evidence(requirement, manifest))
     visual = [_visual_recommendation(asset) for asset in manifest.get("assets", [])]
     unsafe_visual = any(item["decision"] not in {"reuse-canonical-asset", "reuse-alternate-with-explicit-reason", "bounded-context-preserving-crop-or-cleanup", "bounded-content-repair"} for item in visual)
     if unsafe_visual:
@@ -277,6 +278,36 @@ def _candidate_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -
         "visual": visual,
         "safe": not missing and not conflicts and not unsafe_visual,
     }
+
+
+def _required_section_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -> tuple[str, ...]:
+    """Compare the artifact's observed sections against required lesson components.
+
+    The MaterialRequirement's instructional.required_sections carry the current
+    instructional plan's required lesson components (warm-up, main task, exit
+    ticket, ...). The candidate manifest's artifact.observed_sections record the
+    sections the artifact actually contains. A candidate that cannot prove every
+    required component is present is never safe for reuse-existing-approved: a
+    partial activity sheet must be classified as incomplete, not presented as the
+    complete lesson artifact, no matter how authoritative the Drive title sounds.
+    """
+    instructional = requirement.get("instructional")
+    if type(instructional) is not dict:
+        return ()
+    required = instructional.get("required_sections")
+    if type(required) is not list or not required:
+        return ()
+    required_sections = tuple(section for section in required if type(section) is str)
+    if not required_sections:
+        return ()
+    artifact = manifest.get("artifact")
+    observed = artifact.get("observed_sections") if type(artifact) is dict else None
+    if observed is None:
+        return ("artifact-sections-unevidenced",)
+    observed_sections = {section for section in observed if type(section) is str}
+    if any(section not in observed_sections for section in required_sections):
+        return ("artifact-required-sections-missing",)
+    return ()
 
 
 def _visual_recommendation(asset: dict[str, Any]) -> dict[str, Any]:

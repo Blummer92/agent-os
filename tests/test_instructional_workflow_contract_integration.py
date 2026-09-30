@@ -23,8 +23,8 @@ COMPONENT_BLOBS = {
     "common.py": "94159792d80079c18a36d8c36bee97fa13921115",
     "handoff.py": "b616580b0febaa2cab2f85a9327a5f62922289ae",
     "material_requirement.py": "b2e5513e41a3545424f2c3c791bb990e7a7cc4e1",
-    "artifact_manifest.py": "e9d4d79cc085690593ac872b1fecade1ba7901f0",
-    "reuse_planner.py": "e7da9179c2a39627d84a5c2b323cc87a581d29bb",
+    "artifact_manifest.py": "966b01f82da92088eb9dfd3b3a26cc70f5472bc5",
+    "reuse_planner.py": "27cafef045a5094fbc1dbbdcea6c7063de6d73f2",
 }
 EXPECTED_PUBLIC_EXPORTS = (
     "AuthorityEvidence",
