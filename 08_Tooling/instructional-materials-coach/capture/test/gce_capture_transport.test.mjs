@@ -6,6 +6,9 @@ import test from 'node:test';
 import {
   CAPTURE_HOST_ENTRYPOINTS,
   captureGcloudArgv,
+  captureReadinessArgv,
+  captureStartArgv,
+  captureStateArgv,
   captureHostEntrypoint,
   invokeGceCapture,
 } from '../gce_capture_transport.mjs';
@@ -37,30 +40,49 @@ function payload(overrides = {}) {
   };
 }
 
-function successfulSpawn(observed, responseOverrides = {}) {
+function lifecycleSpawn(observed, {
+  states = ['RUNNING'],
+  readinessExitCode = 0,
+  startExitCode = 0,
+  captureResponse = {},
+} = {}) {
+  let stateIndex = 0;
+  observed.calls = [];
   return (command, argv, options) => {
-    observed.command = command;
-    observed.argv = argv;
-    observed.options = options;
+    observed.calls.push({ command, argv, options });
     const child = new EventEmitter();
     child.stdin = new PassThrough();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    observed.stdin = '';
-    child.stdin.on('data', (chunk) => { observed.stdin += chunk.toString('utf8'); });
     child.kill = () => {};
+    child.stdin.on('data', (chunk) => {
+      observed.stdin = (observed.stdin ?? '') + chunk.toString('utf8');
+    });
     queueMicrotask(() => {
-      child.stdout.end(JSON.stringify({
-        transport_status: 'succeeded',
-        execution_surface: EXECUTION_SURFACE,
-        capture_result: { status: 'blocked', capture: null },
-        screenshots: [],
-        evidence_persisted: false,
-        side_effects_performed: false,
-        ...responseOverrides,
-      }));
+      let exitCode = 0;
+      if (argv[0] === 'compute' && argv[1] === 'instances' && argv[2] === 'describe') {
+        const state = states[Math.min(stateIndex, states.length - 1)];
+        stateIndex += 1;
+        child.stdout.end(`${state}\n`);
+      } else if (argv[0] === 'compute' && argv[1] === 'instances' && argv[2] === 'start') {
+        exitCode = startExitCode;
+        child.stdout.end('');
+      } else if (argv.includes('--command') && argv.at(-1).startsWith('test -x ')) {
+        exitCode = readinessExitCode;
+        child.stdout.end('');
+      } else {
+        child.stdout.end(JSON.stringify({
+          transport_status: 'succeeded',
+          execution_surface: EXECUTION_SURFACE,
+          capture_result: { status: 'blocked', capture: null },
+          screenshots: [],
+          evidence_persisted: false,
+          side_effects_performed: false,
+          ...captureResponse,
+        }));
+      }
       child.stderr.end();
-      child.emit('close', 0);
+      child.emit('close', exitCode);
     });
     return child;
   };
@@ -85,10 +107,18 @@ test('GCE capture argv is fixed to one host and one session-owned entrypoint', (
 
 test('valid capture payload streams exact bytes over stdin without a local shell', async () => {
   const observed = {};
-  const result = await invokeGceCapture(payload(), { spawnImpl: successfulSpawn(observed), timeoutMs: 1000 });
-  assert.equal(observed.command, 'gcloud');
-  assert.equal(observed.options.shell, false);
-  assert.deepEqual(observed.argv, captureGcloudArgv(CANVA_BROWSER_SESSION_REF));
+  const result = await invokeGceCapture(payload(), {
+    spawnImpl: lifecycleSpawn(observed),
+    timeoutMs: 1000,
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
+  });
+  assert.equal(observed.calls.every((call) => call.command === 'gcloud' && call.options.shell === false), true);
+  assert.deepEqual(observed.calls.map((call) => call.argv), [
+    captureStateArgv(),
+    captureReadinessArgv(CANVA_BROWSER_SESSION_REF),
+    captureGcloudArgv(CANVA_BROWSER_SESSION_REF),
+  ]);
   const sent = JSON.parse(observed.stdin);
   assert.equal(sent.raw_recording, rawRecording);
   assert.equal(sent.recording_sha256, fingerprintRecording(rawRecording));
@@ -100,14 +130,18 @@ test('valid capture payload streams exact bytes over stdin without a local shell
 test('ephemeral screenshot response is accepted but persistent evidence is rejected', async () => {
   const screenshot = { filename: '000-before.png', content_base64: Buffer.from('pixels').toString('base64') };
   const result = await invokeGceCapture(payload(), {
-    spawnImpl: successfulSpawn({}, { screenshots: [screenshot] }),
+    spawnImpl: lifecycleSpawn({}, { captureResponse: { screenshots: [screenshot] } }),
     timeoutMs: 1000,
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
   });
   assert.deepEqual(result.screenshots, [screenshot]);
 
   await assert.rejects(() => invokeGceCapture(payload(), {
-    spawnImpl: successfulSpawn({}, { evidence_persisted: true }),
+    spawnImpl: lifecycleSpawn({}, { captureResponse: { evidence_persisted: true } }),
     timeoutMs: 1000,
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
   }), /ephemeral evidence only/);
 });
 
@@ -147,4 +181,76 @@ test('Schoology capture argv is fixed to the dedicated Schoology host entrypoint
     '--quiet',
     '--command', 'sudo -n /usr/local/libexec/agent-os-schoology-software-tutorial-capture',
   ]);
+});
+
+
+test('STOPPED capture starts once, waits for RUNNING, probes readiness, then captures', async () => {
+  const observed = {};
+  await invokeGceCapture(payload(), {
+    spawnImpl: lifecycleSpawn(observed, { states: ['STOPPED', 'STAGING', 'RUNNING'] }),
+    timeoutMs: 1000,
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
+    lifecycleMaxPolls: 3,
+  });
+  assert.deepEqual(observed.calls.map((call) => call.argv), [
+    captureStateArgv(),
+    captureStartArgv(),
+    captureStateArgv(),
+    captureStateArgv(),
+    captureReadinessArgv(CANVA_BROWSER_SESSION_REF),
+    captureGcloudArgv(CANVA_BROWSER_SESSION_REF),
+  ]);
+  assert.equal(observed.calls.filter((call) => call.argv[1] === 'instances' && call.argv[2] === 'start').length, 1);
+});
+
+test('RUNNING capture never redundantly starts the VM', async () => {
+  const observed = {};
+  await invokeGceCapture(payload(), {
+    spawnImpl: lifecycleSpawn(observed, { states: ['RUNNING'] }),
+    timeoutMs: 1000,
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
+  });
+  assert.equal(observed.calls.some((call) => call.argv[1] === 'instances' && call.argv[2] === 'start'), false);
+});
+
+test('transitional and unknown initial states fail closed before capture', async () => {
+  for (const state of ['STAGING', 'UNKNOWN']) {
+    const observed = {};
+    await assert.rejects(() => invokeGceCapture(payload(), {
+      spawnImpl: lifecycleSpawn(observed, { states: [state] }),
+      lifecycleTimeoutMs: 1000,
+      lifecyclePollMs: 0,
+    }), /transitional or unknown/);
+    assert.equal(observed.calls.some((call) => call.argv[1] === 'ssh'), false);
+  }
+});
+
+test('start and readiness failures fail closed', async () => {
+  const startObserved = {};
+  await assert.rejects(() => invokeGceCapture(payload(), {
+    spawnImpl: lifecycleSpawn(startObserved, { states: ['STOPPED'], startExitCode: 1 }),
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
+  }), /start failed/);
+
+  const readyObserved = {};
+  await assert.rejects(() => invokeGceCapture(payload(), {
+    spawnImpl: lifecycleSpawn(readyObserved, { states: ['RUNNING'], readinessExitCode: 1 }),
+    lifecycleTimeoutMs: 1000,
+    lifecyclePollMs: 0,
+  }), /not ready/);
+  assert.equal(readyObserved.calls.some((call) => call.argv.at(-1) === 'sudo -n /usr/local/libexec/agent-os-canva-software-tutorial-capture'), false);
+});
+
+test('capture lifecycle has no stop operation and exposes no auth/profile material', () => {
+  const sourceArgv = [
+    ...captureStateArgv(),
+    ...captureStartArgv(),
+    ...captureReadinessArgv(CANVA_BROWSER_SESSION_REF),
+    ...captureGcloudArgv(CANVA_BROWSER_SESSION_REF),
+  ].join(' ');
+  assert.equal(/instances stop/.test(sourceArgv), false);
+  assert.equal(/password|cookie|token|profile_path/.test(sourceArgv), false);
 });

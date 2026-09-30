@@ -35,6 +35,8 @@ zone     = us-central1-a
 instance = agent-os-test
 ```
 
+`gce_capture_transport.mjs` first consumes the fixed stopped-by-default lifecycle for `agent-os-test`: observe the exact VM state, start only from STOPPED/TERMINATED, wait for RUNNING, and probe the fixed session-owned capture entrypoint before capture. RUNNING is never redundantly started; transitional/unknown state, start failure, and readiness failure fail closed. This capture lifecycle deliberately performs no STOP operation; shutdown remains separately governed by #2799/#2829.
+
 `gce_capture_transport.mjs` builds the entire `gcloud compute ssh` argv from repository-owned constants. It sets `shell: false`, accepts no caller-provided executable, SSH command, shell text, port, display, profile path, launch arguments, or alternate resource tuple, and selects only fixed session-owned host entrypoints.
 
 For Canva the remote command is exactly:

@@ -19,6 +19,13 @@ export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
 export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_TIMEOUT_MS = 120_000;
+export const CAPTURE_LIFECYCLE_TIMEOUT_MS = 120_000;
+export const CAPTURE_LIFECYCLE_MAX_POLLS = 30;
+export const CAPTURE_LIFECYCLE_POLL_MS = 2_000;
+
+const RUNNING = 'RUNNING';
+const STOPPED_STATES = new Set(['STOPPED', 'TERMINATED']);
+const TRANSITIONAL_STATES = new Set(['STAGING', 'STOPPING', 'SUSPENDING', 'SUSPENDED', 'PROVISIONING', 'REPAIRING']);
 
 const TRANSPORT_FIELDS = new Set([
   'operation',
@@ -72,6 +79,36 @@ export function captureHostEntrypoint(browserSessionRef) {
   return CAPTURE_HOST_ENTRYPOINTS[browserSessionRef];
 }
 
+export function captureStateArgv() {
+  return Object.freeze([
+    'compute', 'instances', 'describe', EXECUTION_SURFACE.instance,
+    '--project', EXECUTION_SURFACE.project,
+    '--zone', EXECUTION_SURFACE.zone,
+    '--format=value(status)',
+  ]);
+}
+
+export function captureStartArgv() {
+  return Object.freeze([
+    'compute', 'instances', 'start', EXECUTION_SURFACE.instance,
+    '--project', EXECUTION_SURFACE.project,
+    '--zone', EXECUTION_SURFACE.zone,
+    '--quiet',
+  ]);
+}
+
+export function captureReadinessArgv(browserSessionRef) {
+  const entrypoint = captureHostEntrypoint(browserSessionRef);
+  return Object.freeze([
+    'compute', 'ssh', EXECUTION_SURFACE.instance,
+    '--project', EXECUTION_SURFACE.project,
+    '--zone', EXECUTION_SURFACE.zone,
+    '--tunnel-through-iap',
+    '--quiet',
+    '--command', `test -x ${entrypoint}`,
+  ]);
+}
+
 export function captureGcloudArgv(browserSessionRef) {
   const entrypoint = captureHostEntrypoint(browserSessionRef);
   return Object.freeze([
@@ -101,37 +138,114 @@ function collectStream(stream, maximum, label) {
   });
 }
 
-export async function invokeGceCapture(payload, {
-  spawnImpl = spawn,
-  timeoutMs = CAPTURE_TRANSPORT_TIMEOUT_MS,
+async function runGcloud(argv, {
+  spawnImpl,
+  timeoutMs,
+  stdin = null,
+  stdoutMaximum = 64 * 1024,
 } = {}) {
-  const body = validateTransportPayload(payload);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > CAPTURE_TRANSPORT_TIMEOUT_MS) {
-    throw new TypeError('timeoutMs is outside the bounded transport limit');
-  }
-
-  const child = spawnImpl('gcloud', captureGcloudArgv(payload.browser_session_ref), {
+  const child = spawnImpl('gcloud', argv, {
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
   });
-  const stdoutPromise = collectStream(child.stdout, CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES, 'capture transport stdout');
-  const stderrPromise = collectStream(child.stderr, 64 * 1024, 'capture transport stderr');
-  child.stdin.end(Buffer.concat([body, Buffer.from('\n')]));
+  const stdoutPromise = collectStream(child.stdout, stdoutMaximum, 'gcloud stdout');
+  const stderrPromise = collectStream(child.stderr, 64 * 1024, 'gcloud stderr');
+  if (stdin === null) child.stdin.end();
+  else child.stdin.end(stdin);
 
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     child.kill('SIGKILL');
   }, timeoutMs);
-
   const exitCode = await new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', resolve);
   });
   clearTimeout(timer);
   const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
-  if (timedOut) throw new Error('capture transport timed out');
+  if (timedOut) throw new Error('gcloud operation timed out');
+  return { exitCode, stdout };
+}
+
+function normalizeVmState(stdout) {
+  const state = stdout.trim().toUpperCase();
+  if (state === RUNNING || STOPPED_STATES.has(state) || TRANSITIONAL_STATES.has(state)) return state;
+  return 'UNKNOWN';
+}
+
+async function ensureCaptureHostReady(browserSessionRef, {
+  spawnImpl,
+  lifecycleTimeoutMs = CAPTURE_LIFECYCLE_TIMEOUT_MS,
+  pollMs = CAPTURE_LIFECYCLE_POLL_MS,
+  maxPolls = CAPTURE_LIFECYCLE_MAX_POLLS,
+  sleepImpl = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
+  if (!Number.isInteger(lifecycleTimeoutMs) || lifecycleTimeoutMs < 1 || lifecycleTimeoutMs > CAPTURE_LIFECYCLE_TIMEOUT_MS) {
+    throw new TypeError('lifecycleTimeoutMs is outside the bounded lifecycle limit');
+  }
+  if (!Number.isInteger(pollMs) || pollMs < 0 || pollMs > CAPTURE_LIFECYCLE_POLL_MS) {
+    throw new TypeError('pollMs is outside the bounded lifecycle limit');
+  }
+  if (!Number.isInteger(maxPolls) || maxPolls < 1 || maxPolls > CAPTURE_LIFECYCLE_MAX_POLLS) {
+    throw new TypeError('maxPolls is outside the bounded lifecycle limit');
+  }
+
+  const observed = await runGcloud(captureStateArgv(), { spawnImpl, timeoutMs: lifecycleTimeoutMs });
+  if (observed.exitCode !== 0) throw new Error('capture host state observation failed');
+  let state = normalizeVmState(observed.stdout);
+  if (STOPPED_STATES.has(state)) {
+    const started = await runGcloud(captureStartArgv(), { spawnImpl, timeoutMs: lifecycleTimeoutMs });
+    if (started.exitCode !== 0) throw new Error('capture host start failed');
+    state = 'STARTING';
+    for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+      if (attempt > 0 && pollMs > 0) await sleepImpl(pollMs);
+      const current = await runGcloud(captureStateArgv(), { spawnImpl, timeoutMs: lifecycleTimeoutMs });
+      if (current.exitCode !== 0) throw new Error('capture host state observation failed');
+      state = normalizeVmState(current.stdout);
+      if (state === RUNNING) break;
+      if (!STOPPED_STATES.has(state) && !TRANSITIONAL_STATES.has(state)) {
+        throw new Error('capture host entered unknown state');
+      }
+    }
+    if (state !== RUNNING) throw new Error('capture host did not become running');
+  } else if (state !== RUNNING) {
+    throw new Error('capture host is transitional or unknown');
+  }
+
+  const ready = await runGcloud(captureReadinessArgv(browserSessionRef), { spawnImpl, timeoutMs: lifecycleTimeoutMs });
+  if (ready.exitCode !== 0) throw new Error('capture host is not ready');
+}
+
+export async function invokeGceCapture(payload, {
+  spawnImpl = spawn,
+  timeoutMs = CAPTURE_TRANSPORT_TIMEOUT_MS,
+  lifecycleTimeoutMs = CAPTURE_LIFECYCLE_TIMEOUT_MS,
+  lifecyclePollMs = CAPTURE_LIFECYCLE_POLL_MS,
+  lifecycleMaxPolls = CAPTURE_LIFECYCLE_MAX_POLLS,
+  sleepImpl,
+} = {}) {
+  const body = validateTransportPayload(payload);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > CAPTURE_TRANSPORT_TIMEOUT_MS) {
+    throw new TypeError('timeoutMs is outside the bounded transport limit');
+  }
+
+  await ensureCaptureHostReady(payload.browser_session_ref, {
+    spawnImpl,
+    lifecycleTimeoutMs,
+    pollMs: lifecyclePollMs,
+    maxPolls: lifecycleMaxPolls,
+    ...(sleepImpl ? { sleepImpl } : {}),
+  });
+
+  const capture = await runGcloud(captureGcloudArgv(payload.browser_session_ref), {
+    spawnImpl,
+    timeoutMs,
+    stdin: Buffer.concat([body, Buffer.from('\n')]),
+    stdoutMaximum: CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES,
+  });
+  const { exitCode, stdout } = capture;
   if (exitCode !== 0) throw new Error('capture host invocation failed');
 
   let result;
