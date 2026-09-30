@@ -8,7 +8,14 @@ Exactly one open primary PR may claim an implementation issue.
 
 Closes #
 
-<!-- Exactly one closing keyword and issue number. -->
+<!--
+Exactly one closing keyword and issue number.
+GitHub treats close/fix/resolve #N ANYWHERE in the PR title or body as a
+closing reference — even negated ("does not close #N"), mid-sentence, or in
+examples — and closes the issue at merge. If this PR must NOT close its
+issue, link with "Part of #N" or "Refs #N" and keep all close/fix/resolve
+wording away from issue numbers.
+-->
 
 ## Summary
 

@@ -26,6 +26,7 @@ from .approval_records import (
     ApprovalState,
     evaluate_approval_applicability,
 )
+from .parse_pr import GitHubEffectiveClosingReference, normalize_issue_target
 
 MERGE_AUTHORIZATION_SCHEMA_VERSION = "1.0"
 MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION = "1.0"
@@ -105,11 +106,16 @@ MERGE_AUTHORIZATION_REASON_CODES = frozenset(
         "projection.changed",
         "projection.incomplete",
         "pull-request.base-changed",
+        "pull-request.body-changed",
+        "pull-request.closing-references-changed",
+        "pull-request.closure-targets-changed",
         "pull-request.draft",
         "pull-request.head-changed",
         "pull-request.identity-changed",
         "pull-request.not-ready",
         "pull-request.ready-state-changed",
+        "pull-request.title-changed",
+        "pull-request.unauthorized-closing-reference",
         "review.blocked",
         "review.changed",
         "review.head-stale",
@@ -139,6 +145,7 @@ _BLOCKED = frozenset(
         "checks.skipped",
         "pull-request.draft",
         "pull-request.not-ready",
+        "pull-request.unauthorized-closing-reference",
         "review.blocked",
         "review.head-stale",
         "review.unresolved",
@@ -233,6 +240,10 @@ class PullRequestMergeEvidence:
     required_tests: tuple[str, ...]
     required_checks: tuple[MergeCheckEvidence, ...]
     review_evidence: MergeReviewEvidence
+    pr_body_sha256: str
+    pr_title_sha256: str
+    github_effective_closing_references: tuple[GitHubEffectiveClosingReference, ...]
+    authorized_closure_targets: tuple[str, ...]
     evidence_id: str
 
     def __post_init__(self) -> None:
@@ -264,6 +275,18 @@ class PullRequestMergeEvidence:
         object.__setattr__(self, "required_checks", _checks(self.required_checks))
         if not isinstance(self.review_evidence, MergeReviewEvidence):
             raise TypeError("review_evidence must be MergeReviewEvidence")
+        _sha256(self.pr_body_sha256, "pr_body_sha256")
+        _sha256(self.pr_title_sha256, "pr_title_sha256")
+        object.__setattr__(
+            self,
+            "github_effective_closing_references",
+            _closing_references(self.github_effective_closing_references),
+        )
+        object.__setattr__(
+            self,
+            "authorized_closure_targets",
+            _closure_targets(self.authorized_closure_targets),
+        )
         expected = _identity("pull-request-merge-evidence", _pr_payload(self))
         if self.evidence_id and self.evidence_id != expected:
             raise ValueError("evidence_id does not match pull-request content")
@@ -289,6 +312,10 @@ class MergeAuthorizationBinding:
     required_tests: tuple[str, ...]
     required_check_evidence: tuple[MergeCheckEvidence, ...]
     review_evidence: MergeReviewEvidence
+    pr_body_sha256: str
+    pr_title_sha256: str
+    github_effective_closing_references: tuple[GitHubEffectiveClosingReference, ...]
+    authorized_closure_targets: tuple[str, ...]
     draft_ready_state: Literal["draft", "ready"]
 
     def __post_init__(self) -> None:
@@ -331,6 +358,18 @@ class MergeAuthorizationBinding:
         )
         if not isinstance(self.review_evidence, MergeReviewEvidence):
             raise TypeError("review_evidence must be MergeReviewEvidence")
+        _sha256(self.pr_body_sha256, "pr_body_sha256")
+        _sha256(self.pr_title_sha256, "pr_title_sha256")
+        object.__setattr__(
+            self,
+            "github_effective_closing_references",
+            _closing_references(self.github_effective_closing_references),
+        )
+        object.__setattr__(
+            self,
+            "authorized_closure_targets",
+            _closure_targets(self.authorized_closure_targets),
+        )
         if self.draft_ready_state not in {"draft", "ready"}:
             raise ValueError("draft_ready_state is unsupported")
 
@@ -967,14 +1006,33 @@ def reconstruct_merge_authorization_record(
         "approval_applicability_identity", "approval_expires_at",
         "approved_execution_projection_id", "changed_scope_fingerprint",
         "allowed_files", "forbidden_paths", "required_tests",
-        "required_check_evidence", "review_evidence", "draft_ready_state",
+        "required_check_evidence", "review_evidence",
+        "pr_body_sha256", "pr_title_sha256",
+        "github_effective_closing_references", "authorized_closure_targets",
+        "draft_ready_state",
     }
     if set(binding_raw) != binding_expected:
         raise ValueError("merge authorization binding fields are invalid")
     checks_raw = binding_raw["required_check_evidence"]
     review_raw = binding_raw["review_evidence"]
+    closing_raw = binding_raw["github_effective_closing_references"]
+    targets_raw = binding_raw["authorized_closure_targets"]
     if type(checks_raw) is not list or type(review_raw) is not dict:
         raise ValueError("merge authorization nested evidence is invalid")
+    if type(closing_raw) is not list or type(targets_raw) is not list:
+        raise ValueError("merge authorization closing evidence is invalid")
+    closing_references = tuple(
+        GitHubEffectiveClosingReference(
+            keyword=item["keyword"], target=item["target"], source=item["source"]
+        )
+        for item in closing_raw
+        if type(item) is dict
+        and set(item) == {"keyword", "target", "source"}
+    )
+    if len(closing_references) != len(closing_raw):
+        raise ValueError("merge authorization closing references are invalid")
+    if any(type(item) is not str for item in targets_raw):
+        raise ValueError("merge authorization closure targets are invalid")
     checks = tuple(
         MergeCheckEvidence(
             context=item["context"],
@@ -1014,6 +1072,12 @@ def reconstruct_merge_authorization_record(
             blocking_review_present=review_raw["blocking_review_present"],
             unresolved_conversation_count=review_raw["unresolved_conversation_count"],
             exact_head_reviewed=review_raw["exact_head_reviewed"],
+        ),
+        pr_body_sha256=binding_raw["pr_body_sha256"],
+        pr_title_sha256=binding_raw["pr_title_sha256"],
+        github_effective_closing_references=closing_references,
+        authorized_closure_targets=tuple(
+            normalize_issue_target(item) for item in targets_raw
         ),
         draft_ready_state=binding_raw["draft_ready_state"],
     )
@@ -1143,7 +1207,9 @@ def _current_binding(
         reasons.add("contract.forbidden-paths-changed")
     if effective_projection.required_tests != pr.required_tests:
         reasons.add("contract.required-tests-changed")
-    reasons.update(_eligibility_reasons(pr))
+    eligibility_reasons, eligibility_details = _eligibility_reasons(pr)
+    reasons.update(eligibility_reasons)
+    details.extend(eligibility_details)
     if method != pr.proposed_merge_method:
         reasons.add("merge.method-changed")
 
@@ -1167,6 +1233,10 @@ def _current_binding(
         required_tests=pr.required_tests,
         required_check_evidence=pr.required_checks,
         review_evidence=pr.review_evidence,
+        pr_body_sha256=pr.pr_body_sha256,
+        pr_title_sha256=pr.pr_title_sha256,
+        github_effective_closing_references=pr.github_effective_closing_references,
+        authorized_closure_targets=pr.authorized_closure_targets,
         draft_ready_state="draft" if pr.draft else "ready",
     )
     return binding, tuple(sorted(reasons)), tuple(sorted(set(details)))
@@ -1189,8 +1259,11 @@ def _approval_result_reasons(
         reasons.add("approval.not-applicable")
 
 
-def _eligibility_reasons(pr: PullRequestMergeEvidence) -> set[str]:
+def _eligibility_reasons(
+    pr: PullRequestMergeEvidence,
+) -> tuple[set[str], list[str]]:
     reasons: set[str] = set()
+    details: list[str] = []
     if pr.draft:
         reasons.add("pull-request.draft")
     if not pr.ready_for_review:
@@ -1207,7 +1280,26 @@ def _eligibility_reasons(pr: PullRequestMergeEvidence) -> set[str]:
         if check.state != "success":
             reason = "checks.failed" if check.state == "failure" else f"checks.{check.state}"
             reasons.add(reason)
-    return reasons
+    # Fail closed on GitHub-effective closing references (#3157): GitHub closes
+    # any issue matched by a closing keyword in the PR title/body at merge —
+    # including negated prose such as "does not close #123" — regardless of
+    # the stricter Agent OS linked-issue routing. Only targets the lifecycle
+    # explicitly authorized for closure may appear; anything else blocks merge.
+    authorized = set(pr.authorized_closure_targets)
+    unauthorized_targets = sorted(
+        {reference.target for reference in pr.github_effective_closing_references}
+        - authorized
+    )
+    if unauthorized_targets:
+        reasons.add("pull-request.unauthorized-closing-reference")
+        for target in unauthorized_targets:
+            offenders = sorted(
+                f"{reference.keyword} {reference.target} (source={reference.source})"
+                for reference in pr.github_effective_closing_references
+                if reference.target == target
+            )
+            details.append(f"unauthorized-closing-reference:{target}:{'/'.join(offenders)}")
+    return reasons, details
 
 
 def _binding_from_pr_and_record(
@@ -1232,6 +1324,10 @@ def _binding_from_pr_and_record(
         required_tests=pr.required_tests,
         required_check_evidence=pr.required_checks,
         review_evidence=pr.review_evidence,
+        pr_body_sha256=pr.pr_body_sha256,
+        pr_title_sha256=pr.pr_title_sha256,
+        github_effective_closing_references=pr.github_effective_closing_references,
+        authorized_closure_targets=pr.authorized_closure_targets,
         draft_ready_state="draft" if pr.draft else "ready",
     )
 
@@ -1268,6 +1364,10 @@ def _binding_reasons(changed: Iterable[str]) -> set[str]:
         "required_tests": "contract.required-tests-changed",
         "required_check_evidence": "checks.changed",
         "review_evidence": "review.changed",
+        "pr_body_sha256": "pull-request.body-changed",
+        "pr_title_sha256": "pull-request.title-changed",
+        "github_effective_closing_references": "pull-request.closing-references-changed",
+        "authorized_closure_targets": "pull-request.closure-targets-changed",
         "draft_ready_state": "pull-request.ready-state-changed",
     }
     return {mapping[item] for item in changed if item in mapping}
@@ -1460,6 +1560,57 @@ def _checks(value: Iterable[MergeCheckEvidence]) -> tuple[MergeCheckEvidence, ..
             ),
         )
     )
+
+
+def _closing_references(
+    value: Iterable[GitHubEffectiveClosingReference],
+) -> tuple[GitHubEffectiveClosingReference, ...]:
+    """Bound, deduplicate, and deterministically order closing references.
+
+    The references themselves must be produced by the canonical
+    `parse_pr.detect_github_effective_closing_references` detector; this
+    validator only enforces shape, bounds, and ordering, never re-parses.
+    """
+    if isinstance(value, (str, bytes)):
+        raise TypeError(
+            "github_effective_closing_references must be an iterable of "
+            "GitHubEffectiveClosingReference"
+        )
+    items = tuple(_verified(item, GitHubEffectiveClosingReference) for item in value)
+    if len(items) > _MAX_ITEMS:
+        raise ValueError("github_effective_closing_references exceeds bounded item count")
+    if len(set(items)) != len(items):
+        raise ValueError("github_effective_closing_references contains duplicate values")
+    return tuple(
+        sorted(
+            items,
+            key=lambda item: (
+                0 if item.source == "title" else 1,
+                item.target,
+                item.keyword,
+            ),
+        )
+    )
+
+
+def _closure_targets(value: Iterable[str]) -> tuple[str, ...]:
+    """Canonicalize the issue targets whose closure is authorized.
+
+    Authorization itself is owned by the existing issue-lifecycle path; this
+    validator only enforces the canonical `#123` / `owner/repo#123` form so
+    the admission comparison cannot drift on formatting.
+    """
+    if isinstance(value, (str, bytes)):
+        raise TypeError("authorized_closure_targets must be an iterable of strings")
+    items = tuple(value)
+    if len(items) > _MAX_ITEMS:
+        raise ValueError("authorized_closure_targets exceeds bounded item count")
+    for item in items:
+        _text(item, "authorized_closure_targets")
+    normalized = tuple(normalize_issue_target(item) for item in items)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("authorized_closure_targets contains duplicate values")
+    return tuple(sorted(normalized))
 
 
 def _strings(value: Iterable[str], name: str) -> tuple[str, ...]:
