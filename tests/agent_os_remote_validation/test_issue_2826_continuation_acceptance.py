@@ -274,9 +274,22 @@ def test_fixed_current_main_regressions(request, tmp_path, acceptance_evidence):
     report = tmp_path / "regressions.xml"
     command = (sys.executable, "-m", "pytest", "-q", *REGRESSIONS, "--junitxml=" + str(report))
     start = time.monotonic()
-    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
-                               timeout=60, check=False,
-                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                   timeout=60, check=False,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    except subprocess.TimeoutExpired as exc:
+        def text_tail(value, bound):
+            text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+            return text[-bound:]
+        acceptance_evidence["regressions"] = {
+            "command": list(command), "exit": None, "timed_out": True,
+            "seconds": round(time.monotonic() - start, 3), "timeout_seconds": 60,
+            "counts_complete": False, "modules": len(REGRESSIONS),
+            "stdout_tail": text_tail(exc.stdout, 600),
+            "stderr_tail": text_tail(exc.stderr, 300),
+        }
+        pytest.fail("Fixed canonical regressions exceeded the unchanged 60-second bound")
     suites = ET.parse(report).getroot().findall("testsuite")
     counts = {name: sum(int(s.get(name, "0")) for s in suites)
               for name in ("tests", "failures", "errors", "skipped")}
