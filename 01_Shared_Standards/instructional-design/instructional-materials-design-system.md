@@ -86,8 +86,13 @@ Before using a worksheet, poster, game, tool guide, or related material, check:
 - Does the student know what to do first?
 - Can the teacher use it without explaining every box?
 - Does it match the lesson sequence?
+- Does it use available vertical page space before introducing a page break — no large avoidable blank bands while a later block would fit safely, and later pages no more compressed than earlier ones?
 - Is it accessible and readable?
 
 ## Version
 
-0.1.1
+0.1.2
+
+## Changelog
+
+- 0.1.2 adds a vertical-page-space final quality check: use available vertical page space before introducing a page break (#2735).

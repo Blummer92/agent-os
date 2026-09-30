@@ -262,6 +262,7 @@ def _candidate_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -
         missing.append("readiness-teacher-approval-missing")
     if statuses["classroom_readiness"] != "ready":
         missing.append("readiness-classroom-missing")
+    missing.extend(_required_section_evidence(requirement, manifest))
     visual = [_visual_recommendation(asset) for asset in manifest.get("assets", [])]
     unsafe_visual = any(item["decision"] not in {"reuse-canonical-asset", "reuse-alternate-with-explicit-reason", "bounded-context-preserving-crop-or-cleanup", "bounded-content-repair"} for item in visual)
     if unsafe_visual:
@@ -277,6 +278,36 @@ def _candidate_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -
         "visual": visual,
         "safe": not missing and not conflicts and not unsafe_visual,
     }
+
+
+def _required_section_evidence(requirement: dict[str, Any], manifest: dict[str, Any]) -> tuple[str, ...]:
+    """Compare the artifact's observed sections against required lesson components.
+
+    The MaterialRequirement's instructional.required_sections carry the current
+    instructional plan's required lesson components (warm-up, main task, exit
+    ticket, ...). The candidate manifest's artifact.observed_sections record the
+    sections the artifact actually contains. A candidate that cannot prove every
+    required component is present is never safe for reuse-existing-approved: a
+    partial activity sheet must be classified as incomplete, not presented as the
+    complete lesson artifact, no matter how authoritative the Drive title sounds.
+    """
+    instructional = requirement.get("instructional")
+    if type(instructional) is not dict:
+        return ()
+    required = instructional.get("required_sections")
+    if type(required) is not list or not required:
+        return ()
+    required_sections = tuple(section for section in required if type(section) is str)
+    if not required_sections:
+        return ()
+    artifact = manifest.get("artifact")
+    observed = artifact.get("observed_sections") if type(artifact) is dict else None
+    if observed is None:
+        return ("artifact-sections-unevidenced",)
+    observed_sections = {section for section in observed if type(section) is str}
+    if any(section not in observed_sections for section in required_sections):
+        return ("artifact-required-sections-missing",)
+    return ()
 
 
 def _visual_recommendation(asset: dict[str, Any]) -> dict[str, Any]:
@@ -343,7 +374,19 @@ def _decide(
     rejections: list[str] = []
     missing = sorted({item for candidate in ranked for item in candidate["missing"]})
     conflicts = sorted({item for candidate in ranked for item in candidate["conflicts"]})
-    selected = ranked[0] if ranked else None
+    # Issue #2885: the requested artifact role is authoritative through candidate
+    # selection. A candidate whose artifact type conflicts with the requested role
+    # (e.g. a teacher-modeling package offered for a student worksheet request)
+    # is inadmissible for selection even when its title/unit name is the closest
+    # match; it can never resolve to the final/preview artifact.
+    role_excluded = tuple(
+        item["manifest_id"] for item in ranked if "artifact-type-conflict" in item["conflicts"]
+    )
+    selected = next(
+        (item for item in ranked if "artifact-type-conflict" not in item["conflicts"]), None
+    )
+    for manifest_id in role_excluded:
+        rejections.append(f"artifact-reuse-rejected-role-conflict:{manifest_id}")
     visual = [] if selected is None else selected["visual"]
 
     if not supported_executor:
@@ -353,7 +396,7 @@ def _decide(
         rejections.extend(("artifact-reuse-rejected-unmapped-dependency", "artifact-revision-rejected-unmapped-dependency"))
         return "manual-review-required", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual
     if selected is not None and selected["safe"] and not changed:
-        return "reuse-existing-approved", selected, (), tuple(missing), tuple(conflicts), visual
+        return "reuse-existing-approved", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual
     rejections.append("artifact-reuse-rejected-change-or-evidence")
     if selected is not None and selected["safe"] and changed:
         return "revise-existing-bounded", selected, tuple(rejections), tuple(missing), tuple(conflicts), visual

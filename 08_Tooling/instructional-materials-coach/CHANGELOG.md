@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Worksheet revision QA (#2890): `worksheet_revision_qa.py` binds required
+  visual roles across revisions so a vocabulary/content/layout fix cannot
+  silently drop visual scaffolds and still pass as complete; render evidence
+  with zero/missing required icons fails via the existing visual-completeness
+  contract. `worksheet_layout_qa.py` flags large blank regions as accidental
+  dead space only when expected content/response/visual roles are missing on
+  the same page, routing intentional whitespace to manual review. The student
+  PDF preview renderer now rejects internal review/workflow language
+  (`PDF DRAFT`, `review before Google Drive`, production-authorization,
+  routing, backend-handoff phrasing) from student-facing copy unless
+  explicitly declared student copy, and provenance moved from a rendered
+  footer paragraph into the PDF document properties.
+
 ## 0.2.0
 
 - Added a Notion learning loop: `build` now writes a local lesson-candidate

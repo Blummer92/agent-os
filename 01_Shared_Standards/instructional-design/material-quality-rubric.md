@@ -58,6 +58,38 @@ When the render is overloaded, identify the specific competing directions, banks
 
 Intentional whitespace is not a defect by itself. When structural evidence cannot establish whether density, hierarchy, or whitespace is instructionally manageable, route that dimension to rendered/manual review rather than assigning a mechanical pass.
 
+### Worksheet vertical pagination balance
+
+A mechanically valid worksheet page may still require revision when its page
+composition strands vertical space while later content overflows. Use
+available vertical page space before introducing a page break.
+
+Flag a page when rendered evidence shows a large unused vertical band and the
+next bounded content block (a mission, section, or step group) would fit
+safely on the same page. A band is *avoidable* when it equals or exceeds the
+next block's height plus the separation that block needs. Compare band and
+block from rendered block positions, not from page counts or universal fill
+thresholds.
+
+Reflow is required only when all of these hold:
+
+- the next bounded block fits on the current page with clear mission
+  separation preserved;
+- screenshots remain readable at their instructional size;
+- Kami writing and annotation response areas stay large enough for student
+  use;
+- no crowding, clipping, or overlap is introduced.
+
+Do not fix the band by compressing later missions more tightly; balance
+density across pages instead of moving the compression downstream. Do not
+reduce required student response space or shrink screenshots below legible
+size to reclaim space. Intentional whitespace that serves pacing, transitions,
+or readability is not a defect.
+
+When block heights or page occupancy cannot be established from rendered
+evidence, do not assign a mechanical pass; route the pagination-balance
+dimension to rendered/manual review.
+
 ## Quick QA Heuristics
 
 Legacy `agent_tools/material_qa.py` checks are advisory heuristics, not a full rubric.
@@ -86,10 +118,11 @@ or a gate violation is discovered.
 
 ## Version
 
-0.3.2
+0.3.3
 
 ## Changelog
 
+- 0.3.3 adds a worksheet vertical-pagination-balance review dimension: a large unused vertical band is a defect when the next bounded block would fit safely on the page, with screenshot-legibility, Kami response-space, mission-separation, and no-crowding guards, and fail-closed manual review when block heights cannot be established (#2735).
 - 0.3.2 makes worksheet cognitive-density/hierarchy an explicit rendered-review dimension, names competing instructional regions, prefers simplification over added structure, preserves evidence/response space, and rejects universal fill/box/word thresholds (#3098).
 - 0.3.1 added the rendered classroom review gate for phone/projector quality
   and explicit separation of mechanical evidence from manual visual judgment

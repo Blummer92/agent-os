@@ -1,5 +1,18 @@
 """Public surface for pure instructional workflow contracts."""
 
+from .bounded_drive_lookup import (
+    CONTRACT_ID as REVISION_TARGET_DRIVE_LOOKUP_CONTRACT_ID,
+    LOOKUP_PAGE_SIZE as DRIVE_LOOKUP_PAGE_SIZE,
+    MAX_CANDIDATES as DRIVE_LOOKUP_MAX_CANDIDATES,
+    MAX_LOOKUP_ATTEMPTS as DRIVE_LOOKUP_MAX_ATTEMPTS,
+    MAX_LOOKUP_SECONDS as DRIVE_LOOKUP_MAX_SECONDS,
+    MAX_TITLE_HINT_CHARS as DRIVE_LOOKUP_MAX_TITLE_HINT_CHARS,
+    TERMINAL_BLOCKER_DISPOSITIONS as DRIVE_LOOKUP_TERMINAL_BLOCKER_DISPOSITIONS,
+    BoundedLookupDisposition,
+    BoundedLookupResult,
+    DriveLookupClient,
+    resolve_revision_target,
+)
 from .common import (
     FINGERPRINT_ALGORITHM,
     FORBIDDEN_IMPORT_PREFIXES,
@@ -30,6 +43,10 @@ from .common import (
     validate_revision,
     validate_stable_id,
     validate_version,
+)
+from .classroom_artifact_candidate_verification import (
+    CONTRACT_ID as CLASSROOM_ARTIFACT_CANDIDATE_VERIFICATION_CONTRACT_ID,
+    verify_classroom_artifact_candidates,
 )
 from .classroom_unit_workspace import (
     BINDING_STATES as CLASSROOM_WORKSPACE_BINDING_STATES,
@@ -94,6 +111,7 @@ from .request_interpretation import (
 __all__ = [
     "AuthorityEvidence",
     "CANONICAL_OWNERS",
+    "CLASSROOM_ARTIFACT_CANDIDATE_VERIFICATION_CONTRACT_ID",
     "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
     "CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID",
     "CLASSROOM_WORKSPACE_BINDING_STATES",
@@ -164,4 +182,5 @@ __all__ = [
     "validate_revision",
     "validate_stable_id",
     "validate_version",
+    "verify_classroom_artifact_candidates",
 ]

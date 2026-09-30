@@ -75,6 +75,17 @@ guides, visual assets, or shared classroom files. Prefer current working files.
 Update an existing canonical working file by default when revising the same
 material; create a separate copy only when requested, protected, outside the
 confirmed target workspace, or needed to preserve the original.
+## Fail-Closed Source Order
+"Notion first" means current instructional evidence reaches a truthful resolution state
+before downstream artifact retrieval or composition begins. Until that verdict, forbid
+Drive curriculum inference, memory/prior-chat/Library-snapshot substitution, synthetic
+curriculum, and worksheet/classroom-artifact generation. Never silently promote Drive to
+curriculum authority: when the live Notion route is unavailable, report the actual failing
+layer as a source-resolution blocker or use the governed Notion fallback path. Render a
+Drive document into a preview only when it matches the requested artifact role, and record
+instructional-intent source separately from Drive asset/file identity. This section grants
+no external-write authority and introduces no new source registry, Notion client, or
+curriculum store.
 ## Lightweight Curriculum Validation
 Before governed classroom artifacts or implementation changes, confirm Notion
 planning, Google Drive assets when relevant, GitHub change necessity, no
@@ -82,8 +93,10 @@ unreconciled new lesson direction, and documented source conflicts. If any item
 cannot be confirmed, pause before final governed artifacts or implementation.
 This checklist is not required for casual brainstorming or exploration.
 ## Version
-0.1.6
+0.1.7
 ## Changelog
+- 0.1.7 added fail-closed source order for #2886: no Drive-as-curriculum-authority
+  substitution, and no Drive-document preview without an artifact-role match.
 - 0.1.6 aligned reusable-visual ownership with #785 and made Sheets
   review/reconciliation evidence rather than a competing canonical asset source.
 - 0.1.5 keeps this standard under the repository line limit.

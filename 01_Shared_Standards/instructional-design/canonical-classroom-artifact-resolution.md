@@ -51,6 +51,27 @@ Disambiguation should use the smallest available set of:
 
 A legacy or semantically similar artifact does not become current merely because its title is close. A plausible filename cannot override conflicting canonical application identity or workflow evidence. For example, a legacy Photoshop burger tutorial must not be substituted for a canonical Adobe Express burger tutorial. When application identity or workflow conflicts, reject the candidate and continue bounded resolution or fail visibly.
 
+## Current-course identity and response wording
+
+The same title-similarity rule applies across course versions and eras, not
+only across applications. A same-role, same-topic Drive file from a prior
+course era (for example a legacy Photopea-era tutorial deck) is a legacy
+candidate for the current course (for example the Adobe Foundations course
+under development); it must not be presented as the current requested course
+artifact unless current course identity, instructional context, and artifact
+provenance are actually verified against the governed planning source.
+
+Response wording must track the verified identity state:
+
+- Certainty language such as "the actual tutorial" or "the tutorial you asked
+  for" is authorized only when a candidate is verified-current.
+- Without that verification, return a visible bounded unresolved/manual-review
+  result; do not substitute the legacy candidate with confident wording.
+- Legacy candidates may still be surfaced as historical references when
+  useful, but they must be labeled legacy/unverified rather than current.
+
+See Issue #3024 for the live incident that established this rule.
+
 ## Ordering and instructional identity
 
 Filesystem order, search-result rank, filename sorting, and screenshot chronology alone do not establish instructional identity.

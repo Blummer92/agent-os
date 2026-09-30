@@ -14,6 +14,8 @@ When the supplied governed material context requires visuals, the caller must al
 
 A successful receipt is explicitly `preview`, `canonical=False`, and `render_verified=True`. It carries the exact native file ID, native revision ID, and approved source destination identity. The renderer verifies that a non-trivial PDF with a PDF header and EOF marker was actually written before reporting the preview available. Render or verification failure returns `blocked`; prose or a wireframe is never substituted as a completed PDF.
 
+Student-facing title and paragraph copy is screened for internal review/workflow language (for example `PDF DRAFT`, `review before Google Drive`, production-authorization, routing, or backend-handoff phrasing); such copy blocks the preview unless the caller explicitly declares it intended student copy via `explicit_student_copy_review_phrases`. Provenance lives in the PDF document properties (teacher-facing delivery context), never as rendered student-page text.
+
 Requested-format completeness is evaluated separately from native-editable completeness: a requested PDF is `complete` only with verified `application/pdf` evidence in the intended destination; a healthy native Doc is not PDF completion and instead yields `blocked-production` until PDF evidence exists. The PDF is a derived review/print/download artifact only. The native Google Docs/Slides file remains the canonical editable final. This offline renderer has no Google client, credential, Drive persistence, ACL, readiness, approval, publication, or source-authority mutation. Persisting a derived PDF to Drive remains a separately authorized external-write operation with its own exact destination/readback requirement.
 
 ## Reusable visual placement contract
@@ -25,6 +27,11 @@ Repository implementation does not activate this runtime. Creating/deploying an 
 
 ## Offline slide layout QA
 `slide_layout_qa.py` provides a pure structural QA seam for student-facing slide render plans. It detects only mechanically provable defects: empty opaque placeholders layered above required instructional regions, unsafe required-text contrast when both colors are known, unintended overlap between required title/directions/model/task/teacher-cue regions, oversized supporting previews, and under-dominant focal models. Unknown colors or other judgments that cannot be established from the supplied structural plan route to `manual-review` rather than receiving a false pass. The seam performs no rendering, OCR/CV, provider call, classroom publication, or Drive mutation; broader phone/projector rendered review remains owned by #1835.
+
+## Offline worksheet revision and layout QA
+`worksheet_revision_qa.py` binds the required-visual contract across revisions: a later revision must preserve every required visual role declared by the prior revision unless the teacher or governing source explicitly removed it, so a vocabulary/content/layout fix cannot silently delete visual scaffolds and still be presented as complete. It also reuses the existing `visual_completeness.py` contract to fail a revision whose final render has zero or missing required icons/images, routing unresolved roles to manual review.
+
+`worksheet_layout_qa.py` evaluates caller-supplied rendered-inspection evidence (for example phone-scale screenshot review) for dead space. A large blank region on a page that is missing expected content, response-space, or visual roles is flagged as accidental dead space; a large blank region on a page where every expected role is satisfied routes to manual review instead of failing, since the whitespace may be intentional. Both seams are pure QA: no rendering, retrieval, provider call, or external-system mutation.
 
 ## Offline lesson bundles
 `lesson_bundle.py` plans a bounded set of requested classroom-material members from caller-supplied current-curriculum evidence and validated `MaterialRequirement` records. It is coordination only: it performs no source retrieval, generation, credential access, Drive/Notion call, provider execution, persistence, publication, or sharing change.

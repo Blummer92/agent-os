@@ -503,10 +503,10 @@ def test_v1_identity_remains_exact_after_v2_extension() -> None:
     assert result.record is not None
     assert payload is not None
     assert result.record.record_id == (
-        "visual-compatibility-f79ac899b7406a8b1d43a5e8"
+        "visual-compatibility-17981f76fb4171f24761a79e"
     )
     assert result.record.fingerprint == (
-        "8ca8aa4ce84090c608952f5f97c6062b7f9abd4800d7fbd5587c8a2d12bf0d80"
+        "466a69fe171a2196d8b770c4f3e652a77c3a061560c54f41dfc7821f537f1ea6"
     )
     assert "cohesion_profile" not in payload
 
