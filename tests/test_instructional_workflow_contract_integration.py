@@ -22,9 +22,9 @@ PACKAGE = Path(__file__).parents[1] / "src" / "instructional_workflow_contracts"
 COMPONENT_BLOBS = {
     "common.py": "94159792d80079c18a36d8c36bee97fa13921115",
     "handoff.py": "b616580b0febaa2cab2f85a9327a5f62922289ae",
-    "material_requirement.py": "b2e5513e41a3545424f2c3c791bb990e7a7cc4e1",
+    "material_requirement.py": "9cf07d0e48f843977f04209721f28b5ef92f10da",
     "artifact_manifest.py": "966b01f82da92088eb9dfd3b3a26cc70f5472bc5",
-    "reuse_planner.py": "27cafef045a5094fbc1dbbdcea6c7063de6d73f2",
+    "reuse_planner.py": "cdd6b76fc57e0bd47afd7c98107d6d034292d14d",
 }
 EXPECTED_PUBLIC_EXPORTS = (
     "AuthorityEvidence",
