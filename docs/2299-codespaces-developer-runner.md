@@ -86,6 +86,44 @@ The read-only token is a transport credential, not routing or execution
 authority. Missing credential material leaves the prior GCE behavior intact.
 
 
+## Reconstructed #2826 acceptance coverage
+
+`tests/agent_os_remote_validation/test_issue_2826_continuation_acceptance.py`
+adds a fixed, repository-owned controller experiment to `remote-validation-suite`.
+It is reconstructed coverage, not the original external `test_scratch_harness.py`.
+The existing operation identity, issue-comment grammar, qualification, SSH
+transport, fixed suite command, 120-second timeout and cleanup remain unchanged.
+
+The fixture compares unguarded early delivery and an artificial inner ceiling
+against treatments using canonical investigation/finite-batch admission,
+structured completion payloads and `drive_governed_continuation`. Test adapters
+dispatch finite reads and reconcile an in-memory mutation receipt; no external
+mutation is performed. Terminal delivery, genuine blocker, authorization/route
+and currentness rejection, repeated no progress and hard-cap stops are checked.
+The inner-ceiling treatment explicitly starts the next bounded driver batch
+from the retained test cursor. This proves behavior of a controller that owns
+the loop; it does not prove that native ChatGPT performs that re-entry.
+
+The same fixture executes a fixed tuple of existing execution-interface
+regressions: continuation driver/reachability, finite batch, investigation
+completion, mission completion, subordinate-write/batch delivery and operation
+target/mutation-currentness safety. The enclosing suite also runs the existing
+#2220 real MCP continuation-payload tests. Child pytest has a 60-second bound;
+collection errors, skipped coverage, absent modules and nonzero exits fail the
+fixture. No caller can select child commands, paths or upload a probe.
+
+At session teardown, `ISSUE_2826_ACCEPTANCE=` emits a compact JSON receipt through
+pytest's terminal reporter into the existing bounded stdout evidence. It records
+observed Python/pytest versions, reconstructed provenance, per-case pass receipts
+and child-regression counts, exit status and duration. Unfinished/failed cases
+are unverified. This test receipt supplements the existing route/health/SHA and
+cleanup artifacts and is never execution or completion authority. Truncated or
+missing evidence must be reported as an evidence gap, not inferred as a pass.
+
+A local or GCE pass cannot satisfy Codespaces acceptance. A qualifying Codespaces
+pass validates repository/controller behavior only; #2826's native ChatGPT
+continuation and host-versus-client-transport attribution remain unresolved.
+
 ## Bounded GitHub MCP diagnostic consumer (#2947)
 
 The governed issue-comment ingress also exposes one finite read-only diagnostic
