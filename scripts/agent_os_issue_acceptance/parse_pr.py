@@ -160,15 +160,14 @@ def _target_sort_key(target: tuple[str | None, int]) -> tuple[str, int]:
 # close if this PR merged", mirroring GitHub's broader closing semantics.
 # GitHub matches a closing keyword anywhere in the PR title or body,
 # case-insensitively, and ignores negation — PR #3156's prose "does **not**
-# close #2772" closed #2772 at merge. Code spans and fenced code blocks are
-# masked because GitHub's auto-close parser ignores closing keywords inside
-# them; nothing else is masked, so uncertain prose fails closed.
+# close #2772" closed #2772 at merge. Nothing is masked, so uncertain prose
+# (including keywords inside code spans) fails closed: no special-case
+# masking is added without reproduced GitHub behavior proving the parser
+# ignores it.
 _GITHUB_EFFECTIVE_CLOSING_RE = re.compile(
     rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+){_TARGET}\b",
     re.IGNORECASE,
 )
-_FENCED_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
-_INLINE_CODE_SPAN_RE = re.compile(r"`[^`\n]+`")
 _CANONICAL_CLOSING_KEYWORD = {
     "close": "close", "closes": "close", "closed": "close",
     "fix": "fix", "fixes": "fix", "fixed": "fix",
@@ -215,11 +214,6 @@ def normalize_issue_target(raw_target: str) -> str:
     return f"{repository.lower()}#{number}" if repository else f"#{number}"
 
 
-def _mask_code_spans(text: str) -> str:
-    masked = _FENCED_CODE_BLOCK_RE.sub(lambda match: " " * len(match.group(0)), text or "")
-    return _INLINE_CODE_SPAN_RE.sub(lambda match: " " * len(match.group(0)), masked)
-
-
 def detect_github_effective_closing_references(
     pr_body: str, pr_title: str = ""
 ) -> tuple[GitHubEffectiveClosingReference, ...]:
@@ -232,8 +226,7 @@ def detect_github_effective_closing_references(
     """
     found: list[GitHubEffectiveClosingReference] = []
     for source, text in (("title", pr_title or ""), ("body", pr_body or "")):
-        masked = _mask_code_spans(text)
-        for match in _GITHUB_EFFECTIVE_CLOSING_RE.finditer(masked):
+        for match in _GITHUB_EFFECTIVE_CLOSING_RE.finditer(text or ""):
             keyword = _CANONICAL_CLOSING_KEYWORD[match.group("keyword").lower()]
             repository, issue_number = _target_identity(match)
             target = f"{repository.lower()}#{issue_number}" if repository else f"#{issue_number}"
@@ -250,6 +243,21 @@ def detect_github_effective_closing_references(
             seen.add(key)
             unique.append(reference)
     return tuple(unique)
+
+
+def unauthorized_closing_targets(
+    detected: tuple[GitHubEffectiveClosingReference, ...],
+    authorized_targets: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return detected closing targets minus canonically authorized targets.
+
+    This is the single comparison both Ready-for-Review and merge admission
+    use: any detected GitHub-effective closing target not covered by
+    canonical close-issue lifecycle authorization evidence is a blocker.
+    """
+    authorized = {normalize_issue_target(target) for target in authorized_targets}
+    blockers = sorted({reference.target for reference in detected} - authorized)
+    return tuple(blockers)
 
 
 def has_markdown_heading(text: str, heading: str) -> bool:

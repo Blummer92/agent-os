@@ -7,6 +7,8 @@ PR #3156's prose "does **not** close #2772" closed #2772 at merge; the
 detector must flag that shape and merge admission must block it.
 """
 
+import pytest
+
 from scripts.agent_os_issue_acceptance.checks import linked_issue
 from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus, Status
 from scripts.agent_os_issue_acceptance.parse_pr import (
@@ -14,6 +16,7 @@ from scripts.agent_os_issue_acceptance.parse_pr import (
     detect_github_effective_closing_references,
     normalize_issue_target,
     parse_linked_issue_result,
+    unauthorized_closing_targets,
 )
 
 # Verbatim shape from PR #3156 (merged 2026-09-30), which closed #2772 at merge
@@ -28,67 +31,98 @@ def _refs(body, title=""):
     ]
 
 
-def test_detects_each_closing_keyword_family():
-    assert _refs("Closes #123") == [("close", "#123", "body")]
-    assert _refs("Fixes #123") == [("fix", "#123", "body")]
-    assert _refs("Resolves #123") == [("resolve", "#123", "body")]
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Each closing keyword family.
+        ("Closes #123", [("close", "#123", "body")]),
+        ("Fixes #123", [("fix", "#123", "body")]),
+        ("Resolves #123", [("resolve", "#123", "body")]),
+        # Keyword variants and case.
+        ("CLOSED #123", [("close", "#123", "body")]),
+        ("fixed #123", [("fix", "#123", "body")]),
+        ("RESOLVES #123", [("resolve", "#123", "body")]),
+        # Negation never suppresses detection: GitHub closed #2772 on exactly
+        # this class of prose, so negated wording fails closed.
+        ("does not close #123", [("close", "#123", "body")]),
+        ("do not fix #123", [("fix", "#123", "body")]),
+        ("shouldn't resolve #123", [("resolve", "#123", "body")]),
+        ("This PR will never fix #123.", [("fix", "#123", "body")]),
+        # Non-closing linkage is not detected.
+        ("Part of #123", []),
+        ("Refs #123", []),
+        ("See #123 for context.", []),
+        ("#123", []),
+        # Mid-sentence, colon, and URL forms.
+        (
+            "This incidentally closes #123 as a side effect.",
+            [("close", "#123", "body")],
+        ),
+        ("Closes: #123", [("close", "#123", "body")]),
+        (
+            "Fixes https://github.com/other/repo/issues/7",
+            [("fix", "other/repo#7", "body")],
+        ),
+        # Multiple references.
+        (
+            "Closes #1 and fixes #2",
+            [("close", "#1", "body"), ("fix", "#2", "body")],
+        ),
+        # The verbatim #3156 shape: "Part of" does not shield the negated
+        # closing keyword from GitHub's auto-close parser.
+        (PR_3156_BODY, [("close", "#2772", "body")]),
+        # Duplicates collapse to one reference.
+        ("Closes #123\nCloses #123", [("close", "#123", "body")]),
+        # Fail closed: keywords inside code spans and fenced blocks are
+        # detected too — no masking special cases without reproduced GitHub
+        # behavior proving the parser ignores them.
+        ("`Fixes #123` in a code span", [("fix", "#123", "body")]),
+        ("```\nFixes #123\n```", [("fix", "#123", "body")]),
+    ],
+)
+def test_detects_closing_keyword_variants(text, expected):
+    assert _refs(text) == expected
 
 
-def test_detects_keyword_variants_and_case():
-    assert _refs("CLOSED #123") == [("close", "#123", "body")]
-    assert _refs("fixed #123") == [("fix", "#123", "body")]
-    assert _refs("RESOLVES #123") == [("resolve", "#123", "body")]
+@pytest.mark.parametrize(
+    ("body", "title", "expected"),
+    [
+        ("body text", "Resolves #42", [("resolve", "#42", "title")]),
+        ("Fixes #1", "Closes #2", [("close", "#2", "title"), ("fix", "#1", "body")]),
+    ],
+)
+def test_detects_title_references(body, title, expected):
+    assert _refs(body, title=title) == expected
 
 
-def test_negation_does_not_suppress_detection():
-    # GitHub closed #2772 on exactly this class of prose; negated wording
-    # must fail closed, never be treated as non-closing.
-    assert _refs("does not close #123") == [("close", "#123", "body")]
-    assert _refs("do not fix #123") == [("fix", "#123", "body")]
-    assert _refs("shouldn't resolve #123") == [("resolve", "#123", "body")]
-    assert _refs("This PR will never fix #123.") == [("fix", "#123", "body")]
-
-
-def test_non_closing_linkage_is_not_detected():
-    assert _refs("Part of #123") == []
-    assert _refs("Refs #123") == []
-    assert _refs("See #123 for context.") == []
-
-
-def test_detects_mid_sentence_colon_and_url_forms():
-    assert _refs("This incidentally closes #123 as a side effect.") == [
-        ("close", "#123", "body")
-    ]
-    assert _refs("Closes: #123") == [("close", "#123", "body")]
-    assert _refs("Fixes https://github.com/other/repo/issues/7") == [
-        ("fix", "other/repo#7", "body")
-    ]
-
-
-def test_detects_multiple_references():
-    assert _refs("Closes #1 and fixes #2") == [
-        ("close", "#1", "body"),
-        ("fix", "#2", "body"),
-    ]
-
-
-def test_detects_title_references():
-    assert _refs("body text", title="Resolves #42") == [("resolve", "#42", "title")]
-
-
-def test_verbatim_3156_shape_is_detected():
-    # The exact #3156 prose: "Part of" does not shield the negated closing
-    # keyword from GitHub's auto-close parser.
-    assert _refs(PR_3156_BODY) == [("close", "#2772", "body")]
-
-
-def test_code_spans_and_fences_are_masked():
-    assert _refs("`Fixes #123` in a code span") == []
-    assert _refs("```\nFixes #123\n```") == []
-
-
-def test_duplicates_collapse_to_one_reference():
-    assert _refs("Closes #123\nCloses #123") == [("close", "#123", "body")]
+@pytest.mark.parametrize(
+    ("body", "authorized", "expected"),
+    [
+        # Anything detected without canonical authorization is a blocker.
+        ("Fixes #123", (), ("#123",)),
+        ("Fixes #123", ("#123",), ()),
+        # The canonical repository normalizes away in authorized targets.
+        ("Fixes #123", ("Blummer92/agent-os#123",), ()),
+        # Partial authorization leaves the remainder blocked.
+        ("Fixes #123 and closes #124", ("#123",), ("#124",)),
+        ("Fixes #123 and closes #124", ("#123", "#124"), ()),
+        # Cross-repository targets are never confused with short targets.
+        (
+            "Fixes https://github.com/other/repo/issues/7",
+            ("other/repo#7",),
+            (),
+        ),
+        (
+            "Fixes https://github.com/other/repo/issues/7",
+            ("#7",),
+            ("other/repo#7",),
+        ),
+        ("no references here", (), ()),
+    ],
+)
+def test_unauthorized_closing_targets(body, authorized, expected):
+    detected = detect_github_effective_closing_references(body)
+    assert unauthorized_closing_targets(detected, authorized) == expected
 
 
 def test_reference_fields_are_validated():

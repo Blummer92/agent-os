@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+from .parse_pr import normalize_issue_target
+
 SCHEMA_VERSION = "1.0"
 MAX_MUTATIONS = 8
 MAX_LABELS = 32
@@ -342,3 +344,38 @@ def evaluate_lifecycle_mutation(authorization: object, snapshot: object, request
         status = AdmissionStatus.STALE if any(reason.endswith("-changed") or reason == "authorization-stale" for reason in reasons) else AdmissionStatus.BLOCKED
         return LifecycleMutationAdmissionResult(mutation, False, status, tuple(reasons), tuple(details), authorization.authorization_id, snapshot.snapshot_id)
     return LifecycleMutationAdmissionResult(mutation, True, AdmissionStatus.ADMITTED, (), (), authorization.authorization_id, snapshot.snapshot_id)
+
+
+@dataclass(frozen=True, slots=True)
+class IssueClosureAdmission:
+    """Canonical evidence that closing one issue via PR merge is authorized (#3157).
+
+    This binds an admitted close-issue lifecycle mutation result to the
+    authorization it was evaluated against, so downstream consumers
+    (Ready-for-Review admission, merge authorization) can prove which
+    GitHub-effective closing targets carry canonical authorization instead
+    of trusting caller-supplied target strings.
+    """
+
+    authorization: LifecycleMutationAuthorization
+    admission: LifecycleMutationAdmissionResult
+
+    def __post_init__(self) -> None:
+        if type(self.authorization) is not LifecycleMutationAuthorization:
+            raise TypeError("authorization must be a LifecycleMutationAuthorization")
+        if type(self.admission) is not LifecycleMutationAdmissionResult:
+            raise TypeError("admission must be a LifecycleMutationAdmissionResult")
+        if self.admission.requested_mutation != "close-issue":
+            raise ValueError("admission must be for the close-issue mutation")
+        if not self.admission.admitted:
+            raise ValueError("admission must be an admitted close-issue result")
+        if self.admission.authorization_id != self.authorization.authorization_id:
+            raise ValueError("admission is not bound to this authorization")
+
+    @property
+    def target(self) -> str:
+        """Normalized `#123` / `owner/repo#123` target this admission covers."""
+        authorization = self.authorization
+        return normalize_issue_target(
+            f"{authorization.repository}#{authorization.issue_number}"
+        )

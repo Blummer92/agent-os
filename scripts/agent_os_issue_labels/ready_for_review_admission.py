@@ -3,8 +3,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+    IssueClosureAdmission,
+)
+from scripts.agent_os_issue_acceptance.parse_pr import (
+    detect_github_effective_closing_references,
+    unauthorized_closing_targets,
+)
+
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _FINAL_CANDIDATE_MODE = "draft-final-candidate"
+_MAX_CLOSURE_ADMISSIONS = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +52,9 @@ def evaluate_ready_for_review_admission(
     requested_changes: bool,
     blocking_unresolved: int,
     ready_for_review_authority_supplied: bool,
+    pr_title: str,
+    pr_body: str,
+    closure_admissions: tuple[IssueClosureAdmission, ...] = (),
 ) -> ReadyForReviewAdmissionResult:
     """Project ordinary or provisional Draft -> Ready admission.
 
@@ -57,12 +69,21 @@ def evaluate_ready_for_review_admission(
     production, or external-write authority. A provisional transition must be
     reconciled after the Ready-triggered aggregate; non-success or head drift
     requires conversion back to Draft before later lifecycle progression.
+
+    The Ready transition starts the merge path, so it also fails closed on
+    GitHub-effective closing references (#3157): the same detected-targets
+    minus canonically-authorized-targets comparison merge admission uses runs
+    here, and any unauthorized closing target blocks the transition. This
+    grants no closure authority; it only blocks Ready.
     """
     _validate_identity(repository, pr_number)
     _validate_bool(requested_changes, "requested_changes")
     _validate_bool(ready_for_review_authority_supplied, "ready_for_review_authority_supplied")
     if type(blocking_unresolved) is not int or blocking_unresolved < 0:
         raise ValueError("blocking_unresolved must be a non-negative built-in integer")
+    if type(pr_title) is not str or type(pr_body) is not str:
+        raise TypeError("pr_title and pr_body must be built-in strings")
+    admissions = _validated_closure_admissions(closure_admissions)
 
     reasons: list[str] = []
     if pr_lifecycle_state != "draft":
@@ -81,6 +102,14 @@ def evaluate_ready_for_review_admission(
         reasons.append("blocking-review-conversation-unresolved")
     if not ready_for_review_authority_supplied:
         reasons.append("ready-for-review-authority-missing")
+    detected = detect_github_effective_closing_references(pr_body, pr_title)
+    authorized = [
+        admission.target
+        for admission in admissions
+        if admission.authorization.repository.lower() == repository.lower()
+    ]
+    if unauthorized_closing_targets(detected, tuple(authorized)):
+        reasons.append("unauthorized-closing-reference")
 
     final_candidate_green = (
         validation_admission_mode == _FINAL_CANDIDATE_MODE
@@ -119,6 +148,8 @@ def evaluate_ready_for_review_admission(
             next_action = "resolve-review-before-ready"
         elif "ready-for-review-authority-missing" in reasons:
             next_action = "request-ready-for-review-authorization"
+        elif "unauthorized-closing-reference" in reasons:
+            next_action = "authorize-issue-closure-before-ready"
         else:
             next_action = "run-draft-final-candidate-aggregate"
         admissible = False
@@ -152,6 +183,19 @@ def _validate_bool(value: bool, field_name: str) -> None:
 
 def _is_sha40(value: object) -> bool:
     return type(value) is str and _SHA40_RE.fullmatch(value) is not None
+
+
+def _validated_closure_admissions(
+    value: object,
+) -> tuple[IssueClosureAdmission, ...]:
+    if type(value) is not tuple:
+        raise TypeError("closure_admissions must be an exact tuple")
+    for item in value:
+        if type(item) is not IssueClosureAdmission:
+            raise TypeError("closure_admissions must contain IssueClosureAdmission")
+    if len(value) > _MAX_CLOSURE_ADMISSIONS:
+        raise ValueError("closure_admissions exceeds bounded item count")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
