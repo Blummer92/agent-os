@@ -115,6 +115,22 @@ def test_provider_failure_detail_survives_canonical_reader_chain():
     # required + canonical adapter read attempted. When the canonical reader's
     # adapter raises a provider-shaped failure, the projected unavailable result
     # must carry the actual provider cause next to the generic CKR6 reason.
+    #
+    # CI runs each 08_Tooling package's tests with only that package's src on
+    # sys.path, so the sibling packages backing the canonical reader are added
+    # here (same sys.path.insert convention used by this package's other test
+    # modules). Repo root is included because agent_os_execution_service.models
+    # resolves scripts.agent_os_execution_capabilities through the shared
+    # namespace package.
+    import sys
+    from pathlib import Path
+
+    _test_file = Path(__file__).resolve()
+    _tooling = _test_file.parents[2]
+    sys.path.insert(0, str(_tooling / "agent-os-execution-service" / "src"))
+    sys.path.insert(0, str(_tooling / "workflow-scheduler" / "src"))
+    sys.path.insert(0, str(_tooling.parent))
+
     from agent_os_execution_service.lesson_reader_composition import (
         build_lesson_read_executor,
     )
