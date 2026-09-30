@@ -1,4 +1,11 @@
-"""Offline student-material PDF draft/preview rendering with provenance verification."""
+"""Offline student-material PDF draft/preview rendering with provenance verification.
+
+Student-facing title and paragraph copy is screened for internal
+review/workflow language; such copy fails closed unless the caller explicitly
+declares it intended student copy. Provenance lives in the PDF document
+properties (teacher-facing delivery context), never as rendered student-page
+text.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,6 +26,25 @@ class StudentMaterialPdfError(ValueError):
     """Fail-closed error for invalid or unverifiable student-material previews."""
 
 
+#: Internal review/workflow language that must not appear in student-facing
+#: worksheet copy by default. Labels are reported in blocked receipts; matching
+#: is case-insensitive substring matching on whitespace-normalized copy.
+#: Callers declare deliberately student-facing uses through
+#: ``StudentMaterialPdfSource.explicit_student_copy_review_phrases``.
+_REVIEW_LANGUAGE_PHRASES: tuple[tuple[str, str], ...] = (
+    ("PDF DRAFT", "pdf draft"),
+    ("review before Google Drive", "review before google drive"),
+    ("Google Drive", "google drive"),
+    ("production authorization", "production authorization"),
+    ("production authorized", "production authorized"),
+    ("routing note", "routing note"),
+    ("routing notes", "routing notes"),
+    ("backend handoff", "backend handoff"),
+)
+
+_KNOWN_REVIEW_PHRASES: frozenset[str] = frozenset(phrase for _, phrase in _REVIEW_LANGUAGE_PHRASES)
+
+
 @dataclass(frozen=True)
 class StudentMaterialPdfSource:
     artifact_role: str
@@ -32,6 +58,7 @@ class StudentMaterialPdfSource:
     compact_worksheet_header: bool = True
     student_identification_labels: tuple[str, ...] = ("Name", "Hour", "Date")
     unit_day: str = ""
+    explicit_student_copy_review_phrases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +90,11 @@ def render_student_material_pdf_preview(
     role must have one exact already-verified placement receipt for the same native
     artifact before this text renderer may claim a usable preview. This seam does
     not select, retrieve, place, or generate visuals.
+
+    Internal review/workflow language (for example ``PDF DRAFT`` or
+    ``review before Google Drive``) in the student-facing title or paragraphs
+    fails closed unless the caller declares it explicitly student-facing via
+    ``explicit_student_copy_review_phrases``.
     """
     unresolved_visual_roles: tuple[str, ...] = ()
     temp_target: Path | None = None
@@ -88,15 +120,15 @@ def render_student_material_pdf_preview(
             temp_target = Path(handle.name)
         styles = getSampleStyleSheet()
         story = _build_story(source, styles)
-        story.extend([
-            Spacer(1, 10),
-            Paragraph("PDF draft/preview - derived artifact. The native Google Drive file remains the canonical editable final.", styles["Italic"]),
-        ])
+        # Provenance is teacher-facing delivery context: it lives in the PDF
+        # document properties, never as rendered student-page text. Review /
+        # production status must not leak onto the student worksheet itself.
         SimpleDocTemplate(
             str(temp_target),
             pagesize=LETTER,
             title=source.title,
             author="Agent OS Instructional Materials Coach",
+            subject="Teacher review preview; the native Drive file remains the canonical editable final.",
         ).build(story)
         _verify_pdf(temp_target)
         temp_target.replace(target)
@@ -142,6 +174,15 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
     _preview_artifact_type(source.artifact_role)
     if not source.paragraphs or any(not isinstance(item, str) or not item.strip() for item in source.paragraphs):
         raise StudentMaterialPdfError("paragraphs must contain non-empty text")
+    _validate_explicit_review_phrases(source.explicit_student_copy_review_phrases)
+    leaked = _internal_review_language_in_student_copy(source)
+    if leaked:
+        raise StudentMaterialPdfError(
+            "student-facing worksheet copy contains internal review/workflow language: "
+            + ", ".join(leaked)
+            + ". Move review/production status to the teacher-facing delivery context "
+            "or declare the copy explicitly via explicit_student_copy_review_phrases."
+        )
     _validate_role_ids(source.required_visual_role_ids)
     if not isinstance(source.compact_worksheet_header, bool):
         raise StudentMaterialPdfError("compact_worksheet_header must be boolean")
@@ -218,6 +259,47 @@ def _looks_like_legacy_identification_line(value: str) -> bool:
         and normalized.casefold().startswith("name:")
         and "_" in normalized
     )
+
+
+def _validate_explicit_review_phrases(value: object) -> None:
+    """Bound the explicit opt-in for deliberately student-facing review copy.
+
+    Every entry must name a known review-language phrase exactly (case
+    insensitive); unknown entries fail closed so a typo cannot silently read
+    as an intentional opt-in.
+    """
+    if not isinstance(value, tuple):
+        raise StudentMaterialPdfError("explicit_student_copy_review_phrases must be a tuple")
+    if len(value) > 16:
+        raise StudentMaterialPdfError("explicit_student_copy_review_phrases exceeds the bounded preview limit")
+    seen: set[str] = set()
+    for phrase in value:
+        if not isinstance(phrase, str) or not phrase.strip():
+            raise StudentMaterialPdfError("explicit student-copy review phrases must be non-empty text")
+        normalized = " ".join(phrase.split()).casefold()
+        if normalized not in _KNOWN_REVIEW_PHRASES:
+            raise StudentMaterialPdfError(f"unknown student-copy review phrase: {phrase}")
+        if normalized in seen:
+            raise StudentMaterialPdfError("explicit student-copy review phrases must be unique")
+        seen.add(normalized)
+
+
+def _internal_review_language_in_student_copy(source: StudentMaterialPdfSource) -> tuple[str, ...]:
+    """Return labels for internal review/workflow phrases found in student copy.
+
+    Scans the student-facing title and paragraphs only. A phrase listed in
+    ``explicit_student_copy_review_phrases`` is treated as deliberately
+    student-facing and is not reported.
+    """
+    allowed = {" ".join(phrase.split()).casefold() for phrase in source.explicit_student_copy_review_phrases}
+    normalized_texts = [" ".join(text.casefold().split()) for text in (source.title, *source.paragraphs)]
+    found: list[str] = []
+    for label, phrase in _REVIEW_LANGUAGE_PHRASES:
+        if phrase in allowed:
+            continue
+        if any(phrase in text for text in normalized_texts):
+            found.append(label)
+    return tuple(found)
 
 
 def _validate_student_identification_labels(labels: object) -> None:
