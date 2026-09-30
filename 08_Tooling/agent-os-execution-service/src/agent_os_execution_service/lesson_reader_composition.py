@@ -39,34 +39,46 @@ class LessonReadUnavailableError(RuntimeError):
     """
 
 
+def _notion_provider_failure_code(message: object) -> str | None:
+    """Project one raw provider message into a bounded non-secret reason code.
+
+    Returns ``None`` when the message carries no recognizable provider failure
+    signature, so callers keep their existing handling for non-provider
+    failures instead of collapsing them into a generic code. The returned
+    code never embeds raw provider text.
+    """
+
+    if not isinstance(message, str):
+        return None
+    match = _HTTP_FAILURE_RE.match(message)
+    if match:
+        return f"notion-http-{match.group(1)}"
+    if message.startswith("Notion API connection error:"):
+        return "notion-connection-error"
+    if message.startswith("Notion API request timed out:"):
+        return "notion-timeout"
+    if (
+        message.startswith("Notion API returned invalid JSON:")
+        or message.startswith("Notion API returned a non-object JSON payload")
+        or message.startswith("Notion API returned a malformed response")
+        or message.startswith("Notion API response is missing required")
+        or message.startswith("Notion API response 'results' contains a malformed")
+    ):
+        return "notion-malformed-response"
+    if (
+        message.startswith("Missing required payload field:")
+        or message.startswith("Unsupported action:")
+        or "must be between" in message
+        or "must be an integer" in message
+    ):
+        return "notion-adapter-contract-error"
+    return None
+
+
 def _sanitized_notion_failure_reason(result: Mapping[str, Any]) -> str:
     """Project one adapter failure into a bounded non-secret reason code."""
 
-    message = result.get("message")
-    if isinstance(message, str):
-        match = _HTTP_FAILURE_RE.match(message)
-        if match:
-            return f"notion-http-{match.group(1)}"
-        if message.startswith("Notion API connection error:"):
-            return "notion-connection-error"
-        if message.startswith("Notion API request timed out:"):
-            return "notion-timeout"
-        if (
-            message.startswith("Notion API returned invalid JSON:")
-            or message.startswith("Notion API returned a non-object JSON payload")
-            or message.startswith("Notion API returned a malformed response")
-            or message.startswith("Notion API response is missing required")
-            or message.startswith("Notion API response 'results' contains a malformed")
-        ):
-            return "notion-malformed-response"
-        if (
-            message.startswith("Missing required payload field:")
-            or message.startswith("Unsupported action:")
-            or "must be between" in message
-            or "must be an integer" in message
-        ):
-            return "notion-adapter-contract-error"
-    return "notion-read-failure"
+    return _notion_provider_failure_code(result.get("message")) or "notion-read-failure"
 
 
 class LessonReadRouteStatus(str, Enum):
@@ -163,7 +175,21 @@ def resolve_lesson_read_route(
             idempotency_key="agent-os-lessons-learned-read",
             payload=payload,
         )
-        result = notion.execute(task)
+        try:
+            result = notion.execute(task)
+        except LessonReadUnavailableError:
+            raise
+        except Exception as exc:
+            # #3032: the adapter contract returns controlled result dicts, but a
+            # raised provider failure still speaks the same bounded provider
+            # vocabulary. Project it into the same finite reason code instead of
+            # letting the orchestrator collapse it to a generic runtime error.
+            # Non-provider failures re-raise unchanged, preserving the existing
+            # timeout/connection handling and fail-closed behavior.
+            code = _notion_provider_failure_code(str(exc))
+            if code is not None:
+                raise LessonReadUnavailableError(code) from exc
+            raise
         if result.get("status") != "success":
             raise LessonReadUnavailableError(_sanitized_notion_failure_reason(result))
         output = result.get("output")

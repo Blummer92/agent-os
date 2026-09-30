@@ -108,3 +108,46 @@ def test_arbitrary_runtime_error_text_is_not_exposed_in_ckr6_evidence():
 
     assert "lesson-read-runtime-error" in result.selection_reason_codes
     assert all("secret-token" not in reason for reason in result.selection_reason_codes)
+
+
+def test_provider_failure_detail_survives_canonical_reader_chain():
+    # #3032 regression: token present + verified source ID present + retrieval
+    # required + canonical adapter read attempted. When the canonical reader's
+    # adapter raises a provider-shaped failure, the projected unavailable result
+    # must carry the actual provider cause next to the generic CKR6 reason.
+    #
+    # CI runs each 08_Tooling package's tests with only that package's src on
+    # sys.path, so the sibling packages backing the canonical reader are added
+    # here (same sys.path.insert convention used by this package's other test
+    # modules). Repo root is included because agent_os_execution_service.models
+    # resolves scripts.agent_os_execution_capabilities through the shared
+    # namespace package.
+    import sys
+    from pathlib import Path
+
+    _test_file = Path(__file__).resolve()
+    _tooling = _test_file.parents[2]
+    sys.path.insert(0, str(_tooling / "agent-os-execution-service" / "src"))
+    sys.path.insert(0, str(_tooling / "workflow-scheduler" / "src"))
+    sys.path.insert(0, str(_tooling.parent))
+
+    from agent_os_execution_service.lesson_reader_composition import (
+        build_lesson_read_executor,
+    )
+
+    class RaisingAdapter:
+        def execute(self, task):
+            raise RuntimeError("Notion API returned HTTP 403: Forbidden")
+
+    reader = build_lesson_read_executor(
+        data_source_id="2dfd0def-fa42-4c61-992e-c977a1fcaaf4",
+        adapter=RaisingAdapter(),
+    )
+    assert reader is not None
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=reader)
+
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
+    assert "lesson-retrieval-unavailable-specialized-knowledge-required" in result.selection_reason_codes
+    assert "notion-http-403" in result.selection_reason_codes
