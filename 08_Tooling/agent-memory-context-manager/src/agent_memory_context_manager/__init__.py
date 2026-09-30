@@ -46,6 +46,11 @@ from .handoff_packet import (
     REQUIRED_PACKET_FIELDS,
     build_handoff_packet,
 )
+from .handoff_prompt import (
+    MAX_PROMPT_SECTION_ITEMS,
+    REQUIRED_REPORT_FIELDS,
+    project_handoff_prompt,
+)
 from .lesson_activation_bridge import (
     REQUIRED_LESSON_PROPERTIES,
     LessonActivationError,
@@ -183,6 +188,7 @@ __all__ = [
     "MAX_EXISTING_LESSONS",
     "MAX_LESSON_RECORDS",
     "MAX_PROJECTED_LESSONS",
+    "MAX_PROMPT_SECTION_ITEMS",
     "MAX_RELATED_EVIDENCE",
     "MAX_SELECTED",
     "MISS_IDENTITY_MISMATCH",
@@ -195,6 +201,7 @@ __all__ = [
     "RENDERER_VERSION",
     "REQUIRED_LESSON_PROPERTIES",
     "REQUIRED_PACKET_FIELDS",
+    "REQUIRED_REPORT_FIELDS",
     "RelatedGitHubEvidence",
     "RenderingEvidence",
     "RepairContext",
@@ -233,6 +240,7 @@ __all__ = [
     "plan_decision_preflight",
     "plan_lesson_preflight",
     "plan_repair_retry_boundary",
+    "project_handoff_prompt",
     "project_risks_to_lessons",
     "read_summary_cache_entry",
     "select_coding_knowledge",
