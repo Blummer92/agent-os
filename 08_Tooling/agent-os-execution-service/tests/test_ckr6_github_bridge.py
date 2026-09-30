@@ -117,6 +117,36 @@ def test_3032_issue_start_projects_bounded_rejected_candidate_provenance(monkeyp
     assert result["side_effects_performed"] is False
 
 
+def test_3032_issue_start_carries_provider_failure_detail_in_ckr6_reason_codes(monkeypatch):
+    # #3032: the full CKR6 call graph (bridge -> route -> canonical reader ->
+    # preflight -> orchestration) must project the actual provider cause in the
+    # bounded result instead of only the generic unavailable reason.
+    from agent_os_execution_service.lesson_reader_composition import (
+        build_lesson_read_executor,
+    )
+
+    class RaisingAdapter:
+        def execute(self, task):
+            raise RuntimeError("Notion API returned HTTP 403: Forbidden")
+
+    reader = build_lesson_read_executor(
+        data_source_id="2dfd0def-fa42-4c61-992e-c977a1fcaaf4",
+        adapter=RaisingAdapter(),
+    )
+    assert reader is not None
+    route = type("Route", (), {})()
+    route.execute_read = reader
+    monkeypatch.setattr(bridge, "resolve_lesson_read_route", lambda: route)
+    envelope = bridge.parse_envelope(payload(specialized_knowledge_required=True))
+    result = bridge.execute_envelope(envelope, retrieval_required=True)
+
+    assert result["status"] == "insufficient"
+    assert "lesson-retrieval-unavailable-specialized-knowledge-required" in result["reason_codes"]
+    assert "notion-http-403" in result["reason_codes"]
+    assert result["mutation_admissible"] is False
+    assert result["side_effects_performed"] is False
+
+
 def test_failed_repair_rejects_unsupported_repair_context_at_ingress():
     with pytest.raises(ValueError, match="repair_context must be failed-pr-repair or ci-diagnosis"):
         bridge.parse_envelope(

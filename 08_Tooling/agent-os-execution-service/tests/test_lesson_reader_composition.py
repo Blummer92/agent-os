@@ -25,6 +25,18 @@ class SpyNotionAdapter:
         return self.result
 
 
+class RaisingNotionAdapter:
+    """Adapter whose execute() raises instead of returning a result dict."""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.tasks = []
+
+    def execute(self, task):
+        self.tasks.append(task)
+        raise self.exc
+
+
 def test_missing_data_source_identity_preserves_unavailable_fallback(monkeypatch):
     monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
     assert build_lesson_read_executor() is None
@@ -125,3 +137,56 @@ def test_malformed_success_output_uses_bounded_failure_reason():
 
     with pytest.raises(LessonReadUnavailableError, match="^notion-malformed-output$"):
         reader({"page_size": 5, "filter": {"and": []}})
+
+
+def test_raised_provider_http_failure_is_projected_as_finite_sanitized_reason():
+    # #3032: a provider failure raised by the adapter (rather than returned as a
+    # non-success result) must still project the exact provider cause instead of
+    # collapsing to a generic runtime error downstream.
+    adapter = RaisingNotionAdapter(
+        RuntimeError("Notion API returned HTTP 403: Forbidden")
+    )
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError) as exc_info:
+        reader({"page_size": 5, "filter": {"and": []}})
+
+    assert str(exc_info.value) == "notion-http-403"
+    assert len(adapter.tasks) == 1
+
+
+def test_raised_provider_connection_failure_is_projected_as_finite_reason():
+    adapter = RaisingNotionAdapter(
+        RuntimeError("Notion API connection error: dial tcp: connection refused")
+    )
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError, match="^notion-connection-error$"):
+        reader({"page_size": 5})
+
+
+def test_raised_timeout_propagates_unchanged_for_orchestrator_mapping():
+    # TimeoutError keeps its class so the orchestrator can project the
+    # dedicated lesson-read-timeout reason; the composition must not swallow it.
+    adapter = RaisingNotionAdapter(TimeoutError("request timed out"))
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(TimeoutError, match="^request timed out$"):
+        reader({"page_size": 5})
+
+
+def test_raised_non_provider_error_propagates_unchanged():
+    # Failures with no provider signature keep their existing handling; the
+    # composition must neither sanitize them nor invent a provider cause.
+    adapter = RaisingNotionAdapter(RuntimeError("unexpected-adapter-bug"))
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        reader({"page_size": 5})
+
+    assert str(exc_info.value) == "unexpected-adapter-bug"
+    assert not isinstance(exc_info.value, LessonReadUnavailableError)
