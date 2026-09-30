@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import sys
 from dataclasses import FrozenInstanceError, replace
@@ -47,6 +48,9 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     record_merge_execution_observation,
 )
 from scripts.agent_os_issue_acceptance import merge_authorization  # noqa: E402
+from scripts.agent_os_issue_acceptance.parse_pr import (  # noqa: E402
+    detect_github_effective_closing_references,
+)
 from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
     AdoptionClass,
     MetadataCandidate,
@@ -239,6 +243,10 @@ def _pr(bundle=None, **changes):
         required_tests=projection.required_tests,
         required_checks=(_check(tested_sha=projection.tested_repository_sha),),
         review_evidence=_review(), evidence_id="",
+        pr_body_sha256=hashlib.sha256(b"pr-body").hexdigest(),
+        pr_title_sha256=hashlib.sha256(b"pr-title").hexdigest(),
+        github_effective_closing_references=(),
+        authorized_closure_targets=(),
     )
     values.update(changes)
     return PullRequestMergeEvidence(**values)
@@ -805,3 +813,127 @@ def test_2337_only_terminal_success_on_the_exact_head_is_merge_evidence(state):
 
     assert not result.merge_authorized
     assert result.status in {"blocked", "needs-decision"}
+
+
+# --- #3157: GitHub-effective closing references fail closed at merge admission ---
+
+# Verbatim shape from PR #3156 (merged 2026-09-30): "Part of #2772" plus a
+# negated closing keyword. GitHub closed #2772 at merge; Agent OS must block
+# merge admission for any such target outside the authorized closure set.
+_PR_3156_BODY = "Part of #2772. This PR deliberately does **not** close #2772."
+
+
+def _closing_pr(bundle=None, body=_PR_3156_BODY, authorized_targets=(), **changes):
+    references = detect_github_effective_closing_references(body)
+    values = dict(
+        github_effective_closing_references=references,
+        authorized_closure_targets=authorized_targets,
+        pr_body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+    )
+    values.update(changes)
+    return _pr(bundle, **values)
+
+
+def test_3157_unauthorized_github_effective_closing_reference_blocks_candidate():
+    """The verbatim #3156/#2772 shape cannot produce a merge candidate."""
+    bundle = _bundle()
+    with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
+        _candidate(bundle, pr=_closing_pr(bundle))
+
+
+def test_3157_unauthorized_closing_reference_detail_names_offending_reference():
+    """The blocking reason names the exact offending closing reference."""
+    bundle = _bundle()
+    try:
+        _candidate(bundle, pr=_closing_pr(bundle))
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    assert "unauthorized-closing-reference:#2772" in message
+    assert "close #2772" in message
+    assert "source=body" in message
+
+
+def test_3157_authorized_closing_target_passes_admission():
+    """A closing reference whose target the lifecycle authorized still merges."""
+    bundle = _bundle()
+    record = _candidate(bundle, pr=_closing_pr(bundle, authorized_targets=("#2772",)))
+    assert record.binding.authorized_closure_targets == ("#2772",)
+    assert [item.target for item in record.binding.github_effective_closing_references] == [
+        "#2772"
+    ]
+
+
+def test_3157_non_closing_prose_passes_admission():
+    """Part of / Refs-only prose carries no closing references and passes."""
+    bundle = _bundle()
+    pr = _closing_pr(bundle, body="Part of #3157. Refs #3157.")
+    assert pr.github_effective_closing_references == ()
+    _candidate(bundle, pr=pr)
+
+
+def test_3157_closing_reference_added_after_authorization_blocks():
+    """Post-authorization prose edits adding a closing reference block merge."""
+    authorized, bundle = _authorized()
+    result = _evaluate(authorized, bundle, pr=_closing_pr(bundle))
+    assert result.status == "blocked"
+    assert not result.merge_authorized
+    assert "pull-request.unauthorized-closing-reference" in result.reason_codes
+
+
+def test_3157_clean_body_edit_after_authorization_is_stale_not_blocked():
+    """A clean body edit still invalidates the binding via exact-content identity."""
+    authorized, bundle = _authorized()
+    edited = _closing_pr(bundle, body="Part of #3157.")
+    result = _evaluate(authorized, bundle, pr=edited)
+    assert result.status == "stale"
+    assert not result.merge_authorized
+    assert "pull-request.unauthorized-closing-reference" not in result.reason_codes
+    assert "pr_body_sha256" in result.changed_bindings
+
+
+def test_3157_closing_evidence_round_trips_through_serialization():
+    """Closing-reference evidence survives canonical serialize/reconstruct."""
+    authorized, _bundle_unused = _authorized()
+    payload = merge_authorization.serialize_merge_authorization_record(authorized)
+    reconstructed = merge_authorization.reconstruct_merge_authorization_record(payload)
+    assert reconstructed.binding.pr_body_sha256 == authorized.binding.pr_body_sha256
+    assert reconstructed.binding.pr_title_sha256 == authorized.binding.pr_title_sha256
+    assert (
+        reconstructed.binding.github_effective_closing_references
+        == authorized.binding.github_effective_closing_references
+    )
+    assert (
+        reconstructed.binding.authorized_closure_targets
+        == authorized.binding.authorized_closure_targets
+    )
+
+
+def test_3157_closing_targets_are_canonicalized_and_bounded():
+    bundle = _bundle()
+    pr = _pr(
+        bundle,
+        authorized_closure_targets=("Other/Repo#7", "#9"),
+        github_effective_closing_references=(),
+    )
+    assert pr.authorized_closure_targets == ("#9", "other/repo#7")
+    with pytest.raises(ValueError, match="duplicate"):
+        _pr(bundle, authorized_closure_targets=("#9", "#9"))
+    with pytest.raises(ValueError, match="issue target"):
+        _pr(bundle, authorized_closure_targets=("not-a-target",))
+
+
+def test_3157_title_closing_reference_blocks_when_unauthorized():
+    bundle = _bundle()
+    pr = _closing_pr(
+        bundle,
+        body="Part of #3157.",
+        authorized_targets=(),
+        pr_title_sha256=hashlib.sha256(b"Resolves #42").hexdigest(),
+        github_effective_closing_references=detect_github_effective_closing_references(
+            "Part of #3157.", "Resolves #42"
+        ),
+    )
+    with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
+        _candidate(bundle, pr=pr)
