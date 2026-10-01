@@ -140,6 +140,12 @@ The shared Canonical Digital Media Unit Registry and Visual Asset Library
 bindings and the Photography Foundations unit binding are verified-current.
 Photography Foundations remains the proven live request path.
 
+#1941 adds `gate1-visual-assets` as a Gate-1-owned `visual-assets` request bound
+to Photography Foundations. The entry is dispatchable through the same
+admission gate but carries no live-read authority: Gate 1's connected read
+still requires #736's separate explicit authorization, dispatched as
+`/agent-os notion-read gate1-visual-assets` by the repository owner.
+
 Additional units may be declared by finite repository-owned request ids while
 their provider identity remains unverified. Those requests fail closed with
 `canonical-unit-unverified`; merely naming a unit never reaches the

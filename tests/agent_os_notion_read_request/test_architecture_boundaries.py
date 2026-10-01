@@ -162,6 +162,7 @@ def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
         "candy-branding-current-curriculum": 2816,
         "motion-typography-canonical-unit": 2816,
         "motion-typography-current-curriculum": 2816,
+        "gate1-visual-assets": 1941,
     }
 
 

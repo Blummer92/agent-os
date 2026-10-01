@@ -106,6 +106,12 @@
       "request_class": "current-curriculum",
       "canonical_unit_key": "motion-typography",
       "issue_number": 2816
+    },
+    {
+      "request_id": "gate1-visual-assets",
+      "request_class": "visual-assets",
+      "canonical_unit_key": "photography-foundations",
+      "issue_number": 1941
     }
   ]
 }
