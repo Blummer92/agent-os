@@ -49,3 +49,11 @@ WS-GRADE3 generic tests use the WS-GRADE2 synthetic fixture only. This contract 
 Identity matching fails closed: zero candidates becomes `not-found`, multiple candidates become the corresponding ambiguity status, and exactly one candidate is required for resolved identity. Authentication-required, unsupported-page, selector-drift, stale, read-only, unknown-freshness, and reader-error states remain explicit finite outcomes rather than being promoted into success.
 
 The adapter accepts normalized snapshot evidence; it does not fetch or scrape Schoology itself. Repository tests use synthetic Schoology-like values and selectors only. No real student records, production DOM captures, URLs, cookies, tokens, credentials, network interception, undocumented/private API, grade mutation, form submission, or external write is present. `write_authorized` remains permanently false through the WS-GRADE3 result.
+
+## WS-GRADE5 PowerSchool read-only adapter boundary
+
+`powerschool_gradebook_adapter.py` translates already-observed, bounded PowerSchool-like gradebook evidence into the WS-GRADE3 `GradebookReaderResult`. It owns only PowerSchool-specific evidence normalization: class/course identity, candidate student/grade-item identities, visible score/comment, editability, freshness, page state, and bounded selector provenance.
+
+Identity matching fails closed: zero candidates becomes `not-found`, multiple candidates become the corresponding ambiguity status, and exactly one candidate is required for resolved identity. Authentication-required, unsupported-page, selector-drift, stale, read-only, unknown-freshness, and reader-error states remain explicit finite outcomes rather than being promoted into success.
+
+The adapter accepts normalized snapshot evidence; it does not fetch or scrape PowerSchool itself. Repository tests use synthetic PowerSchool-like values and selectors only. No real student records, production DOM captures, URLs, cookies, tokens, credentials, network interception, undocumented/private API, grade mutation, form submission, or external write is present. `write_authorized` remains permanently false through the WS-GRADE3 result.

@@ -17,6 +17,12 @@ from .grading_decision import (
     SourceProvenance,
     TeacherApprovalState,
 )
+from .powerschool_gradebook_adapter import (
+    PowerSchoolGradebookSnapshot,
+    PowerSchoolIdentityCandidate,
+    PowerSchoolPageState,
+    normalize_powerschool_snapshot,
+)
 from .schoology_gradebook_adapter import (
     SchoologyGradebookSnapshot,
     SchoologyIdentityCandidate,
@@ -50,6 +56,9 @@ __all__ = (
     "IdentityEvidence",
     "IdentityResolution",
     "MatchResult",
+    "PowerSchoolGradebookSnapshot",
+    "PowerSchoolIdentityCandidate",
+    "PowerSchoolPageState",
     "ReadOnlyFixtureError",
     "ReaderFreshness",
     "ReaderStatus",
@@ -63,5 +72,6 @@ __all__ = (
     "SyntheticGradebookFixture",
     "TeacherApprovalState",
     "normalize_reader_record",
+    "normalize_powerschool_snapshot",
     "normalize_schoology_snapshot",
 )
