@@ -70,3 +70,15 @@ def test_one_unresolvable_slot_fails_the_whole_resolution_and_names_every_slot()
     assert result.status == "unresolvable"
     assert result.resolved_slots == ("CB-MINI-001",)
     assert result.unresolvable_slots == ("CB-SHOT-001",)
+
+
+def test_missing_or_ambiguous_file_evidence_is_unresolvable():
+    for metadata in ({}, {"id": "file-1"}, {"id": "file-1", "trashed": None},
+                     {"id": "file-1", "trashed": 0}, {"trashed": False},
+                     {"id": "different-file", "trashed": False}):
+        result = resolve_asset_slots(
+            asset_slots={"synthetic-slot": "file-1"},
+            describe_drive_file=lambda _file_id: metadata,
+        )
+        assert result.status == "unresolvable", metadata
+        assert result.unresolvable_slots == ("synthetic-slot",)
