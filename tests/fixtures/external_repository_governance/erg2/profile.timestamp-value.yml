@@ -1,0 +1,4 @@
+apiVersion: agent-os.external-repository-governance/v1alpha1
+kind: ExternalRepositoryProfile
+governanceDocuments:
+  reviewed: 2026-10-01

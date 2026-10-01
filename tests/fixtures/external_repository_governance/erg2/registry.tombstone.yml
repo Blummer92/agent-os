@@ -1,0 +1,13 @@
+apiVersion: agent-os.external-repository-governance-registry/v1alpha1
+kind: ExternalRepositoryRegistry
+repositories:
+  - registryId: id-a
+    repository: partner/a
+    admission: admitted
+    lifecycle: active
+    profilePath: profiles/consumer.yml
+    contractVersion: agent-os.external-repository-governance/v1alpha1
+    routing:
+      ownerAgent: github-service-agent
+    tombstone:
+      reason: retired

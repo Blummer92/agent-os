@@ -1,0 +1,4 @@
+apiVersion: agent-os.external-repository-governance/v1alpha1
+kind: SomethingElse
+governanceDocuments:
+  docs: docs/a.md

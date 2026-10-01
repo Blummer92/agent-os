@@ -1,0 +1,4 @@
+apiVersion: agent-os.external-repository-governance/v9alpha9
+kind: ExternalRepositoryProfile
+governanceDocuments:
+  docs: docs/a.md
