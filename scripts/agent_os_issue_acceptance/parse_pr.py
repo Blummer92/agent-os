@@ -260,6 +260,26 @@ def unauthorized_closing_targets(
     return tuple(blockers)
 
 
+def dual_implemented_issue_claims(
+    detected: tuple[GitHubEffectiveClosingReference, ...],
+) -> tuple[str, ...]:
+    """Return the distinct same-repo closing targets when a PR title/body claims to implement more than one issue (#2991).
+
+    A primary implementation PR implements exactly one issue: a second distinct
+    GitHub-effective closing target is a second *implemented* claim, not
+    dependency/consumer linkage. This is the #2854/#2989 regression fixture —
+    merging the prerequisite bug's fix must not carry closing semantics for
+    the parent task, which stays linked as dependency/consumer evidence
+    ("Part of #2854", "Refs #2854") instead of a second closing keyword.
+    Cross-repository targets are excluded: GitHub never merge-closes them and
+    the authoritative parser already routes them to manual review.
+    """
+    targets = sorted(
+        {reference.target for reference in detected if reference.target.startswith("#")}
+    )
+    return tuple(targets) if len(targets) > 1 else ()
+
+
 def has_markdown_heading(text: str, heading: str) -> bool:
     return bool(re.compile(rf"^#+\s+{re.escape(heading)}\s*$", re.IGNORECASE | re.MULTILINE).search(text or ""))
 

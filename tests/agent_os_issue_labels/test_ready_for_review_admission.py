@@ -312,3 +312,31 @@ def test_pr_title_and_body_are_required():
             assert "built-in strings" in str(exc)
         else:
             raise AssertionError("expected TypeError")
+
+
+# --- #2991: one primary PR cannot claim two distinct implemented issues ------
+#
+# Regression fixture: #2854's execution discovered defect #2989; PR #2990
+# linked BOTH as implemented. The Ready transition starts the merge path, so
+# it fails closed on dual implemented-issue linkage even when both targets
+# carry canonical close-issue admission: the parent stays linked as
+# dependency/consumer evidence, never a second closing target.
+
+
+def test_dual_implemented_closing_targets_block_ready_transition():
+    result = admission(
+        pr_body="Fixes #2989\n\nFixes #2854",
+        closure_admissions=(closure_admission(2989), closure_admission(2854)),
+    )
+    assert result.transition_admissible is False
+    assert "multiple-implemented-issues-linked" in result.reason_codes
+    assert result.next_action == "link-one-issue-as-implemented"
+
+
+def test_single_implemented_issue_plus_dependency_linkage_permits_ready():
+    result = admission(
+        pr_body="Fixes #2989\n\nPart of #2854. Refs #2854.",
+        closure_admissions=(closure_admission(2989),),
+    )
+    assert result.transition_admissible is True
+    assert "multiple-implemented-issues-linked" not in result.reason_codes

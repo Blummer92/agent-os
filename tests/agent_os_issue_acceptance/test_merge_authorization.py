@@ -1033,3 +1033,57 @@ def test_3157_metadata_fingerprint_is_content_bound():
         _pr(bundle, pr_title="title", pr_body="body", pr_metadata_sha256="0" * 64)
     with pytest.raises(ValueError, match="NUL-free"):
         _pr(bundle, pr_body="bad\x00body")
+
+
+# --- #2991: one primary PR cannot claim two distinct implemented issues ------
+#
+# Regression fixture: #2854's execution discovered defect #2989; PR #2990
+# linked BOTH as implemented. A primary PR implements exactly one issue —
+# the parent task must be linked as dependency/consumer evidence, not a
+# second closing target. Both gates fail closed even when each closing target
+# carries canonical close-issue admission evidence.
+
+
+def test_2991_dual_authorized_closing_targets_block_merge():
+    """The #2990 shape cannot produce a merge candidate: both #2989 (the
+    prerequisite fix) and #2854 (the parent task) claimed as implemented."""
+    bundle = _bundle()
+    pr = _closing_pr(
+        bundle,
+        body="Fixes #2989\n\nFixes #2854",
+        admissions=(_closure_admission(2989), _closure_admission(2854)),
+    )
+    with pytest.raises(ValueError, match="pull-request.multiple-implemented-issues"):
+        _candidate(bundle, pr=pr)
+
+
+def test_2991_dual_closing_targets_detail_names_both_issues():
+    """The blocking detail names the exact offending closing references."""
+    bundle = _bundle()
+    pr = _closing_pr(
+        bundle,
+        body="Fixes #2989\n\nFixes #2854",
+        admissions=(_closure_admission(2989), _closure_admission(2854)),
+    )
+    try:
+        _candidate(bundle, pr=pr)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    assert "multiple-implemented-issues:#2854/#2989" in message
+    assert "fix #2989" in message
+    assert "fix #2854" in message
+
+
+def test_2991_single_implemented_issue_plus_dependency_linkage_merges():
+    """The fixed shape: #2989 implemented, #2854 linked as consumer evidence."""
+    bundle = _bundle()
+    admission_2989 = _closure_admission(2989)
+    pr = _closing_pr(
+        bundle,
+        body="Fixes #2989\n\nPart of #2854. Refs #2854.",
+        admissions=(admission_2989,),
+    )
+    record = _candidate(bundle, pr=pr)
+    assert record.binding.closure_admission_ids == (admission_2989.admission.result_id,)
