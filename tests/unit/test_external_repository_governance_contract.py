@@ -98,6 +98,22 @@ def test_standard_pins_fail_closed_bounds_results_compatibility_and_downstream_o
 def test_module_version_and_changelog_register_erg1():
     module_map = (ROOT / "04_Registry/module-version-map.md").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "| External Repository Governance | 0.1.0 |" in module_map
-    assert "**External Repository Governance** `0.1.0`" in module_map
+    assert "| External Repository Governance | 0.2.0 |" in module_map
+    assert "**External Repository Governance** `0.2.0`" in module_map
     assert "ERG1 (#580)" in changelog
+    assert "ERG2 (#581)" in changelog
+
+
+def test_standard_registers_erg2_validator():
+    text = (
+        ROOT / "01_Shared_Standards/github/external-repository-governance.md"
+    ).read_text(encoding="utf-8")
+    assert "Version: 0.2.0" in text
+    assert "Validator issue: #581" in text
+    for required in (
+        "scripts/agent_os_external_repository_governance/validator.py",
+        "scripts/erg2-validate",
+        "authorizes nothing",
+        "infrastructure-error",
+    ):
+        assert required in text

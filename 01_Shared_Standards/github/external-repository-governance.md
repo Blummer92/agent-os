@@ -1,7 +1,8 @@
 # External Repository Governance
 
-Version: 0.1.0
+Version: 0.2.0
 Contract issue: #580
+Validator issue: #581
 Architecture decision: #579
 
 ## Purpose
@@ -135,3 +136,25 @@ Stop and route for review if implementation would require a new generic infrastr
 ## Downstream handoff
 
 #581 must consume these schemas and semantics rather than redefine them. #582 must consume #581's validator contract rather than create another validation path.
+
+## ERG2 validator
+
+The canonical ERG validator is `scripts/agent_os_external_repository_governance/validator.py`
+(`validate_erg_document`), with `scripts/erg2-validate` as its CLI. It consumes
+the #580 schemas and semantics above and adds no second schema framework,
+config loader, result hierarchy, serializer, registry engine, repository
+adapter, workflow, credential path, or enforcement path. It is deterministic,
+offline, credential-free, and fail-closed; consumer repository code is parsed,
+never executed.
+
+Evaluated: strict YAML input bounds, contract identity, schema conformance,
+declared-path safety (lexical, normalized containment, symlink containment),
+and registry admission policy (stable IDs, identity, lifecycle, aliases,
+profile paths). Not evaluated: consumer-repository behavior, live runtime
+state, network or GitHub state, declared-document existence, approval or
+readiness. Reports are evidence only and authorize nothing; `infrastructure-error`
+is never converted to a policy outcome.
+
+## Changelog
+
+- 0.2.0 registers the #581 ERG2 offline validator entry path, its evaluated/not-evaluated boundaries, and the evidence-only reporting contract (#581). No schema, result vocabulary, or authority change.

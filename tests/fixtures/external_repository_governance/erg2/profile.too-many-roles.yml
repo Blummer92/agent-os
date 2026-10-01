@@ -1,0 +1,24 @@
+apiVersion: agent-os.external-repository-governance/v1alpha1
+kind: ExternalRepositoryProfile
+governanceDocuments:
+  role-00: docs/role-00.md
+  role-01: docs/role-01.md
+  role-02: docs/role-02.md
+  role-03: docs/role-03.md
+  role-04: docs/role-04.md
+  role-05: docs/role-05.md
+  role-06: docs/role-06.md
+  role-07: docs/role-07.md
+  role-08: docs/role-08.md
+  role-09: docs/role-09.md
+  role-10: docs/role-10.md
+  role-11: docs/role-11.md
+  role-12: docs/role-12.md
+  role-13: docs/role-13.md
+  role-14: docs/role-14.md
+  role-15: docs/role-15.md
+  role-16: docs/role-16.md
+  role-17: docs/role-17.md
+  role-18: docs/role-18.md
+  role-19: docs/role-19.md
+  role-20: docs/role-20.md
