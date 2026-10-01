@@ -382,6 +382,8 @@ def _validate_options(
 
 
 def _route_owner(options: list[dict[str, Any]]) -> str:
+    if not options:
+        return "manual-review"
     owners = [_OPTION_OWNER[option["kind"]] for option in options]
     if "manual-review" in owners:
         return "manual-review"
@@ -559,6 +561,25 @@ def analyze_assessment_next_instruction(evidence: object) -> ValidationResult:
                     "handoff-invalid",
                     "insufficient evidence admits no instructional options",
                 )
+            return _hold_result(
+                analysis_id=analysis_id,
+                record_revision=record_revision,
+                evidence_source=evidence_source,
+                blueprint=blueprint,
+                targets=targets,
+                observations=observations,
+                hypotheses=hypotheses,
+                reason_code="manual-review-insufficient-evidence",
+                uncertainties=("manual-review-insufficient-evidence",),
+            )
+
+        if not options or not any(
+            item["strength"] in ("moderate", "strong") for item in observations
+        ) or any(
+            hypothesis_strength[identifier] == "weak"
+            for option in options
+            for identifier in option["supporting_hypothesis_ids"]
+        ):
             return _hold_result(
                 analysis_id=analysis_id,
                 record_revision=record_revision,
