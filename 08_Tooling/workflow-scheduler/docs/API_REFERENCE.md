@@ -559,6 +559,72 @@ result = run_bounded_posix_process(
 )
 ```
 
+### Process-Group Containment: the Lighter Sibling (WSC0 / #3200)
+
+`process_group_containment` (`execution/process_group_containment.py`) is the
+sibling adapter for venues where cgroup v2 delegation is unavailable -- for
+example Codespaces containers, which mount `/sys/fs/cgroup` read-only, so the
+#759 cgroup proof is unproducible there. It does not replace or weaken #759:
+the cgroup contract stands unchanged for venues with delegation.
+
+**Preflight** (`process_group_containment.preflight_check`): probes POSIX
+process-group creation (a real `start_new_session` spawn whose pgid is read
+back), rlimit lowering, and `/proc` listability -- all before any invocation
+launch. It also actively probes for a writable cgroup subtree and reports
+the result honestly as `cgroup_delegation_available`, but that field does
+not gate `usable`: this variant exists precisely for venues without
+delegation. Any other failure raises before any process runs; there is no
+silent fallback for that invocation.
+
+**Launch and identity**: the child is spawned as a session and process-group
+leader (`Popen(start_new_session=True)`), so the pgid equals the child pid
+and is the containment identity for the run. Optional `rlimits` (e.g.
+`RLIMIT_NPROC`, `RLIMIT_CPU`, `RLIMIT_AS`, by constant or name) are lowered
+in a minimal `preexec_fn` before exec -- lowering needs no privilege.
+
+**Escalation order**: `SIGTERM` to the whole invocation pgid first, then one
+bounded `SIGKILL` escalation only if the grace period expires -- then a
+`/proc` survivor scan must prove zero live processes remain in the pgid.
+Any survivor raises `ProcessGroupSurvivorError`; survivors are never silently
+ignored. Zombies do not count as survivors: a zombie is already dead, and
+reaping it is its (reparented) parent's job.
+
+**Reap and drain**: the direct child is reaped via a `waitpid` loop with the
+raw kernel status kept (so `WIFEXITED`/`WIFSIGNALED` decode faithfully), and
+stdout/stderr are drained to completion.
+
+**Attestation, not downgrade**: every `containment_record()` carries an
+`attestation` block stating `cgroup_delegation: "unavailable"` and listing
+the #759-grade guarantees this variant explicitly does NOT claim
+(`clone3(CLONE_INTO_CGROUP)` race-free launch, the kernel's recursive
+`cgroup.events populated=0` proof, `cgroup.kill` reaching `setsid()`-detached
+descendants, per-invocation cgroup creation/cleanup). Known limitation,
+stated rather than hidden: a descendant that leaves the process group is
+unreachable by `killpg` -- venues that need that guarantee must use
+`cgroup_v2_containment`.
+
+**Prohibitions**: no cgroup filesystem access at all, no root/capability
+escalation, no daemons, no network, no retries. Every operation is scoped to
+the one pgid the instance launched.
+
+```python
+from workflow_scheduler.execution.process_group_containment import (
+    InvocationProcessGroup,
+    preflight_check,
+)
+
+preflight = preflight_check()
+assert preflight.usable  # fail closed otherwise; never launch uncontained
+
+with InvocationProcessGroup.launch(
+    ["some-command"],
+    rlimits={"RLIMIT_CPU": (60, 60), "RLIMIT_NPROC": (128, 128)},
+    invocation_id="issue-3200-attempt-1",
+) as inv:
+    ...
+record = inv.containment_record()  # includes the attestation block
+```
+
 ## Frozen-Test Validation
 
 ### FrozenTestValidationAdapter and Explicit Termination Evidence (AOS-VALTERM1 / #1205)
