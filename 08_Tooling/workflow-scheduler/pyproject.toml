@@ -21,6 +21,11 @@ dependencies = [
 # installation resolves them without repository-root ``PYTHONPATH``. #1426 adds
 # the execution-interface contract package required by the installed #1411
 # publication path under the same single-owner distribution boundary.
+# #3158 adds the issue-labels contract package: the installed
+# ``agent-os-mcp`` server imports
+# ``scripts.agent_os_issue_labels.connected_issue_creation`` through
+# ``agent_os_execution_service.connected_issue_creation_facade``, and no host
+# distribution shipped it.
 # ``packages`` must be explicit because ``packages.find`` only discovers packages
 # under a single ``where`` root and ignores out-of-tree ``package-dir`` entries.
 [tool.setuptools]
@@ -43,6 +48,7 @@ packages = [
   "scripts.agent_os_github_issue_provider",
   "scripts.agent_os_issue_acceptance.checks",
   "scripts.agent_os_issue_acceptance.typed_subject_approval",
+  "scripts.agent_os_issue_labels",
   "scripts.agent_os_remote_validation",
 ]
 ext-modules = [
@@ -58,4 +64,5 @@ ext-modules = [
 "scripts.agent_os_github_git_objects" = "../../scripts/agent_os_github_git_objects"
 "scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"
 "scripts.agent_os_issue_acceptance.typed_subject_approval" = "../../scripts/agent_os_issue_acceptance/typed_subject_approval"
+"scripts.agent_os_issue_labels" = "../../scripts/agent_os_issue_labels"
 "scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"

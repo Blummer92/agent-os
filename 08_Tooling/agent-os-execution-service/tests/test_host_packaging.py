@@ -47,12 +47,17 @@ EXECUTION_SERVICE_PROJECT = ROOT / "08_Tooling" / "agent-os-execution-service"
 WORKFLOW_SCHEDULER_PROJECT = ROOT / "08_Tooling" / "workflow-scheduler"
 CONTEXT_MANAGER_PROJECT = ROOT / "08_Tooling" / "agent-memory-context-manager"
 CAPABILITY_REGISTRY_PROJECT = ROOT / "08_Tooling" / "reusable-capability-registry"
+# #3158: the repository ``src/`` project builds the
+# ``instructional-workflow-contracts`` distribution that the installed
+# ``agent-os-mcp`` server imports at module scope.
+INSTRUCTIONAL_CONTRACTS_PROJECT = ROOT / "src"
 
 RUNTIME_PROJECTS = (
     CAPABILITY_REGISTRY_PROJECT,
     CONTEXT_MANAGER_PROJECT,
     WORKFLOW_SCHEDULER_PROJECT,
     EXECUTION_SERVICE_PROJECT,
+    INSTRUCTIONAL_CONTRACTS_PROJECT,
 )
 
 # The canonical descriptor loader production host composition binds (#1287).
@@ -108,6 +113,7 @@ def _build_wheels(output: Path) -> dict[str, Path]:
         "workflow_scheduler",
         "agent_memory_context_manager",
         "reusable_capability_registry",
+        "instructional_workflow_contracts",
     }, sorted(wheels)
     return wheels
 
@@ -308,11 +314,18 @@ def test_distributions_carry_one_canonical_copy_of_every_runtime_module(
     built_wheels: dict[str, Path],
 ) -> None:
     """No module -- above all the descriptor loader -- is shipped twice."""
-    service_names = _wheel_names(built_wheels["agent_os_execution_service"])
-    scheduler_names = _wheel_names(built_wheels["workflow_scheduler"])
+    wheel_modules = {
+        name: {entry for entry in _wheel_names(wheel) if entry.endswith(".py")}
+        for name, wheel in built_wheels.items()
+    }
+    seen: dict[str, str] = {}
+    for name, modules in wheel_modules.items():
+        for module in modules:
+            assert module not in seen, (module, seen[module], name)
+            seen[module] = name
 
-    service_modules = {name for name in service_names if name.endswith(".py")}
-    scheduler_modules = {name for name in scheduler_names if name.endswith(".py")}
+    service_modules = wheel_modules["agent_os_execution_service"]
+    scheduler_modules = wheel_modules["workflow_scheduler"]
     assert service_modules & scheduler_modules == set()
 
     # The canonical GitHub provider moved to Scheduler with its direct consumers.
@@ -334,6 +347,21 @@ def test_distributions_carry_one_canonical_copy_of_every_runtime_module(
     with zipfile.ZipFile(built_wheels["workflow_scheduler"]) as archive:
         shipped = archive.read(CANONICAL_DESCRIPTOR_LOADER)
     assert shipped == (ROOT / CANONICAL_DESCRIPTOR_LOADER).read_bytes()
+
+    # #3158: both modules the installed ``agent-os-mcp`` server imports at
+    # module scope are carried by exactly one declared host distribution.
+    issue_labels_carriers = [
+        name
+        for name, wheel in built_wheels.items()
+        if "scripts/agent_os_issue_labels/connected_issue_creation.py" in _wheel_names(wheel)
+    ]
+    assert issue_labels_carriers == ["workflow_scheduler"]
+    contracts_carriers = [
+        name
+        for name, wheel in built_wheels.items()
+        if "instructional_workflow_contracts/__init__.py" in _wheel_names(wheel)
+    ]
+    assert contracts_carriers == ["instructional_workflow_contracts"]
 
 
 def test_explicit_package_lists_still_cover_every_source_module(
@@ -362,6 +390,7 @@ def test_explicit_package_lists_still_cover_every_source_module(
         "agent_os_execution_checkpoint",
         "agent_os_github_issue_provider",
         "agent_os_issue_acceptance",
+        "agent_os_issue_labels",
         "agent_os_remote_validation",
     ):
         sources[ROOT / "scripts" / package] = f"scripts/{package}"
@@ -489,6 +518,72 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
             continue
         resolved = Path(entry).resolve()
         assert not resolved.is_relative_to(repository_root), entry
+
+
+def test_isolated_installation_imports_the_mcp_server_closure(
+    installed_runtime: tuple[Path, Path],
+) -> None:
+    """The #2528 ``agent-os-mcp`` server imports from a clean installation.
+
+    #3158: wheels built from main failed here with
+    ``ModuleNotFoundError: No module named 'instructional_workflow_contracts'``
+    (and would next fail on ``scripts.agent_os_issue_labels``) because the
+    import closure of ``agent_os_execution_service.mcp_server`` reached modules
+    no declared host distribution shipped. Import/startup only: the module
+    import executes the full closure, which is exactly the boundary the
+    installed ``agent-os-mcp`` entry point crosses before serving stdio.
+    """
+    python, outside_repository = installed_runtime
+    probe = _run(
+        [
+            str(python),
+            "-c",
+            (
+                "import json, sys; "
+                "import agent_os_execution_service.mcp_server as server; "
+                "import instructional_workflow_contracts as contracts; "
+                "from scripts.agent_os_issue_labels import connected_issue_creation; "
+                "print(json.dumps({"
+                "'server': server.__file__, "
+                "'contracts': contracts.__file__, "
+                "'issue_labels': connected_issue_creation.__file__, "
+                "'sys_path': sys.path}))"
+            ),
+        ],
+        cwd=outside_repository,
+    )
+    observed = json.loads(probe.stdout)
+
+    environment_root = python.parent.parent.resolve()
+    repository_root = ROOT.resolve()
+    for key in ("server", "contracts", "issue_labels"):
+        module_path = Path(observed[key]).resolve()
+        assert module_path.is_relative_to(environment_root), (key, observed[key])
+        assert not module_path.is_relative_to(repository_root), (key, observed[key])
+
+    # The two #3158 modules resolve through their single declared carriers.
+    assert (
+        Path(observed["contracts"]).resolve().parent.name
+        == "instructional_workflow_contracts"
+    )
+    assert "scripts/agent_os_issue_labels" in observed["issue_labels"].replace("\\", "/")
+
+    # The success above cannot be a repository-root or checkout accident.
+    for entry in observed["sys_path"]:
+        if not entry:
+            continue
+        resolved = Path(entry).resolve()
+        assert not resolved.is_relative_to(repository_root), entry
+
+
+def test_installed_agent_os_mcp_entry_point_exists(
+    installed_runtime: tuple[Path, Path],
+) -> None:
+    """The ``agent-os-mcp`` console script is installed with the service."""
+    python, _outside_repository = installed_runtime
+    script = python.parent / ("agent-os-mcp.exe" if os.name == "nt" else "agent-os-mcp")
+    assert script.is_file(), script
+    assert "agent_os_execution_service.mcp_server" in script.read_text()
 
 
 def test_installed_entrypoint_reaches_its_argv_boundary_without_dispatching(
