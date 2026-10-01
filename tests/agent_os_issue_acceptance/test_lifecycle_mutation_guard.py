@@ -124,3 +124,76 @@ def test_no_mutation_or_io_surface_is_exposed():
         assert not hasattr(value, "run")
         assert not hasattr(value, "write")
         assert not hasattr(value, "callback")
+
+
+def _close_issue_parts(auth_changes=None, snapshot_changes=None):
+    auth = authorization(
+        issue_number=2772,
+        pull_request_number=None,
+        authorized_mutations=("close-issue",),
+        expected_source_head=None,
+        expected_base_head=None,
+        expected_pr_state="none",
+        expected_review_state="unknown",
+        expected_unresolved_threads=0,
+        expected_lifecycle_labels=(),
+        **(auth_changes or {}),
+    )
+    observed = snapshot(
+        issue_number=2772,
+        pull_request_number=None,
+        source_head=None,
+        base_head=None,
+        pr_state="none",
+        review_state="unknown",
+        unresolved_threads=0,
+        lifecycle_labels=(),
+        **(snapshot_changes or {}),
+    )
+    admission = evaluate_lifecycle_mutation(auth, observed, "close-issue")
+    return auth, admission
+
+
+def test_issue_closure_admission_binds_authorization_to_admitted_result():
+    from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+        IssueClosureAdmission,
+    )
+
+    auth, admission = _close_issue_parts()
+    assert admission.admitted
+    bound = IssueClosureAdmission(authorization=auth, admission=admission)
+    assert bound.target == "#2772"
+    assert bound.admission.result_id == admission.result_id
+
+
+def test_issue_closure_admission_normalizes_cross_repository_target():
+    from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+        IssueClosureAdmission,
+    )
+
+    auth, admission = _close_issue_parts(
+        auth_changes={"repository": "other/repo"},
+        snapshot_changes={"repository": "other/repo"},
+    )
+    assert admission.admitted
+    bound = IssueClosureAdmission(authorization=auth, admission=admission)
+    assert bound.target == "other/repo#2772"
+
+
+def test_issue_closure_admission_rejects_non_canonical_evidence():
+    from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+        IssueClosureAdmission,
+    )
+
+    auth, admission = _close_issue_parts()
+    with pytest.raises(TypeError):
+        IssueClosureAdmission(authorization="not-an-authorization", admission=admission)
+    with pytest.raises(TypeError):
+        IssueClosureAdmission(authorization=auth, admission="not-an-admission")
+    _, blocked = _close_issue_parts(snapshot_changes={"issue_state": "closed"})
+    assert not blocked.admitted
+    with pytest.raises(ValueError, match="admitted"):
+        IssueClosureAdmission(authorization=auth, admission=blocked)
+    other_auth, _ = _close_issue_parts(auth_changes={"decision_id": "decision-2"})
+    with pytest.raises(ValueError, match="not bound"):
+        IssueClosureAdmission(authorization=other_auth, admission=admission)

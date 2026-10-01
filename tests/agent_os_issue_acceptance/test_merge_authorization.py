@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
+import json
 import sys
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -48,8 +49,11 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     record_merge_execution_observation,
 )
 from scripts.agent_os_issue_acceptance import merge_authorization  # noqa: E402
-from scripts.agent_os_issue_acceptance.parse_pr import (  # noqa: E402
-    detect_github_effective_closing_references,
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (  # noqa: E402
+    IssueClosureAdmission,
+    LifecycleMutationAuthorization,
+    LifecycleStateSnapshot,
+    evaluate_lifecycle_mutation,
 )
 from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
     AdoptionClass,
@@ -243,10 +247,9 @@ def _pr(bundle=None, **changes):
         required_tests=projection.required_tests,
         required_checks=(_check(tested_sha=projection.tested_repository_sha),),
         review_evidence=_review(), evidence_id="",
-        pr_body_sha256=hashlib.sha256(b"pr-body").hexdigest(),
-        pr_title_sha256=hashlib.sha256(b"pr-title").hexdigest(),
-        github_effective_closing_references=(),
-        authorized_closure_targets=(),
+        pr_title="", pr_body="",
+        pr_metadata_sha256="",
+        closure_admissions=(),
     )
     values.update(changes)
     return PullRequestMergeEvidence(**values)
@@ -290,7 +293,7 @@ def _evaluate(record, bundle=None, pr=None, at="2026-07-26T14:40:00Z", events=()
 
 
 def test_public_schema_state_and_canonical_end_to_end_path():
-    assert MERGE_AUTHORIZATION_SCHEMA_VERSION == "1.0"
+    assert MERGE_AUTHORIZATION_SCHEMA_VERSION == "1.1"
     assert MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION == "1.0"
     assert tuple(item.value for item in MergeAuthorizationState) == (
         "pending", "authorized", "rejected", "expired", "invalidated",
@@ -823,16 +826,59 @@ def test_2337_only_terminal_success_on_the_exact_head_is_merge_evidence(state):
 _PR_3156_BODY = "Part of #2772. This PR deliberately does **not** close #2772."
 
 
-def _closing_pr(bundle=None, body=_PR_3156_BODY, authorized_targets=(), **changes):
-    references = detect_github_effective_closing_references(body)
-    values = dict(
-        github_effective_closing_references=references,
-        authorized_closure_targets=authorized_targets,
-        pr_body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+def _closure_admission(issue_number=2772, repository="blummer92/agent-os"):
+    """Build canonical close-issue admission evidence for one issue (#3157)."""
+    authorization, admission = _closure_parts(issue_number, repository)
+    assert admission.admitted
+    return IssueClosureAdmission(authorization=authorization, admission=admission)
+
+
+def _closure_parts(issue_number=2772, repository="blummer92/agent-os", mutation="close-issue", issue_state="open", decision_id="test-decision"):
+    """Build the authorization/admission pair, admitted only when the state matches."""
+    authorization = LifecycleMutationAuthorization(
+        schema_version="1.0",
+        repository=repository,
+        issue_number=issue_number,
+        pull_request_number=None,
+        authorized_mutations=(mutation,),
+        expected_source_head=None,
+        expected_base_head=None,
+        expected_pr_state="none",
+        expected_merged=False,
+        expected_issue_state=issue_state,
+        expected_review_state="unknown",
+        expected_unresolved_threads=0,
+        expected_lifecycle_labels=(),
+        observed_at_revision="rev-1",
+        state="authorized",
+        authorizer_id="test-authorizer",
+        decision_id=decision_id,
     )
+    snapshot = LifecycleStateSnapshot(
+        repository=repository,
+        issue_number=issue_number,
+        pull_request_number=None,
+        source_head=None,
+        base_head=None,
+        pr_state="none",
+        merged=False,
+        issue_state=issue_state,
+        review_state="unknown",
+        unresolved_threads=0,
+        lifecycle_labels=(),
+        observed_revision="rev-1",
+    )
+    admission = evaluate_lifecycle_mutation(authorization, snapshot, mutation)
+    return authorization, admission
+
+
+def _closing_pr(bundle=None, body=_PR_3156_BODY, title="", admissions=(), **changes):
+    values = dict(pr_title=title, pr_body=body, closure_admissions=admissions)
     values.update(changes)
     return _pr(bundle, **values)
 
+
+# --- #3157: canonical close-issue admission evidence --------------------------
 
 def test_3157_unauthorized_github_effective_closing_reference_blocks_candidate():
     """The verbatim #3156/#2772 shape cannot produce a merge candidate."""
@@ -856,20 +902,25 @@ def test_3157_unauthorized_closing_reference_detail_names_offending_reference():
 
 
 def test_3157_authorized_closing_target_passes_admission():
-    """A closing reference whose target the lifecycle authorized still merges."""
+    """A closing reference covered by canonical admission evidence still merges."""
     bundle = _bundle()
-    record = _candidate(bundle, pr=_closing_pr(bundle, authorized_targets=("#2772",)))
-    assert record.binding.authorized_closure_targets == ("#2772",)
-    assert [item.target for item in record.binding.github_effective_closing_references] == [
-        "#2772"
-    ]
+    admission_2772 = _closure_admission(2772)
+    pr = _closing_pr(bundle, admissions=(admission_2772,))
+    record = _candidate(bundle, pr=pr)
+    assert record.binding.closure_admission_ids == (
+        admission_2772.admission.result_id,
+    )
+    assert (
+        record.binding.pr_metadata_sha256
+        == pr.pr_metadata_sha256
+        == merge_authorization.pr_metadata_fingerprint("", _PR_3156_BODY)
+    )
 
 
 def test_3157_non_closing_prose_passes_admission():
     """Part of / Refs-only prose carries no closing references and passes."""
     bundle = _bundle()
     pr = _closing_pr(bundle, body="Part of #3157. Refs #3157.")
-    assert pr.github_effective_closing_references == ()
     _candidate(bundle, pr=pr)
 
 
@@ -883,57 +934,102 @@ def test_3157_closing_reference_added_after_authorization_blocks():
 
 
 def test_3157_clean_body_edit_after_authorization_is_stale_not_blocked():
-    """A clean body edit still invalidates the binding via exact-content identity."""
+    """A clean body edit still invalidates the binding via the metadata fingerprint."""
     authorized, bundle = _authorized()
     edited = _closing_pr(bundle, body="Part of #3157.")
     result = _evaluate(authorized, bundle, pr=edited)
     assert result.status == "stale"
     assert not result.merge_authorized
     assert "pull-request.unauthorized-closing-reference" not in result.reason_codes
-    assert "pr_body_sha256" in result.changed_bindings
+    assert "pr_metadata_sha256" in result.changed_bindings
 
 
 def test_3157_closing_evidence_round_trips_through_serialization():
-    """Closing-reference evidence survives canonical serialize/reconstruct."""
+    """The persisted binding shape (fingerprint + admission ids) round-trips."""
     authorized, _bundle_unused = _authorized()
     payload = merge_authorization.serialize_merge_authorization_record(authorized)
     reconstructed = merge_authorization.reconstruct_merge_authorization_record(payload)
-    assert reconstructed.binding.pr_body_sha256 == authorized.binding.pr_body_sha256
-    assert reconstructed.binding.pr_title_sha256 == authorized.binding.pr_title_sha256
     assert (
-        reconstructed.binding.github_effective_closing_references
-        == authorized.binding.github_effective_closing_references
+        reconstructed.binding.pr_metadata_sha256
+        == authorized.binding.pr_metadata_sha256
     )
     assert (
-        reconstructed.binding.authorized_closure_targets
-        == authorized.binding.authorized_closure_targets
+        reconstructed.binding.closure_admission_ids
+        == authorized.binding.closure_admission_ids
+        == ()
     )
 
 
-def test_3157_closing_targets_are_canonicalized_and_bounded():
+def test_3157_legacy_binding_shape_is_rejected():
+    """The pre-simplification binding shape is rejected, not silently migrated."""
+    authorized, _bundle_unused = _authorized()
+    payload = json.loads(
+        merge_authorization.serialize_merge_authorization_record(authorized)
+    )
+    binding = payload["binding"]
+    binding["pr_body_sha256"] = "0" * 64
+    del binding["pr_metadata_sha256"]
+    with pytest.raises(ValueError, match="binding fields are invalid"):
+        merge_authorization.reconstruct_merge_authorization_record(payload)
+
+
+def test_3157_closure_admissions_require_canonical_evidence():
+    """Raw target strings can never stand in for canonical admission evidence."""
     bundle = _bundle()
-    pr = _pr(
-        bundle,
-        authorized_closure_targets=("Other/Repo#7", "#9"),
-        github_effective_closing_references=(),
-    )
-    assert pr.authorized_closure_targets == ("#9", "other/repo#7")
+    admission_2772 = _closure_admission(2772)
+    with pytest.raises(TypeError, match="IssueClosureAdmission"):
+        _pr(bundle, closure_admissions=("#2772",))
     with pytest.raises(ValueError, match="duplicate"):
-        _pr(bundle, authorized_closure_targets=("#9", "#9"))
-    with pytest.raises(ValueError, match="issue target"):
-        _pr(bundle, authorized_closure_targets=("not-a-target",))
+        _pr(bundle, closure_admissions=(admission_2772, admission_2772))
+    blocked_authorization, blocked = _closure_parts(issue_state="closed")
+    assert not blocked.admitted
+    with pytest.raises(ValueError, match="admitted"):
+        IssueClosureAdmission(authorization=blocked_authorization, admission=blocked)
+    reopen_authorization, reopen = _closure_parts(
+        mutation="reopen-issue", issue_state="closed"
+    )
+    assert reopen.admitted
+    with pytest.raises(ValueError, match="close-issue"):
+        IssueClosureAdmission(authorization=reopen_authorization, admission=reopen)
+    other_authorization, _ = _closure_parts(decision_id="other-decision")
+    with pytest.raises(ValueError, match="not bound"):
+        IssueClosureAdmission(
+            authorization=other_authorization, admission=admission_2772.admission
+        )
+
+
+def test_3157_cross_repository_admission_does_not_authorize():
+    """An admission for another repository never authorizes the canonical target."""
+    bundle = _bundle()
+    foreign = _closure_admission(2772, repository="other/repo")
+    assert foreign.target == "other/repo#2772"
+    with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
+        _candidate(bundle, pr=_closing_pr(bundle, admissions=(foreign,)))
 
 
 def test_3157_title_closing_reference_blocks_when_unauthorized():
     bundle = _bundle()
-    pr = _closing_pr(
-        bundle,
-        body="Part of #3157.",
-        authorized_targets=(),
-        pr_title_sha256=hashlib.sha256(b"Resolves #42").hexdigest(),
-        github_effective_closing_references=detect_github_effective_closing_references(
-            "Part of #3157.", "Resolves #42"
-        ),
-    )
+    pr = _closing_pr(bundle, body="Part of #3157.", title="Resolves #42")
     with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
         _candidate(bundle, pr=pr)
+
+
+def test_3157_metadata_fingerprint_is_content_bound():
+    """The single title/body fingerprint is derived, verified, and sensitive."""
+    bundle = _bundle()
+    pr = _pr(bundle, pr_title="title", pr_body="body")
+    assert pr.pr_metadata_sha256 == merge_authorization.pr_metadata_fingerprint(
+        "title", "body"
+    )
+    assert (
+        _pr(bundle, pr_title="title", pr_body="body!").pr_metadata_sha256
+        != pr.pr_metadata_sha256
+    )
+    assert (
+        _pr(bundle, pr_title="title!", pr_body="body").pr_metadata_sha256
+        != pr.pr_metadata_sha256
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        _pr(bundle, pr_title="title", pr_body="body", pr_metadata_sha256="0" * 64)
+    with pytest.raises(ValueError, match="NUL-free"):
+        _pr(bundle, pr_body="bad\x00body")

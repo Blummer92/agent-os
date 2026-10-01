@@ -20,6 +20,8 @@ def admission(**overrides):
         "requested_changes": False,
         "blocking_unresolved": 0,
         "ready_for_review_authority_supplied": True,
+        "pr_title": "",
+        "pr_body": "",
     }
     values.update(overrides)
     return evaluate_ready_for_review_admission(**values)
@@ -196,3 +198,117 @@ def test_queued_provisional_ready_is_also_non_converged():
     )
     assert result.rollback_to_draft_required is True
     assert "provisional-ready-aggregate-pending" in result.reason_codes
+
+
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+    IssueClosureAdmission,
+    LifecycleMutationAuthorization,
+    LifecycleStateSnapshot,
+    evaluate_lifecycle_mutation,
+)
+
+
+def closure_admission(issue_number=2772, repository="Blummer92/agent-os"):
+    """Build canonical close-issue admission evidence for one issue (#3157)."""
+    authorization = LifecycleMutationAuthorization(
+        schema_version="1.0",
+        repository=repository,
+        issue_number=issue_number,
+        pull_request_number=None,
+        authorized_mutations=("close-issue",),
+        expected_source_head=None,
+        expected_base_head=None,
+        expected_pr_state="none",
+        expected_merged=False,
+        expected_issue_state="open",
+        expected_review_state="unknown",
+        expected_unresolved_threads=0,
+        expected_lifecycle_labels=(),
+        observed_at_revision="rev-1",
+        state="authorized",
+        authorizer_id="test-authorizer",
+        decision_id="test-decision",
+    )
+    snapshot = LifecycleStateSnapshot(
+        repository=repository,
+        issue_number=issue_number,
+        pull_request_number=None,
+        source_head=None,
+        base_head=None,
+        pr_state="none",
+        merged=False,
+        issue_state="open",
+        review_state="unknown",
+        unresolved_threads=0,
+        lifecycle_labels=(),
+        observed_revision="rev-1",
+    )
+    admission = evaluate_lifecycle_mutation(authorization, snapshot, "close-issue")
+    assert admission.admitted
+    return IssueClosureAdmission(authorization=authorization, admission=admission)
+
+
+def test_unauthorized_closing_reference_blocks_ready_transition():
+    result = admission(pr_body="Fixes #2772")
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+    assert result.next_action == "authorize-issue-closure-before-ready"
+
+
+def test_closing_reference_in_title_blocks_ready_transition():
+    result = admission(pr_title="Fixes #2772")
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+
+
+def test_authorized_closing_reference_permits_ready_transition():
+    result = admission(
+        pr_body="Fixes #2772",
+        closure_admissions=(closure_admission(2772),),
+    )
+    assert result.transition_admissible is True
+    assert "unauthorized-closing-reference" not in result.reason_codes
+
+
+def test_cross_repository_closure_admission_does_not_authorize():
+    result = admission(
+        pr_body="Fixes #2772",
+        closure_admissions=(closure_admission(2772, repository="other/repo"),),
+    )
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+
+
+def test_negated_closing_prose_still_blocks_ready_transition():
+    result = admission(pr_body="This does not close #2772")
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+
+
+def test_ready_gate_grants_no_closure_authority():
+    result = admission(
+        pr_body="Fixes #2772",
+        closure_admissions=(closure_admission(2772),),
+    )
+    assert result.transition_admissible is True
+    assert result.issue_closure_authorized is False
+    assert result.merge_authorized is False
+
+
+def test_closure_admissions_must_be_exact_tuple():
+    try:
+        admission(closure_admissions=[closure_admission(2772)])
+    except TypeError as exc:
+        assert "exact tuple" in str(exc)
+    else:
+        raise AssertionError("expected TypeError")
+
+
+def test_pr_title_and_body_are_required():
+    for kwargs in ({"pr_title": None}, {"pr_body": None}):
+        try:
+            admission(**kwargs)
+        except TypeError as exc:
+            assert "built-in strings" in str(exc)
+        else:
+            raise AssertionError("expected TypeError")
