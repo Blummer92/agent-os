@@ -22,6 +22,15 @@ requires-python = ">=3.11"
 dependencies = [
   "workflow-scheduler>=0.18.0,<0.19.0",
   "agent-memory-context-manager>=0.2.0,<0.3.0",
+  # #3158: the installed ``agent-os-mcp`` server validates requests through
+  # ``instructional_workflow_contracts`` (``mcp_server`` imports it at module
+  # scope), which is carried by the ``instructional-workflow-contracts``
+  # distribution built from the repository ``src/`` project -- declaring it
+  # here is what makes a clean host installation resolve the real import graph
+  # instead of a repository-root ``PYTHONPATH``. It is not listed under
+  # ``[tool.setuptools] packages`` below: that would ship the same module from
+  # two distributions.
+  "instructional-workflow-contracts>=0.1.0,<0.2.0",
   "mcp>=2.2.0,<2.3",
 ]
 
