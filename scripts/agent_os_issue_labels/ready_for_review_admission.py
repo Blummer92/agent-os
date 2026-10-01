@@ -8,6 +8,7 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
 )
 from scripts.agent_os_issue_acceptance.parse_pr import (
     detect_github_effective_closing_references,
+    dual_implemented_issue_claims,
     unauthorized_closing_targets,
 )
 
@@ -73,7 +74,11 @@ def evaluate_ready_for_review_admission(
     The Ready transition starts the merge path, so it also fails closed on
     GitHub-effective closing references (#3157): the same detected-targets
     minus canonically-authorized-targets comparison merge admission uses runs
-    here, and any unauthorized closing target blocks the transition. This
+    here, and any unauthorized closing target blocks the transition. It also
+    fails closed on dual implemented-issue lineage (#2991): a primary PR
+    title/body must not claim two distinct issues as implemented, even when
+    both closing targets carry canonical close-issue admission — the second
+    issue must be linked as dependency/consumer evidence instead. This
     grants no closure authority; it only blocks Ready.
     """
     _validate_identity(repository, pr_number)
@@ -110,6 +115,8 @@ def evaluate_ready_for_review_admission(
     ]
     if unauthorized_closing_targets(detected, tuple(authorized)):
         reasons.append("unauthorized-closing-reference")
+    if dual_implemented_issue_claims(detected):
+        reasons.append("multiple-implemented-issues-linked")
 
     final_candidate_green = (
         validation_admission_mode == _FINAL_CANDIDATE_MODE
@@ -150,6 +157,8 @@ def evaluate_ready_for_review_admission(
             next_action = "request-ready-for-review-authorization"
         elif "unauthorized-closing-reference" in reasons:
             next_action = "authorize-issue-closure-before-ready"
+        elif "multiple-implemented-issues-linked" in reasons:
+            next_action = "link-one-issue-as-implemented"
         else:
             next_action = "run-draft-final-candidate-aggregate"
         admissible = False

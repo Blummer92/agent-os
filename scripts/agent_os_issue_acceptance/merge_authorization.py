@@ -29,6 +29,7 @@ from .approval_records import (
 from .lifecycle_mutation_guard import IssueClosureAdmission
 from .parse_pr import (
     detect_github_effective_closing_references,
+    dual_implemented_issue_claims,
     unauthorized_closing_targets,
 )
 
@@ -1339,6 +1340,24 @@ def _eligibility_reasons(
                 if reference.target == target
             )
             details.append(f"unauthorized-closing-reference:{target}:{'/'.join(offenders)}")
+    # Fail closed on dual implemented-issue lineage (#2991): even when every
+    # closing target carries canonical close-issue admission, a primary PR
+    # title/body must not claim two distinct implementation issues as
+    # implemented (the #2854/#2989 fixture — the parent task remains linked
+    # as dependency/consumer evidence, not a second closing target). The
+    # detector is re-run here on the supplied title/body, never a
+    # caller-supplied reference list, consistent with the #3157 block above.
+    lineage_claims = dual_implemented_issue_claims(detected)
+    if lineage_claims:
+        reasons.add("pull-request.multiple-implemented-issues")
+        offenders = sorted(
+            f"{reference.keyword} {reference.target} (source={reference.source})"
+            for reference in detected
+            if reference.target in lineage_claims
+        )
+        details.append(
+            f"multiple-implemented-issues:{'/'.join(lineage_claims)}:{'/'.join(offenders)}"
+        )
     return reasons, details
 
 

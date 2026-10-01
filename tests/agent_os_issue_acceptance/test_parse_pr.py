@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus
-from scripts.agent_os_issue_acceptance.parse_pr import missing_final_report_fields, parse_linked_issue, parse_linked_issue_result
+from scripts.agent_os_issue_acceptance.parse_pr import (
+    detect_github_effective_closing_references,
+    dual_implemented_issue_claims,
+    missing_final_report_fields,
+    parse_linked_issue,
+    parse_linked_issue_result,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -190,3 +196,55 @@ def test_required_final_report_fields_missing():
     body = (FIXTURES / "pr_body_missing_report_fields.md").read_text()
     assert "linked issue" in missing_final_report_fields(body)
     assert "tests run" in missing_final_report_fields(body)
+
+
+# --- #2991: one primary PR cannot claim two distinct implemented issues ------
+#
+# Regression fixture: during #2854 execution a distinct defect was logged as
+# #2989, and PR #2990 linked BOTH issues as implemented ("Fixes #2854" /
+# "Fixes #2989"), conflating the prerequisite code repair with the parent
+# activation task. The parent must be linked as dependency/consumer evidence,
+# never a second closing target.
+
+
+def _closing_refs(body, title=""):
+    return detect_github_effective_closing_references(body, title)
+
+
+def test_2991_single_closing_target_carries_no_lineage_conflict():
+    """The focused prerequisite-fix PR closes only its own issue (#2989)."""
+    assert dual_implemented_issue_claims(_closing_refs("Fixes #2989")) == ()
+
+
+def test_2991_dual_closing_targets_flag_parent_and_prerequisite():
+    """The #2990 shape — body closes both #2854 and #2989 — is flagged."""
+    body = "Fixes #2989\n\nAlso fixes #2854"
+    assert dual_implemented_issue_claims(_closing_refs(body)) == ("#2854", "#2989")
+
+
+def test_2991_dual_closing_targets_detected_across_title_and_body():
+    """Title linkage counts: title + body each closing a different issue."""
+    refs = _closing_refs("Fixes #2989", title="Fix #2854")
+    assert dual_implemented_issue_claims(refs) == ("#2854", "#2989")
+
+
+def test_2991_negated_prose_still_claims_the_target():
+    """GitHub ignores negation at merge, so it counts as a claimed target."""
+    body = "Fixes #2989\n\nThis does not close #2854"
+    assert dual_implemented_issue_claims(_closing_refs(body)) == ("#2854", "#2989")
+
+
+def test_2991_dependency_style_parent_linkage_passes():
+    """Parent as consumer evidence — Part of / Refs — is not an implemented claim."""
+    body = "Fixes #2989\n\nPart of #2854. Refs #2854."
+    assert dual_implemented_issue_claims(_closing_refs(body)) == ()
+
+
+def test_2991_repeated_single_target_is_not_dual():
+    assert dual_implemented_issue_claims(_closing_refs("Fixes #2989\nFixes #2989")) == ()
+
+
+def test_2991_cross_repository_target_does_not_trigger():
+    """GitHub never merge-closes cross-repo targets, so they stay out of scope."""
+    body = "Fixes #2989\nFixes other/repo#45"
+    assert dual_implemented_issue_claims(_closing_refs(body)) == ()
