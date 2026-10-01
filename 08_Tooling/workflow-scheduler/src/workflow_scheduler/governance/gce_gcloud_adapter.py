@@ -21,6 +21,7 @@ from .gce_control_path import FIXED_ENTRYPOINT, GceResourceTuple, HostInvocation
 from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
 from .sudo_admission_inspection import collect_sudo_admission, expected_runtime_source_sha, unavailable_sudo_admission
+from .retirement_inventory import collect_retirement_inventory
 
 PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
 HOST_PYTHON="/usr/bin/python3"
@@ -131,6 +132,8 @@ class GcloudIapAdapter:
   if payload.get("repository")!=repository or payload.get("issue_number")!=issue_number or payload.get("candidate_sha")!=candidate_sha:raise GcloudCommandError("first-run validation evidence identity mismatch")
   if payload.get("scheduler_invoked") is not False or payload.get("publication_invoked") is not False or payload.get("execution_lease_acquired") is not False or payload.get("resume_invoked") is not False:raise GcloudCommandError("first-run validation crossed execution boundary")
   return payload
+ def inspect_retirement_inventory(self,resource:GceResourceTuple)->dict[str,object]:
+  return collect_retirement_inventory(_run,lambda command:self._ssh(resource,command))
  def inspect_sudo_admission(self,resource:GceResourceTuple)->dict[str,object]:
   try:expected_sha=expected_runtime_source_sha()
   except (OSError,ValueError):return unavailable_sudo_admission("runtime-source-sha-unavailable")
@@ -272,6 +275,8 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
   response["cloud_identity"]=collect_cloud_identity(_run)
+  inspect_retirement=getattr(adapter,"inspect_retirement_inventory",None)
+  if callable(inspect_retirement):response["retirement_inventory"]=inspect_retirement(RESOURCE)
   return response
  if ingress.reason=="accepted-first-publication-activation-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
