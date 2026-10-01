@@ -355,7 +355,7 @@ def test_merge_shaped_scope_mismatch_blocks_before_transport():
     assert all("push" not in call[0] for call in runner.calls)
 
 
-def test_multiple_merge_commits_fail_closed_before_candidate_preparation():
+def test_unproven_multiple_merge_commits_fail_closed_before_candidate_preparation():
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(stdout=f"{MERGE_COMMIT}\n{'7' * 40}\n"),
@@ -375,6 +375,34 @@ def test_ambiguous_topology_marker_fails_closed_before_candidate_preparation():
     result = invoke(provider(FakeBacking(snapshot()), runner))
     assert result.reason_code == "topology-history-ambiguous"
     assert len(runner.calls) == 2
+
+
+def test_duplicate_merge_history_fails_closed_before_candidate_preparation():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n{MERGE_COMMIT}\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-history-ambiguous"
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_excessive_merge_history_fails_closed_before_candidate_preparation():
+    history = "".join(f"{value:040x}\n" for value in range(33))
+    runner = FakeRunner([observation(stdout=f"{MERGE_BASE}\n"), observation(stdout=history)])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-history-ambiguous"
+    assert all("merge-tree" not in call[0] for call in runner.calls)
+
+
+def test_malformed_second_merge_fails_closed_before_candidate_preparation():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\nnot-a-sha\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-history-ambiguous"
+    assert all("push" not in call[0] for call in runner.calls)
 
 
 def test_moved_head_blocks_before_any_git_command():
@@ -707,6 +735,96 @@ def _local_integrity_provider(repo):
         branch_update_authorized=True,
         environment=dict(os.environ),
     )
+
+
+def _multiple_merge_fixture(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    base = _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "switch", "-qc", "agent/multiple-merges")
+    _commit_file(repo, "scripts/example.py", "feature\n", "feature")
+    for number in (1, 2):
+        _git(repo, "switch", "-q", "main")
+        _commit_file(repo, f"main-{number}.txt", f"main {number}\n", f"main {number}")
+        _git(repo, "switch", "-q", "agent/multiple-merges")
+        _git(repo, "merge", "--no-ff", "main", "-m", f"merge main {number}")
+    old = _git_out(repo, "rev-parse", "HEAD")
+    _git(repo, "switch", "-q", "main")
+    main = _commit_file(repo, "current-main.txt", "preserve current main\n", "current main")
+    _git(repo, "checkout", "-q", "--detach", old)
+    live = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os", pr_number=3183, base_branch="main",
+        base_sha=main, head_branch="agent/multiple-merges", head_sha=old,
+        current_main_sha=main, branch_state="behind", mergeability="mergeable",
+        changed_paths=("scripts/example.py",),
+    )
+    subject = _local_integrity_provider(repo)
+    subject.backing = FakeBacking(live)
+    return repo, old, main, subject
+
+
+def test_proven_multiple_merges_preserve_current_main_and_publish_once(tmp_path):
+    repo, old, main, subject = _multiple_merge_fixture(tmp_path)
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    _git(remote, "init", "--bare", "-q")
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "origin", f"{old}:refs/heads/agent/multiple-merges")
+    result = subject.rebase_onto_main(
+        "Blummer92/agent-os", 3183, expected_head_sha=old,
+        expected_base_sha=main, current_main_sha=main,
+    )
+    assert result.status == "updated"
+    assert result.new_head_sha != old
+    assert _git_out(repo, "rev-parse", f"{result.new_head_sha}^1") == main
+    assert _git_out(repo, "diff", "--name-only", main, result.new_head_sha) == "scripts/example.py"
+    assert (repo / "current-main.txt").read_text() == "preserve current main\n"
+    assert (repo / "scripts/example.py").read_text() == "feature\n"
+    assert _git_out(repo, "ls-remote", "origin", "refs/heads/agent/multiple-merges").startswith(result.new_head_sha)
+    assert sum("push" in argv for argv in subject.runner.calls) == 1
+    assert all("rebase" not in argv for argv in subject.runner.calls)
+
+
+def test_multiple_merges_reject_semantic_conflict_without_publication(tmp_path):
+    repo, old, main, subject = _multiple_merge_fixture(tmp_path)
+    _git(repo, "checkout", "-q", "--detach", main)
+    main = _commit_file(repo, "scripts/example.py", "different main\n", "conflicting main")
+    subject.backing.branch_snapshot = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os", pr_number=3183, base_branch="main",
+        base_sha=main, head_branch="agent/multiple-merges", head_sha=old,
+        current_main_sha=main, branch_state="behind", mergeability="conflicted",
+        changed_paths=("scripts/example.py",),
+    )
+    result = subject.rebase_onto_main(
+        "Blummer92/agent-os", 3183, expected_head_sha=old,
+        expected_base_sha=main, current_main_sha=main,
+    )
+    assert result.status == "blocked"
+    assert result.reason_code == "reconciliation.semantic-conflict"
+    assert result.new_head_sha is None
+    assert all("push" not in argv for argv in subject.runner.calls)
+
+
+def test_multiple_merges_reject_expanded_scope_before_publication(tmp_path):
+    repo, old, main, subject = _multiple_merge_fixture(tmp_path)
+    _git(repo, "checkout", "-q", "--detach", old)
+    old = _commit_file(repo, "unadmitted.txt", "outside scope\n", "outside scope")
+    subject.backing.branch_snapshot = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os", pr_number=3183, base_branch="main",
+        base_sha=main, head_branch="agent/multiple-merges", head_sha=old,
+        current_main_sha=main, branch_state="behind", mergeability="mergeable",
+        changed_paths=("scripts/example.py",),
+    )
+    result = subject.rebase_onto_main(
+        "Blummer92/agent-os", 3183, expected_head_sha=old,
+        expected_base_sha=main, current_main_sha=main,
+    )
+    assert result.reason_code == "lineage-integrity.admitted-scope-mismatch"
+    assert result.new_head_sha is None
+    assert all("push" not in argv for argv in subject.runner.calls)
 
 
 def test_lineage_integrity_rejects_path_introduced_only_by_hand_built_merge(tmp_path):
