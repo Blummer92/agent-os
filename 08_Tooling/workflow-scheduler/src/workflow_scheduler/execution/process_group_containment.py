@@ -263,6 +263,18 @@ class ContainmentPreflightResult:
     rlimit_available: bool
 
 
+def _os_name() -> str:
+    """Return ``os.name`` through an indirection tests can safely patch.
+
+    Patching the real ``os.name`` is not viable: pytest calls
+    ``pathlib.Path()`` while reporting each test result, and ``Path``
+    dispatches on ``os.name`` -- a leaked ``"nt"`` crashes the whole
+    session with ``INTERNALERROR: cannot instantiate 'WindowsPath'``.
+    Tests simulate a non-POSIX host by patching this function instead.
+    """
+    return os.name
+
+
 def preflight_check() -> ContainmentPreflightResult:
     """Probe every lighter-containment precondition without side effects.
 
@@ -273,11 +285,11 @@ def preflight_check() -> ContainmentPreflightResult:
     """
     reasons: list[str] = []
 
-    if os.name != "posix":
-        reasons.append(f"not a POSIX host (os.name={os.name!r})")
+    if _os_name() != "posix":
+        reasons.append(f"not a POSIX host (os.name={_os_name()!r})")
 
     setpgid_available = False
-    if os.name == "posix":
+    if _os_name() == "posix":
         setpgid_available, setpgid_reason = _setpgid_probe()
         if not setpgid_available:
             reasons.append(setpgid_reason)
@@ -300,7 +312,7 @@ def preflight_check() -> ContainmentPreflightResult:
     cgroup_delegation_available = _cgroup_delegation_available()
 
     usable = (
-        os.name == "posix"
+        _os_name() == "posix"
         and setpgid_available
         and rlimit_available
         and proc_usable

@@ -92,7 +92,11 @@ def test_preflight_usable_on_this_posix_host() -> None:
 
 
 def test_preflight_fails_closed_on_non_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "name", "nt")
+    # Patch the module's _os_name seam, never the real os.name: pytest
+    # itself calls pathlib.Path() while reporting results and Path
+    # dispatches on os.name -- a patched "nt" crashes the session with
+    # INTERNALERROR: cannot instantiate 'WindowsPath'.
+    monkeypatch.setattr(pg_module, "_os_name", lambda: "nt")
     result = preflight_check()
     assert result.usable is False
     assert result.setpgid_available is False
@@ -112,10 +116,12 @@ def test_preflight_fails_closed_when_resource_module_missing(
 def test_preflight_fails_closed_when_proc_unlistable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _boom(_path: str) -> list[str]:
-        raise OSError("no /proc here")
-
-    monkeypatch.setattr(pg_module.os, "listdir", _boom)
+    # Patch the module's probe seam, never the global os.listdir: the patch
+    # is live while pytest reports the result, and pytest's own machinery
+    # must keep working during that window.
+    monkeypatch.setattr(
+        pg_module, "_proc_filesystem_usable", lambda: (False, "/proc is not listable: no /proc here")
+    )
     result = preflight_check()
     assert result.usable is False
     assert "/proc" in result.reason
