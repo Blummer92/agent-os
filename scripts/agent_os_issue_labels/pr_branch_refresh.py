@@ -31,6 +31,17 @@ class BranchRefreshValidationResult:
     command_ids: tuple[str, ...]
     failed_command_id: str | None = None
     failure_reason: str | None = None
+    # #3153: bounded redacted failed-command evidence. For an executed failing
+    # command the exit code and capped stdout/stderr tails are projected.
+    # For runtime-unavailability reasons (command-not-started,
+    # command-termination-unconfirmed, command-timeout, unknown-command) no
+    # trustworthy child evidence exists; evidence_unavailable_reason records
+    # which one, keeping those statuses first-class and distinct from
+    # command-nonzero-exit. None on green results.
+    failed_command_exit_code: int | None = None
+    failed_command_stdout_tail: str | None = None
+    failed_command_stderr_tail: str | None = None
+    evidence_unavailable_reason: str | None = None
 
 class PullRequestBranchRefreshProvider(Protocol):
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot: ...

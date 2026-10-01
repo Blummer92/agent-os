@@ -133,6 +133,31 @@ proof, reason codes/blockers, rollback posture, and side-effect evidence. It gra
 Ready-for-Review, merge, issue-closure, workflow, repository-setting, credential,
 production, or external-system authority.
 
+## Bounded failed-command diagnostic evidence (#3153)
+
+When required validation fails after a successful branch mutation, the receipt
+also carries bounded, redacted child-command evidence so an operator can
+distinguish an executed failing test from an unavailable test runtime:
+
+- `validation_failed_command_exit_code`: the child exit code (only for an
+  executed command that exited nonzero; `null` otherwise).
+- `validation_failed_command_stdout_tail` /
+  `validation_failed_command_stderr_tail`: the last 200 lines / 4096 characters
+  of child output, redacted through the canonical
+  `agent_os_github_git_objects` secret-redaction rule (redaction runs before
+  truncation).
+- `validation_evidence_unavailable_reason`: explicit when no trustworthy child
+  evidence exists — `command-not-started`, `command-termination-unconfirmed`,
+  `command-timeout` (partial output may still be projected), or
+  `unknown-command`. These stay first-class and distinct from
+  `command-nonzero-exit`.
+
+The evidence is projected from the observation already in hand; the executor
+never re-runs a command to recover diagnostics, and a failed receipt is never
+serialized as successful. The fields flow through the existing receipt →
+artifact (`agent-os-refresh-*` result.json) → operator-summary chain unchanged
+in shape.
+
 Complexity target for #1402:
 
 - before: operator handoffs exposed `PullRequestBranchRefreshRequest` plus provider,
