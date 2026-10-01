@@ -35,7 +35,7 @@ _PROFILES=(
  _profile("workflow-scheduler",RunnerKind.PYTEST_TARGETS,("08_Tooling/workflow-scheduler/tests",),runtime_id="python-pytest-8.3.5",selector_requirements=("workflow-scheduler","workflow-scheduler-concrete-runtime-adapters")),
  _profile("issue-acceptance",RunnerKind.PYTEST_TARGETS,("tests/agent_os_issue_acceptance",),runtime_id="python-pytest-8.3.5",selector_requirements=("issue-acceptance",)),
  _profile("instructional-materials-current-curriculum",RunnerKind.PYTEST_TARGETS,("08_Tooling/instructional-materials-coach/tests/test_generation_context.py","08_Tooling/instructional-materials-coach/tests/test_content_spec.py","08_Tooling/instructional-materials-coach/tests/test_cli.py","tests/test_current_curriculum_state.py","tests/test_current_curriculum_evidence.py"),runtime_id="python-pytest-8.3.5-materials-imports"),
- _profile("picture-perfect",RunnerKind.VITEST_TARGETS,("src/overlayIntegrity.test.ts","src/exactComposite.test.ts","src/exactCompositeSuite.test.ts","src/framePlan.test.ts","src/executorContract.test.ts","src/provenanceValidator.test.ts"),cwd="08_Tooling/instructional-materials-coach/picture-perfect-coach",runtime_id="node22-vitest-4.1.10"),
+ _profile("picture-perfect",RunnerKind.VITEST_TARGETS,("src/overlayIntegrity.test.ts","src/exactComposite.test.ts","src/exactCompositeSuite.test.ts","src/framePlan.test.ts","src/executorContract.test.ts","src/provenanceValidator.test.ts"),cwd="08_Tooling/instructional-materials-coach/picture-perfect-coach",runtime_id="node22-vitest-5.0.0"),
  _profile("semantic-ownership-advisory",RunnerKind.LEGACY_FIXED_SCRIPT,("07_Agent_Tests/run-semantic-ownership-advisory-validation.py",),runtime_id="python-system-script-compat"),
  _profile("eia-paddleocr-runtime-qualification",RunnerKind.EIA_PADDLEOCR_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py",),runtime_id="host-python-eia-paddleocr"),
  _profile("eia-paddleocr-cp311-wheelhouse-qualification",RunnerKind.DEPENDENCY_ARTIFACT_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/dependency_artifact_qualification.py",),runtime_id="network-capable-ephemeral-python-resolver",timeout_class="artifact-300s"),
@@ -61,6 +61,18 @@ def profile_argv(profile_id:object)->tuple[str,...]:
  if p.runner_kind is RunnerKind.VISUAL_ASSET_SHEETS_SMOKE:return("python","-m","workflow_scheduler.governance.visual_asset_sheets_smoke")
  if p.runner_kind is RunnerKind.ISSUE_SCANNER_PROOF:return("python","-m","scripts.agent_os_github_issue_provider.scanner_proof")
  raise ValueError("unsupported developer-validation runner kind")
+def profile_local_argv(profile_id:object)->tuple[str,...]:
+ """Project the same finite profile for a local package checkout.
+
+ The transport's logical ``node vitest`` tokens stay unchanged in
+ ``profile_argv``. A bare Node process needs the fixed installed entry file;
+ targets, package cwd, profile identity and authority remain catalog-owned.
+ No dependency installation or caller-selected executable is introduced.
+ """
+ p=get_profile(profile_id)
+ if p.runner_kind is RunnerKind.VITEST_TARGETS:
+  return("node","node_modules/vitest/vitest.mjs","run",*p.fixed_targets)
+ return profile_argv(profile_id)
 def project_selector_requirements(requirements:Iterable[str])->tuple[str,...]:
  if type(requirements)not in {tuple,list}:raise ValueError("selector requirements must be a tuple or list")
  result:set[str]=set()
