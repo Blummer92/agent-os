@@ -41,6 +41,11 @@ _CAPTURE_COMMANDS = {
         "check",
     ),
 }
+_UI_CROSS_PLATFORM_REFERENCE_DIR = ROOT / "05_Examples/ui-cross-platform-reference"
+_UI_CROSS_PLATFORM_REFERENCE_COMMANDS = {
+    "cd 05_Examples/ui-cross-platform-reference && npm install": ("npm", "install"),
+    "cd 05_Examples/ui-cross-platform-reference && npm test": ("npm", "test"),
+}
 _CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
 
@@ -112,6 +117,9 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     capture_argv = _CAPTURE_COMMANDS.get(command)
     if capture_argv is not None:
         return capture_argv, _CAPTURE_DIR
+    ui_cross_platform_argv = _UI_CROSS_PLATFORM_REFERENCE_COMMANDS.get(command)
+    if ui_cross_platform_argv is not None:
+        return ui_cross_platform_argv, _UI_CROSS_PLATFORM_REFERENCE_DIR
     if command == _CI_VALIDATION_SELF_TEST:
         return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")

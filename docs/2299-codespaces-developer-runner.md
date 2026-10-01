@@ -42,6 +42,41 @@ The focused selector maps `scripts/agent_os_execution_interface/` and its tests 
 `python -m pytest tests/agent_os_execution_interface`. Aggregate runtime
 optimization remains #2243 and measurement remains #520.
 
+### Affected-package coverage for the ui-cross-platform-reference fixture (#3184)
+
+PR #3128 changed only `05_Examples/ui-cross-platform-reference/package.json`
+(Vitest 3.x → ^5.0.3). The exact-head aggregate passed, but its logs covered only
+the structure, Python package, and root suites — the fixture's npm/Vitest tests
+never executed, because the rule map had no focused owner for the fixture and a
+`.json` change fell through to `profile.aggregate-unmapped-executable`.
+
+The rule map now carries a fixture-owned focused rule,
+`ui-cross-platform-reference`, covering `05_Examples/ui-cross-platform-reference/`.
+A dependency-only `package.json` change there selects this single
+affected-package command pair, executed in order:
+
+```text
+cd 05_Examples/ui-cross-platform-reference && npm install
+cd 05_Examples/ui-cross-platform-reference && npm test
+```
+
+`npm install` re-resolves the fixture's private, lockfile-free dependencies so
+the bumped vitest runtime is the tested runtime; `npm test` runs the vitest unit
+suite. The bounded CI executor resolves both command texts to fixed
+`("npm", "install")` / `("npm", "test")` argv in the fixture directory, and the
+existing validation route executes them at the change's exact head SHA. The
+bounded result evidence (stdout/stderr, exit status) returns bound to that head
+SHA — the final repository-visible exact-head gate remains independent.
+
+Third-party PR lineage is admitted without replacing the PR and without a
+generic shell. The positive-PR selection route already admits any branch lineage,
+so the Dependabot PR itself now selects the fixture's focused commands. The
+`/agent-os dev-validate` ingress intentionally keeps its `agent/`-only admission
+and fixed validation-identity allowlist; an `agent/` branch carrying the
+identical dependency-only change can additionally be validated through the
+existing pre-PR planning route against the same rule map. No workflow, runtime
+provisioning, credential, or protected-setting change is involved.
+
 ## Current Codespaces access boundary
 
 #1212 proved `gh codespace ssh` with the official Dev Container SSH feature, but
