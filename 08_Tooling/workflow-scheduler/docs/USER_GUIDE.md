@@ -59,7 +59,9 @@ python -m workflow_scheduler.cli status my-workflow
 
 `agent-os-scheduler-status` is a thin read-only wrapper for operators who want a
 human summary instead of JSON. It calls the same repository and batch-rollup
-logic as the CLI above and renders it with Rich:
+logic as the CLI above and renders it with Rich. It opens the existing database
+with SQLite `mode=ro`; it never initializes tables or migrates schema. An absent
+or incompatible database is an error, not an instruction to create or repair it:
 
 ```bash
 agent-os-scheduler-status my-workflow --db workflow_scheduler.db
