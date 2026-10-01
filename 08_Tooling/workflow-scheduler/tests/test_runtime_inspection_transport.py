@@ -76,6 +76,10 @@ class InspectionAdapter:
         self.calls.append("observe")
         return self.state
 
+    def inspect_retirement_inventory(self, resource):
+        self.calls.append("retirement")
+        return {"status": "observed", "side_effects_performed": False}
+
     def inspect_runtime(self, resource):
         self.calls.append("inspect")
         return {
@@ -102,12 +106,14 @@ class InspectionAdapter:
 def test_inspection_never_starts_vm_or_reaches_scheduler_discovery_resume() -> None:
     adapter = InspectionAdapter()
     result = live.execute_transport(_ingress(), claims=_claims(), adapter=adapter)
-    assert adapter.calls == ["observe", "inspect"]
+    assert adapter.calls == ["observe", "inspect", "retirement"]
     evidence = result["runtime_inspection"]
     assert evidence["scheduler_invoked"] is False
     assert evidence["discovery_invoked"] is False
     assert evidence["resume_invoked"] is False
     assert evidence["side_effects_performed"] is False
+    assert result["retirement_inventory"]["status"] == "observed"
+    assert result["retirement_inventory"]["side_effects_performed"] is False
 
 
 def test_stopped_vm_is_not_started_by_diagnostic_mode() -> None:
