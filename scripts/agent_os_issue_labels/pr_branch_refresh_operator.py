@@ -19,6 +19,12 @@ from typing import Mapping
 from scripts.agent_os_github_git_objects.branch_update import (
     BranchUpdateObservation,
 )
+# #3153: reuse the canonical redaction rule for failed-command evidence instead
+# of duplicating it. Importing the sibling owner keeps one source of truth for
+# which token/credential shapes are masked before evidence persistence.
+from scripts.agent_os_github_git_objects.cli import (
+    _sanitize_diagnostic as _redact_credential_like,
+)
 from scripts.agent_os_github_issue_provider.auth import build_token_client
 
 
@@ -145,6 +151,80 @@ def _failure_reason(observation: BranchUpdateObservation) -> str | None:
     return None
 
 
+# #3153: bounded failed-command evidence projection. Redaction runs before the
+# caps so a redacted marker can never straddle a truncation boundary, and the
+# tail cut keeps the most recent (most diagnostic) output. Both caps are
+# deterministic: an ASCII input at or above the cap always yields exactly the
+# cap, which the byte-exact cap test pins.
+_VALIDATION_EVIDENCE_TAIL_CHARS = 4096
+_VALIDATION_EVIDENCE_TAIL_LINES = 200
+
+
+def _bounded_evidence_tail(value: object) -> str:
+    text = _output(value)
+    redacted = _redact_credential_like(text)
+    tail = "\n".join(redacted.splitlines()[-_VALIDATION_EVIDENCE_TAIL_LINES:])
+    if len(tail) > _VALIDATION_EVIDENCE_TAIL_CHARS:
+        tail = tail[-_VALIDATION_EVIDENCE_TAIL_CHARS:]
+    return tail
+
+
+def _failed_validation_result(
+    *,
+    head_sha: str,
+    command_ids: tuple[str, ...],
+    failed_command_id: str,
+    failure_reason: str,
+    observation: BranchUpdateObservation | None = None,
+):
+    """Project one failed validation observation into a bounded evidence result.
+
+    Never re-runs the command to recover diagnostics: the observation already in
+    hand is the only evidence source, and a missing observation stays missing
+    with an explicit evidence_unavailable_reason instead of silence.
+    """
+    from scripts.agent_os_issue_labels.pr_branch_refresh import (
+        BranchRefreshValidationResult,
+    )
+
+    exit_code: int | None = None
+    stdout_tail: str | None = None
+    stderr_tail: str | None = None
+    unavailable: str | None = None
+    if observation is None:
+        unavailable = failure_reason
+    elif failure_reason == "command-nonzero-exit":
+        exit_code = observation.return_code
+        stdout_tail = _bounded_evidence_tail(observation.stdout)
+        stderr_tail = _bounded_evidence_tail(observation.stderr)
+    elif failure_reason == "command-timeout":
+        # The child never reported a terminal exit code; partial output, if
+        # any, is projected alongside the timeout reason.
+        stdout_tail = _bounded_evidence_tail(observation.stdout)
+        stderr_tail = _bounded_evidence_tail(observation.stderr)
+        unavailable = failure_reason
+    elif failure_reason in ("head-mismatch", "head-moved"):
+        # Head probes emit tiny git output; project it so the mismatch is visible.
+        exit_code = observation.return_code
+        stdout_tail = _bounded_evidence_tail(observation.stdout)
+        stderr_tail = _bounded_evidence_tail(observation.stderr)
+    else:
+        # command-not-started, command-termination-unconfirmed, and any future
+        # safe reason: no trustworthy child evidence exists.
+        unavailable = failure_reason
+    return BranchRefreshValidationResult(
+        head_sha=head_sha,
+        status="failing",
+        command_ids=command_ids,
+        failed_command_id=failed_command_id,
+        failure_reason=failure_reason,
+        failed_command_exit_code=exit_code,
+        failed_command_stdout_tail=stdout_tail,
+        failed_command_stderr_tail=stderr_tail,
+        evidence_unavailable_reason=unavailable,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ClosedBranchRefreshValidationExecutor:
     """Execute only the closed #1365 validation profile."""
@@ -171,9 +251,8 @@ class ClosedBranchRefreshValidationExecutor:
             raise ValueError("duplicate validation command IDs are not allowed")
         unknown = tuple(item for item in command_ids if item not in _REFRESH_VALIDATION_COMMANDS)
         if unknown:
-            return BranchRefreshValidationResult(
+            return _failed_validation_result(
                 head_sha=head_sha,
-                status="failing",
                 command_ids=command_ids,
                 failed_command_id=unknown[0],
                 failure_reason="unknown-command",
@@ -187,12 +266,12 @@ class ClosedBranchRefreshValidationExecutor:
         )
         head_failure = _failure_reason(head)
         if head_failure is not None or head.stdout.strip() != head_sha:
-            return BranchRefreshValidationResult(
+            return _failed_validation_result(
                 head_sha=head_sha,
-                status="failing",
                 command_ids=command_ids,
                 failed_command_id="head:before",
                 failure_reason=head_failure or "head-mismatch",
+                observation=head,
             )
 
         for command_id in command_ids:
@@ -203,12 +282,12 @@ class ClosedBranchRefreshValidationExecutor:
             )
             failure = _failure_reason(result)
             if failure is not None:
-                return BranchRefreshValidationResult(
+                return _failed_validation_result(
                     head_sha=head_sha,
-                    status="failing",
                     command_ids=command_ids,
                     failed_command_id=command_id,
                     failure_reason=failure,
+                    observation=result,
                 )
 
         final_head = self.runner.run(
@@ -218,12 +297,12 @@ class ClosedBranchRefreshValidationExecutor:
         )
         final_failure = _failure_reason(final_head)
         if final_failure is not None or final_head.stdout.strip() != head_sha:
-            return BranchRefreshValidationResult(
+            return _failed_validation_result(
                 head_sha=head_sha,
-                status="failing",
                 command_ids=command_ids,
                 failed_command_id="head:after",
                 failure_reason=final_failure or "head-moved",
+                observation=final_head,
             )
         return BranchRefreshValidationResult(
             head_sha=head_sha,
@@ -260,6 +339,14 @@ class PullRequestBranchRefreshReceipt:
     validation_head_sha: str | None
     validation_failed_command_id: str | None
     validation_failure_reason: str | None
+    # #3153: bounded redacted failed-command evidence carried into the artifact.
+    # Mirrors BranchRefreshValidationResult; None when validation is green or
+    # absent, or when the failure reason carries no trustworthy child evidence.
+    # #3153: keyword-only so existing positional constructions keep working.
+    validation_failed_command_exit_code: int | None = field(default=None, kw_only=True)
+    validation_failed_command_stdout_tail: str | None = field(default=None, kw_only=True)
+    validation_failed_command_stderr_tail: str | None = field(default=None, kw_only=True)
+    validation_evidence_unavailable_reason: str | None = field(default=None, kw_only=True)
     final_current_proven: bool
     blockers: tuple[str, ...]
     reason_codes: tuple[str, ...]
@@ -513,6 +600,10 @@ def _blocked_refresh_receipt(
         validation_head_sha=None,
         validation_failed_command_id=None,
         validation_failure_reason=None,
+        validation_failed_command_exit_code=None,
+        validation_failed_command_stdout_tail=None,
+        validation_failed_command_stderr_tail=None,
+        validation_evidence_unavailable_reason=None,
         final_current_proven=False,
         blockers=tuple(sorted(set(reason_codes))),
         reason_codes=tuple(sorted(set(reason_codes))),
@@ -551,6 +642,10 @@ def _receipt_from_result(
         validation_head_sha=None if validation is None else validation.head_sha,
         validation_failed_command_id=None if validation is None else validation.failed_command_id,
         validation_failure_reason=None if validation is None else validation.failure_reason,
+        validation_failed_command_exit_code=None if validation is None else validation.failed_command_exit_code,
+        validation_failed_command_stdout_tail=None if validation is None else validation.failed_command_stdout_tail,
+        validation_failed_command_stderr_tail=None if validation is None else validation.failed_command_stderr_tail,
+        validation_evidence_unavailable_reason=None if validation is None else validation.evidence_unavailable_reason,
         final_current_proven="branch.current-proven" in reasons,
         blockers=blockers,
         reason_codes=reasons,
