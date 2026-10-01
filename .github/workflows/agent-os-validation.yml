@@ -610,3 +610,26 @@ jobs:
             fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  aggregate-gate:
+    # Terminal disposition of the Agent OS Validation Gate. GitHub reports
+    # skipped jobs as Success on the enclosing workflow, so a skipped
+    # authoritative aggregate would otherwise read as a green gate (#3114).
+    # The gate fails unless the authoritative aggregate job itself reports
+    # exactly `success`; a skipped aggregate closes the gate and can never
+    # become merge/Ready authority. The developer-loop plan job is reported
+    # but is not aggregate authority. Do not require a conditional or
+    # path-filtered job directly in branch protection; require only this
+    # aggregator.
+    name: Agent OS aggregate gate
+    if: always()
+    needs: [plan, validate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Enforce authoritative aggregate disposition
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: python3 scripts/agent_os_aggregate_gate.py

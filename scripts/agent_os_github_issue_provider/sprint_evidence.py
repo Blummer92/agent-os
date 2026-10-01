@@ -123,6 +123,11 @@ _FAILING_CONCLUSIONS = frozenset(
     {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
 )
 _PASSING_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
+# The authoritative aggregate job's check-run name in the Agent OS Validation
+# Gate workflow. Its own disposition is the merge/Ready authority (#3114):
+# GitHub reports skipped jobs as Success on the enclosing workflow, so a
+# skipped aggregate must never read as established aggregate success.
+_AUTHORITATIVE_AGGREGATE_CHECK_NAME = "Run aggregate validation"
 
 
 class SprintEvidenceRequestError(ValueError):
@@ -1353,6 +1358,16 @@ def _checks_status(checks: tuple[CheckEvidence, ...]) -> str:
         return "failing"
     if any(check.status != "completed" for check in checks):
         return "pending"
+    # #3114: the authoritative aggregate's own disposition is the merge/Ready
+    # authority. A skipped (or otherwise non-success) aggregate is aggregate
+    # not established, never a passing result — even though the enclosing
+    # workflow reports skipped jobs as Success.
+    if any(
+        check.name == _AUTHORITATIVE_AGGREGATE_CHECK_NAME
+        and check.conclusion != "success"
+        for check in checks
+    ):
+        return "unknown"
     if all(check.conclusion in _PASSING_CONCLUSIONS for check in checks):
         return "passing"
     return "unknown"

@@ -774,6 +774,98 @@ def test_incomplete_check_runs_are_pending_not_passing():
     assert collection.candidates[0].pull_request.checks_status == "pending"
 
 
+# --- #3114: skipped aggregate never reads as established aggregate ---------
+
+
+def test_skipped_aggregate_check_run_is_not_established_not_passing():
+    """#3105/#3106/#3108 regression: the enclosing workflow concluded success
+    while the authoritative aggregate job was skipped. The aggregate's own
+    disposition is the merge/Ready authority, so the checks must read
+    aggregate-not-established (``unknown``), never ``passing``."""
+    collection, _ = _collect(
+        scripts={
+            "checks": [
+                _response(
+                    {
+                        "check_runs": [
+                            _check(
+                                name="Run aggregate validation",
+                                conclusion="skipped",
+                            ),
+                            _check(name="validation-gate", conclusion="success"),
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    status = collection.candidates[0].pull_request.checks_status
+    assert status == "unknown"
+    assert status != "passing"
+
+
+@pytest.mark.parametrize(
+    "conclusion",
+    ["skipped", "neutral", "cancelled", "failure", "timed_out", None],
+)
+def test_non_success_aggregate_conclusion_is_never_passing(conclusion):
+    """Any authoritative aggregate disposition other than completed success
+    is aggregate not established."""
+    check = {"name": "Run aggregate validation", "status": "completed"}
+    if conclusion is not None:
+        check["conclusion"] = conclusion
+    else:
+        check["status"] = "in_progress"
+    collection, _ = _collect(
+        scripts={"checks": [_response({"check_runs": [check]})]}
+    )
+    status = collection.candidates[0].pull_request.checks_status
+    assert status != "passing"
+
+
+def test_completed_aggregate_success_remains_passing_and_reusable():
+    """#2638/#3043 reuse behavior is untouched: a completed exact-head
+    aggregate success still reads as established aggregate evidence."""
+    collection, _ = _collect(
+        scripts={
+            "checks": [
+                _response(
+                    {
+                        "check_runs": [
+                            _check(
+                                name="Run aggregate validation",
+                                conclusion="success",
+                            ),
+                            _check(name="validation-gate", conclusion="success"),
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    assert collection.candidates[0].pull_request.checks_status == "passing"
+
+
+def test_skipped_non_aggregate_check_keeps_existing_classification():
+    """The #3114 guard is scoped to the authoritative aggregate only: other
+    skipped checks keep their existing classification."""
+    collection, _ = _collect(
+        scripts={
+            "checks": [
+                _response(
+                    {
+                        "check_runs": [
+                            _check(name="optional-lint", conclusion="skipped"),
+                            _check(name="validation-gate", conclusion="success"),
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    assert collection.candidates[0].pull_request.checks_status == "passing"
+
+
 def test_unknown_dependencies_and_blockers_stay_unknown():
     payload = _issue()
     payload.pop("dependencies")
