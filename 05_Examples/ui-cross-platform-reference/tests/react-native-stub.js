@@ -9,6 +9,8 @@
  *
  * Plain JavaScript (no TypeScript syntax): Node's native loader may
  * `require` this file directly via the setup-file resolution redirect.
+ *
+ * Fixture-scoped: only used by the ui-cross-platform-reference tests.
  */
 const React = require("react");
 
