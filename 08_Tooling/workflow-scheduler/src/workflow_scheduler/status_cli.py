@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
 from collections import Counter
 from enum import Enum
 from pathlib import Path
@@ -54,6 +55,23 @@ app = typer.Typer(
     ),
     add_completion=False,
 )
+
+
+class _ReadOnlySQLiteRepository(SQLiteRepository):
+    """Reuse canonical queries without initialization or schema migration."""
+
+    def __init__(self, db: Path):
+        self.db_path = db.resolve().as_uri() + "?mode=ro"
+        self._connection = None
+        self._lock = threading.RLock()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        if self._connection is None:
+            self._connection = sqlite3.connect(
+                self.db_path, uri=True, check_same_thread=False
+            )
+            self._connection.row_factory = sqlite3.Row
+        return self._connection
 
 
 def build_status_payload(
@@ -96,7 +114,7 @@ def build_status_payload(
 def render_text(payload: Dict[str, Any]) -> None:
     """Human rendering via Rich. Never used for the machine path."""
     # Default Console honors non-TTY and NO_COLOR automatically.
-    console = Console()
+    console = Console(force_terminal=sys.stdout.isatty())
     console.print(
         f"[bold]Workflow[/bold] {payload['workflow_id']} — {payload['title']}"
     )
@@ -145,7 +163,7 @@ def status(
         print(f"error: database not found: {db}", file=sys.stderr)
         raise typer.Exit(1)
     try:
-        repo = SQLiteRepository(str(db))
+        repo = _ReadOnlySQLiteRepository(db)
         try:
             payload = build_status_payload(workflow_id, repo)
         finally:
