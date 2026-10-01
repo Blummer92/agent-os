@@ -179,11 +179,37 @@ def _read_source(root: Path, rel_path: str) -> str | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class BindingOccurrence:
+    """One top-level binding of a name, in source order (#2793)."""
+
+    kind: str  # "definition" | "import" | "assignment"
+    lineno: int
+    is_class: bool = False
+    overload_stub: bool = False  # @overload-decorated definition (shadowed by the real impl)
+
+
 class _TopLevelBindings:
-    """Static top-level binding facts for one module (no execution)."""
+    """Static top-level binding facts for one module (no execution).
+
+    ``unconditional`` keeps the historical last-binding-wins ``name -> kind``
+    view consumed by interface resolution; ``occurrences`` preserves the full
+    ordered binding history per name so shadowed/duplicate bindings are not
+    silently discarded (#2793).
+
+    Boundary with repository-wide duplicate hygiene (#2790): duplicate
+    top-level *declaration* detection across the whole repository is owned by
+    ``scripts/check_duplicate_python_declarations.py`` (fail-fast CI guard).
+    That scanner stays decoupled from this registry primitive: the registry
+    package is CI-hermetic (only its own ``src`` on PYTHONPATH) and this
+    module is contractually bounded to a single module (no repository-wide
+    scanning), while the script runs standalone from the repository root.
+    The two share no code by design.
+    """
 
     def __init__(self, tree: ast.Module) -> None:
-        self.unconditional: dict[str, str] = {}     # name -> kind
+        self.unconditional: dict[str, str] = {}     # name -> kind (last binding wins)
+        self.occurrences: dict[str, tuple[BindingOccurrence, ...]] = {}  # name -> full history
         self.conditional: set[str] = set()
         self.deleted: set[str] = set()
         self.aliases: dict[str, str] = {}           # name -> source name (simple alias)
@@ -191,19 +217,28 @@ class _TopLevelBindings:
         self.all_list: set[str] | None = None
         self.has_getattr = False
         self.has_star_import = False
+        history: dict[str, list[BindingOccurrence]] = {}
         for node in tree.body:
-            self._visit_top(node)
+            self._visit_top(node, history)
+        self.occurrences = {name: tuple(items) for name, items in history.items()}
 
-    def _visit_top(self, node: ast.stmt) -> None:
+    def _bind(self, history: dict[str, list[BindingOccurrence]], name: str, occurrence: BindingOccurrence) -> None:
+        history.setdefault(name, []).append(occurrence)
+        self.unconditional[name] = occurrence.kind
+
+    def _visit_top(self, node: ast.stmt, history: dict[str, list[BindingOccurrence]]) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            self.unconditional[node.name] = "definition"
+            self._bind(history, node.name, BindingOccurrence(
+                "definition", node.lineno, overload_stub=_is_overload_decorated(node)))
             if node.name == "__getattr__":
                 self.has_getattr = True
         elif isinstance(node, ast.ClassDef):
-            self.unconditional[node.name] = "definition"
+            self._bind(history, node.name, BindingOccurrence(
+                "definition", node.lineno, is_class=True))
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                self.unconditional[alias.asname or alias.name.split(".")[0]] = "import"
+                self._bind(history, alias.asname or alias.name.split(".")[0],
+                           BindingOccurrence("import", node.lineno))
         elif isinstance(node, ast.ImportFrom):
             if any(alias.name == "*" for alias in node.names):
                 self.has_star_import = True
@@ -211,7 +246,7 @@ class _TopLevelBindings:
                 if alias.name == "*":
                     continue
                 local = alias.asname or alias.name
-                self.unconditional[local] = "import"
+                self._bind(history, local, BindingOccurrence("import", node.lineno))
                 if node.level and node.module:
                     self.relative_import_source[local] = node.module
         elif isinstance(node, ast.Assign):
@@ -220,7 +255,7 @@ class _TopLevelBindings:
                     if target.id == "__all__":
                         self.all_list = _static_str_list(node.value)
                     else:
-                        self.unconditional[target.id] = "assignment"
+                        self._bind(history, target.id, BindingOccurrence("assignment", node.lineno))
                         if isinstance(node.value, ast.Name):
                             self.aliases[target.id] = node.value.id
         elif isinstance(node, ast.Delete):
@@ -230,6 +265,24 @@ class _TopLevelBindings:
         elif isinstance(node, (ast.If, ast.Try, ast.While, ast.For, ast.With)):
             for name in _conditionally_bound_names(node):
                 self.conditional.add(name)
+
+
+def _is_overload_decorated(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    for decorator in node.decorator_list:
+        if isinstance(decorator, ast.Name) and decorator.id == "overload":
+            return True
+        if isinstance(decorator, ast.Attribute) and decorator.attr == "overload":
+            return True
+    return False
+
+
+def _is_overload_group(occurrences: tuple[BindingOccurrence, ...]) -> bool:
+    """Mirror of the #2790 scanner's overload rule: @overload stubs + one impl."""
+    if len(occurrences) < 2:
+        return False
+    if any(occurrence.is_class or occurrence.kind != "definition" for occurrence in occurrences):
+        return False
+    return all(occurrence.overload_stub for occurrence in occurrences[:-1]) and not occurrences[-1].overload_stub
 
 
 def _static_str_list(node: ast.AST) -> set[str] | None:
@@ -320,6 +373,17 @@ def inspect_python_interface(root: Path, interface: str, canonical_paths: tuple[
 
     bindings = _TopLevelBindings(tree)
     if symbol in bindings.unconditional and symbol not in bindings.deleted:
+        occurrences = bindings.occurrences.get(symbol, ())
+        if len(occurrences) > 1 and not _is_overload_group(occurrences):
+            lines = ", ".join(str(occurrence.lineno) for occurrence in occurrences)
+            return EvidenceOutcome(
+                "interface.shadowed-binding",
+                EvidenceConfidence.MANUAL_REVIEW,
+                ValidationSeverity.MANUAL_REVIEW,
+                evidence,
+                f"symbol {symbol!r} is bound {len(occurrences)} times (lines {lines}); "
+                "resolve which binding is authoritative",
+            )
         # package __init__.py re-export: relative source must be a registered canonical path.
         if rel_path.endswith("/__init__.py") and symbol in bindings.relative_import_source:
             package_dir = rel_path[: -len("/__init__.py")]
