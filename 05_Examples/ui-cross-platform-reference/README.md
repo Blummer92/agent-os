@@ -35,6 +35,29 @@ npm run test:web
 
 The package is private and has no publish/deploy script. Do not supply production credentials or real device permissions.
 
+## Remote validation coverage (#3184)
+
+The Agent OS remote-validation selector owns this fixture as the
+`ui-cross-platform-reference` focused rule. A change to any fixture-owned path —
+including a dependency-only `package.json` change such as a Vitest version bump —
+selects exactly these affected-package commands, in order:
+
+```text
+cd 05_Examples/ui-cross-platform-reference && npm install
+cd 05_Examples/ui-cross-platform-reference && npm test
+```
+
+`npm install` re-resolves the fixture's declared dependencies (the package is
+private and carries no lockfile, so `npm install` is the supported install step
+rather than `npm ci`), and `npm test` runs the vitest unit suite
+(`tests/shared.test.ts`, `tests/web.test.tsx`, `tests/mobile.test.tsx`) on the
+Node/npm/vitest toolchain declared in `package.json`. The Playwright acceptance
+path (`npm run test:web`) is teaching evidence for the browser layer and is not
+part of the dependency-change coverage. The remote route executes both commands
+at the change's exact head SHA and returns the bounded stdout/stderr and exit
+status as validation evidence bound to that head SHA — the same exact-head
+evidence contract every focused validation plan carries.
+
 ## Demonstrated states
 
 - shared: loading, empty, success, error;

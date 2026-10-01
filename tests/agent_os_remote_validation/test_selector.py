@@ -710,6 +710,66 @@ def test_exact_pilot_rule_owns_its_path_over_the_package_prefix() -> None:
     assert validate_validation_plan(plan) == ()
 
 
+# --- ui-cross-platform-reference fixture affected-package coverage (#3184) ---
+
+UI_CROSS_PLATFORM_REFERENCE_COMMANDS = (
+    "cd 05_Examples/ui-cross-platform-reference && npm install",
+    "cd 05_Examples/ui-cross-platform-reference && npm test",
+)
+UI_CROSS_PLATFORM_REFERENCE_PACKAGE_JSON = (
+    "05_Examples/ui-cross-platform-reference/package.json"
+)
+
+
+def test_ui_cross_platform_reference_package_json_selects_fixture_vitest_command() -> None:
+    """A dependency-only package.json change (#3128 shape) must select the
+    fixture's own npm install/test commands instead of falling through to the
+    unmapped-executable aggregate that never executes the fixture tests."""
+    plan = _select(
+        _input(
+            [UI_CROSS_PLATFORM_REFERENCE_PACKAGE_JSON],
+            repository="Blummer92/agent-os",
+            pull_request=3128,
+        )
+    )
+    assert plan.profile == "focused"
+    assert plan.commands == UI_CROSS_PLATFORM_REFERENCE_COMMANDS
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert plan.remote_build_required is True
+    assert plan.command_set_digest == compute_command_set_digest(
+        "1.0.0", UI_CROSS_PLATFORM_REFERENCE_COMMANDS
+    )
+    assert validate_validation_plan(plan) == ()
+
+
+def test_ui_cross_platform_reference_other_fixture_paths_share_the_owner() -> None:
+    """Any fixture-owned path selects the same affected-package commands."""
+    plan = _select(
+        _input(["05_Examples/ui-cross-platform-reference/shared/task.ts"])
+    )
+    assert plan.profile == "focused"
+    assert plan.commands == UI_CROSS_PLATFORM_REFERENCE_COMMANDS
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert validate_validation_plan(plan) == ()
+
+
+def test_pre_pr_route_admits_fixture_dependency_change_on_agent_branch() -> None:
+    """The existing pre-PR route admits the same dependency-only change on an
+    agent-owned branch through the shared rule map, without widening ingress
+    to third-party branch lineage or adding a generic shell."""
+    subject = _subject(
+        invocation_id="invocation:3184:0001",
+        branch="agent/3184-affected-package-validation",
+        allowed_files=(UI_CROSS_PLATFORM_REFERENCE_PACKAGE_JSON,),
+        required_command_identities=UI_CROSS_PLATFORM_REFERENCE_COMMANDS,
+    )
+    plan = select_pre_pr_validation_plan(subject, RULES)
+    assert plan.profile == "focused"
+    assert plan.commands == UI_CROSS_PLATFORM_REFERENCE_COMMANDS
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert serialize_pre_pr_validation_plan(plan)["remote_build_required"] is False
+
+
 def test_valid_pre_pr_subject_binds_candidate_726() -> None:
     subject = _subject()
     assert subject.schema_name == "agent-os-pre-pr-validation-subject"
