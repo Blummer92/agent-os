@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import shlex
+import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -89,7 +92,7 @@ def test_cwd_profile_uses_side_effect_free_subshell() -> None:
     _, _, rest = inner.partition(" && ")
     assert shlex.split(rest) == list(profile.fixed_working_directory and (
         "node",
-        "vitest",
+        "node_modules/vitest/vitest.mjs",
         "run",
         "src/overlayIntegrity.test.ts",
         "src/exactComposite.test.ts",
@@ -130,3 +133,20 @@ def test_render_all_covers_catalog_and_aliases() -> None:
     for alias, canonical in PROFILE_ALIASES.items():
         assert alias in rendered
         assert rendered[alias].profile_id == canonical
+
+
+def test_vitest_local_entry_resolves_as_a_node_script(tmp_path) -> None:
+    """#1572: exercise the rendered command, not only shlex on invented tokens."""
+    node = shutil.which("node")
+    assert node is not None, "the registered Node command executor is required"
+    profile = get_profile("picture-perfect")
+    package = tmp_path / profile.fixed_working_directory
+    entry = package / "node_modules/vitest/vitest.mjs"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("console.log(JSON.stringify(process.argv.slice(2)));\n")
+    command = render_mobile_command("picture-perfect").command
+    result = subprocess.run(["sh", "-c", command], cwd=tmp_path, capture_output=True,
+                            text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["run", *profile.fixed_targets]
+    # The synthetic entry proves Node path/argv resolution, not Vitest or UI compatibility.
