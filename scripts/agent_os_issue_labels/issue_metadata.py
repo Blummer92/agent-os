@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
+_HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
 _SUPPORTED_CONTROL_TYPES = {"checkboxes", "dropdown", "input", "textarea"}
 
 # Canonical field IDs preserve the existing label-map contract while allowing
