@@ -70,6 +70,38 @@ jobs:
               output.write(f"accepted={'true' if payload['status'] == 'accepted' else 'false'}\n")
           PY
 
+      - name: Resolve Codespaces-first transport route
+        id: route
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.codespaces_first_route \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --route-output "$RUNNER_TEMP/agent-os-ingress/route.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          route = json.loads((root / "route.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"preferred={route['preferred']}\n")
+              output.write(f"gce_fallback_allowed={'true' if route['gce_fallback_allowed'] else 'false'}\n")
+          if route["preferred"] == "none":
+              result = {
+                  "schema_version": "1.0",
+                  "dispatch_status": "blocked",
+                  "dispatch_reason": ",".join(route["reason_codes"]),
+                  "execution_authorized": False,
+                  "scheduler_invoked": False,
+                  "side_effects_performed": False,
+              }
+              (root / "result.json").write_text(
+                  json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
+                  encoding="utf-8",
+              )
+          PY
+
       - name: Record non-accepted bounded transport evidence
         if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
         run: |
@@ -139,15 +171,42 @@ jobs:
               output.write(f"selected={'true' if route.get('selected') is True else 'false'}\n")
           PY
 
+      - name: Attempt Codespaces discovery
+        id: codespaces_discovery
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.discovery_codespaces \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --route-output "$RUNNER_TEMP/agent-os-ingress/codespaces-discovery-route.json" \
+              --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          route = json.loads((root / "codespaces-discovery-route.json").read_text())
+          result_path = root / "result.json"
+          capable = False
+          if result_path.exists():
+              result = json.loads(result_path.read_text(encoding="utf-8"))
+              capable = result.get("codespaces_capable") is True
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"selected={'true' if route.get('selected') is True else 'false'}\n")
+              output.write(f"capable={'true' if capable else 'false'}\n")
+          PY
+
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true') }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true') }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
@@ -325,7 +384,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -351,8 +410,27 @@ jobs:
           result_path = root / "result.json"
           codespaces_route_path = root / "codespaces-route.json"
           diagnostic_route_path = root / "codespaces-diagnostic-route.json"
+          route_path = root / "route.json"
+          discovery_route_path = root / "codespaces-discovery-route.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Agent OS governed invocation\n\n")
+              if route_path.exists():
+                  ingress_route = json.loads(route_path.read_text(encoding="utf-8"))
+                  summary.write(f"Transport route preferred: `{ingress_route.get('preferred')}`\n\n")
+                  summary.write(f"Route reasons: `{','.join(ingress_route.get('reason_codes', []))}`\n\n")
+                  summary.write(f"GCE fallback allowed: `{ingress_route.get('gce_fallback_allowed')}`\n\n")
+              if discovery_route_path.exists():
+                  discovery_route = json.loads(discovery_route_path.read_text(encoding="utf-8"))
+                  summary.write(f"Codespaces discovery selected: `{discovery_route.get('selected')}`\n\n")
+                  summary.write(f"Codespaces discovery reasons: `{','.join(discovery_route.get('reason_codes', []))}`\n\n")
+              result_capable_path = root / "result.json"
+              if result_capable_path.exists():
+                  try:
+                      capable_result = json.loads(result_capable_path.read_text(encoding="utf-8"))
+                      if "codespaces_capable" in capable_result:
+                          summary.write(f"Codespaces discovery capable: `{capable_result.get('codespaces_capable')}`\n\n")
+                  except json.JSONDecodeError:
+                      pass
               if diagnostic_route_path.exists():
                   diagnostic_route = json.loads(diagnostic_route_path.read_text(encoding="utf-8"))
                   summary.write(f"Codespaces diagnostic handled: `{diagnostic_route.get('handled')}`\n\n")

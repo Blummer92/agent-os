@@ -432,14 +432,19 @@ def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None
     selected_guard = (
         "steps.transport.outputs.accepted == 'true' && "
         "steps.codespaces_diagnostic.outputs.handled != 'true' && "
-        "steps.codespaces.outputs.selected != 'true'"
+        "steps.codespaces.outputs.selected != 'true' && "
+        "(steps.codespaces_discovery.outputs.selected != 'true' || "
+        "steps.codespaces_discovery.outputs.capable != 'true')"
     )
     assert "Attempt read-only Codespaces developer validation" in workflow
+    assert "Attempt Codespaces discovery" in workflow
     assert "secrets.AGENT_OS_CODESPACES_TOKEN" in workflow
     assert selected_guard in workflow
     assert "Invoke exact governed GCE control path" in workflow
     assert (
-        "steps.codespaces.outputs.selected != 'true' }}"
+        "steps.codespaces_discovery.outputs.capable != 'true') && "
+        "(steps.route.outputs.preferred == 'gce' || "
+        "steps.route.outputs.gce_fallback_allowed == 'true') }}"
         in workflow
     )
 

@@ -111,11 +111,26 @@ existing GCE fallback. GitHub CLI is invoked with a fixed trusted command built
 from the existing developer-validation request identity; caller-provided shell
 or argv is not exposed.
 
-Only `remote-validation-suite` participates in this pilot. Other developer-
-validation profiles remain on the existing GCE transport until separately
-qualified for Codespaces. Discovery, first-run validation, Scheduler/control,
-#759 containment, fixed-service-identity, host maintenance, and other VM-specific
-operations remain GCE-owned under #2300.
+Only `remote-validation-suite` participates in the developer-validation pilot.
+Other developer-validation profiles remain on the existing GCE transport until
+separately qualified for Codespaces. Discovery now prefers Codespaces too: the
+`agent-os-governed-invocation` workflow resolves a Codespaces-first route per
+ingress envelope (`workflow_scheduler.governance.codespaces_first_route`), and
+the accepted discovery envelope runs the bounded read-only discovery adapter
+(`workflow_scheduler.governance.discovery_codespaces`) on the current Codespace
+before any GCE fallback. Discovery on Codespaces reuses the same single-current-
+surface resolver, read-only token, and fixed `gh codespace ssh` transport as the
+diagnostic and developer-validation pilots; the remote runner executes the
+repository-owned handoff discovery entrypoint with a fixed argv and returns a
+framed read-only evidence object bound to that execution surface. The remote
+runner verifies the host-local checkpoint store (`invocations` directory) is
+present before importing the discovery implementation: a Codespace without the
+store reports `codespaces_capable=False` so the workflow falls back through the
+existing GCE path instead of returning a misleading `not-found`. If the current
+Codespace is unavailable, the repository checkout is missing, or the store is
+absent, the run fails closed and the existing GCE path is preserved. First-run
+validation, Scheduler/control, #759 containment, fixed-service-identity, host
+maintenance, and other VM-specific operations remain GCE-owned under #2300.
 
 The read-only token is a transport credential, not routing or execution
 authority. Missing credential material leaves the prior GCE behavior intact.
