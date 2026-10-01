@@ -46,4 +46,49 @@ describe('upload evidence consumer', () => {
     if (result.ok) throw new Error('unsafe recording unexpectedly accepted');
     expect(result.message).toMatch(/outside the approved Adobe Express modeling origin/i);
   });
+
+  it.each([
+    ['https://express.adobe.com/your-stuff/files', 'https://express.adobe.com'],
+    ['https://new.express.adobe.com/your-stuff/files', 'https://new.express.adobe.com'],
+  ])('accepts a real Adobe Express origin (%s) through the origin gate', (url) => {
+    const real = structuredClone(tutorialRecording);
+    let rewrote = 0;
+    for (const step of real.steps) {
+      if (step.type === 'navigate' && typeof (step as { url?: unknown }).url === 'string') {
+        (step as { url: string }).url = url;
+        rewrote += 1;
+      }
+    }
+    if (rewrote === 0) throw new Error('fixture navigate step missing');
+    const result = validateUploadText(JSON.stringify(real));
+    // The origin gate must pass; the recording then fails only on the
+    // canonical-evidence check (no Teacher Modeling evidence exists for this
+    // synthetic real-origin recording yet), proving the origin itself was accepted.
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected canonical-evidence rejection');
+    expect(result.message).not.toMatch(/outside the approved Adobe Express modeling origin/i);
+    expect(result.message).toMatch(/no Teacher Modeling evidence/i);
+  });
+
+  it('rejects the synthetic test origin in production mode', () => {
+    // No bare `process` reference: this Vite package does not bundle node
+    // types. Reaches Node's env the same way src/evidence.ts does.
+    const nodeProcess = (globalThis as { process?: { env: Record<string, string | undefined> } }).process;
+    if (!nodeProcess?.env) throw new Error('process.env unavailable in this test environment');
+    const savedNodeEnv = nodeProcess.env['NODE_ENV'];
+    const savedVitest = nodeProcess.env['VITEST'];
+    delete nodeProcess.env['VITEST'];
+    nodeProcess.env['NODE_ENV'] = 'production';
+    try {
+      const result = validateUploadText(JSON.stringify(tutorialRecording));
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('synthetic origin unexpectedly accepted in production mode');
+      expect(result.message).toMatch(/outside the approved Adobe Express modeling origin/i);
+    } finally {
+      if (savedVitest === undefined) delete nodeProcess.env['VITEST'];
+      else nodeProcess.env['VITEST'] = savedVitest;
+      if (savedNodeEnv === undefined) delete nodeProcess.env['NODE_ENV'];
+      else nodeProcess.env['NODE_ENV'] = savedNodeEnv;
+    }
+  });
 });
