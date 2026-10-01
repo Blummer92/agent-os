@@ -27,10 +27,8 @@ PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE
 HOST_PYTHON="/usr/bin/python3"
 DISCOVERY_MODULE="agent_os_execution_service.handoff_discovery_entrypoint"
 ACTIVATION_MODULE="agent_os_execution_service.first_publication_activation_entrypoint"
-FIRST_RUN_VALIDATION_MODULE="agent_os_execution_service.first_run_validation_entrypoint"
 DISCOVERY_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {DISCOVERY_MODULE}'"
 ACTIVATION_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {ACTIVATION_MODULE}'"
-FIRST_RUN_VALIDATION_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {FIRST_RUN_VALIDATION_MODULE}'"
 MAX_DIAGNOSTIC_STDERR=2048
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
 WIF_PROVIDER="//iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main"
@@ -82,14 +80,6 @@ def _discovery_command(*,repository:str,issue_number:int)->str:
 def _activation_command(capsule:str)->str:
  if not re.fullmatch(r"pre-publication-evidence:[0-9a-f]{64}",capsule):raise GcloudCommandError("non-canonical source capsule rejected")
  return f"{HOST_PYTHON} -m {ACTIVATION_MODULE} --source-capsule-id {capsule}"
-def _first_run_validation_command(*,repository:str,issue_number:int,candidate_sha:str)->str:
- # The only caller-derived value is the 40-hex candidate SHA; repository and
- # issue identity come from the trusted GitHub event envelope. There is no argv,
- # shell text, approval, authority, or runtime-configuration surface here.
- if repository!="Blummer92/agent-os":raise GcloudCommandError("non-canonical first-run repository rejected")
- if type(issue_number) is not int or issue_number<1:raise GcloudCommandError("non-canonical first-run issue rejected")
- if type(candidate_sha) is not str or not re.fullmatch(r"[0-9a-f]{40}",candidate_sha):raise GcloudCommandError("non-canonical first-run candidate sha rejected")
- return f"{HOST_PYTHON} -m {FIRST_RUN_VALIDATION_MODULE} --repository {repository} --issue-number {issue_number} --candidate-sha {candidate_sha}"
 
 class GcloudIapAdapter:
  def __init__(self,*,poll_seconds:float=2.0,max_polls:int=30,shutdown_enabled:bool=False)->None:
@@ -122,16 +112,6 @@ class GcloudIapAdapter:
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
- def probe_first_run_validation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,FIRST_RUN_VALIDATION_PROBE_COMMAND).returncode==0
- def validate_first_run(self,resource:GceResourceTuple,*,repository:str,issue_number:int,candidate_sha:str)->dict[str,object]:
-  result=self._ssh(resource,_first_run_validation_command(repository=repository,issue_number=issue_number,candidate_sha=candidate_sha))
-  if result.returncode!=0:raise GcloudCommandError("fixed first-run validation failed")
-  try:payload=json.loads(result.stdout)
-  except json.JSONDecodeError as exc:raise GcloudCommandError("first-run validation evidence was not JSON") from exc
-  if type(payload) is not dict:raise GcloudCommandError("first-run validation evidence must be an object")
-  if payload.get("repository")!=repository or payload.get("issue_number")!=issue_number or payload.get("candidate_sha")!=candidate_sha:raise GcloudCommandError("first-run validation evidence identity mismatch")
-  if payload.get("scheduler_invoked") is not False or payload.get("publication_invoked") is not False or payload.get("execution_lease_acquired") is not False or payload.get("resume_invoked") is not False:raise GcloudCommandError("first-run validation crossed execution boundary")
-  return payload
  def inspect_retirement_inventory(self,resource:GceResourceTuple)->dict[str,object]:
   return collect_retirement_inventory(_run,lambda command:self._ssh(resource,command))
  def inspect_sudo_admission(self,resource:GceResourceTuple)->dict[str,object]:
@@ -250,12 +230,6 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
  if ingress.reason=="accepted-dev-validation-envelope":
   from .dev_validation_gce import execute_dev_validation_transport
   return execute_dev_validation_transport(ingress,claims=claims,adapter=adapter)
- # #1972: an accepted first-run envelope must reach only the fixed first-run host
- # operation. Without this branch it falls through to the generic Scheduler
- # control binding below, which cannot carry the candidate identity at all.
- if ingress.reason=="accepted-first-run-validation-envelope":
-  from .first_run_validation_gce import execute_first_run_validation_transport
-  return execute_first_run_validation_transport(ingress,claims=claims,adapter=adapter)
  # #2673: an accepted PPUX projection envelope must reach only the fixed
  # prompt-projection host operation. Without this branch it falls through to
  # the generic Scheduler control binding below, which cannot carry the
