@@ -80,6 +80,7 @@ classroom use, production, publication, or writes.
 - `artifact-first-response-standard.md` — response ordering for classroom-material requests
 - `teacher-decision-studio-standard.md` — table-first rubric/assessment consultation protocol
 - `teacher-decision-studio-previews-standard.md` — per-option worksheet and PDF preview rules
+- `assessment-next-instruction-standard.md` — #1891 post-administration evidence → next-instruction analysis contract: class-level observations, labeled hypotheses with stated limitations, bounded instructional options, teacher-decision separation, and fail-closed insufficient-evidence holds
 
 ## Core Rule
 
