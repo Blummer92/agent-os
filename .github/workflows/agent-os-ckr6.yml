@@ -33,6 +33,7 @@ jobs:
             -e 08_Tooling/reusable-capability-registry \
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
+            -e src \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Parse and classify bounded CKR6 envelope
@@ -83,6 +84,7 @@ jobs:
             -e 08_Tooling/reusable-capability-registry \
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
+            -e src \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Execute zero-read CKR6 request
