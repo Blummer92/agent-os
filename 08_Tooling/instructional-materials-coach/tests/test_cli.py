@@ -169,6 +169,58 @@ def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypat
 
 
 
+def _visual_build_args(tmp_path):
+    lesson_file = _lesson_file(tmp_path)
+    requirement_file = _write_json(tmp_path, "visual-requirement.json", _fixture("valid_material_requirement_v2.json"))
+    evidence_file = _current_curriculum_evidence_file(tmp_path)
+    manifests_file = _write_json(tmp_path, "artifact-manifests.json", [_fixture("valid_artifact_manifest.json")])
+    candidates_file = _write_json(tmp_path, "visual-candidates.json", [_fixture("valid_visual_asset_compatibility_v2.json")])
+    lessons_dir = tmp_path / "lessons"
+    return _base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--artifact-manifests", str(manifests_file), "--visual-candidates", str(candidates_file), "--visual-source-revision", "visual-library-snapshot-v2", "--lessons-dir", str(lessons_dir)]
+
+
+def test_main_unresolvable_asset_slot_blocks_before_live_build(monkeypatch, tmp_path, capsys):
+    """#3130: when a selected asset slot has no live Drive file, no build requests are emitted."""
+    from instructional_materials_coach import cli
+    monkeypatch.setenv("ALLOW_WRITE", "true")
+    with (
+        patch("instructional_materials_coach.cli.get_credentials", return_value="creds"),
+        patch("instructional_materials_coach.cli.build_drive_service", return_value="drive"),
+        patch("instructional_materials_coach.cli.build_slides_service", return_value="slides"),
+        patch("instructional_materials_coach.cli.build_docs_service", return_value="docs"),
+        # A future verified image-placement operation would pass this gate; the
+        # asset-slot gate must still fail closed before any connected write.
+        patch("instructional_materials_coach.cli._require_visual_placement_support"),
+        patch("instructional_materials_coach.cli.get_file_metadata", side_effect=RuntimeError("drive lookup failed")),
+        patch("instructional_materials_coach.cli.build_live_materials") as live,
+    ):
+        exit_code = cli.main(_visual_build_args(tmp_path))
+    assert exit_code == 1
+    live.assert_not_called()
+    captured = capsys.readouterr()
+    assert "unresolvable_asset_slots=asset-1" in captured.err
+    assert "labeled image placeholders" in captured.err
+
+
+def test_main_resolvable_asset_slot_allows_build(monkeypatch, tmp_path, capsys):
+    """The asset-slot gate lets the build through when every selected slot resolves."""
+    from instructional_materials_coach import cli
+    monkeypatch.setenv("ALLOW_WRITE", "true")
+    with (
+        patch("instructional_materials_coach.cli.get_credentials", return_value="creds"),
+        patch("instructional_materials_coach.cli.build_drive_service", return_value="drive"),
+        patch("instructional_materials_coach.cli.build_slides_service", return_value="slides"),
+        patch("instructional_materials_coach.cli.build_docs_service", return_value="docs"),
+        patch("instructional_materials_coach.cli._require_visual_placement_support"),
+        patch("instructional_materials_coach.cli.get_file_metadata", return_value={"id": "file-1", "trashed": False}),
+        patch("instructional_materials_coach.cli.build_live_materials", return_value=_success_receipt()) as live,
+    ):
+        exit_code = cli.main(_visual_build_args(tmp_path))
+    assert exit_code == 0
+    live.assert_called_once()
+    assert "unresolvable" not in capsys.readouterr().err
+
+
 def test_main_required_worksheet_section_missing_from_plan_blocks_before_credentials(monkeypatch, tmp_path, capsys):
     from instructional_materials_coach import cli
     monkeypatch.setenv("ALLOW_WRITE", "true")

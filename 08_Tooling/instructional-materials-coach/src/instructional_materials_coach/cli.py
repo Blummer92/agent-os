@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Mapping
 
 from .artifact_structure import PASS, validate_required_worksheet_sections
+from .asset_slot_resolution import resolve_asset_slots
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
-from .drive_client import build_drive_service, get_credentials
+from .drive_client import build_drive_service, get_credentials, get_file_metadata
 from .generation_context import compose_generation_context, curriculum_decision_token
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
 from instructional_workflow_contracts.current_curriculum_state import resolve_current_curriculum_state
@@ -19,7 +21,7 @@ from instructional_workflow_contracts.material_requirement import validate_mater
 from .live_build import LiveBuildInput, build_live_materials
 from .slides_requests import build_slides_replace_requests
 from .template_resolution import TemplateCandidate, resolve_approved_template_pair
-from .visual_reuse import plan_governed_visual_reuse
+from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
 from .workspace_clients import build_docs_service, build_slides_service
 
 DEFAULT_LESSONS_DIR = "reports/lessons"
@@ -85,6 +87,42 @@ def _require_visual_placement_support(selected_asset_ids: tuple[str, ...]) -> No
         "path has no verified image-placement operation; refusing a false-success "
         f"build before external write. selected_asset_ids={identities}"
     )
+
+
+def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[str, str | None]:
+    """Map each selected asset ID to the candidate Drive file ID bound by the governed plan."""
+    bound: dict[str, str | None] = {}
+    result = visual_plan.cohesive_visual_plan_result
+    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    selected_candidates = payload.get("selected_candidates", ())
+    if not isinstance(selected_candidates, (list, tuple)):
+        selected_candidates = ()
+    for item in selected_candidates:
+        if not isinstance(item, Mapping):
+            continue
+        asset_reference = item.get("asset_reference")
+        library_reference = item.get("library_reference")
+        asset_id = asset_reference.get("asset_id") if isinstance(asset_reference, Mapping) else None
+        if not isinstance(asset_id, str) or not asset_id:
+            continue
+        drive_file_id = library_reference.get("drive_file_id") if isinstance(library_reference, Mapping) else None
+        bound[asset_id] = drive_file_id if isinstance(drive_file_id, str) and drive_file_id else None
+    return {asset_id: bound.get(asset_id) for asset_id in visual_plan.selected_asset_ids}
+
+
+def _require_asset_slot_resolution(visual_plan: GovernedVisualReusePlan, drive_service: object) -> None:
+    """Fail before connected writes when a selected asset slot has no live Drive file (#3130)."""
+    resolution = resolve_asset_slots(
+        asset_slots=_selected_asset_drive_files(visual_plan),
+        describe_drive_file=lambda file_id: get_file_metadata(drive_service, file_id),
+    )
+    if resolution.status != "resolved":
+        identities = ",".join(resolution.unresolvable_slots)
+        raise RuntimeError(
+            "Selected asset slots do not resolve to live Drive files; refusing a build "
+            "that would ship labeled image placeholders instead of real images. "
+            f"unresolvable_asset_slots={identities}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -183,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         credentials = get_credentials(args.client_secret, args.token_path)
+        drive_service = build_drive_service(credentials)
+        _require_asset_slot_resolution(visual_plan, drive_service)
         receipt = build_live_materials(
             LiveBuildInput(
                 slides_template_id=args.slides_template, doc_template_id=args.doc_template,
@@ -192,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
                 slides_requests=tuple(build_slides_replace_requests(content)),
                 docs_requests=docs_requests,
             ),
-            drive_service=build_drive_service(credentials),
+            drive_service=drive_service,
             slides_service=build_slides_service(credentials),
             docs_service=build_docs_service(credentials),
         )
