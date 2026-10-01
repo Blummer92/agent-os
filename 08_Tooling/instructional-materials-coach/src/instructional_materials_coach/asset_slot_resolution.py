@@ -45,7 +45,11 @@ def resolve_asset_slots(
         except Exception:
             unresolvable.append(asset_id)
             continue
-        if not isinstance(metadata, Mapping) or metadata.get("trashed"):
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("id") != drive_file_id
+            or metadata.get("trashed") is not False
+        ):
             unresolvable.append(asset_id)
             continue
         resolved.append(asset_id)
