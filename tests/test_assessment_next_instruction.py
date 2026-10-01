@@ -362,3 +362,20 @@ def test_empty_targets_are_rejected():
     result = analyze_assessment_next_instruction(_base_evidence(targets=[]))
     assert result.status is ValidationStatus.INVALID
     assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_reviewed_strong_evidence_without_options_holds_instead_of_crashing():
+    result = analyze_assessment_next_instruction(_base_evidence(hypotheses=[], options=[]))
+    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert result.record.to_dict()["routing"] == "hold"
+    assert result.record.to_dict()["instructional_options"] == []
+
+
+def test_options_supported_only_by_weak_evidence_hold():
+    evidence = _base_evidence()
+    evidence["observations"][0]["strength"] = "weak"
+    evidence["hypotheses"][0]["evidence_strength"] = "weak"
+    result = analyze_assessment_next_instruction(evidence)
+    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert result.record.to_dict()["classification"] == "insufficient-evidence"
+    assert result.record.to_dict()["instructional_options"] == []
