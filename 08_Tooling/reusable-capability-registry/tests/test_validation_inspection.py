@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 from pathlib import Path
 
@@ -160,6 +161,58 @@ def test_star_and_dynamic_and_conditional_route_to_manual_review(tmp_path):
 
 def test_deleted_symbol_conflicts(tmp_path):
     assert _interface(tmp_path, "def run():\n    pass\n\ndel run\n").code == "interface.conflicting-binding"
+
+
+def _bindings(source: str) -> insp._TopLevelBindings:
+    return insp._TopLevelBindings(ast.parse(source))
+
+
+def test_binding_history_preserves_duplicate_definitions(tmp_path):
+    bindings = _bindings("def run():\n    pass\n\ndef run():\n    pass\n")
+    occurrences = bindings.occurrences["run"]
+    assert [(occ.kind, occ.lineno) for occ in occurrences] == [("definition", 1), ("definition", 4)]
+    # the historical last-binding-wins view is unchanged
+    assert bindings.unconditional["run"] == "definition"
+
+
+def test_binding_history_preserves_mixed_kind_shadowing(tmp_path):
+    bindings = _bindings("run = 1\n\ndef run():\n    pass\n")
+    assert [occ.kind for occ in bindings.occurrences["run"]] == ["assignment", "definition"]
+    bindings = _bindings("import json\n\njson = {}\n")
+    assert [occ.kind for occ in bindings.occurrences["json"]] == ["import", "assignment"]
+
+
+def test_binding_history_single_binding_has_one_occurrence(tmp_path):
+    bindings = _bindings("def run():\n    pass\n")
+    assert len(bindings.occurrences["run"]) == 1
+
+
+def test_shadowed_symbol_routes_to_manual_review(tmp_path):
+    outcome = _interface(tmp_path, "def run():\n    pass\n\ndef run():\n    pass\n")
+    assert outcome.code == "interface.shadowed-binding"
+    assert outcome.severity is ValidationSeverity.MANUAL_REVIEW
+    assert outcome.confidence is EvidenceConfidence.MANUAL_REVIEW
+    assert "1" in outcome.manual_review_reason and "4" in outcome.manual_review_reason
+
+
+def test_shadowed_mixed_kind_symbol_routes_to_manual_review(tmp_path):
+    outcome = _interface(tmp_path, "run = 1\n\ndef run():\n    pass\n")
+    assert outcome.code == "interface.shadowed-binding"
+
+
+def test_overload_group_still_verifies(tmp_path):
+    source = (
+        "from typing import overload\n\n"
+        "@overload\ndef run(x: int) -> int: ...\n\n"
+        "@overload\ndef run(x: str) -> str: ...\n\n"
+        "def run(x):\n    return x\n"
+    )
+    assert _interface(tmp_path, source).code is None
+
+
+def test_duplicate_class_definitions_route_to_manual_review(tmp_path):
+    outcome = _interface(tmp_path, "class run:\n    pass\n\nclass run:\n    pass\n")
+    assert outcome.code == "interface.shadowed-binding"
 
 
 def test_non_python_interface(tmp_path):
