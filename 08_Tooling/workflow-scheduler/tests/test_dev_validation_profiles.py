@@ -13,6 +13,7 @@ from workflow_scheduler.governance.dev_validation_profiles import (
     canonical_profile_id,
     get_profile,
     profile_argv,
+    profile_local_argv,
     project_selector_requirements,
 )
 
@@ -168,3 +169,25 @@ def test_profile_requests_are_non_authorizing() -> None:
     assert payload["scheduler_invoked"] is False
     assert payload["publication_invoked"] is False
     assert payload["merge_authorized"] is False
+
+
+def test_local_vitest_projection_preserves_transport_identity_and_targets() -> None:
+    profile = get_profile("picture-perfect")
+    assert profile.runtime_id == "node22-vitest-5.0.0"
+    assert profile_argv(profile.profile_id)[:3] == ("node", "vitest", "run")
+    assert profile_local_argv(profile.profile_id) == (
+        "node", "node_modules/vitest/vitest.mjs", "run", *profile.fixed_targets
+    )
+    assert profile_local_argv("ppux-picture-perfect-ts-vitest") == profile_local_argv("picture-perfect")
+    assert profile_local_argv("pr-remediation") == profile_argv("pr-remediation")
+
+
+def test_picture_perfect_runtime_metadata_matches_current_package_and_runner() -> None:
+    import json
+    from pathlib import Path
+    from workflow_scheduler.governance.dev_validation_gce import DEV_VALIDATION_VITEST_VERSION
+    root = Path(__file__).resolve().parents[3]
+    package = json.loads((root / "08_Tooling/instructional-materials-coach/picture-perfect-coach/package.json").read_text())
+    version = package["devDependencies"]["vitest"]
+    assert version == DEV_VALIDATION_VITEST_VERSION
+    assert get_profile("picture-perfect").runtime_id == "node22-vitest-" + version
