@@ -89,10 +89,11 @@ def check_declared_path(
     except ErgPathError as exc:
         return [f"{location}: {exc}"]
     if repo_root is not None:
+        # OSError from symlink resolution is an infrastructure failure, not a
+        # policy violation: it propagates so the validator can report
+        # infrastructure-error instead of converting it to fail.
         try:
             check_symlink_containment(value, repo_root)
         except ErgPathError as exc:
             findings.append(f"{location}: {exc}")
-        except OSError as exc:
-            findings.append(f"{location}: path containment could not be evaluated: {exc}")
     return findings

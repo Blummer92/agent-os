@@ -263,9 +263,11 @@ def _check_registry_policy(
     records = document.get("repositories")
     if not isinstance(records, list):
         return []
+    # Pass 1: identity and declared paths. Alias checks run in a second pass
+    # against the complete identity sets so a collision is reported no matter
+    # whether the alias or the repository it collides with comes first.
     seen_ids: dict[str, int] = {}
     seen_repos: dict[str, int] = {}
-    alias_owners: dict[str, int] = {}
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             continue
@@ -298,27 +300,35 @@ def _check_registry_policy(
                     location=f"{label}/profilePath",
                 )
             )
+    # Pass 2: alias collisions against complete identity sets.
+    alias_owners: dict[str, int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        label = f"/repositories/{index}"
+        repository = record.get("repository")
         aliases = record.get("aliases")
-        if isinstance(aliases, list):
-            for alias in aliases:
-                if not isinstance(alias, str):
-                    continue
-                if alias == repository:
-                    findings.append(
-                        f"{label}: alias {alias!r} duplicates the record's own repository"
-                    )
-                elif alias in alias_owners:
-                    findings.append(
-                        f"{label}: alias {alias!r} collides with an alias of "
-                        f"/repositories/{alias_owners[alias]}"
-                    )
-                elif alias in seen_repos and seen_repos[alias] != index:
-                    findings.append(
-                        f"{label}: alias {alias!r} collides with the repository of "
-                        f"/repositories/{seen_repos[alias]}"
-                    )
-                else:
-                    alias_owners.setdefault(alias, index)
+        if not isinstance(aliases, list):
+            continue
+        for alias in aliases:
+            if not isinstance(alias, str):
+                continue
+            if alias == repository:
+                findings.append(
+                    f"{label}: alias {alias!r} duplicates the record's own repository"
+                )
+            elif alias in alias_owners:
+                findings.append(
+                    f"{label}: alias {alias!r} collides with an alias of "
+                    f"/repositories/{alias_owners[alias]}"
+                )
+            elif alias in seen_repos and seen_repos[alias] != index:
+                findings.append(
+                    f"{label}: alias {alias!r} collides with the repository of "
+                    f"/repositories/{seen_repos[alias]}"
+                )
+            else:
+                alias_owners.setdefault(alias, index)
     return [
         ErgCheck(
             name="registry-admission-policy",
@@ -471,10 +481,30 @@ def validate_erg_document(
         )
     )
 
-    if schema_name == "profile":
-        checks.extend(_check_profile_policy(document, schema, root))
-    else:
-        checks.extend(_check_registry_policy(document, schema, root))
+    try:
+        if schema_name == "profile":
+            checks.extend(_check_profile_policy(document, schema, root))
+        else:
+            checks.extend(_check_registry_policy(document, schema, root))
+    except OSError as exc:
+        # Declared-path containment could not be evaluated at the OS level
+        # (e.g. unreadable repository root). That is an infrastructure
+        # failure, never a policy fail: trusted evidence could not be
+        # produced, so it must not convert to pass/warning/fail.
+        return report_from_checks(
+            subject=source,
+            document_kind=None,
+            contract_version=None,
+            checks=[
+                ErgCheck(
+                    name="declared-path-safety",
+                    verdict=ErgVerdict.INFRASTRUCTURE_ERROR,
+                    detail=f"path containment could not be evaluated: {exc}",
+                )
+            ],
+            evaluated=(),
+            not_evaluated=_NOT_EVALUATED,
+        )
 
     return report_from_checks(
         subject=source,
