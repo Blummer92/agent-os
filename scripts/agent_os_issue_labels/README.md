@@ -47,6 +47,15 @@ If `main` moves before final proof, the result is stale and no second refresh oc
 
 ## Production branch-refresh composition
 
+Merge-shaped refresh also admits bounded multi-merge history (#3183): at most 32
+unique full commit IDs, all covered by the first-parent inventory whose two-parent
+trees the existing lineage check proves equal to Git's clean deterministic merge.
+Malformed, duplicate, excessive, non-first-parent, or unproven history remains
+`topology-history-ambiguous`; stale merge trees and semantic conflicts retain their
+existing fail-closed reasons. Candidate preparation still uses Git's actual merge
+of current main and the admitted head, then verifies scope before the existing
+expected-head publication. Never replace this route with a hand-built stale tree.
+
 `scripts/agent_os_issue_labels/pr_branch_refresh_provider.py` is the GH-LIFE4 / #1365
 production composition behind #1187's existing `PullRequestBranchRefreshProvider`
 protocol. It does not replace #1187 admission, scope checking, validation ordering, or final `branch:current` proof.
