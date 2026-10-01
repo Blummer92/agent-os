@@ -44,6 +44,7 @@ from .pr_branch_refresh import (
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TOPOLOGY_COMMIT_MESSAGE = "Agent OS governed PR refresh candidate"
+_MAX_MERGE_HISTORY = 32
 # #3127: GitHub computes `mergeable` asynchronously after the base branch
 # moves, so the first PR read after main advances commonly reports
 # `mergeable=None` ("unknown"). A bounded warm-up gives GitHub a chance to
@@ -207,8 +208,20 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if history.return_code != 0:
             return _blocked(expected_head_sha, "topology-history-rejected")
         history_lines = [line.strip() for line in history.stdout.splitlines() if line.strip()]
-        if len(history_lines) > 1 or (history_lines and _SHA40_RE.fullmatch(history_lines[0]) is None):
+        if (len(history_lines) > _MAX_MERGE_HISTORY
+                or len(set(history_lines)) != len(history_lines)
+                or any(_SHA40_RE.fullmatch(sha) is None for sha in history_lines)):
             return _blocked(expected_head_sha, "topology-history-ambiguous")
+        if len(history_lines) > 1:
+            # Integrity checked every first-parent merge against Git's clean
+            # deterministic tree. Prove that inventory covers the entire merge
+            # history before admitting a bounded multi-merge candidate.
+            first_parent = self.runner.run((self.git_binary, "rev-list", "--first-parent", "--merges", f"{merge_base_sha}..{expected_head_sha}"), cwd=self.repository_root, env=dict(self.environment))
+            if not first_parent.succeeded:
+                return _blocked(expected_head_sha, "topology-history-ambiguous")
+            proven = [line.strip() for line in first_parent.stdout.splitlines() if line.strip()]
+            if len(proven) != len(history_lines) or set(proven) != set(history_lines):
+                return _blocked(expected_head_sha, "topology-history-ambiguous")
 
         # A GitHub-conflicted stale branch is routed directly to merge-tree so the
         # working tree is never left in a partially rebased state. Existing merge-
