@@ -11,7 +11,15 @@ dependencies = [
   "PyYAML>=6.0,<7",
   "PyGithub>=2.9.1,<3",
   "requests>=2.31,<3",
+  # PYLIB5 pilot (#3222): Typer + Rich for the thin human-readable
+  # scheduler-status wrapper only. No existing CLI uses them; the machine
+  # JSON path stays on plain json.dumps.
+  "typer>=0.27,<1",
+  "rich>=15.0,<16",
 ]
+
+[project.scripts]
+agent-os-scheduler-status = "workflow_scheduler.status_cli:main"
 
 # #1300 (AOS-GCE2C): the Scheduler runtime already imports canonical
 # repository-root ``scripts.*`` contract packages (for example
