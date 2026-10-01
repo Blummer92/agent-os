@@ -19,7 +19,32 @@ const EVIDENCE_STATES = new Set<EvidenceState>([
   'unavailable',
 ]);
 const MODELING_DISPOSITIONS = new Set(['keep', 'combine', 'not-instructional', 'needs-review']);
-const APPROVED_SYNTHETIC_ORIGIN = 'https://new.express.adobe.test';
+// Real Adobe Express origins where genuine teacher modeling happens.
+const APPROVED_MODELING_ORIGINS = new Set([
+  'https://express.adobe.com',
+  'https://new.express.adobe.com',
+]);
+
+// Synthetic fixture origin used by the offline Tutorial 0 fixtures. This is
+// TEST-ONLY: it is approved only while the module runs under the test harness
+// (vitest sets VITEST=true and NODE_ENV=test), so a production upload can
+// never treat a synthetic .test recording as real instructional evidence.
+const SYNTHETIC_TEST_ORIGIN = 'https://new.express.adobe.test';
+
+// Reads Node's process.env when present without requiring @types/node in this
+// Vite package; in the production browser bundle `process` is undefined and
+// this is always false.
+function isTestHarness(): boolean {
+  const nodeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const env = nodeProcess?.env;
+  if (!env) return false;
+  return env['VITEST'] === 'true' || env['NODE_ENV'] === 'test';
+}
+
+function isApprovedOrigin(origin: string): boolean {
+  if (APPROVED_MODELING_ORIGINS.has(origin)) return true;
+  return origin === SYNTHETIC_TEST_ORIGIN && isTestHarness();
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -41,7 +66,7 @@ function hasRecorderShape(value: unknown): value is { steps: unknown[] } {
 function hasOffApprovedOrigin(value: { steps: unknown[] }): boolean {
   return value.steps.some((step) => {
     if (!isRecord(step) || step.type !== 'navigate' || typeof step.url !== 'string') return false;
-    try { return new URL(step.url).origin !== APPROVED_SYNTHETIC_ORIGIN; }
+    try { return !isApprovedOrigin(new URL(step.url).origin); }
     catch { return true; }
   });
 }
