@@ -28,7 +28,7 @@ from .dev_validation_profiles import (
     RunnerKind,
     canonical_profile_id,
     get_profile,
-    profile_argv,
+    profile_local_argv,
 )
 
 # The only shell family this renderer targets. Mobile terminals vary wildly;
@@ -63,8 +63,9 @@ _RUNTIME_PREREQUISITES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "instructional-materials-coach Python dependencies importable",
             "a Blummer92/agent-os checkout at the validated SHA",
         ),
-        "node22-vitest-4.1.10": (
+        "node22-vitest-5.0.0": (
             "Node.js 22 available as `node`",
+            "Vitest 5.0.0 installed, matching the registered package/runtime",
             "picture-perfect-coach node_modules installed",
             "a Blummer92/agent-os checkout at the validated SHA",
         ),
@@ -155,7 +156,7 @@ def render_mobile_command(
         raise ValueError(f"unsupported shell: {shell!r}")
     canonical = canonical_profile_id(profile_id)
     profile = get_profile(canonical)
-    argv = profile_argv(canonical)
+    argv = profile_local_argv(canonical)
 
     body = _quote_posix(argv)
     if profile.fixed_working_directory is not None:
