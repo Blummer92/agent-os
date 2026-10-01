@@ -7,11 +7,13 @@ suppression, help snapshot, and read-only behavior against a missing database.
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from task_helpers import make_plain_task
@@ -138,9 +140,10 @@ def test_help_names_program_and_format(db_path):
     # Type-derived help content via the app object.
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0, result.output
-    assert "--format" in result.output
-    assert "text" in result.output and "json" in result.output
-    assert "workflow_id" in result.output
+    help_text = unstyle(result.output)
+    assert "--format" in help_text
+    assert "text" in help_text and "json" in help_text
+    assert "workflow_id" in help_text
 
 
 def test_help_program_name_not_script_filename():
@@ -165,3 +168,40 @@ def test_help_program_name_not_script_filename():
 def test_invalid_format_exit_2(db_path):
     result = runner.invoke(app, _args(db_path, "--format", "yaml"))
     assert result.exit_code == 2
+
+
+def test_existing_empty_database_is_not_initialized(tmp_path):
+    path = tmp_path / "existing.db"
+    path.touch()
+    before = path.read_bytes()
+    result = runner.invoke(app, ["wf-1", "--db", str(path)])
+    assert result.exit_code == 1
+    assert "cannot read database" in result.output
+    assert path.read_bytes() == before
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master").fetchall() == []
+
+
+def test_existing_legacy_database_is_not_migrated(tmp_path):
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY)")
+    before = path.read_bytes()
+    result = runner.invoke(app, ["wf-1", "--db", str(path)])
+    assert result.exit_code == 1
+    assert path.read_bytes() == before
+    with sqlite3.connect(path) as connection:
+        assert [row[1] for row in connection.execute("PRAGMA table_info(tasks)")] == ["id"]
+
+
+def test_status_query_does_not_change_existing_database(db_path):
+    before = db_path.read_bytes()
+    result = runner.invoke(app, _args(db_path, "--format", "json"))
+    assert result.exit_code == 0, result.output
+    assert db_path.read_bytes() == before
+
+
+def test_piped_output_ignores_force_color(db_path):
+    result = runner.invoke(app, _args(db_path), env={"FORCE_COLOR": "1"})
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.output
