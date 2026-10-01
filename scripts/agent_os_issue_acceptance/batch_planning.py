@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Iterator, Literal
 
 from .batch_checks import BatchConflictRun, evaluate_base_batch_conflict_run
 from .batch_extensions import GraphCheckResult, GraphCheckRun, run_graph_checks
@@ -272,43 +272,70 @@ def _components(nodes: set[str], edges: set[Pair]) -> tuple[tuple[str, ...], ...
     return tuple(sorted(output))
 
 
+def _tarjan_scc(adjacent: dict[str, set[str]]) -> list[set[str]]:
+    """Iterative Tarjan SCC over a sorted adjacency map.
+
+    Returns the same SCC node sets the previous recursive Kosaraju pass
+    produced; traversal order is internal because callers sort every result
+    before exposing it. Iterative so deep graphs cannot hit the recursion
+    limit (see #2275).
+    """
+    index_of: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: set[str] = set()
+    scc_stack: list[str] = []
+    sccs: list[set[str]] = []
+    index = 0
+    for root in sorted(adjacent):
+        if root in index_of:
+            continue
+        index_of[root] = lowlink[root] = index
+        index += 1
+        scc_stack.append(root)
+        on_stack.add(root)
+        work: list[tuple[str, Iterator[str]]] = [(root, iter(sorted(adjacent[root])))]
+        while work:
+            node, targets = work[-1]
+            descended = False
+            for target in targets:
+                if target not in index_of:
+                    index_of[target] = lowlink[target] = index
+                    index += 1
+                    scc_stack.append(target)
+                    on_stack.add(target)
+                    work.append((target, iter(sorted(adjacent[target]))))
+                    descended = True
+                    break
+                if target in on_stack and index_of[target] < lowlink[node]:
+                    lowlink[node] = index_of[target]
+            if descended:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                if lowlink[node] < lowlink[parent]:
+                    lowlink[parent] = lowlink[node]
+            if lowlink[node] == index_of[node]:
+                scc: set[str] = set()
+                while True:
+                    member = scc_stack.pop()
+                    on_stack.discard(member)
+                    scc.add(member)
+                    if member == node:
+                        break
+                sccs.append(scc)
+    return sccs
+
+
 def _cycles(graph: IssueBatchGraph):
     adjacent = {node.node_id: set() for node in graph.nodes}
-    reverse = {node: set() for node in adjacent}
     self_loops = set()
     for source, target in graph.resolved_dependencies:
         adjacent[source].add(target)
-        reverse[target].add(source)
         if source == target:
             self_loops.add(source)
 
-    order: list[str] = []
-    seen: set[str] = set()
-    def first(node: str) -> None:
-        seen.add(node)
-        for target in sorted(adjacent[node]):
-            if target not in seen:
-                first(target)
-        order.append(node)
-    for node in sorted(adjacent):
-        if node not in seen:
-            first(node)
-
-    seen.clear()
-    groups: list[tuple[str, ...]] = []
-    def second(node: str, group: set[str]) -> None:
-        seen.add(node)
-        group.add(node)
-        for target in sorted(reverse[node]):
-            if target not in seen:
-                second(target, group)
-    for node in reversed(order):
-        if node in seen:
-            continue
-        group: set[str] = set()
-        second(node, group)
-        if len(group) > 1:
-            groups.append(tuple(sorted(group)))
+    groups = [tuple(sorted(scc)) for scc in _tarjan_scc(adjacent) if len(scc) > 1]
     return tuple(sorted(self_loops)), tuple(sorted(groups))
 
 
