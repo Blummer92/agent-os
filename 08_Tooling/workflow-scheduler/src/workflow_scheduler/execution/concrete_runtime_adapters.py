@@ -20,7 +20,6 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyReadinessEvidence,
     RequiredEnvironmentSpec,
 )
-from workflow_scheduler.execution import cgroup_v2_containment
 from workflow_scheduler.execution.dependency_preparation import (
     UNSUPPORTED_SOURCE_INDIRECTION,
     BoundDependencyPreparationAdapter,
@@ -47,7 +46,6 @@ from workflow_scheduler.execution.host_local_lease_adapter import (
 )
 from workflow_scheduler.execution.in_memory_lease_adapter import InMemoryLeaseAdapter
 from workflow_scheduler.execution.posix_process_adapter import (
-    ContainmentConfig,
     PosixProcessExecutionResult,
     PosixProcessExecutor,
     PosixProcessExecutorConfig,
@@ -76,44 +74,6 @@ from workflow_scheduler.execution.workspace_state_evidence import (
 ProcessCancellationCheck = Callable[[], bool]
 
 _MAX_MANIFEST_BYTES = 4_194_304
-
-
-class ConcreteRuntimeContainmentError(ConcreteRuntimeConfigurationError):
-    """Raised when configured #759 containment cannot be preflighted.
-
-    Raised before any lease, worktree, or process exists for this
-    invocation -- there is no fallback to the uncontained path once
-    ``delegated_parent_cgroup`` has been configured.
-    """
-
-
-def _invocation_scope(configuration: ConcreteRuntimeConfiguration, *, suffix: str) -> str:
-    """A bounded, filesystem-safe per-purpose invocation id derived from the base one."""
-    digest = hashlib.sha256(
-        f"{configuration.invocation_id}:{suffix}".encode("utf-8")
-    ).hexdigest()
-    return f"wsc-{digest[:32]}"
-
-
-def _preflight_containment(configuration: ConcreteRuntimeConfiguration) -> None:
-    if configuration.delegated_parent_cgroup is None:
-        return
-    preflight = cgroup_v2_containment.preflight_check(configuration.delegated_parent_cgroup)
-    if not preflight.supported:
-        raise ConcreteRuntimeContainmentError(
-            f"#759 containment preflight failed: {preflight.reason}"
-        )
-
-
-def _containment_config(
-    configuration: ConcreteRuntimeConfiguration, *, suffix: str
-) -> ContainmentConfig | None:
-    if configuration.delegated_parent_cgroup is None:
-        return None
-    return ContainmentConfig(
-        delegated_parent_cgroup=configuration.delegated_parent_cgroup,
-        invocation_id=_invocation_scope(configuration, suffix=suffix),
-    )
 
 
 def _lease_adapter(
@@ -250,9 +210,6 @@ class BoundPosixCommandRunner(BoundedCommandRunner):
             cwd=self._configuration.executor_cwd,
             env=_environment(self._configuration),
             cancelled=self._cancelled,
-            containment=_containment_config(
-                self._configuration, suffix=f"validate:{request.test_id}"
-            ),
         )
         self.last_result = result
         outcome = (
@@ -612,9 +569,6 @@ class ConcreteDependencyCommandRunner(DependencyCommandRunner):
                 include_dependency_environment=include_dependency_environment,
             ),
             cancelled=self._cancelled,
-            containment=_containment_config(
-                self._configuration, suffix=f"dependency:{suffix}"
-            ),
         )
 
     @staticmethod
@@ -771,7 +725,6 @@ def build_concrete_runtime_adapters(
     """Verify one binding and construct the executable adapters for this mode."""
 
     configuration.verify(pilot_input)
-    _preflight_containment(configuration)
     lease = _lease_adapter(configuration)
     workspace = WorkspaceStateCapturingAdapter(
         GitWorktreeAdapter(
@@ -791,7 +744,6 @@ def build_concrete_runtime_adapters(
                 max_output_bytes=configuration.executor_max_output_bytes,
                 cwd=configuration.executor_cwd,
                 env=_environment(configuration),
-                containment=_containment_config(configuration, suffix="executor"),
             ),
             cancelled=process_cancelled,
         )
