@@ -1,4 +1,5 @@
 from scripts.agent_os_issue_labels.connected_issue_creation import (
+    DuplicateCandidateEvidence,
     DuplicateReviewDisposition,
     converge_connected_issue_creation,
     evaluate_duplicate_review_admission,
@@ -40,6 +41,33 @@ Reviewed current open bug owners and found one distinct repair seam.
 """
 
 
+
+
+def candidate(
+    issue_number: int,
+    *,
+    state: str = "open",
+    objective: str = "same governed outcome",
+    causal: str = "same causal seam",
+    acceptance: str = "same acceptance boundary",
+    boundary: str = "same ownership and scope boundary",
+) -> DuplicateCandidateEvidence:
+    return DuplicateCandidateEvidence(
+        issue_number=issue_number,
+        state=state,
+        objective_evidence=objective,
+        causal_seam_evidence=causal,
+        acceptance_evidence=acceptance,
+        boundary_evidence=boundary,
+    )
+
+
+def duplicate_admission(**kwargs):
+    kwargs.setdefault("candidate_enumeration_complete", True)
+    kwargs.setdefault("candidate_evidence", ())
+    return evaluate_duplicate_review_admission(BODY, issue_form_path=FORM, **kwargs)
+
+
 class Provider:
     def __init__(self, labels=()):
         self.snapshot = LiveIssueSnapshot("Blummer92/agent-os", 2144, BODY, tuple(labels), "open")
@@ -57,10 +85,8 @@ def test_known_managed_labels_are_available_before_connected_create():
 
 
 def test_distinct_bug_admission_allows_existing_create_flow():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
-        issue_form_path=FORM,
     )
     assert result.create_allowed is True
     assert result.next_operation == "create-then-canonical-readback-and-converge"
@@ -68,11 +94,10 @@ def test_distinct_bug_admission_allows_existing_create_flow():
 
 
 def test_2621_recurrence_routes_to_2283_without_create():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
         canonical_issue_number=2283,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2283),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2283
@@ -80,11 +105,10 @@ def test_2621_recurrence_routes_to_2283_without_create():
 
 
 def test_2615_duplicate_routes_to_2602_without_create():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
         canonical_issue_number=2602,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2602),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2602
@@ -92,18 +116,16 @@ def test_2615_duplicate_routes_to_2602_without_create():
 
 
 def test_focused_successor_requires_distinct_repair_seam():
-    blocked = evaluate_duplicate_review_admission(
-        BODY,
+    blocked = duplicate_admission(
         disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
         canonical_issue_number=2283,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2283),),
     )
-    admitted = evaluate_duplicate_review_admission(
-        BODY,
+    admitted = duplicate_admission(
         disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
         canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283),),
         distinct_repair_seam=True,
-        issue_form_path=FORM,
     )
     assert blocked.create_allowed is False
     assert blocked.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
@@ -112,17 +134,15 @@ def test_focused_successor_requires_distinct_repair_seam():
 
 
 def test_partial_overlap_and_missing_review_fail_closed():
-    overlap = evaluate_duplicate_review_admission(
-        BODY,
+    overlap = duplicate_admission(
         disposition=DuplicateReviewDisposition.PARTIAL_OVERLAP,
         canonical_issue_number=2283,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2283),),
     )
     no_review_body = BODY.split("### Prior scope, duplicate, and supersession review", 1)[0]
     missing = evaluate_duplicate_review_admission(
         no_review_body,
         disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
-        issue_form_path=FORM,
     )
     assert overlap.create_allowed is False
     assert overlap.next_operation == "manual-review-partial-overlap"
@@ -145,11 +165,10 @@ def test_missing_write_authority_cannot_claim_terminal_success():
 
 
 def test_ambiguous_manual_review_never_projects_create():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.MANUAL_REVIEW,
         canonical_issue_number=2283,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2283),),
     )
     assert result.create_allowed is False
     assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
@@ -157,11 +176,10 @@ def test_ambiguous_manual_review_never_projects_create():
 
 
 def test_historical_issue_with_current_successor_uses_supplied_current_owner():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
         canonical_issue_number=2602,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2602),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2602
@@ -177,7 +195,7 @@ def test_duplicate_admission_is_not_derived_from_issue_wording():
         differently_worded_body,
         disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
         canonical_issue_number=2283,
-        issue_form_path=FORM,
+        candidate_evidence=(candidate(2283),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2283
@@ -185,13 +203,98 @@ def test_duplicate_admission_is_not_derived_from_issue_wording():
 
 
 def test_focused_successor_rejects_non_boolean_repair_seam():
-    result = evaluate_duplicate_review_admission(
-        BODY,
+    result = duplicate_admission(
         disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
         canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283),),
         distinct_repair_seam="false",
-        issue_form_path=FORM,
     )
     assert result.create_allowed is False
     assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
     assert "duplicate-review.distinct-repair-seam-invalid" in result.reason_codes
+
+
+def test_2660_incomplete_candidate_enumeration_fails_closed_before_create():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=(candidate(2349),),
+        candidate_enumeration_complete=False,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+    assert result.reason_codes == ("duplicate-review.candidate-enumeration-incomplete",)
+
+
+def test_2660_existing_owner_must_be_an_inspected_open_candidate():
+    missing = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2602),),
+    )
+    closed = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283, state="closed"),),
+    )
+    for result in (missing, closed):
+        assert result.create_allowed is False
+        assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+        assert result.reason_codes == (
+            "duplicate-review.canonical-owner-not-inspected-open-candidate",
+        )
+
+
+def test_2660_candidate_comparison_requires_objective_causal_acceptance_and_boundary_evidence():
+    incomplete = DuplicateCandidateEvidence(
+        issue_number=2283,
+        state="open",
+        objective_evidence="same objective",
+        causal_seam_evidence="same causal seam",
+        acceptance_evidence="",
+        boundary_evidence="same boundary",
+    )
+    result = duplicate_admission(
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(incomplete,),
+    )
+    assert result.create_allowed is False
+    assert result.reason_codes == ("duplicate-review.candidate-evidence-invalid",)
+
+
+def test_2660_one_incident_routes_three_existing_symptoms_and_one_distinct_bug():
+    candidates = (candidate(2349), candidate(2647), candidate(2602))
+    cases = (
+        duplicate_admission(disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER, canonical_issue_number=2349, candidate_evidence=candidates),
+        duplicate_admission(disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER, canonical_issue_number=2647, candidate_evidence=candidates),
+        duplicate_admission(disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER, canonical_issue_number=2602, candidate_evidence=candidates),
+    )
+    assert all(result.create_allowed is False for result in cases)
+    assert [result.canonical_issue_number for result in cases] == [2349, 2647, 2602]
+    distinct = duplicate_admission(
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=candidates,
+    )
+    assert distinct.create_allowed is True
+    assert distinct.canonical_issue_number is None
+    assert distinct.next_operation == "create-then-canonical-readback-and-converge"
+
+
+def test_2660_semantic_or_title_similarity_is_not_candidate_comparison_evidence():
+    similarity_only = DuplicateCandidateEvidence(
+        issue_number=2283,
+        state="open",
+        objective_evidence="same words in title",
+        causal_seam_evidence="",
+        acceptance_evidence="same words in acceptance heading",
+        boundary_evidence="same label",
+    )
+    result = duplicate_admission(
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(similarity_only,),
+    )
+    assert result.create_allowed is False
+    assert result.reason_codes == ("duplicate-review.candidate-evidence-invalid",)
