@@ -338,12 +338,15 @@ class ConcreteRuntimeConfiguration:
     ) -> "ConcreteRuntimeConfiguration":
         """Bind the canonical configuration.
 
-        ``lease_directory`` and ``delegated_parent_cgroup`` are additive and
-        opt-in (default ``None``): omitted, the bound configuration selects
-        the pre-#758/#759 in-memory lease and uncontained POSIX process
-        adapters exactly as before. Supplying either binds the matching
-        production-shaped #758 host-local lease / #759 delegated cgroup v2
-        containment seam instead, with no other behavior change.
+        ``lease_directory`` is additive and opt-in (default ``None``): omitted,
+        the bound configuration selects the pre-#758 in-memory lease adapter
+        exactly as before. Supplying it binds the matching production-shaped
+        #758 host-local lease seam instead, with no other behavior change.
+
+        ``delegated_parent_cgroup`` is retained for configuration-shape
+        compatibility but cgroup containment was retired (#3101/PR #3235):
+        supplying it now fails closed in ``build_concrete_runtime_adapters``
+        instead of establishing containment.
         """
         if (
             not isinstance(pilot_input, SingleIssuePilotInput)
@@ -482,8 +485,10 @@ class ConcreteRuntimeConfiguration:
     ) -> "ConcreteRuntimeConfiguration":
         """Bind a validation-only configuration from truthful pre-execution evidence.
 
-        See ``bind`` for ``lease_directory``/``delegated_parent_cgroup``: both
-        are additive and opt-in, defaulting to the pre-#758/#759 behavior.
+        See ``bind`` for ``lease_directory``/``delegated_parent_cgroup``:
+        ``lease_directory`` is additive and opt-in, defaulting to the
+        pre-#758 behavior; ``delegated_parent_cgroup`` is retained but
+        containment was retired (#3101/PR #3235) and supplying it fails closed.
         """
         if not isinstance(repository_identity, RepositoryIdentity):
             raise ConcreteRuntimeConfigurationError(
