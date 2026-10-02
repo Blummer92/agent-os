@@ -19,6 +19,7 @@ from scripts.agent_os_issue_acceptance.parse_pr import (
 
 ROOT = Path(__file__).resolve().parents[1]
 LIFECYCLE = ROOT / "01_Shared_Standards" / "github" / "issue-lifecycle-standard.md"
+TESTING_RELEASE = ROOT / "01_Shared_Standards" / "global-engineering" / "testing-and-release.md"
 SAFE_LANE = ROOT / "01_Shared_Standards" / "github" / "safe-implementation-lane.md"
 WRITE_POLICY = ROOT / "00_Governance" / "write-authorization-policy.md"
 GITHUB_OVERLAY = ROOT / "02_Agent_Overlays" / "github-service-agent.md"
@@ -290,3 +291,36 @@ def test_bare_issue_reference_does_not_satisfy_lifecycle_contract() -> None:
 
 def test_unsupported_addresses_keyword_does_not_satisfy_lifecycle_contract() -> None:
     assert not _pr_satisfies_linked_issue_contract("Addresses #123")
+
+
+def test_3246_repair_evidence_exercises_trigger_at_causal_boundary() -> None:
+    text = normalized_text(TESTING_RELEASE)
+    for phrase in (
+        "narrowest boundary that can actually demonstrate the claimed behavior",
+        "exercise the triggering condition that previously failed",
+        "successful retry is not repair evidence by itself",
+        "do not promote repository or conformance evidence into a host, provider, or consumer-success claim",
+        "An enclosing success signal cannot override a more authoritative child disposition",
+    ):
+        assert phrase in text, f"missing #3246 repair-evidence guard: {phrase}"
+
+
+def test_3246_closure_requires_acceptance_evidence_and_nonclosing_linkage_when_pending() -> None:
+    text = normalized_text(LIFECYCLE)
+    for phrase in (
+        "issue-closing linkage only when current evidence satisfies",
+        "stated acceptance or clearing condition",
+        "keep the issue open and use non-closing linkage",
+        "never let a closing keyword imply a stronger repair claim than the evidence supports",
+    ):
+        assert phrase in text, f"missing #3246 closure guard: {phrase}"
+
+
+def test_3246_closed_manifestation_recurrence_routes_to_open_root_owner() -> None:
+    text = normalized_text(LIFECYCLE)
+    for phrase in (
+        "closed historical manifestation recurs",
+        "current open `root_cause_issue_number` owner",
+        "Do not use a new comment on the closed manifestation as the current work-routing record",
+    ):
+        assert phrase in text, f"missing #3246 recurrence-routing guard: {phrase}"
