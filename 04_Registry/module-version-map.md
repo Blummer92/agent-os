@@ -5,7 +5,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 |---|---|
 | Global Engineering | 0.4.0 |
 | Agent Interaction Output Standard | 0.2.1 |
-| Testing And Release | 0.6.0 |
+| Testing And Release | 0.7.0 |
 | ChatGPT Orchestrator | 0.3.10 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
@@ -28,7 +28,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
-| GitHub Issue Lifecycle Standard | 0.3.0 |
+| GitHub Issue Lifecycle Standard | 0.5.0 |
 | Safe Implementation Lane | 0.7.0 |
 | Agent OS Execution Service | 0.6.0 |
 | Artifact-First Response Standard | 0.1.4 |
@@ -54,7 +54,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Design Standards** `0.19.0` adds the #1568 standard worksheet Warm-Up + Exit Ticket default, preserving governed overrides/equivalent self-critique, per-variant/day coverage, #1567 compact-header separation, and core response space. `0.18.0` makes the compact worksheet title + student-identification top band the default (#1567), keeps Warm-Up/Exit Ticket and other lesson sections below it, and preserves an explicit layout opt-out. `0.17.0` adds the synthetic/noncanonical Assessment Cross-Unit Validation and Regression Standard (#846), proving portability across Photography, Typography, Graphic Design, Branding, Video Production, and AI Media while rejecting domain-name defaults and cross-domain assessment-rule leakage. `0.16.0` added the Unit 0 Assessment Reference Validation Standard (#842); `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
-**Testing And Release** `0.6.0` adds governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.
+**Testing And Release** `0.7.0` adds #3246 causal-boundary repair evidence: the actual trigger must be exercised at the boundary controlling the claim, successful retry alone cannot establish mixed-outcome repair, and enclosing/conformance success cannot substitute for authoritative child or consumer evidence. `0.6.0` added governed test-campaign reconciliation for #2872: next-test planning reacquires canonical campaign evidence, semantically classifies candidates as `new condition`, `intentional repeat`, or `already completed`, and requires a stated purpose for repeats without adding a second test-state store.
 
 **QA / Test Agent** `0.2.2` consumes that #2872 campaign-reconciliation contract for next-test planning while preserving canonical campaign evidence and the existing validation/non-authority boundary. `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
 
@@ -80,7 +80,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage, and resume planner; every authority field stays false. Its canonical source location and ownership are unchanged by #1300 (AOS-GCE2C); that issue only made the same files installable by declaring them in the `workflow-scheduler` distribution, so exactly one implementation of the descriptor loader continues to exist. #1304 (AOS-GCE2E) additively closed the ResumePlan round-trip and checkpoint-by-id gaps here (`resume_plan_from_dict`/`serialize_resume_plan`/`deserialize_resume_plan`, `resume_plan_store.py`, `store.load_checkpoint_by_id`) and added the sibling #918 route-decision/handoff stores under `agent-os-execution-service`; no package metadata or version changed.
 
-**GitHub Issue Lifecycle Standard** `0.3.0` adds Promotion In Place as a canonical issue-body classification using the existing Child-Issue Creation Test and explicitly forbids a parallel promotion issue-state snapshot/model; it also generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
+**GitHub Issue Lifecycle Standard** `0.5.0` adds #3246 evidence-bounded closure and closed-manifestation recurrence routing while preserving the existing lineage model; `0.4.0` added #2750 canonical bug-lineage metadata; `0.3.0` added Promotion In Place as a canonical issue-body classification using the existing Child-Issue Creation Test and explicitly forbids a parallel promotion issue-state snapshot/model; it also generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
 
 **GitHub Service Agent** `0.14.0` retires managed PR labels as required lifecycle state (#2904): PR lifecycle decisions use canonical PR/head/check/branch/review evidence directly, while issue-label convergence remains governed separately. `0.10.0` consumes #2644's finite protected-setting execution contract while keeping generic administration blocked. `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
 
