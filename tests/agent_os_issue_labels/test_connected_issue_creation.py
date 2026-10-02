@@ -143,6 +143,8 @@ def test_partial_overlap_and_missing_review_fail_closed():
     missing = evaluate_duplicate_review_admission(
         no_review_body,
         disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_enumeration_complete=True,
+        issue_form_path=FORM,
     )
     assert overlap.create_allowed is False
     assert overlap.next_operation == "manual-review-partial-overlap"
@@ -196,6 +198,8 @@ def test_duplicate_admission_is_not_derived_from_issue_wording():
         disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
         canonical_issue_number=2283,
         candidate_evidence=(candidate(2283),),
+        candidate_enumeration_complete=True,
+        issue_form_path=FORM,
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2283
