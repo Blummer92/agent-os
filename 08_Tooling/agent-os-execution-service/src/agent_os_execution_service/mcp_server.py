@@ -23,6 +23,7 @@ from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
+from scripts.agent_os_issue_labels.connected_issue_creation import DuplicateCandidateEvidence
 from .issue_batch_completion import classify_issue_batch_completion
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_reader_composition import resolve_lesson_read_route
@@ -119,16 +120,30 @@ def plan_connected_issue_creation_tool(
     duplicate_review_disposition: str | None = None,
     canonical_issue_number: int | None = None,
     distinct_repair_seam: bool = False,
+    candidate_evidence: list[dict[str, object]] | None = None,
+    candidate_enumeration_complete: bool = False,
 ) -> dict[str, object]:
     """Project canonical connected-issue admission evidence without performing writes."""
+    inspected = tuple(
+        DuplicateCandidateEvidence(
+            issue_number=item["issue_number"],
+            state=item["state"],
+            objective_evidence=item["objective_evidence"],
+            causal_seam_evidence=item["causal_seam_evidence"],
+            acceptance_evidence=item["acceptance_evidence"],
+            boundary_evidence=item["boundary_evidence"],
+        )
+        for item in (candidate_evidence or [])
+    )
     return plan_connected_issue_creation_for_host(
         repository=repository,
         issue_body=issue_body,
         duplicate_review_disposition=duplicate_review_disposition,
         canonical_issue_number=canonical_issue_number,
         distinct_repair_seam=distinct_repair_seam,
+        candidate_evidence=inspected,
+        candidate_enumeration_complete=candidate_enumeration_complete,
     )
-
 
 @mcp.tool()
 def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> dict[str, object]:
