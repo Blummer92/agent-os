@@ -74,6 +74,7 @@ def _configuration(
     validation_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
     executor_timeout_seconds: float = 1.0,
     lease_directory: str | None = None,
+    delegated_parent_cgroup: str | None = None,
 ) -> ConcreteRuntimeConfiguration:
     root = tmp_path / "repository"
     parent = tmp_path / "worktrees"
@@ -91,6 +92,7 @@ def _configuration(
         validation_per_command_timeout_seconds=1.0,
         validation_total_timeout_seconds=5.0,
         lease_directory=lease_directory,
+        delegated_parent_cgroup=delegated_parent_cgroup,
     )
 
 
@@ -431,6 +433,23 @@ def test_builder_constructs_only_existing_adapter_types(tmp_path: Path) -> None:
     assert isinstance(adapters.workspace._adapter, GitWorktreeAdapter)
     assert isinstance(adapters.executor, PosixProcessExecutor)
     assert isinstance(adapters.validator, module.FrozenTestValidationAdapter)
+
+
+def test_retired_delegated_parent_cgroup_fails_closed(tmp_path: Path) -> None:
+    # #3101/PR #3235 retired cgroup containment: a configured
+    # delegated_parent_cgroup must fail closed, never run silently uncontained.
+    configuration = _configuration(
+        tmp_path, delegated_parent_cgroup=str(tmp_path / "cgroup")
+    )
+    with pytest.raises(
+        ConcreteRuntimeConfigurationError, match="containment was retired"
+    ):
+        build_concrete_runtime_adapters(
+            tsp._pilot_input(),
+            configuration,
+            git_runner=ScenarioGitRunner(configuration),
+            changed_paths_inspector=lambda: (),
+        )
 
 
 def test_all_concrete_completed_path(tmp_path: Path) -> None:

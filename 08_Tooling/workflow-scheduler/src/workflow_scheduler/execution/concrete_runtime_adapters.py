@@ -725,6 +725,16 @@ def build_concrete_runtime_adapters(
     """Verify one binding and construct the executable adapters for this mode."""
 
     configuration.verify(pilot_input)
+    # #3101/PR #3235 retired cgroup containment: the delegated_parent_cgroup
+    # field is retained on the configuration but can no longer be honored.
+    # Fail closed instead of silently running uncontained when containment
+    # was requested.
+    if configuration.delegated_parent_cgroup is not None:
+        raise ConcreteRuntimeConfigurationError(
+            "delegated_parent_cgroup is set but cgroup containment was retired "
+            "(#3101/PR #3235); refusing to run uncontained when containment "
+            "was requested"
+        )
     lease = _lease_adapter(configuration)
     workspace = WorkspaceStateCapturingAdapter(
         GitWorktreeAdapter(
