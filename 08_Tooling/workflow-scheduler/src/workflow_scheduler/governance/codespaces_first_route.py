@@ -45,9 +45,14 @@ CODESPACES_PREFERRED_REASONS = frozenset(
 # Envelopes bound to concrete VM-only capabilities under #2300. These never
 # prefer Codespaces; the GCE transport is required until the capability
 # itself is retired or migrated by its own handoff.
+#
+# NOTE (#3101/PR #3233): first-run validation was retired — no transport can
+# perform it anymore. "accepted-first-run-validation-envelope" is deliberately
+# absent here, so it resolves to preferred="none" (route-unknown-envelope) and
+# the governed invocation workflow fails closed instead of routing the envelope
+# to a transport that can no longer carry it.
 GCE_REQUIRED_REASONS = {
     "accepted-runtime-inspection-envelope": "gce-required-fixed-host",
-    "accepted-first-run-validation-envelope": "gce-required-first-run-validation",
     "accepted-ruleset-admin-envelope": "gce-required-ruleset-admin",
     "accepted-first-publication-activation-envelope": "gce-required-activation",
     "accepted-ppux-projection-envelope": "gce-required-ppux-projection",

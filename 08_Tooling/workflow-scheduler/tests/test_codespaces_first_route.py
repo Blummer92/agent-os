@@ -38,7 +38,6 @@ def test_dev_validation_and_diagnostic_prefer_codespaces() -> None:
 def test_vm_only_capabilities_require_gce() -> None:
     cases = {
         "accepted-runtime-inspection-envelope": "gce-required-fixed-host",
-        "accepted-first-run-validation-envelope": "gce-required-first-run-validation",
         "accepted-ruleset-admin-envelope": "gce-required-ruleset-admin",
         "accepted-first-publication-activation-envelope": "gce-required-activation",
         "accepted-ppux-projection-envelope": "gce-required-ppux-projection",
@@ -50,6 +49,15 @@ def test_vm_only_capabilities_require_gce() -> None:
         assert route["preferred"] == "gce", reason
         assert route["gce_fallback_allowed"] is False, reason
         assert route["reason_codes"] == [expected_code], reason
+
+
+def test_retired_first_run_validation_envelope_resolves_to_none() -> None:
+    # #3101/PR #3233 retired first-run validation: no transport can perform it,
+    # so the envelope must fail closed instead of routing to GCE.
+    route = resolve_ingress_route(_transport("accepted-first-run-validation-envelope"))
+    assert route["preferred"] == "none"
+    assert route["gce_fallback_allowed"] is False
+    assert route["reason_codes"] == ["route-unknown-envelope"]
 
 
 def test_non_accepted_envelope_resolves_to_none() -> None:
