@@ -24,6 +24,16 @@ class DuplicateReviewDisposition(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class DuplicateCandidateEvidence:
+    issue_number: int
+    state: str
+    objective_evidence: str
+    causal_seam_evidence: str
+    acceptance_evidence: str
+    boundary_evidence: str
+
+
+@dataclass(frozen=True, slots=True)
 class DuplicateReviewAdmission:
     disposition: DuplicateReviewDisposition
     canonical_issue_number: int | None
@@ -49,6 +59,8 @@ def evaluate_duplicate_review_admission(
     disposition: DuplicateReviewDisposition | str | None,
     canonical_issue_number: int | None = None,
     distinct_repair_seam: bool = False,
+    candidate_evidence: tuple[DuplicateCandidateEvidence, ...] = (),
+    candidate_enumeration_complete: bool = False,
     issue_form_path: str | Path,
 ) -> DuplicateReviewAdmission:
     fields = load_issue_form_fields(issue_form_path)
@@ -71,6 +83,26 @@ def evaluate_duplicate_review_admission(
             False,
             "manual-review-duplicate-admission-required",
             ("duplicate-review.prior-scope-evidence-missing",),
+        )
+    if type(candidate_enumeration_complete) is not bool or not candidate_enumeration_complete:
+        return DuplicateReviewAdmission(
+            DuplicateReviewDisposition.MANUAL_REVIEW,
+            None,
+            review,
+            False,
+            "manual-review-duplicate-admission-required",
+            ("duplicate-review.candidate-enumeration-incomplete",),
+        )
+    try:
+        inspected = _validated_candidate_evidence(candidate_evidence)
+    except ValueError:
+        return DuplicateReviewAdmission(
+            DuplicateReviewDisposition.MANUAL_REVIEW,
+            None,
+            review,
+            False,
+            "manual-review-duplicate-admission-required",
+            ("duplicate-review.candidate-evidence-invalid",),
         )
 
     try:
@@ -101,6 +133,17 @@ def evaluate_duplicate_review_admission(
             "manual-review-duplicate-admission-required",
             ("duplicate-review.canonical-owner-unproven",),
         )
+    if canonical_required:
+        matching = tuple(item for item in inspected if item.issue_number == canonical_issue_number)
+        if len(matching) != 1 or matching[0].state != "open":
+            return DuplicateReviewAdmission(
+                DuplicateReviewDisposition.MANUAL_REVIEW,
+                canonical_issue_number,
+                review,
+                False,
+                "manual-review-duplicate-admission-required",
+                ("duplicate-review.canonical-owner-not-inspected-open-candidate",),
+            )
 
     if resolved is DuplicateReviewDisposition.NEW_DISTINCT_BUG:
         return DuplicateReviewAdmission(
@@ -194,3 +237,30 @@ def converge_connected_issue_creation(provider: IssueLabelProvider, repository: 
 
 def _is_managed(label: str) -> bool:
     return label in _MANAGED_EXACT or label.startswith(_MANAGED_PREFIXES)
+
+
+def _validated_candidate_evidence(
+    candidates: tuple[DuplicateCandidateEvidence, ...],
+) -> tuple[DuplicateCandidateEvidence, ...]:
+    if type(candidates) is not tuple:
+        raise ValueError("candidate_evidence must be a tuple")
+    seen: set[int] = set()
+    for candidate in candidates:
+        if type(candidate) is not DuplicateCandidateEvidence:
+            raise ValueError("candidate_evidence must contain DuplicateCandidateEvidence")
+        if type(candidate.issue_number) is not int or candidate.issue_number <= 0:
+            raise ValueError("candidate issue_number must be positive")
+        if candidate.issue_number in seen:
+            raise ValueError("candidate issue numbers must be unique")
+        seen.add(candidate.issue_number)
+        if candidate.state not in {"open", "closed"}:
+            raise ValueError("candidate state must be open or closed")
+        for value in (
+            candidate.objective_evidence,
+            candidate.causal_seam_evidence,
+            candidate.acceptance_evidence,
+            candidate.boundary_evidence,
+        ):
+            if type(value) is not str or not value.strip():
+                raise ValueError("candidate comparison evidence must be non-empty")
+    return candidates
