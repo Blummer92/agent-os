@@ -340,3 +340,41 @@ def test_single_implemented_issue_plus_dependency_linkage_permits_ready():
     )
     assert result.transition_admissible is True
     assert "multiple-implemented-issues-linked" not in result.reason_codes
+
+
+# --- #3246: the Ready gate requires a matching closure admission --------------
+# Acceptance sufficiency is QA's judgment, supplied only as the presence of an
+# IssueClosureAdmission for the exact issue. The Ready gate verifies that
+# admission; it does not interpret acceptance prose or grant closure authority.
+
+
+def test_3246_closing_reference_without_admission_blocks_ready_with_named_reason():
+    result = admission(pr_body="Closes #3246")
+    assert result.transition_admissible is False
+    assert result.reason_codes == ("unauthorized-closing-reference",)
+    assert result.next_action == "authorize-issue-closure-before-ready"
+
+
+def test_3246_matching_admission_permits_ready_and_grants_no_closure_authority():
+    result = admission(
+        pr_body="Closes #3246",
+        closure_admissions=(closure_admission(3246),),
+    )
+    assert result.transition_admissible is True
+    assert result.reason_codes == ("draft-final-candidate-ready-converged",)
+    assert result.issue_closure_authorized is False
+
+
+def test_3246_admission_for_another_issue_does_not_authorize_ready():
+    result = admission(
+        pr_body="Closes #3246",
+        closure_admissions=(closure_admission(3126),),  # same repository, other issue
+    )
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+
+
+def test_3246_non_closing_linkage_is_permitted_while_acceptance_is_unresolved():
+    result = admission(pr_body="Refs #3246. Part of #3246.")
+    assert result.transition_admissible is True
+    assert "unauthorized-closing-reference" not in result.reason_codes

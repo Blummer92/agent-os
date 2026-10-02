@@ -21,6 +21,8 @@ For materially comparable executions with mixed success and failure, a later suc
 
 An enclosing success signal cannot override a more authoritative child disposition for the claimed behavior. A workflow-level success, documentation change, standards conformance result, or focused pass therefore cannot substitute for a required aggregate job, consumer behavior, or issue-specific acceptance condition when that lower boundary is what controls the claim.
 
+Whether that evidence actually exercised the trigger, reflects a repair rather than an uninformative retry, or satisfies an issue's acceptance or clearing condition is a QA / Test Agent judgment (or that of the acceptance owner the issue designates). Tooling verifies identity, exact-head currentness, and the presence of the required admission; it does not infer repair, trigger execution, or semantic acceptance from a passing result.
+
 
 ## Governed Test-Campaign Reconciliation
 
@@ -50,7 +52,7 @@ For conversational/manual tests, any selected `new condition` or `intentional re
 0.7.0
 
 ## Changelog
-- 0.7.0 adds #3246 causal-boundary repair evidence: exercise the actual failure trigger, treat successful retry as non-repair for mixed outcomes, bound claims to the surface actually verified, and prevent enclosing/documentation/conformance success from substituting for authoritative consumer or child evidence. No new test-state store, experiment system, lifecycle, or authority is added.
+- 0.7.0 adds #3246 causal-boundary repair evidence: exercise the actual failure trigger, treat successful retry as non-repair for mixed outcomes, bound claims to the surface actually verified, and prevent enclosing/documentation/conformance success from substituting for authoritative consumer or child evidence. Semantic sufficiency stays a QA judgment; tooling verifies the admission, not the meaning. No new test-state store, experiment system, lifecycle, or authority is added.
 - 0.6.0 adds #2872 governed test-campaign reconciliation before next-test recommendations: reacquire canonical campaign evidence, semantically classify candidates as `new condition`, `intentional repeat`, or `already completed`, require a stated purpose for repeats, and preserve the conversational/manual reproducibility metadata contract without adding a second test-state store.
 - 0.5.0 adds #2852's reversible provisional-Ready validation trigger for the existing Ready-event aggregate path when no other capable governed aggregate trigger is available; exact-head success is still required before Ready converges and any non-success requires Draft rollback. No merge, closure, workflow-edit, permission, production, or external-write authority is added.
 - 0.4.1 rewords the exact-head governed CI aggregate sentence in Developer Loop Validation so its subsuming-evidence phrase is contiguous and test-verifiable, with no change in meaning (#1594).

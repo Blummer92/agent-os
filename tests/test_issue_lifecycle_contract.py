@@ -293,7 +293,17 @@ def test_unsupported_addresses_keyword_does_not_satisfy_lifecycle_contract() -> 
     assert not _pr_satisfies_linked_issue_contract("Addresses #123")
 
 
-def test_3246_repair_evidence_exercises_trigger_at_causal_boundary() -> None:
+# --- #3246 policy guards ----------------------------------------------------
+# These assert that required standards TEXT remains present. They are policy
+# guards, not behavioral regressions: they cannot prove that any consumer
+# refuses anything. Closure enforcement is covered behaviorally by the #3246
+# tests in tests/agent_os_issue_acceptance/test_merge_authorization.py and
+# tests/agent_os_issue_labels/test_ready_for_review_admission.py; the
+# authoritative-aggregate case (#3114) is covered by
+# tests/test_agent_os_aggregate_gate.py.
+
+
+def test_3246_policy_guard_repair_evidence_text_and_qa_judgment() -> None:
     text = normalized_text(TESTING_RELEASE)
     for phrase in (
         "narrowest boundary that can actually demonstrate the claimed behavior",
@@ -301,26 +311,49 @@ def test_3246_repair_evidence_exercises_trigger_at_causal_boundary() -> None:
         "successful retry is not repair evidence by itself",
         "do not promote repository or conformance evidence into a host, provider, or consumer-success claim",
         "An enclosing success signal cannot override a more authoritative child disposition",
+        "is a QA / Test Agent judgment",
+        "it does not infer repair, trigger execution, or semantic acceptance from a passing result",
     ):
-        assert phrase in text, f"missing #3246 repair-evidence guard: {phrase}"
+        assert phrase in text, f"missing #3246 repair-evidence policy text: {phrase}"
 
 
-def test_3246_closure_requires_acceptance_evidence_and_nonclosing_linkage_when_pending() -> None:
+def test_3246_policy_guard_closure_ownership_text() -> None:
     text = normalized_text(LIFECYCLE)
     for phrase in (
         "issue-closing linkage only when current evidence satisfies",
-        "stated acceptance or clearing condition",
         "keep the issue open and use non-closing linkage",
         "never let a closing keyword imply a stronger repair claim than the evidence supports",
+        "QA / Test Agent, or the acceptance owner the issue designates, judges",
+        "lifecycle authorization and merge code never interpret acceptance prose",
+        "requires an `IssueClosureAdmission` for that exact issue",
+        "fail closed when it is absent or names another issue",
+        "It is not proof that software understood the evidence",
     ):
-        assert phrase in text, f"missing #3246 closure guard: {phrase}"
+        assert phrase in text, f"missing #3246 closure policy text: {phrase}"
 
 
-def test_3246_closed_manifestation_recurrence_routes_to_open_root_owner() -> None:
+def test_3246_policy_guard_recurrence_routing_text() -> None:
     text = normalized_text(LIFECYCLE)
     for phrase in (
         "closed historical manifestation recurs",
         "current open `root_cause_issue_number` owner",
         "Do not use a new comment on the closed manifestation as the current work-routing record",
     ):
-        assert phrase in text, f"missing #3246 recurrence-routing guard: {phrase}"
+        assert phrase in text, f"missing #3246 recurrence-routing policy text: {phrase}"
+
+
+def test_3246_policy_guard_module_version_is_consistent_across_sources() -> None:
+    """The module file, its changelog head, and the module-version map must agree."""
+    version_map = (ROOT / "04_Registry" / "module-version-map.md").read_text(encoding="utf-8")
+    for path, label in (
+        (LIFECYCLE, "GitHub Issue Lifecycle Standard"),
+        (TESTING_RELEASE, "Testing And Release"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        declared = text.split("## Version", 1)[1].split("\n## ", 1)[0].strip()
+        changelog = text.split("## Changelog", 1)[1]
+        newest = next(
+            line for line in changelog.splitlines() if line.lstrip("- ").startswith("0.")
+        ).lstrip("- ").split()[0]
+        assert declared == newest, f"{label}: Version {declared} != newest changelog entry {newest}"
+        assert f"| {label} | {declared} |" in version_map, f"{label}: version map does not list {declared}"
