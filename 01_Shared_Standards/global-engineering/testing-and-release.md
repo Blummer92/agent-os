@@ -13,6 +13,17 @@
 - Expand local testing when focused tests fail, when exact-head CI reports a specific failure that needs diagnosis, when CI is unavailable, or when the governing issue explicitly requires broader local validation.
 
 
+## Repair Evidence At The Causal Boundary
+
+A repair claim must be supported at the narrowest boundary that can actually demonstrate the claimed behavior. The evidence must exercise the triggering condition that previously failed; a passing run in which that trigger never occurs is not regression evidence for that defect. Do not require live, external, or consumer evidence when the claim is purely internal, but do not promote repository or conformance evidence into a host, provider, or consumer-success claim without evidence from that boundary.
+
+For materially comparable executions with mixed success and failure, a later successful retry is not repair evidence by itself. Establish the discriminating mechanism, change or remove that mechanism on the surface that owns it, and exercise the previously failing condition. When the relevant seam is host- or provider-owned and repository code cannot establish the external behavior, report only the bounded repository/conformance result and preserve the external clearing condition.
+
+An enclosing success signal cannot override a more authoritative child disposition for the claimed behavior. A workflow-level success, documentation change, standards conformance result, or focused pass therefore cannot substitute for a required aggregate job, consumer behavior, or issue-specific acceptance condition when that lower boundary is what controls the claim.
+
+Whether that evidence actually exercised the trigger, reflects a repair rather than an uninformative retry, or satisfies an issue's acceptance or clearing condition is a QA / Test Agent judgment (or that of the acceptance owner the issue designates). Tooling verifies identity, exact-head currentness, and the presence of the required admission; it does not infer repair, trigger execution, or semantic acceptance from a passing result.
+
+
 ## Governed Test-Campaign Reconciliation
 
 Before recommending another manual, conversational, benchmark, or adversarial test in an active governed campaign, reacquire the canonical campaign owner and its current result evidence. Reconstruct only the smallest evidence-backed completed-test matrix needed for the next-test decision; do not create a second test-state store, experiment database, conversation-memory system, or parallel source of truth.
@@ -38,9 +49,10 @@ For conversational/manual tests, any selected `new condition` or `intentional re
 - Release only with required exact-head evidence and checklist status.
 
 ## Version
-0.6.0
+0.7.0
 
 ## Changelog
+- 0.7.0 adds #3246 causal-boundary repair evidence: exercise the actual failure trigger, treat successful retry as non-repair for mixed outcomes, bound claims to the surface actually verified, and prevent enclosing/documentation/conformance success from substituting for authoritative consumer or child evidence. Semantic sufficiency stays a QA judgment; tooling verifies the admission, not the meaning. No new test-state store, experiment system, lifecycle, or authority is added.
 - 0.6.0 adds #2872 governed test-campaign reconciliation before next-test recommendations: reacquire canonical campaign evidence, semantically classify candidates as `new condition`, `intentional repeat`, or `already completed`, require a stated purpose for repeats, and preserve the conversational/manual reproducibility metadata contract without adding a second test-state store.
 - 0.5.0 adds #2852's reversible provisional-Ready validation trigger for the existing Ready-event aggregate path when no other capable governed aggregate trigger is available; exact-head success is still required before Ready converges and any non-success requires Draft rollback. No merge, closure, workflow-edit, permission, production, or external-write authority is added.
 - 0.4.1 rewords the exact-head governed CI aggregate sentence in Developer Loop Validation so its subsuming-evidence phrase is contiguous and test-verifiable, with no change in meaning (#1594).

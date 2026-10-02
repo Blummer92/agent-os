@@ -1087,3 +1087,61 @@ def test_2991_single_implemented_issue_plus_dependency_linkage_merges():
     )
     record = _candidate(bundle, pr=pr)
     assert record.binding.closure_admission_ids == (admission_2989.admission.result_id,)
+
+
+# --- #3246: closure authorization is a precondition, not a derived fact -------
+# QA / the designated acceptance owner judges whether acceptance is satisfied;
+# that judgment is supplied here only as the presence of an IssueClosureAdmission.
+# These tests prove the merge gate refuses closing linkage without a matching
+# admission. They do not (and cannot) prove acceptance was semantically met.
+
+_CLOSES_3246 = "Closes #3246"
+
+
+def test_3246_closing_reference_blocks_without_matching_admission_with_named_reason():
+    bundle = _bundle()
+    pr = _closing_pr(bundle, body=_CLOSES_3246)  # otherwise valid: checks success, review clear
+    assert all(check.state == "success" for check in pr.required_checks)
+    with pytest.raises(ValueError) as excinfo:
+        _candidate(bundle, pr=pr)
+    message = str(excinfo.value)
+    assert "pull-request.unauthorized-closing-reference" in message
+    assert "unauthorized-closing-reference:#3246:close #3246" in message
+
+
+def test_3246_matching_admission_is_the_only_difference_that_permits_closure():
+    bundle = _bundle()
+    admission = _closure_admission(3246)
+    assert admission.target == "#3246"
+    pr_without = _closing_pr(bundle, body=_CLOSES_3246)
+    pr_with = _closing_pr(bundle, body=_CLOSES_3246, admissions=(admission,))
+    with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
+        _candidate(bundle, pr=pr_without)
+    record = _candidate(bundle, pr=pr_with)
+    assert record.binding.closure_admission_ids == (admission.admission.result_id,)
+    authorized, _ = _authorized(bundle, pr=pr_with)
+    result = _evaluate(authorized, bundle, pr=pr_with)
+    assert result.merge_authorized is True
+    assert result.reason_codes == ()
+
+
+def test_3246_admission_for_another_issue_does_not_authorize_closure():
+    bundle = _bundle()
+    other_issue = _closure_admission(3126)  # same repository, different issue
+    pr = _closing_pr(bundle, body=_CLOSES_3246, admissions=(other_issue,))
+    with pytest.raises(ValueError) as excinfo:
+        _candidate(bundle, pr=pr)
+    assert "unauthorized-closing-reference:#3246" in str(excinfo.value)
+
+
+def test_3246_non_closing_linkage_is_permitted_while_acceptance_is_unresolved():
+    bundle = _bundle()
+    pr = _closing_pr(bundle, body="Refs #3246. Part of #3246.")
+    record = _candidate(bundle, pr=pr)
+    assert record.binding.closure_admission_ids == ()
+
+
+# Mutation after authorization (a closing reference added to an authorized PR) is
+# covered by test_3157_closing_reference_added_after_authorization_blocks above.
+# The authoritative-aggregate case (#3114) is covered by
+# tests/test_agent_os_aggregate_gate.py; it is intentionally not duplicated here.
