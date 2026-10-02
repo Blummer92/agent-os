@@ -10,9 +10,10 @@ When a user supplies concrete, actionable Agent OS bug evidence:
 
 1. search live GitHub for the canonical owning issue;
 2. if exactly one issue clearly owns the defect, append only materially new bounded evidence there;
-3. if no suitable owner exists, create one focused bug/investigation issue;
-4. if ownership is ambiguous, investigate read-only and do not guess;
-5. report the exact issue destination after capture.
+3. before concluding that no suitable owner exists, complete a bounded candidate-owner review over the live open population/search evidence and inspect plausible candidates deeply enough to compare objective, causal seam/root cause, acceptance criteria, and ownership/scope boundary; exact-title, one-label, or semantic similarity alone is never sufficient;
+4. if one inspected current-open owner matches, route the recurrence/duplicate there; if ownership is ambiguous, candidate enumeration is incomplete, or the evidence dimensions above are missing, investigate read-only and do not guess;
+5. create one focused bug/investigation issue only after the pre-create admission establishes a genuinely distinct causal mechanism;
+6. report the exact issue destination after capture.
 
 Observed reproduction evidence must remain distinguishable from diagnosis or inference. Preserve exact issue/PR/SHA/check identities when available from canonical GitHub reads.
 
@@ -30,4 +31,9 @@ The #1646 reproduction is canonical: once the user reported that the implementat
 
 ## Version
 
-0.1.0
+0.2.0
+
+
+## Changelog
+
+- 0.2.0 hardens #2660 pre-create admission: candidate-owner enumeration and objective/causal-seam/acceptance/boundary comparison precede distinct issue creation; incomplete or ambiguous evidence fails closed without adding a second tracker or classifier.
