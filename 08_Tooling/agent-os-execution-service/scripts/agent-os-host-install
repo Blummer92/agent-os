@@ -299,7 +299,9 @@ print(json.dumps({
     "sha256": os.environ["TARGET_HASH"],
     "staging_root": os.environ["STAGING_ROOT"],
     "privileged_source": "root-owned-staging",
-    "discovery_importable": True,
+    # #3101/PR #3234 retired the discovery entrypoint: it is no longer
+    # installed or importable on the host.
+    "discovery_importable": False,
     "governed_resume_importable": True,
     "native_extension_importable": True,
     "scheduler_invoked": False,
