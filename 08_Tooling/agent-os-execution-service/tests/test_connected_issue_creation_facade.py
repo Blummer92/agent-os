@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from scripts.agent_os_issue_labels.connected_issue_creation import DuplicateCandidateEvidence
+
 from agent_os_execution_service.connected_issue_creation_facade import (
     create_connected_issue_for_host,
     plan_connected_issue_creation_for_host,
@@ -38,11 +40,29 @@ Reviewed current open bug owners and found one distinct repair seam.
 """
 
 
+def candidate(issue_number: int) -> DuplicateCandidateEvidence:
+    return DuplicateCandidateEvidence(
+        issue_number=issue_number,
+        state="open",
+        objective_evidence="candidate objective inspected",
+        causal_seam_evidence="candidate causal seam inspected",
+        acceptance_evidence="candidate acceptance inspected",
+        boundary_evidence="candidate boundary inspected",
+    )
+
+
+def distinct_kwargs() -> dict[str, object]:
+    return {
+        "duplicate_review_disposition": "NEW_DISTINCT_BUG",
+        "candidate_enumeration_complete": True,
+    }
+
+
 def test_host_projection_reuses_canonical_connected_creation_labels() -> None:
     result = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert set(result["proposed_labels"]) == {
         "agent-os",
@@ -59,7 +79,7 @@ def test_host_projection_never_creates_authority() -> None:
     result = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert result["implementation_authorized"] is False
     assert result["merge_authorized"] is False
@@ -84,6 +104,8 @@ def test_recurrence_returns_canonical_owner_without_create() -> None:
         issue_body=BODY,
         duplicate_review_disposition="RECURRENCE_EXISTING_OWNER",
         canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283),),
+        candidate_enumeration_complete=True,
     )
     assert result["create_allowed"] is False
     assert result["canonical_issue_number"] == 2283
@@ -96,12 +118,16 @@ def test_focused_successor_requires_explicit_distinct_seam() -> None:
         issue_body=BODY,
         duplicate_review_disposition="FOCUSED_SUCCESSOR",
         canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283),),
+        candidate_enumeration_complete=True,
     )
     admitted = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",
         issue_body=BODY,
         duplicate_review_disposition="FOCUSED_SUCCESSOR",
         canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283),),
+        candidate_enumeration_complete=True,
         distinct_repair_seam=True,
     )
     assert blocked["create_allowed"] is False
@@ -115,7 +141,7 @@ def test_missing_canonical_metadata_fails_closed() -> None:
         plan_connected_issue_creation_for_host(
             repository="Blummer92/agent-os",
             issue_body="Source of truth: GitHub",
-            duplicate_review_disposition="NEW_DISTINCT_BUG",
+            **distinct_kwargs(),
         )
 
 
@@ -124,7 +150,7 @@ def test_repository_identity_is_bounded() -> None:
         plan_connected_issue_creation_for_host(
             repository="agent-os",
             issue_body=BODY,
-            duplicate_review_disposition="NEW_DISTINCT_BUG",
+            **distinct_kwargs(),
         )
 
 
@@ -132,7 +158,7 @@ def test_admitted_create_projects_nonterminal_readback_convergence_contract() ->
     result = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert result["create_contract"] == "canonical-labels-readback-convergence-required"
     assert result["create_response_terminal"] is False
@@ -146,7 +172,7 @@ def test_2905_ready_label_is_bound_into_required_post_create_readback():
     result = plan_connected_issue_creation_for_host(
         repository="Blummer92/agent-os",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert "status:ready" in result["required_managed_label_readback"]
     assert set(result["required_managed_label_readback"]) == set(result["proposed_labels"])
@@ -206,7 +232,7 @@ def test_3027_zero_label_native_create_reconciles_before_terminal_success():
         repository="Blummer92/agent-os",
         title="BUG - zero labels",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert set(provider.created_with) == set(result.required_managed_labels)
     assert provider.reconcile_count == 1
@@ -222,7 +248,7 @@ def test_3027_partial_label_native_create_reconciles_before_terminal_success():
         repository="Blummer92/agent-os",
         title="BUG - partial labels",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert provider.reconcile_count == 1
     assert result.terminal_success is True
@@ -237,7 +263,7 @@ def test_3027_already_converged_create_is_idempotent():
         repository="Blummer92/agent-os",
         title="BUG - converged",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert provider.reconcile_count == 0
     assert provider.read_count == 1
@@ -258,7 +284,7 @@ def test_3027_reconciliation_mismatch_cannot_terminalize():
         repository="Blummer92/agent-os",
         title="BUG - still missing labels",
         issue_body=BODY,
-        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        **distinct_kwargs(),
     )
     assert provider.reconcile_count == 1
     assert provider.read_count == 2
@@ -274,7 +300,7 @@ def test_3027_malformed_minimal_body_fails_before_native_create():
             repository="Blummer92/agent-os",
             title="BUG - malformed body",
             issue_body="## Summary\nMissing canonical classification.",
-            duplicate_review_disposition="NEW_DISTINCT_BUG",
+            **distinct_kwargs(),
         )
     assert provider.created_with == ()
     assert provider.read_count == 0
