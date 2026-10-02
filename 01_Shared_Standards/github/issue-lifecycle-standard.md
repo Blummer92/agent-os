@@ -87,6 +87,10 @@ Each cross-cutting risk has exactly one canonical owner issue, recorded in `04_R
 
 Close a planning issue with one dated handoff comment once its implementation-ready children exist. Close duplicates with a pointer to the canonical item. Preserve links; never rewrite closed historical bodies.
 
+A pull request, release action, or other mutation may use issue-closing linkage only when current evidence satisfies the open issue body's stated acceptance or clearing condition for the claim being closed. A merged change, documentation/conformance update, successful retry, or enclosing green status is not sufficient merely because it is related to the issue. When the required acceptance evidence is still pending, unavailable, external, or contradicted, keep the issue open and use non-closing linkage. Synchronize the open body before closure, and never let a closing keyword imply a stronger repair claim than the evidence supports.
+
+When a closed historical manifestation recurs, preserve the historical issue and attach the new bounded recurrence evidence to the current open `root_cause_issue_number` owner after reacquiring that owner as open. Do not use a new comment on the closed manifestation as the current work-routing record.
+
 ## Closed-Issue Authority
 
 The open issue body is authoritative while the issue is active and must be synchronized immediately before closure. After closure the body is immutable historical evidence; never rewrite a closed body or its comments. Future execution routing is controlled by the closed state, the closure reason, the latest dated final-disposition comment, and the canonical successor or duplicate pointer — not by any historical `status:ready`, `status:blocked`, or `status:needs-decision` label, which cannot reactivate a closed issue. `completed`, `completed/no-change`, `not planned`, `duplicate`, and `superseded` are distinct terminal dispositions. New related work normally opens a new issue; reopening requires explicit authorization and the same original objective.
@@ -116,6 +120,8 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 0.4.0
 
 ## Changelog
+
+- 0.5.0 adds #3246 evidence-bounded closure: closing linkage requires current acceptance/clearing evidence, non-closing linkage is required while evidence remains pending or external, and recurrences of closed manifestations route to the current open root-cause owner. No new closure state, lineage model, or execution authority is added.
 
 - 0.4.0 defines #2750 canonical bug-lineage body metadata for historical original parent and current root-cause owner, rejects per-issue-number lineage labels, and keeps search/index projections derived and non-authoritative.
 
