@@ -98,7 +98,9 @@ def test_privileged_host_installer_owns_the_bounded_install_and_never_dispatches
     assert "--force-reinstall" in text
     assert "--no-index" in text
     assert "--no-deps" in text
-    assert "agent_os_execution_service.handoff_discovery_entrypoint" in text
+    # #3101/PR #3234 retired handoff_discovery_entrypoint: the installer must
+    # no longer require the deleted module.
+    assert "agent_os_execution_service.handoff_discovery_entrypoint" not in text
     assert "agent_os_execution_service.governed_resume_entrypoint" in text
     assert "workflow_scheduler.execution._clone3_cgroup" in text
     assert text.count("scripts/install-governed-resume") == 1

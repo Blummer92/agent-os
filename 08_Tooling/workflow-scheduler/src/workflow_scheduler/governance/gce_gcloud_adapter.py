@@ -25,9 +25,7 @@ from .retirement_inventory import collect_retirement_inventory
 
 PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
 HOST_PYTHON="/usr/bin/python3"
-DISCOVERY_MODULE="agent_os_execution_service.handoff_discovery_entrypoint"
 ACTIVATION_MODULE="agent_os_execution_service.first_publication_activation_entrypoint"
-DISCOVERY_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {DISCOVERY_MODULE}'"
 ACTIVATION_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {ACTIVATION_MODULE}'"
 MAX_DIAGNOSTIC_STDERR=2048
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
@@ -37,7 +35,6 @@ _FRAME_START="===AGENT-OS-RUNTIME-INSPECTION-JSON-BEGIN==="
 _FRAME_END="===AGENT-OS-RUNTIME-INSPECTION-JSON-END==="
 
 _RUNTIME_INSPECTION_SOURCE=r'''import grp,importlib.util,json,os,pwd,site,stat,subprocess,sys,sysconfig
-M="agent_os_execution_service.handoff_discovery_entrypoint"
 def spec(n):
  try:
   s=importlib.util.find_spec(n);return None if s is None else {"origin":s.origin,"search_locations":list(s.submodule_search_locations or [])}
@@ -54,15 +51,15 @@ def ancestors(p):
   if q=="/":break
   q=os.path.dirname(q)
  return list(reversed(out))
-base=spec("agent_os_execution_service");sub=spec(M);paths=[]
+base=spec("agent_os_execution_service");paths=[]
 if isinstance(base,dict):
  for p in base.get("search_locations",[]):paths.extend(ancestors(p))
-probe=subprocess.run(["/usr/bin/python3","-c","import "+M],capture_output=True,text=True,check=False)
+probe=subprocess.run(["/usr/bin/python3","-c","import agent_os_execution_service"],capture_output=True,text=True,check=False)
 groups=[]
 for g in os.getgroups():
  try:groups.append(grp.getgrgid(g).gr_name)
  except KeyError:groups.append(str(g))
-out={"schema_version":"1.0","status":"observed","reason_codes":["runtime-context-observed"],"project":"agent-os-502614","zone":"us-central1-a","instance":"agent-os-test","interpreter":"/usr/bin/python3","effective_identity":{"username":pwd.getpwuid(os.geteuid()).pw_name,"uid":os.geteuid(),"gid":os.getegid(),"groups":groups},"python_context":{"version":sys.version.split()[0],"executable":sys.executable,"prefix":sys.prefix,"base_prefix":sys.base_prefix,"sys_path":sys.path,"site_packages":site.getsitepackages() if hasattr(site,"getsitepackages") else [],"user_site":site.getusersitepackages(),"purelib":sysconfig.get_path("purelib"),"platlib":sysconfig.get_path("platlib"),"pythonpath_set":"PYTHONPATH" in os.environ},"package_resolution":{"package":base,"submodule":sub},"filesystem_visibility":paths,"import_probe":{"exit_code":probe.returncode,"stderr":probe.stderr[-2048:],"stderr_truncated":len(probe.stderr)>2048},"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
+out={"schema_version":"1.0","status":"observed","reason_codes":["runtime-context-observed"],"project":"agent-os-502614","zone":"us-central1-a","instance":"agent-os-test","interpreter":"/usr/bin/python3","effective_identity":{"username":pwd.getpwuid(os.geteuid()).pw_name,"uid":os.geteuid(),"gid":os.getegid(),"groups":groups},"python_context":{"version":sys.version.split()[0],"executable":sys.executable,"prefix":sys.prefix,"base_prefix":sys.base_prefix,"sys_path":sys.path,"site_packages":site.getsitepackages() if hasattr(site,"getsitepackages") else [],"user_site":site.getusersitepackages(),"purelib":sysconfig.get_path("purelib"),"platlib":sysconfig.get_path("platlib"),"pythonpath_set":"PYTHONPATH" in os.environ},"package_resolution":{"package":base},"filesystem_visibility":paths,"import_probe":{"exit_code":probe.returncode,"stderr":probe.stderr[-2048:],"stderr_truncated":len(probe.stderr)>2048},"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
 '''+("print(%r);print(json.dumps(out,sort_keys=True,separators=(\",\",\":\")));print(%r)"%(_FRAME_START,_FRAME_END))
 RUNTIME_INSPECTION_COMMAND=f"{HOST_PYTHON} -c {shlex.quote(_RUNTIME_INSPECTION_SOURCE)}"
 
@@ -73,10 +70,6 @@ def _require_ok(result:subprocess.CompletedProcess[str],operation:str)->str:
  if result.returncode!=0:raise GcloudCommandError(f"{operation} failed")
  return result.stdout.strip()
 def _state(value:str)->VmState:return {"RUNNING":VmState.RUNNING,"TERMINATED":VmState.STOPPED,"STOPPED":VmState.STOPPED,"STAGING":VmState.STAGING,"STOPPING":VmState.STOPPING,"SUSPENDING":VmState.SUSPENDING}.get(value.strip().upper(),VmState.UNKNOWN)
-def _discovery_command(*,repository:str,issue_number:int)->str:
- if repository!="Blummer92/agent-os":raise GcloudCommandError("non-canonical discovery repository rejected")
- if type(issue_number) is not int or issue_number<1:raise GcloudCommandError("non-canonical discovery issue rejected")
- return f"{HOST_PYTHON} -m {DISCOVERY_MODULE} --repository {repository} --issue-number {issue_number}"
 def _activation_command(capsule:str)->str:
  if not re.fullmatch(r"pre-publication-evidence:[0-9a-f]{64}",capsule):raise GcloudCommandError("non-canonical source capsule rejected")
  return f"{HOST_PYTHON} -m {ACTIVATION_MODULE} --source-capsule-id {capsule}"
@@ -110,7 +103,6 @@ class GcloudIapAdapter:
   if type(timeout) is not int or isinstance(timeout,bool) or not 1<=timeout<=900:raise GcloudCommandError("ssh timeout is outside the bounded range")
   return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=timeout)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
- def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
  def inspect_retirement_inventory(self,resource:GceResourceTuple)->dict[str,object]:
   return collect_retirement_inventory(_run,lambda command:self._ssh(resource,command))
@@ -148,15 +140,6 @@ class GcloudIapAdapter:
    payload=dict(payload);payload["import_probe"]=dict(probe)
    payload["import_probe"]["stderr"]=probe["stderr"][-MAX_DIAGNOSTIC_STDERR:]
    payload["import_probe"]["stderr_truncated"]=True
-  return payload
- def discover(self,resource:GceResourceTuple,*,repository:str,issue_number:int)->dict[str,object]:
-  result=self._ssh(resource,_discovery_command(repository=repository,issue_number=issue_number))
-  if result.returncode!=0:raise GcloudCommandError("fixed host discovery failed")
-  try:payload=json.loads(result.stdout)
-  except json.JSONDecodeError as exc:raise GcloudCommandError("host discovery evidence was not JSON") from exc
-  if type(payload) is not dict:raise GcloudCommandError("host discovery evidence must be an object")
-  if payload.get("repository")!=repository or payload.get("issue_number")!=issue_number:raise GcloudCommandError("host discovery identity mismatch")
-  if payload.get("execution_authorized") is not False or payload.get("side_effects_performed") is not False:raise GcloudCommandError("discovery must remain read-only and non-authorizing")
   return payload
  def invoke(self,resource:GceResourceTuple,argv:tuple[str,...])->HostInvocationEvidence:
   if len(argv)!=3 or argv[0]!=FIXED_ENTRYPOINT or argv[1]!="--handoff-id":raise GcloudCommandError("non-canonical host argv rejected")
@@ -260,19 +243,6 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if state is not VmState.RUNNING:return {"first_publication_activation":_non_authorizing("needs-decision","host-not-running")}
   if not adapter.probe_activation_ready(RESOURCE):return {"first_publication_activation":_non_authorizing("needs-decision","activation-entrypoint-unavailable")}
   return {"first_publication_activation":adapter.activate_first_publication(RESOURCE,source_capsule_id=ingress.source_capsule_id_or_none)}
- if ingress.reason=="accepted-discovery-envelope":
-  if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
-  if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")
-  if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform discovery")
-  if not _policy().accepts(claims):return {"discovery":{"status":"blocked","reason_codes":["claims-rejected"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
-  initial=adapter.observe_state(RESOURCE)
-  if initial is VmState.STOPPED:
-   if not adapter.start(RESOURCE):return {"discovery":{"status":"needs-decision","reason_codes":["vm-start-failed"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
-   state=adapter.wait_until_running(RESOURCE)
-  else:state=initial
-  if state is not VmState.RUNNING:return {"discovery":{"status":"needs-decision","reason_codes":["host-unavailable"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
-  if not adapter.probe_discovery_ready(RESOURCE):return {"discovery":{"status":"needs-decision","reason_codes":["discovery-entrypoint-unavailable"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
-  return {"discovery":adapter.discover(RESOURCE,repository=ingress.repository,issue_number=ingress.issue_number)}
  binding=bind_ingress_to_gce(ingress,resource=RESOURCE);result=run_gce_control_path(request_id=binding.control_request_id,claims=claims,trust_policy=_policy(),resource=binding.resource,expected_resource=RESOURCE,handoff_id=binding.handoff_id,adapter=adapter,allow_shutdown=bool(getattr(adapter,"shutdown_enabled",False)))
  return {"binding":binding.to_dict(),"control":{"result_id":result.result_id,"status":result.status.value,"reason_codes":[item.value for item in result.reason_codes],"request_id":result.request_id,"handoff_id":result.handoff_id,"start_issued":result.start_issued,"host_ready":result.host_ready,"host_invoked":result.host_invoked,"host_accepted":result.host_accepted,"scheduler_invocation_id":result.scheduler_invocation_id,"execution_id":result.execution_id,"terminal_status":result.terminal_status,"shutdown_eligible":result.shutdown_eligible,"shutdown_issued":result.shutdown_issued,"retry_attempted":False,"github_writes_authorized":False,"merge_authorized":False}}
 

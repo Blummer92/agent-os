@@ -1,5 +1,11 @@
 # Governed Handoff Discovery — #1237
 
+> **Retirement notice (#3101/PR #3234):** the GCE consumer described below —
+> the `agent_os_execution_service.handoff_discovery_entrypoint` module, its
+> module-import readiness probe, and the GCE adapter discovery path — was
+> retired. Discovery itself (#1237 locator) and the Codespaces discovery
+> transport are unaffected.
+
 ## Purpose
 
 #1237 adds one read-only locator at the existing #1218 checkpoint-owned invocation-descriptor boundary. It solves only the bootstrap problem where a trusted integration knows the canonical repository and issue but does not yet possess the immutable `executor-handoff:<sha256>` identity.

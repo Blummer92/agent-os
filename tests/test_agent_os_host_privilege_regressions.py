@@ -111,9 +111,10 @@ def test_import_check_actually_fails_closed_on_a_missing_dependency() -> None:
     """Execute the script's own import-check idiom with a module name guaranteed
     absent and confirm `set -eu` aborts before publication can run."""
     text = PRIVILEGED.read_text(encoding="utf-8")
+    # #3101/PR #3234 retired handoff_discovery_entrypoint: the import check
+    # must not require the deleted module.
     real_import = (
         "env -u PYTHONPATH \"$PYTHON\" -c 'import agent_os_execution_service."
-        "handoff_discovery_entrypoint; import agent_os_execution_service."
         "governed_resume_entrypoint; import workflow_scheduler.execution."
         "_clone3_cgroup'"
     )

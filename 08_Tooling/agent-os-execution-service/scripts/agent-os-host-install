@@ -267,7 +267,7 @@ PY_RUNTIME_PERMISSIONS
 
 (
   cd /
-  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
 ) >&2
 
 entrypoint_installer="$checkout/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
@@ -299,7 +299,9 @@ print(json.dumps({
     "sha256": os.environ["TARGET_HASH"],
     "staging_root": os.environ["STAGING_ROOT"],
     "privileged_source": "root-owned-staging",
-    "discovery_importable": True,
+    # #3101/PR #3234 retired the discovery entrypoint: it is no longer
+    # installed or importable on the host.
+    "discovery_importable": False,
     "governed_resume_importable": True,
     "native_extension_importable": True,
     "scheduler_invoked": False,
