@@ -4,6 +4,17 @@ from pathlib import Path
 
 import pytest
 
+# #3268: repository-source IMC tests consume the root-owned Navigation Registry
+# projection introduced by #3254. The aggregate runner enters this package with
+# PYTHONPATH=src, so make the owning repository src tree visible without
+# duplicating the projection or changing production/runtime package ownership.
+import sys
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
+ROOT_SOURCE = REPOSITORY_ROOT / "src"
+if str(ROOT_SOURCE) not in sys.path:
+    sys.path.insert(0, str(ROOT_SOURCE))
+
 
 @pytest.fixture(autouse=True)
 def fail_on_default_lessons_dir_writes():
