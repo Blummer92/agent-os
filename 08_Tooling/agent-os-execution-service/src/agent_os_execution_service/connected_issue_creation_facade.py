@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 from scripts.agent_os_issue_labels.connected_issue_creation import (
+    DuplicateCandidateEvidence,
     DuplicateReviewDisposition,
     evaluate_duplicate_review_admission,
     managed_labels_for_create,
@@ -48,6 +49,8 @@ def plan_connected_issue_creation_for_host(
     duplicate_review_disposition: DuplicateReviewDisposition | str | None = None,
     canonical_issue_number: int | None = None,
     distinct_repair_seam: bool = False,
+    candidate_evidence: tuple[DuplicateCandidateEvidence, ...] = (),
+    candidate_enumeration_complete: bool = False,
     issue_form_path: str | Path = _REPO_ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml",
     label_map_path: str | Path = _REPO_ROOT / ".github/labeler/agent-os-issue-label-map.yml",
 ) -> dict[str, object]:
@@ -67,6 +70,8 @@ def plan_connected_issue_creation_for_host(
         disposition=duplicate_review_disposition,
         canonical_issue_number=canonical_issue_number,
         distinct_repair_seam=distinct_repair_seam,
+        candidate_evidence=candidate_evidence,
+        candidate_enumeration_complete=candidate_enumeration_complete,
         issue_form_path=issue_form_path,
     )
     return {
@@ -102,6 +107,8 @@ def create_connected_issue_for_host(
     duplicate_review_disposition: DuplicateReviewDisposition | str | None = None,
     canonical_issue_number: int | None = None,
     distinct_repair_seam: bool = False,
+    candidate_evidence: tuple[DuplicateCandidateEvidence, ...] = (),
+    candidate_enumeration_complete: bool = False,
     issue_form_path: str | Path = _REPO_ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml",
     label_map_path: str | Path = _REPO_ROOT / ".github/labeler/agent-os-issue-label-map.yml",
 ) -> ConnectedIssueCreateResult:
@@ -112,6 +119,8 @@ def create_connected_issue_for_host(
         duplicate_review_disposition=duplicate_review_disposition,
         canonical_issue_number=canonical_issue_number,
         distinct_repair_seam=distinct_repair_seam,
+        candidate_evidence=candidate_evidence,
+        candidate_enumeration_complete=candidate_enumeration_complete,
         issue_form_path=issue_form_path,
         label_map_path=label_map_path,
     )

@@ -217,6 +217,7 @@ def test_connected_issue_creation_tool_passes_distinct_bug_admission() -> None:
         repository="Blummer92/agent-os",
         issue_body=CONNECTED_ISSUE_BODY,
         duplicate_review_disposition="NEW_DISTINCT_BUG",
+        candidate_enumeration_complete=True,
     )
     assert result["create_allowed"] is True
     assert result["next_operation"] == "create-then-canonical-readback-and-converge"
@@ -237,12 +238,34 @@ def test_connected_issue_creation_tool_passes_existing_owner_admission() -> None
         issue_body=CONNECTED_ISSUE_BODY,
         duplicate_review_disposition="RECURRENCE_EXISTING_OWNER",
         canonical_issue_number=2438,
+        candidate_evidence=[
+            {
+                "issue_number": 2438,
+                "state": "open",
+                "objective_evidence": "candidate objective inspected",
+                "causal_seam_evidence": "candidate causal seam inspected",
+                "acceptance_evidence": "candidate acceptance inspected",
+                "boundary_evidence": "candidate boundary inspected",
+            }
+        ],
+        candidate_enumeration_complete=True,
     )
     duplicate = mcp_server.plan_connected_issue_creation_tool(
         repository="Blummer92/agent-os",
         issue_body=CONNECTED_ISSUE_BODY,
         duplicate_review_disposition="DUPLICATE_EXISTING_OWNER",
         canonical_issue_number=2438,
+        candidate_evidence=[
+            {
+                "issue_number": 2438,
+                "state": "open",
+                "objective_evidence": "candidate objective inspected",
+                "causal_seam_evidence": "candidate causal seam inspected",
+                "acceptance_evidence": "candidate acceptance inspected",
+                "boundary_evidence": "candidate boundary inspected",
+            }
+        ],
+        candidate_enumeration_complete=True,
     )
     assert recurrence["create_allowed"] is False
     assert recurrence["canonical_issue_number"] == 2438
@@ -258,6 +281,17 @@ def test_connected_issue_creation_tool_passes_focused_successor_evidence() -> No
         issue_body=CONNECTED_ISSUE_BODY,
         duplicate_review_disposition="FOCUSED_SUCCESSOR",
         canonical_issue_number=2438,
+        candidate_evidence=[
+            {
+                "issue_number": 2438,
+                "state": "open",
+                "objective_evidence": "candidate objective inspected",
+                "causal_seam_evidence": "candidate causal seam inspected",
+                "acceptance_evidence": "candidate acceptance inspected",
+                "boundary_evidence": "candidate boundary inspected",
+            }
+        ],
+        candidate_enumeration_complete=True,
         distinct_repair_seam=True,
     )
     assert result["create_allowed"] is True
