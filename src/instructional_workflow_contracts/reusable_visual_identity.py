@@ -87,9 +87,15 @@ def issue_reusable_visual_identity(value: object) -> dict[str, Any]:
 
     basis = {
         "contract_version": IDENTITY_CONTRACT_ID,
-        "external_identity": {key: external.get(key) for key in ("provider", "file_id", "exact_reference")},
+        # Identity basis (#3256): only stable identity evidence enters the digest.
+        # ``exact_reference`` (mutable URL text) and ``evidence_reference``
+        # (mutable sync reference) are still required inputs and are still
+        # reported on the issued identity, but they are excluded here so that
+        # re-syncing identical bytes through a different reference preserves
+        # the asset identity instead of producing ``identity.conflict``.
+        "external_identity": {key: external.get(key) for key in ("provider", "file_id")},
         "content_fingerprint": fingerprint,
-        "provenance": {key: provenance.get(key) for key in required_provenance},
+        "provenance": {key: provenance.get(key) for key in ("source_reference", "source_fingerprint")},
         "lineage": {
             "kind": kind,
             "predecessor_asset_id": predecessor_asset_id,

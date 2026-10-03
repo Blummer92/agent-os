@@ -212,7 +212,8 @@ def test_main_resolvable_asset_slot_allows_build(monkeypatch, tmp_path, capsys):
         patch("instructional_materials_coach.cli.build_slides_service", return_value="slides"),
         patch("instructional_materials_coach.cli.build_docs_service", return_value="docs"),
         patch("instructional_materials_coach.cli._require_visual_placement_support"),
-        patch("instructional_materials_coach.cli.get_file_metadata", return_value={"id": "file-1", "trashed": False}),
+        patch("instructional_materials_coach.cli.get_file_metadata",
+              return_value={"id": "file-1", "trashed": False, "sha256Checksum": "c" * 64}),
         patch("instructional_materials_coach.cli.build_live_materials", return_value=_success_receipt()) as live,
     ):
         exit_code = cli.main(_visual_build_args(tmp_path))

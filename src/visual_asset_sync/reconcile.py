@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
 from .models import (
     ExistingAssetRecord,
@@ -195,3 +195,46 @@ def _reason_for(result: ReconciliationResult) -> str:
             "Record is marked excluded from synchronization."
         ),
     }[result]
+
+
+def _normalize_title(title: str | None) -> str | None:
+    if not isinstance(title, str):
+        return None
+    normalized = " ".join(title.split()).casefold()
+    return normalized or None
+
+
+def find_duplicate_titles(
+    existing_records: Sequence[ExistingAssetRecord],
+) -> list[dict[str, Any]]:
+    """Report existing records that share a normalized title (read-only, #3256).
+
+    Duplicate titles do not block reconciliation -- identity is by Drive file
+    ID -- but they are an explicit reconciliation signal: two records with the
+    same title may describe the same logical asset and deserve human review
+    before either is treated as canonical. This function performs no writes;
+    it only reports.
+    """
+    by_title: dict[str, list[ExistingAssetRecord]] = {}
+    for record in existing_records:
+        title = _normalize_title(record.asset_title)
+        if title is None:
+            continue
+        by_title.setdefault(title, []).append(record)
+    report: list[dict[str, Any]] = []
+    for title in sorted(by_title):
+        records = by_title[title]
+        if len(records) < 2:
+            continue
+        report.append(
+            {
+                "normalized_title": title,
+                "record_count": len(records),
+                "page_ids": tuple(sorted(record.page_id for record in records)),
+                "drive_file_ids": tuple(
+                    sorted({record.drive_file_id for record in records if record.drive_file_id})
+                ),
+                "disposition": "duplicate-title-needs-review",
+            }
+        )
+    return report

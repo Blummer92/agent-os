@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Mapping
+from typing import Any, Mapping
 
 from .artifact_structure import PASS, validate_required_worksheet_sections
 from .asset_slot_resolution import resolve_asset_slots
@@ -110,18 +110,58 @@ def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[st
     return {asset_id: bound.get(asset_id) for asset_id in visual_plan.selected_asset_ids}
 
 
+def _selected_asset_content_identities(visual_plan: GovernedVisualReusePlan) -> dict[str, dict[str, Any] | None]:
+    """Map each selected asset ID to its canonical content identity (#3256).
+
+    The governed plan's selected candidates carry the approved bytes as a
+    SHA-256 ``content_fingerprint`` on ``asset_reference``; lift it into the
+    canonical content-identity shape so slot resolution verifies the live
+    Drive bytes against what was reviewed.
+    """
+    from instructional_workflow_contracts.asset_content_identity import content_identity_from_fingerprint
+
+    bound: dict[str, dict[str, Any] | None] = {}
+    result = visual_plan.cohesive_visual_plan_result
+    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    selected_candidates = payload.get("selected_candidates", ())
+    if not isinstance(selected_candidates, (list, tuple)):
+        selected_candidates = ()
+    for item in selected_candidates:
+        if not isinstance(item, Mapping):
+            continue
+        asset_reference = item.get("asset_reference")
+        asset_id = asset_reference.get("asset_id") if isinstance(asset_reference, Mapping) else None
+        if not isinstance(asset_id, str) or not asset_id:
+            continue
+        fingerprint = asset_reference.get("content_fingerprint") if isinstance(asset_reference, Mapping) else None
+        try:
+            bound[asset_id] = content_identity_from_fingerprint(fingerprint) if fingerprint else None
+        except (ValueError, TypeError):
+            bound[asset_id] = None
+    return {asset_id: bound.get(asset_id) for asset_id in visual_plan.selected_asset_ids}
+
+
 def _require_asset_slot_resolution(visual_plan: GovernedVisualReusePlan, drive_service: object) -> None:
-    """Fail before connected writes when a selected asset slot has no live Drive file (#3130)."""
+    """Fail before connected writes when a selected asset slot has no live Drive file (#3130).
+
+    Also fails closed per asset when the live Drive bytes do not match the
+    approved content identity (#3256): a ``content-identity-mismatch`` is never
+    absence and never authorizes a generation handoff.
+    """
     resolution = resolve_asset_slots(
         asset_slots=_selected_asset_drive_files(visual_plan),
         describe_drive_file=lambda file_id: get_file_metadata(drive_service, file_id),
+        expected_content_identities=_selected_asset_content_identities(visual_plan),
     )
     if resolution.status != "resolved":
-        identities = ",".join(resolution.unresolvable_slots)
+        mismatches = ", ".join(resolution.content_identity_mismatches)
+        detail = f" content_identity_mismatches={mismatches}." if mismatches else ""
+        outcomes = ", ".join(f"{slot}={outcome}" for slot, outcome in sorted(resolution.slot_outcomes.items()) if outcome != "resolved")
         raise RuntimeError(
             "Selected asset slots do not resolve to live Drive files; refusing a build "
             "that would ship labeled image placeholders instead of real images. "
-            f"unresolvable_asset_slots={identities}"
+            f"unresolvable_asset_slots={','.join(resolution.unresolvable_slots)}.{detail}"
+            f" slot_outcomes={outcomes}."
         )
 
 
