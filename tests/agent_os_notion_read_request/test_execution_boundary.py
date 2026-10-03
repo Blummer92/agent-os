@@ -90,7 +90,7 @@ def test_admitted_request_without_a_configured_executor_is_not_activated(verifie
 def test_only_allowed_read_actions_are_dispatched(verified_catalog) -> None:
     executor = RecordingExecutor(); evidence = run(verified_catalog, executor)
     assert evidence["dispatch_status"] == DISPATCH_COMPLETED
-    assert executor.actions == ["get_page", "get_page", "query_data_source"]
+    assert executor.actions == ["get_page", "get_page", "query_data_source", "query_data_source"]
     assert set(executor.actions) <= set(READ_ONLY_ACTIONS)
 
 
@@ -132,12 +132,20 @@ def test_no_notion_or_drive_or_classroom_write_is_performed(verified_catalog) ->
 def test_visual_assets_are_retrieved_through_the_canonical_unit_relation(verified_catalog) -> None:
     executor = RecordingExecutor(); run(verified_catalog, executor)
     query = [call for call in executor.calls if call["action"] == "query_data_source"]
-    assert len(query) == 1
+    assert len(query) == 2
     relation_filter = query[0]["filter"]
     assert relation_filter["property"] == "Canonical Unit"
     assert relation_filter["relation"]["contains"] == UNIT_PAGE_ID.replace("-", "")
     serialized = repr(relation_filter).lower()
     for forbidden in ("title", "name", "filename", "contains_text", "rich_text", "search"): assert forbidden not in serialized
+    # #3253: the second governed query selects coursewide reusables on the
+    # Icon System checkbox — still no keyword/title/name matching, and no
+    # fabricated unit relation.
+    scope_filter = query[1]["filter"]
+    assert scope_filter["property"] == "Reusable Across Units?"
+    assert scope_filter["checkbox"] == {"equals": True}
+    serialized = repr(scope_filter).lower()
+    for forbidden in ("title", "name", "filename", "contains_text", "rich_text", "search", "canonical unit"): assert forbidden not in serialized
 
 
 def test_title_or_filename_similarity_cannot_substitute_for_the_relation(verified_catalog) -> None:

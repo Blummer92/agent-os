@@ -37,9 +37,12 @@ def _scope_candidates_to_current_assets(
       (no source_revision), so absence cannot be proven.
 
     The caller may omit current asset evidence for existing offline/planner-only
-    uses. When current evidence is supplied, only candidates whose existing
-    Asset ID + Visual Asset Library page ID + Drive file ID tuple is present in
-    that relation-first evidence can reach the existing candidate filter.
+    uses. When current evidence is supplied, candidates are admitted by exact
+    asset identity against the scope-eligible evidence set (#3253):
+    unit-specific assets match on (Asset ID, page ID, Drive file ID) exactly;
+    coursewide/cross-unit/global assets match on (Asset ID, page ID) with an
+    optional Drive file ID, since scope-eligible assets are not required to
+    carry a unit relation or a Drive binding.
     """
     if visual_candidates is None and current_asset_evidence is None:
         return ("no-evidence", [])
@@ -62,7 +65,15 @@ def _scope_candidates_to_current_assets(
         asset_id = item.get("asset_id")
         page_id = reference.get("page_id")
         drive_file_id = reference.get("drive_file_id")
-        if all(isinstance(value, str) and value for value in (asset_id, page_id, drive_file_id)):
+        # #3253: scope-eligible assets (coursewide/cross-unit/global) are not
+        # required to carry a Drive binding; unit-specific assets keep the
+        # exact triple requirement (#2816-era strictness, unchanged).
+        scope = item.get("reuse_scope", "unit-specific")
+        if not isinstance(drive_file_id, str):
+            drive_file_id = ""
+        if not drive_file_id and scope == "unit-specific":
+            continue
+        if all(isinstance(value, str) and value for value in (asset_id, page_id)):
             admitted.add((asset_id, page_id, drive_file_id))
             asset_ids_by_external_identity.setdefault((page_id, drive_file_id), set()).add(asset_id)
 
@@ -86,12 +97,19 @@ def _scope_candidates_to_current_assets(
         library_reference = evidence.get("library_reference")
         if type(asset_reference) is not dict or type(library_reference) is not dict:
             continue
+        candidate_drive = library_reference.get("drive_file_id")
+        if not isinstance(candidate_drive, str):
+            candidate_drive = ""
         identity = (
             asset_reference.get("asset_id"),
             library_reference.get("page_id"),
-            library_reference.get("drive_file_id"),
+            candidate_drive,
         )
-        if identity in admitted:
+        if (
+            isinstance(identity[0], str) and identity[0]
+            and isinstance(identity[1], str) and identity[1]
+            and identity in admitted
+        ):
             scoped.append(candidate)
     if not scoped:
         if not source_revision:

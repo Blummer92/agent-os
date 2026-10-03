@@ -44,6 +44,19 @@ class CurriculumReadStep:
     action: str
     relation_first: bool = False
     purpose: str = ""
+    # #3253: governed reuse-scope class for this step's asset read. None means
+    # the step carries no scope semantic (owner evidence, unit read). The
+    # coursewide step reuses the same VISUAL_ASSETS logical source, #936
+    # executor, and finite binding architecture — it is not a second reader.
+    reuse_scope: str | None = None
+
+
+# #3253: the Icon System scope signal. This is the existing "Reusable Across
+# Units?" checkbox — no Notion schema change, no writes. #3254 owns the
+# Notion field projection; this module only names the governed property the
+# coursewide read filter selects on.
+REUSABLE_ACROSS_UNITS_PROPERTY = "Reusable Across Units?"
+COURSEWIDE_SCOPE = "coursewide"
 
 
 @dataclass(frozen=True)
@@ -67,14 +80,8 @@ def build_curriculum_read_plan(request: CurriculumReadRequest) -> CurriculumRead
         CurriculumReadStep(CANONICAL_UNIT, "get_page", purpose="canonical unit/currentness")
     ]
     if mode == "images":
-        steps.append(
-            CurriculumReadStep(
-                VISUAL_ASSETS,
-                "query_data_source",
-                relation_first=True,
-                purpose="canonical-unit-related reusable assets",
-            )
-        )
+        steps.append(_unit_scoped_asset_step())
+        steps.append(_coursewide_asset_step())
     elif mode == "modeling":
         steps.append(CurriculumReadStep(MODELING, "query_data_source", purpose="modeling owner evidence"))
     elif mode == "blockers":
@@ -87,34 +94,48 @@ def build_curriculum_read_plan(request: CurriculumReadRequest) -> CurriculumRead
             CurriculumReadStep(source, "query_data_source", purpose="slides planning evidence")
             for source in (UNIT_ALIGNMENT, MODELING, PACKET, MATERIALS, SOURCE_CONTROL, PRODUCTION)
         )
-        steps.append(
-            CurriculumReadStep(
-                VISUAL_ASSETS,
-                "query_data_source",
-                relation_first=True,
-                purpose="canonical-unit-related reusable assets",
-            )
-        )
+        steps.append(_unit_scoped_asset_step())
+        steps.append(_coursewide_asset_step())
     elif mode == "worksheet":
         steps.extend(
             CurriculumReadStep(source, "query_data_source", purpose="worksheet planning evidence")
             for source in (UNIT_ALIGNMENT, PACKET, MATERIALS, SOURCE_CONTROL, PRODUCTION)
         )
         if request.requires_reusable_assets:
-            steps.append(
-                CurriculumReadStep(
-                    VISUAL_ASSETS,
-                    "query_data_source",
-                    relation_first=True,
-                    purpose="canonical-unit-related reusable assets",
-                )
-            )
+            steps.append(_unit_scoped_asset_step())
+            steps.append(_coursewide_asset_step())
     elif mode == "lesson":
         steps.extend(
             CurriculumReadStep(source, "query_data_source", purpose="lesson planning evidence")
             for source in (UNIT_ALIGNMENT, MODELING, PACKET, MATERIALS)
         )
     return CurriculumReadPlan(mode=mode, steps=tuple(steps))
+
+
+def _unit_scoped_asset_step() -> CurriculumReadStep:
+    """Relation-first unit-scoped read (#2816's requirement, unchanged)."""
+    return CurriculumReadStep(
+        VISUAL_ASSETS,
+        "query_data_source",
+        relation_first=True,
+        purpose="canonical-unit-related reusable assets",
+        reuse_scope="unit-specific",
+    )
+
+
+def _coursewide_asset_step() -> CurriculumReadStep:
+    """Governed coursewide read: same source/executor/bounds, no unit relation.
+
+    Selects on the Icon System "Reusable Across Units?" checkbox rather than
+    the Canonical Unit relation. No Canonical Unit relation is fabricated;
+    no second reader, catalog, or broad search is introduced.
+    """
+    return CurriculumReadStep(
+        VISUAL_ASSETS,
+        "query_data_source",
+        purpose="coursewide reusable assets",
+        reuse_scope=COURSEWIDE_SCOPE,
+    )
 
 
 def orchestrate_curriculum_evidence(
@@ -152,13 +173,22 @@ def orchestrate_curriculum_evidence(
                 "property": "Canonical Unit",
                 "contains_page_id": _compact_notion_id(provider_page_id),
             }
+        elif step.reuse_scope == COURSEWIDE_SCOPE:
+            # #3253: governed coursewide selection on the Icon System
+            # "Reusable Across Units?" checkbox — never a unit relation.
+            payload["property_filter"] = {
+                "property": REUSABLE_ACROSS_UNITS_PROPERTY,
+                "checkbox": {"equals": True},
+            }
         raw = execute_read(step, payload)
         result = _normalize_result(raw, step.logical_source)
         if step.logical_source == CANONICAL_UNIT:
             _verify_live_unit(result, provider_page_id)
             continue
         if step.logical_source == VISUAL_ASSETS:
-            incoming_assets = _normalize_assets(result)
+            incoming_assets = _normalize_assets(
+                result, relation_first=step.relation_first, reuse_scope=step.reuse_scope
+            )
             if len(asset_evidence) + len(incoming_assets) > MAX_RESULTS:
                 raise CurriculumReadError("asset evidence exceeds handoff bound")
             asset_evidence.extend(incoming_assets)
@@ -177,7 +207,7 @@ def orchestrate_curriculum_evidence(
         },
         canonical_unit={key: value for key, value in unit.items() if key != "provider_page_id"},
         owner_evidence=owner_evidence,
-        asset_evidence=asset_evidence,
+        asset_evidence=_dedupe_assets(asset_evidence),
         current_context=current_context,
     )
     state = resolve_current_curriculum_state(packet)
@@ -251,12 +281,33 @@ def _verify_live_unit(results: list[dict[str, object]], provider_page_id: str) -
         raise CurriculumReadError("canonical unit identity mismatch")
 
 
-def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
+def _dedupe_assets(assets: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Keep the first record per asset_id; the relation-first step runs first,
+    so unit-scoped evidence wins over a coursewide duplicate (#2816 precedence)."""
+    seen: set[object] = set()
+    deduped: list[dict[str, object]] = []
+    for asset in assets:
+        asset_id = asset.get("asset_id")
+        if asset_id in seen:
+            continue
+        seen.add(asset_id)
+        deduped.append(asset)
+    return deduped
+
+
+def _normalize_assets(
+    records: Iterable[Mapping[str, object]],
+    *,
+    relation_first: bool,
+    reuse_scope: str | None,
+) -> list[dict[str, object]]:
     assets: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
         if _is_raw_notion_page(record):
-            record = _normalize_raw_notion_asset(record)
+            record = _normalize_raw_notion_asset(
+                record, relation_first=relation_first, reuse_scope=reuse_scope
+            )
 
         asset_id = _required_record_text(record.get("asset_id"), "asset_id")
         exists = record.get("exists", True)
@@ -269,13 +320,30 @@ def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str,
         ):
             if type(value) is not bool:
                 raise CurriculumReadError(f"malformed asset boolean {field}")
+        # Scope is contract data, never inferred from prose: the read step's
+        # own provenance decides when the record does not declare it. A
+        # relation-first hit proves unit-specific membership; the coursewide
+        # step proves coursewide eligibility. Nothing is fabricated.
+        scope = record.get("reuse_scope")
+        if scope is None:
+            scope = "unit-specific" if relation_first else (reuse_scope or "unknown")
+        if scope not in {"unit-specific", "coursewide", "cross-unit", "global", "unrelated", "unknown"}:
+            raise CurriculumReadError(f"unsupported asset reuse_scope {scope!r}")
+        status = record.get("reuse_status", "unknown")
+        if status not in {"reusable", "single-use", "unknown"}:
+            raise CurriculumReadError(f"unsupported asset reuse_status {status!r}")
         asset = {
             "asset_id": asset_id,
             "exists": exists,
             "approved_for_requested_use": approved_for_requested_use,
             "approved_student_reuse": approved_student_reuse,
             "source_revision": record.get("source_revision", 1),
-            "canonical_unit_relation": record.get("canonical_unit_relation") is True,
+            "reuse_scope": scope,
+            "reuse_status": status,
+            # The relation marker stays provider-specific and is never
+            # fabricated: raw pages get it from the step's own provenance;
+            # already-normalized records keep the producer's assertion.
+            "canonical_unit_relation": bool(record.get("canonical_unit_relation")),
         }
         library_reference = record.get("library_reference")
         if isinstance(library_reference, Mapping):
@@ -310,27 +378,51 @@ def _is_raw_notion_page(record: Mapping[str, object]) -> bool:
     return isinstance(record.get("id"), str) and isinstance(record.get("properties"), Mapping)
 
 
-def _normalize_raw_notion_asset(record: Mapping[str, object]) -> dict[str, object]:
+def _normalize_raw_notion_asset(
+    record: Mapping[str, object], *, relation_first: bool, reuse_scope: str | None
+) -> dict[str, object]:
     """Project only provider facts already proven by the bounded read itself.
 
     The relation-first query is constructed upstream from the verified canonical
-    unit identity, so a returned page proves existence and relation membership.
-    Property names and approval semantics are not inferred here: those require a
-    separately verified source-schema mapping.
+    unit identity, so a returned page proves existence and relation membership
+    (scope "unit-specific"). The coursewide query selects on the Icon System
+    "Reusable Across Units?" checkbox, so a returned page proves coursewide
+    eligibility without any unit relation (scope "coursewide"); the relation
+    marker stays False and is never fabricated. Property names and approval
+    semantics are not inferred here: those require a separately verified
+    source-schema mapping (#3254).
     """
     page_id = _required_record_text(record.get("id"), "Notion page id")
     properties = record.get("properties")
     if not isinstance(properties, Mapping):
         raise CurriculumReadError("raw Notion asset is missing properties")
+    if relation_first:
+        scope: object = "unit-specific"
+        related = True
+    else:
+        scope = reuse_scope or "unknown"
+        related = False
     return {
         "asset_id": page_id,
         "page_id": page_id,
         "exists": True,
         "approved_for_requested_use": False,
         "approved_student_reuse": False,
-        "canonical_unit_relation": True,
+        "canonical_unit_relation": related,
+        "reuse_scope": scope,
+        "reuse_status": _reusable_checkbox_status(properties),
         "source_revision": 1,
     }
+
+
+def _reusable_checkbox_status(properties: Mapping[str, object]) -> str:
+    """Read only the governed Icon System scope signal; anything else is unknown."""
+    prop = properties.get(REUSABLE_ACROSS_UNITS_PROPERTY)
+    if isinstance(prop, Mapping):
+        checkbox = prop.get("checkbox")
+        if checkbox is True:
+            return "reusable"
+    return "unknown"
 
 
 def _normalize_raw_notion_owner(record: Mapping[str, object]) -> dict[str, object]:

@@ -92,6 +92,43 @@ The assembler preserves `owner-governed`, `display-derived`, `agent-suggested`, 
 The assembler performs no Notion, Drive, GitHub, filesystem, environment, credential, model, or network access; it creates no persistence or write proposal and grants no readiness, approval, source, production, publication, or external-write authority. #963 remains the owner of conversational persistence/write proposals.
 
 
+## Asset Eligibility Scope (#3253)
+
+Curriculum asset evidence carries two separate contract fields that must never
+be conflated:
+
+- `reuse_scope`: where the asset is eligible — `unit-specific`, `coursewide`,
+  `cross-unit`, `global`, `unrelated`, or `unknown`.
+- `reuse_status`: whether the asset may be reused at all — `reusable`,
+  `single-use`, or `unknown`.
+
+Eligibility policy: `unit-specific` assets require the relation-first
+Canonical Unit read (#2816's requirement, unchanged); `coursewide` and
+`global` assets are admitted without any unit relation; `cross-unit` assets
+are admitted only when the requesting unit is listed in their `scope_unit_ids`;
+`unrelated` and `unknown` assets are never admitted. Assets with no
+`reuse_scope` keep the legacy relation-required behavior.
+
+The scope signal is the Icon System's existing "Reusable Across Units?"
+checkbox — no Notion schema change, no Notion writes. The read route reuses
+the #2283 route and #2816's finite binding architecture (same logical source,
+same injected #936 read executor, same result bounds): the plan adds one
+coursewide step selecting on that checkbox property instead of the Canonical
+Unit relation. No second reader, catalog, or broad search is introduced, and
+no Canonical Unit relation is fabricated.
+
+The assembler names scope-dropped assets in `scope_excluded_asset_ids` on the
+packet. The resolver reports them with the non-absence reason code
+`asset-out-of-scope` (mapped per the Wave-1 outcome registry: out-of-scope is
+never absence, never `matching_asset_exists: false`). Scope-eligible assets
+flow into `asset_evidence` with their scope intact and reach the IMC
+`visual_reuse` scoping, which admits them by exact asset identity
+((asset_id, page_id) with optional Drive file ID for scope-eligible assets;
+the exact triple for unit-specific).
+
+#3254 owns how governed Notion evidence populates this eligibility model;
+#3256 owns the exact content/revision identity of selected assets.
+
 ## PPUX Projection Input Assembler
 
 `assemble_ppux_projection_input` is the pure #2755 adapter from already-resolved canonical instructional evidence to the existing Picture Perfect consumer envelope `picture-perfect-prompt-projection-input-v1`.

@@ -103,8 +103,13 @@ def sources(plan) -> list[str]:
 
 def test_image_plan_is_minimal_and_relation_first() -> None:
     plan = build_curriculum_read_plan(CurriculumReadRequest("images", "images"))
-    assert sources(plan) == [CANONICAL_UNIT, VISUAL_ASSETS]
-    assert plan.steps[-1].relation_first is True
+    assert sources(plan) == [CANONICAL_UNIT, VISUAL_ASSETS, VISUAL_ASSETS]
+    assert plan.steps[1].relation_first is True
+    assert plan.steps[1].reuse_scope == "unit-specific"
+    # #3253: the coursewide step reuses the same source/executor with no
+    # unit-relation requirement and no fabricated relation.
+    assert plan.steps[2].relation_first is False
+    assert plan.steps[2].reuse_scope == "coursewide"
 
 
 def test_modeling_plan_excludes_packet_and_materials() -> None:
@@ -138,7 +143,10 @@ def test_slides_plan_selects_required_categories_and_assets() -> None:
         SOURCE_CONTROL,
         PRODUCTION,
         VISUAL_ASSETS,
+        VISUAL_ASSETS,
     ]
+    assert plan.steps[-2].relation_first is True
+    assert plan.steps[-1].reuse_scope == "coursewide"
 
 
 def test_worksheet_lesson_and_teach_next_plans_remain_bounded() -> None:
@@ -158,17 +166,28 @@ def test_pf010_is_reached_by_relation_and_provider_filter_is_hidden_downstream()
         resolve_identity=identity,
         execute_read=fake_reader(calls),
     )
-    asset_call = next(payload for step, payload in calls if step.logical_source == VISUAL_ASSETS)
-    assert asset_call["relation_filter"] == {
+    asset_calls = [payload for step, payload in calls if step.logical_source == VISUAL_ASSETS]
+    assert asset_calls[0]["relation_filter"] == {
         "property": "Canonical Unit",
         "contains_page_id": "3907ac78313181298c73cd9f6b8e8a7d",
     }
+    # #3253: the coursewide step selects on the reusable checkbox, never a
+    # fabricated unit relation.
+    assert "relation_filter" not in asset_calls[1]
+    assert asset_calls[1]["property_filter"] == {
+        "property": "Reusable Across Units?",
+        "checkbox": {"equals": True},
+    }
+    # The same asset returned by both steps is deduplicated; the
+    # relation-first (unit-specific) record wins.
     assert packet["asset_evidence"] == [{
         "asset_id": "pf-010",
         "approved_for_requested_use": False,
         "approved_student_reuse": False,
         "exists": True,
         "source_revision": 1,
+        "reuse_scope": "unit-specific",
+        "reuse_status": "unknown",
         "library_reference": {
             "page_id": "notion-page-pf-010",
             "drive_file_id": "drive-file-pf-010",
@@ -196,7 +215,12 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
         if step.logical_source == CANONICAL_UNIT:
             return {"id": UNIT_PAGE}
         assert step.logical_source == VISUAL_ASSETS
-        assert payload["relation_filter"]["property"] == "Canonical Unit"
+        if step.relation_first:
+            assert payload["relation_filter"]["property"] == "Canonical Unit"
+        else:
+            # #3253: coursewide step never carries a relation filter.
+            assert "relation_filter" not in payload
+            assert payload["property_filter"]["property"] == "Reusable Across Units?"
         return {
             "results": [{
                 "id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
@@ -227,6 +251,8 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
         "approved_student_reuse": False,
         "exists": True,
         "source_revision": 1,
+        "reuse_scope": "unit-specific",
+        "reuse_status": "unknown",
     }]
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
