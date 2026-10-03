@@ -144,13 +144,129 @@ REF_FIELDS = frozenset(
 )
 
 
+# Order-significance declaration for canonicalization.
+#
+# Every list canonicalized by _canonicalize_material_requirement is
+# order-insensitive (set-like) EXCEPT instructional.required_sections, which
+# carries teaching order and is therefore order-significant: it is validated
+# and preserved exactly as supplied, and fingerprinted stably in that order.
+# Fingerprints are always computed and verified over the canonical
+# representation (normalize -> canonicalize -> verify), following the
+# curriculum-handoff positive control.
+ORDER_SIGNIFICANT_LISTS = frozenset({"instructional.required_sections"})
+
+
+def _sorted_by_key(values: list[Any], name: str, key: str) -> list[Any]:
+    """Sort validated mappings by a required key, failing closed on malformed items."""
+    checked: list[dict[str, Any]] = []
+    for item in values:
+        mapping = _mapping(item, name)
+        if key not in mapping:
+            raise ContractValidationError(
+                "handoff-invalid", f"{name} is missing {key}"
+            )
+        checked.append(mapping)
+    return sorted(checked, key=lambda entry: entry[key])
+
+
+def _ordered_text_list(value: object, name: str, maximum: int) -> list[str]:
+    """Validate a text list whose order is semantically significant.
+
+    Same checks as canonical_strings (sequence, bound, text items, non-empty,
+    no duplicates) but the supplied order is preserved: teaching order is part
+    of the record's meaning and must survive the round trip.
+    """
+    items = _list(value, name)
+    if len(items) > maximum:
+        raise ContractValidationError(
+            "handoff-oversized", f"{name} exceeds its collection bound"
+        )
+    checked = [_text(item) for item in items]
+    if not checked:
+        raise ContractValidationError("handoff-invalid", f"{name} cannot be empty")
+    if len(set(checked)) != len(checked):
+        raise ContractValidationError("handoff-duplicate", f"{name} contains duplicates")
+    return checked
+
+
+def _canonicalize_material_requirement(data: dict[str, Any]) -> dict[str, Any]:
+    """Bring normalized input into canonical list order (in place).
+
+    Order-insensitive (set-like) lists are sorted; instructional.required_sections
+    is order-significant and is preserved exactly as supplied. Must run BEFORE
+    any fingerprint is computed or verified so that fingerprints always cover
+    the canonical representation. Containers that are absent are skipped; the
+    validator always runs this after structural checks, so every container
+    below is present on the validator path.
+    """
+    instructional = data.get("instructional")
+    if type(instructional) is dict and "required_sections" in instructional:
+        instructional["required_sections"] = _ordered_text_list(
+            instructional["required_sections"],
+            "required sections",
+            MAX_REQUIRED_SECTIONS,
+        )
+    requirements = data.get("requirements")
+    if type(requirements) is dict:
+        refs = requirements.get("vocabulary_references")
+        if type(refs) is list:
+            requirements["vocabulary_references"] = _sorted_by_key(
+                refs, "vocabulary reference", "stable_id"
+            )
+        for key in (
+            "accessibility_requirements",
+            "content_requirements",
+            "classroom_use_requirements",
+        ):
+            if key in requirements:
+                requirements[key] = list(
+                    _text_list(requirements[key], key, MAX_DOMAIN_ITEMS)
+                )
+    assets = data.get("assets")
+    if type(assets) is list:
+        data["assets"] = _sorted_by_key(assets, "asset", "asset_id")
+    templates = data.get("templates")
+    if type(templates) is list:
+        data["templates"] = _sorted_by_key(templates, "template", "template_id")
+    completeness = data.get("completeness")
+    if type(completeness) is dict:
+        if "blockers" in completeness:
+            completeness["blockers"] = list(
+                canonical_reason_codes(completeness["blockers"], MAX_BLOCKERS)
+            )
+        if "reason_codes" in completeness:
+            completeness["reason_codes"] = list(
+                canonical_reason_codes(completeness["reason_codes"], MAX_REASONS)
+            )
+    visual_direction = data.get("visual_direction")
+    if type(visual_direction) is dict and "roles" in visual_direction:
+        visual_direction["roles"] = _visual_direction(
+            _mapping(visual_direction, "visual_direction")
+        )
+    return data
+
+
 def material_requirement_source_fingerprint(value: object) -> str:
-    """Fingerprint supplied evidence while excluding evidence-only fields."""
+    """Fingerprint supplied evidence while excluding evidence-only fields.
+
+    The fingerprint covers the CANONICAL representation: order-insensitive
+    lists are canonicalized before hashing, so a producer signing a valid
+    non-canonically-ordered input and a validator re-checking the stored
+    record compute the same value.
+    """
     normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
     if type(normalized) is not dict or type(normalized.get("identity")) is not dict:
         raise ContractValidationError("handoff-wrong-type", "identity must be a built-in mapping")
-    payload = dict(normalized)
-    identity = dict(normalized["identity"])
+    try:
+        canonical = _canonicalize_material_requirement(normalized)
+    except ContractValidationError:
+        # Best-effort canonicalization: the validator independently rejects
+        # invalid inputs on their own merits, so their fingerprint value is
+        # immaterial. Valid inputs always canonicalize, keeping their
+        # fingerprints canonical and round-trip stable.
+        canonical = normalized
+    payload = dict(canonical)
+    identity = dict(canonical["identity"])
     identity.pop("source_fingerprint", None)
     identity.pop("created_at", None)
     payload["identity"] = identity
@@ -191,15 +307,9 @@ def validate_material_requirement(value: object) -> ValidationResult:
         assets = _list(data["assets"], "assets")
         templates = _list(data["templates"], "templates")
 
-        _identity(groups["identity"], data, contract_version)
+        _identity(groups["identity"], contract_version)
         _artifact(groups["artifact"])
         _instructional(groups["instructional"])
-
-        if contract_version == V2_CONTRACT_ID:
-            data["visual_direction"]["roles"] = _visual_direction(
-                groups["visual_direction"]
-            )
-
         _handoff(groups["handoff_reference"])
         _learning(groups["learning_evidence"])
         _modeling(groups["modeling"])
@@ -214,27 +324,12 @@ def validate_material_requirement(value: object) -> ValidationResult:
         _completeness(groups["completeness"])
         _all_false(groups["authority"], "authority-invalid")
 
-        data["instructional"]["required_sections"] = list(
-            _text_list(groups["instructional"]["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
-        )
-        req = groups["requirements"]
-        data["requirements"]["vocabulary_references"] = sorted(
-            req["vocabulary_references"], key=lambda item: item["stable_id"]
-        )
-        for key in (
-            "accessibility_requirements", "content_requirements",
-            "classroom_use_requirements",
-        ):
-            data["requirements"][key] = list(_text_list(req[key], key, MAX_DOMAIN_ITEMS))
-        data["assets"] = sorted(assets, key=lambda item: item["asset_id"])
-        data["templates"] = sorted(templates, key=lambda item: item["template_id"])
-        complete = groups["completeness"]
-        data["completeness"]["blockers"] = list(
-            canonical_reason_codes(complete["blockers"], MAX_BLOCKERS)
-        )
-        data["completeness"]["reason_codes"] = list(
-            canonical_reason_codes(complete["reason_codes"], MAX_REASONS)
-        )
+        # Canonicalize BEFORE the source fingerprint is verified. Fingerprints
+        # are computed and verified over the canonical representation, so a
+        # valid record's own serialized form (record.to_dict()) re-validates.
+        _canonicalize_material_requirement(data)
+        _verify_source_fingerprint(groups["identity"], data)
+
         if canonical_size(data) > MAX_RESULT_BYTES:
             raise ContractValidationError("handoff-oversized", "result exceeds 12 KiB")
         identity = groups["identity"]
@@ -285,7 +380,6 @@ def _text_list(value: object, name: str, maximum: int) -> tuple[str, ...]:
 
 def _identity(
     value: dict[str, Any],
-    full: dict[str, Any],
     expected_contract_id: str,
 ) -> None:
     _fields(value, IDENTITY_FIELDS, "identity")
@@ -301,6 +395,15 @@ def _identity(
     if value["created_by"] != "instructional-materials-coach":
         raise ContractValidationError("material-missing-owner-evidence", "wrong creator owner")
     validate_sha256(value["source_fingerprint"], "source_fingerprint")
+
+
+def _verify_source_fingerprint(value: dict[str, Any], full: dict[str, Any]) -> None:
+    """Verify the supplied source fingerprint against the canonical record.
+
+    Must run AFTER _canonicalize_material_requirement: the fingerprint covers
+    the canonical representation, so verifying it against raw input rejects
+    the record's own serialized form on revalidation.
+    """
     if value["source_fingerprint"] != material_requirement_source_fingerprint(full):
         raise ContractValidationError("material-incompatible-fingerprint", "fingerprint mismatch")
 
@@ -317,7 +420,8 @@ def _instructional(value: dict[str, Any]) -> None:
     validate_text(value["purpose"], "purpose")
     if validate_text(value["audience"], "audience", max_length=64) not in SUPPORTED_AUDIENCES:
         raise ContractValidationError("material-invalid-audience", "unsupported audience")
-    _text_list(value["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
+    # required_sections is order-significant (teaching order): validate without sorting.
+    _ordered_text_list(value["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
 
 
 def _visual_role_sort_key(value: dict[str, Any]) -> tuple[object, ...]:

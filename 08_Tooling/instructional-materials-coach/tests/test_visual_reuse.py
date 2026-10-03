@@ -278,3 +278,57 @@ def test_photography_chair_exact_current_identity_survives_reuse_scoping() -> No
         }],
     )
     assert scoped == [candidate]
+
+
+def _noncanonical_visuals_required_requirement() -> dict[str, object]:
+    """Build a valid v2 visuals-required requirement with non-canonical order."""
+    from instructional_workflow_contracts.material_requirement import (
+        validate_material_requirement,
+    )
+
+    requirement = _fixture("valid_material_requirement_v2.json")
+    requirement["instructional"]["required_sections"] = [  # type: ignore[index]
+        "practice",
+        "directions",
+    ]
+    requirements = requirement["requirements"]  # type: ignore[index]
+    requirements["vocabulary_references"] = list(
+        reversed(requirements["vocabulary_references"])
+    )
+    requirements["accessibility_requirements"] = [
+        "plain-language",
+        "keyboard-readable",
+    ]
+    roles = requirement["visual_direction"]["roles"]  # type: ignore[index]
+    roles.reverse()  # type: ignore[union-attr]
+    requirement["identity"]["source_fingerprint"] = (  # type: ignore[index]
+        material_requirement_source_fingerprint(requirement)
+    )
+    result = validate_material_requirement(requirement)
+    assert result.status is ValidationStatus.VALID, result.reason_codes
+    assert result.record is not None
+    return copy.deepcopy(result.record.to_dict())
+
+
+def test_round_tripped_requirement_is_accepted_by_governed_visual_reuse() -> None:
+    """Issue #3249: IMC visual reuse must accept round-tripped requirement records.
+
+    A valid non-canonically-ordered requirement used to revalidate INVALID
+    (material-incompatible-fingerprint), which plan_visual_needs surfaced as
+    invalid-upstream and plan_governed_visual_reuse reported as
+    manual-review-required. The round-tripped record must now validate cleanly
+    at both revalidation boundaries.
+    """
+    round_tripped = _noncanonical_visuals_required_requirement()
+    plan = visual_reuse.plan_governed_visual_reuse(
+        round_tripped,
+        artifact_manifests=[],
+        visual_candidates=[],
+        source_revision=None,
+        changed_dependency_keys=[],
+        impact_map={},
+    )
+    assert plan.material_requirement_result.status is ValidationStatus.VALID
+    assert plan.visual_needs_result is not None
+    assert plan.visual_needs_result.status is ValidationStatus.VALID
+    assert plan.outcome != "invalid-material-requirement"

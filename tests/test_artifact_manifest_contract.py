@@ -442,3 +442,204 @@ def test_observed_sections_reject_duplicates_and_oversized_lists() -> None:
 
 def test_observed_sections_bound_is_finite() -> None:
     assert manifest_module.MAX_OBSERVED_SECTIONS == 32
+
+# Issue #3249 regression: contract round-trip / canonicalization.
+#
+# These tests enter through the real producer path: inputs are built as plain
+# JSON-like documents, signed with artifact_manifest_source_fingerprint (plus
+# the dependency/idempotency evidence the producer supplies), validated,
+# serialized with record.to_dict(), and revalidated. Fixtures are deliberately
+# non-canonical so the suite can see the defect the earlier baseline missed
+# (fixtures were already in canonical order).
+
+FIXTURES_3249 = Path(__file__).parent / "fixtures" / "instructional_workflow_contracts"
+
+
+def _noncanonical_manifest() -> dict[str, object]:
+    """Build a valid manifest with non-canonical list order (real producer)."""
+    value = valid_manifest()
+    value["artifact"]["observed_sections"] = ["practice", "directions"]  # type: ignore[index]
+    value["source_snapshot"]["dependency_keys"] = [  # type: ignore[index]
+        "material.requirement",
+        "source.unit",
+    ]
+    value["operation"]["discovery_evidence"] = ["evidence-b", "evidence-a"]  # type: ignore[index]
+    value["assets"] = list(reversed(value["assets"]))  # type: ignore[arg-type]
+    _refresh(value)
+    return value
+
+
+def _manifest_round_trip(value: dict[str, object]):
+    first = validate_artifact_manifest(value)
+    assert first.status is ValidationStatus.VALID, first.reason_codes
+    assert first.record is not None
+    payload = first.record.to_dict()
+    second = validate_artifact_manifest(copy.deepcopy(payload))
+    assert second.status is ValidationStatus.VALID, second.reason_codes
+    assert second.record is not None
+    assert second.record.fingerprint == first.record.fingerprint
+    # The canonical form is a fixed point: serializing it again changes nothing.
+    assert second.record.to_dict() == payload
+    return first, second
+
+
+def test_round_trip_non_canonical_manifest_is_valid_and_fingerprint_stable() -> None:
+    _manifest_round_trip(_noncanonical_manifest())
+
+
+def test_manifest_permutation_round_trip_property() -> None:
+    """Every permutation of order-insensitive lists yields VALID + equal fingerprint."""
+    unsigned = _noncanonical_manifest()
+    unsigned["identity"]["source_fingerprint"] = "0" * 64  # type: ignore[index]
+    expected_result = validate_artifact_manifest(_noncanonical_manifest())
+    assert expected_result.status is ValidationStatus.VALID
+    assert expected_result.record is not None
+    expected = expected_result.record.fingerprint
+
+    paths = (
+        ("artifact", "observed_sections"),
+        ("source_snapshot", "dependency_keys"),
+        ("operation", "discovery_evidence"),
+        ("assets",),
+        ("quality_rows",),
+        ("references",),
+        ("duplicates", "candidates"),
+    )
+    import random
+
+    rng = random.Random(3249)
+    for _ in range(8):
+        trial = copy.deepcopy(unsigned)
+        for path in paths:
+            target = trial
+            for key in path[:-1]:
+                target = target[key]  # type: ignore[index]
+            items = list(target[path[-1]])  # type: ignore[index]
+            rng.shuffle(items)
+            target[path[-1]] = items  # type: ignore[index]
+        _refresh(trial)
+        result = validate_artifact_manifest(trial)
+        assert result.status is ValidationStatus.VALID, result.reason_codes
+        assert result.record is not None
+        assert result.record.fingerprint == expected
+        again = validate_artifact_manifest(result.record.to_dict())
+        assert again.status is ValidationStatus.VALID
+        assert again.record is not None
+        assert again.record.fingerprint == expected
+
+
+def test_manifest_accepts_material_requirement_v2_reference() -> None:
+    """Manifests can bind MaterialRequirement v2 records (which carry visual direction)."""
+    value = _noncanonical_manifest()
+    value["requirement_reference"]["contract_version"] = (  # type: ignore[index]
+        "curriculum-material-requirement-v2"
+    )
+    _refresh(value)
+    first, second = _manifest_round_trip(value)
+    assert first.record is not None and second.record is not None
+    assert (
+        first.record.to_dict()["requirement_reference"]["contract_version"]
+        == "curriculum-material-requirement-v2"
+    )
+    assert second.record.fingerprint == first.record.fingerprint
+
+
+def test_material_requirement_version_ids_match_canonical_definition() -> None:
+    """The manifest's local v2 copy must track material_requirement's canonical IDs."""
+    import instructional_workflow_contracts.material_requirement as requirement_module
+
+    assert (
+        manifest_module.MATERIAL_CONTRACT_ID
+        == requirement_module.V1_CONTRACT_ID
+        == "curriculum-material-requirement-v1"
+    )
+    assert (
+        manifest_module.MATERIAL_V2_CONTRACT_ID
+        == requirement_module.V2_CONTRACT_ID
+        == "curriculum-material-requirement-v2"
+    )
+    assert manifest_module.MATERIAL_CONTRACT_IDS == frozenset(
+        {
+            requirement_module.V1_CONTRACT_ID,
+            requirement_module.V2_CONTRACT_ID,
+        }
+    )
+
+
+def test_tampered_manifest_fails_closed() -> None:
+    first, _ = _manifest_round_trip(_noncanonical_manifest())
+    assert first.record is not None
+    payload = first.record.to_dict()
+    tampered = copy.deepcopy(payload)
+    tampered["artifact"]["mime_type"] = "application/x-tampered"  # type: ignore[index]
+    assert validate_artifact_manifest(tampered).reason_codes == (
+        "artifact-incompatible-fingerprint",
+    )
+    corrupted = copy.deepcopy(payload)
+    corrupted["identity"]["source_fingerprint"] = "f" * 64  # type: ignore[index]
+    assert validate_artifact_manifest(corrupted).reason_codes == (
+        "artifact-incompatible-fingerprint",
+    )
+
+
+def test_repeated_manifest_round_trips_remain_stable() -> None:
+    first, _ = _manifest_round_trip(_noncanonical_manifest())
+    assert first.record is not None
+    expected = first.record.fingerprint
+    payload = first.record.to_dict()
+    for _ in range(3):
+        result = validate_artifact_manifest(copy.deepcopy(payload))
+        assert result.status is ValidationStatus.VALID
+        assert result.record is not None
+        assert result.record.fingerprint == expected
+        payload = result.record.to_dict()
+
+
+def test_compatibility_accepts_round_tripped_manifest_record() -> None:
+    """Consumer revalidation (compatibility _manifest_record) accepts round-tripped records."""
+    import instructional_workflow_contracts.visual_asset_compatibility as compatibility_module
+
+    envelope = json.loads(
+        (
+            FIXTURES_3249 / "valid_visual_asset_compatibility_v2.json"
+        ).read_text(encoding="utf-8")
+    )
+    manifest_result = validate_artifact_manifest(envelope["artifact_manifest"])
+    assert manifest_result.status is ValidationStatus.VALID
+    assert manifest_result.record is not None
+    # Feed the round-tripped record through the consumer path, which revalidates
+    # record.to_dict() inside _manifest_record.
+    envelope["artifact_manifest"] = manifest_result.record.to_dict()
+    result = compatibility_module.validate_visual_asset_compatibility_evidence(envelope)
+    assert result.status is ValidationStatus.VALID, result.reason_codes
+
+
+def test_noncanonical_manifest_fixture_round_trips() -> None:
+    """The checked-in non-canonical fixture survives the producer round trip."""
+    value = json.loads(
+        (FIXTURES_3249 / "noncanonical_artifact_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    _refresh(value)
+    first, second = _manifest_round_trip(value)
+    assert first.record is not None
+    payload = first.record.to_dict()
+    # Order-insensitive lists are canonicalized.
+    assert [item["asset_id"] for item in payload["assets"]] == [
+        "asset-1",
+        "asset-2",
+        "asset-3",
+    ]
+    assert payload["artifact"]["observed_sections"] == [
+        "directions",
+        "exit-ticket",
+        "practice",
+    ]
+    assert payload["source_snapshot"]["dependency_keys"] == [
+        "material.requirement",
+        "source.lesson",
+        "source.unit",
+    ]
+    assert second.record is not None
+    assert second.record.fingerprint == first.record.fingerprint
