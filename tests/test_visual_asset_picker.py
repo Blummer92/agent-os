@@ -25,7 +25,7 @@ def test_reuse_only_hard_constraint_overrides_earlier_generation_permission():
         AssetPickerIntent(source_preference="reuse-only", generation_allowed=False),
     )
     result = resolve_visual_asset_picker(merged, [])
-    assert (result.source_preference, result.generation_allowed, result.outcome, result.create_new_handoff_allowed) == ("reuse-only", False, "visual-gap", False)
+    assert (result.source_preference, result.generation_allowed, result.outcome, result.create_new_handoff_allowed) == ("reuse-only", False, "blocked", False)
 
 
 def test_ranking_prioritizes_instructional_relevance_before_recency():
@@ -45,9 +45,10 @@ def test_candidate_first_ambiguity_returns_real_candidates_not_abstract_question
 
 def test_needs_review_candidate_never_enters_selected_references():
     result = resolve_visual_asset_picker(AssetPickerIntent(), [candidate("review-a", review_status="needs-review")])
-    assert result.outcome == "visual-gap"
+    assert result.outcome == "review-required"
     assert result.needs_review_asset_ids == ("review-a",)
     assert result.selected_references == ()
+    assert result.create_new_handoff_allowed is False
 
 
 def test_library_failure_keeps_generation_disabled():
@@ -73,4 +74,5 @@ def test_selected_asset_becoming_unavailable_returns_to_picker_resolution():
 def test_requested_asset_scope_rejects_substitution():
     intent = AssetPickerIntent(source_preference="explicit-existing", requested_asset_ids=("wanted",))
     result = resolve_visual_asset_picker(intent, [candidate("other", unit_match=True)])
-    assert result.outcome == "visual-gap"
+    assert result.outcome == "selection-invalidated"
+    assert result.create_new_handoff_allowed is False

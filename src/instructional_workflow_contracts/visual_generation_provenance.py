@@ -52,10 +52,19 @@ def bind_gap_to_image_intent(
     missing_visual_role_id: str,
     image_intent: ValidatedRecord,
 ) -> ValidationResult:
-    """Bind one exact ImageGapBrief to one exact validated ImageIntent."""
+    """Bind one exact ImageGapBrief to one exact validated ImageIntent.
+
+    Admission requires proven absence: the brief must carry tamper-evident
+    ``absence_evidence`` proving that governed evidence found no eligible
+    reusable asset for the role, the plan must not be a manual-review plan,
+    and the brief's snapshot must match the plan's cited candidate-filter
+    evidence (stale snapshots are rejected).
+    """
     try:
         plan = _validated_cohesive_plan(cohesive_visual_plan)
+        _reject_non_absence_plan(plan)
         gap_brief = _find_exact_gap(plan, brief_id, missing_visual_role_id)
+        _require_proven_absence_evidence(plan, gap_brief)
         intent = _validated_image_intent(image_intent)
 
         payload = {
@@ -263,6 +272,39 @@ def _find_exact_gap(plan: ValidatedRecord, brief_id: str, role_id: str) -> dict[
             "identity-invalid", "missing visual role does not match the source gap"
         )
     return match
+
+
+def _reject_non_absence_plan(plan: ValidatedRecord) -> None:
+    """Reject binding briefs from plans that cannot assert proven absence."""
+    if plan.to_dict().get("manual_review_required") is True:
+        raise ContractValidationError(
+            "asset-gap-manual-review-plan",
+            "image-gap briefs from manual-review plans cannot authorize creation",
+        )
+
+
+def _require_proven_absence_evidence(
+    plan: ValidatedRecord, gap_brief: dict[str, Any]
+) -> None:
+    """Admit only briefs carrying tamper-evident proven-absence evidence."""
+    evidence = gap_brief.get("absence_evidence")
+    if type(evidence) is not dict or evidence.get("proven_absence") is not True:
+        raise ContractValidationError(
+            "asset-gap-not-proven-absence",
+            "image-gap brief is not backed by proven-absence evidence",
+        )
+    snapshot = evidence.get("snapshot")
+    source = plan.to_dict().get("source_candidate_filter_result")
+    if (
+        type(snapshot) is not dict
+        or type(source) is not dict
+        or snapshot.get("candidate_filter_id") != source.get("candidate_set_id")
+        or snapshot.get("candidate_filter_fingerprint") != source.get("fingerprint")
+    ):
+        raise ContractValidationError(
+            "asset-gap-stale-snapshot",
+            "image-gap brief snapshot does not match the plan's cited candidate evidence",
+        )
 
 
 def _validated_image_intent(value: object) -> ValidatedRecord:

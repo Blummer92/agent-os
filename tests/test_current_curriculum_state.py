@@ -494,3 +494,40 @@ def test_module_has_no_network_credentials_filesystem_or_subprocess_imports() ->
         "navigation_registry",
     )
     assert not [name for name in imports if name.startswith(forbidden)]
+
+def test_missing_asset_evidence_never_reports_absence() -> None:
+    # #3248: when asset evidence was never supplied, the resolver must not
+    # report matching_asset_exists: false — absence was never evidenced.
+    value = evidence(requires_assets=True)
+    del value["asset_evidence"]
+    result = current_state.resolve_current_curriculum_state(value)
+    state = payload(result)
+    assert state["assets"]["matching_asset_exists"] is None
+    assert "asset-evidence-missing" in state["reason_codes"]
+    assert "asset-reusable-unavailable" not in state["blockers"]
+    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+
+
+def test_supplied_empty_asset_evidence_still_reports_absence() -> None:
+    # Supplied-but-empty evidence is a genuine zero: absence may be reported.
+    result = current_state.resolve_current_curriculum_state(
+        evidence(requires_assets=True, assets=[])
+    )
+    state = payload(result)
+    assert state["assets"]["matching_asset_exists"] is False
+    assert "asset-reusable-unavailable" in state["blockers"]
+    assert result.status is ValidationStatus.BLOCKED
+
+
+def test_unmapped_approvals_stay_ambiguous_without_unavailable_blocker() -> None:
+    # Approvals never mapped (None) are ambiguous, not unavailable.
+    result = current_state.resolve_current_curriculum_state(
+        evidence(
+            requires_assets=True,
+            assets=[asset("photo-1", approved_use=None, student_reuse=None)],
+        )
+    )
+    state = payload(result)
+    assert state["assets"]["matching_asset_exists"] is True
+    assert "asset-approval-ambiguous" in state["reason_codes"]
+    assert "asset-reusable-unavailable" not in state["blockers"]

@@ -77,7 +77,8 @@ class AssetPickerDecision:
     outcome: Literal[
         "recommended",
         "candidate-choice-required",
-        "visual-gap",
+        "review-required",
+        "blocked",
         "library-unavailable",
         "selection-invalidated",
     ]
@@ -180,15 +181,35 @@ def resolve_visual_asset_picker(
     ranked = _rank(approved)
 
     if not ranked:
-        return AssetPickerDecision(
-            outcome="visual-gap",
-            source_preference=source_preference,
-            generation_allowed=generation_allowed,
-            recommended_asset_ids=(),
-            needs_review_asset_ids=needs_review,
-            selected_references=(),
-            create_new_handoff_allowed=generation_allowed,
-        )
+        # The pure picker has no read-evidence input, so it can never prove
+        # absence: no empty/unresolvable pool becomes a visual gap, and none
+        # of these non-absence states authorizes a creation handoff.
+        if not candidates:
+            return AssetPickerDecision(
+                outcome="blocked",
+                source_preference=source_preference,
+                generation_allowed=generation_allowed,
+                recommended_asset_ids=(),
+                needs_review_asset_ids=(),
+                selected_references=(),
+                create_new_handoff_allowed=False,
+            )
+        if intent.requested_asset_ids and not (
+            set(intent.requested_asset_ids) & set(by_id)
+        ):
+            # Requested-ID miss: the teacher-named asset is not in the pool.
+            return _invalidated(source_preference, generation_allowed)
+        if needs_review:
+            return AssetPickerDecision(
+                outcome="review-required",
+                source_preference=source_preference,
+                generation_allowed=generation_allowed,
+                recommended_asset_ids=(),
+                needs_review_asset_ids=needs_review,
+                selected_references=(),
+                create_new_handoff_allowed=False,
+            )
+        return _invalidated(source_preference, generation_allowed)
 
     recommended_ids = tuple(candidate.asset_id for candidate in ranked)
     needs_choice = intent.selection_authority == "teacher-select" or source_preference in {"review-compare", "explicit-existing"} and len(ranked) > 1

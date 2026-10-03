@@ -195,7 +195,9 @@ def test_multiple_required_roles_receive_compatible_candidates() -> None:
     assert payload["unfilled_required_roles"] == []
 
 
-def test_unfilled_required_role_produces_one_vendor_neutral_gap_brief() -> None:
+def test_role_incompatible_candidate_never_produces_gap_brief() -> None:
+    # #3248: a candidate that is merely incompatible with the role (no
+    # eligible asset for the role, but assets were seen) is not absence.
     candidate_payload = _candidate_result().to_dict()
     candidate_payload["eligible"][0]["purpose"]["role_types"] = ["comparison"]
     candidate_payload["eligible"][0]["approved_use"]["role_types"] = ["comparison"]
@@ -210,11 +212,10 @@ def test_unfilled_required_role_produces_one_vendor_neutral_gap_brief() -> None:
     payload = result.record.to_dict()
     assert payload["outcome"] == "partial-set"
     assert len(payload["unfilled_required_roles"]) == 1
-    assert len(payload["image_gap_briefs"]) == 1
-    brief = payload["image_gap_briefs"][0]
-    assert brief["human_review_required"] is True
-    assert brief["required_visual_style_family"] == "unspecified"
-    assert brief["authority"]["side_effects_performed"] is False
+    unfilled = payload["unfilled_required_roles"][0]
+    assert unfilled["outcome_code"] == "incompatible"
+    assert unfilled["remedy_class"] == "unapproved-for-use"
+    assert payload["image_gap_briefs"] == []
 
 
 def test_equal_candidate_tie_routes_to_manual_review() -> None:
