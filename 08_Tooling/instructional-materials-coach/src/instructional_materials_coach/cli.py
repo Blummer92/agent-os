@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ from typing import Any, Mapping
 
 from .artifact_structure import PASS, validate_required_worksheet_sections
 from .asset_slot_resolution import resolve_asset_slots
+from .build_resume import DEFAULT_BUILD_RESUME_DIR
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials, get_file_metadata
@@ -18,8 +20,12 @@ from .generation_context import compose_generation_context, curriculum_decision_
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
 from instructional_workflow_contracts.current_curriculum_state import resolve_current_curriculum_state
 from instructional_workflow_contracts.material_requirement import validate_material_requirement
+from instructional_workflow_contracts.teacher_visual_decision import (
+    canonical_candidate_set_fingerprint,
+)
 from .live_build import LiveBuildInput, build_live_materials
 from .slides_requests import build_slides_replace_requests
+from .teacher_decisions import DEFAULT_TEACHER_DECISIONS_DIR, load_teacher_decisions
 from .template_resolution import TemplateCandidate, resolve_approved_template_pair
 from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
 from .workspace_clients import build_docs_service, build_slides_service
@@ -46,6 +52,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build.add_argument("--client-secret", default=os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_PATH", ""))
     build.add_argument("--token-path", default=os.environ.get("GOOGLE_OAUTH_TOKEN_PATH", ""))
     build.add_argument("--lessons-dir", default=DEFAULT_LESSONS_DIR)
+    build.add_argument("--teacher-decisions-dir", default=DEFAULT_TEACHER_DECISIONS_DIR,
+                       help="Directory of teacher visual-decision records honored by the governed reuse path.")
+    build.add_argument("--resume-dir", default=DEFAULT_BUILD_RESUME_DIR,
+                       help="Directory of build resume records enabling retry continuation.")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -65,16 +75,145 @@ def _load_json(path: str, *, default: object) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _build_idempotency_key(args: argparse.Namespace, content_title: str, material_requirement: object) -> str:
-    identity = material_requirement.get("identity", {}) if isinstance(material_requirement, dict) else {}
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def build_idempotency_key_v2(
+    *,
+    requirement_id: object,
+    contract_version: object,
+    record_revision: object,
+    source_fingerprint: object,
+    content_fingerprint: object,
+    slides_template_id: object,
+    slides_template_revision: object,
+    doc_template_id: object,
+    doc_template_revision: object,
+    selected_visuals: object,
+    candidate_set_fingerprint: object,
+    visual_source_revision: object,
+    target_folder: object,
+    content_title: object,
+) -> str:
+    """Build the #3252 idempotency key over every consequential input.
+
+    Covers: requirement identity, lesson content bytes, template IDs *and*
+    revisions, selected visuals (asset + Lane-D content identity per role),
+    candidate-set fingerprint, visual source revision, and run targeting.
+    Any consequential change yields a new key (fresh copies, never
+    contamination); byte-identical inputs reproduce the key (safe recovery).
+    Run timestamps, actor identity, retry count, and lesson-record sidecars
+    are not consequential and do not participate.
+    """
     payload = {
-        "requirement_id": identity.get("requirement_id"), "contract_version": identity.get("contract_version"),
-        "record_revision": identity.get("record_revision"), "source_fingerprint": identity.get("source_fingerprint"),
-        "slides_template": args.slides_template, "doc_template": args.doc_template,
-        "target_folder": args.target_folder, "content_title": content_title,
+        "requirement_id": requirement_id,
+        "contract_version": contract_version,
+        "record_revision": record_revision,
+        "source_fingerprint": source_fingerprint,
+        "content_fingerprint": content_fingerprint,
+        "slides_template": {"id": slides_template_id, "revision": slides_template_revision},
+        "doc_template": {"id": doc_template_id, "revision": doc_template_revision},
+        "selected_visuals": selected_visuals,
+        "candidate_set_fingerprint": candidate_set_fingerprint,
+        "visual_source_revision": visual_source_revision,
+        "target_folder": target_folder,
+        "content_title": content_title,
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _build_idempotency_key(args: argparse.Namespace, content_title: str, material_requirement: object) -> str:
+    """Legacy entry point kept for backward compatibility.
+
+    Delegates to the v2 key with empty consequential inputs not available
+    to historical callers. New code must call :func:`build_idempotency_key_v2`.
+    """
+    identity = material_requirement.get("identity", {}) if isinstance(material_requirement, dict) else {}
+    return build_idempotency_key_v2(
+        requirement_id=identity.get("requirement_id"),
+        contract_version=identity.get("contract_version"),
+        record_revision=identity.get("record_revision"),
+        source_fingerprint=identity.get("source_fingerprint"),
+        content_fingerprint="",
+        slides_template_id=args.slides_template,
+        slides_template_revision="",
+        doc_template_id=args.doc_template,
+        doc_template_revision="",
+        selected_visuals=[],
+        candidate_set_fingerprint="",
+        visual_source_revision="",
+        target_folder=args.target_folder,
+        content_title=content_title,
+    )
+
+
+def _lesson_content_fingerprint(content: object) -> str:
+    """SHA-256 over the canonical lesson content (authored + governed context)."""
+    try:
+        payload = dataclasses.asdict(content)  # type: ignore[arg-type]
+    except Exception:
+        payload = {"repr": repr(content)}
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _template_revision(drive_service: Any, template_id: str) -> str:
+    """Best-effort Drive revision for a template; empty when unreadable."""
+    try:
+        meta = get_file_metadata(drive_service, template_id)
+    except Exception:
+        return ""
+    revision = meta.get("headRevisionId") if isinstance(meta, dict) else None
+    return revision if isinstance(revision, str) else ""
+
+
+def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict[str, Any]]:
+    """Per-role selected visuals with Lane-D content identity for the key."""
+    from instructional_workflow_contracts.asset_content_identity import (
+        content_identity_from_fingerprint,
+    )
+
+    result = visual_plan.cohesive_visual_plan_result
+    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    visuals: list[dict[str, Any]] = []
+    for key in ("required_role_assignments", "optional_role_assignments"):
+        assignments = payload.get(key, ())
+        if not isinstance(assignments, (list, tuple)):
+            continue
+        for assignment in assignments:
+            if not isinstance(assignment, Mapping):
+                continue
+            candidate = assignment.get("selected_candidate")
+            if not isinstance(candidate, Mapping):
+                continue
+            asset_reference = candidate.get("asset_reference")
+            asset_id = (
+                asset_reference.get("asset_id")
+                if isinstance(asset_reference, Mapping)
+                else None
+            )
+            fingerprint = (
+                asset_reference.get("content_fingerprint")
+                if isinstance(asset_reference, Mapping)
+                else None
+            )
+            try:
+                identity = (
+                    content_identity_from_fingerprint(fingerprint)
+                    if isinstance(fingerprint, str) and fingerprint
+                    else None
+                )
+            except (ValueError, TypeError):
+                identity = None
+            visuals.append(
+                {
+                    "role": assignment.get("role_id"),
+                    "asset_id": asset_id,
+                    "content_identity": identity,
+                }
+            )
+    visuals.sort(key=lambda item: _canonical_json(item))
+    return visuals
 
 
 def _require_visual_placement_support(selected_asset_ids: tuple[str, ...]) -> None:
@@ -208,14 +347,32 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(current_curriculum_evidence, dict)
             else []
         )
+        visual_candidates = _load_json(args.visual_candidates, default=[])
+        # #3252: load governed teacher visual-decision records for this
+        # requirement; the reuse path honors valid ones per role and blocks
+        # invalid ones with an explicit reason code.
+        requirement_identity = (
+            material_requirement.get("identity", {})
+            if isinstance(material_requirement, dict)
+            else {}
+        )
+        teacher_decisions = load_teacher_decisions(
+            args.teacher_decisions_dir,
+            requirement_id=(
+                requirement_identity.get("requirement_id")
+                if isinstance(requirement_identity, dict)
+                else None
+            ),
+        )
         visual_plan = plan_governed_visual_reuse(
             material_requirement,
             artifact_manifests=_load_json(args.artifact_manifests, default=[]),
-            visual_candidates=_load_json(args.visual_candidates, default=[]),
+            visual_candidates=visual_candidates,
             source_revision=args.visual_source_revision,
             changed_dependency_keys=_load_json(args.changed_dependency_keys, default=[]),
             impact_map=_load_json(args.impact_map, default={}),
             current_asset_evidence=current_asset_evidence,
+            teacher_decisions=tuple(teacher_decisions),
         )
         context["visual_reuse_outcome"] = visual_plan.outcome
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
@@ -263,18 +420,39 @@ def main(argv: list[str] | None = None) -> int:
         credentials = get_credentials(args.client_secret, args.token_path)
         drive_service = build_drive_service(credentials)
         _require_asset_slot_resolution(visual_plan, drive_service)
+        # #3252: the idempotency key covers every consequential input. The
+        # same payload doubles as the input fingerprint bound to created
+        # copies (anti-collision on recovery).
+        idempotency_key = build_idempotency_key_v2(
+            requirement_id=requirement_identity.get("requirement_id"),
+            contract_version=requirement_identity.get("contract_version"),
+            record_revision=requirement_identity.get("record_revision"),
+            source_fingerprint=requirement_identity.get("source_fingerprint"),
+            content_fingerprint=_lesson_content_fingerprint(content),
+            slides_template_id=args.slides_template,
+            slides_template_revision=_template_revision(drive_service, args.slides_template),
+            doc_template_id=args.doc_template,
+            doc_template_revision=_template_revision(drive_service, args.doc_template),
+            selected_visuals=_selected_visuals_for_key(visual_plan),
+            candidate_set_fingerprint=canonical_candidate_set_fingerprint(visual_candidates),
+            visual_source_revision=args.visual_source_revision or "",
+            target_folder=args.target_folder,
+            content_title=content.title,
+        )
         receipt = build_live_materials(
             LiveBuildInput(
                 slides_template_id=args.slides_template, doc_template_id=args.doc_template,
                 target_folder_id=args.target_folder, slides_name=f"{content.title} - Slides",
                 doc_name=f"{content.title} - Worksheet",
-                idempotency_key=_build_idempotency_key(args, content.title, material_requirement),
+                idempotency_key=idempotency_key,
+                input_fingerprint=idempotency_key,
                 slides_requests=tuple(build_slides_replace_requests(content)),
                 docs_requests=docs_requests,
             ),
             drive_service=drive_service,
             slides_service=build_slides_service(credentials),
             docs_service=build_docs_service(credentials),
+            resume_dir=args.resume_dir,
         )
         if not receipt.succeeded:
             raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
