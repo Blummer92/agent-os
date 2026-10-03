@@ -390,5 +390,8 @@ def test_2783_main_health_reason_is_published_before_the_step_can_fail():
     )[1].split("\n      - name: ", 1)[0]
 
     conclusion_output = 'echo "validation_conclusion=$validation_conclusion" >> "$GITHUB_OUTPUT"'
-    assert step.index(conclusion_output) < step.index("python3 - <<'PY'")
+    admission_projection = "from scripts.agent_os_remote_validation import ("
+    assert conclusion_output in step
+    assert admission_projection in step
+    assert step.index(conclusion_output) < step.index(admission_projection)
     assert step.index('output.write("reason_codes="') < step.index("raise SystemExit(")
