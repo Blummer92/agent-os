@@ -11,7 +11,7 @@ Candidate v1 accepts only `curriculum-visual-asset-compatibility-v1`; candidate 
 Inputs are bounded as follows:
 
 - `visual_needs_plan`: validated `curriculum-visual-needs-plan-v1` `ValidationResult` or `ValidatedRecord` with exact `visuals-required` outcome; contract version, plan ID, revision, and fingerprint must reconstruct exactly.
-- `candidates`: built-in list of at most 32 compatibility envelopes, each revalidated independently.
+- `candidates`: built-in list of at most 64 compatibility envelopes (`MAX_CANDIDATES`), each revalidated independently. Above 64 the query is `INVALID` with the explicit `capacity-exceeded` reason code: an input-contract violation, never absence or review.
 - `source_revision`: nonempty caller-supplied source-snapshot identity, at most `MAX_SOURCE_REVISION_LENGTH` (`256`) characters.
 - `contract_version`: exact candidate projection version; defaults to v1.
 
@@ -29,7 +29,7 @@ Plan mismatches use `visual-candidate-role-mismatch`, `visual-candidate-material
 
 ## Candidate-set binding
 
-The result preserves plan contract version, plan ID, plan revision, and plan fingerprint. `candidate_set_id` is deterministic and SHA-256-derived from the selected candidate contract, exact plan identity, exact `source_revision`, and fully ordered `eligible`, `rejected`, and `manual_review` groups. The validated result fingerprint covers the complete normalized result.
+The result preserves plan contract version, plan ID, plan revision, and plan fingerprint. `candidate_set_id` is deterministic and SHA-256-derived from the selected candidate contract, exact plan identity, exact `source_revision`, and the compact classification references for the fully ordered `eligible`, `rejected`, and `manual_review` groups. Each reference fingerprint binds the exact validated compatibility record bytes, so the set identity is transport-independent. The validated result fingerprint covers the complete normalized result.
 
 Input order does not affect semantic output. Groups sort by compatibility ID, compatibility fingerprint, reason codes, and canonical `sha256_hex(item)` as the total-order tie-breaker. Changing source revision, version, plan identity, evidence, classification, reasons, or projected fields changes the candidate-set identity or fingerprint.
 
@@ -53,7 +53,15 @@ Invalid or wrong-version v2 envelopes preserve only available compatibility-bind
 
 ## Result, bounds, and authority
 
-The immutable result contains selected contract version, deterministic candidate-set ID, exact source revision, exact plan identity, `maximum_candidate_count: 32`, actual count, the three ordered groups, and all-false candidate-set authority. Shared serialized-size limits apply; oversized input or output fails closed instead of truncating. Any manual-review candidate produces `ValidationStatus.MANUAL_REVIEW_REQUIRED`; otherwise a structurally valid set is `ValidationStatus.VALID`.
+The immutable result contains selected contract version, deterministic candidate-set ID, exact source revision, exact plan identity, `maximum_candidate_count: 64`, actual count, the three ordered groups, a `capacity_exceeded` group (populated only when the bounded transport cannot carry a classified entry), the `projection_transport` marker (`inline` or `by-reference`), and all-false candidate-set authority. Shared serialized-size limits apply.
+
+### Projection transport (#3255)
+
+The result record is bounded by the shared 16 KiB result limit. While the full inline result fits, entries carry their complete validated projections exactly as before. When the inline form would exceed the bound, the filter hands candidates off by reference: each entry becomes the compact `{compatibility_id, fingerprint, classification, reason_codes}` reference, and the cohesive planner resolves references through a caller-supplied projection store -- a mapping keyed by `(compatibility_id, fingerprint)` whose values are the validated compatibility records -- fingerprint-verifying each before selection. The resolved candidate dicts are byte-identical to the inline entries, so selection is transport-independent. A missing store, or a missing or mismatched projection, fails closed.
+
+If even the by-reference form cannot fit the bound, references degrade per item to the explicit `capacity-exceeded` outcome (never the whole query, never absence, never review). The input count bound above 64 remains whole-query `INVALID` with the `capacity-exceeded` reason code.
+
+Any manual-review candidate produces `ValidationStatus.MANUAL_REVIEW_REQUIRED`; otherwise a structurally valid set is `ValidationStatus.VALID`.
 
 Execution, external write, production, publication, and performed-side-effect authority remain false. Contract-specific authority fields stay false; governing no-side-effect requirements remain under `00_Governance/write-authorization-policy.md` and `01_Shared_Standards/github/safe-implementation-lane.md`.
 

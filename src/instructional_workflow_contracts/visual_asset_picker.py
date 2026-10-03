@@ -9,6 +9,10 @@ SourcePreference = Literal["reuse-only", "reuse-first", "find", "explicit-existi
 SelectionAuthority = Literal["recommend", "teacher-select"]
 ReviewStatus = Literal["approved", "needs-review"]
 
+# Governed input bound, reconciled with the candidate filter's maximum (#3255).
+# The filter (consumer) accepts at least this many candidates.
+MAX_CANDIDATES = 64
+
 
 class AssetPickerError(ValueError):
     """Fail-closed Asset Picker contract error."""
@@ -125,7 +129,7 @@ def resolve_visual_asset_picker(
         raise AssetPickerError("intent must be AssetPickerIntent")
     if type(library_available) is not bool:
         raise AssetPickerError("library_available must be boolean")
-    if len(candidates) > 64:
+    if len(candidates) > MAX_CANDIDATES:
         raise AssetPickerError("candidate collection exceeds bound")
     if any(not isinstance(candidate, AssetCandidate) for candidate in candidates):
         raise AssetPickerError("candidates must contain AssetCandidate values")

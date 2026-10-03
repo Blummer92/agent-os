@@ -13,6 +13,9 @@ from instructional_workflow_contracts.visual_asset_candidates import (
     V2_CONTRACT_ID as VISUAL_CANDIDATES_V2_CONTRACT_ID,
     filter_approved_visual_candidates,
 )
+from instructional_workflow_contracts.visual_asset_compatibility import (
+    validate_visual_asset_compatibility_evidence,
+)
 from instructional_workflow_contracts.visual_needs import plan_visual_needs
 
 
@@ -95,6 +98,26 @@ def _scope_candidates_to_current_assets(
             return ("no-read-evidence", [])
         return ("true-zero", [])
     return ("ok", scoped)
+
+
+def _candidate_projection_store(visual_candidates: object) -> dict[tuple[str, str], object]:
+    """Index validated compatibility records for by-reference filter results.
+
+    The planner resolves each by-reference eligible entry through this
+    store, fingerprint-verifying the record before selection. Only
+    validated records are indexed; the filter's own classification decides
+    eligibility, never this store.
+    """
+    store: dict[tuple[str, str], object] = {}
+    if type(visual_candidates) is not list:
+        return store
+    for candidate in visual_candidates:
+        result = validate_visual_asset_compatibility_evidence(candidate)
+        if result.status is ValidationStatus.VALID and result.record is not None:
+            store[(result.record.record_id, result.record.fingerprint)] = (
+                result.record
+            )
+    return store
 
 
 @dataclass(frozen=True)
@@ -231,7 +254,14 @@ def plan_governed_visual_reuse(
     )
     if candidate_filter_result.status is not ValidationStatus.VALID:
         return GovernedVisualReusePlan(
-            outcome="manual-review-required",
+            # #3255: a capacity failure is reported as capacity, never as
+            # manual review. Every other filter failure keeps the existing
+            # manual-review-required outcome.
+            outcome=(
+                "capacity-exceeded"
+                if "capacity-exceeded" in candidate_filter_result.reason_codes
+                else "manual-review-required"
+            ),
             final_production_blocked=True,
             selected_asset_ids=(),
             material_requirement_result=requirement_result,
@@ -243,10 +273,15 @@ def plan_governed_visual_reuse(
     cohesive_result = plan_cohesive_visual_set(
         visual_needs_result,
         candidate_filter_result,
+        candidate_projections=_candidate_projection_store(scoped_candidates),
     )
     if cohesive_result.status is not ValidationStatus.VALID or cohesive_result.record is None:
         return GovernedVisualReusePlan(
-            outcome="manual-review-required",
+            outcome=(
+                "capacity-exceeded"
+                if "capacity-exceeded" in cohesive_result.reason_codes
+                else "manual-review-required"
+            ),
             final_production_blocked=True,
             selected_asset_ids=(),
             material_requirement_result=requirement_result,

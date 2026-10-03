@@ -20,7 +20,15 @@ from .common import (
     validate_revision,
     validate_stable_id,
 )
-from .visual_asset_candidates import V2_CONTRACT_ID as CANDIDATE_CONTRACT_ID
+from .visual_asset_candidates import (
+    PROJECTION_TRANSPORT_BY_REFERENCE,
+    PROJECTION_TRANSPORT_INLINE,
+    V2_CONTRACT_ID as CANDIDATE_CONTRACT_ID,
+)
+from .visual_asset_compatibility import (
+    V1_CONTRACT_ID as V1_COMPATIBILITY_CONTRACT_ID,
+    V2_CONTRACT_ID as V2_COMPATIBILITY_CONTRACT_ID,
+)
 from .visual_needs import CONTRACT_ID as VISUAL_NEEDS_CONTRACT_ID
 
 CONTRACT_ID = "curriculum-cohesive-visual-plan-v1"
@@ -62,6 +70,11 @@ _REMEDY_CLASS = {
     OUTCOME_POLICY_UNASSIGNED: "policy-unassigned",
 }
 
+# Governed eligible-input bound, reconciled with the candidate filter's
+# maximum (#3255). Above this bound the plan is INVALID with the explicit
+# `capacity-exceeded` reason code: an input-contract violation, never
+# absence or review.
+MAX_ELIGIBLE_CANDIDATES = 64
 _COHESION_FIELDS = (
     "visual_style_family",
     "medium",
@@ -84,8 +97,18 @@ _AUTHORITY = {
 def plan_cohesive_visual_set(
     visual_needs_plan: object,
     candidate_filter_result: object,
+    *,
+    candidate_projections: object = None,
 ) -> ValidationResult:
-    """Select one bounded cohesive visual set and deterministic gap briefs."""
+    """Select one bounded cohesive visual set and deterministic gap briefs.
+
+    ``candidate_projections`` supplies the validated compatibility records
+    for a by-reference filter result: a mapping keyed by
+    ``(compatibility_id, fingerprint)`` whose values are the
+    ``ValidatedRecord`` instances the filter classified. Each reference is
+    fingerprint-verified before selection; a missing or mismatched
+    projection fails closed. Inline filter results do not need it.
+    """
     try:
         plan = _plan_record(visual_needs_plan)
         plan_payload = plan.to_dict()
@@ -120,12 +143,18 @@ def plan_cohesive_visual_set(
         if candidate_payload["manual_review"]:
             manual_reasons.add("manual-review-visual-candidates")
 
-        eligible = list(candidate_payload["eligible"])
-        if len(eligible) > 32:
+        eligible_refs = list(candidate_payload["eligible"])
+        if len(eligible_refs) > MAX_ELIGIBLE_CANDIDATES:
             raise ContractValidationError(
-                "handoff-oversized",
+                "capacity-exceeded",
                 "eligible candidate count exceeds the governed bound",
             )
+        eligible = _resolve_eligible_candidates(
+            eligible_refs,
+            transport=candidate_payload.get("projection_transport"),
+            candidate_projections=candidate_projections,
+            candidate_contract_version=candidates.contract_version,
+        )
 
         for role in required_roles:
             if len(selected) >= min(max_visuals, MAX_SELECTED_ASSETS):
@@ -427,7 +456,8 @@ def _candidate_record(value: object) -> ValidatedRecord:
     expected = {
         "contract_version", "candidate_set_id", "source_revision",
         "visual_needs_plan", "maximum_candidate_count", "candidate_count",
-        "eligible", "rejected", "manual_review", "authority",
+        "eligible", "rejected", "manual_review", "capacity_exceeded",
+        "projection_transport", "authority",
     }
     if set(payload) != expected:
         raise ContractValidationError(
@@ -451,6 +481,99 @@ def _candidate_record(value: object) -> ValidatedRecord:
             "candidate-filter payload exceeds the shared result-size bound",
         )
     return supplied
+
+
+def _resolve_eligible_candidates(
+    entries: list[dict[str, Any]],
+    *,
+    transport: object,
+    candidate_projections: object,
+    candidate_contract_version: str,
+) -> list[dict[str, Any]]:
+    """Resolve eligible entries to the full candidate dicts selection consumes.
+
+    Inline entries are used directly. By-reference entries are resolved
+    through the caller-supplied projection store with fingerprint
+    verification: the store record's identity and exact bytes must match
+    the reference, and its contract version must be the compatibility
+    version the filter classified. Anything else fails closed. The resolved
+    dicts are byte-identical to the inline entries the filter would have
+    carried, so selection is transport-independent.
+    """
+    if transport is None or transport == PROJECTION_TRANSPORT_INLINE:
+        return entries
+    if transport != PROJECTION_TRANSPORT_BY_REFERENCE:
+        raise ContractValidationError(
+            "asset-cohesive-plan-invalid-candidates",
+            "candidate-filter projection transport is not supported",
+        )
+    if candidate_projections is None:
+        raise ContractValidationError(
+            "asset-cohesive-plan-missing-projections",
+            "by-reference candidate result requires candidate projections",
+        )
+    if type(candidate_projections) is not dict:
+        raise ContractValidationError(
+            "asset-cohesive-plan-invalid-projections",
+            "candidate projections must be a mapping",
+        )
+    expected_compatibility_version = (
+        V1_COMPATIBILITY_CONTRACT_ID
+        if candidate_contract_version
+        == "curriculum-visual-asset-candidates-v1"
+        else V2_COMPATIBILITY_CONTRACT_ID
+    )
+    resolved: list[dict[str, Any]] = []
+    for entry in entries:
+        if type(entry) is not dict:
+            raise ContractValidationError(
+                "asset-cohesive-plan-projection-mismatch",
+                "candidate reference must be a built-in mapping",
+            )
+        compatibility_id = entry.get("compatibility_id")
+        fingerprint = entry.get("fingerprint")
+        record = candidate_projections.get((compatibility_id, fingerprint))
+        if type(record) is not ValidatedRecord:
+            raise ContractValidationError(
+                "asset-cohesive-plan-projection-mismatch",
+                "candidate projection is missing or not a validated record",
+            )
+        if (
+            record.record_id != compatibility_id
+            or record.fingerprint != fingerprint
+        ):
+            raise ContractValidationError(
+                "asset-cohesive-plan-projection-mismatch",
+                "candidate projection identity does not match its reference",
+            )
+        if record.contract_version != expected_compatibility_version:
+            raise ContractValidationError(
+                "asset-cohesive-plan-projection-mismatch",
+                "candidate projection contract version is incompatible",
+            )
+        projection = record.to_dict()
+        resolved.append(
+            {
+                "compatibility_contract_version": record.contract_version,
+                "compatibility_id": record.record_id,
+                "compatibility_record_revision": record.record_revision,
+                "fingerprint": record.fingerprint,
+                "classification": projection["classification"],
+                "reason_codes": list(projection["reason_codes"]),
+                "manifest_reference": projection["manifest_reference"],
+                "asset_reference": projection["asset_reference"],
+                "library_reference": projection["library_reference"],
+                "purpose": projection["purpose"],
+                "approved_use": projection["approved_use"],
+                "orientation": projection["orientation"],
+                "accessibility": projection["accessibility"],
+                "freshness": projection["freshness"],
+                "matched_asset": projection["matched_asset"],
+                "cohesion_profile": projection.get("cohesion_profile"),
+                "authority": projection["authority"],
+            }
+        )
+    return resolved
 
 
 def _bind_candidate_result_to_plan(
