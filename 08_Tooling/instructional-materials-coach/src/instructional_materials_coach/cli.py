@@ -455,6 +455,12 @@ def main(argv: list[str] | None = None) -> int:
             if visual_plan.selected_asset_ids
             else ()
         )
+        if visual_plan.selected_asset_ids and not visual_placements:
+            raise RuntimeError(
+                "Governed visual selections exist but no placement bindings could be "
+                "planned from the governed plan; refusing a build that would silently "
+                f"drop selected visuals. selected_asset_ids={','.join(visual_plan.selected_asset_ids)}"
+            )
         placement_transport = (
             build_placement_transport(script_id=args.placement_script_id, credentials=credentials)
             if visual_placements
