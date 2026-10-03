@@ -22,7 +22,7 @@ PACKAGE = Path(__file__).parents[1] / "src" / "instructional_workflow_contracts"
 COMPONENT_BLOBS = {
     "common.py": "395cef720b961540811b4643332ea1702976aa5f",
     "handoff.py": "b616580b0febaa2cab2f85a9327a5f62922289ae",
-    "material_requirement.py": "58b728c6fa32afc6ba1f60af1090dc5fc22f45dd",
+    "material_requirement.py": "16838ea2276df9efa228223d41e3646eea5bcf0d",
     "artifact_manifest.py": "913829ab8e22f3865597ee08bd6826357f9dfd21",
     "reuse_planner.py": "cdd6b76fc57e0bd47afd7c98107d6d034292d14d",
 }
