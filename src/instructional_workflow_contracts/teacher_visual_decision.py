@@ -21,7 +21,7 @@ import hashlib
 import json
 from typing import Any, Collection, Mapping
 
-from .asset_content_identity import validate_content_identity
+from .asset_content_identity import is_valid_content_identity
 
 TEACHER_VISUAL_DECISION_CONTRACT_ID = "teacher-visual-decision-v1"
 
@@ -101,10 +101,8 @@ class SelectedAssetIdentity:
         _require_text(self.provider_file_id, "selected_asset.provider_file_id")
         if not isinstance(self.content_identity, Mapping) or not self.content_identity:
             raise ValueError("selected_asset.content_identity must be a non-empty mapping")
-        try:
-            validate_content_identity(self.content_identity)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("selected_asset.content_identity is not governed-verifiable") from exc
+        if not is_valid_content_identity(self.content_identity):
+            raise ValueError("selected_asset.content_identity is not governed-verifiable")
         _require_text(self.revision_identity, "selected_asset.revision_identity")
         if not isinstance(self.provenance, Mapping):
             raise ValueError("selected_asset.provenance must be a mapping")
