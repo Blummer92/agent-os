@@ -208,6 +208,11 @@ def test_main_visual_gap_blocks_before_credentials(monkeypatch, tmp_path, capsys
 
 
 def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypatch, tmp_path, capsys):
+    """#3257: a selection with no placement runtime fails closed before credentials.
+
+    The old dead-end refusal ("no verified image-placement operation") is
+    replaced by the explicit placement-runtime-unavailable blocked state.
+    """
     from instructional_materials_coach import cli
     monkeypatch.setenv("ALLOW_WRITE", "true")
     lesson_file = _lesson_file(tmp_path)
@@ -222,12 +227,49 @@ def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypat
     credentials.assert_not_called()
     live.assert_not_called()
     captured = capsys.readouterr()
-    assert "no verified image-placement operation" in captured.err
+    assert "placement-runtime-unavailable" in captured.err
     assert "selected_asset_ids=asset-1" in captured.err
     assert "Approved visual assets" not in captured.out
     record = yaml.safe_load(next(lessons_dir.glob("*.yaml")).read_text())
-    assert "no verified image-placement operation" in record["what_happened"]
+    assert "placement-runtime-unavailable" in record["what_happened"]
     assert "asset-1" in record["what_happened"]
+
+
+def test_main_selected_visual_proceeds_with_configured_placement_runtime(monkeypatch, tmp_path, capsys):
+    """#3257: the dead-end refusal is gone -- a configured runtime lets the selection through.
+
+    The gate no longer kills the build; placement bindings reach the normal
+    connected build composition (build_live_materials, mocked here).
+    """
+    from instructional_materials_coach import cli
+    monkeypatch.setenv("ALLOW_WRITE", "true")
+    lesson_file = _lesson_file(tmp_path)
+    requirement_file = _write_json(tmp_path, "visual-requirement.json", _fixture("valid_material_requirement_v2.json"))
+    evidence_file = _current_curriculum_evidence_file(tmp_path)
+    manifests_file = _write_json(tmp_path, "artifact-manifests.json", [_fixture("valid_artifact_manifest.json")])
+    candidates_file = _write_json(tmp_path, "visual-candidates.json", [_fixture("valid_visual_asset_compatibility_v2.json")])
+    lessons_dir = tmp_path / "lessons"
+    with (
+        patch("instructional_materials_coach.cli.get_credentials", return_value="creds"),
+        patch("instructional_materials_coach.cli.build_drive_service", return_value="drive"),
+        patch("instructional_materials_coach.cli.build_slides_service", return_value="slides"),
+        patch("instructional_materials_coach.cli.build_docs_service", return_value="docs"),
+        patch("instructional_materials_coach.cli.get_file_metadata",
+              return_value={"id": "file-1", "trashed": False, "sha256Checksum": "c" * 64}),
+        patch("instructional_materials_coach.cli.build_placement_transport", return_value="transport") as transport_factory,
+        patch("instructional_materials_coach.cli.build_live_materials", return_value=_success_receipt()) as live,
+    ):
+        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--artifact-manifests", str(manifests_file), "--visual-candidates", str(candidates_file), "--visual-source-revision", "visual-library-snapshot-v2", "--lessons-dir", str(lessons_dir), "--placement-script-id", "script-123", "--placement-receipts-dir", str(tmp_path / "receipts")])
+    assert exit_code == 0
+    transport_factory.assert_called_once()
+    live.assert_called_once()
+    build_input = live.call_args.args[0]
+    assert len(build_input.visual_placements) == 1
+    binding = build_input.visual_placements[0]
+    assert binding.asset_id == "asset-1" and binding.drive_file_id == "file-1"
+    assert binding.content_identity["value"] == "c" * 64
+    assert live.call_args.kwargs["placement_transport"] == "transport"
+    assert "no verified image-placement operation" not in capsys.readouterr().err
 
 
 

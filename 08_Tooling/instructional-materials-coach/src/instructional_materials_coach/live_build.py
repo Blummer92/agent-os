@@ -11,6 +11,11 @@ from .build_resume import (
     new_resume_record,
     write_resume_record,
 )
+from .connected_visual_placement import (
+    VisualPlacementBinding,
+    execute_artifact_visual_placements,
+    require_all_required_visuals_placed,
+)
 from .drive_client import (
     GOOGLE_DOCS_MIME,
     GOOGLE_SLIDES_MIME,
@@ -48,6 +53,12 @@ class LiveBuildInput:
     # ``IdempotencyKeyInputMismatchError`` instead of silently reusing the
     # stale copy. Empty disables the check (pre-#3252 callers).
     input_fingerprint: str = ""
+    # #3257: governed visual-placement bindings planned from the visual-reuse
+    # plan. Empty (the default) preserves the text-only behavior for builds
+    # with no selected visuals. A non-empty tuple requires a placement
+    # transport at build time; without one the build fails closed with
+    # placement-runtime-unavailable, never "final".
+    visual_placements: tuple[VisualPlacementBinding, ...] = ()
 
 
 class IdempotencyKeyInputMismatchError(RuntimeError):
@@ -366,6 +377,39 @@ def _apply_requests_tracked(
         on_applied(index)
 
 
+def _place_artifact_visuals(
+    *,
+    build: LiveBuildInput,
+    artifact_type: str,
+    artifact_id: str,
+    drive_service: Any,
+    artifact_service: Any,
+    placement_transport: Any,
+    placement_receipts_dir: str | None,
+) -> None:
+    """#3257: place selected visuals into one live artifact after text requests.
+
+    Runs between text-request application and final-copy verification so the
+    verified copy reflects the placed visuals. Raises
+    ``PlacementRuntimeUnavailable`` when bindings exist but no transport was
+    supplied, and ``PlacementExecutionError`` when any attempted binding
+    cannot be verified-placed. Both fail the artifact closed via the
+    caller's per-artifact handler.
+    """
+    if not build.visual_placements:
+        return
+    execute_artifact_visual_placements(
+        bindings=build.visual_placements,
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        drive_service=drive_service,
+        artifact_service=artifact_service,
+        transport=placement_transport,
+        receipts_dir=placement_receipts_dir,
+        idempotency_key=build.idempotency_key,
+    )
+
+
 def build_live_materials(
     build: LiveBuildInput,
     *,
@@ -373,12 +417,23 @@ def build_live_materials(
     slides_service: Any,
     docs_service: Any,
     resume_dir: str | None = None,
+    placement_transport: Any = None,
+    placement_receipts_dir: str | None = None,
 ) -> LiveBuildReceipt:
     """Build one governed Slides/Docs pair without acquiring credentials or authority.
 
     ``resume_dir`` enables #3252 retry continuation: per-role resume state
     is loaded by idempotency key, already-verified work is skipped, and only
     unapplied requests are applied. Without it, behavior is unchanged.
+
+    ``placement_transport`` + ``build.visual_placements`` enable #3257
+    connected visual placement: after text requests are applied to each
+    artifact, selected visuals are placed through the transport, verified
+    against the persisted artifact, and recorded as durable receipts. A
+    missing transport with non-empty placements fails closed with
+    ``placement-runtime-unavailable``; a placement failure fails the
+    artifact closed with its explicit reason -- never a visual gap and
+    never generation permission.
     """
     verify_template(drive_service, build.slides_template_id, GOOGLE_SLIDES_MIME)
     verify_template(drive_service, build.doc_template_id, GOOGLE_DOCS_MIME)
@@ -488,6 +543,15 @@ def build_live_materials(
                     _persist(),
                 ),
             )
+            _place_artifact_visuals(
+                build=build,
+                artifact_type="slides",
+                artifact_id=slides.file_id,
+                drive_service=drive_service,
+                artifact_service=slides_service,
+                placement_transport=placement_transport,
+                placement_receipts_dir=placement_receipts_dir,
+            )
             final = verify_final_copy(
                 drive_service,
                 slides.file_id,
@@ -549,6 +613,15 @@ def build_live_materials(
                     _persist(),
                 ),
             )
+            _place_artifact_visuals(
+                build=build,
+                artifact_type="docs",
+                artifact_id=worksheet.file_id,
+                drive_service=drive_service,
+                artifact_service=docs_service,
+                placement_transport=placement_transport,
+                placement_receipts_dir=placement_receipts_dir,
+            )
             final = verify_final_copy(
                 drive_service,
                 worksheet.file_id,
@@ -568,4 +641,15 @@ def build_live_materials(
             )
             _persist()
         worksheet = replace(worksheet, state="failed", error=str(exc))
+    # #3257 backstop: a visuals-required build can complete only when every
+    # required slot is verified-placed. The per-artifact placement step above
+    # already fails closed on any attempted binding; this covers paths where
+    # placement ran in an earlier attempt (resume recovery).
+    if build.visual_placements and slides.state == "updated" and worksheet.state == "updated":
+        require_all_required_visuals_placed(
+            bindings=build.visual_placements,
+            receipts_dir=placement_receipts_dir,
+            idempotency_key=build.idempotency_key,
+            artifact_files={"slides": slides.file_id, "worksheet": worksheet.file_id},
+        )
     return LiveBuildReceipt(slides, worksheet, worksheet.state == "ambiguous")

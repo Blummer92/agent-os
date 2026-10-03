@@ -21,9 +21,11 @@ Requested-format completeness is evaluated separately from native-editable compl
 ## Reusable visual placement contract
 `visual_placement.py` defines the repository-side fail-closed contract for binding one exact governed reusable asset to one exact Docs/Slides placement marker. Controlled markers use `{{visual:<role_id>}}`; coarse visual intent such as `slide`, `page`, `section`, or `student-facing` is never interpreted as a concrete position. Exactly one marker match is required. Missing, duplicate, malformed, or drifted markers stop placement.
 
-`apps-script/VisualPlacementTransport.gs` is an **offline reference transport** for the separately governed dedicated Apps Script runtime. It demonstrates the approved `BlobSource` route: read the exact selected private Drive file, insert its blob into the exact admitted Docs/Slides target, remove only the matched marker, and return bounded placement evidence. It does not search/reselect assets or alter Drive sharing.
+`connected_visual_placement.py` (#3257) wires that contract into the normal connected build: governed selection -> `VisualPlacementBinding` (role/slot + Asset ID + Drive file + canonical content identity + explicit eligibility evidence) -> marker discovery in the live artifact -> `resolve_exact_target` -> `build_placement_request` -> exact content/revision verification against fresh Drive metadata -> `placement_transport.insert_placement` -> post-insertion verification against the persisted artifact -> `verify_placement_receipt` -> durable receipt in `placement_receipts.py` (the #3258 handoff surface). `live_build.py` runs placement per artifact after text requests and before final-copy verification; a visuals-required build completes only when every required slot is verified-placed.
 
-Repository implementation does not activate this runtime. Creating/deploying an Apps Script API executable, enabling the Apps Script API, selecting/configuring the shared standard Google Cloud project, OAuth/credential work, and live Drive/Docs/Slides writes require separate authorization. Candidate minimum functional scopes must be reverified before activation and are currently `drive.readonly`, `documents` when Docs are enabled, and `presentations` when Slides are enabled. Existing #1753 fail-closed connected-build behavior remains in force until a positive placement path is separately integrated, activated, and verified.
+`apps-script/VisualPlacementTransport.gs` is the **reference transport** for the separately governed dedicated Apps Script runtime. It demonstrates the approved `BlobSource` route: read the exact selected private Drive file, insert its blob into the exact admitted Docs/Slides target, remove only the matched marker, and return bounded placement evidence. It does not search/reselect assets or alter Drive sharing. `placement_transport.py` invokes the deployed script through the Apps Script Execution API; repository tests inject fake transports.
+
+Deploying/activating the Apps Script runtime (API executable deployment, execution grant, OAuth/credential work) remains separately governed. Until activation, a build with a non-empty visual selection fails closed with the explicit `placement-runtime-unavailable` blocked state -- never "final", never a visual gap, never generation permission. Placement failure keeps its own explicit reason (asset-missing, asset-access-failure, content-identity-mismatch, marker-not-found, placement-transport-failed, ...) and is never converted into absence. See `docs/visual-placement-contract.md`.
 
 ## Offline slide layout QA
 `slide_layout_qa.py` provides a pure structural QA seam for student-facing slide render plans. It detects only mechanically provable defects: empty opaque placeholders layered above required instructional regions, unsafe required-text contrast when both colors are known, unintended overlap between required title/directions/model/task/teacher-cue regions, oversized supporting previews, and under-dominant focal models. Unknown colors or other judgments that cannot be established from the supplied structural plan route to `manual-review` rather than receiving a false pass. The seam performs no rendering, OCR/CV, provider call, classroom publication, or Drive mutation; broader phone/projector rendered review remains owned by #1835.
@@ -92,6 +94,21 @@ For `visuals-required`, add already-governed evidence as applicable:
     --visual-source-revision <source_revision> \
     --changed-dependency-keys <changed_dependency_keys.json> \
     --impact-map <impact_map.json>
+
+For connected visual placement (#3257), also configure the placement runtime:
+
+    --placement-script-id <apps_script_deployment_id> \
+    --placement-receipts-dir reports/placement-receipts
+
+Without `--placement-script-id` (and without the separately governed runtime
+activation behind it), a build with a non-empty visual selection fails closed
+before any connected write with the explicit `placement-runtime-unavailable`
+blocked state. With a configured runtime, each selected visual is placed into
+its `{{visual:<role_id>}}` marker in the live artifact, verified against the
+persisted artifact (slot, asset, and exact content identity), and recorded as
+a durable verified placement receipt. A visuals-required build completes only
+when every required slot is verified-placed; placement failure never becomes
+a visual gap and never authorizes new visual creation.
 
 The runtime reuses the public MaterialRequirement validator, visual-needs planner, canonical reuse planner, visual-candidate filter, and cohesive visual planner. The CLI remains the manual credential wrapper and delegates the external operation to `build_live_materials()` after governed content/visual checks pass.
 
