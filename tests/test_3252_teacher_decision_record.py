@@ -79,6 +79,35 @@ def _content_identities(asset_id="asset-a", value=SHA_A):
     }
 
 
+def test_role_identity_survives_unrelated_requirement_revision():
+    from instructional_workflow_contracts.material_requirement import material_requirement_source_fingerprint
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    requirement = _fixture("valid_material_requirement_v2.json")
+    baseline = plan_visual_needs(requirement).record.to_dict()
+    requirement["instructional"]["purpose"] += " unrelated edit"
+    requirement["identity"]["record_revision"] += 1
+    requirement["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(requirement)
+    revised = plan_visual_needs(requirement).record.to_dict()
+    assert [r["role_id"] for r in baseline["required_roles"] + baseline["optional_roles"]] == [
+        r["role_id"] for r in revised["required_roles"] + revised["optional_roles"]
+    ]
+
+
+def test_semantic_role_edit_changes_only_that_role_identity():
+    from instructional_workflow_contracts.material_requirement import material_requirement_source_fingerprint
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    requirement = _fixture("valid_material_requirement_v2.json")
+    baseline = plan_visual_needs(requirement).record.to_dict()
+    requirement["visual_direction"]["roles"][0]["instructional_purpose"] += " changed"
+    requirement["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(requirement)
+    revised = plan_visual_needs(requirement).record.to_dict()
+    before = [r["role_id"] for r in baseline["required_roles"] + baseline["optional_roles"]]
+    after = [r["role_id"] for r in revised["required_roles"] + revised["optional_roles"]]
+    assert before[0] != after[0]
+    assert before[1:] == after[1:]
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
