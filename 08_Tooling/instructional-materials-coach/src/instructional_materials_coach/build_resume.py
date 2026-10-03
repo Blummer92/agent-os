@@ -23,6 +23,11 @@ from typing import Any, Mapping
 DEFAULT_BUILD_RESUME_DIR = "reports/build-resume"
 BUILD_RESUME_CONTRACT_ID = "build-resume-v1"
 
+
+class ResumeRecordInvalidError(RuntimeError):
+    pass
+
+
 _KEY_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _ROLE_STATES = ("planned", "created", "updated", "failed")
 
@@ -67,31 +72,31 @@ def new_resume_record(idempotency_key: str, input_fingerprint: str = "") -> dict
 def load_resume_record(
     resume_dir: str | Path, idempotency_key: str
 ) -> dict[str, Any] | None:
-    """Load the resume record for a key, or None when absent/unreadable.
-
-    A corrupt record is treated as absent (the build falls back to the
-    content-presence safety net); it never crashes the retry path.
-    """
-    try:
-        path = resume_path(resume_dir, idempotency_key)
-    except ValueError:
-        return None
+    """Load persisted resume state; malformed existing state fails closed."""
+    path = resume_path(resume_dir, idempotency_key)
     if not path.is_file():
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as exc:
+        raise ResumeRecordInvalidError("resume-record-invalid: unreadable persisted state") from exc
     if not isinstance(raw, dict):
-        return None
+        raise ResumeRecordInvalidError("resume-record-invalid: record must be a mapping")
     if raw.get("contract_id") != BUILD_RESUME_CONTRACT_ID:
-        return None
+        raise ResumeRecordInvalidError("resume-record-invalid: contract mismatch")
     if raw.get("idempotency_key") != idempotency_key:
-        return None
+        raise ResumeRecordInvalidError("resume-record-invalid: idempotency key mismatch")
     for role in ("slides", "worksheet"):
         state = raw.get(role)
         if not isinstance(state, dict) or state.get("state") not in _ROLE_STATES:
-            return None
+            raise ResumeRecordInvalidError(f"resume-record-invalid: {role} state is invalid")
+        indices = state.get("applied_request_indices")
+        if not isinstance(indices, list) or any(
+            type(index) is not int or index < 0 for index in indices
+        ):
+            raise ResumeRecordInvalidError(
+                f"resume-record-invalid: {role} applied_request_indices are invalid"
+            )
     return raw
 
 
