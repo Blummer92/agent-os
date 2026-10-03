@@ -258,6 +258,12 @@ def test_raw_coursewide_page_becomes_coursewide_evidence_without_fabricated_rela
                 "results": [{
                     "id": "icon-page-camera",
                     "properties": {
+                        # #3254: governed identity (not the page UUID) and
+                        # governed approval fields. The scope still comes
+                        # from the coursewide step's provenance (#3253).
+                        "Asset ID": {"type": "rich_text", "rich_text": [{"plain_text": "VA-20261002-0001"}]},
+                        "Drive File ID": {"type": "rich_text", "rich_text": [{"plain_text": "drive-icon-camera"}]},
+                        "Source Approved?": {"type": "checkbox", "checkbox": True},
                         "Reusable Across Units?": {"type": "checkbox", "checkbox": True},
                     },
                 }]
@@ -275,13 +281,17 @@ def test_raw_coursewide_page_becomes_coursewide_evidence_without_fabricated_rela
         execute_read=reader,
     )
     assert packet["asset_evidence"] == [{
-        "asset_id": "icon-page-camera",
-        "approved_for_requested_use": False,
-        "approved_student_reuse": False,
+        "asset_id": "VA-20261002-0001",
+        "approved_for_requested_use": True,
+        "approved_student_reuse": None,
         "exists": True,
         "source_revision": 1,
         "reuse_scope": "coursewide",
         "reuse_status": "reusable",
+        "library_reference": {
+            "page_id": "icon-page-camera",
+            "drive_file_id": "drive-icon-camera",
+        },
     }]
     record = resolve_current_curriculum_state(packet).record
     assert record is not None

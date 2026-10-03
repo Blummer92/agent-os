@@ -50,7 +50,69 @@ def _current_curriculum_evidence_file(tmp_path):
         evidence_id = f"section-{decision_key}"
         owner_evidence.append({"evidence_id": evidence_id, "owner": "instructional-materials-coach", "decision_key": decision_key, "value": value, "classification": "owner-governed", "source_revision": 1, "observed_at": "2026-08-28T12:00:00Z", "currentness": "current", "material": True, "relation_resolved": True, "reference": reference(evidence_id)})
 
-    return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": [{"asset_id": "asset-1", "exists": True, "approved_for_requested_use": True, "approved_student_reuse": True, "source_revision": 1, "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"}}]})
+    # #3254: asset evidence is produced by the real governed projection from
+    # a raw Notion page fixture, not hand-injected. The raw page carries the
+    # governed Asset ID, Drive File ID, and approval fields; the projection
+    # (not the test) builds the library_reference join.
+    asset_evidence = [_projected_cli_asset_evidence()]
+
+    return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": asset_evidence})
+
+
+def _projected_cli_asset_evidence():
+    """Build CLI asset evidence via the real #3254 projection.
+
+    The raw page fixture mirrors a Visual Asset Library record with governed
+    fields populated. The projection output (not a hand-injected dict) is
+    what the CLI consumes, so the test exercises the real producer chain.
+    """
+    from navigation_registry.connectors.notion_asset_evidence_projection import (
+        project_notion_asset_page,
+    )
+    page = {
+        # page-1 matches the valid_visual_asset_compatibility_v2.json fixture's
+        # library_reference so the tuple-scoping join succeeds in the CLI test.
+        "id": "page-1",
+        "properties": {
+            "Asset Title": {"type": "title", "title": [{"plain_text": "CLI Fixture Asset"}]},
+            "Asset ID": {"type": "rich_text", "rich_text": [{"plain_text": "asset-1"}]},
+            "Drive File ID": {"type": "rich_text", "rich_text": [{"plain_text": "file-1"}]},
+            "Reuse status": {"type": "status", "status": {"name": "approved"}},
+            "Approved use": {"type": "multi_select", "multi_select": [{"name": "student-facing"}]},
+            "Canonical Unit": {"type": "relation", "relation": [{"id": "unit-page"}]},
+        },
+    }
+    projected = project_notion_asset_page(page, relation_first=True, reuse_scope="unit-specific")
+    assert projected.kind == "evidence" and projected.evidence is not None
+    evidence = dict(projected.evidence)
+    # The CLI fixture needs the page UUID for the library join; the governed
+    # asset_id ("asset-1") is what joins to candidates.
+    assert evidence["library_reference"] == {
+        "page_id": "page-1",
+        "drive_file_id": "file-1",
+    }
+    return evidence
+
+
+def test_cli_asset_evidence_comes_from_real_projection():
+    """#3254: the CLI fixture's library_reference is projection output, not an
+    injected dict. A raw page without governed identity/Drive binding yields
+    explicit incomplete-evidence instead of a silent join."""
+    from navigation_registry.connectors.notion_asset_evidence_projection import (
+        project_notion_asset_page,
+    )
+    # Negative: no Asset ID, no Drive File ID -> incomplete-evidence.
+    bare = project_notion_asset_page(
+        {"id": "3907ac78-3131-8111-9999-dddddddddddd", "properties": {}},
+        relation_first=True,
+        reuse_scope="unit-specific",
+    )
+    assert bare.kind == "incomplete-evidence"
+    assert bare.evidence is None
+    # Join: governed identity + drive binding -> library_reference joins.
+    joined = _projected_cli_asset_evidence()
+    assert joined["asset_id"] == "asset-1"
+    assert joined["library_reference"]["drive_file_id"] == "file-1"
 
 
 def _base_build_args(lesson_file, requirement_file):

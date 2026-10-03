@@ -92,6 +92,10 @@ def bind_gap_to_image_intent(
             "source_gap": {
                 "brief_id": gap_brief["brief_id"],
                 "missing_visual_role_id": gap_brief["missing_visual_role_id"],
+                # #3254: concept/vocabulary carry-through from the role via
+                # the gap brief. Older briefs predate this field; only carry
+                # it when the brief supplies it (never invented).
+                **({"subject_or_concept": gap_brief["subject_or_concept"]} if "subject_or_concept" in gap_brief else {}),
             },
             "image_intent": {
                 "contract_version": intent.contract_version,

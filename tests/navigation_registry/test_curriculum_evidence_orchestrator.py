@@ -245,19 +245,83 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
         execute_read=reader,
     )
 
-    assert packet["asset_evidence"] == [{
-        "asset_id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
-        "approved_for_requested_use": False,
-        "approved_student_reuse": False,
-        "exists": True,
-        "source_revision": 1,
-        "reuse_scope": "unit-specific",
-        "reuse_status": "unknown",
+    assert packet["asset_evidence"] == []
+    # #3254: no governed Asset ID on the page -> explicit incomplete-evidence,
+    # never a page-UUID substitution, never absence, never approval.
+    assert packet["incomplete_asset_evidence"] == [{
+        "page_id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
+        "projection_status": "incomplete-evidence",
+        "evidence_gaps": [
+            "identity: no governed Asset ID on the Notion record",
+            "drive binding: no Drive File ID on the Notion record",
+        ],
     }]
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
+    assert state.record.to_dict()["assets"]["matching_asset_exists"] is False
+    # Incomplete identity is not absence: the resolver must not claim it.
+    assert "asset-approval-ambiguous" not in state.record.to_dict()["assets"].get("reason_codes", [])
+
+
+def test_raw_notion_visual_asset_with_governed_asset_id_becomes_evidence() -> None:
+    """#3254: a page carrying the governed Asset ID projects to asset evidence."""
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        assert step.logical_source == VISUAL_ASSETS
+        return {
+            "results": [{
+                "id": "3907ac78-3131-8111-9999-bbbbbbbbbbbb",
+                "last_edited_time": "2026-09-25T12:00:00Z",
+                "properties": {
+                    "Asset Title": {
+                        "type": "title",
+                        "title": [{"plain_text": "Camera Diagram"}],
+                    },
+                    "Asset ID": {
+                        "type": "rich_text",
+                        "rich_text": [{"plain_text": "VA-20260925-0001"}],
+                    },
+                    "Drive File ID": {
+                        "type": "rich_text",
+                        "rich_text": [{"plain_text": "drive-file-1"}],
+                    },
+                    "Reuse status": {
+                        "type": "status",
+                        "status": {"name": "approved"},
+                    },
+                    "Canonical Unit": {
+                        "type": "relation",
+                        "relation": [{"id": UNIT_PAGE}],
+                    },
+                },
+            }]
+        }
+
+    packet = orchestrate_curriculum_evidence(
+        request=CurriculumReadRequest("images", "images"),
+        canonical_unit=unit(),
+        resolve_identity=identity,
+        execute_read=reader,
+    )
+
+    assert packet["asset_evidence"] == [{
+        "asset_id": "VA-20260925-0001",
+        "exists": True,
+        "approved_for_requested_use": True,
+        "approved_student_reuse": None,
+        "source_revision": 1,
+        "reuse_scope": "unit-specific",
+        "reuse_status": "unknown",
+        "library_reference": {
+            "page_id": "3907ac78-3131-8111-9999-bbbbbbbbbbbb",
+            "drive_file_id": "drive-file-1",
+        },
+    }]
+    assert "incomplete_asset_evidence" not in packet
+    state = resolve_current_curriculum_state(packet)
+    assert state.record is not None
     assert state.record.to_dict()["assets"]["matching_asset_exists"] is True
-    assert state.record.to_dict()["assets"]["approved_reusable_student_facing_exists"] is False
 
 
 

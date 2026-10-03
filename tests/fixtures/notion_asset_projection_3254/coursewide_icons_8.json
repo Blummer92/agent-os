@@ -1,0 +1,338 @@
+[
+ {
+  "_comment": "Approved coursewide icon 1/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000000",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Checkmark Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0001",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-checkmark-001",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 2/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000001",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Warning Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0002",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-warning-002",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 3/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000002",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Info Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0003",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-info-003",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 4/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000003",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Star Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0004",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-star-004",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 5/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000004",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Arrow Right Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0005",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-arrow-005",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 6/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000005",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Lightbulb Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0006",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-lightbulb-006",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 7/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000006",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Question Mark Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0007",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-question-007",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ },
+ {
+  "_comment": "Approved coursewide icon 8/8 for #3254 acceptance (#3253 matrix).",
+  "id": "3907ac78-3131-8111-9999-c000000000007",
+  "last_edited_time": "2026-10-02T12:00:00Z",
+  "properties": {
+   "Asset Title": {
+    "type": "title",
+    "title": [
+     {
+      "plain_text": "Book Icon",
+      "type": "text"
+     }
+    ]
+   },
+   "Asset ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "VA-20261002-0008",
+      "type": "text"
+     }
+    ]
+   },
+   "Drive File ID": {
+    "type": "rich_text",
+    "rich_text": [
+     {
+      "plain_text": "drive-file-book-008",
+      "type": "text"
+     }
+    ]
+   },
+   "Reusable Across Units?": {
+    "type": "checkbox",
+    "checkbox": true
+   },
+   "Source Approved?": {
+    "type": "checkbox",
+    "checkbox": true
+   }
+  }
+ }
+]
