@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
+  persisted final artifact contains the governed required content and
+  visuals, attributable to the current build and artifact state.
+  `LiveBuildReceipt.succeeded` (the single completion owner) now requires
+  both artifacts terminal-QA `verified`; metadata-only verification yields
+  `persisted`, never `final`. Expectations derive from the planned
+  `replaceAllText` requests and the #3257 visual bindings; evaluation reads
+  back persisted Docs/Slides bodies (unresolved-token scan, content
+  presence with whitespace-only normalization, visual marker/element
+  observation, receipt-to-artifact revision binding, build-attribution
+  checks). The existing `worksheet_revision_qa` / `visual_completeness`
+  contracts are wired into the visual dimension. QA runs read-only on every
+  terminal attempt including the resume fast path; verified evidence
+  persists per idempotency key and is recovered only while artifact revision
+  and expectations still match. 20-scenario regression matrix plus a
+  red/green proof that the pre-repair base reported final with an
+  unresolved token persisted. Canonical contract:
+  `docs/terminal-qa-contract.md`.
 - Worksheet revision QA (#2890): `worksheet_revision_qa.py` binds required
   visual roles across revisions so a vocabulary/content/layout fix cannot
   silently drop visual scaffolds and still pass as complete; render evidence

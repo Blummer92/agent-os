@@ -11,6 +11,7 @@ import sys
 from typing import Any, Mapping
 
 from .artifact_structure import PASS, validate_required_worksheet_sections
+from .artifact_content_qa import DEFAULT_QA_EVIDENCE_DIR, TerminalQAExpectations
 from .asset_slot_resolution import resolve_asset_slots
 from .build_resume import DEFAULT_BUILD_RESUME_DIR
 from .connected_visual_placement import plan_visual_placement_bindings
@@ -66,6 +67,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             "Deployment and execution are separately governed.")
     build.add_argument("--placement-receipts-dir", default=DEFAULT_PLACEMENT_RECEIPTS_DIR,
                        help="Directory of durable verified placement receipts (#3257/#3258 handoff).")
+    build.add_argument("--qa-evidence-dir", default=DEFAULT_QA_EVIDENCE_DIR,
+                       help="Directory of durable terminal-QA evidence (#3258). Verified QA "
+                            "reports are recovered on retry while artifact revision and "
+                            "expectations still match, and re-verified otherwise.")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -330,6 +335,35 @@ def _require_asset_slot_resolution(visual_plan: GovernedVisualReusePlan, drive_s
         )
 
 
+def _terminal_qa_summary(receipt: object) -> str:
+    """Summarize terminal QA evidence for a non-final build report (#3258).
+
+    Names the QA state per artifact plus the first failing finding, so an
+    operator can see WHY "final" was refused without digging through JSON.
+    ``persisted`` (metadata-verified, QA not passed) is distinguished from
+    ``final`` explicitly.
+    """
+    parts: list[str] = []
+    for role in ("slides", "worksheet"):
+        artifact = getattr(receipt, role, None)
+        if artifact is None:
+            continue
+        state = getattr(artifact, "terminal_qa_state", "not-run")
+        persisted = getattr(artifact, "is_persisted", False)
+        label = "persisted-not-final" if persisted else state
+        detail = ""
+        qa_report = getattr(receipt, "terminal_qa", None)
+        if qa_report is not None:
+            artifact_report = getattr(qa_report, role, None)
+            findings = getattr(artifact_report, "findings", ()) or ()
+            failing = [f for f in findings if getattr(f, "severity", "") == "fail"]
+            if failing:
+                first = failing[0]
+                detail = f": {getattr(first, 'code', '')} {getattr(first, 'message', '')}"
+        parts.append(f"{role}={label}{detail}")
+    return "; ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "log-lesson":
@@ -485,6 +519,18 @@ def main(argv: list[str] | None = None) -> int:
             target_folder=args.target_folder,
             content_title=content.title,
         )
+        # #3258: derive terminal-QA expectations from the governed planned
+        # inputs (planned replaceAllText requests + visual bindings) before
+        # the build. Terminal QA evaluates the PERSISTED artifacts against
+        # these expectations; metadata-only success is "persisted", never
+        # "final".
+        slides_requests = tuple(build_slides_replace_requests(content))
+        qa_expectations = TerminalQAExpectations.build_from_requests(
+            idempotency_key=idempotency_key,
+            docs_requests=docs_requests,
+            slides_requests=slides_requests,
+            visual_placements=tuple(visual_placements),
+        )
         receipt = build_live_materials(
             LiveBuildInput(
                 slides_template_id=args.slides_template, doc_template_id=args.doc_template,
@@ -492,9 +538,10 @@ def main(argv: list[str] | None = None) -> int:
                 doc_name=f"{content.title} - Worksheet",
                 idempotency_key=idempotency_key,
                 input_fingerprint=idempotency_key,
-                slides_requests=tuple(build_slides_replace_requests(content)),
+                slides_requests=slides_requests,
                 docs_requests=docs_requests,
                 visual_placements=tuple(visual_placements),
+                qa_expectations=qa_expectations,
             ),
             drive_service=drive_service,
             slides_service=build_slides_service(credentials),
@@ -502,9 +549,18 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir,
             placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
+            qa_evidence_dir=args.qa_evidence_dir,
         )
         if not receipt.succeeded:
-            raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
+            qa_summary = _terminal_qa_summary(receipt)
+            raise RuntimeError(
+                f"Live build incomplete: slides={receipt.slides.state} "
+                f"(terminal_qa={receipt.slides.terminal_qa_state}); "
+                f"worksheet={receipt.worksheet.state} "
+                f"(terminal_qa={receipt.worksheet.terminal_qa_state}); "
+                f"manual_reconciliation_required={receipt.manual_reconciliation_required}"
+                + (f"; {qa_summary}" if qa_summary else "")
+            )
         print(f"Slides final (native Google Slides, canonical editable): {receipt.slides.web_view_link}")
         print(f"Worksheet final (native Google Docs, canonical editable): {receipt.worksheet.web_view_link}")
         return 0
