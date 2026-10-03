@@ -425,6 +425,29 @@ def test_resume_with_ambiguous_copies_still_fails_closed(tmp_path):
     assert len(copies) == 2
 
 
+def test_corrupt_resume_record_fails_closed_without_duplicate_copy(tmp_path):
+    """A corrupt resume record must not be treated as absent recovery state.
+
+    Silently ignoring malformed continuation state can re-run mutations whose
+    completion cannot be proven. The build must stop for reconciliation rather
+    than guessing or creating another copy.
+    """
+    store: dict[str, dict[str, Any]] = {}
+    key = "k" * 64
+    resume_dir = tmp_path / "resume"
+    resume_dir.mkdir(parents=True)
+    (resume_dir / f"{key}.json").write_text("{not-json", encoding="utf-8")
+
+    slides_svc = _FakeWorkspaceService("presentations", store)
+    docs_svc = _FakeWorkspaceService("documents", store)
+    receipt = _run(_build(key), store, slides_svc, docs_svc, resume_dir=resume_dir)
+
+    assert receipt.manual_reconciliation_required is True
+    assert receipt.succeeded is False
+    copies = [m for m in store.values() if isinstance(m, dict) and "appProperties" in m]
+    assert copies == []
+
+
 def test_resume_record_written_after_every_state_transition(tmp_path):
     """Crash-safety of the resume record itself.
 
