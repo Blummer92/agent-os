@@ -1,0 +1,14 @@
+=== comfyui setup done Sat Oct  3 19:07:02 UTC 2026 ===
+--- /system_stats (first 600 chars) ---
+{"system": {"os": "linux", "ram_total": 16770494464, "ram_free": 13933043712, "comfyui_version": "0.38.0", "required_frontend_version": "1.53.10", "installed_templates_version": "0.11.76", "required_templates_version": "0.11.76", "comfy_package_versions": [{"name": "comfyui-frontend-package", "installed": "1.53.10", "required": "1.53.10"}, {"name": "comfyui-workflow-templates", "installed": "0.11.76", "required": "0.11.76"}, {"name": "comfyui-embedded-docs", "installed": "0.5.13", "required": "0.5.13"}, {"name": "comfy-kitchen", "installed": "0.2.37", "required": "0.2.37"}, {"name": "comfy-aim
+--- model files ---
+-rw-r--r-- 1 vscode vscode 2132648310 Oct  3 19:06 /home/vscode/comfyui/models/checkpoints/uberRealisticPornMerge_v13.safetensors
+-rw-r--r-- 1 vscode vscode  349290513 Oct  3 19:06 /home/vscode/comfyui/models/loras/URPMv1.3_LORA_296.safetensors
+-rw-r--r-- 1 vscode vscode  151111100 Oct  3 19:06 /home/vscode/comfyui/models/loras/UberVag_LORA_V1.0.safetensors
+-rw-r--r-- 1 vscode vscode  228452344 Oct  3 19:06 /home/vscode/comfyui/models/loras/add-detail-xl.safetensors
+--- server log tail ---
+[32m[INFO][0m 
+[32m[INFO][0m Using RAM pressure cache.
+[32m[INFO][0m Starting server
+
+[32m[INFO][0m To see the GUI go to: http://127.0.0.1:8188
