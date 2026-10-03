@@ -139,6 +139,11 @@ VISUAL_ROLE_FIELDS = frozenset(
     }
 )
 
+# #3254: optional concept/vocabulary binding carried from the role through
+# gap briefs to image intents and ingested library records. Never required,
+# never invented: only carried when the requirement author supplies it.
+VISUAL_ROLE_OPTIONAL_FIELDS = frozenset({"concept"})
+
 REF_FIELDS = frozenset(
     {"stable_id", "owner", "contract_version", "record_revision", "fingerprint"}
 )
@@ -488,6 +493,11 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
     for raw in roles:
         role = _mapping(raw, "visual role")
         _fields(role, VISUAL_ROLE_FIELDS, "visual role")
+        # #3254: optional concept/vocabulary binding. Unknown optional fields
+        # are still rejected; only the governed optional set is allowed.
+        unknown_optional = set(role) - VISUAL_ROLE_FIELDS - VISUAL_ROLE_OPTIONAL_FIELDS
+        if unknown_optional:
+            raise ContractValidationError("material-unknown-field", "visual role has unknown fields")
 
         role_type = validate_text(
             role["role_type"],
@@ -545,6 +555,11 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
             "intended_placement": placement,
             "orientation": orientation,
         }
+        # #3254: optional concept/vocabulary reference. Never invented: only
+        # carried when the requirement author supplies it.
+        concept = role.get("concept")
+        if concept is not None:
+            normalized_role["concept"] = validate_text(concept, "visual role concept", max_length=256)
         semantic_key = _visual_role_semantic_key(normalized_role)
         if semantic_key in seen:
             raise ContractValidationError(

@@ -951,6 +951,10 @@ def _gap_brief(
         for item in sorted(selected, key=_candidate_sort_key)
     ]
     role_id = role["role_id"]
+    # #3254: concept/vocabulary carry-through. The brief carries the role's
+    # concept when the requirement author supplied one; otherwise the role
+    # type. Never invented.
+    concept = role.get("concept") or role["role_type"]
     return {
         "brief_id": validate_stable_id(
             "image-gap-" + sha256_hex({"role_id": role_id, "material_type": material_type})[:24],
@@ -958,7 +962,7 @@ def _gap_brief(
         ),
         "missing_visual_role_id": role_id,
         "missing_visual_role_type": role["role_type"],
-        "subject_or_concept": role["role_type"],
+        "subject_or_concept": concept,
         "instructional_purpose": role["instructional_purpose"],
         "material_type": material_type,
         "intended_placement": role["intended_placement"],

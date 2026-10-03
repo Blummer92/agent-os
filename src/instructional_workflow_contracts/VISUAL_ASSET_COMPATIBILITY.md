@@ -63,3 +63,55 @@ Every record preserves contract version, compatibility ID, classification, reaso
 All authority fields—execution, external write, production, publication, and side effects—must be built-in `false`. The contract performs no retrieval, ranking, scoring, selection, prompt construction, generation, image decoding, OCR, embeddings, vector search, computer vision, GPU/model use, network/filesystem write, Notion/Drive access, publication, readiness/approval mutation, or production action.
 
 Rollback removes only additive v2 compatibility support, focused fixture/tests, and this documentation. V1 behavior needs no migration; manifests, Visual Asset Sync, Drive, Notion, and classroom artifacts need no cleanup.
+
+## Notion field projection (#3254)
+
+The governed field-by-field mapping from live Notion records (Visual Asset
+Library, Icon System) into compatibility evidence. Owner: the projection
+module `navigation_registry.connectors.notion_asset_evidence_projection`
+(pure transformation, no I/O). Scope vocabulary and eligibility policy are
+owned by #3253 (`current_curriculum_evidence.REUSE_SCOPES`/`REUSE_STATUSES`).
+
+Shared invariant: governed values are never invented. Missing, unmappable,
+or incomplete values become explicit `incomplete-evidence` / manual review.
+They are never proven absence, never approval, and never a substituted
+identity. Caller-asserted approval alone is rejected.
+
+| v2 / evidence field | Governed source (Notion) | Transformation owner | Validation | Failure behavior |
+|---|---|---|---|---|
+| `library_record.page_id` | Page UUID (provider fact from the bounded read) | Orchestrator (bounded read) | required text | missing → record rejected |
+| `library_record.drive_file_id` | VAL "Drive File ID" (rich_text) | Projection | required text | missing → cannot join tuple scoping; incomplete-evidence |
+| `library_record.asset_title` | VAL "Asset Title" (title) | Projection | text | missing → allowed (nullable) |
+| `library_record.approved_use` (raw) | VAL "Approved use" (multi_select; 84/525 populated) | Projection via `material_type_vocabulary.map_material_type` (val source) | stable IDs | unmapped value → manual-review-required; never invented |
+| `library_record.human_review_status` | VAL "Human Review Done" (checkbox; 7/525) | Projection | — | empty → not-assessed; never approved |
+| `asset_reference.asset_id` | VAL "Asset ID" (governed property; no live population) | Projection | joins manifest assets | missing → EXPLICIT GAP (identity); incomplete-evidence; never page_id |
+| `approved_use.state` | VAL "Reuse status" / Icon "Source Approved?" | Projection (three-state) | enum approved/denied/pending/expired/manual-review-required | empty → pending/manual-review-required; never approved |
+| `approved_use.material_types` | VAL "Approved use" via the single material-type vocabulary | Projection | stable IDs ≤16 | unknown → manual-review-required |
+| `cohesion_profile.visual_style_family` | VAL "Style family" free text (378/525; unmapped vocabulary) | Projection (map to `VISUAL_STYLE_FAMILIES`) | enum | unmapped/empty → `unspecified` |
+| `cohesion_profile.medium`, `representation_class`, `palette_family`, `line_treatment`, `rendering_style`, `perspective`, `background_treatment` | NO LIVE SOURCE | — | — | EXPLICIT GAP → incomplete-evidence |
+| `cohesion_profile.cognitive_load_rating` | VAL "Cognitive load rating" (low/medium/high; 0/525 populated); Icon "Source Cognitive Load Signal" (zero options) | Projection (blocked) | int 1–5 | EXPLICIT GAP → incomplete-evidence; numeric defaults prohibited |
+| `cohesion_profile.complexity_rating` | NO LIVE SOURCE | — | int 1–5 | EXPLICIT GAP → incomplete-evidence |
+| `audience_compatibility.state` | VAL "Human Review Done" / Icon "Source Approved?" (no attributable reviewer) | Projection | enum | empty → not-assessed; reviewer fields null (permitted) |
+| `manifest_reference` | NO LIVE SOURCE (ingestion writes no manifest binding) | — | must bind a real manifest | EXPLICIT GAP → blocks v2 validation; incomplete-evidence |
+| `freshness` | Drive readback / sync timestamps (unverifiable in projection) | Projection | revision ≥ 1 | unverifiable → stale: true / manual-review-required |
+| `reuse_scope` | Step provenance (#3253): relation-first → unit-specific; coursewide step → coursewide; record-declared scope wins when governed | Projection + orchestrator | `REUSE_SCOPES` | unknown → never admitted (fail closed) |
+| `reuse_status` | Icon "Reusable Across Units?" checkbox (reusable); else unknown | Projection | `REUSE_STATUSES` | never conflated with scope |
+| `scope_unit_ids` | VAL "Scope Unit IDs" (bounded list ≤24) | Projection | cross-unit admission | missing for cross-unit → excluded |
+
+### Single material-type vocabulary
+
+`instructional_workflow_contracts.material_type_vocabulary` is the one
+governed mapping across MaterialRequirement (`teacher-guide`, `slide-deck`,
+…), IMC (`teacher-reference` → `teacher-guide` alias), and VAL live values
+(`worksheet`, `slide` → `slide-deck`, `poster`, `teacher-facing` →
+`teacher-guide`, `student-facing`). `student-facing`/`teacher-facing` are
+audience values in VAL, separated from material type. Unknown values map to
+None → manual review.
+
+### Concept carry-through
+
+Visual roles may carry an optional `concept` (requirement-authored, never
+invented). Gap briefs emit it as `subject_or_concept` (fallback: role_type);
+generation handoffs carry it in `source_gap`; ingestion admission evidence
+carries it so the ingested library record preserves the role's vocabulary
+reference.

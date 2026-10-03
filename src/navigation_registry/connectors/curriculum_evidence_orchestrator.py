@@ -18,6 +18,13 @@ from instructional_workflow_contracts.current_curriculum_state import (
     resolve_current_curriculum_state,
 )
 
+from .notion_asset_evidence_projection import (
+    REUSABLE_ACROSS_UNITS_PROPERTY as _REUSABLE_ACROSS_UNITS_PROPERTY,
+)
+from .notion_asset_evidence_projection import (
+    project_notion_asset_page,
+)
+
 MAX_RESULTS = 24
 
 CANONICAL_UNIT = "canonical-unit"
@@ -52,10 +59,10 @@ class CurriculumReadStep:
 
 
 # #3253: the Icon System scope signal. This is the existing "Reusable Across
-# Units?" checkbox — no Notion schema change, no writes. #3254 owns the
-# Notion field projection; this module only names the governed property the
-# coursewide read filter selects on.
-REUSABLE_ACROSS_UNITS_PROPERTY = "Reusable Across Units?"
+# Units?" checkbox — no Notion schema change, no writes. The projection module
+# (#3254) owns the Notion field projection; this module only names the
+# governed property the coursewide read filter selects on.
+REUSABLE_ACROSS_UNITS_PROPERTY = _REUSABLE_ACROSS_UNITS_PROPERTY
 COURSEWIDE_SCOPE = "coursewide"
 
 
@@ -158,6 +165,7 @@ def orchestrate_curriculum_evidence(
     provider_page_id = _required_text(unit.get("provider_page_id"), "canonical_unit.provider_page_id")
     owner_evidence: list[dict[str, object]] = []
     asset_evidence: list[dict[str, object]] = []
+    incomplete_asset_evidence: list[dict[str, object]] = []
 
     for step in plan.steps:
         identity = _verified_identity(resolve_identity(step.logical_source), step.logical_source)
@@ -186,12 +194,13 @@ def orchestrate_curriculum_evidence(
             _verify_live_unit(result, provider_page_id)
             continue
         if step.logical_source == VISUAL_ASSETS:
-            incoming_assets = _normalize_assets(
+            incoming_assets, incoming_incomplete = _normalize_assets(
                 result, relation_first=step.relation_first, reuse_scope=step.reuse_scope
             )
             if len(asset_evidence) + len(incoming_assets) > MAX_RESULTS:
                 raise CurriculumReadError("asset evidence exceeds handoff bound")
             asset_evidence.extend(incoming_assets)
+            incomplete_asset_evidence.extend(incoming_incomplete)
         else:
             incoming_owners = _normalize_owners(result)
             if len(owner_evidence) + len(incoming_owners) > MAX_RESULTS:
@@ -210,6 +219,20 @@ def orchestrate_curriculum_evidence(
         asset_evidence=_dedupe_assets(asset_evidence),
         current_context=current_context,
     )
+    # #3254: records the projection marked incomplete-evidence are named
+    # explicitly on the packet for manual-review visibility. They are never
+    # admitted as candidates, never absence, never approval. The #973
+    # resolver ignores this key (it reads only governed fields).
+    if incomplete_asset_evidence:
+        seen_pages: set[str] = set()
+        deduped_incomplete: list[dict[str, object]] = []
+        for item in incomplete_asset_evidence:
+            page_id = item.get("page_id")
+            if page_id in seen_pages:
+                continue
+            seen_pages.add(page_id)
+            deduped_incomplete.append(item)
+        packet["incomplete_asset_evidence"] = deduped_incomplete
     state = resolve_current_curriculum_state(packet)
     if state.record is None:
         raise CurriculumReadError("assembled evidence is incompatible with #973")
@@ -300,14 +323,33 @@ def _normalize_assets(
     *,
     relation_first: bool,
     reuse_scope: str | None,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Normalize raw records via the governed #3254 projection.
+
+    Returns (asset_evidence, incomplete_asset_evidence). Records whose
+    projection is incomplete-evidence (no governed Asset ID or other
+    unmappable required field) are named explicitly and never admitted as
+    candidates, never reported as absence, never approved.
+    """
     assets: list[dict[str, object]] = []
+    incomplete: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
         if _is_raw_notion_page(record):
-            record = _normalize_raw_notion_asset(
+            projected = project_notion_asset_page(
                 record, relation_first=relation_first, reuse_scope=reuse_scope
             )
+            if projected.kind == "incomplete-evidence":
+                incomplete.append(
+                    {
+                        "page_id": projected.page_id,
+                        "projection_status": "incomplete-evidence",
+                        "evidence_gaps": list(projected.gaps),
+                    }
+                )
+                continue
+            assert projected.evidence is not None
+            record = projected.evidence
 
         asset_id = _required_record_text(record.get("asset_id"), "asset_id")
         exists = record.get("exists", True)
@@ -318,7 +360,14 @@ def _normalize_assets(
             ("approved_for_requested_use", approved_for_requested_use),
             ("approved_student_reuse", approved_student_reuse),
         ):
-            if type(value) is not bool:
+            # #3254: approval is three-state. None means unknown/ambiguous and
+            # routes to the existing "asset-approval-ambiguous" manual-review
+            # reason; it is never invented approval and never denial.
+            if field == "exists":
+                valid = type(value) is bool
+            else:
+                valid = type(value) is bool or value is None
+            if not valid:
                 raise CurriculumReadError(f"malformed asset boolean {field}")
         # Scope is contract data, never inferred from prose: the read step's
         # own provenance decides when the record does not declare it. A
@@ -358,7 +407,7 @@ def _normalize_assets(
                 "drive_file_id": drive_file_id.strip(),
             }
         assets.append(asset)
-    return assets
+    return assets, incomplete
 
 
 def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -377,52 +426,6 @@ def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str,
 def _is_raw_notion_page(record: Mapping[str, object]) -> bool:
     return isinstance(record.get("id"), str) and isinstance(record.get("properties"), Mapping)
 
-
-def _normalize_raw_notion_asset(
-    record: Mapping[str, object], *, relation_first: bool, reuse_scope: str | None
-) -> dict[str, object]:
-    """Project only provider facts already proven by the bounded read itself.
-
-    The relation-first query is constructed upstream from the verified canonical
-    unit identity, so a returned page proves existence and relation membership
-    (scope "unit-specific"). The coursewide query selects on the Icon System
-    "Reusable Across Units?" checkbox, so a returned page proves coursewide
-    eligibility without any unit relation (scope "coursewide"); the relation
-    marker stays False and is never fabricated. Property names and approval
-    semantics are not inferred here: those require a separately verified
-    source-schema mapping (#3254).
-    """
-    page_id = _required_record_text(record.get("id"), "Notion page id")
-    properties = record.get("properties")
-    if not isinstance(properties, Mapping):
-        raise CurriculumReadError("raw Notion asset is missing properties")
-    if relation_first:
-        scope: object = "unit-specific"
-        related = True
-    else:
-        scope = reuse_scope or "unknown"
-        related = False
-    return {
-        "asset_id": page_id,
-        "page_id": page_id,
-        "exists": True,
-        "approved_for_requested_use": False,
-        "approved_student_reuse": False,
-        "canonical_unit_relation": related,
-        "reuse_scope": scope,
-        "reuse_status": _reusable_checkbox_status(properties),
-        "source_revision": 1,
-    }
-
-
-def _reusable_checkbox_status(properties: Mapping[str, object]) -> str:
-    """Read only the governed Icon System scope signal; anything else is unknown."""
-    prop = properties.get(REUSABLE_ACROSS_UNITS_PROPERTY)
-    if isinstance(prop, Mapping):
-        checkbox = prop.get("checkbox")
-        if checkbox is True:
-            return "reusable"
-    return "unknown"
 
 
 def _normalize_raw_notion_owner(record: Mapping[str, object]) -> dict[str, object]:
