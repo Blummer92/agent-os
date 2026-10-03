@@ -201,7 +201,9 @@ def test_image_request_stays_request_sensitive() -> None:
     tasks: list[dict[str, object]] = []
     via_agent_os(IMAGES, calls=tasks)
     queried = [task["data_source_id"] for task in tasks if task["action"] == "query_data_source"]
-    assert queried == [f"ds-{VISUAL_ASSETS}"]
+    # #3253: the relation-first and coursewide steps share the one governed
+    # visual-asset source; no other surface is read.
+    assert queried == [f"ds-{VISUAL_ASSETS}", f"ds-{VISUAL_ASSETS}"]
     for unrelated in (MODELING, PACKET, MATERIALS, SOURCE_CONTROL, PRODUCTION, UNIT_ALIGNMENT):
         assert f"ds-{unrelated}" not in queried
 
@@ -216,8 +218,14 @@ def test_modeling_request_does_not_reach_packet_or_material_surfaces() -> None:
 def test_visual_asset_lookup_is_relation_first_in_provider_payload() -> None:
     tasks: list[dict[str, object]] = []
     via_agent_os(IMAGES, calls=tasks)
-    asset_task = next(task for task in tasks if task.get("data_source_id") == f"ds-{VISUAL_ASSETS}")
-    assert asset_task["filter"] == {"property": "Canonical Unit", "relation": {"contains": UNIT_PAGE_COMPACT}}
+    asset_tasks = [task for task in tasks if task.get("data_source_id") == f"ds-{VISUAL_ASSETS}"]
+    assert asset_tasks[0]["filter"] == {"property": "Canonical Unit", "relation": {"contains": UNIT_PAGE_COMPACT}}
+    # #3253: the second governed asset query selects on the reusable
+    # checkbox — never a fabricated unit relation, never keyword matching.
+    assert asset_tasks[1]["filter"] == {
+        "property": "Reusable Across Units?",
+        "checkbox": {"equals": True},
+    }
 
 
 def test_provider_filter_syntax_stays_behind_read_boundary() -> None:
@@ -231,7 +239,7 @@ def test_provider_filter_syntax_stays_behind_read_boundary() -> None:
 def test_asset_title_cannot_substitute_for_governed_approval_evidence() -> None:
     packet = via_agent_os(IMAGES)["curriculum_evidence"]
     assert "Photography Foundations hero image" not in repr(packet)
-    assert packet["asset_evidence"] == [{"asset_id": "pf-010", "approved_for_requested_use": False, "approved_student_reuse": False, "exists": True, "source_revision": 1}]
+    assert packet["asset_evidence"] == [{"asset_id": "pf-010", "approved_for_requested_use": False, "approved_student_reuse": False, "exists": True, "source_revision": 1, "reuse_scope": "unit-specific", "reuse_status": "unknown"}]
 
 
 def test_teacher_facing_asset_existence_is_not_production_authority() -> None:

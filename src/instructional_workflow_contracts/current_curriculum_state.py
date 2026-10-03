@@ -148,7 +148,8 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
                     contradictions.append(_conflict("advisory-conflict", key, operative, item))
 
         asset_summary, asset_reasons, asset_blockers = _asset_summary(
-            assets, request["requires_reusable_assets"], asset_evidence_supplied
+            assets, request["requires_reusable_assets"], asset_evidence_supplied,
+            _scope_excluded_ids(root.get("scope_excluded_asset_ids")),
         )
         reasons |= asset_reasons
         blockers |= asset_blockers
@@ -335,6 +336,18 @@ def _reference(value: object) -> dict[str, str]:
     return {"system": ref.system, "stable_id": ref.stable_id, "exact_location": ref.exact_location, "verification_evidence": ref.verification_evidence}
 
 
+def _scope_excluded_ids(value: object) -> tuple[str, ...]:
+    """Validate the assembler's explicit out-of-scope asset naming (#3253)."""
+    if value is None:
+        return ()
+    if type(value) is not list:
+        raise ContractValidationError("handoff-wrong-type", "scope_excluded_asset_ids must be a built-in list")
+    checked = tuple(validate_stable_id(item, "scope_excluded_asset_ids") for item in value)
+    if len(set(checked)) != len(checked):
+        raise ContractValidationError("handoff-duplicate", "scope_excluded_asset_ids contains duplicates")
+    return checked
+
+
 def _assets(value: object) -> list[dict[str, Any]]:
     if type(value) is not list:
         raise ContractValidationError("handoff-wrong-type", "asset_evidence must be a built-in list")
@@ -346,18 +359,31 @@ def _assets(value: object) -> list[dict[str, Any]]:
         exists, approved, reuse = raw.get("exists"), raw.get("approved_for_requested_use"), raw.get("approved_student_reuse")
         if type(exists) is not bool or (approved is not None and type(approved) is not bool) or (reuse is not None and type(reuse) is not bool):
             raise ContractValidationError("handoff-wrong-type", "asset eligibility fields have invalid types")
-        items.append({
+        # #3253: scope and reuse status ride on the evidence as contract data.
+        scope = raw.get("reuse_scope")
+        if scope is not None and (not isinstance(scope, str) or len(scope) > 64):
+            raise ContractValidationError("handoff-invalid-field", "asset reuse_scope is invalid")
+        status = raw.get("reuse_status")
+        if status is not None and (not isinstance(status, str) or len(status) > 32):
+            raise ContractValidationError("handoff-invalid-field", "asset reuse_status is invalid")
+        item: dict[str, Any] = {
             "asset_id": validate_stable_id(raw.get("asset_id"), "asset_id"),
             "exists": exists, "approved_for_requested_use": approved, "approved_student_reuse": reuse,
             "source_revision": validate_revision(raw.get("source_revision")),
-        })
+        }
+        if scope is not None:
+            item["reuse_scope"] = scope
+        if status is not None:
+            item["reuse_status"] = status
+        items.append(item)
     if len({item["asset_id"] for item in items}) != len(items):
         raise ContractValidationError("handoff-duplicate", "asset IDs must be unique")
     return sorted(items, key=lambda x: x["asset_id"])
 
 
 def _asset_summary(
-    items: list[dict[str, Any]], required: bool, supplied: bool
+    items: list[dict[str, Any]], required: bool, supplied: bool,
+    scope_excluded: tuple[str, ...],
 ) -> tuple[dict[str, Any], set[str], set[str]]:
     # #3248: when no asset evidence was supplied, the resolver must not report
     # matching_asset_exists: false — absence was never evidenced. The field is
@@ -371,11 +397,17 @@ def _asset_summary(
             "production_authorized": False,
             "asset_ids": [],
             "eligible_asset_ids": [],
+            "scope_excluded_asset_ids": list(scope_excluded),
         }, {"asset-evidence-missing"}, set()
     existing = [item for item in items if item["exists"]]
     ambiguous = [item for item in existing if item["approved_for_requested_use"] is None or item["approved_student_reuse"] is None]
     eligible = [item for item in existing if item["approved_for_requested_use"] is True and item["approved_student_reuse"] is True]
     reasons = {"asset-approval-ambiguous"} if ambiguous else set()
+    # #3253: assets excluded by scope are named as out-of-scope — an explicit
+    # non-absence reason. They are never reported as matching_asset_exists:
+    # false, and they never dilute the in-scope absence accounting.
+    if scope_excluded:
+        reasons.add("asset-out-of-scope")
     blockers = {"asset-reusable-unavailable"} if required and not eligible and not ambiguous else set()
     return {
         "matching_asset_exists": bool(existing),
@@ -384,6 +416,7 @@ def _asset_summary(
         "production_authorized": False,
         "asset_ids": [item["asset_id"] for item in existing],
         "eligible_asset_ids": [item["asset_id"] for item in eligible],
+        "scope_excluded_asset_ids": list(scope_excluded),
     }, reasons, blockers
 
 
@@ -392,7 +425,7 @@ def _disposition(status: str, reasons: set[str], blockers: set[str]) -> str:
         return "blocked"
     if status != "active" or reasons & {"ownership-owner-conflict", "source-owner-value-conflict"}:
         return "needs-decision"
-    if reasons & {"source-stale-material", "source-newer-narrative-conflict", "source-display-drift", "asset-approval-ambiguous", "asset-evidence-missing"}:
+    if reasons & {"source-stale-material", "source-newer-narrative-conflict", "source-display-drift", "asset-approval-ambiguous", "asset-evidence-missing", "asset-out-of-scope"}:
         return "needs-reconciliation"
     return "supported"
 

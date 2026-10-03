@@ -113,8 +113,13 @@ def _scheduler_task_payload(action: str, payload: Mapping[str, object]) -> dict[
         "max_results": bound,
     }
     relation_filter = payload.get("relation_filter")
+    property_filter = payload.get("property_filter")
+    if relation_filter is not None and property_filter is not None:
+        raise CurriculumSurfaceError("read payload carries two competing filters")
     if relation_filter is not None:
         task_payload["filter"] = _relation_filter(relation_filter)
+    elif property_filter is not None:
+        task_payload["filter"] = _property_filter(property_filter)
     return task_payload
 
 
@@ -128,6 +133,23 @@ def _relation_filter(value: object) -> dict[str, object]:
                 value.get("contains_page_id"), "relation_filter.contains_page_id"
             )
         },
+    }
+
+
+def _property_filter(value: object) -> dict[str, object]:
+    """Map the governed coursewide checkbox selection (#3253).
+
+    Only the exact checkbox-equals shape is admitted; anything else fails
+    closed rather than widening into keyword or free-text matching.
+    """
+    if not isinstance(value, Mapping):
+        raise CurriculumSurfaceError("property filter must be a mapping")
+    checkbox = value.get("checkbox")
+    if not isinstance(checkbox, Mapping) or type(checkbox.get("equals")) is not bool:
+        raise CurriculumSurfaceError("property filter supports only checkbox equals")
+    return {
+        "property": _required_text(value.get("property"), "property_filter.property"),
+        "checkbox": {"equals": checkbox["equals"]},
     }
 
 
