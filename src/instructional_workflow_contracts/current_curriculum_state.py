@@ -57,7 +57,11 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
         )
         required = set(_ids(root.get("required_decision_keys", []), "required decision keys", MAX_OWNER_EVIDENCE))
         evidence_items = _owner_evidence(root.get("owner_evidence", []))
-        assets = _assets(root.get("asset_evidence", []))
+        # #3248: missing asset evidence must not read as "no assets exist".
+        # Only supplied evidence may assert absence.
+        asset_evidence_value = root.get("asset_evidence")
+        asset_evidence_supplied = asset_evidence_value is not None
+        assets = _assets([] if asset_evidence_value is None else asset_evidence_value)
 
         reasons: set[str] = set()
         blockers: set[str] = set(routing_blockers)
@@ -143,7 +147,9 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
                 elif classification == "agent-suggested":
                     contradictions.append(_conflict("advisory-conflict", key, operative, item))
 
-        asset_summary, asset_reasons, asset_blockers = _asset_summary(assets, request["requires_reusable_assets"])
+        asset_summary, asset_reasons, asset_blockers = _asset_summary(
+            assets, request["requires_reusable_assets"], asset_evidence_supplied
+        )
         reasons |= asset_reasons
         blockers |= asset_blockers
         if (asset_reasons or asset_blockers) and next_owner is None:
@@ -350,7 +356,22 @@ def _assets(value: object) -> list[dict[str, Any]]:
     return sorted(items, key=lambda x: x["asset_id"])
 
 
-def _asset_summary(items: list[dict[str, Any]], required: bool) -> tuple[dict[str, Any], set[str], set[str]]:
+def _asset_summary(
+    items: list[dict[str, Any]], required: bool, supplied: bool
+) -> tuple[dict[str, Any], set[str], set[str]]:
+    # #3248: when no asset evidence was supplied, the resolver must not report
+    # matching_asset_exists: false — absence was never evidenced. The field is
+    # None (unknown), the missing evidence is a reason, and no
+    # asset-reusable-unavailable blocker is raised.
+    if not supplied:
+        return {
+            "matching_asset_exists": None,
+            "approved_for_requested_use_exists": False,
+            "approved_reusable_student_facing_exists": False,
+            "production_authorized": False,
+            "asset_ids": [],
+            "eligible_asset_ids": [],
+        }, {"asset-evidence-missing"}, set()
     existing = [item for item in items if item["exists"]]
     ambiguous = [item for item in existing if item["approved_for_requested_use"] is None or item["approved_student_reuse"] is None]
     eligible = [item for item in existing if item["approved_for_requested_use"] is True and item["approved_student_reuse"] is True]
@@ -371,7 +392,7 @@ def _disposition(status: str, reasons: set[str], blockers: set[str]) -> str:
         return "blocked"
     if status != "active" or reasons & {"ownership-owner-conflict", "source-owner-value-conflict"}:
         return "needs-decision"
-    if reasons & {"source-stale-material", "source-newer-narrative-conflict", "source-display-drift", "asset-approval-ambiguous"}:
+    if reasons & {"source-stale-material", "source-newer-narrative-conflict", "source-display-drift", "asset-approval-ambiguous", "asset-evidence-missing"}:
         return "needs-reconciliation"
     return "supported"
 

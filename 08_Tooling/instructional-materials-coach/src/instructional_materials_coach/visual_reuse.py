@@ -19,18 +19,34 @@ from instructional_workflow_contracts.visual_needs import plan_visual_needs
 def _scope_candidates_to_current_assets(
     visual_candidates: object,
     current_asset_evidence: object,
-) -> object:
+    source_revision: object,
+) -> tuple[str, list[object]]:
     """Constrain supplied governed candidates to exact current-unit asset identity.
+
+    Returns (scope_state, scoped_candidates) where scope_state is one of:
+    - "ok": candidates scoped (or passed through for offline/planner-only use);
+    - "true-zero": evidence was supplied and admitted zero candidates;
+    - "no-evidence": no candidate evidence was supplied at all;
+    - "malformed": candidate or current-asset evidence is malformed;
+    - "identity-conflict": one exact library page + Drive identity maps to two
+      competing Asset IDs (fail closed; no precedence invented);
+    - "no-read-evidence": zero candidates admitted and no read is identified
+      (no source_revision), so absence cannot be proven.
 
     The caller may omit current asset evidence for existing offline/planner-only
     uses. When current evidence is supplied, only candidates whose existing
     Asset ID + Visual Asset Library page ID + Drive file ID tuple is present in
     that relation-first evidence can reach the existing candidate filter.
     """
+    if visual_candidates is None and current_asset_evidence is None:
+        return ("no-evidence", [])
+    if visual_candidates is not None and type(visual_candidates) is not list:
+        return ("malformed", [])
     if current_asset_evidence is None:
-        return visual_candidates
-    if type(visual_candidates) is not list or type(current_asset_evidence) is not list:
-        return []
+        # Offline/planner-only use: no current-unit scoping requested.
+        return ("ok", list(visual_candidates or []))
+    if type(current_asset_evidence) is not list:
+        return ("malformed", [])
 
     admitted: set[tuple[str, str, str]] = set()
     asset_ids_by_external_identity: dict[tuple[str, str], set[str]] = {}
@@ -47,14 +63,17 @@ def _scope_candidates_to_current_assets(
             admitted.add((asset_id, page_id, drive_file_id))
             asset_ids_by_external_identity.setdefault((page_id, drive_file_id), set()).add(asset_id)
 
+    if current_asset_evidence and not admitted:
+        return ("malformed", [])
+
     # #3104: one exact library page + Drive identity cannot authorize two
     # competing Asset IDs. Canonical reconciliation belongs to #1387; this
     # consumer must fail closed instead of inventing precedence.
     if any(len(asset_ids) > 1 for asset_ids in asset_ids_by_external_identity.values()):
-        return []
+        return ("identity-conflict", [])
 
     scoped: list[object] = []
-    for candidate in visual_candidates:
+    for candidate in visual_candidates or []:
         if type(candidate) is not dict:
             continue
         evidence = candidate.get("compatibility_evidence")
@@ -71,7 +90,11 @@ def _scope_candidates_to_current_assets(
         )
         if identity in admitted:
             scoped.append(candidate)
-    return scoped
+    if not scoped:
+        if not source_revision:
+            return ("no-read-evidence", [])
+        return ("true-zero", [])
+    return ("ok", scoped)
 
 
 @dataclass(frozen=True)
@@ -157,10 +180,49 @@ def plan_governed_visual_reuse(
             artifact_reuse_result=artifact_reuse_result,
         )
 
-    scoped_candidates = _scope_candidates_to_current_assets(
-        [] if visual_candidates is None else visual_candidates,
+    scope_state, scoped_candidates = _scope_candidates_to_current_assets(
+        None if visual_candidates is None else visual_candidates,
         current_asset_evidence,
+        source_revision,
     )
+    # Canonical outcome-code registry (#3248): scoping failures are distinct
+    # non-absence states and never become visual gaps.
+    if scope_state == "no-evidence":
+        return GovernedVisualReusePlan(
+            outcome="empty-evidence",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
+    if scope_state == "malformed":
+        return GovernedVisualReusePlan(
+            outcome="incomplete-evidence",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
+    if scope_state == "identity-conflict":
+        return GovernedVisualReusePlan(
+            outcome="identity-conflict",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
+    if scope_state == "no-read-evidence":
+        return GovernedVisualReusePlan(
+            outcome="retrieval-failure",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
     candidate_filter_result = filter_approved_visual_candidates(
         visual_needs_result,
         scoped_candidates,
@@ -199,9 +261,23 @@ def plan_governed_visual_reuse(
         item["asset_reference"]["asset_id"]
         for item in cohesive_payload["selected_candidates"]
     )
-    if cohesive_payload["unfilled_required_roles"]:
+    if cohesive_payload["image_gap_briefs"]:
+        # Proven-absence briefs exist: the only state that may block on a gap.
         return GovernedVisualReusePlan(
             outcome="visual-gap-blocked",
+            final_production_blocked=True,
+            selected_asset_ids=selected_asset_ids,
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+            candidate_filter_result=candidate_filter_result,
+            cohesive_visual_plan_result=cohesive_result,
+        )
+    if cohesive_payload["unfilled_required_roles"]:
+        # Required roles went unfilled for non-absence reasons (the per-role
+        # outcome codes live on the plan record): blocked, but not a gap.
+        return GovernedVisualReusePlan(
+            outcome="visual-assignment-blocked",
             final_production_blocked=True,
             selected_asset_ids=selected_asset_ids,
             material_requirement_result=requirement_result,

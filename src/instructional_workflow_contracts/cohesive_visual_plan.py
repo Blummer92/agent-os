@@ -26,6 +26,42 @@ from .visual_needs import CONTRACT_ID as VISUAL_NEEDS_CONTRACT_ID
 CONTRACT_ID = "curriculum-cohesive-visual-plan-v1"
 MAX_SELECTED_ASSETS = 8
 MAX_GAP_BRIEFS = 8
+
+# Canonical visual outcome-code registry is owned by #3248
+# (~/workspace/wave1-campaign/outcome-code-registry.md). This module emits codes
+# into that registry and must not redefine their semantics. Only "proven-absence"
+# may produce an image-gap brief or authorize creation.
+OUTCOME_PROVEN_ABSENCE = "proven-absence"
+OUTCOME_POLICY_UNASSIGNED = "policy-unassigned"
+OUTCOME_REVIEW_PENDING = "review-pending"
+OUTCOME_INCOMPATIBLE = "incompatible"
+OUTCOME_INACCESSIBLE = "inaccessible"
+OUTCOME_INCOMPLETE_EVIDENCE = "incomplete-evidence"
+
+# Role-intrinsic rejection reasons that classify as hard incompatibility.
+_INCOMPATIBLE_ROLE_REASONS = frozenset(
+    {
+        "asset-role-mismatch",
+        "asset-approved-use-role-mismatch",
+        "asset-approved-use-material-mismatch",
+        "asset-orientation-mismatch",
+        "asset-audience-incompatible",
+    }
+)
+# Filter-level rejection classification for "invalid" (unconsumable) entries.
+_FILTER_INVALID_CLASSIFICATION = "invalid"
+# Filter-level reason fragment marking an access/verification failure.
+_ACCESS_FAILURE_REASON = "asset-compatibility-invalid-manifest"
+
+_REMEDY_CLASS = {
+    OUTCOME_PROVEN_ABSENCE: "absent",
+    OUTCOME_INCOMPATIBLE: "unapproved-for-use",
+    OUTCOME_INACCESSIBLE: "unapproved-for-use",
+    OUTCOME_REVIEW_PENDING: "unapproved-for-use",
+    OUTCOME_INCOMPLETE_EVIDENCE: "unapproved-for-use",
+    OUTCOME_POLICY_UNASSIGNED: "policy-unassigned",
+}
+
 _COHESION_FIELDS = (
     "visual_style_family",
     "medium",
@@ -112,10 +148,24 @@ def plan_cohesive_visual_set(
                 manual_reasons.update(match["manual_review"])
             candidate = match["candidate"]
             if candidate is None:
-                if "manual-review-visual-assignment-tie" in match["manual_review"]:
-                    unfilled_required.append(_unfilled_role(role, tie_blocked=True))
-                else:
-                    unfilled_required.append(_unfilled_role(role))
+                outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
+                    role,
+                    match,
+                    candidate_payload,
+                )
+                unfilled_required.append(
+                    _unfilled_role(
+                        role,
+                        outcome_code=outcome_code,
+                        reason_codes=reason_codes,
+                        rejected_candidate_ids=rejected_ids,
+                    )
+                )
+                # A gap brief is emitted ONLY for proven absence: governed
+                # evidence proves no eligible reusable asset exists for the role
+                # under the stated scope and snapshot. Every other non-absence
+                # state carries its own outcome code and never becomes a brief.
+                if outcome_code == OUTCOME_PROVEN_ABSENCE:
                     unfilled_required_roles.append(role)
                 continue
             assignment = _assignment(
@@ -149,7 +199,19 @@ def plan_cohesive_visual_set(
                 manual_reasons.update(match["manual_review"])
             candidate = match["candidate"]
             if candidate is None:
-                unfilled_optional.append(_unfilled_role(role))
+                outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
+                    role,
+                    match,
+                    candidate_payload,
+                )
+                unfilled_optional.append(
+                    _unfilled_role(
+                        role,
+                        outcome_code=outcome_code,
+                        reason_codes=reason_codes,
+                        rejected_candidate_ids=rejected_ids,
+                    )
+                )
                 continue
             assignment = _assignment(
                 role,
@@ -169,14 +231,23 @@ def plan_cohesive_visual_set(
                 "selected visual set exceeds the governed bound",
             )
 
-        gap_briefs = [
-            _gap_brief(
-                role,
-                material_type=material_type,
-                selected=selected,
-            )
-            for role in unfilled_required_roles
-        ]
+        # Manual-review plans never emit gap briefs: a brief asserts proven
+        # absence, which a plan awaiting bounded human review cannot claim.
+        gap_briefs = (
+            []
+            if manual_reasons
+            else [
+                _gap_brief(
+                    role,
+                    material_type=material_type,
+                    selected=selected,
+                    plan=plan,
+                    candidates=candidates,
+                    candidate_payload=candidate_payload,
+                )
+                for role in unfilled_required_roles
+            ]
+        )
         if len(gap_briefs) > MAX_GAP_BRIEFS:
             raise ContractValidationError(
                 "handoff-oversized",
@@ -414,6 +485,11 @@ def _select_for_role(
 ) -> dict[str, Any]:
     viable: list[tuple[tuple[int, int, int, int], str, dict[str, Any]]] = []
     manual: set[str] = set()
+    # Candidates that pass role-intrinsic rejection but fail set-level rejection
+    # (cohesion / load / duplicate-selected against the already-selected set).
+    role_eligible: list[tuple[dict[str, Any], tuple[str, ...]]] = []
+    # Candidates rejected for role-intrinsic reasons, with those reasons.
+    role_rejections: list[tuple[dict[str, Any], tuple[str, ...]]] = []
     for candidate in candidates:
         reasons = _role_rejection_reasons(
             role,
@@ -422,6 +498,7 @@ def _select_for_role(
         )
         if reasons:
             rejected_assignments.append(_rejection(role, candidate, reasons))
+            role_rejections.append((candidate, reasons))
             continue
         set_reasons = _set_rejection_reasons(
             role,
@@ -433,18 +510,111 @@ def _select_for_role(
         )
         if set_reasons:
             rejected_sets.append(_rejection(role, candidate, set_reasons))
+            role_eligible.append((candidate, set_reasons))
             continue
         score = _score(role, candidate)
         viable.append((score, _candidate_sort_key(candidate), candidate))
 
     if not viable:
-        return {"candidate": None, "manual_review": tuple(sorted(manual))}
+        return {
+            "candidate": None,
+            "manual_review": tuple(sorted(manual)),
+            "role_eligible": role_eligible,
+            "role_rejections": role_rejections,
+        }
 
     viable.sort(key=lambda item: (-item[0][0], -item[0][1], -item[0][2], -item[0][3], item[1]))
     if len(viable) > 1 and viable[0][0] == viable[1][0]:
         manual.add("manual-review-visual-assignment-tie")
-        return {"candidate": None, "manual_review": tuple(sorted(manual))}
-    return {"candidate": viable[0][2], "manual_review": tuple(sorted(manual))}
+        return {
+            "candidate": None,
+            "manual_review": tuple(sorted(manual)),
+            "role_eligible": role_eligible,
+            "role_rejections": role_rejections,
+        }
+    return {
+        "candidate": viable[0][2],
+        "manual_review": tuple(sorted(manual)),
+        "role_eligible": role_eligible,
+        "role_rejections": role_rejections,
+    }
+
+
+def _classify_unfilled_role(
+    role: dict[str, Any],
+    match: dict[str, Any],
+    candidate_payload: dict[str, Any],
+) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Classify one unfilled role into the canonical outcome-code registry.
+
+    Returns (outcome_code, reason_codes, rejected_candidate_ids). Only
+    ``proven-absence`` may later become an image-gap brief.
+    """
+    del role  # classification uses the match and filter evidence only
+    if "manual-review-visual-assignment-tie" in match["manual_review"]:
+        return (
+            OUTCOME_REVIEW_PENDING,
+            (OUTCOME_REVIEW_PENDING, "asset-required-role-tie-blocked"),
+            (),
+        )
+    role_eligible = match["role_eligible"]
+    if role_eligible:
+        # Eligible candidates exist for this role but assignment policy rejected
+        # every one of them (cohesion / load / duplicate-selected). Per #3248
+        # this is policy-unassigned, reported with the candidate identities —
+        # never a visual gap.
+        set_reasons: set[str] = set()
+        rejected_ids: list[str] = []
+        for candidate, reasons in role_eligible:
+            set_reasons.update(reasons)
+            rejected_ids.append(candidate["compatibility_id"])
+        return (
+            OUTCOME_POLICY_UNASSIGNED,
+            (OUTCOME_POLICY_UNASSIGNED, *sorted(set_reasons)),
+            tuple(sorted(set(rejected_ids))),
+        )
+    if candidate_payload["manual_review"]:
+        return (OUTCOME_REVIEW_PENDING, (OUTCOME_REVIEW_PENDING,), ())
+    if candidate_payload["eligible"]:
+        # Candidates exist but none is role-eligible for this role.
+        intrinsic: set[str] = set()
+        for _, reasons in match["role_rejections"]:
+            intrinsic.update(reasons)
+        if intrinsic & _INCOMPATIBLE_ROLE_REASONS:
+            return (
+                OUTCOME_INCOMPATIBLE,
+                (OUTCOME_INCOMPATIBLE, *sorted(intrinsic)),
+                (),
+            )
+        if "asset-cohesion-missing" in intrinsic:
+            return (
+                OUTCOME_INCOMPLETE_EVIDENCE,
+                (OUTCOME_INCOMPLETE_EVIDENCE, "asset-cohesion-missing"),
+                (),
+            )
+        return (OUTCOME_INCOMPATIBLE, (OUTCOME_INCOMPATIBLE,), ())
+    if candidate_payload["rejected"]:
+        # The filter saw assets but rejected every one of them. An access /
+        # verification failure means the asset exists but cannot be recovered
+        # (inaccessible), even when the filter also marks the entry invalid.
+        access_failure = any(
+            _ACCESS_FAILURE_REASON in entry.get("reason_codes", [])
+            for entry in candidate_payload["rejected"]
+        )
+        if access_failure:
+            return (OUTCOME_INACCESSIBLE, (OUTCOME_INACCESSIBLE,), ())
+        invalid = any(
+            entry.get("classification") == _FILTER_INVALID_CLASSIFICATION
+            for entry in candidate_payload["rejected"]
+        )
+        if invalid:
+            return (OUTCOME_INCOMPLETE_EVIDENCE, (OUTCOME_INCOMPLETE_EVIDENCE,), ())
+        return (OUTCOME_INCOMPATIBLE, (OUTCOME_INCOMPATIBLE,), ())
+    # The filter ran over an identified read (source_revision is required
+    # non-empty by the filter contract) and admitted zero candidates in every
+    # group: governed evidence proves no eligible reusable asset exists for this
+    # role under the stated scope and snapshot.
+    return (OUTCOME_PROVEN_ABSENCE, (OUTCOME_PROVEN_ABSENCE,), ())
 
 
 def _role_rejection_reasons(
@@ -618,12 +788,13 @@ def _rejection(
     }
 
 
-def _unfilled_role(role: dict[str, Any], *, tie_blocked: bool = False) -> dict[str, Any]:
-    reason_code = (
-        "asset-required-role-tie-blocked"
-        if tie_blocked
-        else "asset-required-role-unfilled"
-    )
+def _unfilled_role(
+    role: dict[str, Any],
+    *,
+    outcome_code: str,
+    reason_codes: tuple[str, ...],
+    rejected_candidate_ids: tuple[str, ...] = (),
+) -> dict[str, Any]:
     return {
         "role_id": role["role_id"],
         "role_type": role["role_type"],
@@ -631,7 +802,15 @@ def _unfilled_role(role: dict[str, Any], *, tie_blocked: bool = False) -> dict[s
         "instructional_purpose": role["instructional_purpose"],
         "intended_placement": role["intended_placement"],
         "orientation": role["orientation"],
-        "reason_codes": [reason_code],
+        # Canonical outcome-code registry (#3248): the single machine-readable
+        # classification of why this role went unfilled. Only "proven-absence"
+        # may become an image-gap brief.
+        "outcome_code": outcome_code,
+        "reason_codes": list(reason_codes),
+        # Candidate identities rejected for this role (populated for
+        # policy-unassigned so the policy owner can adjudicate).
+        "rejected_candidate_ids": list(rejected_candidate_ids),
+        "remedy_class": _REMEDY_CLASS[outcome_code],
     }
 
 
@@ -640,6 +819,9 @@ def _gap_brief(
     *,
     material_type: str,
     selected: list[dict[str, Any]],
+    plan: ValidatedRecord,
+    candidates: ValidatedRecord,
+    candidate_payload: dict[str, Any],
 ) -> dict[str, Any]:
     reference_ids = [
         item["asset_reference"]["stable_ref"]
@@ -672,7 +854,34 @@ def _gap_brief(
         "intended_reusable_uses": [material_type, role["role_type"]],
         "draft_alt_text": f"{role['role_type']} visual for {material_type}.",
         "accessibility_considerations": [role["accessibility_reference"]],
-        "reason_asset_is_needed": "No approved eligible asset filled this required visual role.",
+        # Proven-absence assertion, backed by the recorded evidence below. A
+        # brief is emitted ONLY when governed evidence proves no eligible
+        # reusable asset exists for this role under the stated scope/snapshot.
+        "reason_asset_is_needed": (
+            "Governed evidence proves no eligible reusable asset exists for "
+            "this required visual role under the stated scope and snapshot."
+        ),
+        # Tamper-evident absence evidence: the binding admission checks this
+        # block before any ImageIntent handoff is authorized.
+        "absence_evidence": {
+            "proven_absence": True,
+            "scope": {
+                "visual_needs_plan_id": plan.record_id,
+                "material_type": material_type,
+            },
+            "snapshot": {
+                "candidate_filter_id": candidates.record_id,
+                "candidate_filter_fingerprint": candidates.fingerprint,
+                "source_revision": candidate_payload["source_revision"],
+            },
+            "filter_evidence": {
+                "candidate_count": candidate_payload["candidate_count"],
+                "eligible": len(candidate_payload["eligible"]),
+                "rejected": len(candidate_payload["rejected"]),
+                "manual_review": len(candidate_payload["manual_review"]),
+            },
+            "remedy_class": "absent",
+        },
         "human_review_required": True,
         "authority": dict(_AUTHORITY),
     }

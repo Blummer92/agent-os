@@ -268,7 +268,7 @@ def render_teacher_reference_markdown(reference: object) -> str:
         lines.extend(
             [
                 "",
-                "**Icon key:** approved-existing = reuse resolved teacher-reference-authorized icon; useful-but-missing = explicit gap; no-icon-needed = no icon required.",
+                "**Icon key:** approved-existing = reuse resolved teacher-reference-authorized icon; useful-but-missing = explicit gap (proven absence of an approved icon for the row's visual role under the supplied evidence scope — other unresolved states are not gaps); no-icon-needed = no icon required.",
             ]
         )
         excluded = reference.get("excluded_scaffolds")

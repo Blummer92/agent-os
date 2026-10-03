@@ -97,9 +97,9 @@ If governed evidence identifies an eligible reusable asset but the producing
 surface cannot recover/materialize that exact asset, report the artifact as
 incomplete/preview with an unresolved visual-assets blocker. Do not convert the
 recovery failure into permission to omit the visual, draw a placeholder, invent
-a lookalike, or silently generate a replacement. Synthetic fallback is eligible
+a lookalike, or silently generate a replacement. A visual gap exists only when governed evidence proves that no eligible reusable asset exists for a required visual role under a stated scope and snapshot. Synthetic fallback is eligible
 only when governed discovery proves no eligible reusable asset is available and
-current generation policy independently permits creation.
+current generation policy independently permits creation. Any other unresolved state — incompatibility, cohesion or load rejection, pending review, inaccessible assets, retrieval failure, identity conflict, incomplete evidence, or capacity failure — carries its own outcome code and never authorizes image creation.
 
 If a connected visual-asset source such as Visual Asset Sync is unavailable or
 not authorized, do not interpret that absence as permission to silently remove
@@ -278,10 +278,11 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.8
+0.1.9
 
 ## Changelog
 
+- 0.1.9 states the visual-gap definition identically to instructional-materials-workflows.md (#3248): a gap exists only on proven absence under a stated scope and snapshot; all other unresolved states carry their own outcome codes and never authorize image creation.
 - 0.1.8 combines the 0.1.7 additions: required visual placement and
   companion-file boundary (#2888) plus revision-bound required visual roles
   (#2890).

@@ -107,14 +107,16 @@ def test_candy_branding_current_unit_identity_excludes_plausible_typography_cand
         "drive_file_id": "drive-typography-september",
     }
 
-    scoped = visual_reuse._scope_candidates_to_current_assets(
+    state, scoped = visual_reuse._scope_candidates_to_current_assets(
         [typography, candy],
         [{
             "asset_id": "asset-1",
             "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"},
         }],
+        "visual-library-snapshot-v2",
     )
 
+    assert state == "ok"
     assert scoped == [candy]
 
 
@@ -250,10 +252,12 @@ def test_photography_chair_conflicting_asset_ids_fail_closed_before_reuse() -> N
         },
     ]
 
-    scoped = visual_reuse._scope_candidates_to_current_assets(
+    state, scoped = visual_reuse._scope_candidates_to_current_assets(
         candidates,
         current_asset_evidence,
+        "visual-library-snapshot-v2",
     )
+    assert state == "identity-conflict"
     assert scoped == []
 
 
@@ -267,7 +271,7 @@ def test_photography_chair_exact_current_identity_survives_reuse_scoping() -> No
         "drive_file_id": chair_drive_id,
     }
 
-    scoped = visual_reuse._scope_candidates_to_current_assets(
+    state, scoped = visual_reuse._scope_candidates_to_current_assets(
         [candidate],
         [{
             "asset_id": asset_id,
@@ -276,7 +280,9 @@ def test_photography_chair_exact_current_identity_survives_reuse_scoping() -> No
                 "drive_file_id": chair_drive_id,
             },
         }],
+        "visual-library-snapshot-v2",
     )
+    assert state == "ok"
     assert scoped == [candidate]
 
 
@@ -332,3 +338,134 @@ def test_round_tripped_requirement_is_accepted_by_governed_visual_reuse() -> Non
     assert plan.visual_needs_result is not None
     assert plan.visual_needs_result.status is ValidationStatus.VALID
     assert plan.outcome != "invalid-material-requirement"
+def test_scoping_without_any_evidence_reports_empty_evidence() -> None:
+    # #3248: no candidate evidence supplied at all is empty-evidence, never a gap.
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+    )
+    assert plan.outcome == "empty-evidence"
+    assert plan.final_production_blocked is True
+    assert plan.image_gap_briefs == ()
+
+
+def test_scoping_with_malformed_evidence_reports_incomplete_evidence() -> None:
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[_fixture("valid_visual_asset_compatibility_v2.json")],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+        current_asset_evidence=[{"not": "an asset identity"}],
+    )
+    assert plan.outcome == "incomplete-evidence"
+    assert plan.final_production_blocked is True
+    assert plan.image_gap_briefs == ()
+
+
+def test_scoping_with_identity_conflict_reports_identity_conflict() -> None:
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[_fixture("valid_visual_asset_compatibility_v2.json")],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+        current_asset_evidence=[
+            {"asset_id": "asset-1", "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"}},
+            {"asset_id": "asset-2", "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"}},
+        ],
+    )
+    assert plan.outcome == "identity-conflict"
+    assert plan.final_production_blocked is True
+    assert plan.image_gap_briefs == ()
+
+
+def test_scoping_without_read_revision_reports_retrieval_failure() -> None:
+    # #3248: zero admitted candidates with no identified read is
+    # retrieval-failure — discovery failure never becomes generation permission.
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[],
+        source_revision="",
+        changed_dependency_keys=[],
+        impact_map={},
+        current_asset_evidence=[],
+    )
+    assert plan.outcome == "retrieval-failure"
+    assert plan.final_production_blocked is True
+    assert plan.image_gap_briefs == ()
+
+
+def test_scoping_true_zero_with_read_reports_visual_gap_blocked() -> None:
+    # Genuine proven absence: an identified read admitted zero candidates.
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+        current_asset_evidence=[],
+    )
+    assert plan.outcome == "visual-gap-blocked"
+    assert plan.final_production_blocked is True
+    assert len(plan.image_gap_briefs) == 1
+    assert plan.image_gap_briefs[0]["absence_evidence"]["proven_absence"] is True
+
+
+def test_non_absence_unfilled_role_reports_visual_assignment_blocked() -> None:
+    # Cohesion rejection at the IMC boundary: blocked, but not a gap.
+    requirement = _fixture("valid_material_requirement_v2.json")
+    roles = requirement["visual_direction"]["roles"]
+    roles[1]["requirement_state"] = "required"
+    requirement["visual_direction"]["roles"] = [roles[1], roles[0]]
+    requirement["visual_direction"]["maximum_visual_count"] = 8
+    requirement["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(
+        requirement
+    )
+    first = _fixture("valid_visual_asset_compatibility_v2.json")
+    second = copy.deepcopy(first)
+    manifest = second["artifact_manifest"]
+    manifest["assets"][0]["asset_id"] = "asset-comparison"
+    manifest["assets"][0]["stable_ref"] = "asset-ref-comparison"
+    manifest["assets"][0]["content_fingerprint"] = "f" * 64
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_source_fingerprint as _manifest_fingerprint,
+        validate_artifact_manifest as _validate_manifest,
+    )
+    manifest["identity"]["source_fingerprint"] = _manifest_fingerprint(manifest)
+    manifest_result = _validate_manifest(manifest)
+    assert manifest_result.status is ValidationStatus.VALID
+    manifest_fp = manifest_result.record.fingerprint
+    evidence = second["compatibility_evidence"]
+    evidence["purpose"]["role_types"] = ["comparison"]
+    evidence["approved_use"]["role_types"] = ["comparison"]
+    evidence["orientation"]["orientation"] = "square"
+    evidence["cohesion_profile"]["palette_family"] = "full-color"
+    evidence["cohesion_profile"]["cognitive_load_rating"] = 1
+    evidence["asset_reference"]["asset_id"] = "asset-comparison"
+    evidence["asset_reference"]["stable_ref"] = "asset-ref-comparison"
+    evidence["asset_reference"]["content_fingerprint"] = "f" * 64
+    evidence["manifest_reference"]["fingerprint"] = manifest_fp
+    evidence["freshness"]["manifest_fingerprint"] = manifest_fp
+    plan = visual_reuse.plan_governed_visual_reuse(
+        requirement,
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[first, second],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+    )
+    assert plan.outcome == "visual-assignment-blocked"
+    assert plan.final_production_blocked is True
+    assert plan.image_gap_briefs == ()
+    payload = plan.cohesive_visual_plan_result.record.to_dict()
+    unfilled = payload["unfilled_required_roles"]
+    assert len(unfilled) == 1
+    assert unfilled[0]["outcome_code"] == "policy-unassigned"

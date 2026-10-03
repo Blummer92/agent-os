@@ -23,10 +23,37 @@ def _cohesive_plan(*, role_id: str = "role-weak-rule-of-thirds") -> ValidatedRec
         "brief_id": "image-gap-weak-rule-thirds",
         "missing_visual_role_id": role_id,
         "missing_visual_role_type": "non-example",
+        # #3248: binding admits only briefs backed by proven-absence evidence.
+        "absence_evidence": {
+            "proven_absence": True,
+            "scope": {
+                "visual_needs_plan_id": "visual-needs-plan-photography-foundations",
+                "material_type": "worksheet",
+            },
+            "snapshot": {
+                "candidate_filter_id": "visual-candidates-photography-foundations",
+                "candidate_filter_fingerprint": "a" * 64,
+                "source_revision": "visual-library-snapshot-test",
+            },
+            "filter_evidence": {
+                "candidate_count": 0,
+                "eligible": 0,
+                "rejected": 0,
+                "manual_review": 0,
+            },
+            "remedy_class": "absent",
+        },
     }
     payload = {
         "contract_version": "curriculum-cohesive-visual-plan-v1",
         "cohesive_visual_plan_id": "cohesive-plan-photography-foundations",
+        "manual_review_required": False,
+        "source_candidate_filter_result": {
+            "contract_version": "curriculum-visual-asset-candidates-v2",
+            "candidate_set_id": "visual-candidates-photography-foundations",
+            "record_revision": 1,
+            "fingerprint": "a" * 64,
+        },
         "image_gap_briefs": [gap],
     }
     return ValidatedRecord(
