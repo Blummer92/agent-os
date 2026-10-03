@@ -149,7 +149,16 @@ def duplicate_template(
     *,
     idempotency_key: str | None = None,
     role: str | None = None,
+    input_fingerprint: str | None = None,
 ) -> Any:
+    """Copy a template, stamping the idempotency key, role, and (#3252) the
+    input fingerprint as Drive appProperties.
+
+    ``input_fingerprint`` binds the consequential inputs to the created
+    copy so recovery can reject a key reused with different inputs
+    (``idempotency-key-input-mismatch``). It is secondary evidence only;
+    the local resume record remains the primary continuation surface.
+    """
     if not target_folder_id:
         raise ValueError("target_folder_id is required -- refusing to guess a destination.")
 
@@ -164,13 +173,16 @@ def duplicate_template(
     if not idempotency_key or not role:
         raise ValueError("idempotency_key and role must be supplied together")
 
+    app_properties = {
+        "agent_os_idempotency_key": idempotency_key,
+        "agent_os_artifact_role": role,
+    }
+    if input_fingerprint:
+        app_properties["agent_os_input_fingerprint"] = input_fingerprint
     body = {
         "name": new_name,
         "parents": [target_folder_id],
-        "appProperties": {
-            "agent_os_idempotency_key": idempotency_key,
-            "agent_os_artifact_role": role,
-        },
+        "appProperties": app_properties,
     }
     return service.files().copy(
         fileId=template_id,
