@@ -1,5 +1,5 @@
 === comfyui environment ready ===
-comfyui_version=0.38.0 ram_total=16770494464 ram_free=14987968512
+comfyui_version=0.38.0 ram_total=16770494464 ram_free=14967345152
 checkpoints visible to ComfyUI:
   - epicrealism_naturalSinRC1VAE.safetensors
   - realisticVisionV60B1_v51HyperVAE_418901.safetensors
