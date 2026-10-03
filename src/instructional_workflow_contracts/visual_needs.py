@@ -313,21 +313,22 @@ def _roles(value: object, *, source_fingerprint: str) -> list[dict[str, Any]]:
             ),
             "accessibility_reference": "requirements.accessibility_requirements",
         }
-        normalized["role_id"] = _role_id(
-            source_fingerprint=source_fingerprint,
-            role=normalized,
-        )
+        normalized["role_id"] = _role_id(role=normalized)
         validate_stable_id(normalized["role_id"], "visual role_id")
         roles.append(normalized)
     return roles
 
 
-def _role_id(*, source_fingerprint: str, role: dict[str, Any]) -> str:
+def _role_id(*, role: dict[str, Any]) -> str:
+    """Derive stable identity from the existing governed semantic role key.
+
+    Requirement fingerprint, revision, requirement_state, and other unrelated
+    record fields are deliberately excluded. Editing semantic role content
+    changes only that role's identity.
+    """
     identity = {
-        "planner_contract": CONTRACT_ID,
-        "source_requirement_fingerprint": source_fingerprint,
+        "role_identity_contract": "visual-role-semantic-key-v1",
         "role_type": role["role_type"],
-        "requirement_state": role["requirement_state"],
         "instructional_purpose": role["instructional_purpose"],
         "intended_placement": role["intended_placement"],
         "orientation": role["orientation"],

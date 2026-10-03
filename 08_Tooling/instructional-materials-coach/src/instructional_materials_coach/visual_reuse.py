@@ -6,9 +6,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from instructional_workflow_contracts import ValidationResult, ValidationStatus
+from instructional_workflow_contracts.asset_content_identity import (
+    content_identity_from_fingerprint,
+)
 from instructional_workflow_contracts.cohesive_visual_plan import plan_cohesive_visual_set
 from instructional_workflow_contracts.material_requirement import validate_material_requirement
 from instructional_workflow_contracts.reuse_planner import plan_instructional_artifact_reuse
+from instructional_workflow_contracts.teacher_visual_decision import (
+    DecisionValidity,
+    canonical_candidate_set_fingerprint,
+    evaluate_decision_validity,
+)
 from instructional_workflow_contracts.visual_asset_candidates import (
     V2_CONTRACT_ID as VISUAL_CANDIDATES_V2_CONTRACT_ID,
     filter_approved_visual_candidates,
@@ -150,6 +158,7 @@ class GovernedVisualReusePlan:
     artifact_reuse_result: ValidationResult | None = None
     candidate_filter_result: ValidationResult | None = None
     cohesive_visual_plan_result: ValidationResult | None = None
+    teacher_decision_outcomes: tuple[dict[str, Any], ...] = ()
 
     @property
     def image_gap_briefs(self) -> tuple[dict[str, Any], ...]:
@@ -161,6 +170,148 @@ class GovernedVisualReusePlan:
         return tuple(payload["image_gap_briefs"])
 
 
+def _eligible_asset_content_identities(
+    scoped_candidates: list[object],
+) -> dict[str, dict[str, Any] | None]:
+    """Map each scoped asset ID to its canonical content identity (#3256).
+
+    Assets without a recorded content fingerprint map to None (unverifiable
+    at decision-use time, which fails closed per the decision contract).
+    """
+    identities: dict[str, dict[str, Any] | None] = {}
+    for candidate in scoped_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        evidence = candidate.get("compatibility_evidence")
+        if not isinstance(evidence, dict):
+            continue
+        asset_reference = evidence.get("asset_reference")
+        if not isinstance(asset_reference, dict):
+            continue
+        asset_id = asset_reference.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id:
+            continue
+        fingerprint = asset_reference.get("content_fingerprint")
+        try:
+            identities[asset_id] = (
+                content_identity_from_fingerprint(fingerprint).copy()
+                if isinstance(fingerprint, str) and fingerprint
+                else None
+            )
+        except (ValueError, TypeError):
+            identities[asset_id] = None
+    return identities
+
+
+def _apply_teacher_decisions(
+    cohesive_payload: dict[str, Any],
+    teacher_decisions: tuple[object, ...],
+    *,
+    candidate_set_fingerprint: str,
+    eligible_asset_ids: set[str],
+    content_identities: dict[str, dict[str, Any] | None],
+    source_revision: object,
+) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], str | None]:
+    """Honor valid teacher decisions per role; block roles with invalid ones.
+
+    Returns ``(selected_asset_ids, decision_outcomes, blocked_reason)``.
+    ``blocked_reason`` is None when no role was blocked. A blocked role's
+    asset is excluded from the selection and the planner's pick is never
+    substituted — the role stays blocked with its explicit reason code.
+    Decisions for roles absent from the plan are recorded as not honored
+    (``role-retired``) without blocking unrelated work.
+    """
+    assignments: list[dict[str, Any]] = []
+    for key in ("required_role_assignments", "optional_role_assignments"):
+        items = cohesive_payload.get(key, ())
+        if isinstance(items, (list, tuple)):
+            assignments.extend(item for item in items if isinstance(item, dict))
+    role_order: list[str] = []
+    role_asset: dict[str, str] = {}
+    for assignment in assignments:
+        role_id = assignment.get("role_id")
+        selected = assignment.get("selected_candidate")
+        if not isinstance(role_id, str):
+            continue
+        asset_reference = selected.get("asset_reference") if isinstance(selected, dict) else None
+        asset_id = (
+            asset_reference.get("asset_id")
+            if isinstance(asset_reference, dict)
+            else None
+        )
+        if role_id not in role_asset:
+            role_order.append(role_id)
+        if isinstance(asset_id, str) and asset_id:
+            role_asset[role_id] = asset_id
+    active_roles = set(role_order)
+
+    outcomes: list[dict[str, Any]] = []
+    blocked: dict[str, str] = {}
+    for raw in teacher_decisions:
+        if not isinstance(raw, dict):
+            continue
+        decision_id = raw.get("decision_id")
+        role = raw.get("role")
+        validity: DecisionValidity = evaluate_decision_validity(
+            raw,
+            candidate_set_fingerprint=candidate_set_fingerprint,
+            eligible_asset_ids=eligible_asset_ids,
+            current_content_identities=content_identities,
+            source_revision=(
+                source_revision if isinstance(source_revision, str) else None
+            ),
+            active_roles=active_roles,
+        )
+        selected_asset = raw.get("selected_asset")
+        decision_asset_id = (
+            selected_asset.get("asset_id")
+            if isinstance(selected_asset, dict)
+            else None
+        )
+        if validity.valid and isinstance(decision_asset_id, str) and decision_asset_id:
+            if isinstance(role, str) and role in role_asset:
+                role_asset[role] = decision_asset_id
+            outcomes.append(
+                {
+                    "decision_id": decision_id,
+                    "role": role,
+                    "honored": True,
+                    "reason_code": None,
+                    "detail": None,
+                    "asset_id": decision_asset_id,
+                }
+            )
+        else:
+            outcomes.append(
+                {
+                    "decision_id": decision_id,
+                    "role": role,
+                    "honored": False,
+                    "reason_code": validity.reason_code,
+                    "detail": validity.detail,
+                    "asset_id": decision_asset_id,
+                }
+            )
+            # A decision for a retired (absent) role has no role to block;
+            # record it without blocking unrelated work.
+            if (
+                isinstance(role, str)
+                and role in active_roles
+                and validity.reason_code != "role-retired"
+            ):
+                blocked[role] = validity.reason_code or "invalid"
+
+    ordered_ids: list[str] = []
+    for role_id in role_order:
+        if role_id in blocked:
+            continue
+        asset_id = role_asset.get(role_id)
+        if asset_id and asset_id not in ordered_ids:
+            ordered_ids.append(asset_id)
+    blocked_reason = next(iter(blocked.values()), None)
+    return tuple(ordered_ids), tuple(outcomes), blocked_reason
+
+
 def plan_governed_visual_reuse(
     requirement: object,
     *,
@@ -170,8 +321,16 @@ def plan_governed_visual_reuse(
     changed_dependency_keys: object = None,
     impact_map: object = None,
     current_asset_evidence: object = None,
+    teacher_decisions: tuple[object, ...] = (),
 ) -> GovernedVisualReusePlan:
-    """Compose existing public contracts without adding selection or safety policy."""
+    """Compose existing public contracts without adding selection or safety policy.
+
+    ``teacher_decisions`` accepts governed teacher visual-decision records
+    (see ``instructional_workflow_contracts.teacher_visual_decision``). A
+    valid decision's asset replaces the planner's selection for its role; an
+    invalid decision blocks its role with an explicit reason code — the
+    planner never silently substitutes its own pick.
+    """
     requirement_result = validate_material_requirement(requirement)
     if requirement_result.status is not ValidationStatus.VALID:
         return GovernedVisualReusePlan(
@@ -340,6 +499,34 @@ def plan_governed_visual_reuse(
             cohesive_visual_plan_result=cohesive_result,
         )
 
+    # #3252: honor valid teacher decisions per role; an invalid decision
+    # blocks its role with an explicit reason code instead of silently
+    # falling back to the planner's pick.
+    decision_outcomes: tuple[dict[str, Any], ...] = ()
+    if teacher_decisions:
+        scoped_fingerprint = canonical_candidate_set_fingerprint(scoped_candidates)
+        scoped_identities = _eligible_asset_content_identities(scoped_candidates)
+        selected_asset_ids, decision_outcomes, blocked_reason = _apply_teacher_decisions(
+            cohesive_payload,
+            tuple(teacher_decisions),
+            candidate_set_fingerprint=scoped_fingerprint,
+            eligible_asset_ids=set(scoped_identities),
+            content_identities=scoped_identities,
+            source_revision=source_revision,
+        )
+        if blocked_reason is not None:
+            return GovernedVisualReusePlan(
+                outcome="teacher-decision-invalidated",
+                final_production_blocked=True,
+                selected_asset_ids=selected_asset_ids,
+                material_requirement_result=requirement_result,
+                visual_needs_result=visual_needs_result,
+                artifact_reuse_result=artifact_reuse_result,
+                candidate_filter_result=candidate_filter_result,
+                cohesive_visual_plan_result=cohesive_result,
+                teacher_decision_outcomes=decision_outcomes,
+            )
+
     return GovernedVisualReusePlan(
         outcome="visuals-ready",
         final_production_blocked=False,
@@ -349,4 +536,5 @@ def plan_governed_visual_reuse(
         artifact_reuse_result=artifact_reuse_result,
         candidate_filter_result=candidate_filter_result,
         cohesive_visual_plan_result=cohesive_result,
+        teacher_decision_outcomes=decision_outcomes,
     )
