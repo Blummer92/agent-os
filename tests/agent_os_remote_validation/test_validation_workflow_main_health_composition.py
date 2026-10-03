@@ -164,6 +164,7 @@ def test_workflow_recovery_binding_consumes_reusable_content_bound_authorization
     assert 'main_check_details_url=os.environ["MAIN_CHECK_DETAILS_URL"]' in step
     assert '"main-health-changed-files.txt"' in step
     assert 'recovery_requested=os.environ["RECOVERY_REQUESTED"] == "true"' in step
+    assert "recovery authorization rejected" in step
 
 
 def test_workflow_has_no_historical_incident_specific_recovery_selector():
