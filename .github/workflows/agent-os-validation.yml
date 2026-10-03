@@ -471,6 +471,9 @@ jobs:
           PY
               )"
             fi
+            if [ "$recovery_requested" != "true" ]; then
+              echo "recovery authorization rejected for issue $recovery_issue_number" >&2
+            fi
           fi
 
           export CURRENT_MAIN_SHA="$current_main_sha"
