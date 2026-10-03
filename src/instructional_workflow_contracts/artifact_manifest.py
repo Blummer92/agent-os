@@ -34,6 +34,17 @@ from .common import (
 
 CONTRACT_ID = "curriculum-artifact-manifest-v1"
 MATERIAL_CONTRACT_ID = "curriculum-material-requirement-v1"
+# Canonical definition: material_requirement.V2_CONTRACT_ID. Kept as a local
+# copy so this module keeps its .common-only import surface (enforced by
+# test_no_duplicate_generic_framework_or_import_side_effects); consistency is
+# bound by test_material_requirement_v2_ids_match_canonical_definition.
+MATERIAL_V2_CONTRACT_ID = "curriculum-material-requirement-v2"
+# ArtifactManifest may bind MaterialRequirement v1 or v2 records. v2 carries
+# visual direction; refusing v2 references would turn valid visual-direction
+# evidence into INVALID at the manifest layer. The reference check is
+# format-level (identifier/version/revision/fingerprint shape); version-specific
+# semantics remain the MaterialRequirement validator's responsibility.
+MATERIAL_CONTRACT_IDS = frozenset({MATERIAL_CONTRACT_ID, MATERIAL_V2_CONTRACT_ID})
 MAX_REVISIONS = 32
 MAX_ASSETS = 64
 MAX_QUALITY_ROWS = 64
@@ -194,12 +205,107 @@ TOP_LEVEL_FIELDS = frozenset(
 )
 
 
+# Order-significance declaration for canonicalization.
+#
+# Every list canonicalized by _canonicalize_artifact_manifest is
+# order-insensitive (set-like): input order never changes the record. The
+# manifest carries no order-significant lists. Fingerprints are always computed
+# and verified over the canonical representation (normalize -> canonicalize ->
+# verify), following the curriculum-handoff positive control.
+
+
+def _sorted_by_key(values: list[Any], name: str, key: str) -> list[Any]:
+    """Sort validated mappings by a required key, failing closed on malformed items."""
+    checked: list[dict[str, Any]] = []
+    for item in values:
+        mapping = validate_mapping(item, name)
+        if key not in mapping:
+            raise ContractValidationError(
+                "handoff-invalid", f"{name} is missing {key}"
+            )
+        checked.append(mapping)
+    return sorted(checked, key=lambda entry: entry[key])
+
+
+def _canonicalize_artifact_manifest(data: dict[str, Any]) -> dict[str, Any]:
+    """Bring normalized input into canonical list order (in place).
+
+    All canonicalized lists are order-insensitive (set-like). Must run BEFORE
+    any fingerprint is computed or verified so that fingerprints always cover
+    the canonical representation. Containers that are absent are skipped; the
+    validator always runs this after structural checks, so every container
+    below is present on the validator path.
+    """
+    artifact = data.get("artifact")
+    if type(artifact) is dict and "observed_sections" in artifact:
+        artifact["observed_sections"] = list(
+            _strings(
+                artifact["observed_sections"],
+                "observed sections",
+                MAX_OBSERVED_SECTIONS,
+            )
+        )
+    source = data.get("source_snapshot")
+    if type(source) is dict and "dependency_keys" in source:
+        source["dependency_keys"] = list(
+            canonical_strings(
+                source["dependency_keys"],
+                name="dependency keys",
+                maximum=MAX_DEPENDENCY_KEYS,
+                validator=validate_dependency_key,
+            )
+        )
+    operation = data.get("operation")
+    if type(operation) is dict and "discovery_evidence" in operation:
+        operation["discovery_evidence"] = list(
+            _strings(
+                operation["discovery_evidence"],
+                "discovery evidence",
+                MAX_DISCOVERY_EVIDENCE,
+            )
+        )
+    duplicates = data.get("duplicates")
+    if type(duplicates) is dict and "candidates" in duplicates:
+        duplicates["candidates"] = _sorted_by_key(
+            duplicates["candidates"], "duplicate candidate", "candidate_id"
+        )
+    quality_rows = data.get("quality_rows")
+    if type(quality_rows) is list:
+        data["quality_rows"] = _sorted_by_key(
+            quality_rows, "quality row", "row_id"
+        )
+    assets = data.get("assets")
+    if type(assets) is list:
+        data["assets"] = _sorted_by_key(assets, "asset", "asset_id")
+    references = data.get("references")
+    if type(references) is list:
+        data["references"] = _sorted_by_key(
+            references, "reference", "reference_id"
+        )
+    return data
+
+
 def artifact_manifest_source_fingerprint(value: object) -> str:
+    """Fingerprint supplied evidence while excluding evidence-only fields.
+
+    The fingerprint covers the CANONICAL representation: order-insensitive
+    lists are canonicalized before hashing, so a producer signing a valid
+    non-canonically-ordered input and a validator re-checking the stored
+    record compute the same value.
+    """
     normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
     if type(normalized) is not dict or type(normalized.get("identity")) is not dict:
         raise ContractValidationError("handoff-wrong-type", "identity must be a built-in mapping")
-    payload = dict(normalized)
-    identity = dict(normalized["identity"])
+    try:
+        canonical = _canonicalize_artifact_manifest(normalized)
+    except ContractValidationError:
+        # Best-effort canonicalization: the validator independently rejects
+        # invalid inputs on their own merits, so their fingerprint value is
+        # immaterial. Valid inputs always canonicalize, keeping their
+        # fingerprints canonical and round-trip stable.
+        canonical = normalized
+    payload = dict(canonical)
+    identity = dict(canonical["identity"])
     for key in ("source_fingerprint", "created_at", "modified_at", "verified_at"):
         identity.pop(key, None)
     payload["identity"] = identity
@@ -261,7 +367,7 @@ def validate_artifact_manifest(value: object) -> ValidationResult:
         assets = _list(data["assets"], "assets")
         references = _list(data["references"], "references")
 
-        _identity(groups["identity"], data)
+        _identity(groups["identity"])
         _requirement(groups["requirement_reference"])
         _artifact(groups["artifact"])
         _external(groups["external_identity"])
@@ -277,26 +383,12 @@ def validate_artifact_manifest(value: object) -> ValidationResult:
         _custom_properties(groups["custom_properties"], groups)
         _authority(groups["authority"])
 
-        data["artifact"]["observed_sections"] = list(
-            _strings(groups["artifact"]["observed_sections"], "observed sections", MAX_OBSERVED_SECTIONS)
-        )
-        data["source_snapshot"]["dependency_keys"] = list(
-            canonical_strings(
-                groups["source_snapshot"]["dependency_keys"],
-                name="dependency keys",
-                maximum=MAX_DEPENDENCY_KEYS,
-                validator=validate_dependency_key,
-            )
-        )
-        data["operation"]["discovery_evidence"] = list(
-            _strings(groups["operation"]["discovery_evidence"], "discovery evidence", MAX_DISCOVERY_EVIDENCE)
-        )
-        data["duplicates"]["candidates"] = sorted(
-            groups["duplicates"]["candidates"], key=lambda item: item["candidate_id"]
-        )
-        data["quality_rows"] = sorted(quality_rows, key=lambda item: item["row_id"])
-        data["assets"] = sorted(assets, key=lambda item: item["asset_id"])
-        data["references"] = sorted(references, key=lambda item: item["reference_id"])
+        # Canonicalize BEFORE the source fingerprint is verified. Fingerprints
+        # are computed and verified over the canonical representation, so a
+        # valid manifest's own serialized form (record.to_dict()) re-validates.
+        _canonicalize_artifact_manifest(data)
+        _verify_source_fingerprint(groups["identity"], data)
+
         if canonical_size(data) > MAX_RESULT_BYTES:
             raise ContractValidationError("handoff-oversized", "normalized manifest exceeds the 16 KiB result bound")
         identity = groups["identity"]
@@ -379,7 +471,7 @@ def _strings(value: object, name: str, maximum: int) -> tuple[str, ...]:
     )
 
 
-def _identity(value: dict[str, Any], full: dict[str, Any]) -> None:
+def _identity(value: dict[str, Any]) -> None:
     _fields(
         value,
         frozenset(
@@ -394,6 +486,15 @@ def _identity(value: dict[str, Any], full: dict[str, Any]) -> None:
     for key in ("created_at", "modified_at", "verified_at"):
         validate_timestamp(value[key], key)
     validate_sha256(value["source_fingerprint"], "source_fingerprint")
+
+
+def _verify_source_fingerprint(value: dict[str, Any], full: dict[str, Any]) -> None:
+    """Verify the supplied source fingerprint against the canonical record.
+
+    Must run AFTER _canonicalize_artifact_manifest: the fingerprint covers the
+    canonical representation, so verifying it against raw input rejects the
+    record's own serialized form on revalidation.
+    """
     if value["source_fingerprint"] != artifact_manifest_source_fingerprint(full):
         raise ContractValidationError("artifact-incompatible-fingerprint", "source fingerprint does not match supplied evidence")
 
@@ -401,7 +502,7 @@ def _identity(value: dict[str, Any], full: dict[str, Any]) -> None:
 def _requirement(value: dict[str, Any]) -> None:
     _fields(value, frozenset({"requirement_id", "contract_version", "record_revision", "fingerprint"}), "requirement_reference")
     validate_stable_id(value["requirement_id"], "requirement_id")
-    if validate_version(value["contract_version"]) != MATERIAL_CONTRACT_ID:
+    if validate_version(value["contract_version"]) not in MATERIAL_CONTRACT_IDS:
         raise ContractValidationError("artifact-incompatible-requirement", "MaterialRequirement version is incompatible")
     validate_revision(value["record_revision"])
     validate_sha256(value["fingerprint"], "MaterialRequirement fingerprint")

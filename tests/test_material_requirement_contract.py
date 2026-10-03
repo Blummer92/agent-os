@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import copy
+import json
+import random
 from pathlib import Path
 
 import pytest
@@ -785,3 +787,212 @@ def test_v2_rejects_conflicting_requirement_states_for_same_role() -> None:
     assert result.reason_codes == (
         "material-duplicate-visual-role",
     )
+
+# Issue #3249 regression: contract round-trip / canonicalization.
+#
+# These tests enter through the real producer path: inputs are built as plain
+# JSON-like documents, signed with material_requirement_source_fingerprint,
+# validated, serialized with record.to_dict(), and revalidated. Fixtures are
+# deliberately non-canonical so the suite can see the defect the earlier
+# baseline missed (fixtures were already in canonical order).
+
+FIXTURES_3249 = Path(__file__).parent / "fixtures" / "instructional_workflow_contracts"
+
+
+def _noncanonical_v2() -> dict[str, object]:
+    """Build a valid v2 requirement with non-canonical list order (real producer)."""
+    value = valid_v2_requirement()
+    value["instructional"]["required_sections"] = [  # type: ignore[index]
+        "practice",
+        "exit-ticket",
+        "directions",
+    ]
+    requirements = value["requirements"]  # type: ignore[index]
+    requirements["vocabulary_references"] = list(
+        reversed(requirements["vocabulary_references"])
+    )
+    requirements["accessibility_requirements"] = [
+        "plain-language",
+        "keyboard-readable",
+    ]
+    value["assets"] = list(reversed(value["assets"]))  # type: ignore[arg-type]
+    roles = value["visual_direction"]["roles"]  # type: ignore[index]
+    roles.reverse()  # type: ignore[union-attr]
+    _refresh(value)
+    return value
+
+
+def _noncanonical_v1() -> dict[str, object]:
+    """Build a valid v1 requirement with non-canonical list order (real producer)."""
+    value = valid_requirement()
+    value["instructional"]["required_sections"] = [  # type: ignore[index]
+        "practice",
+        "directions",
+    ]
+    requirements = value["requirements"]  # type: ignore[index]
+    requirements["vocabulary_references"] = list(
+        reversed(requirements["vocabulary_references"])
+    )
+    requirements["accessibility_requirements"] = [
+        "plain-language",
+        "keyboard-readable",
+    ]
+    value["assets"] = list(reversed(value["assets"]))  # type: ignore[arg-type]
+    _refresh(value)
+    return value
+
+
+def _round_trip(value: dict[str, object]):
+    first = validate_material_requirement(value)
+    assert first.status is ValidationStatus.VALID, first.reason_codes
+    assert first.record is not None
+    payload = first.record.to_dict()
+    second = validate_material_requirement(copy.deepcopy(payload))
+    assert second.status is ValidationStatus.VALID, second.reason_codes
+    assert second.record is not None
+    assert second.record.fingerprint == first.record.fingerprint
+    # The canonical form is a fixed point: serializing it again changes nothing.
+    assert second.record.to_dict() == payload
+    return first, second
+
+
+@pytest.mark.parametrize("builder", [_noncanonical_v1, _noncanonical_v2])
+def test_round_trip_non_canonical_input_is_valid_and_fingerprint_stable(
+    builder,
+) -> None:
+    _round_trip(builder())
+
+
+def test_permutation_round_trip_property() -> None:
+    """Every permutation of order-insensitive lists yields VALID + equal fingerprint."""
+    unsigned = _noncanonical_v2()
+    unsigned["identity"]["source_fingerprint"] = "0" * 64  # type: ignore[index]
+    signed_baseline = _noncanonical_v2()
+    expected_result = validate_material_requirement(signed_baseline)
+    assert expected_result.status is ValidationStatus.VALID
+    assert expected_result.record is not None
+    expected = expected_result.record.fingerprint
+
+    paths = (
+        ("requirements", "vocabulary_references"),
+        ("requirements", "accessibility_requirements"),
+        ("assets",),
+        ("templates",),
+        ("visual_direction", "roles"),
+    )
+    rng = random.Random(3249)
+    for _ in range(8):
+        trial = copy.deepcopy(unsigned)
+        for path in paths:
+            target = trial
+            for key in path[:-1]:
+                target = target[key]  # type: ignore[index]
+            items = list(target[path[-1]])  # type: ignore[index]
+            rng.shuffle(items)
+            target[path[-1]] = items  # type: ignore[index]
+        _refresh(trial)
+        result = validate_material_requirement(trial)
+        assert result.status is ValidationStatus.VALID, result.reason_codes
+        assert result.record is not None
+        assert result.record.fingerprint == expected
+        again = validate_material_requirement(result.record.to_dict())
+        assert again.status is ValidationStatus.VALID
+        assert again.record is not None
+        assert again.record.fingerprint == expected
+
+
+def test_required_sections_order_is_significant_and_stable() -> None:
+    """Teaching order is preserved through the round trip and changes the fingerprint."""
+    first_value = valid_requirement()
+    first_value["instructional"]["required_sections"] = ["directions", "practice"]  # type: ignore[index]
+    _refresh(first_value)
+    second_value = valid_requirement()
+    second_value["instructional"]["required_sections"] = ["practice", "directions"]  # type: ignore[index]
+    _refresh(second_value)
+    first, _ = _round_trip(first_value)
+    second, _ = _round_trip(second_value)
+    assert first.record is not None and second.record is not None
+    assert first.record.to_dict()["instructional"]["required_sections"] == [
+        "directions",
+        "practice",
+    ]
+    assert second.record.to_dict()["instructional"]["required_sections"] == [
+        "practice",
+        "directions",
+    ]
+    assert first.record.fingerprint != second.record.fingerprint
+
+
+def test_tampered_record_fails_closed() -> None:
+    first, _ = _round_trip(_noncanonical_v2())
+    assert first.record is not None
+    payload = first.record.to_dict()
+    tampered = copy.deepcopy(payload)
+    tampered["instructional"]["purpose"] = "Tampered purpose."  # type: ignore[index]
+    assert validate_material_requirement(tampered).reason_codes == (
+        "material-incompatible-fingerprint",
+    )
+    corrupted = copy.deepcopy(payload)
+    corrupted["identity"]["source_fingerprint"] = "f" * 64  # type: ignore[index]
+    assert validate_material_requirement(corrupted).reason_codes == (
+        "material-incompatible-fingerprint",
+    )
+
+
+def test_repeated_round_trips_remain_stable() -> None:
+    first, _ = _round_trip(_noncanonical_v2())
+    assert first.record is not None
+    expected = first.record.fingerprint
+    payload = first.record.to_dict()
+    for _ in range(3):
+        result = validate_material_requirement(copy.deepcopy(payload))
+        assert result.status is ValidationStatus.VALID
+        assert result.record is not None
+        assert result.record.fingerprint == expected
+        payload = result.record.to_dict()
+
+
+def test_plan_visual_needs_accepts_round_tripped_record() -> None:
+    """Consumer revalidation (visual_needs) accepts round-tripped records."""
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    result = validate_material_requirement(_noncanonical_v2())
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    round_tripped = result.record.to_dict()
+    revalidated = validate_material_requirement(copy.deepcopy(round_tripped))
+    for supplied in (round_tripped, revalidated, result.record):
+        planned = plan_visual_needs(supplied)
+        assert planned.status is ValidationStatus.VALID, planned.reason_codes
+
+
+def test_noncanonical_fixture_round_trips() -> None:
+    """The checked-in non-canonical fixture survives the producer round trip."""
+    value = json.loads(
+        (FIXTURES_3249 / "noncanonical_material_requirement_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    _refresh(value)
+    first, second = _round_trip(value)
+    assert first.record is not None
+    payload = first.record.to_dict()
+    # Order-significant teaching order is preserved as supplied ...
+    assert payload["instructional"]["required_sections"] == [
+        "practice",
+        "exit-ticket",
+        "directions",
+        "warm-up",
+    ]
+    # ... while order-insensitive lists are canonicalized.
+    assert [item["asset_id"] for item in payload["assets"]] == [
+        "asset-1",
+        "asset-2",
+        "asset-3",
+    ]
+    assert [
+        item["stable_id"]
+        for item in payload["requirements"]["vocabulary_references"]
+    ] == ["vocabulary-1", "vocabulary-2", "vocabulary-3"]
+    assert second.record is not None
+    assert second.record.fingerprint == first.record.fingerprint
