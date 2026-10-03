@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from .artifact_structure import PASS, validate_required_worksheet_sections
 from .asset_slot_resolution import resolve_asset_slots
 from .build_resume import DEFAULT_BUILD_RESUME_DIR
+from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials, get_file_metadata
@@ -24,6 +25,7 @@ from instructional_workflow_contracts.teacher_visual_decision import (
     canonical_candidate_set_fingerprint,
 )
 from .live_build import LiveBuildInput, build_live_materials
+from .placement_transport import PlacementRuntimeUnavailable, build_placement_transport
 from .slides_requests import build_slides_replace_requests
 from .teacher_decisions import DEFAULT_TEACHER_DECISIONS_DIR, load_teacher_decisions
 from .template_resolution import TemplateCandidate, resolve_approved_template_pair
@@ -31,6 +33,7 @@ from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
 from .workspace_clients import build_docs_service, build_slides_service
 
 DEFAULT_LESSONS_DIR = "reports/lessons"
+DEFAULT_PLACEMENT_RECEIPTS_DIR = "reports/placement-receipts"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -56,6 +59,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="Directory of teacher visual-decision records honored by the governed reuse path.")
     build.add_argument("--resume-dir", default=DEFAULT_BUILD_RESUME_DIR,
                        help="Directory of build resume records enabling retry continuation.")
+    build.add_argument("--placement-script-id", default=os.environ.get("IMC_PLACEMENT_SCRIPT_ID", ""),
+                       help="Apps Script deployment id for the governed visual-placement transport (#3257). "
+                            "Empty (the default) means no placement runtime is available: a build with a "
+                            "non-empty visual selection then fails closed with placement-runtime-unavailable. "
+                            "Deployment and execution are separately governed.")
+    build.add_argument("--placement-receipts-dir", default=DEFAULT_PLACEMENT_RECEIPTS_DIR,
+                       help="Directory of durable verified placement receipts (#3257/#3258 handoff).")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -216,15 +226,31 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
     return visuals
 
 
-def _require_visual_placement_support(selected_asset_ids: tuple[str, ...]) -> None:
-    """Fail before connected writes when selected visuals cannot be physically placed."""
+def _require_visual_placement_support(
+    selected_asset_ids: tuple[str, ...],
+    placement_script_id: str | None = None,
+) -> None:
+    """#3257 admission gate: a non-empty selection needs a placement runtime.
+
+    Replaces the old dead-end refusal. When governed reusable visuals were
+    selected but no verified image-placement runtime is configured, fail
+    before connected writes with the explicit ``placement-runtime-unavailable``
+    blocked state -- never "final", never a visual gap, never generation
+    permission (#1753 fail-closed behavior). When a runtime is configured,
+    the selection proceeds into the connected placement path.
+    """
     if not selected_asset_ids:
         return
+    if placement_script_id and str(placement_script_id).strip():
+        return
     identities = ",".join(selected_asset_ids)
-    raise RuntimeError(
-        "Governed reusable visuals were selected but the current Docs/Slides build "
-        "path has no verified image-placement operation; refusing a false-success "
-        f"build before external write. selected_asset_ids={identities}"
+    raise PlacementRuntimeUnavailable(
+        "placement-runtime-unavailable: Governed reusable visuals were selected but no "
+        "verified image-placement runtime is available to this build; refusing a "
+        "false-success build before external write. "
+        f"selected_asset_ids={identities}. "
+        "Configure --placement-script-id with the separately governed Apps Script "
+        "placement deployment to enable connected visual placement."
     )
 
 
@@ -378,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
         if visual_plan.final_production_blocked:
             raise RuntimeError(f"Governed visual reuse gate blocked final production: {visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}")
-        _require_visual_placement_support(visual_plan.selected_asset_ids)
+        _require_visual_placement_support(visual_plan.selected_asset_ids, args.placement_script_id)
 
         content = compose_generation_context(
             content,
@@ -420,6 +446,20 @@ def main(argv: list[str] | None = None) -> int:
         credentials = get_credentials(args.client_secret, args.token_path)
         drive_service = build_drive_service(credentials)
         _require_asset_slot_resolution(visual_plan, drive_service)
+        # #3257: plan connected visual placements from the governed selection.
+        # Slot resolution above already proved every selected asset resolves to
+        # a live Drive file whose bytes match the approved content identity;
+        # the bindings below carry that exact identity into placement.
+        visual_placements = (
+            plan_visual_placement_bindings(visual_plan)
+            if visual_plan.selected_asset_ids
+            else ()
+        )
+        placement_transport = (
+            build_placement_transport(script_id=args.placement_script_id, credentials=credentials)
+            if visual_placements
+            else None
+        )
         # #3252: the idempotency key covers every consequential input. The
         # same payload doubles as the input fingerprint bound to created
         # copies (anti-collision on recovery).
@@ -448,11 +488,14 @@ def main(argv: list[str] | None = None) -> int:
                 input_fingerprint=idempotency_key,
                 slides_requests=tuple(build_slides_replace_requests(content)),
                 docs_requests=docs_requests,
+                visual_placements=tuple(visual_placements),
             ),
             drive_service=drive_service,
             slides_service=build_slides_service(credentials),
             docs_service=build_docs_service(credentials),
             resume_dir=args.resume_dir,
+            placement_transport=placement_transport,
+            placement_receipts_dir=args.placement_receipts_dir,
         )
         if not receipt.succeeded:
             raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
