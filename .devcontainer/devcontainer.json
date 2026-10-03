@@ -1,1 +1,1 @@
-{"forwardPorts":[8188],"image":"mcr.microsoft.com/devcontainers/python:3.12","name":"ComfyUI","portsAttributes":{"8188":{"label":"ComfyUI","onAutoForward":"notify"}},"postCreateCommand":"bash .devcontainer/setup-comfyui.sh"}
+{"forwardPorts":[8188],"image":"mcr.microsoft.com/devcontainers/python:3.12","name":"ComfyUI","portsAttributes":{"8188":{"label":"ComfyUI","onAutoForward":"notify"}},"postCreateCommand":"bash .devcontainer/setup-comfyui.sh","postStartCommand":"bash .devcontainer/ensure-server.sh"}
