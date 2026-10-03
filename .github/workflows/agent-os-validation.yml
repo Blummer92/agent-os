@@ -445,29 +445,30 @@ jobs:
               export MAIN_CHECK_DETAILS_URL="$details_url"
               recovery_requested="$(
                 python3 - <<'PY'
-import os
-from pathlib import Path
-from scripts.agent_os_remote_validation.main_health_recovery_authorization import (
-    evaluate_recovery_authorization,
-)
-authorization = evaluate_recovery_authorization(
-    os.environ["RECOVERY_ISSUE_BODY"],
-    repository=os.environ["GITHUB_REPOSITORY"],
-    repository_owner=os.environ["REPOSITORY_OWNER"],
-    issue_number=int(os.environ["RECOVERY_ISSUE_NUMBER"]),
-    issue_author=os.environ["RECOVERY_ISSUE_AUTHOR"],
-    current_main_sha=os.environ["CURRENT_MAIN_SHA"],
-    pull_request=int(os.environ["PR_NUMBER"]),
-    current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
-    main_check_details_url=os.environ["MAIN_CHECK_DETAILS_URL"],
-    changed_files=tuple(
-        line for line in Path(
-            os.environ["RUNNER_TEMP"], "main-health-changed-files.txt"
-        ).read_text(encoding="utf-8").splitlines() if line
-    ),
-)
-print("true" if authorization is not None else "false")
-PY
+          import os
+          from pathlib import Path
+          from scripts.agent_os_remote_validation.main_health_recovery_authorization import (
+              evaluate_recovery_authorization,
+          )
+
+          authorization = evaluate_recovery_authorization(
+              os.environ["RECOVERY_ISSUE_BODY"],
+              repository=os.environ["GITHUB_REPOSITORY"],
+              repository_owner=os.environ["REPOSITORY_OWNER"],
+              issue_number=int(os.environ["RECOVERY_ISSUE_NUMBER"]),
+              issue_author=os.environ["RECOVERY_ISSUE_AUTHOR"],
+              current_main_sha=os.environ["CURRENT_MAIN_SHA"],
+              pull_request=int(os.environ["PR_NUMBER"]),
+              current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
+              main_check_details_url=os.environ["MAIN_CHECK_DETAILS_URL"],
+              changed_files=tuple(
+                  line for line in Path(
+                      os.environ["RUNNER_TEMP"], "main-health-changed-files.txt"
+                  ).read_text(encoding="utf-8").splitlines() if line
+              ),
+          )
+          print("true" if authorization is not None else "false")
+          PY
               )"
             fi
           fi
