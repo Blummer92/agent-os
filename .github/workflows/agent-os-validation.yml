@@ -425,18 +425,51 @@ jobs:
               ;;
           esac
 
+          export CURRENT_MAIN_SHA="$current_main_sha"
           recovery_requested=false
-          recovery_main_sha="5fa6fe672c233344e041cbfeac20cfed20130b69"
-          recovery_run_job_fragment="/actions/runs/36155587326/job/108139205339"
-          recovery_pr_number="2937"
-          recovery_failed_path="tests/test_agent_os_host_runtime_install_workflow.py"
-          if [ "$current_main_sha" = "$recovery_main_sha" ] && \
-             [ "$PR_NUMBER" = "$recovery_pr_number" ] && \
-             [ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ] && \
-             [ "$validation_conclusion" = "repository-failure" ] && \
-             [[ "$details_url" == *"$recovery_run_job_fragment"* ]] && \
-             grep -Fxq "$recovery_failed_path" "$RUNNER_TEMP/main-health-changed-files.txt"; then
-            recovery_requested=true
+          if [ "$validation_conclusion" = "repository-failure" ] && \
+             [ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ]; then
+            recovery_issue_number="$(
+              gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' |
+              python3 -c 'import sys; from scripts.agent_os_remote_validation.main_health_recovery_authorization import recovery_issue_reference; value=recovery_issue_reference(sys.stdin.read()); print(value or "")'
+            )"
+            if [ -n "$recovery_issue_number" ]; then
+              recovery_issue_json="$(gh api "/repos/$GITHUB_REPOSITORY/issues/$recovery_issue_number")"
+              recovery_issue_body="$(jq -r '.body // ""' <<<"$recovery_issue_json")"
+              recovery_issue_author="$(jq -r '.user.login // ""' <<<"$recovery_issue_json")"
+              repository_owner="${GITHUB_REPOSITORY%%/*}"
+              export RECOVERY_ISSUE_NUMBER="$recovery_issue_number"
+              export RECOVERY_ISSUE_BODY="$recovery_issue_body"
+              export RECOVERY_ISSUE_AUTHOR="$recovery_issue_author"
+              export REPOSITORY_OWNER="$repository_owner"
+              export MAIN_CHECK_DETAILS_URL="$details_url"
+              recovery_requested="$(
+                python3 - <<'PY'
+import os
+from pathlib import Path
+from scripts.agent_os_remote_validation.main_health_recovery_authorization import (
+    evaluate_recovery_authorization,
+)
+authorization = evaluate_recovery_authorization(
+    os.environ["RECOVERY_ISSUE_BODY"],
+    repository=os.environ["GITHUB_REPOSITORY"],
+    repository_owner=os.environ["REPOSITORY_OWNER"],
+    issue_number=int(os.environ["RECOVERY_ISSUE_NUMBER"]),
+    issue_author=os.environ["RECOVERY_ISSUE_AUTHOR"],
+    current_main_sha=os.environ["CURRENT_MAIN_SHA"],
+    pull_request=int(os.environ["PR_NUMBER"]),
+    current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
+    main_check_details_url=os.environ["MAIN_CHECK_DETAILS_URL"],
+    changed_files=tuple(
+        line for line in Path(
+            os.environ["RUNNER_TEMP"], "main-health-changed-files.txt"
+        ).read_text(encoding="utf-8").splitlines() if line
+    ),
+)
+print("true" if authorization is not None else "false")
+PY
+              )"
+            fi
           fi
 
           export CURRENT_MAIN_SHA="$current_main_sha"
