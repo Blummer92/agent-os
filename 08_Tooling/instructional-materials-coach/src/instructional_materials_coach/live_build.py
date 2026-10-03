@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Literal
 
 from .build_resume import (
+    ResumeRecordInvalidError,
     load_resume_record,
     mark_role_state,
     new_resume_record,
@@ -386,7 +387,15 @@ def build_live_materials(
     resume: dict[str, Any] | None = None
     resume_was_loaded = False
     if resume_dir:
-        loaded = load_resume_record(resume_dir, build.idempotency_key)
+        try:
+            loaded = load_resume_record(resume_dir, build.idempotency_key)
+        except ResumeRecordInvalidError as exc:
+            error = str(exc)
+            return LiveBuildReceipt(
+                ArtifactReceipt("slides", state="ambiguous", error=error),
+                ArtifactReceipt("worksheet", state="ambiguous", error=error),
+                True,
+            )
         resume_was_loaded = loaded is not None
         resume = loaded if loaded is not None else new_resume_record(
             build.idempotency_key, build.input_fingerprint
