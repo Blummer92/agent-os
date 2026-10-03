@@ -2,12 +2,27 @@
 
 This module is pure repository-side planning/verification. It performs no
 Workspace calls and grants no external-write authority.
+
+Content identity (#3256)
+------------------------
+Every placement request binds the canonical content identity recorded at
+approval/selection (see ``instructional_workflow_contracts.asset_content_identity``).
+The request carries the identity; ``verify_request_content_identity`` checks it
+against fresh Drive metadata immediately before insertion. A mismatch fails
+closed with the explicit ``content-identity-mismatch`` outcome -- never
+absence, never a generation handoff. The placement receipt must reconstruct
+the bound content identity exactly.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
 from typing import Any, Iterable, Mapping
+
+from instructional_workflow_contracts.asset_content_identity import (
+    is_valid_content_identity,
+    verify_content_identity,
+)
 
 _MARKER_RE = re.compile(r"^\{\{visual:([a-z0-9][a-z0-9-]{2,127})\}\}$")
 _SUPPORTED_ARTIFACTS = frozenset({"docs", "slides"})
@@ -40,6 +55,7 @@ class PlacementRequest:
     role_id: str
     source_plan_id: str
     target: PlacementTarget
+    content_identity: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -140,12 +156,23 @@ def build_placement_request(
     role_id: str,
     source_plan_id: str,
     target: PlacementTarget,
+    content_identity: Mapping[str, Any] | None = None,
 ) -> PlacementRequest:
-    """Bind one exact governed asset identity to one exact placement target."""
+    """Bind one exact governed asset identity to one exact placement target.
+
+    The request carries the canonical content identity recorded at
+    approval/selection (#3256): taken from ``selected_asset["content_identity"]``
+    unless overridden explicitly. A missing or malformed content identity is a
+    build-time failure -- placement must never proceed on bytes that were not
+    reviewed.
+    """
     if not isinstance(selected_asset, Mapping):
         raise VisualPlacementError("selected_asset must be a mapping")
     asset_id = _required_id(selected_asset.get("asset_id"), "asset_id")
     drive_file_id = _required_id(selected_asset.get("drive_file_id"), "drive_file_id")
+    identity = content_identity if content_identity is not None else selected_asset.get("content_identity")
+    if not is_valid_content_identity(identity):
+        raise VisualPlacementError("selected_asset must carry a valid canonical content identity (#3256)")
     role = _required_id(role_id, "role_id")
     plan = _required_id(source_plan_id, "source_plan_id")
     if target.role_id != role or target.marker != marker_for_role(role):
@@ -158,7 +185,23 @@ def build_placement_request(
         role_id=role,
         source_plan_id=plan,
         target=target,
+        content_identity=dict(identity),
     )
+
+
+def verify_request_content_identity(
+    *,
+    request: PlacementRequest,
+    drive_metadata: Mapping[str, Any],
+) -> str:
+    """Verify the request's bound content identity against fresh Drive metadata.
+
+    Call this immediately before insertion (#3257). Returns one of
+    ``content-identity-match``, ``content-identity-mismatch``,
+    ``content-identity-unverifiable``, or ``content-identity-not-recorded``.
+    Anything but a match must fail the placement closed for that asset.
+    """
+    return verify_content_identity(expected=request.content_identity, metadata=drive_metadata)
 
 
 def verify_placement_receipt(request: PlacementRequest, receipt: object) -> PlacementReceipt:
@@ -176,13 +219,14 @@ def verify_placement_receipt(request: PlacementRequest, receipt: object) -> Plac
         "artifact_revision_id": request.target.artifact_revision_id,
         "marker": request.target.marker,
         "container_id": request.target.container_id,
+        "content_identity": dict(request.content_identity),
     }
     for key, value in expected.items():
         if receipt.get(key) != value:
             raise VisualPlacementError(f"placement receipt {key} mismatch")
     inserted = _required_id(receipt.get("inserted_element_id"), "inserted_element_id")
     return PlacementReceipt(
-        **expected,
+        **{key: value for key, value in expected.items() if key != "content_identity"},
         inserted_element_id=inserted,
         state="verified",
     )
@@ -205,6 +249,7 @@ def retry_is_safe(*, request: PlacementRequest, receipt: object | None) -> bool:
         and receipt.get("artifact_revision_id") == request.target.artifact_revision_id
         and receipt.get("marker") == request.target.marker
         and receipt.get("container_id") == request.target.container_id
+        and receipt.get("content_identity", dict(request.content_identity)) == dict(request.content_identity)
     )
     return bool(identity and receipt.get("inserted_element_id") in (None, ""))
 

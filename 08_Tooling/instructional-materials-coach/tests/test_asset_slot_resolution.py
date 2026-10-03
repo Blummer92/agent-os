@@ -82,3 +82,89 @@ def test_missing_or_ambiguous_file_evidence_is_unresolvable():
         )
         assert result.status == "unresolvable", metadata
         assert result.unresolvable_slots == ("synthetic-slot",)
+
+
+# --- #3256 content identity -------------------------------------------------
+
+SHA_A = "a" * 64
+SHA_B = "b" * 64
+
+
+def _identity(value):
+    return {
+        "contract_version": "governed-asset-content-identity-v1",
+        "source": "drive-sha256",
+        "algorithm": "sha256",
+        "value": value,
+    }
+
+
+def test_matching_content_identity_resolves():
+    result = resolve_asset_slots(
+        asset_slots={"slot-1": "drive-file-1"},
+        describe_drive_file=_describe({"drive-file-1": {"id": "drive-file-1", "trashed": False, "sha256Checksum": SHA_A}}),
+        expected_content_identities={"slot-1": _identity(SHA_A)},
+    )
+    assert result.status == "resolved"
+    assert result.slot_outcomes == {"slot-1": "resolved"}
+    assert result.content_identity_mismatches == ()
+
+
+def test_modified_after_approval_fails_closed_with_explicit_mismatch():
+    result = resolve_asset_slots(
+        asset_slots={"slot-1": "drive-file-1"},
+        describe_drive_file=_describe({"drive-file-1": {"id": "drive-file-1", "trashed": False, "sha256Checksum": SHA_B}}),
+        expected_content_identities={"slot-1": _identity(SHA_A)},
+    )
+    assert result.status == "unresolvable"
+    assert result.slot_outcomes == {"slot-1": "content-identity-mismatch"}
+    assert result.content_identity_mismatches == ("slot-1",)
+    assert result.unresolvable_slots == ("slot-1",)
+
+
+def test_metadata_without_hash_fields_is_unverifiable_not_absence():
+    result = resolve_asset_slots(
+        asset_slots={"slot-1": "drive-file-1"},
+        describe_drive_file=_describe({"drive-file-1": {"id": "drive-file-1", "trashed": False}}),
+        expected_content_identities={"slot-1": _identity(SHA_A)},
+    )
+    assert result.status == "unresolvable"
+    assert result.slot_outcomes == {"slot-1": "content-identity-unverifiable"}
+
+
+def test_no_expected_identity_preserves_legacy_resolution():
+    result = resolve_asset_slots(
+        asset_slots={"slot-1": "drive-file-1"},
+        describe_drive_file=_describe({"drive-file-1": {"id": "drive-file-1", "trashed": False}}),
+    )
+    assert result.status == "resolved"
+    assert result.slot_outcomes == {"slot-1": "resolved"}
+
+
+def test_not_found_and_no_access_are_distinct_outcomes():
+    class NotFoundError(RuntimeError):
+        drive_outcome = "not-found"
+
+    class NoAccessError(RuntimeError):
+        drive_outcome = "no-access"
+
+    def describe(file_id):
+        if file_id == "gone":
+            raise NotFoundError("deleted")
+        raise NoAccessError("forbidden")
+
+    result = resolve_asset_slots(
+        asset_slots={"deleted-slot": "gone", "private-slot": "secret"},
+        describe_drive_file=describe,
+    )
+    assert result.status == "unresolvable"
+    assert result.slot_outcomes == {"deleted-slot": "not-found", "private-slot": "no-access"}
+
+
+def test_outcome_envelope_is_understood():
+    result = resolve_asset_slots(
+        asset_slots={"slot-1": "gone"},
+        describe_drive_file=lambda _fid: {"outcome": "not-found", "metadata": None},
+    )
+    assert result.slot_outcomes == {"slot-1": "not-found"}
+    assert result.unresolvable_slots == ("slot-1",)

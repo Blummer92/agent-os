@@ -7,7 +7,16 @@ from instructional_materials_coach.visual_placement import (
     resolve_exact_target,
     retry_is_safe,
     verify_placement_receipt,
+    verify_request_content_identity,
 )
+
+
+CONTENT_IDENTITY = {
+    "contract_version": "governed-asset-content-identity-v1",
+    "source": "drive-sha256",
+    "algorithm": "sha256",
+    "value": "a" * 64,
+}
 
 
 def _target(kind="slides"):
@@ -29,7 +38,7 @@ def _target(kind="slides"):
 
 def _request(kind="slides"):
     return build_placement_request(
-        selected_asset={"asset_id": "asset-1", "drive_file_id": "drive-file-1"},
+        selected_asset={"asset_id": "asset-1", "drive_file_id": "drive-file-1", "content_identity": dict(CONTENT_IDENTITY)},
         role_id="visual-role-abc123",
         source_plan_id="visual-plan-1",
         target=_target(kind),
@@ -83,6 +92,7 @@ def test_receipt_requires_exact_identity_before_verified():
         "artifact_revision_id": request.target.artifact_revision_id,
         "marker": request.target.marker,
         "container_id": request.target.container_id,
+        "content_identity": dict(CONTENT_IDENTITY),
         "inserted_element_id": "image-1",
     }
     verified = verify_placement_receipt(request, receipt)
@@ -93,6 +103,9 @@ def test_receipt_requires_exact_identity_before_verified():
     stale = dict(receipt, artifact_revision_id="revision-old")
     with pytest.raises(VisualPlacementError, match="artifact_revision_id mismatch"):
         verify_placement_receipt(request, stale)
+    wrong_bytes = dict(receipt, content_identity=dict(CONTENT_IDENTITY, value="b" * 64))
+    with pytest.raises(VisualPlacementError, match="content_identity mismatch"):
+        verify_placement_receipt(request, wrong_bytes)
 
 
 def test_transport_success_without_placed_state_is_not_verified():
@@ -183,3 +196,41 @@ def test_source_dimensions_must_be_complete_positive_pair():
             artifact_type="docs", artifact_id="a", artifact_revision_id="revision-1", role_id=role,
             matches=[{"marker": marker_for_role(role), "container_id": "b", "element_id": "e", "source_width": 100}],
         )
+
+
+# --- #3256 content identity -------------------------------------------------
+
+def test_placement_request_requires_content_identity():
+    with pytest.raises(VisualPlacementError, match="content identity"):
+        build_placement_request(
+            selected_asset={"asset_id": "asset-1", "drive_file_id": "drive-file-1"},
+            role_id="visual-role-abc123",
+            source_plan_id="visual-plan-1",
+            target=_target(),
+        )
+
+
+def test_placement_request_rejects_malformed_content_identity():
+    with pytest.raises(VisualPlacementError, match="content identity"):
+        build_placement_request(
+            selected_asset={"asset_id": "asset-1", "drive_file_id": "drive-file-1",
+                            "content_identity": {"source": "drive-sha256"}},
+            role_id="visual-role-abc123",
+            source_plan_id="visual-plan-1",
+            target=_target(),
+        )
+
+
+def test_placement_request_binds_content_identity():
+    request = _request()
+    assert request.content_identity == CONTENT_IDENTITY
+
+
+def test_verify_request_content_identity_against_fresh_metadata():
+    request = _request()
+    assert verify_request_content_identity(
+        request=request, drive_metadata={"id": "drive-file-1", "sha256Checksum": "a" * 64}) == "content-identity-match"
+    assert verify_request_content_identity(
+        request=request, drive_metadata={"id": "drive-file-1", "sha256Checksum": "b" * 64}) == "content-identity-mismatch"
+    assert verify_request_content_identity(
+        request=request, drive_metadata={"id": "drive-file-1"}) == "content-identity-unverifiable"

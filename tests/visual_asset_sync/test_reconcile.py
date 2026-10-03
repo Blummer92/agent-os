@@ -466,3 +466,46 @@ def test_malformed_existing_identity_does_not_create_false_match() -> None:
     )[0]
     assert entry.result is ReconciliationResult.CREATE_MISSING
     assert entry.matched_page_ids == ()
+
+
+# --- #3256 read-only duplicate title reporting -----------------------------
+
+from visual_asset_sync.reconcile import find_duplicate_titles
+
+
+def test_duplicate_titles_are_reported_read_only() -> None:
+    records = [
+        existing("page-1", drive_file_id=VALID_ID, asset_title="Audience Check Icon"),
+        existing("page-2", drive_file_id=OTHER_ID, asset_title="audience  check  icon"),
+        existing("page-3", drive_file_id=THIRD_ID, asset_title="Unique Title"),
+        existing("page-4", asset_title=None),
+    ]
+    report = find_duplicate_titles(records)
+    assert len(report) == 1
+    group = report[0]
+    assert group["normalized_title"] == "audience check icon"
+    assert group["record_count"] == 2
+    assert group["page_ids"] == ("page-1", "page-2")
+    assert group["disposition"] == "duplicate-title-needs-review"
+    # Read-only: the input records are untouched.
+    assert records[0].asset_title == "Audience Check Icon"
+
+
+def test_no_duplicate_titles_reports_empty() -> None:
+    records = [
+        existing("page-1", asset_title="One"),
+        existing("page-2", asset_title="Two"),
+    ]
+    assert find_duplicate_titles(records) == []
+
+
+def test_duplicate_drive_ids_still_surface_duplicate_id_state() -> None:
+    entries = build_plan(
+        [source("1", drive_file_id=VALID_ID)],
+        [
+            existing("page-1", drive_file_id=VALID_ID),
+            existing("page-2", drive_file_id=VALID_ID),
+        ],
+    )
+    assert entries[0].result is ReconciliationResult.DUPLICATE_ID
+    assert entries[0].matched_page_ids == ("page-1", "page-2")

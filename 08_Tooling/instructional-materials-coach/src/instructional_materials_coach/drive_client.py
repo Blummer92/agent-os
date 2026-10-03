@@ -38,9 +38,67 @@ def build_drive_service(credentials: Any) -> Any:
 def get_file_metadata(service: Any, file_id: str) -> dict[str, Any]:
     return service.files().get(
         fileId=file_id,
-        fields="id,name,mimeType,parents,trashed,capabilities(canCopy,canAddChildren),appProperties,webViewLink,driveId",
+        fields="id,name,mimeType,parents,trashed,capabilities(canCopy,canAddChildren),appProperties,webViewLink,driveId,"
+        "md5Checksum,sha256Checksum,headRevisionId",
         supportsAllDrives=True,
     ).execute()
+
+
+class DriveLookupError(RuntimeError):
+    """A Drive file lookup that failed with a governed outcome.
+
+    ``outcome`` is one of ``not-found`` (the file does not exist or was
+    deleted), ``no-access`` (the caller cannot read it), or ``lookup-failed``
+    (any other transport or API failure). Not-found and no-access are distinct:
+    a deleted asset and a permission gap must never be conflated (#3256).
+    """
+
+    def __init__(self, file_id: str, outcome: str, detail: str = "") -> None:
+        self.file_id = file_id
+        self.outcome = outcome
+        # Duck-typing hook: slot resolution and error classifiers read this
+        # attribute to distinguish lookup outcomes without importing this module.
+        self.drive_outcome = outcome
+        self.detail = detail
+        super().__init__(f"Drive lookup {outcome} for {file_id}{(': ' + detail) if detail else ''}")
+
+
+def classify_drive_error(file_id: str, exc: BaseException) -> DriveLookupError:
+    """Classify any Drive lookup exception into a governed outcome.
+
+    Duck-types the googleapiclient ``HttpError`` (``exc.resp.status``) so this
+    works without importing the client library: 404 -> ``not-found``,
+    403 -> ``no-access``, anything else -> ``lookup-failed``. An exception that
+    already carries a ``drive_outcome`` attribute keeps it.
+    """
+    outcome = getattr(exc, "drive_outcome", None)
+    if outcome in ("not-found", "no-access", "lookup-failed"):
+        return DriveLookupError(file_id, outcome, str(exc))
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status == 404:
+        outcome = "not-found"
+    elif status == 403:
+        outcome = "no-access"
+    else:
+        outcome = "lookup-failed"
+    return DriveLookupError(file_id, outcome, str(exc))
+
+
+def describe_drive_file_outcome(service: Any, file_id: str) -> dict[str, Any]:
+    """Describe a Drive file, returning a governed outcome envelope.
+
+    Returns ``{"outcome": ..., "metadata": ...}`` where outcome is ``ok``,
+    ``not-found``, ``no-access``, or ``lookup-failed``. Never raises for lookup
+    failures; only for programming errors (unusable service). Prefer this over
+    ``get_file_metadata`` when the caller must distinguish deletion from a
+    permission gap.
+    """
+    try:
+        metadata = get_file_metadata(service, file_id)
+    except Exception as exc:  # noqa: BLE001 - classified below
+        classified = classify_drive_error(file_id, exc)
+        return {"outcome": classified.outcome, "metadata": None, "detail": classified.detail}
+    return {"outcome": "ok", "metadata": metadata, "detail": ""}
 
 
 def verify_template(service: Any, file_id: str, expected_mime: str) -> dict[str, Any]:
