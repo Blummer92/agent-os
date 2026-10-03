@@ -33,8 +33,20 @@ V2_CONTRACT_ID = "curriculum-visual-asset-candidates-v2"
 
 # Existing callers remain explicitly bound to the v1 projection.
 CONTRACT_ID = V1_CONTRACT_ID
-MAX_CANDIDATES = 32
+# Governed input bound, reconciled with the Asset Picker's maximum (#3255).
+# Above this bound the query is INVALID with the explicit `capacity-exceeded`
+# reason code: an input-contract violation, never absence or review.
+MAX_CANDIDATES = 64
 MAX_SOURCE_REVISION_LENGTH = 256
+
+# Projection transport markers for the filter result record.
+PROJECTION_TRANSPORT_INLINE = "inline"
+PROJECTION_TRANSPORT_BY_REFERENCE = "by-reference"
+
+# Measurement-only normalization budget for the transport decision. The
+# governed 16 KiB result bound is enforced by the explicit canonical-size
+# check, never by this budget.
+_MEASUREMENT_BYTES = 1024 * 1024
 
 
 def filter_approved_visual_candidates(
@@ -44,7 +56,39 @@ def filter_approved_visual_candidates(
     source_revision: object,
     contract_version: object = CONTRACT_ID,
 ) -> ValidationResult:
-    """Return bounded eligible, rejected, and manual-review candidate groups."""
+    """Return bounded eligible, rejected, and manual-review candidate groups.
+
+    The result record is transported inline while it fits the governed
+    16 KiB result bound; larger populations are handed off by reference
+    (compact identity entries resolved through a caller-supplied projection
+    store). Overflow that even the by-reference form cannot carry is reported
+    per item with the explicit `capacity-exceeded` outcome -- never as a
+    whole-query failure, never as absence, never as review.
+    """
+    return _filter_with_transport_bound(
+        visual_needs_plan,
+        candidates,
+        source_revision=source_revision,
+        contract_version=contract_version,
+        transport_bound=MAX_RESULT_BYTES,
+    )
+
+
+def _filter_with_transport_bound(
+    visual_needs_plan: object,
+    candidates: object,
+    *,
+    source_revision: object,
+    contract_version: object,
+    transport_bound: int,
+) -> ValidationResult:
+    """Filter implementation with an explicit result-transport bound.
+
+    Production always passes the governed ``MAX_RESULT_BYTES``. Tests may
+    pass a different bound to force a specific transport for equivalence
+    testing (e.g. a tiny bound forces the by-reference form on a small
+    population, proving selection is transport-independent).
+    """
     try:
         plan = _plan_record(visual_needs_plan)
         plan_payload = plan.to_dict()
@@ -143,67 +187,246 @@ def filter_approved_visual_candidates(
         rejected.sort(key=key)
         manual_review.sort(key=key)
 
-        payload = {
-            "contract_version": selected_contract_version,
-            "candidate_set_id": _candidate_set_id(
-                contract_version=selected_contract_version,
-                plan=plan,
-                source_revision=revision,
-                eligible=eligible,
-                rejected=rejected,
-                manual_review=manual_review,
-            ),
-            "source_revision": revision,
-            "visual_needs_plan": {
-                "contract_version": plan.contract_version,
-                "plan_id": plan.record_id,
-                "record_revision": plan.record_revision,
-                "fingerprint": plan.fingerprint,
-            },
-            "maximum_candidate_count": MAX_CANDIDATES,
-            "candidate_count": len(raw_candidates),
-            "eligible": eligible,
-            "rejected": rejected,
-            "manual_review": manual_review,
-            "authority": {
-                "execution_authorized": False,
-                "external_write_authorized": False,
-                "production_authorized": False,
-                "publication_authorized": False,
-                "side_effects_performed": False,
-            },
-        }
-        normalized = validate_and_normalize_json(payload, max_bytes=MAX_RESULT_BYTES)
-        if type(normalized) is not dict:
-            raise ContractValidationError(
-                "asset-candidates-invalid",
-                "visual candidate result must be a built-in mapping",
-            )
-        if canonical_size(normalized) > MAX_RESULT_BYTES:
-            raise ContractValidationError(
-                "handoff-oversized",
-                "visual candidate result exceeds the shared result-size bound",
-            )
-        record = ValidatedRecord(
-            contract_version=selected_contract_version,
-            record_id=normalized["candidate_set_id"],
-            record_revision=1,
-            fingerprint_algorithm=FINGERPRINT_ALGORITHM,
-            fingerprint=sha256_hex(normalized),
-            payload=freeze_json(normalized),
+        return _assemble_result(
+            selected_contract_version=selected_contract_version,
+            plan=plan,
+            plan_payload=plan_payload,
+            source_revision=revision,
+            eligible=eligible,
+            rejected=rejected,
+            manual_review=manual_review,
+            candidate_count=len(raw_candidates),
+            transport_bound=transport_bound,
         )
-        if manual_review:
-            return ValidationResult(
-                status=ValidationStatus.MANUAL_REVIEW_REQUIRED,
-                record=record,
-                reason_codes=("manual-review-visual-candidates",),
-                details=("one or more candidates require bounded human review",),
-            )
-        return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
         return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
         return invalid_result("asset-candidates-invalid", sanitize_detail(str(exc)))
+
+
+def _assemble_result(
+    *,
+    selected_contract_version: str,
+    plan: ValidatedRecord,
+    plan_payload: dict[str, Any],
+    source_revision: str,
+    eligible: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    manual_review: list[dict[str, Any]],
+    candidate_count: int,
+    transport_bound: int,
+) -> ValidationResult:
+    """Assemble the bounded result record, choosing the projection transport.
+
+    The candidate-set identity binds the full classification (transport
+    independent). The payload is transported inline while it fits the
+    governed bound; larger populations travel by reference; a population
+    that even the by-reference form cannot carry degrades per item to the
+    explicit ``capacity-exceeded`` outcome instead of failing the query.
+    """
+    candidate_set_id = _candidate_set_id(
+        contract_version=selected_contract_version,
+        plan=plan,
+        source_revision=source_revision,
+        eligible=[_compact_reference(item) for item in eligible],
+        rejected=[_compact_reference(item) for item in rejected],
+        manual_review=[_compact_reference(item) for item in manual_review],
+    )
+    header = {
+        "contract_version": selected_contract_version,
+        "candidate_set_id": candidate_set_id,
+        "source_revision": source_revision,
+        "visual_needs_plan": {
+            "contract_version": plan.contract_version,
+            "plan_id": plan.record_id,
+            "record_revision": plan.record_revision,
+            "fingerprint": plan.fingerprint,
+        },
+        "maximum_candidate_count": MAX_CANDIDATES,
+        "candidate_count": candidate_count,
+        "authority": {
+            "execution_authorized": False,
+            "external_write_authorized": False,
+            "production_authorized": False,
+            "publication_authorized": False,
+            "side_effects_performed": False,
+        },
+    }
+
+    inline_payload = {
+        **header,
+        "eligible": eligible,
+        "rejected": rejected,
+        "manual_review": manual_review,
+        "capacity_exceeded": [],
+        "projection_transport": PROJECTION_TRANSPORT_INLINE,
+    }
+    if _measured_size(inline_payload) <= transport_bound:
+        return _finalize_result(
+            selected_contract_version=selected_contract_version,
+            normalized=validate_and_normalize_json(
+                inline_payload, max_bytes=transport_bound
+            ),
+            manual_review_present=bool(manual_review),
+        )
+
+    by_reference_payload = {
+        **header,
+        "eligible": [_compact_reference(item) for item in eligible],
+        "rejected": [_compact_reference(item) for item in rejected],
+        "manual_review": [_compact_reference(item) for item in manual_review],
+        "capacity_exceeded": [],
+        "projection_transport": PROJECTION_TRANSPORT_BY_REFERENCE,
+    }
+    if _measured_size(by_reference_payload) <= transport_bound:
+        return _finalize_result(
+            selected_contract_version=selected_contract_version,
+            normalized=validate_and_normalize_json(
+                by_reference_payload, max_bytes=transport_bound
+            ),
+            manual_review_present=bool(manual_review),
+        )
+
+    return _assemble_with_capacity_markers(
+        selected_contract_version=selected_contract_version,
+        header=header,
+        eligible=eligible,
+        rejected=rejected,
+        manual_review=manual_review,
+        transport_bound=transport_bound,
+    )
+
+
+def _measured_size(payload: dict[str, Any]) -> int:
+    """Canonical size of a candidate payload, measured without the transport bound.
+
+    Any bound exceedance during measurement means the payload does not fit
+    the inline transport; it is reported as infinite size so the caller
+    falls through to the by-reference form.
+    """
+    try:
+        return canonical_size(
+            validate_and_normalize_json(payload, max_bytes=_MEASUREMENT_BYTES)
+        )
+    except ContractValidationError:
+        return _MEASUREMENT_BYTES + 1
+
+
+def _compact_reference(entry: dict[str, Any]) -> dict[str, Any]:
+    """Reduce one classified entry to its transport reference.
+
+    The (compatibility_id, fingerprint) pair is the lookup key into the
+    caller-supplied projection store; the fingerprint binds the exact
+    validated record bytes (including contract version and revision), and
+    classification plus reason codes preserve the eligibility evidence.
+    """
+    return {
+        "compatibility_id": entry.get("compatibility_id"),
+        "fingerprint": entry.get("fingerprint"),
+        "classification": entry.get("classification"),
+        "reason_codes": list(entry.get("reason_codes", [])),
+    }
+
+
+def _capacity_marker(entry: dict[str, Any], *, original_group: str) -> dict[str, Any]:
+    """Mark one entry the bounded transport could not carry.
+
+    Explicit per-item ``capacity-exceeded``: the candidate was classified,
+    but its reference did not fit the result bound. It is never eligible,
+    never absence, never review. The marker carries only the candidate
+    identity (the fingerprint-bound full classification lives in the
+    candidate-set identity); it is deliberately smaller than a reference
+    so the degradation loop always converges.
+    """
+    return {
+        "compatibility_id": entry.get("compatibility_id"),
+        "classification": "capacity-exceeded",
+        "reason_codes": ["capacity-exceeded"],
+        "original_group": original_group,
+    }
+
+
+def _assemble_with_capacity_markers(
+    *,
+    selected_contract_version: str,
+    header: dict[str, Any],
+    eligible: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    manual_review: list[dict[str, Any]],
+    transport_bound: int,
+) -> ValidationResult:
+    """Degrade per item when even the by-reference form overflows the bound.
+
+    References convert to ``capacity-exceeded`` markers from the lowest
+    transport priority (rejected, then manual-review, then eligible) in
+    deterministic sorted order until the record fits. Markers are strictly
+    smaller than references, so the loop terminates.
+    """
+    kept: dict[str, list[dict[str, Any]]] = {
+        "eligible": [_compact_reference(item) for item in eligible],
+        "manual_review": [_compact_reference(item) for item in manual_review],
+        "rejected": [_compact_reference(item) for item in rejected],
+    }
+    markers: list[dict[str, Any]] = []
+    while True:
+        payload = {
+            **header,
+            "eligible": kept["eligible"],
+            "rejected": kept["rejected"],
+            "manual_review": kept["manual_review"],
+            "capacity_exceeded": markers,
+            "projection_transport": PROJECTION_TRANSPORT_BY_REFERENCE,
+        }
+        if _measured_size(payload) <= transport_bound:
+            return _finalize_result(
+                selected_contract_version=selected_contract_version,
+                normalized=validate_and_normalize_json(
+                    payload, max_bytes=transport_bound
+                ),
+                manual_review_present=bool(manual_review),
+            )
+        converted = False
+        for group in ("rejected", "manual_review", "eligible"):
+            if kept[group]:
+                markers.append(
+                    _capacity_marker(kept[group].pop(), original_group=group)
+                )
+                converted = True
+                break
+        if not converted:
+            raise ContractValidationError(
+                "capacity-exceeded",
+                "candidate result cannot fit the bounded transport",
+            )
+
+
+def _finalize_result(
+    *,
+    selected_contract_version: str,
+    normalized: Any,
+    manual_review_present: bool,
+) -> ValidationResult:
+    if type(normalized) is not dict:
+        raise ContractValidationError(
+            "asset-candidates-invalid",
+            "visual candidate result must be a built-in mapping",
+        )
+    record = ValidatedRecord(
+        contract_version=selected_contract_version,
+        record_id=normalized["candidate_set_id"],
+        record_revision=1,
+        fingerprint_algorithm=FINGERPRINT_ALGORITHM,
+        fingerprint=sha256_hex(normalized),
+        payload=freeze_json(normalized),
+    )
+    if manual_review_present:
+        return ValidationResult(
+            status=ValidationStatus.MANUAL_REVIEW_REQUIRED,
+            record=record,
+            reason_codes=("manual-review-visual-candidates",),
+            details=("one or more candidates require bounded human review",),
+        )
+    return ValidationResult(status=ValidationStatus.VALID, record=record)
 
 
 def _plan_record(value: object) -> ValidatedRecord:
@@ -274,8 +497,8 @@ def _candidate_list(value: object) -> list[object]:
         )
     if len(value) > MAX_CANDIDATES:
         raise ContractValidationError(
-            "handoff-oversized",
-            "visual candidates exceed the 32-candidate bound",
+            "capacity-exceeded",
+            "visual candidates exceed the 64-candidate bound",
         )
     return value
 
@@ -394,6 +617,13 @@ def _candidate_set_id(
     rejected: list[dict[str, Any]],
     manual_review: list[dict[str, Any]],
 ) -> str:
+    """Derive the transport-independent candidate-set identity.
+
+    The identity binds the compact classification references; each
+    reference's fingerprint binds the exact validated compatibility record
+    bytes, so the full classification is content-addressed without
+    embedding full projections in the hashed identity.
+    """
     identity = {
         "contract_version": contract_version,
         "plan_id": plan.record_id,

@@ -13,7 +13,9 @@ The planner accepts only validated evidence:
 - `curriculum-visual-needs-plan-v1` with outcome `visuals-required`.
 - `curriculum-visual-asset-candidates-v2` bound to the exact plan ID, revision, contract version, and fingerprint.
 
-The v2 candidate result must already contain eligible candidates from the upstream candidate filter. The cohesive planner never restores rejected or manual-review candidates into eligibility.
+The v2 candidate result must already contain eligible candidates from the upstream candidate filter. The cohesive planner never restores rejected or manual-review candidates into eligibility. At most 64 eligible candidates are accepted (`MAX_ELIGIBLE_CANDIDATES`, reconciled with the filter's maximum); above that the plan is `INVALID` with the explicit `capacity-exceeded` reason code.
+
+When the filter result uses the by-reference projection transport (#3255), the planner takes the validated compatibility records through the optional `candidate_projections` mapping (keyed by `(compatibility_id, fingerprint)`). Each reference is fingerprint-verified before selection; a missing store or a missing/mismatched projection fails closed. Inline filter results do not need the mapping.
 
 ## Output
 

@@ -211,7 +211,19 @@ def test_candidate_count_is_bounded() -> None:
     )
 
     assert result.status is ValidationStatus.INVALID
-    assert result.reason_codes == ("handoff-oversized",)
+    assert result.reason_codes == ("capacity-exceeded",)
+
+
+def test_candidate_count_at_bound_succeeds() -> None:
+    result = filter_approved_visual_candidates(
+        _plan(),
+        [_compatibility() for _ in range(MAX_CANDIDATES)],
+        source_revision="visual-library-snapshot-v1",
+    )
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.record.to_dict()["candidate_count"] == MAX_CANDIDATES
 
 
 @pytest.mark.parametrize("value", [None, (), {}, "candidate"])
@@ -590,7 +602,9 @@ def test_v2_plan_fingerprint_is_revalidated() -> None:
     assert result.reason_codes == ("asset-candidates-invalid-plan",)
 
 
-def test_v2_oversized_projection_fails_closed() -> None:
+def test_v2_large_population_uses_by_reference_transport() -> None:
+    # #3255: a full v2 population no longer fails the whole query; it is
+    # handed off by reference.
     result = filter_approved_visual_candidates(
         _plan(),
         [_compatibility_v2() for _ in range(MAX_CANDIDATES)],
@@ -598,9 +612,12 @@ def test_v2_oversized_projection_fails_closed() -> None:
         contract_version=V2_CONTRACT_ID,
     )
 
-    assert result.status is ValidationStatus.INVALID
-    assert result.record is None
-    assert result.reason_codes == ("handoff-oversized",)
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    payload = result.record.to_dict()
+    assert payload["projection_transport"] == "by-reference"
+    assert payload["candidate_count"] == MAX_CANDIDATES
+    assert len(payload["eligible"]) == MAX_CANDIDATES
 
 
 def test_candidate_module_has_no_prohibited_operations() -> None:
