@@ -187,7 +187,11 @@ def test_resync_with_existing_identity_reconciles_without_conflict():
 def test_changed_bytes_still_change_identity():
     first = issue_reusable_visual_identity(_identity_evidence())["identity"]
     second = issue_reusable_visual_identity(_identity_evidence(fingerprint=SHA_B))["identity"]
-    assert second["asset_id"] != first["asset_id"]
+    # Logical identity is preserved across content revisions; the content
+    # fingerprint advances to distinguish the selected content.
+    assert second["asset_id"] == first["asset_id"]
+    assert second["stable_ref"] == first["stable_ref"]
+    assert second["content_fingerprint"] != first["content_fingerprint"]
 
 
 def test_mutable_references_remain_reported_but_outside_digest():

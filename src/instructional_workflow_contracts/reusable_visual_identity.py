@@ -93,8 +93,12 @@ def issue_reusable_visual_identity(value: object) -> dict[str, Any]:
         # reported on the issued identity, but they are excluded here so that
         # re-syncing identical bytes through a different reference preserves
         # the asset identity instead of producing ``identity.conflict``.
+        # ``content_fingerprint`` is excluded from the digest basis so that a
+        # legitimate provider revision (new bytes, new fingerprint) preserves
+        # the logical asset identity (asset_id/stable_ref) while advancing
+        # the selected-content identity. The fingerprint is still reported on
+        # the issued identity for content verification.
         "external_identity": {key: external.get(key) for key in ("provider", "file_id")},
-        "content_fingerprint": fingerprint,
         "provenance": {key: provenance.get(key) for key in ("source_reference", "source_fingerprint")},
         "lineage": {
             "kind": kind,
