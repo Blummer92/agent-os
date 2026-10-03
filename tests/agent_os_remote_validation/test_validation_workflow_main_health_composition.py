@@ -149,26 +149,34 @@ def test_bounded_recovery_lane_allows_only_explicit_recovery_projection():
     assert _main_health_blockers(recovery) == ()
 
 
-def test_workflow_recovery_binding_is_finite_self_expiring_and_exact():
+def test_workflow_recovery_binding_consumes_reusable_content_bound_authorization():
     step = WORKFLOW.read_text(encoding="utf-8").split(
         "      - name: Project exact-current main health\n", 1
     )[1].split("\n      - name: ", 1)[0]
 
-    assert 'recovery_main_sha="5fa6fe672c233344e041cbfeac20cfed20130b69"' in step
-    assert 'recovery_run_job_fragment="/actions/runs/36155587326/job/108139205339"' in step
-    assert 'recovery_pr_number="2937"' in step
-    assert (
-        'recovery_failed_path="tests/test_agent_os_host_runtime_install_workflow.py"'
-        in step
-    )
-    assert '[ "$current_main_sha" = "$recovery_main_sha" ]' in step
-    assert '[ "$PR_NUMBER" = "$recovery_pr_number" ]' in step
-    assert '[ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ]' in step
-    assert '[ "$validation_conclusion" = "repository-failure" ]' in step
-    assert '[[ "$details_url" == *"$recovery_run_job_fragment"* ]]' in step
-    assert 'grep -Fxq "$recovery_failed_path"' in step
-    assert 'recovery_requested=true' in step
+    assert "recovery_issue_reference" in step
+    assert "evaluate_recovery_authorization" in step
+    assert 'gh api "/repos/$GITHUB_REPOSITORY/issues/$recovery_issue_number"' in step
+    assert 'repository_owner="${GITHUB_REPOSITORY%%/*}"' in step
+    assert 'current_main_sha=os.environ["CURRENT_MAIN_SHA"]' in step
+    assert 'pull_request=int(os.environ["PR_NUMBER"])' in step
+    assert 'current_head_sha=os.environ["CANDIDATE_HEAD_SHA"]' in step
+    assert 'main_check_details_url=os.environ["MAIN_CHECK_DETAILS_URL"]' in step
+    assert '"main-health-changed-files.txt"' in step
     assert 'recovery_requested=os.environ["RECOVERY_REQUESTED"] == "true"' in step
+
+
+def test_workflow_has_no_historical_incident_specific_recovery_selector():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert "5fa6fe672c233344e041cbfeac20cfed20130b69" not in step
+    assert "/actions/runs/36155587326/job/108139205339" not in step
+    assert 'recovery_pr_number="2937"' not in step
+    assert "tests/test_agent_os_host_runtime_install_workflow.py" not in step
+    assert '[ "$validation_conclusion" = "repository-failure" ]' in step
+    assert '[ "$CANDIDATE_BASE_SHA" = "$current_main_sha" ]' in step
 
 
 def test_unproven_current_main_evidence_fails_closed():
