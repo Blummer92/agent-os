@@ -100,3 +100,25 @@ recommendations, and remaining risks.
 ## Changelog
 
 - 0.2.0 narrows #2644's redundant execution-surface gate for already-authorized finite protected-setting operations without granting generic administration.
+
+## Authoritative aggregate commit status (#2589)
+
+The Agent OS Validation Gate publishes the commit status
+`agent-os/authoritative-aggregate`, the canonical future required-check identity
+for `main`. Lifecycle:
+
+- Ordinary Draft PR runs publish nothing under this context, so Draft or
+  deferred validation can never satisfy it.
+- An authoritative run (non-Draft PR run or admitted final-candidate dispatch)
+  publishes `pending` before checkout and tests, then exactly one terminal state:
+  `success` only after a real aggregate success, `failure` for an aggregate
+  failure, `error` for cancellation or infrastructure failure, and `pending`
+  (non-authorizing) when exact-current main health withholds authority.
+- Ready-for-Review reuse consults only the newest status for the exact head.
+  Only a newest `success` is reusable; a newer `failure`, `error`, or `pending`
+  defeats an older `success`, and a missing status requires a run (#2761).
+- `statuses: write` is granted only to the `validate` and `aggregate-gate`
+  jobs. Decision logic lives in `scripts/agent_os_aggregate_gate.py`.
+
+Publishing the status does not enforce it. Adding it to the live `Protect main`
+ruleset is a protected-setting change that needs its own authorization (#2234).
