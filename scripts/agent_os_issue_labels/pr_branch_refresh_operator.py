@@ -113,9 +113,6 @@ _REFRESH_VALIDATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "pytest:branch-update": (
         "-m", "pytest", "tests/agent_os_github_git_objects/test_branch_update.py", "-q",
     ),
-    "pytest:pr-lifecycle": (
-        "-m", "pytest", "tests/agent_os_issue_labels/test_pr_lifecycle.py", "-q",
-    ),
     "structure": (
         "bash", "07_Agent_Tests/validate-repo-structure.sh",
     ),

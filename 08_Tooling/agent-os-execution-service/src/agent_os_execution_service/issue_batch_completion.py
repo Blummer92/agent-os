@@ -130,6 +130,42 @@ def _classify_lane(repository: str, value: object) -> dict[str, object]:
                 value.get("subordinate_writes_only"), "subordinate_writes_only"
             ),
             implementation_pr_required=True,
+            live_consumer_required=_optional_bool(
+                value.get("live_consumer_required"), "live_consumer_required"
+            ),
+            live_consumer_requirement_source=_optional_text(
+                value.get("live_consumer_requirement_source"),
+                "live_consumer_requirement_source",
+            ),
+            live_consumer_reachability_proven=_optional_bool(
+                value.get("live_consumer_reachability_proven"),
+                "live_consumer_reachability_proven",
+            ),
+            live_consumer_identity=_optional_text(
+                value.get("live_consumer_identity"), "live_consumer_identity"
+            ),
+            live_consumer_evidence_source=_optional_text(
+                value.get("live_consumer_evidence_source"),
+                "live_consumer_evidence_source",
+            ),
+            live_consumer_evidence_current=_optional_bool(
+                value.get("live_consumer_evidence_current"),
+                "live_consumer_evidence_current",
+            ),
+            live_consumer_evidence_kind=_optional_text(
+                value.get("live_consumer_evidence_kind"),
+                "live_consumer_evidence_kind",
+            ),
+            successor_issue_number=_optional_issue_number(
+                value.get("successor_issue_number"), "successor_issue_number"
+            ),
+            successor_current=_optional_bool(
+                value.get("successor_current"), "successor_current"
+            ),
+            successor_owns_residual_live_acceptance=_optional_bool(
+                value.get("successor_owns_residual_live_acceptance"),
+                "successor_owns_residual_live_acceptance",
+            ),
         )
         result["pr_number"] = pr_number
         result["terminal"] = admission.completion_admissible
@@ -198,6 +234,18 @@ def _bool(value: object, name: str) -> bool:
     if type(value) is not bool:
         raise TypeError(f"{name} must be built-in bool")
     return value
+
+
+def _optional_bool(value: object, name: str) -> bool:
+    if value is None:
+        return False
+    return _bool(value, name)
+
+
+def _optional_issue_number(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    return _issue_number(value, name)
 
 
 def _nonnegative_int(value: object, name: str) -> int:

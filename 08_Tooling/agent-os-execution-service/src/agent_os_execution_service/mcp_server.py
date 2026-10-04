@@ -43,6 +43,7 @@ from .mcp_facade import (
     classify_agent_os_mission_completion,
     plan_agent_os_continuation,
 )
+from workflow_scheduler.execution.recovery_progress import RecoverySemanticEvidence
 
 mcp = MCPServer("Agent OS")
 
@@ -256,8 +257,8 @@ def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, att
 
 
 @mcp.tool()
-def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str) -> dict[str, object]:
-    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability)
+def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, *, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None) -> dict[str, object]:
+    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint)
 
 
 def _ready_review_closure_admissions(
@@ -439,8 +440,8 @@ def admit_agent_os_ready_for_review_tool(repository: str, pr_number: int, pr_lif
 
 
 @mcp.tool()
-def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False) -> dict[str, object]:
-    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required)
+def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False, live_consumer_required: bool = False, live_consumer_requirement_source: str | None = None, live_consumer_reachability_proven: bool = False, live_consumer_identity: str | None = None, live_consumer_evidence_source: str | None = None, live_consumer_evidence_current: bool = False, live_consumer_evidence_kind: str | None = None, successor_issue_number: int | None = None, successor_current: bool = False, successor_owns_residual_live_acceptance: bool = False) -> dict[str, object]:
+    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required, live_consumer_required=live_consumer_required, live_consumer_requirement_source=live_consumer_requirement_source, live_consumer_reachability_proven=live_consumer_reachability_proven, live_consumer_identity=live_consumer_identity, live_consumer_evidence_source=live_consumer_evidence_source, live_consumer_evidence_current=live_consumer_evidence_current, live_consumer_evidence_kind=live_consumer_evidence_kind, successor_issue_number=successor_issue_number, successor_current=successor_current, successor_owns_residual_live_acceptance=successor_owns_residual_live_acceptance)
 
 
 @mcp.tool()

@@ -98,6 +98,39 @@ identity. Caller-asserted approval alone is rejected.
 | `reuse_status` | Icon "Reusable Across Units?" checkbox (reusable); else unknown | Projection | `REUSE_STATUSES` | never conflated with scope |
 | `scope_unit_ids` | VAL "Scope Unit IDs" (bounded list ≤24) | Projection | cross-unit admission | missing for cross-unit → excluded |
 
+### Registration composition (#3254 Lane F)
+
+New assets enter the table above through exactly one composition,
+`navigation_registry.connectors.visual_asset_registration_composition`
+(pure orchestration; Drive/Notion clients injected, no live I/O):
+
+`coordinator.coordinate_ingestion` (#954) → Drive writer `#958` (injected
+client, readback-verified) → Drive SHA-256 capture →
+`identity_evidence_for_drive_file` + `issue_reusable_visual_identity`
+(#3256) → asset-ID policy (below) → Notion writer `#959` (injected client,
+binds the issued `asset_id` to the governed "Asset ID" property) →
+`project_ingestion_admission` (verified record → admission evidence, an
+eligible candidate on the next run).
+
+Asset-ID policy (the minting-format + legacy-reconciliation decision is
+owner-gated and remains OPEN; no new scheme is invented):
+
+- Governed "Asset ID" property is authoritative INPUT: read, never invented.
+- Absent/blank → the #3256 issuer mints canonical `visual-asset-<24hex>`;
+  the Notion write binds it.
+- Canonical `visual-asset-[0-9a-f]{24}` → reconciled; mismatch with the
+  re-minted identity fails closed (`registration-asset-id-conflict`).
+- Legacy `VA-…` / `DMIMG-…` → recognized EXTERNAL ALIASES with explicit
+  provenance (never minted, never validated as canonical); the composition
+  still mints and binds the canonical identity and preserves the alias.
+- Unknown format → explicit incomplete-evidence
+  (`registration-asset-id-unrecognized`); never adopted, never invented.
+
+The composition never redefines #3257 placement identity formats
+(`visual-asset-…` logical IDs, exact (Asset ID, page ID, Drive file ID)
+tuple scoping) or its fail-closed taxonomy, and never touches #3258
+terminal-QA binding fields or QA's read-only nature.
+
 ### Single material-type vocabulary
 
 `instructional_workflow_contracts.material_type_vocabulary` is the one

@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from workflow_scheduler.execution.recovery_progress import (
+    RecoveryProgressDisposition,
+    RecoverySemanticEvidence,
+    classify_recovery_progress,
+)
+
 _ALLOWED_MERGEABILITY = {"mergeable", "conflicting", "unknown"}
 _ALLOWED_BRANCH_FRESHNESS = {"current", "behind", "conflicted", "unknown"}
 _ALLOWED_REVIEW_STATE = {"clear", "requested-changes", "blocking-thread", "unknown"}
@@ -23,6 +29,7 @@ class FailedRepairAdmissionRecord:
     mutation_admissible: bool
     reason_codes: tuple[str, ...]
     next_action: str
+    recovery_stalled: bool = False
     github_writes_authorized: bool = field(default=False, init=False)
     workflow_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
@@ -40,6 +47,9 @@ def evaluate_failed_repair_admission(
     review_state: str,
     branch_freshness: str,
     mergeability: str,
+    current: RecoverySemanticEvidence | None = None,
+    prior: RecoverySemanticEvidence | None = None,
+    prior_transition_fingerprint: str | None = None,
 ) -> FailedRepairAdmissionRecord:
     """Gate the next repair mutation on retry-specific CKR6 and separated diagnostics.
 
@@ -48,6 +58,18 @@ def evaluate_failed_repair_admission(
     resolve reviews, or infer conflicts. It only prevents the next mutation until
     the retry-specific lesson result and each independent diagnostic dimension are
     explicit enough to continue safely.
+
+    When ``current`` recovery evidence is supplied (#2281), the projection also
+    composes ``classify_recovery_progress``: repeated repairs require semantic
+    progress. An EQUIVALENT observation (no semantic movement vs ``prior``)
+    makes the mutation inadmissible; a RECOVERY_STALLED observation (the same
+    equivalent transition observed again) additionally records ``recovery_stalled``
+    so the caller can mark the host continuation stalled. INITIAL and PROGRESSED
+    observations add no gating. The classification is a pure projection over
+    caller-supplied semantic identities: no Notion read, CI execution, mutation,
+    or retry happens inside it, and capability failures stay outside recurrence.
+    All three recovery params are optional keyword-only so #3280's later
+    additive params land cleanly.
     """
     attempt_id = _text(activation_result.get("attempt_id"), "attempt_id")
     retry_reentry_outcome = _text(
@@ -71,6 +93,20 @@ def evaluate_failed_repair_admission(
     _enum(mergeability, _ALLOWED_MERGEABILITY, "mergeability")
 
     reasons: list[str] = []
+    recovery_stalled = False
+    if current is not None:
+        progress = classify_recovery_progress(
+            current,
+            prior=prior,
+            prior_transition_fingerprint=prior_transition_fingerprint,
+        )
+        if progress.disposition is RecoveryProgressDisposition.EQUIVALENT:
+            reasons.append("recovery-equivalent-no-semantic-progress")
+        elif progress.disposition is RecoveryProgressDisposition.RECOVERY_STALLED:
+            reasons.append("recovery-stalled-repeated-equivalent-transition")
+            recovery_stalled = True
+        # INITIAL and PROGRESSED add no recovery gating: the first observation
+        # and genuine semantic movement continue through existing diagnostics.
     if retry_reentry_outcome != "consumed" or not activation_mutation_admissible:
         reasons.append("retry-specific-lessons-not-consumed")
     if required_check_configuration_state in {"unavailable", "unknown"}:
@@ -101,6 +137,10 @@ def evaluate_failed_repair_admission(
             next_action = "route-branch-state-through-existing-refresh-conflict-owner"
         elif "review-state-blocking-or-unresolved" in reasons:
             next_action = "resolve-or-reacquire-review-state"
+        elif "recovery-stalled-repeated-equivalent-transition" in reasons:
+            next_action = "route-stalled-recovery-to-canonical-owner-for-human-decision"
+        elif "recovery-equivalent-no-semantic-progress" in reasons:
+            next_action = "record-equivalent-recovery-transition-before-retry"
         else:
             next_action = "reacquire-independent-diagnostics"
         mutation_admissible = False
@@ -121,6 +161,7 @@ def evaluate_failed_repair_admission(
         mutation_admissible=mutation_admissible,
         reason_codes=tuple(reasons),
         next_action=next_action,
+        recovery_stalled=recovery_stalled,
     )
 
 

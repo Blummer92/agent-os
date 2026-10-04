@@ -267,6 +267,10 @@ _ACTIONS = {
 }
 
 
+# RETAINED (#1188 planner, campaign reduction boundary): this planner and its pieces
+# in this module are the canonical composition seam. They must not be deleted,
+# retired, or consumed by the Connection Wave 1 campaign. #2281 composes only
+# with classify_recovery_progress (recovery_progress.py); the planner stays as-is.
 def plan_execution_continuation(
     evidence: ExistingWorkEvidence,
     *,
