@@ -29,7 +29,7 @@ REPOSITORY = "Blummer92/agent-os"
 RULESET_ID = 19123362
 RULESET_NAME = "Protect main"
 AUTHORIZATION_ISSUE = 1883
-REQUIRED_CONTEXT = "Run aggregate validation"
+REQUIRED_CONTEXT = "agent-os/authoritative-aggregate"
 REQUIRED_INTEGRATION_ID = 15368
 _API_VERSION = "2026-03-10"
 
