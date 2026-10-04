@@ -152,6 +152,71 @@ This package does not provide network transport or a concrete live GitHub reader
 ## Informational reuse evidence (optional adapter)
 - `reuse_readiness.py` (RC5B / #470 under the #248 contract) attaches caller-supplied RC3 `DiscoveryResult` and corrected-RC4 `ValidationReport` evidence to a `ReadinessResult` as a strictly informational layer. Informational evidence never changes `ReadinessOutcome`, `overall_status`, ordinary checks, blockers, ordinary manual-review items, or `exit_code_for()`; it is carried only in `AcceptanceReport.informational_checks`, rendered in a separate section that is omitted when empty (legacy output stays byte-for-byte identical). Provenance is compared using caller-supplied `RegistryProvenance` values only (strict, version-aware); missing, mismatched, unsupported, failing, contradicted, conflicting, or malformed evidence suppresses positive reuse guidance while leaving base readiness unchanged.
 - It is the sole cross-package boundary, never reads the registry or invokes `RegistryReader`/discovery/validation orchestration, and is not exported from `__init__.py`; `readiness.py` stays independent, so base readiness imports and runs without the reusable-capability package installed. No reuse evidence authorizes implementation, writes, readiness changes, or merge, and the adapter performs no registry, issue, label, readiness, workflow, Scheduler, credential, production, or external mutation.
+## Report-only issue-quality and metadata-validation checks (#3282)
+
+`checks/issue_quality.py` (the issue-quality taxonomy checkers) and
+`metadata_validation.py` (MD2B) are registered in `policy.py` as strictly
+informational evidence. They run on every acceptance evaluation and their
+results appear in `AcceptanceReport.informational_checks`, rendered in the
+report's informational section and included in `--format json` output. They
+never enter `report.checks`, `overall_status`, `blockers`,
+`manual_review_items`, `remaining_risks`, or the workflow exit code:
+`overall_status` is computed by `strongest_status()` over `report.checks`
+only, and `exit_code_for()` returns 1 only for `Status.FAIL`. This mirrors the
+`reuse_readiness.py` precedent for the same channel. The rendered section keeps
+the #248-contract heading "Reusable-capability evidence (informational):"
+(pinned by `test_report.py`); the #3282 checks are distinguished by name
+prefix (`issue-quality: ...`, `metadata:<field>`).
+
+### Tier-to-issue-family mapping
+
+`issue_quality.check()` needs an `IssueFamily`, but the acceptance inputs carry
+no tier-to-family mapping (metadata tiers `tier:0/1/2-*` are not families).
+`policy.py` derives the family from the "Issue tier" body section (the issue
+template keeps tier as body evidence, not a label):
+
+| Issue tier value | Issue family |
+|---|---|
+| `tier:0-small-maintenance` | `cleanup` |
+| `tier:1-standard-implementation` | `implementation` |
+| `tier:2-governed-cross-system` | `governance` |
+
+Tier 1 and Tier 2 map by direct name correspondence with the template's
+definitions ("standard implementation", "governed or cross-system work");
+Tier 0 ("small safe maintenance") maps to the lightest family contract
+(`cleanup`: goal + scope required). When the Issue tier section holds no
+canonical tier value, no family is guessed: only the family-independent
+checkers (`check_parent_reference`, `check_related_references`,
+`check_blocker_quality`) run, plus one manual-review note recording the skip.
+
+### Metadata field-extraction contract
+
+`metadata_validation.validate_metadata_evidence()` evaluates one
+(field, input_evidence) pair. The live-issue contract extracts pairs from
+issue-form body sections only (labels are not available to
+`evaluate_acceptance`):
+
+| Body section | Metadata field |
+|---|---|
+| Issue tier | `issue_tier` |
+| Readiness candidate | `readiness_candidate` |
+| Documentation impact | `documentation_impact` |
+| Primary owner | `primary_owner` |
+| Source of truth | `source_route` |
+| External write boundary | `external_write_boundary` |
+
+Only sections holding a real (non-empty, non-placeholder) value produce a
+check; absent or placeholder-only sections (e.g. `_No response_`) produce no
+check at all, so unfilled optional fields never emit manual-review noise.
+Legacy `risk:`/`surface:`/`system:`/`phase:` tokens in the body are evaluated
+as `legacy_metadata` evidence only when present.
+
+### Fixtures
+
+`tests/agent_os_issue_acceptance/fixtures/issue_quality/` holds one fixture per
+issue family: `roadmap.md`, `strong_implementation.md`, `validation.md`,
+`governance.md`, `cleanup.md`. Registration behavior is covered by
+`tests/agent_os_issue_acceptance/test_report_only_registration.py`.
 ## Workflow and write boundary
 Metadata validation and scanning remain offline and report-only. Connected retrieval consumes caller-supplied readers and preserves provenance. The package does not authorize issue, label, readiness, workflow, Scheduler, credential, production, or external-system writes.
 Outcome meaning remains governed by `01_Shared_Standards/github/issue-acceptance-automation.md`. Package boundaries and facade decisions are governed by issue #464 and the applicable Agent OS governance standards.

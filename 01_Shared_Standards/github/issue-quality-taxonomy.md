@@ -91,6 +91,25 @@ merge, closure, or external-write authority.
 Operational state, authorization, routing, queue/lane selection, and post-PR
 recommendation remain owned by their existing canonical contracts.
 
+## Registration Status
+
+The checkers defined by this taxonomy (`check_completeness`,
+`check_parent_reference`, `check_related_references`, `check_blocker_quality`,
+`check_acceptance_criteria`, and `check`) are registered in the Issue
+Acceptance Report as report-only evidence (#3282). They run inside
+`scripts/agent_os_issue_acceptance/policy.py` via
+`AcceptanceReport.informational_checks` and never enter `report.checks`,
+`overall_status`, blockers, manual-review items, remaining risks, or the
+workflow exit code. `metadata_validation.py` (MD2B) is registered alongside
+them through the same channel. The issue family is derived from the "Issue
+tier" body section: `tier:0-small-maintenance` -> `cleanup`,
+`tier:1-standard-implementation` -> `implementation`,
+`tier:2-governed-cross-system` -> `governance`; when no canonical tier value
+is present, only the family-independent checkers run and no family is
+guessed. Retirement was not performed: the #2502 gate requires contract
+classification (zero consumers is insufficient), and both modules own unique
+tested invariants.
+
 ## Version
 
 0.1.0

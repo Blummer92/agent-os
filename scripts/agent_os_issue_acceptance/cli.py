@@ -330,6 +330,17 @@ def _report_to_dict(report):
         "evidence": report.evidence,
         "blockers": report.blockers,
         "remaining_risks": report.remaining_risks,
+        # Report-only evidence (#3282): informational checks are carried in the
+        # JSON report exactly as rendered, without affecting any other field.
+        "informational_checks": [
+            {
+                "name": check.name,
+                "status": check.status.value,
+                "message": check.message,
+                "evidence": check.evidence,
+            }
+            for check in report.informational_checks
+        ],
     }
 
 
