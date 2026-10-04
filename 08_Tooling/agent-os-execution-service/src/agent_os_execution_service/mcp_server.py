@@ -32,6 +32,10 @@ from scripts.agent_os_issue_labels.ready_for_review_admission import (
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
+from .governed_mutation_seams_facade import (
+    evaluate_issue_comment_mutation_boundary_for_host,
+    project_lane_post_pr_issue_reconciliation_for_host,
+)
 from scripts.agent_os_issue_labels.connected_issue_creation import DuplicateCandidateEvidence
 from .issue_batch_completion import classify_issue_batch_completion
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
@@ -464,6 +468,66 @@ def classify_agent_os_continuation_tool(repository: str, issue_number: int, oper
 @mcp.tool()
 def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]]) -> dict[str, object]:
     return classify_bulk_repair_continuation(repository=repository, issue_number=issue_number, requested_pull_requests=requested_pull_requests, candidate_evidence=candidate_evidence)
+
+
+@mcp.tool()
+def admit_agent_os_issue_comment_mutation_tool(
+    phase: str,
+    issue_number: int,
+    evidence_kind: str = "defect",
+    target_open: bool = False,
+    state_current: bool = False,
+    open_owner_issue_number: int | None = None,
+    historical_lineage_issue_number: int | None = None,
+    intended_body: str | None = None,
+    provider_reported_success: bool | None = None,
+    readback_complete: bool = False,
+    comments: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Run the issue-comment write boundary: pre-write verify-open guard (#2741) or post-write canonical readback (#2785). Never performs the write."""
+    return evaluate_issue_comment_mutation_boundary_for_host(
+        phase=phase,
+        issue_number=issue_number,
+        evidence_kind=evidence_kind,
+        target_open=target_open,
+        state_current=state_current,
+        open_owner_issue_number=open_owner_issue_number,
+        historical_lineage_issue_number=historical_lineage_issue_number,
+        intended_body=intended_body,
+        provider_reported_success=provider_reported_success,
+        readback_complete=readback_complete,
+        comments=tuple(comments or ()),
+    )
+
+
+@mcp.tool()
+def project_agent_os_lane_post_pr_issue_reconciliation_tool(
+    phase: str,
+    issue_number: int,
+    issue_open: bool = False,
+    lifecycle_labels: tuple[str, ...] = (),
+    linked_pull_request_number: int = 0,
+    pr_state: str = "draft",
+    pr_head_sha: str = "",
+    pr_readback_current: bool = False,
+    closure_authorized: bool = False,
+    evidence_current: bool = False,
+    plan: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority."""
+    return project_lane_post_pr_issue_reconciliation_for_host(
+        phase=phase,
+        issue_number=issue_number,
+        issue_open=issue_open,
+        lifecycle_labels=tuple(lifecycle_labels),
+        linked_pull_request_number=linked_pull_request_number,
+        pr_state=pr_state,
+        pr_head_sha=pr_head_sha,
+        pr_readback_current=pr_readback_current,
+        closure_authorized=closure_authorized,
+        evidence_current=evidence_current,
+        plan=plan,
+    )
 
 
 def main() -> None:

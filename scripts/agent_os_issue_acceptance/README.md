@@ -183,3 +183,15 @@ consumer.
 ## Issue-comment mutation readback
 
 `comment_mutation_readback.py` (#2785) classifies a connected issue-comment mutation only after caller-supplied canonical readback. Exact target/body identity yields `persisted`; a complete readback with no matching comment yields `not-persisted`; incomplete, duplicate, target-mismatched, or unknown-provider evidence remains `uncertain`. Retry eligibility is evidence only and never performs or authorizes a GitHub write.
+
+## Governed GitHub mutation seams (#3281)
+
+Three pure contracts — each merged as an incident fix but with no host consumer — form two governed mutation seams, exposed to the ChatGPT execution surface as MCP admission tools (`admit_agent_os_issue_comment_mutation_tool`, `project_agent_os_lane_post_pr_issue_reconciliation_tool`; composition in `08_Tooling/agent-os-execution-service/src/agent_os_execution_service/governed_mutation_seams_facade.py`).
+
+Seam 1, the issue-comment write boundary:
+- pre-write guard: `defect_evidence_mutation_guard.py` (#2741) admits persisting new defect/process evidence only on a target whose open state was reacquired immediately before the write. A closed target is refused fail-closed with a routing directive — `reacquire-target-state` (stale evidence), `route-to-open-owner` (open owner named), or `create-new-bug` — so evidence is never admitted onto a closed issue as its active owner; closed issues stay historical lineage only.
+- post-write readback: `comment_mutation_readback.py` (#2785). A subordinate comment write counts as persisted only after canonical readback proves the exact intended body; a provider success claim alone never proves persistence, and an uncertain response never authorizes an automatic retry, so uncertain-then-reconcile can never create a duplicate comment.
+
+Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`).
+
+Fail-closed reasons: every seam tool is pure admission/readback composition with `side_effects_performed: False` and no GitHub write authority; uncertain or stale evidence resolves to non-terminal, non-retrying dispositions rather than optimistic success; and missing closure authority surfaces visibly as `reconcile-ready-awaiting-closure-authority` instead of silently leaving the issue looking actionable.
