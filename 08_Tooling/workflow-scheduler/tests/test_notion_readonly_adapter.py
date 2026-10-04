@@ -482,3 +482,109 @@ class TestExistingAdaptersUnaffected:
 
         adapter = resolve_adapter("github_readonly")
         assert isinstance(adapter, GitHubReadOnlyAdapter)
+
+
+class TestHttpErrorBodyDiagnostics:
+    """#2816 diagnostic hardening: a Notion HTTP error's JSON body carries the
+    only provider-side subtype signal (Notion error code / message /
+    request_id). The adapter must surface that sanitized detail instead of
+    discarding it, while keeping the existing ``Notion API returned HTTP``
+    prefix and the transient/failure taxonomy unchanged."""
+
+    @staticmethod
+    def _http_error(status: int, reason: str, body: bytes):
+        import io
+        import urllib.error
+
+        return urllib.error.HTTPError(
+            "https://api.notion.com/v1/data_sources/da5cba48/query",
+            status,
+            reason,
+            {},
+            io.BytesIO(body),
+        )
+
+    def test_notion_json_error_body_survives_in_adapter_message(self):
+        import json
+
+        body = json.dumps(
+            {
+                "object": "error",
+                "status": 404,
+                "code": "object_not_found",
+                "message": "Could not find data source with ID: da5cba48-50fd-4377-9790-8df8f6f2c7dd.",
+                "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            }
+        ).encode("utf-8")
+        exc = self._http_error(404, "Not Found", body)
+
+        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
+            nrao_module._raise_for_http_error(exc, "Notion API")
+
+        message = str(exc_info.value)
+        # The existing contracted prefix is preserved (consumers regex on it).
+        assert message.startswith("Notion API returned HTTP 404:")
+        # The provider subtype signal is no longer discarded.
+        assert "object_not_found" in message
+        assert "a1b2c3d4-e5f6-7890-abcd-ef1234567890" in message
+        # Fail-closed taxonomy is unchanged: 404 stays non-transient.
+        assert exc_info.value.is_transient is False
+
+    def test_transient_status_keeps_transient_taxonomy_with_detail(self):
+        import json
+
+        body = json.dumps(
+            {"object": "error", "status": 503, "code": "service_unavailable", "message": "Service unavailable."}
+        ).encode("utf-8")
+        exc = self._http_error(503, "Service Unavailable", body)
+
+        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
+            nrao_module._raise_for_http_error(exc, "Notion API")
+
+        assert str(exc_info.value).startswith("Notion API returned HTTP 503:")
+        assert "service_unavailable" in str(exc_info.value)
+        assert exc_info.value.is_transient is True
+
+    def test_non_json_error_body_keeps_existing_message_shape(self):
+        exc = self._http_error(500, "Internal Server Error", b"<html>proxy error</html>")
+
+        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
+            nrao_module._raise_for_http_error(exc, "Notion API")
+
+        assert str(exc_info.value) == "Notion API returned HTTP 500: Internal Server Error"
+        assert exc_info.value.is_transient is True
+
+    def test_empty_error_body_keeps_existing_message_shape(self):
+        exc = self._http_error(403, "Forbidden", b"")
+
+        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
+            nrao_module._raise_for_http_error(exc, "Notion API")
+
+        assert str(exc_info.value) == "Notion API returned HTTP 403: Forbidden"
+        assert exc_info.value.is_transient is False
+
+    def test_error_body_never_carries_authorization_material(self):
+        import json
+
+        body = json.dumps(
+            {
+                "object": "error",
+                "status": 401,
+                "code": "unauthorized",
+                "message": "API token is invalid.",
+                "request_id": "r-1",
+            }
+        ).encode("utf-8")
+        headers = {"Authorization": "Bearer secret-token-value", "Notion-Version": "2026-03-11"}
+        import io
+        import urllib.error
+
+        exc = urllib.error.HTTPError(
+            "https://api.notion.com/v1/data_sources/da5cba48/query", 401, "Unauthorized", headers, io.BytesIO(body)
+        )
+
+        with pytest.raises(NotionReadOnlyAdapterError) as exc_info:
+            nrao_module._raise_for_http_error(exc, "Notion API")
+
+        assert "secret-token-value" not in str(exc_info.value)
+        assert "Bearer" not in str(exc_info.value)

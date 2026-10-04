@@ -275,11 +275,35 @@ def _verified_identity(value: Mapping[str, object], logical_source: str) -> dict
     return identity
 
 
+def _provider_failure_detail(value: Mapping[str, object]) -> str:
+    """Name the sanitized provider failure detail carried by the read envelope.
+
+    The execution-surface router preserves ``provider_status``/``provider_message``
+    on unresolved scheduler results; surfacing them keeps the terminal
+    fail-closed error diagnosable (#2816: without this, distinct Notion
+    failures collapse to a bare ``provider unresolved``). The fail-closed
+    taxonomy, secret isolation, and read bounds are unchanged: the detail is
+    bounded, single-line, and originates from the adapter's already-sanitized
+    provider message, which never carries credential material.
+    """
+    parts: list[str] = []
+    provider_status = value.get("provider_status")
+    if isinstance(provider_status, str) and provider_status.strip():
+        parts.append(f"provider_status={provider_status.strip()}")
+    provider_message = value.get("provider_message")
+    if isinstance(provider_message, str) and provider_message.strip():
+        flattened = " ".join(provider_message.split())
+        parts.append(f"provider_message={flattened[:300]}")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
 def _normalize_result(value: object, logical_source: str) -> list[dict[str, object]]:
     if isinstance(value, Mapping):
         status = value.get("status")
         if status in {"missing", "not-found", "permission-denied", "stale", "unresolved"}:
-            raise CurriculumReadError(f"provider {status} for {logical_source}")
+            raise CurriculumReadError(
+                f"provider {status} for {logical_source}{_provider_failure_detail(value)}"
+            )
         results = value.get("results")
         if results is None:
             return [dict(value)]

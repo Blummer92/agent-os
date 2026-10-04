@@ -27,6 +27,14 @@ _MAX_PAGES = 20
 _MAX_RESULTS = 2000
 _QUERY_BODY_FIELDS = ("filter", "sorts")
 
+# Sanitized Notion error-body fields: the body is provider-generated diagnostics
+# only and never carries the credential, but code/request_id are still
+# restricted to a safe token charset so log output cannot be injected.
+_NOTION_ERROR_TOKEN_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+)
+_MAX_NOTION_ERROR_MESSAGE_CHARS = 300
+
 
 class NotionReadOnlyAdapterError(Exception):
     """Controlled adapter failure converted to a Scheduler contract result."""
@@ -55,9 +63,53 @@ def _retry_after_seconds(headers: Any) -> Optional[float]:
     return parsed if parsed >= 0 else None
 
 
+def _sanitized_notion_token(value: str) -> str:
+    return "".join(ch for ch in value.strip() if ch in _NOTION_ERROR_TOKEN_CHARS)
+
+
+def _notion_http_error_detail(exc: urllib.error.HTTPError) -> str:
+    """Return sanitized Notion JSON error detail for an HTTP error.
+
+    Notion's error body carries the only provider-side subtype signal
+    (``code`` / ``message`` / ``request_id``); discarding it makes distinct
+    provider failures (unshared source, invalid filter, transient outage)
+    indistinguishable downstream. Only the bounded, charset-restricted fields
+    below are surfaced, so no credential or response-header material can leak.
+    Anything unparseable degrades to an empty detail string, preserving the
+    existing ``Notion API returned HTTP <code>: <reason>`` prefix that
+    downstream consumers match on.
+    """
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    parts: list[str] = []
+    code = payload.get("code")
+    if isinstance(code, str) and code.strip():
+        token = _sanitized_notion_token(code)
+        if token:
+            parts.append(f"notion_code={token}")
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        flattened = " ".join(message.split())
+        parts.append(f"notion_message={flattened[:_MAX_NOTION_ERROR_MESSAGE_CHARS]}")
+    request_id = payload.get("request_id")
+    if isinstance(request_id, str) and request_id.strip():
+        token = _sanitized_notion_token(request_id)
+        if token:
+            parts.append(f"request_id={token}")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
 def _raise_for_http_error(exc: urllib.error.HTTPError, api_name: str) -> None:
     raise NotionReadOnlyAdapterError(
-        f"{api_name} returned HTTP {exc.code}: {exc.reason}",
+        f"{api_name} returned HTTP {exc.code}: {exc.reason}{_notion_http_error_detail(exc)}",
         is_transient=exc.code in _TRANSIENT_HTTP_STATUS_CODES,
         retry_after=_retry_after_seconds(exc.headers),
     ) from exc
