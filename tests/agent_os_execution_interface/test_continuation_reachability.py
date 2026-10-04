@@ -19,9 +19,14 @@ GOVERNED_CONTINUATION_DECISIONS = {
 # Keeping the expected set explicit makes the reduction evidence visible without
 # pretending the wrappers are runtime consumers. #2772/#1729 own their retirement.
 KNOWN_UNCONSUMED_DECISIONS = {
+    # RETAINED (#1188 planner, campaign reduction boundary): plan_execution_continuation
+    # and its pieces in continuation.py are the canonical composition seam and must
+    # not be deleted, retired, or consumed by this campaign. #2281 composes with
+    # classify_recovery_progress only; the planner stays exactly as-is.
     "plan_execution_continuation",
+    # Owned by #3280: plan_red_ci_continuation is a separate lane migration
+    # (diagnostic-actionability / distinct-attempted-surfaces); untouched here.
     "plan_red_ci_continuation",
-    "classify_recovery_progress",
 }
 
 PRODUCTION_ROOTS = (
