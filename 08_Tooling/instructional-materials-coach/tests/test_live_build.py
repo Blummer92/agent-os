@@ -2,14 +2,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from instructional_materials_coach.artifact_content_qa import TerminalQAExpectations
 from instructional_materials_coach.live_build import ArtifactReceipt, LiveBuildInput, LiveBuildReceipt, build_live_materials, evaluate_artifact_completeness
 
 
 def _build():
+    key = "k" * 64
     return LiveBuildInput(
         slides_template_id="slides-template", doc_template_id="doc-template", target_folder_id="folder",
-        slides_name="Lesson - Slides", doc_name="Lesson - Worksheet", idempotency_key="k" * 64,
+        slides_name="Lesson - Slides", doc_name="Lesson - Worksheet", idempotency_key=key,
         slides_requests=({"replaceAllText": {}},), docs_requests=({"replaceAllText": {}},),
+        # #3258: terminal QA runs on every build; the empty request plan
+        # yields no content expectations but the token scan still applies.
+        qa_expectations=TerminalQAExpectations.build_from_requests(idempotency_key=key),
     )
 
 
@@ -31,14 +36,57 @@ def test_preflight_failure_blocks_before_copy():
     copy.assert_not_called()
 
 
+def _readable_services():
+    """Minimal Docs/Slides fakes whose readback returns a clean resource.
+
+    Terminal QA (#3258) reads back the persisted artifact: a MagicMock
+    service would return a non-mapping resource and fail closed with
+    artifact-inaccessible, so tests that expect success use these.
+    """
+    from unittest.mock import MagicMock
+
+    class _Get:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def execute(self):
+            return self._payload
+
+    class _Resource:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def get(self, **kwargs):
+            return _Get(self._payload)
+
+    docs = MagicMock()
+    docs.documents.return_value = _Resource(
+        {"revisionId": "d-rev-1", "body": {"content": []}}
+    )
+    slides = MagicMock()
+    slides.presentations.return_value = _Resource(
+        {"revisionId": "s-rev-1", "slides": []}
+    )
+    return slides, docs
+
+
 def test_zero_matches_creates_both_and_reports_verified_native_finals():
     slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, doc]), patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s-rev"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d-rev"), patch("instructional_materials_coach.live_build.apply_slides_requests") as s_apply, patch("instructional_materials_coach.live_build.apply_docs_requests") as d_apply, patch("instructional_materials_coach.live_build.verify_final_copy", side_effect=[slides, doc]):
-        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
+        slides_svc, docs_svc = _readable_services()
+        receipt = build_live_materials(
+            _build(), drive_service=MagicMock(),
+            slides_service=slides_svc, docs_service=docs_svc,
+        )
     assert receipt.succeeded
     assert receipt.slides.is_final and receipt.worksheet.is_final
+    # #3258: terminal QA verified the persisted readback (no unresolved
+    # tokens, no required content/visuals missing).
+    assert receipt.slides.terminal_qa_state == "verified"
+    assert receipt.worksheet.terminal_qa_state == "verified"
+    assert receipt.terminal_qa is not None and receipt.terminal_qa.state == "verified"
     assert receipt.slides.delivery_kind == receipt.worksheet.delivery_kind == "final"
     assert receipt.slides.canonical_editable and receipt.worksheet.canonical_editable
     assert receipt.slides.persistence_verified and receipt.worksheet.persistence_verified
@@ -117,7 +165,8 @@ def test_one_exact_match_recovers_without_duplicate():
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[recovered], []]), patch("instructional_materials_coach.live_build.duplicate_template", return_value=doc) as copy, patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d"), patch("instructional_materials_coach.live_build.apply_slides_requests"), patch("instructional_materials_coach.live_build.apply_docs_requests"), patch("instructional_materials_coach.live_build.verify_final_copy", side_effect=[recovered, doc]):
-        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
+        slides_svc, docs_svc = _readable_services()
+        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=slides_svc, docs_service=docs_svc)
     assert receipt.succeeded and copy.call_count == 1
 
 
@@ -150,7 +199,8 @@ def test_ambiguous_copy_reconciles_before_any_retry():
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], [recovered], []]) as find, patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[TimeoutError("unknown"), doc]) as copy, patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d"), patch("instructional_materials_coach.live_build.apply_slides_requests"), patch("instructional_materials_coach.live_build.apply_docs_requests"), patch("instructional_materials_coach.live_build.verify_final_copy", side_effect=[recovered, doc]):
-        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
+        slides_svc, docs_svc = _readable_services()
+        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=slides_svc, docs_service=docs_svc)
     assert receipt.succeeded and copy.call_count == 2 and find.call_count == 3
 
 
@@ -186,13 +236,21 @@ def test_both_copied_slides_update_failure_preserves_both_ids():
     assert not receipt.succeeded and copy.call_count == 2
 
 
-def test_docs_update_failure_preserves_slides_final_but_pair_is_partial():
+def test_docs_update_failure_preserves_slides_persisted_but_pair_is_partial():
+    """#3258: a failed worksheet leaves slides metadata-persisted, never final.
+
+    Terminal QA never ran for the pair (the worksheet failed), so the
+    slides receipt is ``persisted`` (metadata-verified) but not ``final``.
+    """
     slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, doc]), patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d"), patch("instructional_materials_coach.live_build.apply_slides_requests"), patch("instructional_materials_coach.live_build.apply_docs_requests", side_effect=RuntimeError("revision mismatch")), patch("instructional_materials_coach.live_build.verify_final_copy", return_value=slides):
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
-    assert receipt.slides.is_final and receipt.worksheet.state == "failed" and not receipt.succeeded
+    assert receipt.slides.state == "updated" and receipt.slides.is_persisted
+    assert not receipt.slides.is_final
+    assert receipt.slides.terminal_qa_state == "not-run"
+    assert receipt.worksheet.state == "failed" and not receipt.succeeded
 
 
 def test_wrong_parent_or_mime_or_failed_readback_never_reports_final():

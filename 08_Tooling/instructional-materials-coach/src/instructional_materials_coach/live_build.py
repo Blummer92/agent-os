@@ -4,6 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Literal
 
+from .artifact_content_qa import (
+    QA_STATE_NOT_RUN,
+    QA_STATE_VERIFIED,
+    TerminalQAExpectations,
+    TerminalQAReport,
+    run_terminal_qa,
+)
 from .build_resume import (
     ResumeRecordInvalidError,
     load_resume_record,
@@ -59,6 +66,13 @@ class LiveBuildInput:
     # transport at build time; without one the build fails closed with
     # placement-runtime-unavailable, never "final".
     visual_placements: tuple[VisualPlacementBinding, ...] = ()
+    # #3258: governed terminal-QA expectations derived from the planned
+    # requests and visual bindings. ``None`` (the default) means no
+    # expectations were supplied: terminal QA then reports
+    # evidence-incomplete and the build can never be final. An empty
+    # expectations record still runs the unresolved-token scan and
+    # artifact-identity binding.
+    qa_expectations: TerminalQAExpectations | None = None
 
 
 class IdempotencyKeyInputMismatchError(RuntimeError):
@@ -92,6 +106,10 @@ class ArtifactReceipt:
     persistence_verified: bool = False
     error: str = ""
     reconciliation_candidates: tuple[ReconciliationCandidate, ...] = ()
+    # #3258: terminal artifact-content QA state for this artifact. ``final``
+    # requires ``verified``: metadata-only verification is ``persisted``,
+    # never ``final``.
+    terminal_qa_state: str = QA_STATE_NOT_RUN
 
     @property
     def is_final(self) -> bool:
@@ -100,6 +118,27 @@ class ArtifactReceipt:
             and self.delivery_kind == "final"
             and self.canonical_editable
             and self.persistence_verified
+            and self.terminal_qa_state == QA_STATE_VERIFIED
+            and bool(self.file_id)
+            and bool(self.mime_type)
+            and bool(self.parents)
+        )
+
+    @property
+    def is_persisted(self) -> bool:
+        """Metadata-verified but not terminal-QA-verified.
+
+        The artifact exists with the right identity (mime, parents,
+        idempotency attribution) but its persisted content has not passed
+        terminal QA. ``persisted`` is a nonterminal state: it must never be
+        reported as ``final``.
+        """
+        return (
+            self.state == "updated"
+            and self.delivery_kind == "final"
+            and self.canonical_editable
+            and self.persistence_verified
+            and self.terminal_qa_state != QA_STATE_VERIFIED
             and bool(self.file_id)
             and bool(self.mime_type)
             and bool(self.parents)
@@ -154,6 +193,10 @@ class LiveBuildReceipt:
     slides: ArtifactReceipt
     worksheet: ArtifactReceipt
     manual_reconciliation_required: bool = False
+    # #3258: machine-readable terminal QA report for the pair. ``succeeded``
+    # requires both artifacts terminal-QA ``verified``: anything unresolved,
+    # stale, failed, inaccessible, or unverified refuses terminal success.
+    terminal_qa: TerminalQAReport | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -419,6 +462,7 @@ def build_live_materials(
     resume_dir: str | None = None,
     placement_transport: Any = None,
     placement_receipts_dir: str | None = None,
+    qa_evidence_dir: str | None = None,
 ) -> LiveBuildReceipt:
     """Build one governed Slides/Docs pair without acquiring credentials or authority.
 
@@ -434,6 +478,11 @@ def build_live_materials(
     ``placement-runtime-unavailable``; a placement failure fails the
     artifact closed with its explicit reason -- never a visual gap and
     never generation permission.
+
+    ``qa_evidence_dir`` enables #3258 terminal artifact-content QA evidence
+    persistence: verified QA reports are recovered on retry while artifact
+    revision and expectations still match, and re-verified otherwise. Even
+    without it, terminal QA runs in-memory and gates ``succeeded``.
     """
     verify_template(drive_service, build.slides_template_id, GOOGLE_SLIDES_MIME)
     verify_template(drive_service, build.doc_template_id, GOOGLE_DOCS_MIME)
@@ -652,4 +701,25 @@ def build_live_materials(
             idempotency_key=build.idempotency_key,
             artifact_files={"slides": slides.file_id, "worksheet": worksheet.file_id},
         )
-    return LiveBuildReceipt(slides, worksheet, worksheet.state == "ambiguous")
+    # #3258 terminal artifact-content QA: the single admission gate. A build
+    # is terminal-success only when the PERSISTED artifacts prove the
+    # governed required content and visuals, attributable to this build and
+    # artifact state. QA runs on every terminal attempt, including the
+    # resume fast path (read-only: no external mutation), so a mutated
+    # artifact can never ride a stale success to "final".
+    qa_report = None
+    if slides.state == "updated" and worksheet.state == "updated":
+        qa_report = run_terminal_qa(
+            expectations=build.qa_expectations,
+            slides_service=slides_service,
+            docs_service=docs_service,
+            slides_file_id=slides.file_id,
+            worksheet_file_id=worksheet.file_id,
+            receipts_dir=placement_receipts_dir,
+            qa_evidence_dir=qa_evidence_dir,
+        )
+        slides = replace(slides, terminal_qa_state=qa_report.slides.state)
+        worksheet = replace(worksheet, terminal_qa_state=qa_report.worksheet.state)
+    return LiveBuildReceipt(
+        slides, worksheet, worksheet.state == "ambiguous", terminal_qa=qa_report
+    )

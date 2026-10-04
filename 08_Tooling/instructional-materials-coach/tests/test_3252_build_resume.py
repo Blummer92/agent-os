@@ -24,6 +24,7 @@ from instructional_materials_coach.live_build import (
     LiveBuildInput,
     build_live_materials,
 )
+from instructional_materials_coach.artifact_content_qa import TerminalQAExpectations
 from instructional_materials_coach.workspace_clients import (
     _validate_replace_results,
 )
@@ -35,6 +36,22 @@ TITLE_TEXT = "Fractions Intro"
 
 
 def _build(key: str = "k" * 64, input_fingerprint: str = "fp-a") -> LiveBuildInput:
+    slides_requests = (
+        {
+            "replaceAllText": {
+                "containsText": {"text": "{{title}}"},
+                "replaceText": {"text": TITLE_TEXT},
+            }
+        },
+    )
+    docs_requests = (
+        {
+            "replaceAllText": {
+                "containsText": {"text": "{{title}}"},
+                "replaceText": {"text": TITLE_TEXT},
+            }
+        },
+    )
     return LiveBuildInput(
         slides_template_id="slides-template",
         doc_template_id="doc-template",
@@ -43,21 +60,14 @@ def _build(key: str = "k" * 64, input_fingerprint: str = "fp-a") -> LiveBuildInp
         doc_name="Lesson - Worksheet",
         idempotency_key=key,
         input_fingerprint=input_fingerprint,
-        slides_requests=(
-            {
-                "replaceAllText": {
-                    "containsText": {"text": "{{title}}"},
-                    "replaceText": {"text": TITLE_TEXT},
-                }
-            },
-        ),
-        docs_requests=(
-            {
-                "replaceAllText": {
-                    "containsText": {"text": "{{title}}"},
-                    "replaceText": {"text": TITLE_TEXT},
-                }
-            },
+        slides_requests=slides_requests,
+        docs_requests=docs_requests,
+        # #3258: terminal QA proves the persisted content; without governed
+        # expectations the build can never be final.
+        qa_expectations=TerminalQAExpectations.build_from_requests(
+            idempotency_key=key,
+            docs_requests=docs_requests,
+            slides_requests=slides_requests,
         ),
     )
 
@@ -75,7 +85,13 @@ class _FakeDriveFiles:
 
     def __init__(self, store: dict[str, dict[str, Any]]):
         self._store = store
+        # Continue numbering past copies created through other service
+        # instances sharing this store: ids must never collide.
         self._next = 0
+        for existing_id in store:
+            match = re.fullmatch(r"copy-(\d+)", str(existing_id))
+            if match:
+                self._next = max(self._next, int(match.group(1)))
 
     def list(self, q: str = "", **kwargs: Any) -> _Executable:
         key = re.search(r"key='agent_os_idempotency_key' and value='([^']*)'", q)
@@ -155,12 +171,15 @@ class _FakeWorkspaceService:
         # go through the patched get_*_revision_id helpers).
         texts: dict[str, str] = self._store.get("_texts", {})
         text = texts.get(fid, "")
+        # #3258: terminal QA binds evidence to the artifact revision, so the
+        # fake readback carries a revisionId like the real API.
+        revision = f"rev-{fid or self._kind}"
         if self._kind == "documents":
             return _Executable(
-                {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": text}}]}}]}}
+                {"revisionId": revision, "body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": text}}]}}]}}
             )
         return _Executable(
-            {"slides": [{"pageElements": [{"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}}]}]}
+            {"revisionId": revision, "slides": [{"pageElements": [{"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}}]}]}
         )
 
     def batchUpdate(self, presentationId: str | None = None, documentId: str | None = None,
@@ -355,6 +374,12 @@ def test_resume_applies_only_unapplied_requests(tmp_path):
         input_fingerprint="fp-a",
         slides_requests=(),
         docs_requests=two_docs,
+        # #3258: terminal QA proves the persisted content.
+        qa_expectations=TerminalQAExpectations.build_from_requests(
+            idempotency_key=key,
+            docs_requests=two_docs,
+            slides_requests=(),
+        ),
     )
 
     # Simulate the crash: worksheet copy exists, request 0 recorded applied.
@@ -379,6 +404,9 @@ def test_resume_applies_only_unapplied_requests(tmp_path):
     record["worksheet"]["file_id"] = docs_copy["id"]
     record["worksheet"]["applied_request_indices"] = [0]
     write_resume_record(resume_dir, record)
+    # Model the pre-crash reality the resume record claims: request 0's text
+    # is already persisted in the copy, so terminal QA can observe it.
+    store.setdefault("_texts", {})[docs_copy["id"]] = "First"
 
     # Retry: only requests[1:] must be applied, one at a time.
     docs_svc2 = _FakeWorkspaceService("documents", store)

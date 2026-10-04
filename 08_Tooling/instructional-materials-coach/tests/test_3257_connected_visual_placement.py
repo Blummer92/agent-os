@@ -129,14 +129,15 @@ def _drive_metadata(file_id: str, *, sha256: str = FINGERPRINT, trashed: bool = 
 class FakeDocsService:
     """Fake Docs v1 service over an in-memory document store.
 
-    documents_store: doc_id -> {"revisionId": str, "paragraphs": [str, ...]}.
+    documents_store: doc_id -> {"revisionId": str, "paragraphs": [str, ...],
+    "inline_objects": [embeddedObjectId, ...]}.
     """
 
     def __init__(self) -> None:
         self.documents_store: dict[str, dict[str, Any]] = {}
 
     def add_document(self, doc_id: str, paragraphs: list[str], revision: str = "r1") -> None:
-        self.documents_store[doc_id] = {"revisionId": revision, "paragraphs": list(paragraphs)}
+        self.documents_store[doc_id] = {"revisionId": revision, "paragraphs": list(paragraphs), "inline_objects": []}
 
     def documents(self) -> "_FakeDocsResource":
         return _FakeDocsResource(self)
@@ -152,7 +153,14 @@ class _FakeDocsResource:
             {"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}
             for text in doc["paragraphs"]
         ]
-        return _FakeExecutable({"revisionId": doc["revisionId"], "body": {"content": content}})
+        # #3258: placed visuals are observable as inline objects, mirroring
+        # the real documents.get inlineObjects surface.
+        for object_id in doc.get("inline_objects", []):
+            content.append(
+                {"paragraph": {"elements": [{"inlineObjectElement": {"embeddedObjectId": object_id}}]}}
+            )
+        inline_objects = {object_id: {"objectId": object_id} for object_id in doc.get("inline_objects", [])}
+        return _FakeExecutable({"revisionId": doc["revisionId"], "body": {"content": content}, "inlineObjects": inline_objects})
 
 
 class FakeSlidesService:
@@ -241,6 +249,9 @@ class FakePlacementTransport:
             assert self._docs is not None
             doc = self._docs.documents_store[target.artifact_id]
             doc["paragraphs"] = ["" if p.strip() == target.marker else p for p in doc["paragraphs"]]
+            # #3258: the inserted visual is observable in readback as an
+            # inline object, like the real Docs API.
+            doc.setdefault("inline_objects", []).append(inserted_id)
             doc["revisionId"] = doc["revisionId"] + "-p"
         return {"state": "placed", "inserted_element_id": inserted_id}
 
@@ -750,14 +761,24 @@ def _run_connected_build(*, bindings, docs, slides, drive, transport, tmp_path,
                          resume_dir=None, copies=([], []), key="k" * 64):
     """Run the real build_live_materials composition with injected fakes."""
     from unittest.mock import patch
+    from instructional_materials_coach.artifact_content_qa import TerminalQAExpectations
     from instructional_materials_coach.live_build import LiveBuildInput, build_live_materials
     slides_meta = _live_build_meta("slides-id", "application/vnd.google-apps.presentation", "slides", key)
     doc_meta = _live_build_meta("doc-id", "application/vnd.google-apps.document", "worksheet", key)
+    slides_requests = ({"replaceAllText": {}},)
+    docs_requests = ({"replaceAllText": {}},)
     build = LiveBuildInput(
         slides_template_id="slides-template", doc_template_id="doc-template",
         target_folder_id="folder", slides_name="Lesson - Slides", doc_name="Lesson - Worksheet",
-        idempotency_key=key, slides_requests=({"replaceAllText": {}},),
-        docs_requests=({"replaceAllText": {}},), visual_placements=tuple(bindings),
+        idempotency_key=key, slides_requests=slides_requests,
+        docs_requests=docs_requests, visual_placements=tuple(bindings),
+        # #3258: terminal QA proves the persisted content and placed visuals.
+        qa_expectations=TerminalQAExpectations.build_from_requests(
+            idempotency_key=key,
+            docs_requests=docs_requests,
+            slides_requests=slides_requests,
+            visual_placements=tuple(bindings),
+        ),
     )
     receipts_dir = tmp_path / "receipts"
     with patch("instructional_materials_coach.live_build.verify_template"), \

@@ -27,6 +27,9 @@ Requested-format completeness is evaluated separately from native-editable compl
 
 Deploying/activating the Apps Script runtime (API executable deployment, execution grant, OAuth/credential work) remains separately governed. Until activation, a build with a non-empty visual selection fails closed with the explicit `placement-runtime-unavailable` blocked state -- never "final", never a visual gap, never generation permission. Placement failure keeps its own explicit reason (asset-missing, asset-access-failure, content-identity-mismatch, marker-not-found, placement-transport-failed, ...) and is never converted into absence. See `docs/visual-placement-contract.md`.
 
+## Terminal artifact-content QA
+`artifact_content_qa.py` (#3258) proves the persisted final artifact contains the governed required content and visuals, attributable to the current build and artifact state. `LiveBuildReceipt.succeeded` — the single completion owner — now requires both artifacts terminal-QA `verified`; metadata-only verification yields `persisted`, never `final`. Expectations derive from the planned `replaceAllText` requests (token gone + replacement text present) and the #3257 visual bindings; evaluation reads back the persisted Docs/Slides bodies (unresolved-token scan, content presence, visual marker/element observation, receipt-to-artifact revision binding). The existing `worksheet_revision_qa.validate_revision_render_visuals` / `visual_completeness` contracts are wired into the visual dimension. QA runs read-only on every terminal attempt including the #3252 resume fast path; verified evidence persists per idempotency key (`reports/terminal-qa/`, recovered only while revision and expectations still match). Fail-closed throughout: missing, stale, conflicting, inaccessible, or unverifiable evidence refuses terminal success. The CLI prints "final" only on QA pass. See `docs/terminal-qa-contract.md`.
+
 ## Offline slide layout QA
 `slide_layout_qa.py` provides a pure structural QA seam for student-facing slide render plans. It detects only mechanically provable defects: empty opaque placeholders layered above required instructional regions, unsafe required-text contrast when both colors are known, unintended overlap between required title/directions/model/task/teacher-cue regions, oversized supporting previews, and under-dominant focal models. Unknown colors or other judgments that cannot be established from the supplied structural plan route to `manual-review` rather than receiving a false pass. The seam performs no rendering, OCR/CV, provider call, classroom publication, or Drive mutation; broader phone/projector rendered review remains owned by #1835.
 
@@ -109,6 +112,15 @@ persisted artifact (slot, asset, and exact content identity), and recorded as
 a durable verified placement receipt. A visuals-required build completes only
 when every required slot is verified-placed; placement failure never becomes
 a visual gap and never authorizes new visual creation.
+
+Terminal artifact-content QA (#3258) runs on every build, including the
+resume fast path: the persisted Slides/Docs bodies are read back and checked
+for unresolved tokens, required content, and required visuals bound to the
+current artifact revision and build idempotency key. The CLI prints "final"
+only when terminal QA verifies both artifacts; anything else is reported
+with its QA state (e.g. `persisted-not-final`) and failing findings.
+`--qa-evidence-dir` (default `reports/terminal-qa`) controls where verified
+QA evidence persists for retry recovery.
 
 The runtime reuses the public MaterialRequirement validator, visual-needs planner, canonical reuse planner, visual-candidate filter, and cohesive visual planner. The CLI remains the manual credential wrapper and delegates the external operation to `build_live_materials()` after governed content/visual checks pass.
 
