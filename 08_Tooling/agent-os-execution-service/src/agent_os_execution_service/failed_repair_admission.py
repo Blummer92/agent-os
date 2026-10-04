@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import (
+    ZeroJobAdmissionEvidence,
+    ZeroJobRecoveryProjection,
+    project_zero_job_admission,
+)
 from workflow_scheduler.execution.recovery_progress import (
     RecoveryProgressDisposition,
     RecoverySemanticEvidence,
@@ -30,6 +35,8 @@ class FailedRepairAdmissionRecord:
     reason_codes: tuple[str, ...]
     next_action: str
     recovery_stalled: bool = False
+    bounded_continuation_admitted: bool = False
+    zero_job_recovery: ZeroJobRecoveryProjection | None = None
     github_writes_authorized: bool = field(default=False, init=False)
     workflow_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
@@ -50,6 +57,7 @@ def evaluate_failed_repair_admission(
     current: RecoverySemanticEvidence | None = None,
     prior: RecoverySemanticEvidence | None = None,
     prior_transition_fingerprint: str | None = None,
+    zero_job: ZeroJobAdmissionEvidence | None = None,
 ) -> FailedRepairAdmissionRecord:
     """Gate the next repair mutation on retry-specific CKR6 and separated diagnostics.
 
@@ -70,6 +78,15 @@ def evaluate_failed_repair_admission(
     or retry happens inside it, and capability failures stay outside recurrence.
     All three recovery params are optional keyword-only so #3280's later
     additive params land cleanly.
+
+    When ``zero_job`` run evidence is supplied (#3277), the projection also
+    composes the surface-neutral zero-job classifier. Non-executed validation
+    evidence (stale ``action_required``, pre-job failure, unproven currentness)
+    is never a red code-test failure: repository repair is inadmissible and the
+    CKR6 code-repair re-entry is not selected. Stale non-executed evidence
+    projects the bounded exact-head re-dispatch (at most two attempts, fail
+    closed when the PR head moved); an executed failure adds no gating. Actual
+    dispatch capability remains owned by #2410.
     """
     attempt_id = _text(activation_result.get("attempt_id"), "attempt_id")
     retry_reentry_outcome = _text(
@@ -94,6 +111,11 @@ def evaluate_failed_repair_admission(
 
     reasons: list[str] = []
     recovery_stalled = False
+    zero_job_projection = None
+    if zero_job is not None:
+        zero_job_projection = project_zero_job_admission(zero_job)
+        if zero_job_projection.gates_code_repair:
+            reasons.extend(zero_job_projection.reason_codes)
     if current is not None:
         progress = classify_recovery_progress(
             current,
@@ -128,8 +150,12 @@ def evaluate_failed_repair_admission(
     if mergeability == "conflicting":
         reasons.append("mergeability-conflict-signal")
 
+    bounded_continuation_admitted = False
     if reasons:
-        if "retry-specific-lessons-not-consumed" in reasons:
+        if zero_job_projection is not None and zero_job_projection.gates_code_repair:
+            next_action = zero_job_projection.next_action or "reacquire-independent-diagnostics"
+            bounded_continuation_admitted = zero_job_projection.bounded_continuation
+        elif "retry-specific-lessons-not-consumed" in reasons:
             next_action = "reenter-ckr6-for-exact-failed-attempt"
         elif "required-check-configuration-drift" in reasons:
             next_action = "reconcile-required-check-configuration-before-code-repair"
@@ -162,6 +188,10 @@ def evaluate_failed_repair_admission(
         reason_codes=tuple(reasons),
         next_action=next_action,
         recovery_stalled=recovery_stalled,
+        bounded_continuation_admitted=bounded_continuation_admitted,
+        zero_job_recovery=(
+            zero_job_projection.recovery if zero_job_projection is not None else None
+        ),
     )
 
 
