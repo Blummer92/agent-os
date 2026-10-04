@@ -82,9 +82,8 @@ def test_gate_enforces_disposition_through_the_tested_decision_module():
 
 
 def test_gate_is_a_plain_job_not_a_reusable_workflow_call():
-    # The gate must be a first-class job in this workflow so its disposition
-    # is reported as a check run on the PR; delegating to a reusable workflow
-    # would change the reported check identity.
+    # When admitted, the gate must remain a first-class job in this workflow so
+    # its authoritative disposition is reported directly on the PR.
     job = _gate_job()
     assert "uses" not in job
     assert job.get("steps"), "the gate job must define its own steps"
