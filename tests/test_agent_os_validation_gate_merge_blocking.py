@@ -69,44 +69,15 @@ def test_ready_event_does_not_cancel_equivalent_in_flight_same_pr_validation() -
     ) in content
 
 
-def test_ready_event_queries_only_current_head_aggregate_check_evidence() -> None:
+def test_ready_event_reads_latest_canonical_commit_status_for_exact_head() -> None:
     step = _ready_evidence_step(_workflow())
     assert 'HEAD_SHA: ${{ github.event.pull_request.head.sha }}' in step
-    assert '"/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100"' in step
-    assert 'select(.name == "Run aggregate validation")' in step
-    assert "CURRENT_RUN_URL_FRAGMENT" in step
-    assert "contains(env.CURRENT_RUN_URL_FRAGMENT)" in step
-
-
-def test_historical_1904_shape_reuses_completed_exact_head_success() -> None:
-    step = _ready_evidence_step(_workflow())
-    assert 'any(.status == "completed" and .conclusion == "success") then "passed"' in step
-    assert "passed)" in step
-    assert "active|passed)" not in step
-    assert 'echo "run_required=false" >> "$GITHUB_OUTPUT"' in step
-
-
-def test_queued_or_in_progress_exact_head_aggregate_is_not_reusable_success() -> None:
-    step = _ready_evidence_step(_workflow())
-    assert 'any(.status == "queued" or .status == "in_progress") then "active"' in step
-    assert "active|passed)" not in step
-    assert 'active)' not in step
-    assert 'echo "run_required=true" >> "$GITHUB_OUTPUT"' in step
-
-
-def test_missing_failed_or_cancelled_current_head_evidence_requires_aggregate() -> None:
-    step = _ready_evidence_step(_workflow())
-    assert 'else "missing-or-nonpassing"' in step
-    assert 'echo "run_required=true" >> "$GITHUB_OUTPUT"' in step
-    assert '.conclusion == "failure"' not in step
-    assert '.conclusion == "cancelled"' not in step
-
-
-def test_new_sha_and_stale_older_sha_evidence_cannot_be_reused() -> None:
-    step = _ready_evidence_step(_workflow())
-    assert "commits/$HEAD_SHA/check-runs" in step
-    assert "pulls/$PR_NUMBER/check-runs" not in step
-    assert "head_branch" not in step
+    assert '"/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100"' in step
+    assert 'select(.context == "agent-os/authoritative-aggregate")' in step
+    assert "sort_by(.id)" in step
+    # Historical "any successful check run" semantics are gone (#2761).
+    assert "check-runs" not in step
+    assert "pulls/$PR_NUMBER" not in step
 
 
 def test_ready_without_prior_aggregate_still_executes_authoritative_command() -> None:
@@ -141,9 +112,6 @@ def test_manual_diagnostic_and_final_candidate_dispatch_do_not_use_ready_reuse_g
     assert "mode=final-candidate" in _workflow()
 
 
-CURRENT_RUN = "/actions/runs/200"
-
-
 def _reuse_step_script() -> str:
     workflow = yaml.safe_load(_workflow())
     (step,) = [
@@ -154,10 +122,10 @@ def _reuse_step_script() -> str:
     return step["run"]
 
 
-def _run_reuse_step(tmp_path: Path, check_runs: list[dict]) -> dict[str, str]:
-    """Execute the real reuse step against a stubbed `gh api` check-run response."""
-    fixture = tmp_path / "check-runs.json"
-    fixture.write_text(json.dumps({"check_runs": check_runs}), encoding="utf-8")
+def _run_reuse_step(tmp_path: Path, statuses: list[dict]) -> dict[str, str]:
+    """Execute the real reuse step against a stubbed `gh api` status response."""
+    fixture = tmp_path / "statuses.json"
+    fixture.write_text(json.dumps(statuses), encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -180,49 +148,46 @@ def _run_reuse_step(tmp_path: Path, check_runs: list[dict]) -> dict[str, str]:
             "GITHUB_OUTPUT": str(output),
             "GITHUB_REPOSITORY": "Blummer92/agent-os",
             "HEAD_SHA": "d3501c232181963deda648483c9c65f4290f8ba7",
-            "CURRENT_RUN_URL_FRAGMENT": CURRENT_RUN,
         },
         check=True,
     )
     return dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
 
 
-def _check(run: str, status: str, conclusion: str | None) -> dict:
-    return {
-        "name": "Run aggregate validation",
-        "status": status,
-        "conclusion": conclusion,
-        "details_url": f"https://github.com/Blummer92/agent-os/actions/runs/{run}/job/1",
-    }
+def _status(status_id: int, state: str, context: str = "agent-os/authoritative-aggregate") -> dict:
+    return {"id": status_id, "state": state, "context": context}
 
 
-def test_2631_chronology_draft_skipped_job_is_not_reusable_evidence(tmp_path: Path) -> None:
-    # PR #2631: the Draft-time run skipped the aggregate job; the Ready run must
-    # execute it rather than treat the skipped job as accepted evidence.
-    outputs = _run_reuse_step(
-        tmp_path,
-        [_check("35349164504", "completed", "skipped"), _check("200", "in_progress", None)],
-    )
-    assert outputs == {"state": "missing-or-nonpassing", "run_required": "true"}
+# (statuses newest-first as GitHub returns them, expected state, run_required)
+REUSE_MATRIX = [
+    ([], "missing", "true"),
+    ([_status(1, "success")], "success", "false"),
+    ([_status(2, "pending"), _status(1, "success")], "pending", "true"),
+    # #2761: older success -> newer failure must not be reused.
+    ([_status(2, "failure"), _status(1, "success")], "failure", "true"),
+    ([_status(2, "error"), _status(1, "success")], "error", "true"),
+    # Newer success after a failure is the governing evidence.
+    ([_status(3, "success"), _status(2, "failure")], "success", "false"),
+    # Ordering of the response must not matter; the highest id governs.
+    ([_status(1, "success"), _status(2, "failure")], "failure", "true"),
+    # Other contexts never count, however new or green.
+    ([_status(9, "success", "ci/other")], "missing", "true"),
+    ([_status(9, "success", "ci/other"), _status(2, "failure")], "failure", "true"),
+]
 
 
-def test_completed_exact_head_success_is_reused_once(tmp_path: Path) -> None:
-    outputs = _run_reuse_step(tmp_path, [_check("100", "completed", "success")])
-    assert outputs == {"state": "passed", "run_required": "false"}
+@pytest.mark.parametrize("statuses,state,run_required", REUSE_MATRIX)
+def test_workflow_reuse_step_obeys_latest_status_matrix(
+    tmp_path: Path, statuses: list[dict], state: str, run_required: str
+) -> None:
+    outputs = _run_reuse_step(tmp_path, statuses)
+    assert outputs == {"state": state, "run_required": run_required}
 
 
-@pytest.mark.parametrize("status", ["queued", "in_progress"])
-def test_active_other_run_is_never_reported_as_satisfied_evidence(tmp_path: Path, status: str) -> None:
-    # Skipping here would publish a green aggregate check for this run while the
-    # other run could still fail (#2920 / #2589 masking shape).
-    outputs = _run_reuse_step(
-        tmp_path,
-        [_check("100", "completed", "success"), _check("101", status, None)],
-    )
-    assert outputs == {"state": "active", "run_required": "true"}
+@pytest.mark.parametrize("statuses,state,run_required", REUSE_MATRIX)
+def test_python_reuse_decision_matches_workflow_matrix(
+    statuses: list[dict], state: str, run_required: str
+) -> None:
+    from scripts.agent_os_aggregate_gate import evaluate_reuse
 
-
-@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped"])
-def test_nonpassing_exact_head_evidence_requires_aggregate(tmp_path: Path, conclusion: str) -> None:
-    outputs = _run_reuse_step(tmp_path, [_check("100", "completed", conclusion)])
-    assert outputs == {"state": "missing-or-nonpassing", "run_required": "true"}
+    assert evaluate_reuse(statuses) == (run_required == "false", state)

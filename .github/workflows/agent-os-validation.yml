@@ -192,6 +192,21 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Job-level override replaces the workflow permissions, so the read grants
+    # are restated. `statuses: write` is only for the canonical
+    # `agent-os/authoritative-aggregate` commit status (#2589).
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: write
+    outputs:
+      authoritative: ${{ steps.authority.outputs.authoritative }}
+      head_sha: ${{ steps.authority.outputs.head_sha }}
+      reused: ${{ steps.aggregate_evidence.outputs.run_required == 'false' }}
+      aggregate_outcome: ${{ steps.aggregate.outcome }}
+      main_health_outcome: ${{ steps.main_health.outcome }}
+      main_recovery_stop_outcome: ${{ steps.main_recovery_stop.outcome }}
     steps:
       - name: Admit exact-head Draft final candidate
         if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -247,37 +262,69 @@ jobs:
           echo "head_sha=$current_head" >> "$GITHUB_OUTPUT"
           echo "base_sha=$current_base" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve authoritative candidate identity
+        id: authority
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
+          DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # Only non-Draft PR runs and admitted final-candidate dispatches are
+          # authoritative. Diagnostic dispatch and main pushes never publish.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "authoritative=true" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_MODE" = "final-candidate" ]; then
+            echo "authoritative=true" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$DISPATCH_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "authoritative=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Reuse valid exact-head aggregate evidence
         if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' }}
         id: aggregate_evidence
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CURRENT_RUN_URL_FRAGMENT: /actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Only the newest `agent-os/authoritative-aggregate` status for this
+          # exact SHA governs (#2761): an older success never masks a newer
+          # failure/error/pending, and check-run history is not consulted.
           evidence_state="$(
             gh api \
               -H "Accept: application/vnd.github+json" \
-              "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" \
-              --jq '[.check_runs[]
-                | select(.name == "Run aggregate validation")
-                | select(((.details_url // "") | contains(env.CURRENT_RUN_URL_FRAGMENT)) | not)
-                | {status, conclusion}]
-                | if any(.status == "queued" or .status == "in_progress") then "active"
-                  elif any(.status == "completed" and .conclusion == "success") then "passed"
-                  else "missing-or-nonpassing"
-                  end'
+              "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" \
+              --jq '[.[] | select(.context == "agent-os/authoritative-aggregate")]
+                | sort_by(.id)
+                | last
+                | .state // "missing"'
           )"
           echo "state=$evidence_state" >> "$GITHUB_OUTPUT"
           case "$evidence_state" in
-            passed)
+            success)
               echo "run_required=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "run_required=true" >> "$GITHUB_OUTPUT"
               ;;
           esac
+
+      - name: Publish authoritative aggregate pending status
+        if: ${{ steps.authority.outputs.authoritative == 'true' && steps.aggregate_evidence.outputs.run_required != 'false' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_SHA: ${{ steps.authority.outputs.head_sha }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
+            -f state=pending \
+            -f context=agent-os/authoritative-aggregate \
+            -f description="Authoritative aggregate validation running on this exact head" \
+            -f target_url="$TARGET_URL"
 
       - name: Check out repository
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
@@ -660,9 +707,35 @@ jobs:
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     needs: [plan, validate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+      - name: Publish terminal authoritative aggregate status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHORITATIVE: ${{ needs.validate.outputs.authoritative }}
+          REUSED: ${{ needs.validate.outputs.reused }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          AGGREGATE_OUTCOME: ${{ needs.validate.outputs.aggregate_outcome }}
+          MAIN_HEALTH_OUTCOME: ${{ needs.validate.outputs.main_health_outcome }}
+          MAIN_RECOVERY_STOP_OUTCOME: ${{ needs.validate.outputs.main_recovery_stop_outcome }}
+          STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          decision="$(python3 scripts/agent_os_aggregate_gate.py status)"
+          if [ -z "$decision" ]; then
+            echo "No authoritative aggregate status to publish for this run."
+            exit 0
+          fi
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
+            -f state="$(jq -r .state <<<"$decision")" \
+            -f context=agent-os/authoritative-aggregate \
+            -f description="$(jq -r .description <<<"$decision")" \
+            -f target_url="$TARGET_URL"
       - name: Enforce authoritative aggregate disposition
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
