@@ -22,6 +22,7 @@ from scripts.agent_os_execution_interface.continuation_driver import (
     continuation_payload,
 )
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import ZeroJobAdmissionEvidence
+from agent_os_execution_service.failed_repair_admission import DiagnosticSurfaceEvidence
 from workflow_scheduler.execution.recovery_progress import RecoverySemanticEvidence
 from scripts.agent_os_execution_interface.mission_completion_admission import evaluate_mission_completion_admission
 from scripts.agent_os_execution_interface.post_selection_continuation import (
@@ -87,8 +88,8 @@ def activate_agent_os_failed_repair(*, repository: str, issue_number: int, attem
     return {"repository": repo, "issue_number": issue, "attempt_id": result.attempt.attempt_id, "retry_reentry_outcome": result.attempt.retry_reentry_outcome.value, "lesson_disposition": result.lesson_disposition.value, "lesson_retrieval_status": result.lesson_result.lesson_retrieval_status.value, "selected_lesson_ids": list(result.lesson_result.selected_lesson_ids), "canonical_github_refs": list(result.lesson_result.canonical_github_refs), "mutation_admissible": result.boundary.mutation_admissible, "blocking_attempt_id": result.boundary.blocking_attempt_id, "reason_codes": list(result.boundary.reason_codes), "github_writes_authorized": False, "execution_authorized": False, "side_effects_performed": False}
 
 
-def admit_agent_os_failed_repair(*, activation_result: Mapping[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None) -> dict[str, object]:
-    decision = evaluate_failed_repair_admission(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job)
+def admit_agent_os_failed_repair(*, activation_result: Mapping[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None, diagnostics: DiagnosticSurfaceEvidence | None = None) -> dict[str, object]:
+    decision = evaluate_failed_repair_admission(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job, diagnostics=diagnostics)
     proceeds = decision.mutation_admissible or decision.bounded_continuation_admitted
     payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(DriverDecision(action=decision.next_action if proceeds else "", blocked=not proceeds, stalled=decision.recovery_stalled, reason_codes=decision.reason_codes)); return payload
 

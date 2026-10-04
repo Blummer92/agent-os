@@ -48,6 +48,7 @@ from .mcp_facade import (
     plan_agent_os_continuation,
 )
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import ZeroJobAdmissionEvidence
+from agent_os_execution_service.failed_repair_admission import DiagnosticSurfaceEvidence
 from workflow_scheduler.execution.recovery_progress import RecoverySemanticEvidence
 
 mcp = MCPServer("Agent OS")
@@ -262,8 +263,8 @@ def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, att
 
 
 @mcp.tool()
-def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, *, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None) -> dict[str, object]:
-    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job)
+def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, *, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None, diagnostics: DiagnosticSurfaceEvidence | None = None) -> dict[str, object]:
+    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job, diagnostics=diagnostics)
 
 
 def _ready_review_closure_admissions(
