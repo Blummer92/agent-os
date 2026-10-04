@@ -21,6 +21,8 @@ EXPECTED_TOOLS = frozenset(
         "classify_agent_os_investigation_completion_tool",
         "classify_agent_os_continuation_tool",
         "classify_agent_os_bulk_repair_continuation_tool",
+        "admit_agent_os_issue_comment_mutation_tool",
+        "project_agent_os_lane_post_pr_issue_reconciliation_tool",
     }
 )
 

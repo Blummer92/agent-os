@@ -22,6 +22,14 @@ ChatGPT + Agent OS app
 
 Both tools are non-authorizing. Their result models cannot grant execution, GitHub writes, merge, closure, external writes, Scheduler admission, or lease acquisition.
 
+## Governed mutation seams (#3281)
+
+`admit_agent_os_issue_comment_mutation_tool(phase, issue_number, ...)` exposes the issue-comment write boundary. Phase `pre-write-guard` runs the #2741 verify-open guard (`evaluate_defect_evidence_mutation`) on host-supplied target state: stale state evidence is refused fail-closed for re-acquire; a closed target is refused with the directive `route-to-open-owner` (when an open owner is named) or `create-new-bug`; only a current, verified-open target is admitted. Phase `post-write-readback` runs the #2785 canonical readback (`evaluate_comment_persistence`) over the host's canonical comment list: a subordinate write is `persisted` only when the exact intended body appears in the canonical readback; a provider success claim without readback proof is `not-persisted` and retry-safe; an incomplete or ambiguous readback is `uncertain` and never authorizes an automatic retry, so an uncertain response followed by reconciliation never creates a duplicate comment.
+
+`project_agent_os_lane_post_pr_issue_reconciliation_tool(phase, ...)` exposes the Safe Implementation Lane post-PR step. Phase `plan` runs the #2791 projection (`project_lane_post_pr_issue_reconciliation`) on host-supplied issue/PR readback evidence and projects the issue's expected post-PR disposition using only the existing lifecycle-mutation vocabulary (`remove-lifecycle-label`, `close-issue`); phase `readback-proof` replays the returned plan dict against the canonical post-mutation readback (`evaluate_lane_post_pr_issue_readback`). Draft PR creation is never reported `fully_reconciled` while the linked issue keeps a stale Ready label or an open disposition. The projection can never grant merge or Ready authority (`merge_authorized`/`ready_authorized` are `Literal[False]`).
+
+Both tools are pure admission/readback composition in `governed_mutation_seams_facade.py`. They perform no GitHub writes, authorize none, and introduce no second issue registry, queue, scheduler, or lifecycle authority. Live host consumption is separately authorized; registration and tests alone are not closure evidence.
+
 ## Discovery and write boundaries
 
 #1284 remains unchanged: MCP never reads `<checkpoint_store>/invocations/*.json` directly. The app requests the existing server-side discovery operation through the governed GitHub/GCE path. Zero matches remain `not-found`; multiple/corrupt/unavailable evidence remains `needs-decision`; no newest/latest heuristic is added.
