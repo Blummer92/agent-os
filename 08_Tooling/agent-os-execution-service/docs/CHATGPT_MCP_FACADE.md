@@ -22,6 +22,16 @@ ChatGPT + Agent OS app
 
 Both tools are non-authorizing. Their result models cannot grant execution, GitHub writes, merge, closure, external writes, Scheduler admission, or lease acquisition.
 
+## Mission completion tools
+
+`classify_agent_os_mission_completion_tool(repository, issue_number, branch_exists, implementation_commit_count, draft_pr_exists, canonical_pr_readback_verified, capable_route_available, subordinate_writes_only, implementation_pr_required=False, ...)` accepts the same ten live-consumer/successor inputs as `classify_agent_os_mission_completion` in the facade: `live_consumer_required`, `live_consumer_requirement_source`, `live_consumer_reachability_proven`, `live_consumer_identity`, `live_consumer_evidence_source`, `live_consumer_evidence_current`, `live_consumer_evidence_kind`, `successor_issue_number`, `successor_current`, `successor_owns_residual_live_acceptance`. All default to `False`/`None`, so repository-only callers that pass only the original nine parameters are unaffected: a mission whose issue contract does not require a live consumer keeps the repository-only completion semantics.
+
+When `live_consumer_required` is true, completion through the tool is refused unless either (a) current source-specific live observation is proven against the exact consumer identity (`required-live-consumer-current-observation-proven`) or (b) a current successor issue provably owns the residual live-acceptance obligation (`residual-live-acceptance-owned-by-current-successor`). Packaging, registration, fixtures, contracts, and unit tests are repository evidence only; they never satisfy the live-consumer requirement.
+
+`classify_agent_os_issue_batch_completion_tool(repository, issue_number, lane_evidence)` reads the same ten keys as optional per-lane fields from each `lane_evidence` entry and forwards them to the single-issue admission gate for PR-required lanes. Per-lane is deliberate: heterogeneous lanes must not homogenize (one lane's live-consumer requirement never blocks or blesses another lane). No-PR lanes never call admission, so per-lane live-consumer keys are naturally a no-op there.
+
+Tool registration is not evidence of live consumption. The fact that these tools are registered on the MCP surface proves only that the contract inputs exist; nothing about registration, packaging, or a passing tool call observes the live host/runtime/connector. A completion claim backed only by tool availability is a false completion.
+
 ## Discovery and write boundaries
 
 #1284 remains unchanged: MCP never reads `<checkpoint_store>/invocations/*.json` directly. The app requests the existing server-side discovery operation through the governed GitHub/GCE path. Zero matches remain `not-found`; multiple/corrupt/unavailable evidence remains `needs-decision`; no newest/latest heuristic is added.
