@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_os_issue_labels.pr_branch_refresh_actions import _TRIGGER
+from scripts.agent_os_issue_labels.pr_branch_refresh_actions import (
+    _CLAUDE_CODE_ATTRIBUTION_FOOTER,
+    _TRIGGER,
+    _canonical_trigger_body,
+)
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
@@ -142,6 +146,13 @@ def test_admission_admits_everything_the_canonical_parser_accepts(body: str) -> 
     assert body.startswith(_admission_prefix())
 
 
+def test_claude_footer_trigger_reaches_admission_and_normalizes_to_canonical_grammar() -> None:
+    body = "/agent-os refresh-pr 1619" + _CLAUDE_CODE_ATTRIBUTION_FOOTER
+    assert body.startswith(_admission_prefix())
+    assert _TRIGGER.fullmatch(body) is None
+    assert _TRIGGER.fullmatch(_canonical_trigger_body(body)) is not None
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -242,3 +253,145 @@ def test_summary_step_always_runs_and_evidence_is_uploaded() -> None:
     assert "if: ${{ always() }}" in summary_step.split("run:", 1)[0]
     assert "upload-artifact" in job
     assert "if-no-files-found: warn" in job
+
+# --- #3294: refresh runtime must satisfy the fixed validation profile -------
+
+import ast  # noqa: E402
+import sys  # noqa: E402
+
+# Import name -> distribution that provides it. `requests` is a hard dependency
+# of PyGithub, so it is satisfied transitively by the pinned PyGithub install.
+_IMPORT_TO_DISTRIBUTION = {
+    "github": "pygithub",
+    "pytest": "pytest",
+    "requests": "pygithub",
+    "yaml": "pyyaml",
+}
+_EXACT_PIN = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[0-9][A-Za-z0-9_.+!-]*)$")
+
+
+def _refresh_install_pins() -> dict[str, str]:
+    """Distributions the refresh job pip-installs, keyed by normalized name."""
+    job = _refresh_job(WORKFLOW.read_text(encoding="utf-8"))
+    pins: dict[str, str] = {}
+    for line in job.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("run: python -m pip install "):
+            continue
+        for token in stripped.removeprefix("run: python -m pip install ").split():
+            match = _EXACT_PIN.fullmatch(token)
+            assert match is not None, f"refresh job installs a non-exact-pinned requirement: {token}"
+            pins[match.group("name").lower()] = match.group("version")
+    assert pins, "refresh job installs no bounded runtime dependencies"
+    return pins
+
+
+def _module_path(module: str) -> Path | None:
+    base = ROOT.joinpath(*module.split("."))
+    if base.with_suffix(".py").is_file():
+        return base.with_suffix(".py")
+    if (base / "__init__.py").is_file():
+        return base / "__init__.py"
+    return None
+
+
+def _third_party_imports(entry: Path) -> set[str]:
+    """Top-level third-party modules imported at import time by entry's repo-local closure."""
+    seen: set[Path] = set()
+    third: set[str] = set()
+    stack = [entry]
+    while stack:
+        path = stack.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        parts = list(path.relative_to(ROOT).with_suffix("").parts)
+        package = parts if parts[-1] == "__init__" else parts[:-1]
+        if parts[-1] == "__init__":
+            package = parts[:-1]
+        for index in range(1, len(package) + 1):
+            init = ROOT.joinpath(*package[:index]) / "__init__.py"
+            if init.is_file():
+                stack.append(init)
+        pending = list(ast.parse(path.read_text(encoding="utf-8")).body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.If, ast.Try, ast.With)):
+                for field in ("body", "orelse", "finalbody"):
+                    pending.extend(getattr(node, field, []))
+                for handler in getattr(node, "handlers", []):
+                    pending.extend(handler.body)
+                continue
+            if isinstance(node, ast.Import):
+                candidates = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = package[: len(package) - (node.level - 1)]
+                    prefix = ".".join(base + ([node.module] if node.module else []))
+                else:
+                    prefix = node.module or ""
+                candidates = [prefix] + [f"{prefix}.{alias.name}" for alias in node.names]
+            else:
+                continue
+            for module in candidates:
+                resolved = _module_path(module) if module else None
+                if resolved is not None:
+                    stack.append(resolved)
+                elif module and (top := module.split(".")[0]) not in sys.stdlib_module_names:
+                    if not (ROOT / top).exists():
+                        third.add(top)
+    return third
+
+
+def _profile_commands() -> dict[str, tuple[str, ...]]:
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+
+    return {
+        command_id: operator._validation_argv(command_id)
+        for command_id in operator._CANONICAL_REFRESH_VALIDATION_COMMAND_IDS
+    }
+
+
+def test_refresh_install_step_pins_exact_versions_and_adds_no_floating_dependencies() -> None:
+    pins = _refresh_install_pins()
+    assert set(pins) <= {"pygithub", "pytest", "pyyaml"}, "refresh runtime must stay a bounded exact-pinned set"
+    assert pins["pygithub"] == "2.10.0"
+    requirements_dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "PyGithub==2.10.0" in requirements_dev, "PyGithub pin drifted from requirements-dev.txt"
+
+
+def test_refresh_runtime_provides_every_pytest_backed_profile_command() -> None:
+    pins = _refresh_install_pins()
+    pytest_commands = [
+        command_id
+        for command_id, argv in _profile_commands().items()
+        if argv[1:3] == ("-m", "pytest")
+    ]
+    assert pytest_commands, "profile no longer selects pytest commands; update this relationship deliberately"
+    assert "pytest" in pins, f"refresh job does not install pytest required by {pytest_commands}"
+
+
+def test_refresh_runtime_provides_third_party_imports_of_profile_test_targets() -> None:
+    pins = _refresh_install_pins()
+    required: dict[str, set[str]] = {}
+    for command_id, argv in _profile_commands().items():
+        if argv[1:3] != ("-m", "pytest"):
+            continue
+        for target in (arg for arg in argv[3:] if arg.endswith(".py")):
+            for module in _third_party_imports(ROOT / target):
+                required.setdefault(module, set()).add(command_id)
+    assert required, "closure analysis found no third-party imports; the analysis itself is broken"
+    for module, commands in sorted(required.items()):
+        distribution = _IMPORT_TO_DISTRIBUTION.get(module)
+        assert distribution is not None, (
+            f"profile {sorted(commands)} imports {module!r} with no declared distribution; "
+            "extend _IMPORT_TO_DISTRIBUTION and the refresh install step together"
+        )
+        assert distribution in pins, f"refresh job does not install {distribution} needed for {module!r} by {sorted(commands)}"
+
+
+def test_refresh_install_step_runs_before_the_validation_executing_step() -> None:
+    job = _refresh_job(WORKFLOW.read_text(encoding="utf-8"))
+    assert job.index("python -m pip install") < job.index("pr_branch_refresh_actions_runner")
+    assert "secrets." not in job
+    assert "pip install -r" not in job and "pip install -e" not in job

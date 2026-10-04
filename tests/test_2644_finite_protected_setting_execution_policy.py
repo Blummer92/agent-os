@@ -53,7 +53,7 @@ def test_2234_ruleset_admin_path_remains_fixed_and_content_bound() -> None:
     for literal in (
         'REPOSITORY = "Blummer92/agent-os"',
         "RULESET_ID = 19123362",
-        'REQUIRED_CONTEXT = "Run aggregate validation"',
+        'REQUIRED_CONTEXT = "agent-os/authoritative-aggregate"',
         "AUTHORIZATION_ISSUE = 1883",
         "expected_prestate_sha256",
         "unsupported request fields",
