@@ -303,3 +303,62 @@ def test_router_creates_no_second_notion_client_or_curriculum_system() -> None:
     assert "orchestrate_curriculum_evidence" in source
     assert "assemble_current_curriculum_evidence" not in source
     assert "resolve_current_curriculum_state" not in source
+
+
+def _failing_asset_scheduler(provider_message: str):
+    """get_page succeeds; the visual-asset query fails with provider detail."""
+
+    def execute(task_payload):
+        if task_payload["action"] == "get_page":
+            return {"status": "success", "message": "ok", "output": {"id": UNIT_PAGE, "last_edited_time": "2026-08-08T12:00:00Z"}}
+        return {"status": "failure", "message": provider_message}
+
+    return execute
+
+
+def test_terminal_error_carries_sanitized_provider_detail() -> None:
+    """#2816 diagnostic hardening: the terminal fail-closed error must name the
+    provider's sanitized failure detail (HTTP status / Notion error code),
+    instead of collapsing to a bare ``provider unresolved`` with the evidence
+    only in the discarded scheduler envelope."""
+    provider_message = (
+        "Notion API returned HTTP 404: Not Found "
+        "(notion_code=object_not_found; "
+        "notion_message=Could not find data source with ID: da5cba48-50fd-4377-9790-8df8f6f2c7dd.; "
+        "request_id=a1b2c3d4)"
+    )
+    execute_read = build_scheduler_fallback_read_executor(
+        execute_scheduler_task=_failing_asset_scheduler(provider_message)
+    )
+
+    with pytest.raises(CurriculumReadError) as exc_info:
+        retrieve_curriculum_evidence(
+            request=IMAGES,
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=execute_read,
+        )
+
+    message = str(exc_info.value)
+    # The fail-closed taxonomy is preserved ...
+    assert "provider unresolved for visual-asset-library" in message
+    # ... and the provider subtype signal survives to the operator.
+    assert "object_not_found" in message
+    assert "404" in message
+
+
+def test_terminal_error_without_provider_message_names_status_only() -> None:
+    """A scheduler failure with an empty message still names the provider status."""
+    execute_read = build_scheduler_fallback_read_executor(
+        execute_scheduler_task=_failing_asset_scheduler("")
+    )
+
+    with pytest.raises(CurriculumReadError) as exc_info:
+        retrieve_curriculum_evidence(
+            request=IMAGES,
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=execute_read,
+        )
+
+    assert str(exc_info.value) == "provider unresolved for visual-asset-library (provider_status=failure)"
