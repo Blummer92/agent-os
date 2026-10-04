@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_os_issue_labels.pr_branch_refresh_actions import _TRIGGER
+from scripts.agent_os_issue_labels.pr_branch_refresh_actions import (
+    _CLAUDE_CODE_ATTRIBUTION_FOOTER,
+    _TRIGGER,
+    _canonical_trigger_body,
+)
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
@@ -140,6 +144,13 @@ def test_admission_admits_everything_the_canonical_parser_accepts(body: str) -> 
     """Admission must never reject a trigger the canonical grammar would accept."""
     assert _TRIGGER.fullmatch(body) is not None
     assert body.startswith(_admission_prefix())
+
+
+def test_claude_footer_trigger_reaches_admission_and_normalizes_to_canonical_grammar() -> None:
+    body = "/agent-os refresh-pr 1619" + _CLAUDE_CODE_ATTRIBUTION_FOOTER
+    assert body.startswith(_admission_prefix())
+    assert _TRIGGER.fullmatch(body) is None
+    assert _TRIGGER.fullmatch(_canonical_trigger_body(body)) is not None
 
 
 @pytest.mark.parametrize(
