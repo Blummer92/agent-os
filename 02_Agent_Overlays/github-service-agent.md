@@ -115,6 +115,14 @@ excluded surfaces listed in
 authorized. Emergency exceptions require separate approval and evidence under
 that standard.
 
+Before any Draft -> Ready-for-Review mutation, run the registered MCP admission
+pre-step `admit_agent_os_ready_for_review_tool` (#3279) and fail closed when
+the projection is absent, refused, or stale: the exact head SHA and the PR
+body revision must bind, and GitHub-effective closing references in the PR
+title/body without canonical close-issue authorization refuse the transition.
+The pre-step projects admissibility only; it grants no merge, closure,
+workflow, protected-setting, production, or external-write authority.
+
 ## Required Handoff Targets
 Return implementation evidence and unresolved decisions to the requesting owner.
 Route independent validation uncertainty to QA / Test Agent support. Route
@@ -136,10 +144,11 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.15.0
+0.16.0
 
 ## Changelog
-- 0.15.0 names the governed GitHub mutation guard/readback contracts (#2741/#2785/#2791) as the executable owners of AGENTS.md step 9 and the Draft-PR post-create obligations, exposed to the ChatGPT execution surface as MCP admission tools: the issue-comment write boundary (pre-write verify-open guard + post-write canonical readback) and the Safe Implementation Lane post-PR issue reconciliation (#3281).
+- 0.16.0 names the governed GitHub mutation guard/readback contracts (#2741/#2785/#2791) as the executable owners of AGENTS.md step 9 and the Draft-PR post-create obligations, exposed to the ChatGPT execution surface as MCP admission tools: the issue-comment write boundary (pre-write verify-open guard + post-write canonical readback) and the Safe Implementation Lane post-PR issue reconciliation (#3281).
+- 0.15.0 requires the Draft -> Ready-for-Review transition to run the registered MCP admission pre-step `admit_agent_os_ready_for_review_tool` (#3279): the exact head SHA and PR body revision must bind, GitHub-effective closing references without canonical close-issue authorization fail closed, and the pre-step grants no merge, closure, workflow, protected-setting, production, or external-write authority.
 - 0.14.0 retires managed PR labels as required lifecycle state (#2904): PR creation and lifecycle transitions use canonical PR/head/check/branch/review evidence directly, while issue-label convergence remains unchanged.
 - 0.13.0 makes #2774's host-facing connected-create contract explicit: native create responses are non-terminal, canonical readback is mandatory, and managed-label mismatch must reuse #1962 before terminal success.
 - 0.12.0 generalizes #2752 post-create managed-label convergence from implementation handoffs to every supported Agent OS issue-creation path: native/direct create responses remain provisional, canonical readback is mandatory, and missing planned managed labels must converge through the existing #1962 reconciler before issue creation is terminal. No new label writer, readiness inference, or authority is introduced.

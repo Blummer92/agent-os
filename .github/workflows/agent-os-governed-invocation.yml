@@ -525,8 +525,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install bounded refresh runtime dependency
-        run: python -m pip install PyGithub==2.10.0
+      # #3294: the fixed post-refresh validation profile (pr_branch_refresh_operator)
+      # runs `python -m pytest` and imports yaml via the issue-acceptance package, so
+      # the interpreter needs exactly these exact-pinned distributions and nothing
+      # from the floating requirements-dev.txt set.
+      - name: Install bounded refresh runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 pytest==9.1.1 PyYAML==6.0.3
 
       - name: Run finite governed PR refresh
         env:

@@ -16,6 +16,7 @@ EXPECTED_TOOLS = frozenset(
         "activate_agent_os_issue_start_lessons_tool",
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
+        "admit_agent_os_ready_for_review_tool",
         "classify_agent_os_mission_completion_tool",
         "classify_agent_os_issue_batch_completion_tool",
         "classify_agent_os_investigation_completion_tool",

@@ -20,6 +20,15 @@ from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
     evaluate_batch_primary_pr_packaging,
     evaluate_primary_pr_creation_admission,
 )
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+    IssueClosureAdmission,
+    LifecycleMutationAuthorization,
+    LifecycleStateSnapshot,
+    evaluate_lifecycle_mutation,
+)
+from scripts.agent_os_issue_labels.ready_for_review_admission import (
+    evaluate_ready_for_review_admission,
+)
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
@@ -38,6 +47,7 @@ from .mcp_facade import (
     classify_agent_os_mission_completion,
     plan_agent_os_continuation,
 )
+from workflow_scheduler.execution.recovery_progress import RecoverySemanticEvidence
 
 mcp = MCPServer("Agent OS")
 
@@ -251,13 +261,191 @@ def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, att
 
 
 @mcp.tool()
-def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str) -> dict[str, object]:
-    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability)
+def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, *, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None) -> dict[str, object]:
+    return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint)
+
+
+def _ready_review_closure_admissions(
+    items: list[dict[str, object]] | None,
+) -> tuple[IssueClosureAdmission, ...]:
+    """Project canonical close-issue authorization evidence (#3157) for the Ready pre-step.
+
+    Each evidence item carries the canonical authorization identity
+    (repository, issue, authorizer, decision, observed revision). The admitted
+    `IssueClosureAdmission` structs are derived through
+    `evaluate_lifecycle_mutation`, so detected closing targets are compared
+    against digest-bound authorization evidence, never caller-supplied target
+    strings. Malformed or unverifiable items raise: the Ready pre-step fails
+    closed instead of treating them as absent.
+    """
+    admissions: list[IssueClosureAdmission] = []
+    for item in items or ():
+        authorization = LifecycleMutationAuthorization(
+            schema_version="1.0",
+            repository=item["repository"],
+            issue_number=item["issue_number"],
+            pull_request_number=None,
+            authorized_mutations=("close-issue",),
+            expected_source_head=None,
+            expected_base_head=None,
+            expected_pr_state="none",
+            expected_merged=False,
+            expected_issue_state="open",
+            expected_review_state="unknown",
+            expected_unresolved_threads=0,
+            expected_lifecycle_labels=(),
+            observed_at_revision=item["observed_at_revision"],
+            state="authorized",
+            authorizer_id=item["authorizer_id"],
+            decision_id=item["decision_id"],
+        )
+        snapshot = LifecycleStateSnapshot(
+            repository=item["repository"],
+            issue_number=item["issue_number"],
+            pull_request_number=None,
+            source_head=None,
+            base_head=None,
+            pr_state="none",
+            merged=False,
+            issue_state="open",
+            review_state="unknown",
+            unresolved_threads=0,
+            lifecycle_labels=(),
+            observed_revision=item["observed_at_revision"],
+        )
+        admission = evaluate_lifecycle_mutation(authorization, snapshot, "close-issue")
+        if not admission.admitted:
+            raise ValueError("closure authorization evidence did not verify as admitted")
+        admissions.append(
+            IssueClosureAdmission(authorization=authorization, admission=admission)
+        )
+    return tuple(admissions)
+
+
+def _refused_ready_review_projection(
+    *,
+    repository: str,
+    pr_number: int,
+    expected_head_sha: str,
+    observed_head_sha: str,
+    validation_head_sha: str,
+    expected_body_revision: str | None,
+    observed_body_revision: str | None,
+    reason_codes: tuple[str, ...],
+    next_action: str,
+) -> dict[str, object]:
+    """Fail-closed Ready projection when pre-evaluation bindings refuse the transition."""
+    return {
+        "repository": repository,
+        "pr_number": pr_number,
+        "expected_head_sha": expected_head_sha,
+        "observed_head_sha": observed_head_sha,
+        "validation_head_sha": validation_head_sha,
+        "expected_body_revision": expected_body_revision,
+        "observed_body_revision": observed_body_revision,
+        "transition_admissible": False,
+        "provisional_ready": False,
+        "rollback_to_draft_required": False,
+        "reason_codes": list(reason_codes),
+        "next_action": next_action,
+        "authorized_closing_targets": [],
+        "ready_for_review_authorized": False,
+        "merge_authorized": False,
+        "issue_closure_authorized": False,
+        "workflow_authorized": False,
+        "protected_setting_authorized": False,
+        "production_authorized": False,
+        "external_system_write_authorized": False,
+    }
 
 
 @mcp.tool()
-def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False) -> dict[str, object]:
-    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required)
+def admit_agent_os_ready_for_review_tool(repository: str, pr_number: int, pr_lifecycle_state: str, expected_head_sha: str, observed_head_sha: str, validation_head_sha: str, validation_admission_mode: str, aggregate_status: str, focused_status: str, requested_changes: bool, blocking_unresolved: int, ready_for_review_authority_supplied: bool, pr_title: str, pr_body: str, closure_admissions: list[dict[str, object]] | None = None, expected_body_revision: str | None = None, observed_body_revision: str | None = None) -> dict[str, object]:
+    """Project Draft -> Ready admission before the Ready transition (#3279).
+
+    Binds the exact head SHA and the PR body revision: stale bindings are
+    refused with named reason codes. GitHub-effective closing references in
+    the PR title/body are detected with the single canonical parser consumed
+    by `evaluate_ready_for_review_admission`; targets without canonical
+    close-issue authorization refuse the transition
+    (`unauthorized-closing-reference`). This projects admissibility only; it
+    grants no merge, closure, workflow, protected-setting, production, or
+    external-write authority.
+    """
+    if expected_body_revision is not None and observed_body_revision != expected_body_revision:
+        return _refused_ready_review_projection(
+            repository=repository,
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            observed_head_sha=observed_head_sha,
+            validation_head_sha=validation_head_sha,
+            expected_body_revision=expected_body_revision,
+            observed_body_revision=observed_body_revision,
+            reason_codes=("stale-body-revision",),
+            next_action="reacquire-pr-body-revision",
+        )
+    try:
+        admissions = _ready_review_closure_admissions(closure_admissions)
+    except (KeyError, TypeError, ValueError):
+        return _refused_ready_review_projection(
+            repository=repository,
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            observed_head_sha=observed_head_sha,
+            validation_head_sha=validation_head_sha,
+            expected_body_revision=expected_body_revision,
+            observed_body_revision=observed_body_revision,
+            reason_codes=("closure-authorization-evidence-invalid",),
+            next_action="supply-canonical-closure-authorization-evidence",
+        )
+    result = evaluate_ready_for_review_admission(
+        repository=repository,
+        pr_number=pr_number,
+        pr_lifecycle_state=pr_lifecycle_state,
+        expected_head_sha=expected_head_sha,
+        observed_head_sha=observed_head_sha,
+        validation_head_sha=validation_head_sha,
+        validation_admission_mode=validation_admission_mode,
+        aggregate_status=aggregate_status,
+        focused_status=focused_status,
+        requested_changes=requested_changes,
+        blocking_unresolved=blocking_unresolved,
+        ready_for_review_authority_supplied=ready_for_review_authority_supplied,
+        pr_title=pr_title,
+        pr_body=pr_body,
+        closure_admissions=admissions,
+    )
+    return {
+        "repository": result.repository,
+        "pr_number": result.pr_number,
+        "expected_head_sha": result.expected_head_sha,
+        "observed_head_sha": result.observed_head_sha,
+        "validation_head_sha": result.validation_head_sha,
+        "expected_body_revision": expected_body_revision,
+        "observed_body_revision": observed_body_revision,
+        "transition_admissible": result.transition_admissible,
+        "provisional_ready": result.provisional_ready,
+        "rollback_to_draft_required": result.rollback_to_draft_required,
+        "reason_codes": list(result.reason_codes),
+        "next_action": result.next_action,
+        "authorized_closing_targets": [
+            admission.target
+            for admission in admissions
+            if admission.authorization.repository.lower() == repository.lower()
+        ],
+        "ready_for_review_authorized": result.ready_for_review_authorized,
+        "merge_authorized": result.merge_authorized,
+        "issue_closure_authorized": result.issue_closure_authorized,
+        "workflow_authorized": result.workflow_authorized,
+        "protected_setting_authorized": result.protected_setting_authorized,
+        "production_authorized": result.production_authorized,
+        "external_system_write_authorized": result.external_system_write_authorized,
+    }
+
+
+@mcp.tool()
+def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False, live_consumer_required: bool = False, live_consumer_requirement_source: str | None = None, live_consumer_reachability_proven: bool = False, live_consumer_identity: str | None = None, live_consumer_evidence_source: str | None = None, live_consumer_evidence_current: bool = False, live_consumer_evidence_kind: str | None = None, successor_issue_number: int | None = None, successor_current: bool = False, successor_owns_residual_live_acceptance: bool = False) -> dict[str, object]:
+    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required, live_consumer_required=live_consumer_required, live_consumer_requirement_source=live_consumer_requirement_source, live_consumer_reachability_proven=live_consumer_reachability_proven, live_consumer_identity=live_consumer_identity, live_consumer_evidence_source=live_consumer_evidence_source, live_consumer_evidence_current=live_consumer_evidence_current, live_consumer_evidence_kind=live_consumer_evidence_kind, successor_issue_number=successor_issue_number, successor_current=successor_current, successor_owns_residual_live_acceptance=successor_owns_residual_live_acceptance)
 
 
 @mcp.tool()
