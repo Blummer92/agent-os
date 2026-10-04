@@ -526,3 +526,44 @@ def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
             blockers=("blocked",), reason_codes=("blocked",),
             rollback_posture="no-branch-mutation", side_effects_performed=False,
         )
+
+
+def test_refresh_validation_profile_targets_exist_on_disk():
+    """#3290: every fixed filesystem target in the closed profile must exist.
+
+    A stale target (e.g. a test file deleted by a later retirement) makes the
+    command exit non-zero for every PR and turns every governed refresh into
+    ``validation-failing`` after a successful branch update.
+    """
+    from pathlib import Path
+
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+
+    repo_root = Path(__file__).resolve().parents[2]
+    assert operator._CANONICAL_REFRESH_VALIDATION_COMMAND_IDS
+    checked = 0
+    for command_id in operator._CANONICAL_REFRESH_VALIDATION_COMMAND_IDS:
+        argv = operator._validation_argv(command_id)
+        targets = [
+            arg for arg in argv[1:]
+            if not arg.startswith("-") and ("/" in arg or arg.endswith(".py") or arg.endswith(".sh"))
+        ]
+        assert targets, f"{command_id} declares no filesystem target to verify"
+        for target in targets:
+            checked += 1
+            assert (repo_root / target).is_file(), (
+                f"{command_id} references missing validation target {target}"
+            )
+    assert checked >= len(operator._CANONICAL_REFRESH_VALIDATION_COMMAND_IDS)
+
+
+def test_refresh_validation_profile_is_finite_and_fixed():
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+
+    assert tuple(operator._REFRESH_VALIDATION_COMMANDS) == (
+        "pytest:pr-branch-refresh",
+        "pytest:pr-branch-refresh-provider",
+        "pytest:branch-update",
+        "structure",
+    )
+    assert "pytest:pr-lifecycle" not in operator._REFRESH_VALIDATION_COMMANDS
