@@ -22,6 +22,8 @@ ChatGPT + Agent OS app
 
 Both tools are non-authorizing. Their result models cannot grant execution, GitHub writes, merge, closure, external writes, Scheduler admission, or lease acquisition.
 
+`admit_agent_os_failed_repair_tool(...)` gates the next repair mutation on the retry-specific CKR6 activation result plus separated diagnostics. It also accepts three optional keyword-only recovery-progress inputs — `current`, `prior` (`RecoverySemanticEvidence`), and `prior_transition_fingerprint` — which compose the existing `classify_recovery_progress` projection (#2281): an `EQUIVALENT` observation (no semantic progress vs `prior`) makes the mutation inadmissible, and a `RECOVERY_STALLED` observation (the same equivalent transition seen again) additionally sets `agent_os_continuation["stalled"]` to `True` on the non-authorizing host payload. Omitted params behave exactly as before; the params are additive so #3280's later optional params land cleanly.
+
 ## Discovery and write boundaries
 
 #1284 remains unchanged: MCP never reads `<checkpoint_store>/invocations/*.json` directly. The app requests the existing server-side discovery operation through the governed GitHub/GCE path. Zero matches remain `not-found`; multiple/corrupt/unavailable evidence remains `needs-decision`; no newest/latest heuristic is added.
