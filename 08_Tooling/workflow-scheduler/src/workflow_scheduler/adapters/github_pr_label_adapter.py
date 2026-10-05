@@ -3,7 +3,8 @@
 The Scheduler approval gate remains the authorization owner. This adapter owns
 only payload validation, the fixed label-add endpoint, and Scheduler result
 projection. Tests may inject the historical callable seam; production uses the
-shared PyGithub request boundary from agent_os_github_issue_provider.
+shared PyGithub client construction and request boundary from
+agent_os_github_issue_provider.
 """
 from __future__ import annotations
 
@@ -11,8 +12,7 @@ import math
 import os
 from typing import Any, Callable, Dict, Optional
 
-from github import Auth, Github
-
+from scripts.agent_os_github_issue_provider.auth import build_token_client
 from scripts.agent_os_github_issue_provider.request import (
     GitHubRequestError,
     request_json,
@@ -117,15 +117,23 @@ class GitHubPRLabelAdapter(TaskAdapter):
             raise GitHubPRLabelAdapterError("'label' must be a non-empty string")
         return value
 
-    def _client(self) -> Github:
-        auth = Auth.Token(self.token) if self.token else None
-        return Github(
-            auth=auth,
-            retry=None,
-            lazy=False,
-            timeout=self.timeout,
-            user_agent="workflow-scheduler/github-pr-label",
-        )
+    def _client(self):
+        """Build the production client through the canonical Agent OS boundary.
+
+        Mirrors GitHubReadOnlyAdapter (#2507/#3011): client construction is
+        owned by scripts.agent_os_github_issue_provider.auth.build_token_client.
+        A missing token fails closed here as a domain adapter error instead of
+        building an unauthenticated client.
+        """
+        environment = dict(os.environ)
+        if self.token is not None:
+            environment["GITHUB_TOKEN"] = self.token
+        try:
+            return build_token_client(
+                environment, user_agent="workflow-scheduler/github-pr-label"
+            )
+        except RuntimeError as exc:
+            raise GitHubPRLabelAdapterError(str(exc)) from exc
 
     def _post_label(
         self, repository_full_name: str, pr_number: int, label: str
