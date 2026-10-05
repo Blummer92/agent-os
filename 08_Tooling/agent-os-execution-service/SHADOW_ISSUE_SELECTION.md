@@ -33,6 +33,17 @@ This seam does not:
 
 If canonical mission/request constraints still leave more than 64 open candidates, the result is `shadow-selection.candidate-population-too-broad` with no selected issue.
 
+## Narrowing contract (Phase 0 Shadow Admission)
+
+Narrowing is always explicit and caller-declared, owned entirely by this module:
+
+1. The caller supplies a bounded candidate set via `candidate_issue_numbers` plus a `narrowing_criterion` naming the deterministic rule it applied (for example `explicit-request:operator-shortlist-2026-10-05`).
+2. Narrowing without a named criterion, or a named criterion without a narrowing set, is rejected: narrowing is never silent.
+3. The seam proves every narrowed candidate is a member of the complete scanned population and enforces the 64-candidate bound before any evidence is read.
+4. The criterion is recorded on `ShadowIssueSelectionResult.narrowing_criterion`, and every narrowed result carries the `shadow-selection.population-narrowed` reason code alongside its primary reason — selected or fail-closed.
+
+The seam never invents a priority, rank, age, or popularity rule to narrow on the caller's behalf.
+
 ## Canonical evidence only
 
 Operational state is supplied only through the existing `CandidateIssueEvidence` contract.

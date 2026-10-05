@@ -4,6 +4,15 @@ This module is a thin execution-service composition seam. It reuses the
 canonical paginated issue scanner, caller-supplied canonical candidate evidence,
 the existing executable-lane selector, and the existing single-issue live reader.
 It performs no mutation or execution and creates no priority or authority.
+
+Narrowing rule (Phase 0 Shadow Admission): narrowing is always explicit and
+caller-declared. The caller supplies a bounded candidate set plus a
+``narrowing_criterion`` naming the deterministic rule it applied (for example
+``"explicit-request:operator-shortlist-2026-10-05"``). This module proves every
+narrowed candidate is a member of the complete scanned population, enforces the
+64-candidate bound, records the criterion on the result, and advertises
+``shadow-selection.population-narrowed`` on every narrowed result. It never
+invents a priority, rank, age, or popularity rule to narrow silently.
 """
 
 from __future__ import annotations
@@ -45,6 +54,7 @@ REASON_CODES = frozenset(
     {
         "shadow-selection.current",
         "shadow-selection.population-incomplete",
+        "shadow-selection.population-narrowed",
         "shadow-selection.candidate-population-empty",
         "shadow-selection.candidate-population-too-broad",
         "shadow-selection.candidate-not-in-population",
@@ -58,6 +68,19 @@ REASON_CODES = frozenset(
         "shadow-selection.selected-issue-changed",
     }
 )
+
+
+def _validate_narrowing_criterion(value: str | None) -> str | None:
+    """Validate the caller-declared deterministic narrowing rule name."""
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise TypeError("narrowing_criterion must be exact text or None")
+    if not 1 <= len(value) <= 128:
+        raise ValueError("narrowing_criterion must be 1 to 128 characters")
+    if value != value.strip() or not value.isprintable():
+        raise ValueError("narrowing_criterion must be stripped printable text")
+    return value
 
 
 class CanonicalCandidateEvidenceReader(Protocol):
@@ -82,6 +105,7 @@ class ShadowIssueSelectionResult:
     selected_issue_revision: str | None
     status: ShadowSelectionStatus
     reason_codes: tuple[str, ...]
+    narrowing_criterion: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -123,6 +147,11 @@ class ShadowIssueSelectionResult:
         if not reasons or any(reason not in REASON_CODES for reason in reasons):
             raise ValueError("reason_codes contains an unsupported reason")
         object.__setattr__(self, "reason_codes", reasons)
+        # The criterion is present exactly when the run was narrowed: the only
+        # production constructor (select_shadow_issue) enforces the pairing.
+        object.__setattr__(
+            self, "narrowing_criterion", _validate_narrowing_criterion(self.narrowing_criterion)
+        )
         if self.status is ShadowSelectionStatus.SELECTED:
             if self.selection is None or self.selected_issue_number is None:
                 raise ValueError("selected status requires selection and selected issue")
@@ -145,6 +174,7 @@ def select_shadow_issue(
     issue_transport: SingleIssueTransport,
     candidate_evidence_reader: CanonicalCandidateEvidenceReader,
     candidate_issue_numbers: tuple[int, ...] | None = None,
+    narrowing_criterion: str | None = None,
     explicit_request_order: tuple[int, ...] = (),
 ) -> ShadowIssueSelectionResult:
     """Return one current read-only selector result or an explicit fail-closed stop.
@@ -153,6 +183,10 @@ def select_shadow_issue(
     narrowing set. None means the whole scanned open-issue population. The set
     carries no rank semantics; explicit user order is supplied separately through
     explicit_request_order.
+
+    An explicit narrowing set requires narrowing_criterion naming the
+    deterministic rule the caller applied. Narrowing without a named rule, or a
+    named rule without a narrowing set, is rejected: narrowing is never silent.
     """
 
     scan = scan_connected_issues(
@@ -163,6 +197,20 @@ def select_shadow_issue(
     )
     population = tuple(record.issue_number for record in scan.records)
 
+    if candidate_issue_numbers is None:
+        if narrowing_criterion is not None:
+            raise ValueError(
+                "narrowing_criterion requires an explicit candidate_issue_numbers narrowing set"
+            )
+        narrowed_criterion: str | None = None
+    else:
+        if narrowing_criterion is None:
+            raise ValueError(
+                "explicit candidate narrowing requires narrowing_criterion "
+                "naming the deterministic rule applied"
+            )
+        narrowed_criterion = _validate_narrowing_criterion(narrowing_criterion)
+
     if not scan.complete:
         return _result(
             repository=repository,
@@ -172,6 +220,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.population-incomplete",
+            narrowing_criterion=narrowed_criterion,
         )
 
     records = {record.issue_number: record for record in scan.records}
@@ -204,6 +253,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-empty",
+            narrowing_criterion=narrowed_criterion,
         )
     if any(issue_number not in records for issue_number in candidates):
         return _result(
@@ -214,6 +264,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-not-in-population",
+            narrowing_criterion=narrowed_criterion,
         )
     if len(candidates) > MAX_CANDIDATES:
         return _result(
@@ -224,6 +275,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-too-broad",
+            narrowing_criterion=narrowed_criterion,
         )
 
     evidence: list[CandidateIssueEvidence] = []
@@ -241,6 +293,7 @@ def select_shadow_issue(
                 scan_page_count=scan.page_count,
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-evidence-incomplete",
+                narrowing_criterion=narrowed_criterion,
             )
         state = candidate.operational_state
         if state.repository.casefold() != repository.casefold():
@@ -252,6 +305,7 @@ def select_shadow_issue(
                 scan_page_count=scan.page_count,
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-repository-mismatch",
+                narrowing_criterion=narrowed_criterion,
             )
         scanned_revision = records[issue_number].source_revision
         if not _ISSUE_REVISION_RE.fullmatch(scanned_revision):
@@ -263,6 +317,7 @@ def select_shadow_issue(
                 scan_page_count=scan.page_count,
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.issue-revision-unavailable",
+                narrowing_criterion=narrowed_criterion,
             )
         if scanned_revision not in state.evidence_ids:
             return _result(
@@ -273,6 +328,7 @@ def select_shadow_issue(
                 scan_page_count=scan.page_count,
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-revision-mismatch",
+                narrowing_criterion=narrowed_criterion,
             )
         repository_revisions.add(state.source_revision)
         evidence.append(candidate)
@@ -286,6 +342,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.repository-revision-conflict",
+            narrowing_criterion=narrowed_criterion,
         )
     repository_source_revision = next(iter(repository_revisions))
 
@@ -305,6 +362,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.selector-no-executable-lane",
+            narrowing_criterion=narrowed_criterion,
             repository_source_revision=repository_source_revision,
             selection=selection,
         )
@@ -320,6 +378,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
+            narrowing_criterion=narrowed_criterion,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -335,6 +394,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
+            narrowing_criterion=narrowed_criterion,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -348,6 +408,7 @@ def select_shadow_issue(
             scan_page_count=scan.page_count,
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-changed",
+            narrowing_criterion=narrowed_criterion,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -365,7 +426,12 @@ def select_shadow_issue(
         selected_issue_number=selected,
         selected_issue_revision=current_revision,
         status=ShadowSelectionStatus.SELECTED,
-        reason_codes=("shadow-selection.current",),
+        reason_codes=(
+            ("shadow-selection.current",)
+            if narrowed_criterion is None
+            else ("shadow-selection.current", "shadow-selection.population-narrowed")
+        ),
+        narrowing_criterion=narrowed_criterion,
     )
 
 
@@ -378,10 +444,15 @@ def _result(
     scan_page_count: int,
     scan_item_count: int,
     reason: str,
+    narrowing_criterion: str | None = None,
     status: ShadowSelectionStatus = ShadowSelectionStatus.NO_SELECTION,
     repository_source_revision: str | None = None,
     selection: ExecutableLaneSelection | None = None,
 ) -> ShadowIssueSelectionResult:
+    reasons = (reason,) if narrowing_criterion is None else (
+        reason,
+        "shadow-selection.population-narrowed",
+    )
     return ShadowIssueSelectionResult(
         repository=repository,
         retrieved_at=retrieved_at,
@@ -394,5 +465,6 @@ def _result(
         selected_issue_number=None,
         selected_issue_revision=None,
         status=status,
-        reason_codes=(reason,),
+        reason_codes=reasons,
+        narrowing_criterion=narrowing_criterion,
     )
