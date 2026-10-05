@@ -277,6 +277,16 @@ releases a lease. #1237 owns same-lineage continuation; a red focused test or
 Codespaces capability mismatch is intermediate evidence, not parent-mission
 completion.
 
+### Preferred-surface unavailability is item-local (#3139)
+
+A preferred Codespaces surface that cannot be directly observed or entered is an
+item-local capability boundary, not a shared mission blocker, unless evidence
+proves the limitation is shared across the remaining population. Finite missions
+preserve their cursor and continue every independent operation still admissible
+through canonical GitHub read evidence; see the ChatGPT Orchestrator overlay's
+"Preferred Execution Surface Unavailability" section and
+`scripts/agent_os_execution_interface/preferred_surface_limitation.py`.
+
 ## Non-authorization
 
 Runtime preference creates no implementation, GitHub-write, merge, issue-closure,
