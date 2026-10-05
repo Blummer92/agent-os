@@ -8,7 +8,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 GOVERNED_CONTINUATION_DECISIONS = {
     "plan_execution_continuation": REPO_ROOT / "08_Tooling/workflow-scheduler/src/workflow_scheduler/execution/continuation.py",
-    "plan_red_ci_continuation": REPO_ROOT / "08_Tooling/workflow-scheduler/src/workflow_scheduler/execution/red_ci_continuation.py",
     "classify_recovery_progress": REPO_ROOT / "08_Tooling/workflow-scheduler/src/workflow_scheduler/execution/recovery_progress.py",
     "evaluate_mission_completion_admission": REPO_ROOT / "scripts/agent_os_execution_interface/mission_completion_admission.py",
     "evaluate_failed_repair_admission": REPO_ROOT / "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/failed_repair_admission.py",
@@ -24,11 +23,6 @@ KNOWN_UNCONSUMED_DECISIONS = {
     # not be deleted, retired, or consumed by this campaign. #2281 composes with
     # classify_recovery_progress only; the planner stays exactly as-is.
     "plan_execution_continuation",
-    # #3280: the diagnostic-surface exhaustion invariant now lives in
-    # evaluate_failed_repair_admission (live via admit_agent_os_failed_repair_tool).
-    # The planner itself still has no production consumer, so its entry stays until
-    # the separately gated deletion wave removes plan_red_ci_continuation.
-    "plan_red_ci_continuation",
 }
 
 PRODUCTION_ROOTS = (
