@@ -13,16 +13,28 @@ Phase-0 evidence boundary (#3329 Wire-or-Retire): the production
 ``LiveCandidateEvidenceReader``
 (``scripts/agent_os_issue_acceptance/live_candidate_evidence_reader.py``)
 is now wired at the composition point below. It composes the canonical
-evidence the shadow-run context can legitimately supply -- the live issue
-snapshot read plus the #1464 dependency/validation adapters -- and fails
-closed with a named ``candidate-evidence.*`` reason wherever no canonical
-live owner exists (repository source revision, lifecycle stage, primary
-claims, approval applicability, freshness, requested mode, environment
-capability, dependency depth, substitutable). #1460 still forbids a reader
-from inventing PR-linkage or lifecycle-stage authority. The seam therefore
-still fail-closes with ``candidate-evidence-incomplete`` for the real
-backlog, and the experiment record names the exact missing owner instead of
-filling the gap. The real-backlog acceptance canary remains gated on #3328's
+evidence the shadow-run context can legitimately supply:
+- the live issue snapshot read plus the #1464 dependency/validation adapters;
+- the repository HEAD SHA read live from the GitHub API (the canonical
+  current-revision source; the API equivalent of the caller's checkout SHA);
+- ``FreshnessState.CURRENT`` -- this composition performs the live read
+  itself, so the evidence is current as of the read (the
+  ``live_route_context.py`` precedent for live-verified evidence);
+- an honest read-only environment self-description (UNPROBED local
+  execution, UNSUPPORTED push -- this CLI never mutates);
+- explicit request-supplied context (``--requested-mode``,
+  ``--dependency-depth``, ``--substitutable``/``--no-substitutable``),
+  absent stays absent, never defaulted.
+It still fails closed with a named ``candidate-evidence.*`` reason wherever
+no canonical live owner exists: ``lifecycle_stage`` (no lifecycle
+authority; #1460 forbids inventing one), ``primary_claims`` (no live
+PR-linkage reader; #1460 forbids inventing claim authority), and
+``approval_applicability`` (the approval evidence graph is not
+reconstructible for arbitrary backlog issues). Those three are #3329's
+bounded blockers -- surfaced, not manufactured. The seam therefore still
+fail-closes with ``candidate-evidence-incomplete`` for the real backlog,
+and the experiment record names the exact missing owner instead of filling
+the gap. The real-backlog acceptance canary remains gated on #3328's
 legitimate cohort plus caller-supplied request context. Feeding a
 ``SELECTED`` result into the governed issue-start path is #3082 (Phase 1+);
 this CLI is the producer side of that future connection.
@@ -87,6 +99,14 @@ from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  
     LiveCandidateEvidence,
     LiveCandidateEvidenceReader,
 )
+from scripts.agent_os_issue_acceptance.issue_operational_state import (  # noqa: E402
+    FreshnessState,
+)
+from scripts.agent_os_issue_acceptance.operating_mode import (  # noqa: E402
+    EnvironmentCapabilityEvidence,
+    EnvironmentCapabilityState,
+    RequestedMode,
+)
 from scripts.agent_os_candidate_packet_live_input import (  # noqa: E402
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
@@ -137,6 +157,68 @@ class GitHubReadClient:
             return exc.code, headers, exc.read() if hasattr(exc, "read") else b""
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RuntimeError(f"github api unreachable: {exc}") from exc
+
+
+def _fetch_repository_head_sha(client: GitHubReadClient, repository: str) -> str:
+    """Fetch the repository's default-branch HEAD SHA via the GitHub API.
+
+    This is the canonical live "current repository SHA" for the shadow
+    experiment: the revision the candidate evidence is evaluated against.
+    It is GitHub's own ref data, not inference -- the API-based equivalent
+    of the "current checkout SHA" the snapshot reader's contract expects
+    the caller to know.
+
+    Fail-closed: raises RuntimeError when the ref cannot be read or the
+    payload is malformed, which the CLI reports as a transport failure.
+    """
+    status, _, body = client.get(f"/repos/{repository}")
+    if status != 200:
+        raise RuntimeError(
+            f"github api: repository read failed for {repository} (http {status})"
+        )
+    try:
+        default_branch = json.loads(body)["default_branch"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"github api: repository payload malformed for {repository}"
+        ) from exc
+    if not isinstance(default_branch, str) or not default_branch:
+        raise RuntimeError(
+            f"github api: default branch missing for {repository}"
+        )
+    status, _, body = client.get(
+        f"/repos/{repository}/branches/{default_branch}"
+    )
+    if status != 200:
+        raise RuntimeError(
+            f"github api: branch read failed for {repository}@{default_branch} "
+            f"(http {status})"
+        )
+    try:
+        sha = json.loads(body)["commit"]["sha"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"github api: branch payload malformed for "
+            f"{repository}@{default_branch}"
+        ) from exc
+    if not isinstance(sha, str) or len(sha) != 40 or any(
+        c not in "0123456789abcdef" for c in sha
+    ):
+        raise RuntimeError(
+            f"github api: branch sha malformed for {repository}@{default_branch}"
+        )
+    return sha
+
+
+# Honest environment capability for the read-only shadow context. This CLI
+# performs no execution and no GitHub mutation by design (see module
+# docstring); UNPROBED/UNSUPPORTED are truthful self-descriptions that can
+# authorize nothing, not probe results.
+def _shadow_environment_capability() -> EnvironmentCapabilityEvidence:
+    return EnvironmentCapabilityEvidence(
+        local_execution_state=EnvironmentCapabilityState.UNPROBED,
+        push_state=EnvironmentCapabilityState.UNSUPPORTED,
+    )
 
 
 class LivePageReader:
@@ -437,6 +519,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="mission id for the evidence ledger "
         "(default: derived deterministically as shadow-run:{campaign_id}:{retrieved_at})",
     )
+    parser.add_argument(
+        "--requested-mode",
+        default=None,
+        choices=[mode.value for mode in RequestedMode],
+        help="explicit request operating mode (request-supplied; absent stays absent)",
+    )
+    parser.add_argument(
+        "--dependency-depth",
+        default=None,
+        type=int,
+        help="explicit request dependency depth, non-negative int (request-supplied)",
+    )
+    parser.add_argument(
+        "--substitutable",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="explicit request substitution semantics (request-supplied; "
+        "absent stays absent, never defaulted)",
+    )
     return parser.parse_args(argv)
 
 
@@ -475,31 +576,58 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     client = GitHubReadClient()
+    # #3329 real-live composition: the repository HEAD SHA is read live from
+    # the GitHub API (the canonical current-revision source for this
+    # read-only context). Fail-closed on transport failure.
+    try:
+        source_revision = _fetch_repository_head_sha(client, args.repository)
+    except RuntimeError as exc:
+        print(f"agent-os-shadow-run: transport failure: {exc}", file=sys.stderr)
+        return 1
+    if args.dependency_depth is not None and args.dependency_depth < 0:
+        print(
+            "agent-os-shadow-run: argument error: "
+            "--dependency-depth must be a non-negative int",
+            file=sys.stderr,
+        )
+        return 2
     # One provenance log shared by the reader and the seam: the reader fills
     # it during the scan, the seam records the filled log on the result.
     provenance_log = ScanProvenanceLog()
     page_reader = LivePageReader(client, provenance_log)
     issue_transport = LiveIssueTransport(client)
     # #3329 Wire-or-Retire: the production canonical evidence reader replaces
-    # the Phase-0 always-None stub. This shadow-run context supplies the live
-    # read seam only; every other required canonical input has no canonical
-    # live owner here, so the reader fail-closes with a named reason per
-    # missing owner, recorded on the experiment record below.
+    # the Phase-0 always-None stub. This shadow-run context now supplies every
+    # input with an actual source:
+    # - source_revision: live GitHub API default-branch HEAD SHA (canonical);
+    # - freshness_state: CURRENT -- the composition performs the live issue
+    #   read itself, so the evidence is current as of observed_at (the
+    #   live_route_context.py precedent for live-verified evidence);
+    # - environment: honest read-only self-description (UNPROBED local
+    #   execution, UNSUPPORTED push -- this CLI never mutates);
+    # - requested_mode / dependency_depth / substitutable: explicit
+    #   request-supplied context via CLI flags (absent stays absent, never
+    #   defaulted).
+    # lifecycle_stage, primary_claims, and approval_applicability have no
+    # canonical live owner for arbitrary backlog issues (#1460 forbids
+    # inventing PR-linkage, lifecycle, claim, or freshness authorities), so
+    # the reader still fail-closes with their named reasons -- the bounded
+    # blockers #3329 surfaces instead of manufacturing evidence.
     evidence_reader = _RecordingCandidateEvidenceReader(
         LiveCandidateEvidenceReader(
             LiveCandidateEvidence(
                 repository=args.repository,
                 issue_transport=issue_transport,
                 observed_at=retrieved_at,
-                source_revision=None,
+                source_revision=source_revision,
                 lifecycle_stage=None,
                 primary_claims=None,
                 approval_applicability=None,
-                freshness_state=None,
-                requested_mode=None,
-                environment=None,
-                dependency_depth=None,
-                substitutable=None,
+                freshness_state=FreshnessState.CURRENT,
+                requested_mode=args.requested_mode,
+                environment=_shadow_environment_capability(),
+                dependency_depth=args.dependency_depth,
+                substitutable=args.substitutable,
             )
         )
     )
