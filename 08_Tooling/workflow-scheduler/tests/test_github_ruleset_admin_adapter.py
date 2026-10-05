@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
     AUTHORIZATION_ISSUE,
     REPOSITORY,
@@ -172,3 +174,152 @@ def test_readback_nonconvergence_is_terminal_failure_without_retry():
     assert "did not converge" in result["message"]
     assert "retry_after" not in result
     assert len(puts) == 1
+
+
+class TestCanonicalGatewayMigration:
+    """#2507: the adapter's bespoke urllib transport is retired behind the
+    canonical agent_os_github_issue_provider gateway. Domain policy (fixed
+    operation shape, prestate binding, terminal-failure contract) is unchanged;
+    only client construction and request execution move to the shared boundary.
+    """
+
+    def test_bespoke_urllib_transport_is_deleted(self):
+        import workflow_scheduler.adapters.github_ruleset_admin_adapter as module
+
+        assert not hasattr(module, "urllib"), "bespoke urllib import must be deleted"
+        source = open(module.__file__, encoding="utf-8").read()
+        assert "urllib.request" not in source
+        assert "urlopen" not in source
+        assert hasattr(module, "build_token_client")
+        assert hasattr(module, "request_json")
+
+    def test_client_routes_through_canonical_builder(self, monkeypatch):
+        import workflow_scheduler.adapters.github_ruleset_admin_adapter as module
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+        )
+
+        seen = {}
+        sentinel = object()
+
+        def fake_build_token_client(environment, user_agent=None):
+            seen["environment"] = environment
+            seen["user_agent"] = user_agent
+            return sentinel
+
+        monkeypatch.setattr(module, "build_token_client", fake_build_token_client)
+        adapter = GitHubRulesetAdminAdapter(token="canonical-token")
+
+        assert adapter._client() is sentinel
+        assert seen["environment"]["GITHUB_TOKEN"] == "canonical-token"
+        assert seen["user_agent"] == "workflow-scheduler/github-ruleset-admin"
+
+    def test_gh_token_convention_honored_without_constructor_token(self, monkeypatch):
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+        )
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "gh-token-convention")
+        adapter = GitHubRulesetAdminAdapter(token=None)
+
+        # Building the client performs no I/O; the convention token is honored.
+        assert adapter._client() is not None
+
+    def test_missing_token_fails_closed_as_adapter_error(self, monkeypatch):
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+            GitHubRulesetAdminAdapterError,
+        )
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        adapter = GitHubRulesetAdminAdapter(token=None)
+
+        with pytest.raises(GitHubRulesetAdminAdapterError):
+            adapter._client()
+
+    def test_missing_token_surfaces_as_execute_failure_without_retry(self, monkeypatch):
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+        )
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        adapter = GitHubRulesetAdminAdapter(token=None)
+
+        result = adapter.execute(task(ruleset()))
+
+        assert result["status"] == "failure"
+        assert "retry_after" not in result
+
+    def test_canonical_path_rejects_off_base_url(self):
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+            GitHubRulesetAdminAdapterError,
+        )
+
+        adapter = GitHubRulesetAdminAdapter(token="x")
+
+        with pytest.raises(GitHubRulesetAdminAdapterError):
+            adapter._canonical_path("https://example.invalid/repos/x/rulesets/1")
+
+    def test_transport_failures_are_terminal_never_retryable(self, monkeypatch):
+        import workflow_scheduler.adapters.github_ruleset_admin_adapter as module
+        from scripts.agent_os_github_issue_provider.request import GitHubRequestError
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            GitHubRulesetAdminAdapter,
+        )
+
+        cases = [
+            (GitHubRequestError("http-error", status=403, attempts=()), "HTTP 403"),
+            (GitHubRequestError("http-error", status=500, attempts=()), "HTTP 500"),
+            (GitHubRequestError("rate-limited", status=429, attempts=()), "rate-limited"),
+            (GitHubRequestError("transport-unavailable", status=None, attempts=()), "transport failed"),
+            (GitHubRequestError("internal-error", status=None, attempts=()), "invalid response"),
+        ]
+        for error, fragment in cases:
+            def fake_request_json(*args, **kwargs):
+                raise error
+
+            monkeypatch.setattr(module, "request_json", fake_request_json)
+            adapter = GitHubRulesetAdminAdapter(token="x")
+            result = adapter.execute(task(ruleset()))
+
+            assert result["status"] == "failure", error.kind
+            assert fragment in result["message"], error.kind
+            assert "retry_after" not in result, error.kind
+
+    def test_canonical_requests_use_single_attempt_and_fixed_path(self, monkeypatch):
+        import workflow_scheduler.adapters.github_ruleset_admin_adapter as module
+        from scripts.agent_os_github_issue_provider.request import GitHubRequestResult
+        from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+            REPOSITORY,
+            RULESET_ID,
+            GitHubRulesetAdminAdapter,
+        )
+
+        calls = []
+        sentinel_client = object()
+
+        def fake_request_json(client, method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return GitHubRequestResult(headers={}, payload=ruleset(), attempts=())
+
+        monkeypatch.setattr(module, "request_json", fake_request_json)
+        monkeypatch.setattr(
+            GitHubRulesetAdminAdapter, "_client", lambda self: sentinel_client
+        )
+        adapter = GitHubRulesetAdminAdapter(token="x")
+        url = f"https://api.github.com/repos/{REPOSITORY}/rulesets/{RULESET_ID}"
+
+        adapter._canonical_get(url, {}, 10.0)
+        adapter._canonical_put(url, {}, {"rules": []}, 10.0)
+
+        assert [c[0] for c in calls] == ["GET", "PUT"]
+        assert all(
+            path == f"/repos/{REPOSITORY}/rulesets/{RULESET_ID}" for _, path, _ in calls
+        )
+        assert all(kwargs["max_attempts"] == 1 for _, _, kwargs in calls)
+        assert calls[0][2]["input_payload"] is None
+        assert calls[1][2]["input_payload"] == {"rules": []}
