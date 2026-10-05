@@ -2,7 +2,11 @@
 
 Owns process creation, bounded concurrent pipe draining, timeout/cancellation
 observation, process-group signaling, one bounded escalation, final
-communication, and termination evidence -- and nothing else. It performs no
+communication, and termination evidence -- and nothing else. Migrated from the
+retired #3200 lighter variant, it additionally owns optional rlimit
+lowering at launch, a post-escalation ``/proc`` survivor scan proving
+zero live processes remain in the invocation pgid, and an explicit venue
+attestation carried on every result. It performs no
 retry, no shell, no network, no persistence, no GitHub access, no worktree or
 lease behavior, and no workflow dispatch.
 
@@ -27,7 +31,12 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
+
+try:
+    import resource as _resource
+except ImportError:  # pragma: no cover - non-POSIX hosts fail _require_posix first
+    _resource = None
 
 from workflow_scheduler.execution.single_issue_pilot import (
     ExecutorOutcome,
@@ -57,6 +66,347 @@ class PosixProcessAdapterError(ValueError):
 
 
 CancellationCheck = Callable[[], bool]
+
+
+# --------------------------------------------------------------------------
+# Migrated containment guarantees (from the retired #3200 lighter variant)
+#
+# For execution venues where cgroup v2 delegation is unavailable, the #759
+# cgroup proof is unproducible. These helpers own: rlimit lowering at
+# launch (lowering never needs privilege), a /proc survivor scan proving
+# zero live processes remain in the invocation pgid, and an explicit venue
+# capability attestation carried on every result. All failures are typed
+# and fail closed.
+# --------------------------------------------------------------------------
+
+# The #759-grade guarantees this process-group variant explicitly does NOT
+# claim. Surfaced verbatim in every result's attestation fields: no silent
+# downgrade from the cgroup proof to the process-group proof.
+GUARANTEES_NOT_CLAIMED = (
+    "clone3(CLONE_INTO_CGROUP) race-free launch directly inside a target cgroup",
+    "kernel recursive cgroup.events populated=0 whole-subtree emptiness proof",
+    "cgroup.kill exact-scope escalation reaching descendants that left the process group (setsid)",
+    "per-invocation cgroup creation, identity, and rmdir cleanup",
+)
+
+GUARANTEES_CLAIMED = (
+    "one fresh process group per invocation (pgid == child pid)",
+    "SIGTERM-then-SIGKILL escalation scoped to exactly the invocation pgid",
+    "/proc survivor scan proving zero live processes remain in the invocation pgid",
+    "direct-child waitpid reap with observed exit status",
+    "final stdout/stderr pipe drain to completion",
+    "rlimit bounds applied at launch (lowering only, no privilege)",
+)
+
+
+class PosixProcessSurvivorError(RuntimeError):
+    """Live processes remained in the invocation pgid after SIGKILL escalation.
+
+    Fail-closed and never silently ignored: the surviving pids are named in
+    the message. Also raised when the survivor state itself cannot be
+    established (``/proc`` unlistable). Deliberately a ``RuntimeError``,
+    not a ``ValueError``: this is a runtime containment breach, never a
+    malformed-input rejection (those stay ``PosixProcessAdapterError`` and
+    are always raised before any process is spawned).
+    """
+
+
+def _resolve_rlimit_key(key: object) -> int:
+    """Resolve an rlimit key to a ``resource.RLIMIT_*`` constant.
+
+    Accepts the constant itself or its exact name (``"RLIMIT_NPROC"``).
+    Anything else fails closed at launch time, never silently skipped.
+    """
+    if _resource is None:  # pragma: no cover - _require_posix already failed
+        raise PosixProcessAdapterError("the resource module is unavailable")
+    if isinstance(key, int) and not isinstance(key, bool):
+        return key
+    if isinstance(key, str):
+        resolved = getattr(_resource, key, None)
+        if isinstance(resolved, int) and not isinstance(resolved, bool):
+            return resolved
+    raise PosixProcessAdapterError(f"unknown rlimit key: {key!r}")
+
+
+def _validate_rlimits(
+    rlimits: Mapping[object, tuple[int, int]] | None,
+) -> dict[int, tuple[int, int]]:
+    """Validate the caller-supplied rlimit map before any process is spawned."""
+    if rlimits is None:
+        return {}
+    validated: dict[int, tuple[int, int]] = {}
+    for key, bounds in rlimits.items():
+        if (
+            not isinstance(bounds, (tuple, list))
+            or len(bounds) != 2
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in bounds)
+        ):
+            raise PosixProcessAdapterError(
+                f"rlimit {key!r} must map to a (soft, hard) int pair, got {bounds!r}"
+            )
+        soft, hard = int(bounds[0]), int(bounds[1])
+        if soft < -1 or hard < -1:
+            raise PosixProcessAdapterError(
+                f"rlimit {key!r} bounds must be >= -1 (RLIM_INFINITY), got {(soft, hard)}"
+            )
+        validated[_resolve_rlimit_key(key)] = (soft, hard)
+    return validated
+
+
+def _rlimit_display_name(res: int) -> str:
+    """Best-effort ``RLIMIT_*`` name for a constant, for evidence records."""
+    assert _resource is not None
+    for name in dir(_resource):
+        if name.startswith("RLIMIT_") and getattr(_resource, name) == res:
+            return name
+    return str(res)
+
+
+def _apply_rlimits_in_child(rlimits: dict[int, tuple[int, int]]) -> None:
+    """``preexec_fn`` body: lower rlimits in the forked child before exec.
+
+    Only ``setrlimit`` syscalls are issued here -- no allocation, no Python
+    C-API use beyond the call itself -- because this runs between fork and
+    exec. Lowering a limit never needs privilege.
+    """
+    assert _resource is not None
+    for res, (soft, hard) in rlimits.items():
+        _resource.setrlimit(res, (soft, hard))
+
+
+def _read_proc_stat(pid: int) -> tuple[int, str] | None:
+    """Return ``(pgrp, state)`` for a pid, or None if it vanished/unreadable.
+
+    A process in another uid's session can never share our fresh pgid, so
+    an unreadable entry is skipped rather than treated as a survivor; a
+    vanished pid is simply gone.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return None
+    # comm may contain spaces/parens; the fields after the last ')' are stable.
+    tail = text.rsplit(")", 1)
+    if len(tail) != 2:
+        return None
+    fields = tail[1].split()
+    if len(fields) < 4:
+        return None
+    try:
+        return int(fields[2]), fields[0]
+    except ValueError:
+        return None
+
+
+def _pgid_live_survivors(pgid: int) -> list[int]:
+    """Pids still alive in ``pgid``, excluding zombies.
+
+    A zombie (state ``Z``) is already dead; reaping it is init's job after
+    reparenting, not this module's. Only live processes count as
+    survivors. Raises ``PosixProcessSurvivorError`` when ``/proc`` cannot
+    be listed: survivor state that cannot be established is itself a
+    fail-closed condition.
+    """
+    survivors: list[int] = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError as exc:
+        raise PosixProcessSurvivorError(
+            f"survivor scan could not list /proc: {exc}"
+        ) from exc
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        stat = _read_proc_stat(pid)
+        if stat is None:
+            continue
+        pgrp, state = stat
+        if pgrp == pgid and state != "Z":
+            survivors.append(pid)
+    return sorted(survivors)
+
+
+def _assert_no_pgid_survivors(pgid: int, settle_seconds: float) -> None:
+    """Fail closed unless zero live processes remain in ``pgid``.
+
+    Settles briefly (a reaped child needs a moment to vanish from
+    ``/proc``), then raises ``PosixProcessSurvivorError`` naming any
+    survivors -- never silently ignored.
+    """
+    deadline = time.monotonic() + max(settle_seconds, 0.0)
+    survivors = _pgid_live_survivors(pgid)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.02)
+        survivors = _pgid_live_survivors(pgid)
+    if survivors:
+        raise PosixProcessSurvivorError(
+            f"{len(survivors)} live process(es) survived SIGKILL in pgid {pgid}: "
+            f"{survivors}; route to manual review/quarantine"
+        )
+
+
+def _silent_kill(process: "subprocess.Popen[bytes]") -> None:
+    """Best-effort kill+reap for a child that failed containment setup."""
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+CGROUP2_MOUNT_CANDIDATES = ("/sys/fs/cgroup", "/sys/fs/cgroup/unified")
+
+
+def _cgroup_delegation_available() -> bool:
+    """Actively probe for a writable cgroup v2 subtree.
+
+    Reports True only if a cgroup2 mount exists AND a probe directory can
+    be created and removed inside it. In container venues (read-only
+    ``/sys/fs/cgroup``) this reports False -- which the attestation
+    records honestly instead of treating as fatal.
+    """
+    for candidate in CGROUP2_MOUNT_CANDIDATES:
+        controllers = os.path.join(candidate, "cgroup.controllers")
+        if not os.path.isfile(controllers):
+            continue
+        probe = os.path.join(candidate, f".agentos-pg-preflight-{os.getpid()}")
+        try:
+            os.mkdir(probe)
+        except OSError:
+            continue
+        try:
+            os.rmdir(probe)
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def _setpgid_probe() -> tuple[bool, str]:
+    """Prove a fresh process group can actually be created on this host.
+
+    The pgid is read while the probe child is still alive: reading it
+    after ``wait()`` would race the pid's disappearance.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["/bin/sleep", "30"],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        return False, f"cannot spawn a process-group leader: {exc}"
+    try:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            return False, f"cannot read the spawned child's pgid: {exc}"
+        if pgid != proc.pid:
+            return False, f"child pgid {pgid} != child pid {proc.pid}"
+        return True, ""
+    finally:
+        _silent_kill(proc)
+
+
+def _proc_filesystem_usable() -> tuple[bool, str]:
+    """/proc must be listable: the survivor scan has no pgrep fallback."""
+    try:
+        entries = os.listdir("/proc")
+    except OSError as exc:
+        return False, f"/proc is not listable: {exc}"
+    if not any(entry.isdigit() for entry in entries):
+        return False, "/proc contains no numeric pid entries"
+    return True, ""
+
+
+def _os_name() -> str:
+    """Return ``os.name`` through an indirection tests can safely patch.
+
+    Patching the real ``os.name`` is not viable: pytest calls
+    ``pathlib.Path()`` while reporting each test result, and ``Path``
+    dispatches on ``os.name`` -- a leaked ``"nt"`` crashes the whole
+    session with ``INTERNALERROR: cannot instantiate 'WindowsPath'``.
+    Tests simulate a non-POSIX host by patching this function instead.
+    """
+    return os.name
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PosixContainmentPreflightResult:
+    """Bounded, immutable evidence for one containment preflight probe.
+
+    ``usable`` is the single fail-closed gate: any caller must refuse to
+    spawn an uncontained process when it is ``False``.
+    ``cgroup_delegation_available`` is reported honestly (False in
+    container venues) but does not gate ``usable`` -- this variant exists
+    precisely for venues without delegation.
+    """
+
+    usable: bool
+    reason: str
+    cgroup_delegation_available: bool
+    setpgid_available: bool
+    rlimit_available: bool
+
+
+def posix_containment_preflight() -> PosixContainmentPreflightResult:
+    """Probe every process-group containment precondition without side effects.
+
+    Fails closed: ``usable`` is True only on a POSIX host where a fresh
+    process group can actually be created, rlimits can be lowered, and
+    ``/proc`` is listable for the survivor scan. The probe child exits
+    immediately and is reaped; nothing persists. This is the entry point
+    for the Codespace experiment (expect ``usable=True`` with
+    ``cgroup_delegation_available=False`` there).
+    """
+    reasons: list[str] = []
+
+    if _os_name() != "posix":
+        reasons.append(f"not a POSIX host (os.name={_os_name()!r})")
+
+    setpgid_available = False
+    if _os_name() == "posix":
+        setpgid_available, setpgid_reason = _setpgid_probe()
+        if not setpgid_available:
+            reasons.append(setpgid_reason)
+
+    rlimit_available = _resource is not None
+    if not rlimit_available:
+        reasons.append("the resource module is unavailable (rlimits cannot be applied)")
+    else:
+        try:
+            current = _resource.getrlimit(_resource.RLIMIT_NPROC)
+            _resource.setrlimit(_resource.RLIMIT_NPROC, current)
+        except (OSError, ValueError) as exc:
+            rlimit_available = False
+            reasons.append(f"rlimit get/set probe failed: {exc}")
+
+    proc_usable, proc_reason = _proc_filesystem_usable()
+    if not proc_usable:
+        reasons.append(proc_reason)
+
+    cgroup_delegation_available = _cgroup_delegation_available()
+
+    usable = (
+        _os_name() == "posix"
+        and setpgid_available
+        and rlimit_available
+        and proc_usable
+    )
+    return PosixContainmentPreflightResult(
+        usable=usable,
+        reason="; ".join(reasons),
+        cgroup_delegation_available=cgroup_delegation_available,
+        setpgid_available=setpgid_available,
+        rlimit_available=rlimit_available,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -166,6 +516,16 @@ class PosixProcessExecutionResult:
     cleanup_confirmed: bool | None = None
     exec_failure_phase: str | None = None
     exec_failure_errno: int | None = None
+    # Migrated venue attestation (from the retired #3200 lighter variant).
+    # Every result states its containment venue and exactly which
+    # guarantees it claims -- never the #759 cgroup proof.
+    rlimits_applied: dict[str, list[int]] | None = None
+    containment_venue: str | None = None
+    cgroup_delegation_available: bool | None = None
+    guarantees_claimed: tuple[str, ...] | None = None
+    guarantees_not_claimed: tuple[str, ...] | None = None
+    survivor_scan_performed: bool = False
+    survivor_count: int = 0
 
 
 MAX_CGROUP_PATH_LENGTH = 1024
@@ -262,11 +622,53 @@ def contained_termination_evidence(
     )
 
 
-def _signal_group(process: "subprocess.Popen[bytes]", sig: signal.Signals) -> str | None:
-    try:
-        pgid = os.getpgid(process.pid)
-    except ProcessLookupError:
-        return None
+COMPACT_EVIDENCE_SCHEMA_VERSION = 1
+
+
+def compact_execution_evidence(result: PosixProcessExecutionResult) -> dict:
+    """Project one execution result onto a compact, schema-versioned evidence dict.
+
+    The framed summary that callers (dev-validation pilot, Codespaces
+    adapters) consume instead of raw logs: outcome, bounded reason, output
+    tails with truncation flags, and the containment attestation sub-block
+    that makes the summary trustworthy without re-verification. It never
+    claims the #759 cgroup proof: see ``guarantees_not_claimed``.
+    """
+    if type(result) is not PosixProcessExecutionResult:
+        raise PosixProcessAdapterError("result must be an exact PosixProcessExecutionResult")
+    return {
+        "schema_version": COMPACT_EVIDENCE_SCHEMA_VERSION,
+        "outcome": _outcome_for(result),
+        "return_code": result.return_code,
+        "termination_confirmed": result.termination_confirmed,
+        "timeout_observed": result.timeout_observed,
+        "cancellation_requested": result.cancellation_requested,
+        "containment": {
+            "venue": result.containment_venue,
+            "cgroup_delegation_available": result.cgroup_delegation_available,
+            "guarantees_claimed": list(result.guarantees_claimed or ()),
+            "guarantees_not_claimed": list(result.guarantees_not_claimed or ()),
+            "survivor_scan_performed": result.survivor_scan_performed,
+            "survivor_count": result.survivor_count,
+            "rlimits_applied": result.rlimits_applied,
+        },
+        "reason": result.reason,
+        "stdout_tail": result.stdout_text,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr_tail": result.stderr_text,
+        "stderr_truncated": result.stderr_truncated,
+    }
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> str | None:
+    """Signal exactly the invocation pgid captured at spawn.
+
+    The pgid is passed in rather than re-derived from the child pid: once
+    the direct child has exited and been reaped, ``os.getpgid(pid)`` raises
+    ``ProcessLookupError`` and a re-derived lookup would silently skip the
+    signal -- leaving pipe-holding descendants alive while the escalation
+    believes it signaled them.
+    """
     try:
         os.killpg(pgid, sig)
     except (ProcessLookupError, PermissionError):
@@ -326,6 +728,7 @@ def run_bounded_posix_process(
     env: dict[str, str] | None = None,
     cancelled: CancellationCheck | None = None,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    rlimits: Mapping[object, tuple[int, int]] | None = None,
 ) -> PosixProcessExecutionResult:
     """Run exactly one bounded POSIX process attempt and return its evidence.
 
@@ -335,7 +738,12 @@ def run_bounded_posix_process(
     period, escalates through one frozen policy (SIGTERM then SIGKILL), and
     always finishes the wait/reap before returning. Never reports
     termination as confirmed unless both the child's exit and the final
-    drain/reap were directly observed.
+    drain/reap were directly observed. After a SIGKILL escalation, a
+    ``/proc`` survivor scan proves zero live processes remain in the
+    invocation pgid and raises ``PosixProcessSurvivorError`` fail-closed
+    otherwise. Optional ``rlimits`` are lowered in the child before exec.
+    Every result carries the venue attestation (``containment_venue`` of
+    ``"process-group"`` with explicit claimed/not-claimed guarantees).
     """
     _require_posix()
     validated_argv = _validate_argv(argv)
@@ -345,6 +753,7 @@ def run_bounded_posix_process(
         raise PosixProcessAdapterError("grace_period_seconds must not be negative")
     if not isinstance(max_output_bytes, int) or max_output_bytes <= 0:
         raise PosixProcessAdapterError("max_output_bytes must be a positive integer")
+    validated_rlimits = _validate_rlimits(rlimits)
 
     process: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - argv validated above
         list(validated_argv),
@@ -355,7 +764,25 @@ def run_bounded_posix_process(
         cwd=cwd,
         env=env,
         start_new_session=True,
+        preexec_fn=(lambda: _apply_rlimits_in_child(validated_rlimits))
+        if validated_rlimits
+        else None,
     )
+    # The pgid is the containment identity for this run: capture it now,
+    # while the child is certainly still ours, and fail closed unless it
+    # is a fresh group led by the child itself.
+    try:
+        pgid = os.getpgid(process.pid)
+    except OSError as exc:
+        _silent_kill(process)
+        raise PosixProcessAdapterError(
+            f"spawned child has no readable pgid: {exc}"
+        ) from exc
+    if pgid != process.pid:
+        _silent_kill(process)
+        raise PosixProcessAdapterError(
+            f"child pgid {pgid} != child pid {process.pid}: not a fresh process group"
+        )
     started = True
 
     stdout_buf = _BoundedBuffer(max_output_bytes)
@@ -379,9 +806,10 @@ def run_bounded_posix_process(
         signal_dispatched: str | None = None
         escalation_dispatched = False
         child_exit_observed = exited
+        survivor_scan_performed = False
 
         if not exited and (timeout_observed or cancellation_requested):
-            signal_dispatched = _signal_group(process, signal.SIGTERM)
+            signal_dispatched = _signal_group(pgid, signal.SIGTERM)
             grace_deadline = time.monotonic() + grace_period_seconds
             _, _, exited_after_term = _drain_until(
                 process, selector, open_streams, grace_deadline, None, poll_interval_seconds
@@ -389,12 +817,16 @@ def run_bounded_posix_process(
             child_exit_observed = exited_after_term
 
             if not exited_after_term:
-                escalation_dispatched = _signal_group(process, signal.SIGKILL) is not None
+                escalation_dispatched = _signal_group(pgid, signal.SIGKILL) is not None
                 kill_deadline = time.monotonic() + grace_period_seconds
                 _, _, exited_after_kill = _drain_until(
                     process, selector, open_streams, kill_deadline, None, poll_interval_seconds
                 )
                 child_exit_observed = exited_after_kill
+                # Prove zero live processes remain in the invocation pgid.
+                # Fail closed: survivors (or an unlistable /proc) raise.
+                survivor_scan_performed = True
+                _assert_no_pgid_survivors(pgid, max(grace_period_seconds, 1.0))
     finally:
         selector.close()
 
@@ -438,6 +870,19 @@ def run_bounded_posix_process(
         possible_partial_effects=possible_partial_effects,
         reason=reason,
         pid=process.pid,
+        rlimits_applied=(
+            {
+                _rlimit_display_name(res): [soft, hard]
+                for res, (soft, hard) in validated_rlimits.items()
+            }
+            or None
+        ),
+        containment_venue="process-group",
+        cgroup_delegation_available=_cgroup_delegation_available(),
+        guarantees_claimed=GUARANTEES_CLAIMED,
+        guarantees_not_claimed=GUARANTEES_NOT_CLAIMED,
+        survivor_scan_performed=survivor_scan_performed,
+        survivor_count=0,
     )
 
 
@@ -476,9 +921,11 @@ class PosixProcessExecutorConfig:
     max_output_bytes: int = MAX_OUTPUT_BYTES
     cwd: str | None = None
     env: dict[str, str] | None = None
+    rlimits: Mapping[object, tuple[int, int]] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "argv", _validate_argv(self.argv))
+        _validate_rlimits(self.rlimits)
 
 
 def _outcome_for(result: PosixProcessExecutionResult) -> ExecutorOutcome:
@@ -536,6 +983,7 @@ class PosixProcessExecutor:
             cwd=self._config.cwd,
             env=self._config.env,
             cancelled=self._cancelled,
+            rlimits=self._config.rlimits,
         )
         self.last_result = result
         return _to_pilot_execution_observation(result)
