@@ -10,6 +10,13 @@ The live mutation shape is fixed: one GET of Protect main, at most one PUT that
 preserves the observed ruleset and appends the canonical aggregate-validation
 required-status-check rule, then one immediate GET read-back.  There is no
 caller-supplied URL, HTTP method, arbitrary rule payload, retry, or fallback.
+
+Transport mechanics (client construction, request execution, credential
+discovery) are owned by the canonical Agent OS GitHub gateway
+(scripts.agent_os_github_issue_provider).  This adapter keeps only its domain
+policy: the fixed operation shape, prestate/currentness binding, and
+terminal-failure contract.  Tests may inject the historical callable seam;
+production uses the shared canonical request boundary.
 """
 from __future__ import annotations
 
@@ -17,10 +24,13 @@ import hashlib
 import json
 import math
 import os
-import urllib.error
-import urllib.request
 from typing import Any, Callable, Dict, Optional
 
+from scripts.agent_os_github_issue_provider.auth import build_token_client
+from scripts.agent_os_github_issue_provider.request import (
+    GitHubRequestError,
+    request_json,
+)
 from workflow_scheduler.adapters.base_adapter import TaskAdapter
 from workflow_scheduler.models import Task
 
@@ -42,26 +52,20 @@ JsonGet = Callable[[str, Dict[str, str], float], Any]
 JsonPut = Callable[[str, Dict[str, str], Dict[str, Any], float], Any]
 
 
-def _request_json(method: str, url: str, headers: Dict[str, str], body: Dict[str, Any] | None, timeout: float) -> Any:
-    data = None if body is None else json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        raise GitHubRulesetAdminAdapterError(f"GitHub API returned HTTP {exc.code}: {exc.reason}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise GitHubRulesetAdminAdapterError(f"GitHub API transport failed: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise GitHubRulesetAdminAdapterError("GitHub API returned invalid JSON") from exc
+def _translate_request_error(error: GitHubRequestError) -> GitHubRulesetAdminAdapterError:
+    """Map the canonical transport failure onto the adapter's terminal contract.
 
-
-def _default_get(url: str, headers: Dict[str, str], timeout: float) -> Any:
-    return _request_json("GET", url, headers, None, timeout)
-
-
-def _default_put(url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float) -> Any:
-    return _request_json("PUT", url, headers, body, timeout)
+    Mutation failures are never retryable: every transport failure is a
+    controlled terminal failure, exactly as the bespoke urllib layer produced.
+    """
+    kind = error.kind
+    if kind == "http-error" and error.status is not None:
+        return GitHubRulesetAdminAdapterError(f"GitHub API returned HTTP {error.status}")
+    if kind == "rate-limited":
+        return GitHubRulesetAdminAdapterError("GitHub API rate-limited the request")
+    if kind == "transport-unavailable":
+        return GitHubRulesetAdminAdapterError("GitHub API transport failed")
+    return GitHubRulesetAdminAdapterError("GitHub API returned an invalid response")
 
 
 def mutation_prestate_sha256(payload: object) -> str:
@@ -109,9 +113,67 @@ class GitHubRulesetAdminAdapter(TaskAdapter):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
-        self._http_get = http_get or _default_get
-        self._http_put = http_put or _default_put
+        self._http_get = http_get or self._canonical_get
+        self._http_put = http_put or self._canonical_put
         self.timeout = timeout
+
+    def _client(self):
+        """Build the production client through the canonical Agent OS boundary.
+
+        Mirrors the PR comment/label adapters (#2507/#3331): client
+        construction is owned by
+        scripts.agent_os_github_issue_provider.auth.build_token_client.
+        A missing token fails closed here as a domain adapter error instead of
+        issuing an unauthenticated request.
+        """
+        environment = dict(os.environ)
+        if self.token is not None:
+            environment["GITHUB_TOKEN"] = self.token
+        try:
+            return build_token_client(
+                environment, user_agent="workflow-scheduler/github-ruleset-admin"
+            )
+        except RuntimeError as exc:
+            raise GitHubRulesetAdminAdapterError(str(exc)) from exc
+
+    def _canonical_path(self, url: str) -> str:
+        """Restrict the canonical request to the adapter's fixed endpoint."""
+        prefix = GITHUB_API_BASE
+        if not url.startswith(prefix):
+            raise GitHubRulesetAdminAdapterError("ruleset request left the fixed API base")
+        return url[len(prefix):]
+
+    def _canonical_request(
+        self, method: str, url: str, headers: Dict[str, str], body: Dict[str, Any] | None
+    ) -> Any:
+        # max_attempts=1: writes must never be retried blindly, so the domain
+        # layer classifies uncertain mutation outcomes itself (via read-back).
+        try:
+            return request_json(
+                self._client(),
+                method,
+                self._canonical_path(url),
+                input_payload=body,
+                headers=headers,
+                max_attempts=1,
+            ).payload
+        except GitHubRequestError as exc:
+            raise _translate_request_error(exc) from exc
+
+    def _canonical_get(self, url: str, headers: Dict[str, str], timeout: float) -> Any:
+        """Default GET seam behind the canonical gateway.
+
+        The timeout parameter is part of the historical injectable-seam
+        contract; the canonical request boundary applies its own bounded
+        requester defaults.
+        """
+        return self._canonical_request("GET", url, headers, None)
+
+    def _canonical_put(
+        self, url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float
+    ) -> Any:
+        """Default PUT seam behind the canonical gateway (single attempt)."""
+        return self._canonical_request("PUT", url, headers, body)
 
     def execute(self, task: Task) -> Dict[str, Any]:
         try:
