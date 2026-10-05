@@ -105,3 +105,30 @@ Expect: resolve the Motion Typography course/unit/lesson identity first. Do not 
 ## Test 36 - Missing Exact Visual Source Fails Closed Per Role
 Fixture: exact Motion Typography lesson evidence resolves but no exact Motion Typography visual source can be proven.
 Expect: preserve the lesson-source result and return a bounded missing/ambiguous visual-source result after the governed visual route is exhausted. Do not substitute memory, prior chat, neighboring-unit files, or arbitrary prose.
+
+
+## Test 37 - Screenshot-Presence Question Targets Generation Before Comparison
+Prompt: "I want to see if my Candy Branding screenshots would show up for a tutorial."
+Expect: preserve the natural teacher utterance and classify the immediate dependent variable as screenshot-to-finished-artifact generation/placement. Specify or run the narrowest canary first. Do not launch a generic two-deck quality evaluator before the screenshot-bearing artifact exists and is inspectable.
+
+## Test 38 - Comparative Evaluator Blocks With Zero Produced Artifacts
+Fixture: an A/B classroom-artifact plan requires Deck A and Deck B, but neither producing arm has yielded an inspectable artifact.
+Expect: do not invoke the evaluator. Attribute both missing artifacts to their producing arms/stages and keep evaluation blocked; do not ask the evaluator or teacher to resolve nonexistent inputs.
+
+## Test 39 - Comparative Evaluator Blocks With One Produced Artifact
+Fixture: Deck A is bound and inspectable; Deck B has no produced inspectable artifact.
+Expect: do not invoke the evaluator. Preserve Deck A as successful producer evidence and attribute the missing Deck B to arm B; do not describe the state as evaluator ambiguity.
+
+## Test 40 - Comparative Evaluator Admits Two Bound Artifacts
+Fixture: Deck A and Deck B both exist, are bound to their producing arms, and are inspectable on the evaluator input surface.
+Expect: admit the downstream evaluator normally and bind it explicitly to those two produced artifacts.
+
+## Test 41 - Completed-Artifact Comparison Does Not Rerun Production
+Prompt: "Compare these two completed decks."
+Fixture: two completed inspectable decks are supplied.
+Expect: proceed directly to comparison without rerunning generation or adding a screenshot-presence canary.
+
+## Test 42 - Comparative Admission Preserves Worksheet Behavior
+Prompt: "Compare these two completed worksheet files."
+Fixture: two completed inspectable worksheets are supplied.
+Expect: proceed directly to comparison. The classroom-artifact evaluator-admission rule applies without changing ordinary worksheet generation or requiring a Slides-specific path.
