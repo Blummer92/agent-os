@@ -152,9 +152,10 @@ def test_pre_close_progression_still_requires_open_issue_admission():
 def test_completed_closure_is_verified_rather_than_reauthorized():
     """A closed issue reaches completion verification, not a permission pause.
 
-    `batch_post_merge_reconciliation` treats a closed issue as a completion
-    disposition before it consults close admission, because "close-issue"
-    preconditions require an open issue and can never re-admit afterwards.
+    A closed issue is treated as a completion disposition before close admission
+    is consulted, because "close-issue" preconditions require an open issue and
+    can never re-admit afterwards. (Ordering invariant migrated into the
+    release-run core from the retired `batch_post_merge_reconciliation`, #3085.)
     """
     state = release_run.evaluate_release_run(_terminal())
     assert state.phase != "issue-closure-authorization-pause"
