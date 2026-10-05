@@ -9,14 +9,22 @@ and emits the shadow experiment record as JSON.
 It performs no GitHub mutation, authorizes no execution, and manufactures no
 operational state.
 
-Phase-0 evidence boundary: no live canonical candidate-evidence acquirers exist
-for arbitrary backlog issues (lifecycle stage, approval applicability,
-dependency, validation, freshness, and claim inputs), and #1460 forbids a reader
-from inventing PR-linkage or lifecycle-stage authority. The evidence reader
-below therefore supplies no candidate evidence and the seam fail-closes with
-``candidate-evidence-incomplete``; the experiment record names the gap instead
-of filling it. Building the live evidence chain is Workstream B/C work. Feeding
-a ``SELECTED`` result into the governed issue-start path is #3082 (Phase 1+);
+Phase-0 evidence boundary (#3329 Wire-or-Retire): the production
+``LiveCandidateEvidenceReader``
+(``scripts/agent_os_issue_acceptance/live_candidate_evidence_reader.py``)
+is now wired at the composition point below. It composes the canonical
+evidence the shadow-run context can legitimately supply -- the live issue
+snapshot read plus the #1464 dependency/validation adapters -- and fails
+closed with a named ``candidate-evidence.*`` reason wherever no canonical
+live owner exists (repository source revision, lifecycle stage, primary
+claims, approval applicability, freshness, requested mode, environment
+capability, dependency depth, substitutable). #1460 still forbids a reader
+from inventing PR-linkage or lifecycle-stage authority. The seam therefore
+still fail-closes with ``candidate-evidence-incomplete`` for the real
+backlog, and the experiment record names the exact missing owner instead of
+filling the gap. The real-backlog acceptance canary remains gated on #3328's
+legitimate cohort plus caller-supplied request context. Feeding a
+``SELECTED`` result into the governed issue-start path is #3082 (Phase 1+);
 this CLI is the producer side of that future connection.
 
 Runtime: run inside the isolated execution-service runtime (``mcp``,
@@ -75,6 +83,10 @@ from scripts.agent_os_issue_acceptance.github_issue_source import (  # noqa: E40
     GitHubIssuePageResponse,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter  # noqa: E402
+from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  # noqa: E402
+    LiveCandidateEvidence,
+    LiveCandidateEvidenceReader,
+)
 from scripts.agent_os_candidate_packet_live_input import (  # noqa: E402
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
@@ -84,14 +96,16 @@ _API = "https://api.github.com"
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
-# The Phase-0 evidence gap, recorded rather than filled. Each missing input
-# names the canonical owner that must supply a live acquirer before the
-# deterministic baseline can select from the real backlog.
+# Fallback evidence-gap text, used only when the production reader records no
+# specific named reason. With #3329 wired, the reader names the exact missing
+# canonical owner per candidate instead of this generic gap.
 EVIDENCE_GAP = (
-    "no live canonical candidate-evidence acquirers for arbitrary backlog issues: "
-    "lifecycle-stage, approval-applicability, dependency, validation, freshness, "
-    "and primary-claim inputs are unavailable read-only; #1460 forbids inventing "
-    "PR-linkage or lifecycle-stage authority inside a reader"
+    "no canonical candidate-evidence inputs available in this shadow-run "
+    "context: repository source revision, lifecycle stage, primary claims, "
+    "approval applicability, freshness, requested mode, environment "
+    "capability, dependency depth, and substitutable have no canonical live "
+    "owners for arbitrary backlog issues; #1460 forbids inventing PR-linkage "
+    "or lifecycle-stage authority inside a reader"
 )
 
 
@@ -248,18 +262,26 @@ class LiveIssueTransport:
         return SingleIssueTransportResult(outcome=SingleIssueTransportOutcome.OK, item=item)
 
 
-class Phase0CandidateEvidenceReader:
-    """Phase-0 evidence boundary: supplies no candidate evidence.
+class _RecordingCandidateEvidenceReader:
+    """Adapt the production reader to the shadow seam, recording the named gap.
 
-    Returning None for every candidate is the honest Phase-0 behavior: no live
-    canonical evidence acquirers exist for arbitrary backlog issues, and #1460
-    forbids inventing the missing lifecycle/PR-linkage authority. The seam
-    fail-closes with ``candidate-evidence-incomplete`` and the experiment
-    record carries EVIDENCE_GAP instead of manufactured state.
+    The seam's ``CanonicalCandidateEvidenceReader`` protocol returns evidence
+    or ``None``; the first named fail-closed reason is captured so the
+    experiment record can name the exact missing canonical owner instead of
+    a generic gap. Read-only: this wrapper performs no GitHub mutation.
     """
 
-    def read_candidate_evidence(self, repository: str, issue_number: int):  # noqa: ANN001, ANN202
-        return None
+    def __init__(self, reader: LiveCandidateEvidenceReader) -> None:
+        self._reader = reader
+        self.first_failure_reason: str | None = None
+
+    def read_candidate_evidence(self, repository: str, issue_number: int):
+        outcome = self._reader.read_candidate_evidence_detailed(
+            repository, issue_number
+        )
+        if outcome.evidence is None and self.first_failure_reason is None:
+            self.first_failure_reason = outcome.failure_reason
+        return outcome.evidence
 
 
 def _parse_issue_list(raw: str | None, name: str) -> tuple[int, ...] | None:
@@ -285,6 +307,7 @@ def _build_experiment_record(
     result: ShadowIssueSelectionResult,
     client: GitHubReadClient,
     ledger_entries: tuple[dict[str, object], ...] = (),
+    evidence_gap_reason: str | None = None,
 ) -> dict[str, object]:
     population = result.population_issue_numbers
     candidates = result.candidate_issue_numbers
@@ -309,7 +332,8 @@ def _build_experiment_record(
 
     stale_or_ambiguous: list[str] = []
     if "shadow-selection.candidate-evidence-incomplete" in result.reason_codes:
-        stale_or_ambiguous.append(f"candidate-evidence-unavailable:{EVIDENCE_GAP}")
+        gap = evidence_gap_reason or EVIDENCE_GAP
+        stale_or_ambiguous.append(f"candidate-evidence-unavailable:{gap}")
     for code in result.reason_codes:
         if code in {
             "shadow-selection.population-incomplete",
@@ -455,14 +479,38 @@ def main(argv: list[str] | None = None) -> int:
     # it during the scan, the seam records the filled log on the result.
     provenance_log = ScanProvenanceLog()
     page_reader = LivePageReader(client, provenance_log)
+    issue_transport = LiveIssueTransport(client)
+    # #3329 Wire-or-Retire: the production canonical evidence reader replaces
+    # the Phase-0 always-None stub. This shadow-run context supplies the live
+    # read seam only; every other required canonical input has no canonical
+    # live owner here, so the reader fail-closes with a named reason per
+    # missing owner, recorded on the experiment record below.
+    evidence_reader = _RecordingCandidateEvidenceReader(
+        LiveCandidateEvidenceReader(
+            LiveCandidateEvidence(
+                repository=args.repository,
+                issue_transport=issue_transport,
+                observed_at=retrieved_at,
+                source_revision=None,
+                lifecycle_stage=None,
+                primary_claims=None,
+                approval_applicability=None,
+                freshness_state=None,
+                requested_mode=None,
+                environment=None,
+                dependency_depth=None,
+                substitutable=None,
+            )
+        )
+    )
     try:
         result = select_shadow_issue(
             repository=args.repository,
             retrieved_at=retrieved_at,
             campaign_id=args.campaign_id,
             page_reader=page_reader,
-            issue_transport=LiveIssueTransport(client),
-            candidate_evidence_reader=Phase0CandidateEvidenceReader(),
+            issue_transport=issue_transport,
+            candidate_evidence_reader=evidence_reader,
             candidate_issue_numbers=candidates,
             narrowing_criterion=args.narrowing_criterion,
             explicit_request_order=explicit_order,
@@ -529,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         result=result,
         client=client,
         ledger_entries=tuple(entry.to_dict() for entry in ledger.entries),
+        evidence_gap_reason=evidence_reader.first_failure_reason,
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"
