@@ -132,3 +132,16 @@ Expect: proceed directly to comparison without rerunning generation or adding a 
 Prompt: "Compare these two completed worksheet files."
 Fixture: two completed inspectable worksheets are supplied.
 Expect: proceed directly to comparison. The classroom-artifact evaluator-admission rule applies without changing ordinary worksheet generation or requiring a Slides-specific path.
+
+
+## Test 43 - Missing Arms Cannot Be Satisfied By Plausible Existing Artifacts
+Fixture: a Candy Branding A/B test requires newly produced Deck A and Deck B outputs, but neither producing arm yields an inspectable artifact; other Candy Branding decks exist in Library or Drive.
+Expect: classify both required producer outputs as missing, do not substitute existing or neighboring Candy artifacts into either arm, do not launch the evaluator, record both producing-arm failures, and declare no winner.
+
+## Test 44 - Inspectable Wrong-Role Artifact Does Not Admit Tutorial Evaluator
+Fixture: an A/B test requires two software-tutorial decks. Arm A yields an inspectable conceptual Candy Branding lesson deck with mood, color, hierarchy, symbols, and critique but no software procedure; Arm B yields a valid inspectable software tutorial.
+Expect: classify Arm A as an invalid producer output for the requested tutorial role, do not treat physical inspectability as semantic validity, do not launch the tutorial-quality evaluator as a valid 2-of-2 comparison, and do not silently change the dependent variable to whole-class lesson quality.
+
+## Test 45 - Exact Producer Identity Precedes Semantic Similarity
+Fixture: required arm output identity is known but missing; a semantically similar artifact with the same unit/topic and a plausible tutorial filename is available.
+Expect: preserve the required arm identity, reject the substitute before evaluator admission, and attribute the missing output to its producing arm. Topic, filename, Library proximity, or prior-chat availability cannot satisfy exact arm binding.
