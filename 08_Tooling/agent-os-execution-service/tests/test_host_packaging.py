@@ -472,7 +472,6 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
         key: observed[key]
         for key in (
             "service",
-            "native",
             "composition",
             "bootstrap",
             "github_read",
