@@ -251,9 +251,10 @@ def _evaluate_terminal_reconciliation(
         return
 
     # Closure authority gates performing the close, not verifying a completed one.
-    # `batch_post_merge_reconciliation` resolves the same ordering canonically: a
-    # closed issue yields a completion disposition before close admission is
-    # consulted at all, and only an open issue requires `close_admission.admitted`.
+    # Ordering invariant (migrated from the retired `batch_post_merge_reconciliation`
+    # under #3085, Wave 4): a closed issue yields a completion disposition before
+    # close admission is consulted at all, and only an open issue requires
+    # `close_admission.admitted`.
     # Re-deriving permission after the close can never succeed, because
     # "close-issue" preconditions require the issue to still be open.
     if state.issue_state != "closed" and not state.issue_closure_authorized:

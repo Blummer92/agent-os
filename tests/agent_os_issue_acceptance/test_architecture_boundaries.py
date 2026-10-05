@@ -40,7 +40,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
     ),
     (
         "planning",
-        frozenset({"bulk_repair_review_integration", "pr_batch_merge_plan", "zero_job_validation_recovery"}),
+        frozenset({"bulk_repair_review_integration", "zero_job_validation_recovery"}),
         ("batch_",),
     ),
     (
