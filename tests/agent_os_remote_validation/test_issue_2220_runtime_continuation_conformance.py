@@ -79,6 +79,7 @@ def test_vm_runtime_mcp_projects_completed_delivery_as_terminal() -> None:
         implementation_commit_count=1,
         draft_pr_exists=True,
         canonical_pr_readback_verified=True,
+        canonical_pr_readback_binding="readback-digest:canonical-pr:2220",
         capable_route_available=True,
         subordinate_writes_only=False,
     )
