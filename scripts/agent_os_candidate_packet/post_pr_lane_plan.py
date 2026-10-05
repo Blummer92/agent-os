@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
-from scripts.agent_os_issue_acceptance.executor_route import ExecutorRoute
+from agent_os_execution_service.executor_routing import ExecutorRoute
 from scripts.agent_os_issue_acceptance.post_pr_state_audit import (
     PostPrStateAuditResult,
     RecommendationOutcome,
@@ -277,7 +277,7 @@ def plan_post_pr_lane(selection: ExecutableLaneSelection, audit: PostPrStateAudi
     if outcome is LanePlanOutcome.HUMAN_DECISION:
         primary = None
         alternate = None
-        route = ExecutorRoute.HUMAN_DECISION
+        route = ExecutorRoute.HUMAN_DECISION_REQUIRED
         action = "Escalate conflicting post-PR lane evidence to human decision."
     else:
         action = f"Open #{primary}."

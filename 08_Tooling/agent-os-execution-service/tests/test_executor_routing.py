@@ -439,3 +439,64 @@ def test_version_surfaces_and_markdown_limits_are_aligned() -> None:
     package_root = Path(__file__).resolve().parents[1]; repo_root = Path(__file__).resolve().parents[3]
     project = tomllib.loads((package_root / "pyproject.toml").read_text(encoding="utf-8")); models_text = (package_root / "src/agent_os_execution_service/models.py").read_text(encoding="utf-8"); map_text = (repo_root / "04_Registry/module-version-map.md").read_text(encoding="utf-8"); details_text = (repo_root / "04_Registry/module-version-map-details.md").read_text(encoding="utf-8")
     assert project["project"]["version"] == "0.6.0"; assert 'EXECUTION_SERVICE_VERSION = "0.6.0"' in models_text; assert re.search(r"\| Agent OS Execution Service \| 0\.6\.0 \|", map_text); assert "moved `0.5.0` -> `0.6.0`" in details_text; assert len((package_root / "README.md").read_text(encoding="utf-8").splitlines()) < 100; assert len(map_text.splitlines()) < 100
+
+
+def test_prior_runner_route_preserved_when_still_capable() -> None:
+    route = runner_decision(
+        ExecutorCapability.CHECKOUT,
+        prior_route_or_none=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
+    )
+    assert route.selected_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+    assert route.route_reasons == (ExecutorRouteReason.PRIOR_ROUTE_PRESERVED,)
+    assert route.rejected_lower_cost_routes == (
+        ExecutorRoute.CHATGPT_CONNECTOR_NATIVE,
+    )
+    assert route.prior_route_or_none is ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+
+
+def test_prior_runner_route_not_preserved_when_capability_lost() -> None:
+    route = runner_decision(
+        ExecutorCapability.PROCESS_EXECUTION,
+        governed_runner_capabilities=(ExecutorCapability.CHECKOUT,),
+        prior_route_or_none=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
+    )
+    assert route.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+    assert ExecutorRouteReason.PRIOR_ROUTE_NOT_AVAILABLE in route.route_reasons
+    assert ExecutorRouteReason.PRIOR_ROUTE_PRESERVED not in route.route_reasons
+
+
+def test_prior_connector_route_not_available_when_runtime_required() -> None:
+    route = runner_decision(
+        ExecutorCapability.CHECKOUT,
+        prior_route_or_none=ExecutorRoute.CHATGPT_CONNECTOR_NATIVE,
+    )
+    assert route.selected_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+    assert ExecutorRouteReason.PRIOR_ROUTE_NOT_AVAILABLE in route.route_reasons
+
+
+def test_prior_route_does_not_override_ambiguity() -> None:
+    route = runner_decision(
+        ExecutorCapability.CHECKOUT,
+        prior_route_or_none=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
+        authority_ambiguous=True,
+    )
+    assert route.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+    assert ExecutorRouteReason.AUTHORITY_AMBIGUOUS in route.route_reasons
+
+
+def test_prior_human_decision_route_preserved_fail_closed() -> None:
+    route = decision(
+        required_capabilities=(ExecutorCapability.CHECKOUT,),
+        governed_runner_capabilities=(),
+        prior_route_or_none=ExecutorRoute.HUMAN_DECISION_REQUIRED,
+    )
+    assert route.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+    assert route.route_reasons == (ExecutorRouteReason.PRIOR_ROUTE_PRESERVED,)
+
+
+def test_prior_route_rejects_non_enum() -> None:
+    with pytest.raises(TypeError):
+        runner_decision(
+            ExecutorCapability.CHECKOUT,
+            prior_route_or_none="chatgpt-governed-runner",
+        )

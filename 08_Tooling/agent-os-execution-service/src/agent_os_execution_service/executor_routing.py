@@ -108,6 +108,8 @@ class ExecutorRouteReason(str, Enum):
     EVIDENCE_CONTRADICTORY = "evidence-contradictory"
     IRREVERSIBLE_OR_UNCERTAIN_MUTATION = "irreversible-or-uncertain-mutation"
     NO_CAPABLE_APPROVED_ROUTE = "no-capable-approved-route"
+    PRIOR_ROUTE_PRESERVED = "prior-route-preserved"
+    PRIOR_ROUTE_NOT_AVAILABLE = "prior-route-not-available"
 
 
 _ROUTE_ORDER = (
@@ -290,6 +292,41 @@ def _list_field(payload: dict[str, object], name: str) -> list[object]:
     return value
 
 
+def _prior_route_available(
+    route: ExecutorRoute,
+    *,
+    required_capabilities: tuple[ExecutorCapability, ...],
+    governed_runner_capabilities: tuple[ExecutorCapability, ...],
+    governed_runner_available: bool,
+    external_fallback_available: bool,
+    external_fallback_explicitly_permitted: bool,
+    external_fallback_capabilities: tuple[ExecutorCapability, ...] | None,
+) -> bool:
+    """Whether a previously selected route remains usable under current evidence.
+
+    Ports the #907 resume-route preservation invariant into the canonical
+    vocabulary, evaluated with the canonical capability model: a prior route
+    is preserved only when the current evidence still proves it capable.
+    """
+    required = frozenset(required_capabilities)
+    if route is ExecutorRoute.CHATGPT_CONNECTOR_NATIVE:
+        return not required
+    if route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER:
+        return governed_runner_available and required.issubset(
+            frozenset(governed_runner_capabilities)
+        )
+    if route is ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK:
+        return (
+            external_fallback_available
+            and external_fallback_explicitly_permitted
+            and (
+                external_fallback_capabilities is None
+                or required.issubset(frozenset(external_fallback_capabilities))
+            )
+        )
+    return True  # HUMAN_DECISION_REQUIRED is always available fail-closed.
+
+
 def _expected_route(
     *,
     required_capabilities: tuple[ExecutorCapability, ...],
@@ -299,6 +336,7 @@ def _expected_route(
     external_fallback_explicitly_permitted: bool,
     external_fallback_capabilities: tuple[ExecutorCapability, ...] | None,
     human_flags: dict[str, bool],
+    prior_route_or_none: ExecutorRoute | None = None,
 ) -> tuple[
     ExecutorRoute,
     tuple[ExecutorRouteReason, ...],
@@ -320,18 +358,56 @@ def _expected_route(
             (),
         )
 
+    def _with_prior(
+        reasons: tuple[ExecutorRouteReason, ...],
+    ) -> tuple[ExecutorRouteReason, ...]:
+        if prior_route_or_none is None or _prior_route_available(
+            prior_route_or_none,
+            required_capabilities=required_capabilities,
+            governed_runner_capabilities=governed_runner_capabilities,
+            governed_runner_available=governed_runner_available,
+            external_fallback_available=external_fallback_available,
+            external_fallback_explicitly_permitted=external_fallback_explicitly_permitted,
+            external_fallback_capabilities=external_fallback_capabilities,
+        ):
+            return reasons
+        return tuple(
+            sorted(
+                set(reasons) | {ExecutorRouteReason.PRIOR_ROUTE_NOT_AVAILABLE},
+                key=lambda item: item.value,
+            )
+        )
+
+    if prior_route_or_none is not None and _prior_route_available(
+        prior_route_or_none,
+        required_capabilities=required_capabilities,
+        governed_runner_capabilities=governed_runner_capabilities,
+        governed_runner_available=governed_runner_available,
+        external_fallback_available=external_fallback_available,
+        external_fallback_explicitly_permitted=external_fallback_explicitly_permitted,
+        external_fallback_capabilities=external_fallback_capabilities,
+    ):
+        index = _ROUTE_ORDER.index(prior_route_or_none)
+        return (
+            prior_route_or_none,
+            (ExecutorRouteReason.PRIOR_ROUTE_PRESERVED,),
+            _ROUTE_ORDER[:index],
+        )
+
     required = frozenset(required_capabilities)
     available = frozenset(governed_runner_capabilities)
     if governed_runner_available and required.issubset(available):
         return (
             ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
-            tuple(
-                sorted(
-                    (
-                        ExecutorRouteReason.RUNTIME_CAPABILITY_REQUIRED,
-                        ExecutorRouteReason.GOVERNED_RUNNER_CAPABLE,
-                    ),
-                    key=lambda item: item.value,
+            _with_prior(
+                tuple(
+                    sorted(
+                        (
+                            ExecutorRouteReason.RUNTIME_CAPABILITY_REQUIRED,
+                            ExecutorRouteReason.GOVERNED_RUNNER_CAPABLE,
+                        ),
+                        key=lambda item: item.value,
+                    )
                 )
             ),
             _ROUTE_ORDER[:1],
@@ -353,14 +429,16 @@ def _expected_route(
     ):
         return (
             ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK,
-            tuple(
-                sorted(
-                    (
-                        ExecutorRouteReason.RUNTIME_CAPABILITY_REQUIRED,
-                        runner_reason,
-                        ExecutorRouteReason.EXTERNAL_FALLBACK_EXPLICITLY_PERMITTED,
-                    ),
-                    key=lambda item: item.value,
+            _with_prior(
+                tuple(
+                    sorted(
+                        (
+                            ExecutorRouteReason.RUNTIME_CAPABILITY_REQUIRED,
+                            runner_reason,
+                            ExecutorRouteReason.EXTERNAL_FALLBACK_EXPLICITLY_PERMITTED,
+                        ),
+                        key=lambda item: item.value,
+                    )
                 )
             ),
             _ROUTE_ORDER[:2],
@@ -385,7 +463,7 @@ def _expected_route(
         )
     return (
         ExecutorRoute.HUMAN_DECISION_REQUIRED,
-        tuple(sorted(reasons, key=lambda item: item.value)),
+        _with_prior(tuple(sorted(reasons, key=lambda item: item.value))),
         _ROUTE_ORDER[:-1],
     )
 
@@ -432,6 +510,7 @@ class ExecutorRouteDecision:
     environment_health_evidence_id_or_none: str | None = None
     checkpoint_id_or_none: str | None = None
     resume_plan_id_or_none: str | None = None
+    prior_route_or_none: ExecutorRoute | None = None
     workflow_runtime_identity_or_none: str | None = None
     execution_authorized: bool = False
     github_writes_authorized: bool = False
@@ -493,6 +572,12 @@ class ExecutorRouteDecision:
         )
         if type(self.selected_route) is not ExecutorRoute:
             raise TypeError("selected_route must be an exact ExecutorRoute")
+        if self.prior_route_or_none is not None and (
+            type(self.prior_route_or_none) is not ExecutorRoute
+        ):
+            raise TypeError(
+                "prior_route_or_none must be an exact ExecutorRoute or None"
+            )
         _enum_tuple(
             "route_reasons",
             self.route_reasons,
@@ -519,6 +604,7 @@ class ExecutorRouteDecision:
             ),
             external_fallback_capabilities=self.external_fallback_capabilities,
             human_flags=human_flags,
+            prior_route_or_none=self.prior_route_or_none,
         )
         if self.selected_route is not expected_route:
             raise ValueError(
@@ -896,6 +982,11 @@ def _decision_payload(
         ),
         "checkpoint_id_or_none": value.checkpoint_id_or_none,
         "resume_plan_id_or_none": value.resume_plan_id_or_none,
+        "prior_route_or_none": (
+            value.prior_route_or_none.value
+            if value.prior_route_or_none is not None
+            else None
+        ),
         "workflow_runtime_identity_or_none": (
             value.workflow_runtime_identity_or_none
         ),
@@ -1018,6 +1109,7 @@ def select_executor_route(
     environment_health_evidence_id_or_none: str | None = None,
     checkpoint_id_or_none: str | None = None,
     resume_plan_id_or_none: str | None = None,
+    prior_route_or_none: ExecutorRoute | None = None,
     workflow_runtime_identity_or_none: str | None = None,
     execution_authorized: bool = False,
     github_writes_authorized: bool = False,
@@ -1066,6 +1158,12 @@ def select_executor_route(
     }
     for name, value in boolean_values.items():
         _exact_bool(name, value)
+    if prior_route_or_none is not None and (
+        type(prior_route_or_none) is not ExecutorRoute
+    ):
+        raise TypeError(
+            "prior_route_or_none must be an exact ExecutorRoute or None"
+        )
     human_flags = {
         name: boolean_values[name] for name, _ in _HUMAN_FLAG_REASONS
     }
@@ -1079,6 +1177,7 @@ def select_executor_route(
         ),
         external_fallback_capabilities=external_fallback_capabilities,
         human_flags=human_flags,
+        prior_route_or_none=prior_route_or_none,
     )
     if route is ExecutorRoute.HUMAN_DECISION_REQUIRED:
         execution_authorized = False
@@ -1132,6 +1231,7 @@ def select_executor_route(
         ),
         checkpoint_id_or_none=checkpoint_id_or_none,
         resume_plan_id_or_none=resume_plan_id_or_none,
+        prior_route_or_none=prior_route_or_none,
         workflow_runtime_identity_or_none=workflow_runtime_identity_or_none,
         execution_authorized=execution_authorized,
         github_writes_authorized=github_writes_authorized,

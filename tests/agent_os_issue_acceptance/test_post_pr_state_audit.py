@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from scripts.agent_os_issue_acceptance.executor_route import ExecutorRoute
+from agent_os_execution_service.executor_routing import ExecutorRoute
 from scripts.agent_os_issue_acceptance.post_pr_state_audit import (
     POST_PR_STATE_AUDIT_SCHEMA_NAME,
     POST_PR_STATE_AUDIT_SCHEMA_VERSION,
@@ -257,9 +257,9 @@ def test_required_governance_footer_completeness() -> None:
 
 def test_executor_route_is_reused_without_granting_authority() -> None:
     result = evaluate_post_pr_state_audit(
-        evidence(candidates=(candidate(executor_route=ExecutorRoute.GOVERNED_RUNNER),))
+        evidence(candidates=(candidate(executor_route=ExecutorRoute.CHATGPT_GOVERNED_RUNNER),))
     )
-    assert result.recommended_executor_route is ExecutorRoute.GOVERNED_RUNNER
+    assert result.recommended_executor_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER
     assert not hasattr(result, "execution_authorized")
     assert result.side_effects_performed is False
 

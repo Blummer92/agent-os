@@ -75,7 +75,7 @@ def build_coding_cockpit_view(
         OperationalOutcome.INVALID,
     }
     route = handoff.executor_route
-    if route == "human_decision":
+    if route == "human-decision-required":
         manual_review = True
 
     return CodingCockpitView(

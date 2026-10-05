@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
-from .executor_route import ExecutorRoute
+from agent_os_execution_service.executor_routing import ExecutorRoute
 
 POST_PR_STATE_AUDIT_SCHEMA_NAME = "agent-os-post-pr-state-audit"
 POST_PR_STATE_AUDIT_SCHEMA_VERSION = "1.0"

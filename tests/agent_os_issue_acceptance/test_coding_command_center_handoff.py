@@ -30,13 +30,10 @@ from scripts.agent_os_issue_acceptance.coding_command_center_handoff import (
     render_coding_command_center_handoff,
     serialize_coding_command_center_handoff,
 )
-from scripts.agent_os_issue_acceptance.executor_route import (
-    CapabilityState,
+from agent_os_execution_service.executor_routing import (
+    ExecutorCapability,
     ExecutorRoute,
-    ExecutorRouteEvidence,
-    ExplicitExecutionSurface,
-    RuntimeRequirement,
-    evaluate_executor_route,
+    select_executor_route,
 )
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
     AuthorityProjection,
@@ -126,27 +123,37 @@ def _handoff(state=None, **overrides):
     return build_coding_command_center_handoff(evidence)
 
 
-def _route(**changes):
-    baseline = ExecutorRouteEvidence(
-        source_operational_state_id=_state().state_id,
-        operational_outcome=OperationalOutcome.READY,
-        source_operating_mode_decision_id=MODE_ID,
-        operating_mode_outcome=OperatingModeOutcome.BUILT,
-        requested_mode=RequestedMode.BUILD,
-        implementation_authorization=AuthorizationState.AUTHORIZED,
-        target="#1097",
-        base_ref="main",
-        source_revision=SHA,
-        observed_revision=SHA,
-        stop_condition="Open one Draft PR and stop.",
-        goal="Project the Coding Command Center handoff.",
-        scope=("coding command center handoff module", "focused tests"),
-        validation=("pytest focused", "validate-all"),
-        connector_state=CapabilityState.AVAILABLE,
-        runner_state=CapabilityState.AVAILABLE,
-        external_fallback_state=CapabilityState.AVAILABLE,
-    )
-    return evaluate_executor_route(replace(baseline, **changes))
+def _route(**overrides):
+    payload = {
+        "repository": "Blummer92/agent-os",
+        "issue_or_handoff_identity": "issue:1097",
+        "requested_operation": "coding-command-center-handoff",
+        "required_capabilities": (),
+        "governed_runner_capabilities": (),
+        "governed_runner_available": True,
+        "external_fallback_available": True,
+        "external_fallback_explicitly_permitted": False,
+        "created_at": "2026-10-05T00:00:00Z",
+        "expires_at": "2026-10-05T01:00:00Z",
+        "invalidation_conditions": ("handoff-probe",),
+        "execution_service_request_fingerprint_or_none": "execution-request:handoff1",
+        "operating_mode_decision_id_or_none": "operating-mode:handoff1",
+        "executable_lane_selection_id_or_none": "lane-selection:handoff1",
+        "environment_profile_id_or_none": "environment-profile:handoff1",
+        "environment_health_evidence_id_or_none": "environment-health:handoff1",
+        "workflow_runtime_identity_or_none": "workflow-runtime:handoff1",
+    }
+    payload.update(overrides)
+    required = set(payload["required_capabilities"])
+    if required & {
+        ExecutorCapability.COMPILE_OR_LINT,
+        ExecutorCapability.TEST_EXECUTION,
+        ExecutorCapability.EXACT_HEAD_VALIDATION,
+    }:
+        payload.setdefault(
+            "validation_command_plan_id_or_none", "command-plan:handoff1"
+        )
+    return select_executor_route(**payload)
 
 
 def _classification(classification: ValidationFailureClassification):
@@ -216,7 +223,7 @@ def _lane_plan(**changes):
         selected_lane_issue_numbers=(1102,),
         primary_next_issue=1102,
         alternate_issue=None,
-        recommended_executor_route=ExecutorRoute.CHATGPT_CONNECTOR,
+        recommended_executor_route=ExecutorRoute.CHATGPT_CONNECTOR_NATIVE,
         smallest_next_action="start #1102 on the governed lane",
         reason_codes=("plan.audit-recommendation-selected",),
         conflict_findings=(),
@@ -231,33 +238,43 @@ def _lane_plan(**changes):
 def test_connector_native_route_is_projected_unchanged():
     decision = _route()
     result = _handoff(executor_route_decision=decision)
-    assert result.executor_route == "chatgpt_connector"
+    assert result.executor_route == "chatgpt-connector-native"
     assert result.executor_route_decision_id == decision.decision_id
-    assert "route.route.chatgpt-connector" in result.reason_codes
+    assert "route.connector-sufficient" in result.reason_codes
 
 
 def test_governed_runner_route_is_projected_unchanged():
-    decision = _route(runtime_requirements=(RuntimeRequirement.TESTS,))
+    decision = _route(
+        required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+        governed_runner_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+    )
     result = _handoff(executor_route_decision=decision)
-    assert result.executor_route == "governed_runner"
+    assert result.executor_route == "chatgpt-governed-runner"
     assert result.executor_route_decision_id == decision.decision_id
 
 
 def test_permitted_external_fallback_route_is_projected_unchanged():
-    decision = _route(explicit_surface=ExplicitExecutionSurface.EXTERNAL_FALLBACK)
+    decision = _route(
+        required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+        governed_runner_capabilities=(),
+        governed_runner_available=False,
+        external_fallback_explicitly_permitted=True,
+        external_fallback_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+    )
     result = _handoff(executor_route_decision=decision)
-    assert result.executor_route == "external_fallback"
+    assert result.executor_route == "external-coding-agent-fallback"
 
 
 def test_human_decision_route_is_projected_unchanged():
     decision = _route(
-        connector_state=CapabilityState.UNAVAILABLE,
-        runner_state=CapabilityState.UNAVAILABLE,
-        external_fallback_state=CapabilityState.UNAVAILABLE,
+        required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+        governed_runner_capabilities=(),
+        governed_runner_available=False,
+        external_fallback_available=False,
     )
-    assert decision.route is ExecutorRoute.HUMAN_DECISION
+    assert decision.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
     result = _handoff(executor_route_decision=decision)
-    assert result.executor_route == "human_decision"
+    assert result.executor_route == "human-decision-required"
 
 
 def test_absent_executor_route_stays_explicitly_unavailable():
@@ -481,7 +498,10 @@ def test_different_input_produces_a_different_handoff_identity():
 
 def test_render_and_serialization_stay_bounded():
     result = _handoff(
-        executor_route_decision=_route(runtime_requirements=(RuntimeRequirement.TESTS,)),
+        executor_route_decision=_route(
+        required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+        governed_runner_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+    ),
         validation_classification=_classification(ValidationFailureClassification.PR_REGRESSION),
         post_pr_lane_plan=_lane_plan(),
         observed_head_sha=SHA,
