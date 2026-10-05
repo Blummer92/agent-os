@@ -3,10 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from scripts.agent_os_issue_acceptance.validation_failure_classifier import (
+    ValidationFailureClassification,
+    ValidationFailureEvidence,
+    classify_validation_failure,
+)
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import (
     ZeroJobAdmissionEvidence,
     ZeroJobRecoveryProjection,
     project_zero_job_admission,
+)
+from .validation_supersession import (
+    ValidationHeadDisposition,
+    ValidationSupersessionEvidence,
+    project_validation_head_disposition,
 )
 from workflow_scheduler.execution.recovery_progress import (
     RecoveryProgressDisposition,
@@ -22,6 +32,21 @@ _ALLOWED_REQUIRED_CHECK_STATE = {"current", "drifted", "unavailable", "unknown"}
 
 
 _DIAGNOSTIC_BLOCKER_KIND = "BLOCKED_DIAGNOSTIC_SURFACE"
+
+_STALE_HEAD_DISPOSITIONS = frozenset(
+    {
+        ValidationHeadDisposition.STALE_HEAD,
+        ValidationHeadDisposition.SUPERSEDED_BY_NEW_HEAD,
+    }
+)
+
+# PR_REGRESSION is deliberately absent: it keeps ordinary authorized repair and
+# carries the classifier's own focused -> exact-head aggregate ladder.
+_FAILURE_GATE_ACTIONS = {
+    ValidationFailureClassification.INHERITED_MAIN_FAILURE: "report-inherited-main-failure-blocker",
+    ValidationFailureClassification.CI_INFRASTRUCTURE_CONFIGURATION_FAILURE: "stop-at-ci-infrastructure-authorization-boundary",
+    ValidationFailureClassification.INSUFFICIENT_EVIDENCE_NEEDS_DECISION: "reacquire-missing-validation-failure-evidence",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +103,9 @@ class FailedRepairAdmissionRecord:
     zero_job_recovery: ZeroJobRecoveryProjection | None = None
     next_diagnostic_surface: str | None = None
     diagnostic_blocker: DiagnosticSurfaceBlocker | None = None
+    validation_head_disposition: str | None = None
+    validation_failure_classification: str | None = None
+    validation_repair_ladder: str | None = None
     github_writes_authorized: bool = field(default=False, init=False)
     workflow_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
@@ -100,6 +128,8 @@ def evaluate_failed_repair_admission(
     prior_transition_fingerprint: str | None = None,
     zero_job: ZeroJobAdmissionEvidence | None = None,
     diagnostics: DiagnosticSurfaceEvidence | None = None,
+    validation_head: ValidationSupersessionEvidence | None = None,
+    validation_failure: ValidationFailureEvidence | None = None,
 ) -> FailedRepairAdmissionRecord:
     """Gate the next repair mutation on retry-specific CKR6 and separated diagnostics.
 
@@ -139,6 +169,21 @@ def evaluate_failed_repair_admission(
     clearing condition. The bound is exhaustion of a finite set of distinct
     surfaces, not a retry count, and stays separate from #2281's semantic
     recovery progress.
+
+    When ``validation_head`` evidence is supplied (#3280), the projection composes
+    the canonical exact-head owner ``project_validation_head_disposition``: stale
+    or superseded evidence, or a failure bound to a previous PR head, can never
+    satisfy the current candidate, so repair is inadmissible and current-head
+    validation evidence must be reacquired first. Any disposition other than a
+    failure on the current head also fails closed to the owner's own action.
+
+    When ``validation_failure`` evidence is supplied (#3280), the projection
+    composes ``classify_validation_failure``. A PR regression keeps the
+    deterministic ladder (authorized repair -> focused validation -> exact-head
+    aggregate validation -> continue) as ``validation_repair_ladder``; inherited
+    main failures, CI infrastructure/configuration failures and insufficient
+    evidence make repair inadmissible and route to their own explicit action.
+    If both are supplied the failure evidence must bind the current head.
     """
     attempt_id = _text(activation_result.get("attempt_id"), "attempt_id")
     retry_reentry_outcome = _text(
@@ -168,6 +213,35 @@ def evaluate_failed_repair_admission(
         zero_job_projection = project_zero_job_admission(zero_job)
         if zero_job_projection.gates_code_repair:
             reasons.extend(zero_job_projection.reason_codes)
+    head_decision = None
+    head_gate_action: str | None = None
+    if validation_head is not None:
+        head_decision = project_validation_head_disposition(validation_head)
+        stale_failure = (
+            head_decision.disposition is ValidationHeadDisposition.FAILED
+            and head_decision.prior_head_sha != head_decision.current_head_sha
+        )
+        if head_decision.disposition in _STALE_HEAD_DISPOSITIONS or stale_failure:
+            reasons.append("validation-head-stale-evidence-cannot-satisfy-current-head")
+            head_gate_action = "reacquire-current-head-validation-evidence"
+        elif head_decision.disposition is not ValidationHeadDisposition.FAILED:
+            reasons.append(f"validation-head-disposition-{head_decision.disposition.value}")
+            head_gate_action = "route-validation-head-disposition-to-canonical-owner"
+    failure_result = None
+    failure_gate_action: str | None = None
+    if validation_failure is not None:
+        failure_result = classify_validation_failure(validation_failure)
+        bound_head = (
+            validation_head.current_head_sha if validation_head is not None else None
+        )
+        if bound_head is not None and failure_result.pr_head_sha != bound_head:
+            reasons.append("validation-failure-evidence-bound-to-non-current-head")
+            failure_gate_action = "reacquire-current-head-validation-evidence"
+        elif failure_result.classification in _FAILURE_GATE_ACTIONS:
+            reasons.append(
+                f"validation-failure-{failure_result.classification.value.replace('_', '-')}"
+            )
+            failure_gate_action = _FAILURE_GATE_ACTIONS[failure_result.classification]
     if current is not None:
         progress = classify_recovery_progress(
             current,
@@ -219,6 +293,10 @@ def evaluate_failed_repair_admission(
         if zero_job_projection is not None and zero_job_projection.gates_code_repair:
             next_action = zero_job_projection.next_action or "reacquire-independent-diagnostics"
             bounded_continuation_admitted = zero_job_projection.bounded_continuation
+        elif head_gate_action is not None:
+            next_action = head_gate_action
+        elif failure_gate_action is not None:
+            next_action = failure_gate_action
         elif diagnostic_blocker is not None:
             next_action = "blocked-diagnostic-surface"
         elif next_diagnostic_surface is not None:
@@ -263,6 +341,19 @@ def evaluate_failed_repair_admission(
         ),
         next_diagnostic_surface=next_diagnostic_surface,
         diagnostic_blocker=diagnostic_blocker,
+        validation_head_disposition=(
+            head_decision.disposition.value if head_decision is not None else None
+        ),
+        validation_failure_classification=(
+            failure_result.classification.value if failure_result is not None else None
+        ),
+        validation_repair_ladder=(
+            failure_result.recommended_next_action
+            if failure_result is not None
+            and failure_result.classification
+            is ValidationFailureClassification.PR_REGRESSION
+            else None
+        ),
     )
 
 
