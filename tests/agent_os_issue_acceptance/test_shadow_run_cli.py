@@ -1,7 +1,8 @@
 """Phase 0 (Shadow Admission): focused coverage for scripts/agent-os-shadow-run.py.
 
 Pins the CLI's pure contracts without network access: argument parsing,
-the read-only client shape, the Phase-0 evidence boundary, and the
+the read-only client shape, the #3329 production evidence reader wiring
+(Wire-or-Retire disposition of the Phase-0 always-None stub), and the
 11-field shadow experiment record.
 """
 
@@ -72,10 +73,61 @@ def test_read_client_exposes_no_write_method() -> None:
     assert client.write_requests == 0
 
 
-def test_phase0_evidence_reader_returns_no_evidence() -> None:
-    """Pins the documented Phase-0 boundary: no manufactured evidence."""
-    reader = cli.Phase0CandidateEvidenceReader()
+def test_production_reader_wired_fail_closed_with_named_reason() -> None:
+    """#3329 Wire-or-Retire: the always-None stub is gone.
+
+    The CLI wires the production ``LiveCandidateEvidenceReader``; with no
+    canonical live owners for the required inputs in the shadow-run context,
+    it fail-closes with the exact named missing owner instead of
+    manufacturing evidence.
+    """
+    assert not hasattr(cli, "Phase0CandidateEvidenceReader")
+
+    class _NeverCalled:
+        def get_issue(self, repository: str, issue_number: int):
+            raise AssertionError("fail-closed checks must precede any live read")
+
+    inner = cli.LiveCandidateEvidenceReader(
+        cli.LiveCandidateEvidence(
+            repository="Blummer92/agent-os",
+            issue_transport=_NeverCalled(),
+            observed_at="2026-10-05T18:00:00Z",
+            source_revision=None,
+            lifecycle_stage=None,
+            primary_claims=None,
+            approval_applicability=None,
+            freshness_state=None,
+            requested_mode=None,
+            environment=None,
+            dependency_depth=None,
+            substitutable=None,
+        )
+    )
+    reader = cli._RecordingCandidateEvidenceReader(inner)
     assert reader.read_candidate_evidence("Blummer92/agent-os", 3082) is None
+    assert (
+        reader.first_failure_reason
+        == "candidate-evidence.no-canonical-repository-source-revision"
+    )
+
+
+def test_experiment_record_carries_named_evidence_gap_reason() -> None:
+    client = cli.GitHubReadClient()
+    record = cli._build_experiment_record(
+        repository="Blummer92/agent-os",
+        retrieved_at="2026-10-05T14:00:00Z",
+        campaign_id="campaign-test",
+        narrowing_criterion="explicit-request:test-suite",
+        result=_fail_closed_result(),
+        client=client,
+        evidence_gap_reason="candidate-evidence.no-canonical-requested-mode",
+    )
+    stale = record["stale_or_ambiguous_evidence"]
+    assert any(
+        "candidate-evidence-unavailable:"
+        "candidate-evidence.no-canonical-requested-mode" in item
+        for item in stale
+    )
 
 
 def test_experiment_record_carries_all_eleven_fields() -> None:
@@ -118,7 +170,8 @@ def test_experiment_record_carries_all_eleven_fields() -> None:
     assert record["human_selected_candidate"] is None
     assert record["agreement"] is None
     assert record["disagreement_reason"] is None
-    # 9. stale/ambiguous evidence names the Phase-0 gap, not a selection
+    # 9. stale/ambiguous evidence names the evidence gap, not a selection
+    # (fallback gap text when no specific named reason is supplied)
     assert any("candidate-evidence-unavailable" in item for item in record["stale_or_ambiguous_evidence"])
     # 10. manual-review cases
     assert len(record["manual_review_cases"]) == 1

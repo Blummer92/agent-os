@@ -57,6 +57,12 @@ The seam does not derive lifecycle stage, primary-PR claims, dependency state, v
 
 Missing candidate evidence returns `shadow-selection.candidate-evidence-incomplete`.
 
+The production reader (`LiveCandidateEvidenceReader` in
+`scripts/agent_os_issue_acceptance/live_candidate_evidence_reader.py`, #3329)
+composes that evidence from existing canonical owners; the field-by-field
+owner mapping, production acquisition paths, and fail-closed behaviors live in
+[SHADOW_CANDIDATE_EVIDENCE_OWNERSHIP.md](SHADOW_CANDIDATE_EVIDENCE_OWNERSHIP.md).
+
 ## Revision identity
 
 Two revision identities remain deliberately separate:
