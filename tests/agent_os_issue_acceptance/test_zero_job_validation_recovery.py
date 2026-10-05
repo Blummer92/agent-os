@@ -79,9 +79,11 @@ def test_in_flight_and_queued_runs_classify_as_pending():
     assert classify_workflow_run_evidence(
         (WorkflowRunConclusionEvidence(1, None, 2),)
     ) is ZeroJobRunDisposition.PENDING
+    # #3277: a zero-job run with no conclusion is not a genuinely pending
+    # validation; it requires a currentness cross-check against the exact head.
     assert classify_workflow_run_evidence(
         (WorkflowRunConclusionEvidence(1, None, 0),)
-    ) is ZeroJobRunDisposition.PENDING
+    ) is ZeroJobRunDisposition.CURRENTNESS_CROSS_CHECK_REQUIRED
 
 
 def test_action_required_with_jobs_is_pending_not_stale():
