@@ -188,11 +188,12 @@ For example, a teacher asking whether existing screenshots appear in a tutorial 
 
 Before invoking a downstream comparative evaluator:
 
-- bind every required evaluator input to the artifact produced by its specific arm;
+- bind every required evaluator input to the exact artifact identity produced by its specific arm; never satisfy a missing arm with a plausible Library, Drive, prior-chat, or neighboring artifact;
 - prove each required artifact exists and is inspectable on the evaluator's actual input surface;
-- treat zero-of-two or one-of-two artifact availability as a producing-arm outcome, not evaluator ambiguity or a request for the teacher to upload missing outputs;
+- prove each bound artifact satisfies the requested artifact role and the causal prerequisite being compared; a readable but wrong-role artifact is an invalid producer output, not an admissible comparison arm;
+- treat zero-of-two or one-of-two exact producer outputs, or any wrong-role producer output, as a producing-arm outcome, not evaluator ambiguity or a request for the teacher to upload or substitute missing outputs;
 - do not count plans, source records, generation claims, local placeholders, or inaccessible links as produced artifacts when the evaluator requires renderable files or persisted artifacts;
-- when both required bound artifacts are inspectable, admit the evaluator normally; and
+- when both exact producer-bound artifacts are inspectable and valid for the requested artifact role, admit the evaluator normally; and
 - when the teacher directly supplies two completed inspectable artifacts and asks to compare them, evaluation may begin without rerunning production.
 
 Keep these admission controls in the harness. Do not expand or rewrite the natural teacher utterance to encode them.
@@ -211,7 +212,7 @@ requires extended writing or a different format.
 
 ## Changelog
 
-- 0.7.0 adds classroom-artifact test targeting and evaluator admission: measure the teacher's actual dependent variable at the narrowest causal boundary, require every evaluator artifact to be bound, existent, and inspectable before comparison, and attribute missing artifacts to their producing arms rather than evaluator ambiguity (#3298).
+- 0.7.0 adds classroom-artifact test targeting and evaluator admission: measure the teacher's actual dependent variable at the narrowest causal boundary; require every evaluator artifact to be bound to the exact producing arm, existent, inspectable, and valid for the requested artifact role; reject plausible substitute artifacts; and attribute missing or wrong-role outputs to their producing arms rather than evaluator ambiguity (#3298).
 - 0.6.0 requires explicit clean-context isolation for independent comparative artifact tests while keeping fixed-source/config/evaluation controls equivalent across arms (#3090).
 - 0.5.0 separates realistic teacher utterances from benchmark harness controls so comparative artifact tests do not hide teacher-facing UX burden through prompt-engineering leakage (#3091).
 - 0.4.0 makes concise lesson-specific Warm-Up and Exit Ticket sections standard worksheet defaults, preserves supplied/equivalent closing evidence without duplication, applies the rule per differentiated/day worksheet, and keeps both below #1567's compact header without sacrificing core response space (#1568).
