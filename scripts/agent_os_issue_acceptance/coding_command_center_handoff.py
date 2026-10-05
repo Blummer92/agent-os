@@ -15,7 +15,7 @@ from typing import Literal
 
 from scripts.agent_os_candidate_packet.post_pr_lane_plan import PostPrLanePlan
 
-from .executor_route import ExecutorRouteDecision
+from agent_os_execution_service.executor_routing import ExecutorRouteDecision
 from .issue_operational_state import (
     ClaimState,
     IssueOperationalState,
@@ -175,9 +175,9 @@ def build_coding_command_center_handoff(
             route.__post_init__()
         except (TypeError, ValueError) as exc:
             raise ValueError("executor route decision validation failed") from exc
-        executor_route = route.route.value
+        executor_route = route.selected_route.value
         executor_route_decision_id = route.decision_id
-        reasons.update(f"route.{item}" for item in route.reason_codes)
+        reasons.update(f"route.{item.value}" for item in route.route_reasons)
     else:
         executor_route = None
         executor_route_decision_id = None

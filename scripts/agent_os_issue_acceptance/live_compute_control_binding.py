@@ -148,7 +148,7 @@ from .compute_control_projection import (
     build_compute_control_projection,
     serialize_compute_control_projection,
 )
-from .executor_route import ExecutorRouteDecision
+from agent_os_execution_service.executor_routing import ExecutorRouteDecision
 from .issue_operational_state import (
     AuthorityProjection,
     ClaimState,

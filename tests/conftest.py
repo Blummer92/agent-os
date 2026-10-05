@@ -5,11 +5,26 @@ This module provides fixtures for testing Agent OS standards, documentation,
 and governance implementations.
 """
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Generator
 
 import pytest
+
+
+# The canonical executor-routing vocabulary lives in the execution-service
+# package, which is not pip-installed in CI. Several scripts/ production
+# modules import it (Decision 1 consolidation), so every root-suite test
+# needs its src importable.
+_EXECUTION_SERVICE_SRC = (
+    Path(__file__).resolve().parent.parent
+    / "08_Tooling"
+    / "agent-os-execution-service"
+    / "src"
+)
+if str(_EXECUTION_SERVICE_SRC) not in sys.path:
+    sys.path.insert(0, str(_EXECUTION_SERVICE_SRC))
 
 
 # ============================================================================

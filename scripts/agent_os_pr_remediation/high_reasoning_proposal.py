@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Literal, Protocol
 
+from agent_os_execution_service.executor_routing import ExecutorRoute
+
 from .models import canonical_json, deterministic_id
 from .planning import COMPUTE_ROUTES
 
@@ -23,9 +25,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SHELLISH_RE = re.compile(r"[`;&|><$]")
 
-EXISTING_EXECUTOR_ROUTES = frozenset(
-    {"chatgpt_connector", "governed_runner", "external_fallback", "human_decision"}
-)
+EXISTING_EXECUTOR_ROUTES = frozenset(route.value for route in ExecutorRoute)
 AUTHORITY_FIELDS = (
     "execution_authorized",
     "source_edit_authorized",

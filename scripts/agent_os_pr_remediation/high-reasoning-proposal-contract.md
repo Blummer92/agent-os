@@ -29,7 +29,7 @@ Provider output is untrusted until all checks succeed. The verifier requires:
 - frozen non-goals, prohibited changes, blockers, and required validation preserved;
 - proposed and step target paths contained in allowed scope and outside forbidden paths;
 - structured finite step actions with no shell-like control content or arbitrary command field;
-- executor requirements limited to the existing four routes: `chatgpt_connector`, `governed_runner`, `external_fallback`, and `human_decision`;
+- executor requirements limited to the existing four routes: `chatgpt-connector-native`, `chatgpt-governed-runner`, `external-coding-agent-fallback`, and `human-decision-required`;
 - explicit rollback, insufficiency, expiry, and invalidation evidence; and
 - canonical serialization plus a stable content-derived plan ID.
 

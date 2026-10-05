@@ -20,7 +20,7 @@ from scripts.agent_os_candidate_packet.post_pr_lane_plan import (
     plan_post_pr_lane,
     serialize_post_pr_lane_plan,
 )
-from scripts.agent_os_issue_acceptance.executor_route import ExecutorRoute
+from agent_os_execution_service.executor_routing import ExecutorRoute
 from scripts.agent_os_issue_acceptance.post_pr_state_audit import (
     POST_PR_STATE_AUDIT_SCHEMA_NAME,
     POST_PR_STATE_AUDIT_SCHEMA_VERSION,
@@ -57,7 +57,7 @@ def selection(*, selected=(910,), deferred=(), queues=None, lane_count=1):
     )
 
 
-def audit(*, recommended=910, alternate=None, outcome=RecommendationOutcome.NEXT_ISSUE, terminal=TerminalPrState.MERGED, route=ExecutorRoute.CHATGPT_CONNECTOR):
+def audit(*, recommended=910, alternate=None, outcome=RecommendationOutcome.NEXT_ISSUE, terminal=TerminalPrState.MERGED, route=ExecutorRoute.CHATGPT_CONNECTOR_NATIVE):
     return PostPrStateAuditResult(
         schema_name=POST_PR_STATE_AUDIT_SCHEMA_NAME,
         schema_version=POST_PR_STATE_AUDIT_SCHEMA_VERSION,
@@ -91,7 +91,7 @@ def test_recommendation_already_selected_preserves_selector_primary():
 def test_primary_recommendation_preserves_executor_route():
     plan = plan_post_pr_lane(selection(), audit())
     assert plan.primary_next_issue == 910
-    assert plan.recommended_executor_route is ExecutorRoute.CHATGPT_CONNECTOR
+    assert plan.recommended_executor_route is ExecutorRoute.CHATGPT_CONNECTOR_NATIVE
 
 @pytest.mark.parametrize("queue,reason", [
     (Queue.WAITING_FOR_AUTHORIZATION, "conflict.recommendation-waiting-authorization"),
@@ -103,7 +103,7 @@ def test_non_executable_recommendations_fail_closed(queue, reason):
     plan = plan_post_pr_lane(selection(selected=(910,), deferred=(911,), queues={910: Queue.READY_FOR_IMPLEMENTATION, 911: queue}), audit(recommended=911))
     assert plan.outcome is LanePlanOutcome.HUMAN_DECISION
     assert reason in plan.reason_codes
-    assert plan.recommended_executor_route is ExecutorRoute.HUMAN_DECISION
+    assert plan.recommended_executor_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
 
 
 def test_absent_recommendation_fails_closed():

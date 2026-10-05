@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_os_issue_acceptance.executor_route import ExecutorRoute
+from agent_os_execution_service.executor_routing import ExecutorRoute
 from scripts.agent_os_pr_remediation.high_reasoning_proposal import (
     AUTHORITY_FIELDS,
     EXISTING_EXECUTOR_ROUTES,
@@ -104,7 +104,7 @@ def make_response(request, **changes):
         validations=list(request.required_validations),
         blockers=list(request.blockers),
         rollback_concept="Revert the bounded proposal module and its tests.",
-        executor_route_requirements=["governed_runner"],
+        executor_route_requirements=["chatgpt-governed-runner"],
         insufficiency_reason="The task was already classified high-reasoning-required.",
         uncertainty=[],
         expiry_condition="Expires when any bound request evidence changes.",
