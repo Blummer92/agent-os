@@ -39,8 +39,8 @@ jobs and assigns bounded work through existing queue and lease behavior.
 
 ## Relationship To Existing Code
 
-The MVP implementation reuses the dry-run project execution model from
-`workflow_scheduler.project_execution`. It does not introduce a new live worker
+The MVP implementation was modeled on the former dry-run project execution MVP
+(`workflow_scheduler.project_execution`, retired via #3311). It does not introduce a new live worker
 pool, merge queue, GitHub issue reader, Notion writer, or Google Drive writer.
 
 ## Smoke Test Requirements
