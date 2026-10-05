@@ -426,3 +426,62 @@ class TestExistingAdaptersUnaffected:
 
         adapter = resolve_adapter("github_pr_comment")
         assert isinstance(adapter, GitHubPRCommentAdapter)
+
+
+class TestCanonicalClientConstruction:
+    """#2507: production client construction routes through the canonical
+    agent_os_github_issue_provider.auth boundary. The adapter-local duplicate
+    _client() implementation is deleted; only the canonical builder remains."""
+
+    def test_superseded_direct_pygithub_import_is_deleted(self):
+        import workflow_scheduler.adapters.github_pr_label_adapter as module
+
+        assert not hasattr(module, "Github"), "direct Github construction must be deleted"
+        assert not hasattr(module, "Auth"), "direct Auth construction must be deleted"
+        assert hasattr(module, "build_token_client")
+
+    def test_client_routes_through_canonical_builder(self, monkeypatch):
+        import workflow_scheduler.adapters.github_pr_label_adapter as module
+
+        seen = {}
+        sentinel = object()
+
+        def fake_build_token_client(environment, user_agent=None):
+            seen["environment"] = environment
+            seen["user_agent"] = user_agent
+            return sentinel
+
+        monkeypatch.setattr(module, "build_token_client", fake_build_token_client)
+        adapter = GitHubPRLabelAdapter(token="canonical-token")
+
+        assert adapter._client() is sentinel
+        assert seen["environment"]["GITHUB_TOKEN"] == "canonical-token"
+        assert seen["user_agent"] == "workflow-scheduler/github-pr-label"
+
+    def test_gh_token_convention_honored_without_constructor_token(self, monkeypatch):
+        from github import Github
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "gh-token-convention")
+        adapter = GitHubPRLabelAdapter(token=None)
+
+        assert isinstance(adapter._client(), Github)
+
+    def test_missing_token_fails_closed_as_adapter_error(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        adapter = GitHubPRLabelAdapter(token=None)
+
+        with pytest.raises(GitHubPRLabelAdapterError, match="required"):
+            adapter._client()
+
+    def test_missing_token_surfaces_as_execute_failure_not_retryable(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        adapter = GitHubPRLabelAdapter(token=None)
+        task = make_task(payload=dict(VALID_PAYLOAD))
+
+        result = adapter.execute(task)
+
+        assert result["status"] == "failure"
+        assert "retry_after" not in result
