@@ -52,8 +52,9 @@ capabilities:
     owner_agent: QA / Test Agent
     supporting_agents:
       - Integration Manager
-    known_consumers: []
-    known_consumer_exemption: Approved for RC2 because the stable package interface, conservative behavior, and extensive tests are verified, but no non-test repository consumer currently exists.
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/documentation_gap_report.py
+      - scripts/agent_os_issue_acceptance/issue_operational_state_acquisition.py
     tests:
       - tests/agent_os_issue_acceptance/test_readiness.py
     keywords:
@@ -395,16 +396,17 @@ capabilities:
     status: active
     canonical_paths:
       - scripts/agent_os_issue_acceptance/scheduler_handoff.py
+      - scripts/agent_os_issue_acceptance/__init__.py
     public_interfaces:
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffCohort
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:SchedulerPlanningHandoff
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationOutcome
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationResult
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_graph_digest
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_planning_result_digest
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_handoff_digest
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:serialize_scheduler_planning_handoff
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:validate_scheduler_planning_handoff
+      - scripts.agent_os_issue_acceptance:HandoffCohort
+      - scripts.agent_os_issue_acceptance:SchedulerPlanningHandoff
+      - scripts.agent_os_issue_acceptance:HandoffValidationOutcome
+      - scripts.agent_os_issue_acceptance:HandoffValidationResult
+      - scripts.agent_os_issue_acceptance:compute_graph_digest
+      - scripts.agent_os_issue_acceptance:compute_planning_result_digest
+      - scripts.agent_os_issue_acceptance:compute_handoff_digest
+      - scripts.agent_os_issue_acceptance:serialize_scheduler_planning_handoff
+      - scripts.agent_os_issue_acceptance:validate_scheduler_planning_handoff
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
@@ -446,14 +448,15 @@ capabilities:
     status: active
     canonical_paths:
       - scripts/agent_os_issue_acceptance/issueplan_current_state.py
+      - scripts/agent_os_issue_acceptance/__init__.py
     public_interfaces:
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanSourceSnapshot
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateEvidence
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateComparison
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateOutcome
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:build_issueplan_current_state_evidence
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:compare_issueplan_current_state
-      - scripts.agent_os_issue_acceptance.issueplan_current_state:compute_issueplan_current_state_fingerprint
+      - scripts.agent_os_issue_acceptance:IssuePlanSourceSnapshot
+      - scripts.agent_os_issue_acceptance:IssuePlanCurrentStateEvidence
+      - scripts.agent_os_issue_acceptance:IssuePlanCurrentStateComparison
+      - scripts.agent_os_issue_acceptance:IssuePlanCurrentStateOutcome
+      - scripts.agent_os_issue_acceptance:build_issueplan_current_state_evidence
+      - scripts.agent_os_issue_acceptance:compare_issueplan_current_state
+      - scripts.agent_os_issue_acceptance:compute_issueplan_current_state_fingerprint
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
@@ -691,8 +694,9 @@ capabilities:
     supporting_agents:
       - GitHub Service Agent
       - QA / Test Agent
-    known_consumers: []
-    known_consumer_exemption: Approved under repository-owner authorization to work on #1105 (AOS-AUTO1G) for experimental admission of the terminal #749 Stage 7 integration entrypoint. The public function and CLI are verified end-to-end through focused fingerprint tests, natural full-pipeline tests, CLI tests, and architecture-boundary tests in this same change; no non-test repository-relative consumer file exists yet.
+    known_consumers:
+      - scripts/agent_os_execution_interface/governed_handoff_publication.py
+      - 08_Tooling/agent-os-execution-service/src/agent_os_execution_service/first_publication_host_observation.py
     tests:
       - tests/agent_os_candidate_packet/test_contract_fingerprint.py
       - tests/agent_os_candidate_packet/test_end_to_end.py
@@ -743,8 +747,8 @@ capabilities:
     supporting_agents:
       - GitHub Service Agent
       - QA / Test Agent
-    known_consumers:
-      - 02_Agent_Overlays/chatgpt-orchestrator.md
+    known_consumers: []
+    known_consumer_exemption: TypeScript entrypoint bundled for the governed #2525 projection operation; no non-test repository code file imports or calls the registered projection interfaces (operational evidence is the co-located vitest suite). The overlay doc describes the routing but is not an operational consumer.
     tests:
       - tests/test_picture_perfect_request_routing.py
       - 08_Tooling/instructional-materials-coach/picture-perfect-coach/src/promptProjectionEntrypoint.test.ts
