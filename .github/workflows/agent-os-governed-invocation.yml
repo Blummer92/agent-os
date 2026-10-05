@@ -68,6 +68,9 @@ jobs:
           )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"accepted={'true' if payload['status'] == 'accepted' else 'false'}\n")
+              # #2940: notion-read envelopes are GitHub-hosted reads; they must
+              # never trigger the GCP authentication / gcloud setup steps below.
+              output.write(f"is_notion_read={'true' if payload['reason'] == 'accepted-notion-read-envelope' else 'false'}\n")
           PY
 
       - name: Resolve Codespaces-first transport route
@@ -199,14 +202,14 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
