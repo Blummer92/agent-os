@@ -113,10 +113,11 @@ def test_import_check_actually_fails_closed_on_a_missing_dependency() -> None:
     text = PRIVILEGED.read_text(encoding="utf-8")
     # #3101/PR #3234 retired handoff_discovery_entrypoint: the import check
     # must not require the deleted module.
+    # #3311 retired clone3_cgroup_launcher/_clone3_cgroup: the import check
+    # must not require the deleted native extension.
     real_import = (
         "env -u PYTHONPATH \"$PYTHON\" -c 'import agent_os_execution_service."
-        "governed_resume_entrypoint; import workflow_scheduler.execution."
-        "_clone3_cgroup'"
+        "governed_resume_entrypoint'"
     )
     assert real_import in text
     hostile_import = real_import.replace(

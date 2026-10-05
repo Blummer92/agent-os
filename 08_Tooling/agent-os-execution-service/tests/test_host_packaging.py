@@ -431,22 +431,6 @@ def test_execution_service_declares_a_deterministic_scheduler_dependency(
     )
 
 
-def test_native_clone3_cgroup_extension_is_built_by_the_scheduler_wheel(
-    built_wheels: dict[str, Path],
-) -> None:
-    """The qualified Debian host builds the extension from this distribution."""
-    scheduler_wheel = built_wheels["workflow_scheduler"]
-    extensions = [
-        name
-        for name in _wheel_names(scheduler_wheel)
-        if name.startswith("workflow_scheduler/execution/_clone3_cgroup")
-        and name.endswith(".so")
-    ]
-    assert len(extensions) == 1
-    # A platform wheel, not a pure-Python one: the C extension really compiled.
-    assert not scheduler_wheel.name.endswith("-py3-none-any.whl")
-
-
 def test_isolated_installation_imports_the_production_governed_resume_graph(
     installed_runtime: tuple[Path, Path],
 ) -> None:
@@ -460,7 +444,6 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
                 "import json, sys; "
                 "import agent_os_execution_service as service; "
                 "import workflow_scheduler; "
-                "from workflow_scheduler.execution import _clone3_cgroup; "
                 "from scripts.agent_os_execution_checkpoint.invocation_descriptor "
                 "import load_invocation_descriptor; "
                 "import agent_os_execution_service.production_host_composition as phc; "
@@ -470,7 +453,6 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
                 "print(json.dumps({"
                 "'service': service.__file__, "
                 "'scheduler_paths': list(workflow_scheduler.__path__), "
-                "'native': _clone3_cgroup.__file__, "
                 "'loader': load_invocation_descriptor.__module__, "
                 "'composition': phc.__file__, "
                 "'bootstrap': bootstrap.__file__, "

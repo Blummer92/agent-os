@@ -102,7 +102,9 @@ def test_privileged_host_installer_owns_the_bounded_install_and_never_dispatches
     # no longer require the deleted module.
     assert "agent_os_execution_service.handoff_discovery_entrypoint" not in text
     assert "agent_os_execution_service.governed_resume_entrypoint" in text
-    assert "workflow_scheduler.execution._clone3_cgroup" in text
+    # #3311 retired clone3_cgroup_launcher/_clone3_cgroup: the installer must
+    # no longer require the deleted native extension.
+    assert "workflow_scheduler.execution._clone3_cgroup" not in text
     assert text.count("scripts/install-governed-resume") == 1
     assert text.count('sh "$entrypoint_installer"') == 2
     assert '[ "$metadata" = "root:root:755" ]' in text

@@ -267,7 +267,7 @@ PY_RUNTIME_PERMISSIONS
 
 (
   cd /
-  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.governed_resume_entrypoint'
 ) >&2
 
 entrypoint_installer="$checkout/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
