@@ -240,10 +240,11 @@ def test_incomplete_population_never_reads_candidate_evidence() -> None:
         page_reader=reader,
         issue_transport=Transport({}),
         candidate_evidence_reader=ExplodingEvidenceReader(),
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(1,),
     )
 
-    assert result.reason_codes == ("shadow-selection.population-incomplete",)
+    assert result.reason_codes == ("shadow-selection.population-incomplete", "shadow-selection.population-narrowed",)
 
 
 def test_more_than_64_narrowed_candidates_fails_before_evidence_reads() -> None:
@@ -256,10 +257,11 @@ def test_more_than_64_narrowed_candidates_fails_before_evidence_reads() -> None:
         page_reader=terminal_reader(items),
         issue_transport=Transport({}),
         candidate_evidence_reader=ExplodingEvidenceReader(),
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=tuple(range(1, 66)),
     )
 
-    assert result.reason_codes == ("shadow-selection.candidate-population-too-broad",)
+    assert result.reason_codes == ("shadow-selection.candidate-population-too-broad", "shadow-selection.population-narrowed",)
 
 
 def test_missing_candidate_evidence_fails_closed() -> None:
@@ -273,10 +275,11 @@ def test_missing_candidate_evidence_fails_closed() -> None:
         page_reader=terminal_reader((item,)),
         issue_transport=Transport({10: item}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10,),
     )
 
-    assert result.reason_codes == ("shadow-selection.candidate-evidence-incomplete",)
+    assert result.reason_codes == ("shadow-selection.candidate-evidence-incomplete", "shadow-selection.population-narrowed",)
     assert reader.calls == 1
 
 
@@ -292,10 +295,11 @@ def test_scanned_issue_revision_must_be_preserved_in_operational_evidence() -> N
         page_reader=terminal_reader((scanned,)),
         issue_transport=Transport({10: scanned}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10,),
     )
 
-    assert result.reason_codes == ("shadow-selection.candidate-revision-mismatch",)
+    assert result.reason_codes == ("shadow-selection.candidate-revision-mismatch", "shadow-selection.population-narrowed",)
 
 
 def test_repository_revision_conflict_fails_closed() -> None:
@@ -315,10 +319,11 @@ def test_repository_revision_conflict_fails_closed() -> None:
         page_reader=terminal_reader((first, second)),
         issue_transport=Transport({10: first, 11: second}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10, 11),
     )
 
-    assert result.reason_codes == ("shadow-selection.repository-revision-conflict",)
+    assert result.reason_codes == ("shadow-selection.population-narrowed", "shadow-selection.repository-revision-conflict",)
 
 
 def test_existing_selector_semantics_choose_lower_issue_number_without_calling_it_priority() -> None:
@@ -333,6 +338,7 @@ def test_existing_selector_semantics_choose_lower_issue_number_without_calling_i
         page_reader=terminal_reader((high, low)),
         issue_transport=Transport({10: low, 11: high}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(11, 10),
     )
 
@@ -356,6 +362,7 @@ def test_explicit_request_order_is_forwarded_to_existing_selector() -> None:
         page_reader=terminal_reader((first, second)),
         issue_transport=Transport({10: first, 11: second}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10, 11),
         explicit_request_order=(11, 10),
     )
@@ -381,11 +388,12 @@ def test_non_executable_candidates_return_no_selection() -> None:
         page_reader=terminal_reader((item,)),
         issue_transport=Transport({10: item}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10,),
     )
 
     assert result.status is ShadowSelectionStatus.NO_SELECTION
-    assert result.reason_codes == ("shadow-selection.selector-no-executable-lane",)
+    assert result.reason_codes == ("shadow-selection.population-narrowed", "shadow-selection.selector-no-executable-lane",)
     assert result.selection is not None
     assert result.selection.selected_lanes == ()
 
@@ -401,13 +409,14 @@ def test_selected_issue_is_reacquired_and_bound_to_current_issue_revision() -> N
         page_reader=terminal_reader((item,)),
         issue_transport=Transport({10: item}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10,),
     )
 
     assert result.status is ShadowSelectionStatus.SELECTED
     assert result.selected_issue_revision == issue_source_revision(item)
     assert result.repository_source_revision == REPOSITORY_SHA
-    assert result.reason_codes == ("shadow-selection.current",)
+    assert result.reason_codes == ("shadow-selection.current", "shadow-selection.population-narrowed",)
 
 
 def test_selected_issue_drift_requires_replan() -> None:
@@ -422,10 +431,116 @@ def test_selected_issue_drift_requires_replan() -> None:
         page_reader=terminal_reader((scanned,)),
         issue_transport=Transport({10: changed}),
         candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:test-suite",
         candidate_issue_numbers=(10,),
     )
 
     assert result.status is ShadowSelectionStatus.REPLAN_REQUIRED
-    assert result.reason_codes == ("shadow-selection.selected-issue-changed",)
+    assert result.reason_codes == ("shadow-selection.population-narrowed", "shadow-selection.selected-issue-changed",)
     assert result.selected_issue_number is None
     assert result.selected_issue_revision is None
+
+def test_narrowing_without_criterion_is_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="narrowing_criterion"):
+        select_shadow_issue(
+            repository=REPOSITORY,
+            retrieved_at=RETRIEVED_AT,
+            campaign_id="campaign-2832",
+            page_reader=terminal_reader((raw_issue(10),)),
+            issue_transport=Transport({}),
+            candidate_evidence_reader=ExplodingEvidenceReader(),
+            candidate_issue_numbers=(10,),
+        )
+
+
+def test_criterion_without_narrowing_is_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="narrowing_criterion"):
+        select_shadow_issue(
+            repository=REPOSITORY,
+            retrieved_at=RETRIEVED_AT,
+            campaign_id="campaign-2832",
+            page_reader=terminal_reader((raw_issue(10),)),
+            issue_transport=Transport({}),
+            candidate_evidence_reader=ExplodingEvidenceReader(),
+            narrowing_criterion="explicit-request:test-suite",
+        )
+
+
+def test_malformed_narrowing_criterion_is_rejected() -> None:
+    import pytest
+
+    base = dict(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-2832",
+        page_reader=terminal_reader((raw_issue(10),)),
+        issue_transport=Transport({}),
+        candidate_evidence_reader=ExplodingEvidenceReader(),
+        candidate_issue_numbers=(10,),
+    )
+    for bad in ("", "   ", "x" * 129, "has\ttab", 42):
+        with pytest.raises((TypeError, ValueError)):
+            select_shadow_issue(**base, narrowing_criterion=bad)
+
+
+def test_narrowed_result_records_criterion_and_advertises_narrowing() -> None:
+    scanned = raw_issue(10)
+    reader = EvidenceReader({10: candidate(scanned)})
+
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-2832",
+        page_reader=terminal_reader((scanned,)),
+        issue_transport=Transport({10: scanned}),
+        candidate_evidence_reader=reader,
+        narrowing_criterion="explicit-request:operator-shortlist-2026-10-05",
+        candidate_issue_numbers=(10,),
+    )
+
+    assert result.status is ShadowSelectionStatus.SELECTED
+    assert result.narrowing_criterion == "explicit-request:operator-shortlist-2026-10-05"
+    assert result.reason_codes == (
+        "shadow-selection.current",
+        "shadow-selection.population-narrowed",
+    )
+
+
+def test_unnarrowed_result_carries_no_criterion_or_narrowing_reason() -> None:
+    scanned = raw_issue(10)
+    reader = EvidenceReader({10: candidate(scanned)})
+
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-2832",
+        page_reader=terminal_reader((scanned,)),
+        issue_transport=Transport({10: scanned}),
+        candidate_evidence_reader=reader,
+    )
+
+    assert result.status is ShadowSelectionStatus.SELECTED
+    assert result.narrowing_criterion is None
+    assert result.reason_codes == ("shadow-selection.current",)
+
+
+def test_narrowed_fail_closed_result_still_advertises_narrowing() -> None:
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-2832",
+        page_reader=terminal_reader((raw_issue(10),)),
+        issue_transport=Transport({}),
+        candidate_evidence_reader=EvidenceReader({}),
+        narrowing_criterion="explicit-request:test-suite",
+        candidate_issue_numbers=(10,),
+    )
+
+    assert result.status is ShadowSelectionStatus.NO_SELECTION
+    assert result.narrowing_criterion == "explicit-request:test-suite"
+    assert "shadow-selection.population-narrowed" in result.reason_codes
+    assert "shadow-selection.candidate-evidence-incomplete" in result.reason_codes

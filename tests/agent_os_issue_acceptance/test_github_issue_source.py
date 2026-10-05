@@ -355,3 +355,58 @@ def test_adapter_defines_no_write_surface():
         {"create", "update", "delete", "post", "patch", "put", "mutate"}
     )
     assert "Authorization" not in source
+
+
+def test_live_shaped_multipage_scan_over_200_proves_completeness_and_excludes_prs() -> None:
+    """Phase 0 (Shadow Admission): committed pagination/completeness canary.
+
+    Mirrors the 2026-10-05 live canary shape (two full 100-item pages plus a
+    partial terminal page, pull requests interleaved on every page) through the
+    canonical paginated scanner. Proves the scan completes beyond 100 items with
+    scan-complete, exact page/item counts, PR exclusion, and per-record source
+    provenance -- the properties the shadow experiment's population receipt
+    depends on.
+    """
+    pr_numbers = iter(range(9000, 9200))
+
+    def _page_items(numbers: tuple[int, ...]) -> tuple[dict, ...]:
+        items: list[dict] = []
+        for number in numbers:
+            item = _issue(number)
+            # The shared helper formats updated_at with the issue number as
+            # seconds; keep timestamps valid for numbers past 59.
+            item["updated_at"] = f"2026-07-20T00:{(number // 60) % 60:02d}:{number % 60:02d}Z"
+            items.append(item)
+            if number % 25 == 0:
+                items.append(dict(_issue(next(pr_numbers)), pull_request={"url": "example"}))
+        return tuple(items)
+
+    reader = FakeReader(
+        {
+            1: GitHubIssuePageResponse(_page_items(tuple(range(1, 101))), 2),
+            2: GitHubIssuePageResponse(_page_items(tuple(range(101, 201))), 3),
+            3: GitHubIssuePageResponse(
+                _page_items(tuple(range(201, 248))), None, terminal_page_proven=True
+            ),
+        }
+    )
+
+    result = scan_connected_issues(
+        "Blummer92/agent-os",
+        reader,
+        state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        per_page=100,
+    )
+
+    assert result.status == RetrievalStatus.COMPLETE
+    assert result.complete is True
+    assert result.page_count == 3
+    assert result.item_count == 247
+    assert [record.issue_number for record in result.records] == list(range(1, 248))
+    assert all(record.source_revision == record.updated_at for record in result.records)
+    assert reader.calls == [
+        ("Blummer92/agent-os", 1, 100, "open"),
+        ("Blummer92/agent-os", 2, 100, "open"),
+        ("Blummer92/agent-os", 3, 100, "open"),
+    ]

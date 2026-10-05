@@ -480,3 +480,66 @@ def test_public_facade_matches_reviewed_baseline() -> None:
 def test_supported_evaluate_acceptance_facade_remains_exported() -> None:
     facade = _assigned_string_sequence(_parse(PACKAGE_ROOT / "__init__.py"), "__all__")
     assert "evaluate_acceptance" in facade
+
+
+# Phase 0 (Shadow Admission): the whole-population scan is the only governed
+# population-enumeration path. GitHub's search API truncates at 100 results
+# (#2696), so no production module may build a candidate population from
+# search results. This boundary fails on any production reference to the
+# search-enumeration surface, whether as code, attribute, or string literal.
+_SEARCH_ENUMERATION_NAMES = frozenset({"search_issues", "incomplete_results"})
+_SEARCH_ENUMERATION_LITERAL = "/search/issues"
+
+
+def _search_enumeration_hits(tree: ast.Module) -> list[str]:
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _SEARCH_ENUMERATION_NAMES:
+            hits.append(f"name {node.id!r} at line {node.lineno}")
+        elif isinstance(node, ast.Attribute) and node.attr in _SEARCH_ENUMERATION_NAMES:
+            hits.append(f"attribute {node.attr!r} at line {node.lineno}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _SEARCH_ENUMERATION_LITERAL in node.value or any(
+                name in node.value for name in _SEARCH_ENUMERATION_NAMES
+            ):
+                hits.append(f"string literal at line {node.lineno}")
+    return hits
+
+
+def _phase0_production_modules() -> dict[str, Path]:
+    repo = REPO_ROOT
+    roots = [repo / "scripts", *(p for p in (repo / "08_Tooling").glob("*/src") if p.is_dir())]
+    modules: dict[str, Path] = {}
+    for root in roots:
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            if any(part in {"tests", "test"} for part in path.parts):
+                continue
+            if path.name.startswith("test_") or path.name.endswith("_test.py"):
+                continue
+            if path.name == "conftest.py":
+                continue
+            modules[str(path.relative_to(repo))] = path
+    return modules
+
+
+def test_no_production_module_enumerates_populations_from_search() -> None:
+    modules = _phase0_production_modules()
+    assert modules, "production modules under scripts/ and 08_Tooling/*/src/ were not found"
+    violations: list[str] = []
+    for name, path in modules.items():
+        try:
+            hits = _search_enumeration_hits(_parse(path))
+        except SyntaxError as exc:
+            violations.append(f"{name}: unparseable ({exc})")
+            continue
+        if hits:
+            violations.append(
+                f"{name} references the search-enumeration surface "
+                f"({'; '.join(hits)}); population enumeration must use the "
+                f"paginated scanner, never GitHub search"
+            )
+    assert not violations, "Search-based population enumeration violations:\n- " + "\n- ".join(
+        violations
+    )
