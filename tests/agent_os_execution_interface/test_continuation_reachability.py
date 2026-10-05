@@ -24,8 +24,10 @@ KNOWN_UNCONSUMED_DECISIONS = {
     # not be deleted, retired, or consumed by this campaign. #2281 composes with
     # classify_recovery_progress only; the planner stays exactly as-is.
     "plan_execution_continuation",
-    # Owned by #3280: plan_red_ci_continuation is a separate lane migration
-    # (diagnostic-actionability / distinct-attempted-surfaces); untouched here.
+    # #3280: the diagnostic-surface exhaustion invariant now lives in
+    # evaluate_failed_repair_admission (live via admit_agent_os_failed_repair_tool).
+    # The planner itself still has no production consumer, so its entry stays until
+    # the separately gated deletion wave removes plan_red_ci_continuation.
     "plan_red_ci_continuation",
 }
 

@@ -21,6 +21,45 @@ _ALLOWED_CHECK_STATE = {"green", "red", "pending", "missing", "unknown"}
 _ALLOWED_REQUIRED_CHECK_STATE = {"current", "drifted", "unavailable", "unknown"}
 
 
+_DIAGNOSTIC_BLOCKER_KIND = "BLOCKED_DIAGNOSTIC_SURFACE"
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticSurfaceEvidence:
+    """Caller-supplied diagnostic-surface facts for the live failed-repair path (#3280).
+
+    ``authorized_surfaces`` are the already-authorized canonical diagnostic
+    surfaces for the exact failing operation; ``attempted_surfaces`` are the ones
+    already tried. Both are compared as distinct surface identities, so a surface
+    reported twice is one surface. This carries no retry count: the bound is that
+    the finite authorized set is exhausted.
+    """
+
+    diagnostics_actionable: bool
+    authorized_surfaces: tuple[str, ...] = ()
+    attempted_surfaces: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.diagnostics_actionable) is not bool:
+            raise TypeError("diagnostics_actionable must be built-in bool")
+        for name in ("authorized_surfaces", "attempted_surfaces"):
+            value = getattr(self, name)
+            if type(value) is not tuple or any(
+                type(item) is not str or not item.strip() for item in value
+            ):
+                raise TypeError(f"{name} must be an exact tuple of non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticSurfaceBlocker:
+    """The one explicit terminal blocker once authorized alternatives are exhausted."""
+
+    kind: str
+    missing_evidence: str
+    attempted_surfaces: tuple[str, ...]
+    clearing_condition: str
+
+
 @dataclass(frozen=True, slots=True)
 class FailedRepairAdmissionRecord:
     attempt_id: str
@@ -37,6 +76,8 @@ class FailedRepairAdmissionRecord:
     recovery_stalled: bool = False
     bounded_continuation_admitted: bool = False
     zero_job_recovery: ZeroJobRecoveryProjection | None = None
+    next_diagnostic_surface: str | None = None
+    diagnostic_blocker: DiagnosticSurfaceBlocker | None = None
     github_writes_authorized: bool = field(default=False, init=False)
     workflow_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
@@ -58,6 +99,7 @@ def evaluate_failed_repair_admission(
     prior: RecoverySemanticEvidence | None = None,
     prior_transition_fingerprint: str | None = None,
     zero_job: ZeroJobAdmissionEvidence | None = None,
+    diagnostics: DiagnosticSurfaceEvidence | None = None,
 ) -> FailedRepairAdmissionRecord:
     """Gate the next repair mutation on retry-specific CKR6 and separated diagnostics.
 
@@ -87,6 +129,16 @@ def evaluate_failed_repair_admission(
     projects the bounded exact-head re-dispatch (at most two attempts, fail
     closed when the PR head moved); an executed failure adds no gating. Actual
     dispatch capability remains owned by #2410.
+
+    When ``diagnostics`` evidence is supplied (#3280), the projection executes the
+    overlay's bounded alternate-diagnosis rule: insufficient diagnostics with an
+    unused already-authorized surface continue through that one bounded
+    alternative (``next_diagnostic_surface``); once every distinct authorized
+    surface has been attempted, exactly one explicit ``BLOCKED_DIAGNOSTIC_SURFACE``
+    blocker is returned with the evidence that could not be obtained and its
+    clearing condition. The bound is exhaustion of a finite set of distinct
+    surfaces, not a retry count, and stays separate from #2281's semantic
+    recovery progress.
     """
     attempt_id = _text(activation_result.get("attempt_id"), "attempt_id")
     retry_reentry_outcome = _text(
@@ -150,11 +202,28 @@ def evaluate_failed_repair_admission(
     if mergeability == "conflicting":
         reasons.append("mergeability-conflict-signal")
 
+    next_diagnostic_surface: str | None = None
+    diagnostic_blocker: DiagnosticSurfaceBlocker | None = None
+    if diagnostics is not None and not diagnostics.diagnostics_actionable:
+        authorized = _distinct(diagnostics.authorized_surfaces)
+        attempted = _distinct(diagnostics.attempted_surfaces)
+        remaining = tuple(surface for surface in authorized if surface not in attempted)
+        if remaining:
+            next_diagnostic_surface = remaining[0]
+            reasons.append("diagnostic-evidence-insufficient-alternate-surface-available")
+        else:
+            reasons.append("diagnostic-surface-exhausted")
+            diagnostic_blocker = _diagnostic_blocker(authorized, attempted)
     bounded_continuation_admitted = False
     if reasons:
         if zero_job_projection is not None and zero_job_projection.gates_code_repair:
             next_action = zero_job_projection.next_action or "reacquire-independent-diagnostics"
             bounded_continuation_admitted = zero_job_projection.bounded_continuation
+        elif diagnostic_blocker is not None:
+            next_action = "blocked-diagnostic-surface"
+        elif next_diagnostic_surface is not None:
+            next_action = "diagnose-via-authorized-alternate-surface"
+            bounded_continuation_admitted = True
         elif "retry-specific-lessons-not-consumed" in reasons:
             next_action = "reenter-ckr6-for-exact-failed-attempt"
         elif "required-check-configuration-drift" in reasons:
@@ -191,6 +260,41 @@ def evaluate_failed_repair_admission(
         bounded_continuation_admitted=bounded_continuation_admitted,
         zero_job_recovery=(
             zero_job_projection.recovery if zero_job_projection is not None else None
+        ),
+        next_diagnostic_surface=next_diagnostic_surface,
+        diagnostic_blocker=diagnostic_blocker,
+    )
+
+
+def _distinct(surfaces: Sequence[str]) -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for surface in surfaces:
+        seen.setdefault(surface.strip(), None)
+    return tuple(seen)
+
+
+def _diagnostic_blocker(
+    authorized: tuple[str, ...], attempted: tuple[str, ...]
+) -> DiagnosticSurfaceBlocker:
+    tried = tuple(surface for surface in authorized if surface in attempted)
+    if tried:
+        missing = (
+            "actionable failure diagnostics for the exact current head could not be "
+            f"obtained from any authorized diagnostic surface ({', '.join(tried)})"
+        )
+    else:
+        missing = (
+            "actionable failure diagnostics for the exact current head could not be "
+            "obtained and no authorized diagnostic surface is available"
+        )
+    return DiagnosticSurfaceBlocker(
+        kind=_DIAGNOSTIC_BLOCKER_KIND,
+        missing_evidence=missing,
+        attempted_surfaces=tried,
+        clearing_condition=(
+            "an additional already-authorized diagnostic surface (or the missing "
+            "connector or integration capability that exposes the evidence) becomes "
+            "available and returns actionable evidence for the exact current head"
         ),
     )
 
