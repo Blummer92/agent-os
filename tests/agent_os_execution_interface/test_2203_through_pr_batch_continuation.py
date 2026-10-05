@@ -28,6 +28,7 @@ def test_verified_pr_does_not_finish_ten_item_batch_early():
         repository="Blummer92/agent-os", issue_number=2203,
         branch_exists=True, implementation_commit_count=2,
         draft_pr_exists=True, canonical_pr_readback_verified=True,
+        canonical_pr_readback_binding="readback-digest:canonical-pr:2203",
         capable_route_available=True, subordinate_writes_only=False,
     )
     assert completion.completion_admissible is True

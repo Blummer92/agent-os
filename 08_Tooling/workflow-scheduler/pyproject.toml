@@ -54,6 +54,7 @@ packages = [
   "scripts.agent_os_issue_acceptance",
   "scripts.agent_os_github_git_objects",
   "scripts.agent_os_github_issue_provider",
+  "scripts.agent_os_github_target_guard",
   "scripts.agent_os_issue_acceptance.checks",
   "scripts.agent_os_issue_acceptance.typed_subject_approval",
   "scripts.agent_os_issue_labels",
@@ -68,6 +69,7 @@ packages = [
 "scripts.agent_os_issue_acceptance" = "../../scripts/agent_os_issue_acceptance"
 "scripts.agent_os_github_git_objects" = "../../scripts/agent_os_github_git_objects"
 "scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"
+"scripts.agent_os_github_target_guard" = "../../scripts/agent_os_github_target_guard"
 "scripts.agent_os_issue_acceptance.typed_subject_approval" = "../../scripts/agent_os_issue_acceptance/typed_subject_approval"
 "scripts.agent_os_issue_labels" = "../../scripts/agent_os_issue_labels"
 "scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"

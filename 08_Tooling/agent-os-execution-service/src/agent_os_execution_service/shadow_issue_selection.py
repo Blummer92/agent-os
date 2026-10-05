@@ -42,6 +42,7 @@ from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter
 
 
 _ISSUE_REVISION_RE = re.compile(r"^github-issue-v1:[0-9a-f]{64}$")
+_UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 class ShadowSelectionStatus(str, Enum):
@@ -83,6 +84,94 @@ def _validate_narrowing_criterion(value: str | None) -> str | None:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class ScanPageProvenance:
+    """One scanned page's transport provenance (Phase 1 B5).
+
+    Records exactly what the page reader observed while fetching a single
+    page: the requested 1-based page index, the exact source query string
+    (state/per_page/page params), the per-page item count, the next-page
+    cursor (integer cursor plus the observed ``Link`` next URL), terminal-page
+    proof state, the observed rate-limit remainder, and any error kind.
+    Provenance never manufactures state: every field is an observation made
+    by the reader that served the page. A recorded scan is reconstructible
+    from these fields alone.
+    """
+
+    page: int
+    item_count: int
+    next_page: int | None
+    source_query_string: str | None
+    link_next_url: str | None
+    rate_limit_remaining: str | None
+    terminal_page_proven: bool
+    error_kind: str | None
+
+    def __post_init__(self) -> None:
+        if type(self.page) is not int or self.page < 1:
+            raise TypeError("page must be a positive exact integer")
+        if type(self.item_count) is not int or self.item_count < 0:
+            raise TypeError("item_count must be a non-negative exact integer")
+        if self.next_page is not None and (
+            type(self.next_page) is not int or self.next_page < 1
+        ):
+            raise TypeError("next_page must be a positive exact integer or None")
+        if self.source_query_string is not None and (
+            type(self.source_query_string) is not str
+            or not self.source_query_string.strip()
+        ):
+            raise ValueError("source_query_string must be non-empty text or None")
+        if self.link_next_url is not None and (
+            type(self.link_next_url) is not str or not self.link_next_url
+        ):
+            raise ValueError("link_next_url must be non-empty text or None")
+        if self.rate_limit_remaining is not None and type(self.rate_limit_remaining) is not str:
+            raise TypeError("rate_limit_remaining must be exact text or None")
+        if type(self.terminal_page_proven) is not bool:
+            raise TypeError("terminal_page_proven must be an exact bool")
+        if self.error_kind is not None and type(self.error_kind) is not str:
+            raise TypeError("error_kind must be exact text or None")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "page": self.page,
+            "item_count": self.item_count,
+            "next_page": self.next_page,
+            "source_query_string": self.source_query_string,
+            "link_next_url": self.link_next_url,
+            "rate_limit_remaining": self.rate_limit_remaining,
+            "terminal_page_proven": self.terminal_page_proven,
+            "error_kind": self.error_kind,
+        }
+
+
+@dataclass
+class ScanProvenanceLog:
+    """Mutable append-only log a page reader fills during a scan (Phase 1 B5).
+
+    The caller creates one log, hands it to both the page reader and
+    ``select_shadow_issue``, and the seam records the filled log on the
+    result after the scan. ``note_page`` stamps scan start/end from the
+    reader's clock: the first noted page sets ``scan_started_at``, every
+    noted page refreshes ``scan_ended_at``. The log carries observations
+    only; it never alters the selection.
+    """
+
+    entries: list[ScanPageProvenance] = field(default_factory=list)
+    scan_started_at: str | None = None
+    scan_ended_at: str | None = None
+
+    def note_page(self, entry: ScanPageProvenance, *, at: str) -> None:
+        if type(entry) is not ScanPageProvenance:
+            raise TypeError("entry must be an exact ScanPageProvenance")
+        if type(at) is not str or not _UTC_TIMESTAMP_RE.fullmatch(at):
+            raise ValueError("at must use YYYY-MM-DDTHH:MM:SSZ form")
+        if self.scan_started_at is None:
+            self.scan_started_at = at
+        self.scan_ended_at = at
+        self.entries.append(entry)
+
+
 class CanonicalCandidateEvidenceReader(Protocol):
     """Supply already-canonical state/mode evidence for one bounded candidate."""
 
@@ -106,6 +195,12 @@ class ShadowIssueSelectionResult:
     status: ShadowSelectionStatus
     reason_codes: tuple[str, ...]
     narrowing_criterion: str | None = None
+    # Phase 1 B5: per-page scan provenance. Additive: every field defaults so
+    # all existing constructors keep working unchanged.
+    scan_started_at: str | None = None
+    scan_ended_at: str | None = None
+    scan_source_query: str | None = None
+    scan_page_provenance: tuple[ScanPageProvenance, ...] = ()
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -152,6 +247,28 @@ class ShadowIssueSelectionResult:
         object.__setattr__(
             self, "narrowing_criterion", _validate_narrowing_criterion(self.narrowing_criterion)
         )
+        for name in ("scan_started_at", "scan_ended_at"):
+            value = getattr(self, name)
+            if value is not None and (
+                type(value) is not str or not _UTC_TIMESTAMP_RE.fullmatch(value)
+            ):
+                raise ValueError(f"{name} must use YYYY-MM-DDTHH:MM:SSZ form or None")
+        if (
+            self.scan_started_at is not None
+            and self.scan_ended_at is not None
+            and self.scan_started_at > self.scan_ended_at
+        ):
+            raise ValueError("scan_started_at cannot be later than scan_ended_at")
+        if self.scan_source_query is not None and (
+            type(self.scan_source_query) is not str or not self.scan_source_query.strip()
+        ):
+            raise ValueError("scan_source_query must be non-empty text or None")
+        if type(self.scan_page_provenance) is not tuple or any(
+            type(entry) is not ScanPageProvenance for entry in self.scan_page_provenance
+        ):
+            raise TypeError(
+                "scan_page_provenance must be an exact tuple of ScanPageProvenance"
+            )
         if self.status is ShadowSelectionStatus.SELECTED:
             if self.selection is None or self.selected_issue_number is None:
                 raise ValueError("selected status requires selection and selected issue")
@@ -176,6 +293,7 @@ def select_shadow_issue(
     candidate_issue_numbers: tuple[int, ...] | None = None,
     narrowing_criterion: str | None = None,
     explicit_request_order: tuple[int, ...] = (),
+    scan_provenance_log: ScanProvenanceLog | None = None,
 ) -> ShadowIssueSelectionResult:
     """Return one current read-only selector result or an explicit fail-closed stop.
 
@@ -187,7 +305,15 @@ def select_shadow_issue(
     An explicit narrowing set requires narrowing_criterion naming the
     deterministic rule the caller applied. Narrowing without a named rule, or a
     named rule without a narrowing set, is rejected: narrowing is never silent.
+
+    Phase 1 B5: the caller may supply a ``ScanProvenanceLog`` shared with the
+    page reader. The reader fills it during the scan; the seam records the
+    filled log verbatim on the result so the decision is reconstructible.
+    Provenance never alters the selection itself.
     """
+
+    if scan_provenance_log is not None and type(scan_provenance_log) is not ScanProvenanceLog:
+        raise TypeError("scan_provenance_log must be an exact ScanProvenanceLog or None")
 
     scan = scan_connected_issues(
         repository,
@@ -196,6 +322,23 @@ def select_shadow_issue(
         retrieved_at=retrieved_at,
     )
     population = tuple(record.issue_number for record in scan.records)
+    scan_source_query = f"repo={repository} state={IssueStateFilter.OPEN.value}"
+    if scan_provenance_log is None:
+        provenance_entries: tuple[ScanPageProvenance, ...] = ()
+        scan_started_at = None
+        scan_ended_at = None
+    else:
+        provenance_entries = tuple(scan_provenance_log.entries)
+        if any(type(entry) is not ScanPageProvenance for entry in provenance_entries):
+            raise TypeError("scan_provenance_log holds a non-ScanPageProvenance entry")
+        scan_started_at = scan_provenance_log.scan_started_at
+        scan_ended_at = scan_provenance_log.scan_ended_at
+    provenance_kwargs = {
+        "scan_started_at": scan_started_at,
+        "scan_ended_at": scan_ended_at,
+        "scan_source_query": scan_source_query,
+        "scan_page_provenance": provenance_entries,
+    }
 
     if candidate_issue_numbers is None:
         if narrowing_criterion is not None:
@@ -221,6 +364,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.population-incomplete",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
         )
 
     records = {record.issue_number: record for record in scan.records}
@@ -254,6 +398,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-empty",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
         )
     if any(issue_number not in records for issue_number in candidates):
         return _result(
@@ -265,6 +410,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-not-in-population",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
         )
     if len(candidates) > MAX_CANDIDATES:
         return _result(
@@ -276,6 +422,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-too-broad",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
         )
 
     evidence: list[CandidateIssueEvidence] = []
@@ -294,6 +441,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-evidence-incomplete",
                 narrowing_criterion=narrowed_criterion,
+                **provenance_kwargs,
             )
         state = candidate.operational_state
         if state.repository.casefold() != repository.casefold():
@@ -306,6 +454,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-repository-mismatch",
                 narrowing_criterion=narrowed_criterion,
+                **provenance_kwargs,
             )
         scanned_revision = records[issue_number].source_revision
         if not _ISSUE_REVISION_RE.fullmatch(scanned_revision):
@@ -318,6 +467,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.issue-revision-unavailable",
                 narrowing_criterion=narrowed_criterion,
+                **provenance_kwargs,
             )
         if scanned_revision not in state.evidence_ids:
             return _result(
@@ -329,6 +479,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-revision-mismatch",
                 narrowing_criterion=narrowed_criterion,
+                **provenance_kwargs,
             )
         repository_revisions.add(state.source_revision)
         evidence.append(candidate)
@@ -343,6 +494,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.repository-revision-conflict",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
         )
     repository_source_revision = next(iter(repository_revisions))
 
@@ -352,6 +504,7 @@ def select_shadow_issue(
         substitution_allowed=False,
         explicit_request_order=explicit_request_order,
         candidates=tuple(evidence),
+        population_source_query=scan_source_query,
     )
     if not selection.selected_lanes:
         return _result(
@@ -363,6 +516,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selector-no-executable-lane",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
             repository_source_revision=repository_source_revision,
             selection=selection,
         )
@@ -379,6 +533,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -395,6 +550,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -409,6 +565,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-changed",
             narrowing_criterion=narrowed_criterion,
+            **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -432,6 +589,7 @@ def select_shadow_issue(
             else ("shadow-selection.current", "shadow-selection.population-narrowed")
         ),
         narrowing_criterion=narrowed_criterion,
+        **provenance_kwargs,
     )
 
 
@@ -448,6 +606,10 @@ def _result(
     status: ShadowSelectionStatus = ShadowSelectionStatus.NO_SELECTION,
     repository_source_revision: str | None = None,
     selection: ExecutableLaneSelection | None = None,
+    scan_started_at: str | None = None,
+    scan_ended_at: str | None = None,
+    scan_source_query: str | None = None,
+    scan_page_provenance: tuple[ScanPageProvenance, ...] = (),
 ) -> ShadowIssueSelectionResult:
     reasons = (reason,) if narrowing_criterion is None else (
         reason,
@@ -467,4 +629,8 @@ def _result(
         status=status,
         reason_codes=reasons,
         narrowing_criterion=narrowing_criterion,
+        scan_started_at=scan_started_at,
+        scan_ended_at=scan_ended_at,
+        scan_source_query=scan_source_query,
+        scan_page_provenance=scan_page_provenance,
     )

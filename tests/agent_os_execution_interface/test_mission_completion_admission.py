@@ -24,6 +24,8 @@ def admission(**overrides):
         "successor_issue_number": None,
         "successor_current": False,
         "successor_owns_residual_live_acceptance": False,
+        "canonical_pr_readback_binding": "readback-digest:canonical-pr:1985",
+        "live_consumer_observation_binding": None,
     }
     values.update(overrides)
     return evaluate_mission_completion_admission(**values)
@@ -38,6 +40,9 @@ def live_observation(**overrides):
         "live_consumer_evidence_source": "canonical-host-observation:current",
         "live_consumer_evidence_current": True,
         "live_consumer_evidence_kind": LIVE_CONSUMER_OBSERVATION,
+        "live_consumer_observation_binding": (
+            "observation-digest:live-consumer:agent-os:exact-live-consumer"
+        ),
     }
     values.update(overrides)
     return admission(**values)

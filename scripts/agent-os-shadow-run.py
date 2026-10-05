@@ -26,6 +26,15 @@ distributions), e.g. the venv described in ``SHADOW_ISSUE_SELECTION.md``.
 Network access is read-only: only HTTP GET is ever issued. ``GITHUB_TOKEN``,
 when set, is used as a bearer token to raise the API rate limit; it is never
 logged or written anywhere.
+
+Phase 1 B5: the CLI records per-page scan provenance (exact query string,
+observed Link next URL, rate-limit remainder, scan start/end timestamps) on
+the selection result, and emits one finite-mission evidence-ledger entry for
+its selection decision into the experiment record's ``evidence_ledger``
+section. The ledger mission_id comes from ``--mission-id`` when supplied;
+otherwise it is derived deterministically as
+``shadow-run:{campaign_id}:{retrieved_at}`` (documented in
+``_resolve_mission_id``).
 """
 
 from __future__ import annotations
@@ -51,9 +60,16 @@ for _entry in (
         sys.path.insert(0, _entry)
 
 from agent_os_execution_service.shadow_issue_selection import (  # noqa: E402
+    ScanPageProvenance,
+    ScanProvenanceLog,
     ShadowIssueSelectionResult,
     ShadowSelectionStatus,
     select_shadow_issue,
+)
+from agent_os_execution_service.evidence_ledger import (  # noqa: E402
+    EvidenceLedger,
+    NavigationDecisionType,
+    hash_decision_inputs,
 )
 from scripts.agent_os_issue_acceptance.github_issue_source import (  # noqa: E402
     GitHubIssuePageResponse,
@@ -110,21 +126,75 @@ class GitHubReadClient:
 
 
 class LivePageReader:
-    """GitHubIssuePageReader over the live issues endpoint (GET only)."""
+    """GitHubIssuePageReader over the live issues endpoint (GET only).
 
-    def __init__(self, client: GitHubReadClient) -> None:
+    Phase 1 B5: records per-page scan provenance -- the exact query string,
+    the observed ``Link`` next URL, the observed rate-limit remainder, and
+    scan start/end timestamps -- into the caller-shared ScanProvenanceLog, so
+    the scan that produced a population is reconstructible from the reader's
+    observations alone. Provenance is recorded for every returned page
+    response, including rate-limited error responses; pages that raise
+    (404/denied/transport failure) abort the scan and carry their own
+    exception signal.
+    """
+
+    def __init__(
+        self, client: GitHubReadClient, provenance_log: ScanProvenanceLog | None = None
+    ) -> None:
         self._client = client
+        self._provenance_log = provenance_log
 
     def read_issue_page(
         self, repository: str, *, page: int, per_page: int, state: str
     ) -> GitHubIssuePageResponse:
+        query_string = f"state={state}&per_page={per_page}&page={page}"
+        now = _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         status, headers, body = self._client.get(
-            f"/repos/{repository}/issues?state={state}&per_page={per_page}&page={page}"
+            f"/repos/{repository}/issues?{query_string}"
         )
-        if status == 403 and headers.get("x-ratelimit-remaining") == "0":
-            return GitHubIssuePageResponse(
-                items=(), next_page=None, complete=False, error_kind="rate-limited"
+        rate_limit_remaining = headers.get("x-ratelimit-remaining")
+        link_next_url: str | None = None
+        link_match = _LINK_NEXT_RE.search(headers.get("link", ""))
+        if link_match:
+            link_next_url = link_match.group(1)
+
+        def _respond(
+            *,
+            items: tuple = (),
+            next_page: int | None = None,
+            complete: bool = True,
+            terminal_page_proven: bool = False,
+            error_kind: str | None = None,
+        ) -> GitHubIssuePageResponse:
+            response = GitHubIssuePageResponse(
+                items=items,
+                next_page=next_page,
+                complete=complete,
+                terminal_page_proven=terminal_page_proven,
+                error_kind=error_kind,
+                page=page,
+                source_query_string=query_string,
+                link_next_url=link_next_url,
+                rate_limit_remaining=rate_limit_remaining,
             )
+            if self._provenance_log is not None:
+                self._provenance_log.note_page(
+                    ScanPageProvenance(
+                        page=page,
+                        item_count=len(response.items),
+                        next_page=response.next_page,
+                        source_query_string=query_string,
+                        link_next_url=link_next_url,
+                        rate_limit_remaining=rate_limit_remaining,
+                        terminal_page_proven=response.terminal_page_proven,
+                        error_kind=error_kind,
+                    ),
+                    at=now,
+                )
+            return response
+
+        if status == 403 and headers.get("x-ratelimit-remaining") == "0":
+            return _respond(error_kind="rate-limited", complete=False)
         if status == 404:
             raise LookupError(f"repository not found: {repository}")
         if status in (401, 403):
@@ -137,8 +207,8 @@ class LivePageReader:
             raise ValueError(f"github api page {page} returned malformed json") from exc
         if not isinstance(items, list):
             raise ValueError(f"github api page {page} returned a non-list payload")
-        has_next = _LINK_NEXT_RE.search(headers.get("link", "")) is not None
-        return GitHubIssuePageResponse(
+        has_next = link_next_url is not None
+        return _respond(
             items=tuple(items),
             next_page=(page + 1) if has_next else None,
             complete=True,
@@ -214,6 +284,7 @@ def _build_experiment_record(
     narrowing_criterion: str | None,
     result: ShadowIssueSelectionResult,
     client: GitHubReadClient,
+    ledger_entries: tuple[dict[str, object], ...] = (),
 ) -> dict[str, object]:
     population = result.population_issue_numbers
     candidates = result.candidate_issue_numbers
@@ -305,6 +376,10 @@ def _build_experiment_record(
             "execution_authorized": result.execution_authorized,
             "side_effects_performed": result.side_effects_performed,
         },
+        # 12. finite-mission evidence ledger (Phase 1 B5): append-only,
+        # hash-chained navigation decision entries bound to one mission_id.
+        # Additive: the 11 Phase-0 fields above are unchanged.
+        "evidence_ledger": list(ledger_entries),
     }
 
 
@@ -332,7 +407,29 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="UTC timestamp %%Y-%%m-%%dT%%H:%%M:%%SZ (default: now)",
     )
     parser.add_argument("--output", default=None, help="record path (default: stdout)")
+    parser.add_argument(
+        "--mission-id",
+        default=None,
+        help="mission id for the evidence ledger "
+        "(default: derived deterministically as shadow-run:{campaign_id}:{retrieved_at})",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_mission_id(
+    raw: str | None, *, campaign_id: str, retrieved_at: str
+) -> str:
+    """Resolve the ledger mission_id: an explicit --mission-id wins; otherwise
+    it is derived deterministically as shadow-run:{campaign_id}:{retrieved_at}."""
+    mission_id = raw if raw is not None else f"shadow-run:{campaign_id}:{retrieved_at}"
+    if (
+        not isinstance(mission_id, str)
+        or not mission_id.strip()
+        or len(mission_id) > 256
+        or not mission_id.isprintable()
+    ):
+        raise ValueError("--mission-id must be 1-256 printable characters")
+    return mission_id
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -346,22 +443,30 @@ def main(argv: list[str] | None = None) -> int:
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not _TIMESTAMP_RE.match(retrieved_at):
             raise ValueError("--retrieved-at must use %Y-%m-%dT%H:%M:%SZ form")
+        mission_id = _resolve_mission_id(
+            args.mission_id, campaign_id=args.campaign_id, retrieved_at=retrieved_at
+        )
     except ValueError as exc:
         print(f"agent-os-shadow-run: argument error: {exc}", file=sys.stderr)
         return 2
 
     client = GitHubReadClient()
+    # One provenance log shared by the reader and the seam: the reader fills
+    # it during the scan, the seam records the filled log on the result.
+    provenance_log = ScanProvenanceLog()
+    page_reader = LivePageReader(client, provenance_log)
     try:
         result = select_shadow_issue(
             repository=args.repository,
             retrieved_at=retrieved_at,
             campaign_id=args.campaign_id,
-            page_reader=LivePageReader(client),
+            page_reader=page_reader,
             issue_transport=LiveIssueTransport(client),
             candidate_evidence_reader=Phase0CandidateEvidenceReader(),
             candidate_issue_numbers=candidates,
             narrowing_criterion=args.narrowing_criterion,
             explicit_request_order=explicit_order,
+            scan_provenance_log=provenance_log,
         )
     except (TypeError, ValueError) as exc:
         print(f"agent-os-shadow-run: contract violation: {exc}", file=sys.stderr)
@@ -370,6 +475,52 @@ def main(argv: list[str] | None = None) -> int:
         print(f"agent-os-shadow-run: transport failure: {exc}", file=sys.stderr)
         return 1
 
+    recorded_at = _datetime.datetime.now(_datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    inputs_digest = hash_decision_inputs(
+        {
+            "repository": args.repository,
+            "campaign_id": args.campaign_id,
+            "retrieved_at": retrieved_at,
+            "candidate_issue_numbers": list(candidates)
+            if candidates is not None
+            else None,
+            "narrowing_criterion": args.narrowing_criterion,
+            "explicit_request_order": list(explicit_order),
+            "population_issue_numbers": list(result.population_issue_numbers),
+            "scan_page_count": result.scan_page_count,
+            "scan_item_count": result.scan_item_count,
+            "scan_source_query": result.scan_source_query,
+            "scan_page_provenance": [
+                entry.to_dict() for entry in result.scan_page_provenance
+            ],
+            "selection_status": result.status.value,
+            "reason_codes": list(result.reason_codes),
+        }
+    )
+    ledger = EvidenceLedger().append(
+        mission_id=mission_id,
+        decision_type=NavigationDecisionType.SELECTION,
+        decision_label="shadow-selection",
+        inputs_digest=inputs_digest,
+        reason_codes=result.reason_codes,
+        provenance_refs=tuple(
+            sorted(
+                {
+                    f"scan-source-query:{result.scan_source_query}",
+                    f"scan-pages:{result.scan_page_count}",
+                    f"scan-items:{result.scan_item_count}",
+                    f"population-issues:{len(result.population_issue_numbers)}",
+                    "experiment-record:population_receipt",
+                    "experiment-record:deterministic_selector_result",
+                }
+            )
+        ),
+        recorded_at=recorded_at,
+        actor="agent-os-shadow-run/phase0",
+    )
+
     record = _build_experiment_record(
         repository=args.repository,
         retrieved_at=retrieved_at,
@@ -377,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         narrowing_criterion=args.narrowing_criterion,
         result=result,
         client=client,
+        ledger_entries=tuple(entry.to_dict() for entry in ledger.entries),
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"

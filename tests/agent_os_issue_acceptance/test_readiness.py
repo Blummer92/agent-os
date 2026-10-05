@@ -583,7 +583,7 @@ Blocked by: #2434
 """
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.BLOCKED
-    assert "A required dependency is blocked." in result.report.blockers
+    assert "A dependency blocker is declared in the issue body (prose evidence only; not the canonical dependency signal)." in result.report.blockers
     assert result.report.manual_review_items
 
 
@@ -640,7 +640,7 @@ def test_2645_genuine_controlling_blocker_still_blocks(dependency_line):
     """Control: a real declared blocker must remain blocked."""
     result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
     assert result.outcome == ReadinessOutcome.BLOCKED, dependency_line
-    assert "A required dependency is blocked." in result.report.blockers
+    assert "A dependency blocker is declared in the issue body (prose evidence only; not the canonical dependency signal)." in result.report.blockers
 
 
 def _parent_tracking_body(coordination: str) -> str:
@@ -691,7 +691,7 @@ def test_2648_parent_gated_on_prerequisite_evidence_remains_blocked():
     )
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.BLOCKED
-    assert "A required dependency is blocked." in result.report.blockers
+    assert "A dependency blocker is declared in the issue body (prose evidence only; not the canonical dependency signal)." in result.report.blockers
 
 
 def test_2648_parent_gated_on_child_evidence_remains_blocked():

@@ -29,6 +29,14 @@ class MissionCompletionAdmission:
     completion_admissible: bool
     reason_codes: tuple[str, ...]
     next_action: str
+    #: Digest binding the ``canonical_pr_readback_verified`` claim to the
+    #: canonical readback observation the caller already reacquired. Carried
+    #: for provenance; a True claim without a binding fails closed.
+    canonical_pr_readback_binding: str | None
+    #: Digest binding the ``live_consumer_reachability_proven`` claim to the
+    #: live observation the caller already reacquired. Carried for provenance;
+    #: a True claim without a binding fails closed.
+    live_consumer_observation_binding: str | None
     github_writes_authorized: bool = field(default=False, init=False)
     merge_authorized: bool = field(default=False, init=False)
     issue_closure_authorized: bool = field(default=False, init=False)
@@ -58,6 +66,8 @@ def evaluate_mission_completion_admission(
     successor_issue_number: int | None = None,
     successor_current: bool = False,
     successor_owns_residual_live_acceptance: bool = False,
+    canonical_pr_readback_binding: str | None = None,
+    live_consumer_observation_binding: str | None = None,
 ) -> MissionCompletionAdmission:
     """Project whether bounded repository delivery may be represented as complete.
 
@@ -70,6 +80,15 @@ def evaluate_mission_completion_admission(
 
     Packaging, registration, fixtures, contracts, and unit tests are repository
     evidence only; they are never treated as live-consumer observation here.
+
+    Narration is not evidence: a bare asserted boolean claims nothing. When
+    ``canonical_pr_readback_verified`` is True the caller must also supply
+    ``canonical_pr_readback_binding`` -- a digest string binding the claim to the
+    canonical readback observation already reacquired -- and when
+    ``live_consumer_reachability_proven`` is True the caller must also supply
+    ``live_consumer_observation_binding``. A True claim without its binding fails
+    closed as unproven. Bindings are verified for non-emptiness and shape only;
+    this pure seam performs no reads and cannot re-verify the readback itself.
 
     This projection performs no reads or writes and grants no merge, closure,
     workflow, production, external-system, or GitHub-write authority.
@@ -102,6 +121,8 @@ def evaluate_mission_completion_admission(
         ("live_consumer_identity", live_consumer_identity),
         ("live_consumer_evidence_source", live_consumer_evidence_source),
         ("live_consumer_evidence_kind", live_consumer_evidence_kind),
+        ("canonical_pr_readback_binding", canonical_pr_readback_binding),
+        ("live_consumer_observation_binding", live_consumer_observation_binding),
     ):
         if value is not None and (type(value) is not str or not value.strip()):
             raise ValueError(f"{name} must be None or non-empty exact text")
@@ -121,6 +142,10 @@ def evaluate_mission_completion_admission(
     if not draft_pr_exists:
         reasons.append("draft-pr-not-proven")
     if draft_pr_exists and not canonical_pr_readback_verified:
+        reasons.append("canonical-pr-readback-not-proven")
+    if canonical_pr_readback_verified and canonical_pr_readback_binding is None:
+        # Narration is not evidence: a bare asserted True with no digest binding
+        # the claim to a reacquired canonical readback observation fails closed.
         reasons.append("canonical-pr-readback-not-proven")
     if subordinate_writes_only:
         reasons.append("subordinate-write-is-not-parent-completion")
@@ -159,6 +184,13 @@ def evaluate_mission_completion_admission(
             if not live_consumer_reachability_proven:
                 reasons.append("required-live-consumer-reachability-not-proven")
             else:
+                if live_consumer_observation_binding is None:
+                    # Narration is not evidence: a bare asserted True with no
+                    # digest binding the claim to a reacquired live observation
+                    # fails closed, even when the supplied fields look complete.
+                    reasons.append(
+                        "required-live-consumer-reachability-not-proven"
+                    )
                 if live_consumer_identity is None:
                     reasons.append("required-live-consumer-identity-not-proven")
                 if live_consumer_evidence_source is None:
@@ -223,6 +255,8 @@ def evaluate_mission_completion_admission(
         completion_admissible=completion_admissible,
         reason_codes=tuple(reasons),
         next_action=next_action,
+        canonical_pr_readback_binding=canonical_pr_readback_binding,
+        live_consumer_observation_binding=live_consumer_observation_binding,
     )
 
 

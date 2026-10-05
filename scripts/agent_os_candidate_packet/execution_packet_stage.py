@@ -53,6 +53,7 @@ from .validation_stage import (
     validation_stage_result_from_dict,
     validation_stage_result_to_dict,
 )
+from scripts.agent_os_execution_capabilities.reason_codes import normalize_absence_cause
 
 
 class ExecutionPacketDisposition(str, Enum):
@@ -274,6 +275,24 @@ def execution_packet_stage_result_from_dict(
     )
 
 
+def _runtime_absence_cause_codes(
+    candidate_runtime_inputs: CandidateRuntimeInputs,
+) -> tuple[str, ...]:
+    """Carry the bounded absence cause for the bare-bool runtime-capability path.
+
+    The upstream ``CandidateRuntimeInputs`` contract carries only the bare
+    ``runtime_capability_available`` bool, so the absence cause is genuinely
+    unclassified here: the bounded vocabulary-miss fallback
+    ``capability-absence.undiscovered`` applies. If a caller attaches an
+    optional ``runtime_capability_absence_cause`` attribute to the inputs (a
+    backward-compatible extension point; the canonical dataclass does not
+    declare it), the classified cause is carried instead. This never raises and
+    never reports the capability as available.
+    """
+    hint = getattr(candidate_runtime_inputs, "runtime_capability_absence_cause", None)
+    return (normalize_absence_cause(hint),)
+
+
 def prepare_execution_packet(
     approval_projection_stage_result: ApprovalProjectionStageResult,
     candidate_runtime_inputs: CandidateRuntimeInputs,
@@ -328,7 +347,10 @@ def prepare_execution_packet(
             request=request,
             command_plan=command_plan,
             command_plan_id=plan_id,
-            reason_codes=("runtime-capability-unavailable",),
+            reason_codes=(
+                "runtime-capability-unavailable",
+                *_runtime_absence_cause_codes(candidate_runtime_inputs),
+            ),
         )
 
     try:

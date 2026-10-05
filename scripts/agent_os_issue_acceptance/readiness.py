@@ -110,6 +110,13 @@ _BLOCKER_DECLARATION_RE = re.compile(r"(?im)^\s*(?:blocked by|blockers?)\s*:\s*(
 #: is evidence that no controlling blocker exists, never evidence of one.
 _NO_CONTROLLING_BLOCKER_RE = re.compile(r"(?i)^(?:none|not applicable)\b")
 
+#: Bounded dependency-blocker reason codes (B2). The canonical structured
+#: dependency signal and body-prose declarations never share a code, and the
+#: reconciliation code names the canonical-wins-over-stale-prose outcome.
+_DEPENDENCY_BLOCKED_CODE = "dependency-blocked"
+_PROSE_DECLARED_BLOCKER_CODE = "prose-declared-blocker"
+_PROSE_BLOCKER_SUPERSEDED_CODE = "prose-blocker-superseded-by-canonical-clear"
+
 _NO_RESPONSE = "_No response_"
 _KNOWN_DOCUMENTATION_IMPACT_VALUES = {"docs-required", "docs-not-required", "docs-needs-decision"}
 _DOC_HEADING_FIELD_MAP = {
@@ -144,8 +151,23 @@ def evaluate_issue_readiness(
     *,
     dependency_blocked: bool = False,
     validation_pending: bool = False,
+    dependency_state_clear: bool = False,
 ) -> ReadinessResult:
-    """Evaluate one issue locally without network calls or metadata writes."""
+    """Evaluate one issue locally without network calls or metadata writes.
+
+    PROSE PRECEDENCE (B2 / AI-navigation invariant): free-text blocker
+    declarations in the issue body are never given canonical weight. When the
+    structured dependency signal reports blocked, the canonical
+    ``dependency-blocked`` code applies. When only body prose declares a
+    blocker, the check is tagged ``prose-declared-blocker`` with its evidence
+    source marked, so it is distinguishable from the canonical signal. When
+    the caller additionally injects ``dependency_state_clear=True`` (the
+    canonical dependency evidence resolved CLEAR) and stale prose still
+    declares a blocker, the prose is superseded: the result yields the
+    reconciliation code ``prose-blocker-superseded-by-canonical-clear`` and
+    routes to manual review (needs-decision) instead of manufacturing a
+    BLOCKED outcome.
+    """
     body = issue_body or ""
     scan_result = scan_issue_metadata(body)
     metadata = project_issue_metadata(scan_result)
@@ -232,9 +254,17 @@ def evaluate_issue_readiness(
         checks.append(CheckResult("unresolved decisions", Status.MANUAL_REVIEW, "The issue contains an unresolved decision value."))
         manual_review_items.append("Resolve all needs-decision fields.")
 
-    if dependency_blocked or _declares_blocked_dependency(body):
-        checks.append(CheckResult("dependencies", Status.FAIL, "A required dependency is blocked."))
-        blockers.append("A required dependency is blocked.")
+    dependencies_check, dependency_blocker, dependency_review_item = _dependencies_check(
+        body,
+        dependency_blocked=dependency_blocked,
+        dependency_state_clear=dependency_state_clear,
+    )
+    if dependencies_check is not None:
+        checks.append(dependencies_check)
+    if dependency_blocker is not None:
+        blockers.append(dependency_blocker)
+    if dependency_review_item is not None:
+        manual_review_items.append(dependency_review_item)
 
     if validation_pending:
         checks.append(CheckResult("required validation", Status.FAIL, "Required validation is pending."))
@@ -254,12 +284,14 @@ def evaluate_issue_readiness_with_labels(
     *,
     dependency_blocked: bool = False,
     validation_pending: bool = False,
+    dependency_state_clear: bool = False,
 ) -> ReadinessResult:
     """Combine readiness with an existing report-only label evidence report."""
     base = evaluate_issue_readiness(
         issue_body,
         dependency_blocked=dependency_blocked,
         validation_pending=validation_pending,
+        dependency_state_clear=dependency_state_clear,
     )
     return _build_result(
         [*base.report.checks, *label_report.checks],
@@ -917,11 +949,89 @@ def _declares_blocked_dependency(body: str) -> bool:
     evaluated at the separating space instead of at the value. Every normally
     formatted ``Blockers: none`` therefore projected blocked (#2645).
     """
+    return bool(_declared_blockers(body))
+
+
+def _declared_blockers(body: str) -> list[str]:
+    """Return the controlling blocker values declared in body prose.
+
+    A declaration of absence (``none``/``not applicable``) is evidence that no
+    controlling blocker exists and is never returned. The returned values are
+    prose evidence only: they never carry the canonical dependency-signal
+    weight (see ``_dependencies_check``).
+    """
+    declared: list[str] = []
     for match in _BLOCKER_DECLARATION_RE.finditer(_sanitize(body)):
         value = match.group(1).strip().rstrip(".")
         if value and not _NO_CONTROLLING_BLOCKER_RE.match(value):
-            return True
-    return False
+            declared.append(value)
+    return declared
+
+
+def _dependencies_check(
+    body: str,
+    *,
+    dependency_blocked: bool,
+    dependency_state_clear: bool,
+) -> tuple[CheckResult | None, str | None, str | None]:
+    """Classify the dependency-block signal by evidence source.
+
+    Returns ``(check, blocker_text, manual_review_text)``; any element may be
+    None. Canonical precedence (B2): the structured dependency signal always
+    wins. Prose-sourced blockers are tagged distinctly and never emit the
+    canonical message, and stale prose never overrides an injected canonical
+    CLEAR -- that divergence yields the reconciliation code and routes to
+    manual review instead of manufacturing a BLOCKED outcome.
+    """
+    if dependency_blocked:
+        check = CheckResult(
+            "dependencies",
+            Status.FAIL,
+            "A required dependency is blocked.",
+            [
+                "evidence_source=structured-dependency-signal",
+                f"code={_DEPENDENCY_BLOCKED_CODE}",
+            ],
+        )
+        return check, "A required dependency is blocked.", None
+    declared = _declared_blockers(body)
+    if not declared:
+        return None, None, None
+    declared_evidence = [f"declared={value}" for value in declared]
+    if dependency_state_clear:
+        check = CheckResult(
+            "dependencies",
+            Status.MANUAL_REVIEW,
+            "The issue body declares a dependency blocker, but the canonical "
+            "dependency signal resolved CLEAR; the prose declaration is "
+            "superseded and does not force blocked.",
+            [
+                "evidence_source=body-prose",
+                f"code={_PROSE_BLOCKER_SUPERSEDED_CODE}",
+                *declared_evidence,
+            ],
+        )
+        return (
+            check,
+            None,
+            "Reconcile the stale body-prose dependency blocker against the "
+            "canonical CLEAR dependency signal.",
+        )
+    blocker_text = (
+        "A dependency blocker is declared in the issue body (prose evidence "
+        "only; not the canonical dependency signal)."
+    )
+    check = CheckResult(
+        "dependencies",
+        Status.FAIL,
+        blocker_text,
+        [
+            "evidence_source=body-prose",
+            f"code={_PROSE_DECLARED_BLOCKER_CODE}",
+            *declared_evidence,
+        ],
+    )
+    return check, blocker_text, None
 
 
 def _sanitize(body: str) -> str:

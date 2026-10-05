@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
-from .reason_codes import is_approved_reason_code, normalize_reason_codes
+from .reason_codes import is_approved_reason_code, normalize_absence_cause, normalize_reason_codes
 
 CAPABILITY_EVIDENCE_SCHEMA_NAME = "agent-os-capability-evidence"
 CAPABILITY_EVIDENCE_SCHEMA_VERSION = "1.0"
@@ -119,6 +119,16 @@ class RepositoryIdentity:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CapabilityEvidence:
+    """Bounded evidence record for one execution capability.
+
+    PROSE RULE (B4 / AI-navigation invariant): cause classification comes
+    exclusively from ``reason_code`` normalized into the bounded absence-cause
+    family (``reason_codes.ABSENCE_CAUSE_CODES``) via :meth:`absence_cause`.
+    The free-text ``reason`` field is annotation only -- it is never the cause
+    carrier, and no consumer may classify an absence from it. See
+    ``reason_codes.normalize_absence_cause`` for the vocabulary-miss rule.
+    """
+
     capability_id: str
     status: CapabilityStatus
     evidence_strength: EvidenceStrength
@@ -152,6 +162,20 @@ class CapabilityEvidence:
             raise ValueError("reason_code must use the bounded GEX vocabulary")
         if not isinstance(self.reason, str):
             raise TypeError("reason must be a string")
+
+    def absence_cause(self) -> str | None:
+        """Return the bounded absence cause, or None when not absent.
+
+        Classification comes exclusively from ``reason_code`` normalized into
+        the bounded absence-cause family; the free-text ``reason`` field is
+        ignored. Vocabulary misses (a non-family ``reason_code``) fall back to
+        ``capability-absence.undiscovered``. Returns None unless status is
+        UNAVAILABLE, so absence is never inferred and availability is never
+        defaulted.
+        """
+        if self.status is not CapabilityStatus.UNAVAILABLE:
+            return None
+        return normalize_absence_cause(self.reason_code)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

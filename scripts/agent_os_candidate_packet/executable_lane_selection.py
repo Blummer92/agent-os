@@ -372,6 +372,11 @@ class ExecutableLaneSelection:
     duplicate_claim_findings: tuple[DuplicateClaimFinding, ...]
     reason_codes: tuple[str, ...]
     selection_id: str = ""
+    # Phase 1 B5: the query/filter that produced this selection's population
+    # (for example the scan's source_query). Additive: None means the caller
+    # did not carry a population query; the selection id is unchanged in that
+    # case so existing consumers observe byte-identical behavior.
+    population_source_query: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -462,6 +467,9 @@ class ExecutableLaneSelection:
             raise ValueError("reason_codes exceeds its bound")
         object.__setattr__(self, "reason_codes", reasons)
 
+        if self.population_source_query is not None:
+            _exact_text(self.population_source_query, "population_source_query", 512)
+
         if self.execution_authorized is not False:
             raise ValueError("executable lane selection cannot authorize execution")
         if self.side_effects_performed is not False:
@@ -475,7 +483,7 @@ class ExecutableLaneSelection:
             raise ValueError("executable lane selection exceeds serialized bound")
 
     def _payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema_name": self.schema_name,
             "schema_version": self.schema_version,
             "campaign_id": self.campaign_id,
@@ -494,6 +502,11 @@ class ExecutableLaneSelection:
             "execution_authorized": False,
             "side_effects_performed": False,
         }
+        # Bound into the content address only when carried: existing consumers
+        # that pass nothing keep their exact historical selection_id.
+        if self.population_source_query is not None:
+            payload["population_source_query"] = self.population_source_query
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self._payload(), "selection_id": self.selection_id}
@@ -558,14 +571,22 @@ def select_executable_lanes(
     substitution_allowed: bool,
     explicit_request_order: tuple[int, ...],
     candidates: tuple[CandidateIssueEvidence, ...],
+    population_source_query: str | None = None,
 ) -> ExecutableLaneSelection:
     """Classify, rank, and select up to `requested_lane_count` productive lanes.
 
     Pure local computation only; performs no execution or mutation. Fails
     closed on malformed, duplicated, or tampered input rather than guessing.
+
+    Phase 1 B5: `population_source_query` carries the query/filter that
+    produced this selection's population (for example the scan's
+    `source_query`). It is recorded on the selection and bound into the
+    content-addressed `selection_id` when present.
     """
 
     _exact_text(campaign_id, "campaign_id", 256)
+    if population_source_query is not None:
+        _exact_text(population_source_query, "population_source_query", 512)
     if type(requested_lane_count) is not int or not (
         MIN_LANE_COUNT <= requested_lane_count <= MAX_LANE_COUNT
     ):
@@ -739,6 +760,7 @@ def select_executable_lanes(
         rank_evidence=rank_evidence,
         duplicate_claim_findings=duplicate_claim_findings,
         reason_codes=tuple(top_level_reasons),
+        population_source_query=population_source_query,
     )
 
 
@@ -784,7 +806,20 @@ def deserialize_executable_lane_selection(serialized: object) -> ExecutableLaneS
             "selection_id",
         }
     )
-    _strict_keys(payload, expected, "executable lane selection")
+    # Phase 1 B5 additive field: payloads written before the population query
+    # was carried remain valid and deserialize with population_source_query=None;
+    # every other extra field is still rejected.
+    allowed_extra = frozenset({"population_source_query"})
+    unknown = (set(payload) - expected) - allowed_extra
+    missing = expected - set(payload)
+    if unknown:
+        raise ValueError(
+            f"executable lane selection contains unknown fields: {sorted(unknown)}"
+        )
+    if missing:
+        raise ValueError(
+            f"executable lane selection is missing fields: {sorted(missing)}"
+        )
     if payload.get("schema_name") != EXECUTABLE_LANE_SELECTION_SCHEMA_NAME:
         raise ValueError("unsupported executable lane selection schema name")
     if payload.get("schema_version") != EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION:
@@ -833,4 +868,5 @@ def deserialize_executable_lane_selection(serialized: object) -> ExecutableLaneS
         ),
         reason_codes=tuple(payload["reason_codes"]),
         selection_id=payload["selection_id"],
+        population_source_query=payload.get("population_source_query"),
     )

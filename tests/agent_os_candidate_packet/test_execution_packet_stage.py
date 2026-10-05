@@ -256,7 +256,10 @@ def test_runtime_capability_unavailable_keeps_non_runtime_objects_and_blocks(tmp
     assert result.request is not None
     assert result.command_plan is not None
     assert result.runtime_configuration is None
-    assert result.reason_codes == ("runtime-capability-unavailable",)
+    assert result.reason_codes == (
+        "capability-absence.undiscovered",
+        "runtime-capability-unavailable",
+    )
 
 
 def test_expired_request_fails_before_runtime_configuration(tmp_path) -> None:
@@ -498,3 +501,64 @@ def test_candidate_sha_drift_changes_request_and_runtime_fingerprints(tmp_path) 
     assert first.request_fingerprint != second.request_fingerprint
     assert first.runtime_configuration_fingerprint != second.runtime_configuration_fingerprint
     assert first.command_plan_id != second.command_plan_id
+
+# --------------------------------------------------------------------------
+# B4: caused runtime-capability absence (#B4).
+# --------------------------------------------------------------------------
+
+
+def test_b4_runtime_absence_carries_bounded_cause_code(tmp_path) -> None:
+    """The bare-bool absence path emits a bounded cause, never a bare bool."""
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        runtime_capability_available=False,
+    )
+
+    result = prepare_execution_packet(approved, inputs)
+
+    assert result.disposition is ExecutionPacketDisposition.BLOCKED
+    assert result.runtime_capability_available is False
+    # reason_codes are sorted in __post_init__; the cause must be present.
+    assert result.reason_codes == (
+        "capability-absence.undiscovered",
+        "runtime-capability-unavailable",
+    )
+
+
+def test_b4_runtime_absence_cause_helper_classifies_hint() -> None:
+    from types import SimpleNamespace
+
+    helper = execution_packet_stage_module._runtime_absence_cause_codes
+    assert helper(SimpleNamespace()) == ("capability-absence.undiscovered",)
+    assert helper(
+        SimpleNamespace(
+            runtime_capability_absence_cause="capability-absence.permission-missing"
+        )
+    ) == ("capability-absence.permission-missing",)
+    # Vocabulary miss on the hint -> bounded fallback, never a bare error.
+    assert helper(
+        SimpleNamespace(runtime_capability_absence_cause="not-a-cause")
+    ) == ("capability-absence.undiscovered",)
+    assert helper(SimpleNamespace(runtime_capability_absence_cause=None)) == (
+        "capability-absence.undiscovered",
+    )
+
+
+def test_b4_runtime_absence_round_trips_through_transport(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        runtime_capability_available=False,
+    )
+    result = prepare_execution_packet(approved, inputs)
+
+    restored = execution_packet_stage_result_from_dict(
+        execution_packet_stage_result_to_dict(result)
+    )
+    assert restored.reason_codes == result.reason_codes
+    assert "capability-absence.undiscovered" in restored.reason_codes

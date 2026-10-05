@@ -284,8 +284,7 @@ item-local capability boundary, not a shared mission blocker, unless evidence
 proves the limitation is shared across the remaining population. Finite missions
 preserve their cursor and continue every independent operation still admissible
 through canonical GitHub read evidence; see the ChatGPT Orchestrator overlay's
-"Preferred Execution Surface Unavailability" section and
-`scripts/agent_os_execution_interface/preferred_surface_limitation.py`.
+"Preferred Execution Surface Unavailability" section.
 
 ## Non-authorization
 

@@ -552,6 +552,7 @@ def test_issue_batch_completion_tool_requires_pr_or_explicit_no_pr_terminal_proo
                 "implementation_commit_count": 1,
                 "draft_pr_exists": True,
                 "canonical_pr_readback_verified": True,
+                "canonical_pr_readback_binding": "readback-digest:canonical-pr:2600",
                 "capable_route_available": True,
                 "subordinate_writes_only": False,
             },
