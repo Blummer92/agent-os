@@ -163,6 +163,39 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 - If no capable authorized route exists, stop for human decision and report the controlling capability or authorization reason.
 - Repository policy may constrain routing but cannot manufacture product, connector, CLI, authentication, network, runner, or process capabilities that the active execution surface does not actually expose.
 
+## Preferred Execution Surface Unavailability
+
+When a finite mission requests a preferred execution surface (for example,
+Codespaces) but that surface cannot be directly observed or entered, classify
+the limitation with
+`scripts/agent_os_execution_interface/preferred_surface_limitation.py`
+before deciding the mission disposition:
+
+1. classify whether the missing capability blocks the whole parent mission or
+   only operations that actually require the surface;
+2. preserve the mission cursor — the cursor is never dropped by this
+   classification;
+3. continue every independent operation still admissible through canonical
+   GitHub read evidence;
+4. stop only at the first operation whose completion genuinely requires the
+   unavailable surface, or after all independently actionable work is
+   reconciled;
+5. report the limitation as an item-local capability boundary unless evidence
+   proves it is shared across the remaining population.
+
+Unproven sharedness fails closed to item-local: a preferred surface that
+cannot be observed or entered is capability evidence, never by itself evidence
+of a shared mission blocker. A connector that lacks a literal surface-list or
+surface-entry action is not, by itself, evidence that the mission's remaining
+read-only work is impossible; if no admissible operation remains, stop with
+the item-local boundary recorded, not with a shared-blocker claim.
+
+This is the #3139 regression fixture under the #2826 continuation lineage:
+#3129's reconstructed controller coverage explicitly does not prove native
+ChatGPT continuation, so this rule binds the runtime continuation decision
+directly. It adds no scheduler, queue, mission store, continuation engine,
+persistence mechanism, or generic Codespaces API.
+
 ## Destination Rules
 - Route Agent OS repository work to the GitHub Service Agent.
 - Route teacher planning, readiness, and lesson candidates to Notion or a Notion handoff.
@@ -183,10 +216,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.13
+0.3.14
 Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.14 classifies preferred execution surface unavailability as an item-local capability boundary in finite missions (#3139): when a preferred surface (for example, Codespaces) cannot be directly observed or entered, the limitation is reported as item-local unless evidence proves it is shared across the remaining population; the mission cursor is preserved and every independent operation still admissible through canonical GitHub read evidence continues. Unproven sharedness fails closed to item-local. Consumed through `scripts/agent_os_execution_interface/preferred_surface_limitation.py`; adds no scheduler, queue, mission store, continuation engine, persistence mechanism, or generic Codespaces API.
 - 0.3.13 governs interrupted retrieval in finite artifact missions (#3152): a client/streaming interruption or a source-retrieval tool call with no consumed result is an intermediate retrieval boundary, never mission completion; on re-entry, correlate the last completed operation, classify the interrupted result as pending/returned-but-unconsumed/never-returned, preserve the artifact-mission plan state and retrieval cursor, and resume from the last completed operation boundary without a new owner prompt. Reuses the existing finite-mission cursor and the #2826 continuation architecture; adds no scheduler, queue, mission store, polling loop, or second continuation framework.
 - 0.3.12 consumes #3020's zero-diff stale-branch resume rule: before implementation resumes with no open primary PR, current `main` is reacquired and an ancestor-safe branch with zero unique commits is non-force fast-forwarded/read back; unique, diverged, or ambiguous branches are never force-reset and remain on the existing governed reconciliation route.
 - 0.3.11 preserves typed GitHub identities in campaign/report rendering (#3053): issue number, PR number, and canonical closing target remain distinct; reported `Closes` / `Fixes` / `Resolves` targets must come from current canonical PR linkage/body evidence rather than substituting the PR number. This constrains the existing model-visible Orchestrator response seam and adds no parser, identity registry, campaign store, scheduler, queue, or mutation authority.
