@@ -78,10 +78,6 @@ ABSENCE_CAUSE_CODES = frozenset(
 ABSENCE_CAUSE_FALLBACK = "capability-absence.undiscovered"
 
 
-def is_approved_reason_code(value: object) -> bool:
-    return isinstance(value, str) and value in APPROVED_REASON_CODES
-
-
 def is_absence_cause_code(value: object) -> bool:
     """Report whether `value` is a member of the bounded absence-cause family."""
     return isinstance(value, str) and value in ABSENCE_CAUSE_CODES
