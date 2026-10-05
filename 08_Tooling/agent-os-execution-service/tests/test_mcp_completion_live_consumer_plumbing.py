@@ -25,6 +25,7 @@ def _admissible_kwargs() -> dict[str, object]:
         "canonical_pr_readback_verified": True,
         "capable_route_available": True,
         "subordinate_writes_only": False,
+        "canonical_pr_readback_binding": "readback-digest:canonical-pr:2765",
     }
 
 
@@ -43,6 +44,7 @@ def _pr_lane(issue: int, pr: int) -> dict[str, object]:
         "canonical_pr_readback_verified": True,
         "capable_route_available": True,
         "subordinate_writes_only": False,
+        "canonical_pr_readback_binding": "readback-digest:canonical-pr:lane",
     }
 
 
@@ -83,6 +85,7 @@ def test_mcp_completion_tool_accepts_proven_live_consumer() -> None:
         live_consumer_evidence_source="current-host-readback",
         live_consumer_evidence_current=True,
         live_consumer_evidence_kind="live-consumer-observation",
+        live_consumer_observation_binding="observation-digest:live-consumer:chatgpt-host:agent-os",
     )
     assert result["completion_admissible"] is True
     assert "required-live-consumer-current-observation-proven" in result["reason_codes"]

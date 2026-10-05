@@ -166,6 +166,14 @@ def _classify_lane(repository: str, value: object) -> dict[str, object]:
                 value.get("successor_owns_residual_live_acceptance"),
                 "successor_owns_residual_live_acceptance",
             ),
+            canonical_pr_readback_binding=_optional_text(
+                value.get("canonical_pr_readback_binding"),
+                "canonical_pr_readback_binding",
+            ),
+            live_consumer_observation_binding=_optional_text(
+                value.get("live_consumer_observation_binding"),
+                "live_consumer_observation_binding",
+            ),
         )
         result["pr_number"] = pr_number
         result["terminal"] = admission.completion_admissible

@@ -13,6 +13,21 @@ _INFORMATIONAL_NOTICE = (
 )
 
 
+# OUTPUT PRECEDENCE CONTRACT (B2 / AI-navigation invariant): the status token
+# rendered for every check comes exclusively from the canonical `Status` enum.
+# The message channel is annotation only. On any divergence between a check's
+# prose message and its canonical Status, the Status wins: consumers must
+# follow the status token, never the message. `_canonical_status` fails fast if
+# a non-canonical (e.g. prose-derived) status ever reaches the report path.
+def _canonical_status(check: CheckResult) -> Status:
+    if type(check.status) is not Status:
+        raise TypeError(
+            "report statuses must be canonical Status members; "
+            "prose messages never carry status"
+        )
+    return check.status
+
+
 def render_report(report: AcceptanceReport) -> str:
     status = _linked_issue_status(report)
     if status == LinkedIssueParseStatus.RESOLVED:
@@ -30,7 +45,8 @@ def render_report(report: AcceptanceReport) -> str:
         "Checks:",
     ]
     for check in report.checks:
-        lines.append(f"- {check.name}: {check.status.value} - {check.message}")
+        status = _canonical_status(check)
+        lines.append(f"- {check.name}: {status.value} - {check.message}")
         for item in check.evidence:
             lines.append(f"  - evidence: {item}")
     lines.extend([
@@ -47,7 +63,8 @@ def render_report(report: AcceptanceReport) -> str:
         lines.append("Reusable-capability evidence (informational):")
         lines.append(f"- notice: {_INFORMATIONAL_NOTICE}")
         for check in report.informational_checks:
-            lines.append(f"- {check.name}: {check.status.value} - {check.message}")
+            status = _canonical_status(check)
+            lines.append(f"- {check.name}: {status.value} - {check.message}")
             for item in check.evidence:
                 lines.append(f"  - evidence: {item}")
     return "\n".join(lines) + "\n"

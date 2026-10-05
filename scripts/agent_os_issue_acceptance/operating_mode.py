@@ -60,8 +60,19 @@ class OperatingModeOutcome(str, Enum):
 
 
 class EnvironmentCapabilityState(str, Enum):
+    """Bounded states for one caller-supplied environment capability.
+
+    Disambiguation (B4): ``ABSENT`` means a probe ran and the capability is
+    absent; ``UNPROBED`` means no probe has ever run. ``NOT_VERIFIED`` is the
+    legacy conflated value covering both cases: it must not be produced for new
+    evidence, and every consumer must treat it as indeterminate -- never as
+    evidence of absence and never as evidence of presence.
+    """
+
     VERIFIED = "verified"
     NOT_VERIFIED = "not-verified"
+    ABSENT = "absent"
+    UNPROBED = "unprobed"
     STALE = "stale"
     UNSUPPORTED = "unsupported"
 
@@ -89,9 +100,13 @@ REASON_CODES = frozenset(
         "authorization.closure-stale",
         "authorization.closure-needs-decision",
         "environment.local-execution-not-verified",
+        "environment.local-execution-absent",
+        "environment.local-execution-unprobed",
         "environment.local-execution-stale",
         "environment.local-execution-unsupported",
         "environment.push-not-verified",
+        "environment.push-absent",
+        "environment.push-unprobed",
         "environment.push-stale",
         "environment.push-unsupported",
         "lifecycle.mode-ceiling-reached",
@@ -175,6 +190,8 @@ _ENV_REASON_PREFIX = {
 }
 _ENV_STATE_SUFFIX = {
     EnvironmentCapabilityState.NOT_VERIFIED: "not-verified",
+    EnvironmentCapabilityState.ABSENT: "absent",
+    EnvironmentCapabilityState.UNPROBED: "unprobed",
     EnvironmentCapabilityState.STALE: "stale",
     EnvironmentCapabilityState.UNSUPPORTED: "unsupported",
 }
@@ -253,7 +270,13 @@ def _strict_keys(payload: dict[str, object], expected: frozenset[str], name: str
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentCapabilityEvidence:
-    """Caller-verified environment capability, independent of `IssueOperationalState`."""
+    """Caller-verified environment capability, independent of `IssueOperationalState`.
+
+    `evidence_id` is required only for VERIFIED and STALE states (the states
+    whose claim rests on observed evidence). ABSENT, UNPROBED, NOT_VERIFIED,
+    and UNSUPPORTED carry no evidence_id requirement, mirroring the legacy
+    shape.
+    """
 
     local_execution_state: EnvironmentCapabilityState
     push_state: EnvironmentCapabilityState

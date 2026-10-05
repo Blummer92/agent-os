@@ -30,6 +30,14 @@ class GitHubIssuePageResponse:
     complete: bool = True
     terminal_page_proven: bool = False
     error_kind: str | None = None
+    # Phase 1 B5: per-page scan provenance. Every field is a transport
+    # observation made by the reader that served the page; provenance never
+    # manufactures state. All fields are additive with None defaults so every
+    # existing constructor keeps working.
+    page: int | None = None
+    source_query_string: str | None = None
+    link_next_url: str | None = None
+    rate_limit_remaining: str | None = None
 
     def __post_init__(self) -> None:
         items = tuple(self.items)
@@ -43,6 +51,25 @@ class GitHubIssuePageResponse:
             raise ValueError("next_page must be a positive integer or None")
         if self.error_kind is not None and self.error_kind not in _ERROR_KINDS:
             raise ValueError("error_kind is unsupported")
+        if self.page is not None and (
+            not isinstance(self.page, int)
+            or isinstance(self.page, bool)
+            or self.page < 1
+        ):
+            raise ValueError("page must be a positive integer or None")
+        if self.source_query_string is not None and (
+            not isinstance(self.source_query_string, str)
+            or not self.source_query_string.strip()
+        ):
+            raise ValueError("source_query_string must be non-empty text or None")
+        if self.link_next_url is not None and (
+            not isinstance(self.link_next_url, str) or not self.link_next_url
+        ):
+            raise ValueError("link_next_url must be non-empty text or None")
+        if self.rate_limit_remaining is not None and not isinstance(
+            self.rate_limit_remaining, str
+        ):
+            raise TypeError("rate_limit_remaining must be text or None")
         object.__setattr__(self, "items", items)
 
 

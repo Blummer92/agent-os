@@ -38,7 +38,7 @@ def test_mission_completion_drives_remaining_same_lineage_work() -> None:
 
 
 def test_mission_completion_is_terminal_only_after_pr_readback() -> None:
-    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2189, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False)
+    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2189, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, canonical_pr_readback_binding="readback-digest:canonical-pr:2189", capable_route_available=True, subordinate_writes_only=False)
     assert result["completion_admissible"] is True
     assert result["agent_os_continuation"]["terminal"] is True
 
@@ -106,12 +106,12 @@ def test_mission_completion_blocks_repository_green_when_required_live_consumer_
 
 
 def test_mission_completion_accepts_proven_required_live_consumer() -> None:
-    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2765, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_requirement_source="issue-contract:#2765", live_consumer_reachability_proven=True, live_consumer_identity="chatgpt-host:agent-os", live_consumer_evidence_source="current-host-readback", live_consumer_evidence_current=True, live_consumer_evidence_kind="live-consumer-observation")
+    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2765, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, canonical_pr_readback_binding="readback-digest:canonical-pr:2765", capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_requirement_source="issue-contract:#2765", live_consumer_reachability_proven=True, live_consumer_identity="chatgpt-host:agent-os", live_consumer_evidence_source="current-host-readback", live_consumer_evidence_current=True, live_consumer_evidence_kind="live-consumer-observation", live_consumer_observation_binding="observation-digest:live-consumer:chatgpt-host:agent-os")
     assert result["completion_admissible"] is True
 
 
 def test_mission_completion_projects_current_successor_owned_residual_acceptance() -> None:
-    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2525, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_requirement_source="issue-contract:#2525", successor_issue_number=2673, successor_current=True, successor_owns_residual_live_acceptance=True)
+    result = classify_agent_os_mission_completion(repository="Blummer92/agent-os", issue_number=2525, branch_exists=True, implementation_commit_count=2, draft_pr_exists=True, canonical_pr_readback_verified=True, canonical_pr_readback_binding="readback-digest:canonical-pr:2525", capable_route_available=True, subordinate_writes_only=False, live_consumer_required=True, live_consumer_requirement_source="issue-contract:#2525", successor_issue_number=2673, successor_current=True, successor_owns_residual_live_acceptance=True)
     assert result["completion_admissible"] is True
     assert "residual-live-acceptance-owned-by-current-successor" in result["reason_codes"]
 

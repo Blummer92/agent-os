@@ -572,3 +572,64 @@ def test_decision_id_is_content_addressed():
         state(lifecycle_stage=LifecycleStage.MERGED), "release", environment()
     )
     assert third.decision_id != first.decision_id
+
+
+# --- B4: NOT_VERIFIED disambiguation -------------------------------------------
+# ABSENT (probed and found absent) and UNPROBED (never probed) replace the
+# legacy conflated NOT_VERIFIED for new evidence. NOT_VERIFIED is preserved
+# for existing records and must be treated as indeterminate.
+
+
+def test_b4_absent_is_distinct_from_unprobed():
+    decision = evaluate_operating_mode_decision(
+        state(),
+        "draft-pr",
+        environment(push_state=EnvironmentCapabilityState.ABSENT),
+    )
+    assert "environment.push-absent" in decision.blocker_codes
+    assert "environment.push-not-verified" not in decision.blocker_codes
+    assert decision.maximum_permitted_stage is LifecycleStage.IMPLEMENTATION
+
+
+def test_b4_unprobed_is_distinct_from_absent():
+    decision = evaluate_operating_mode_decision(
+        state(),
+        "draft-pr",
+        environment(push_state=EnvironmentCapabilityState.UNPROBED),
+    )
+    assert "environment.push-unprobed" in decision.blocker_codes
+    assert "environment.push-absent" not in decision.blocker_codes
+    assert "environment.push-not-verified" not in decision.blocker_codes
+
+
+def test_b4_local_execution_absent_blocks_build():
+    decision = evaluate_operating_mode_decision(
+        state(),
+        "build",
+        environment(local_execution_state=EnvironmentCapabilityState.ABSENT),
+    )
+    assert decision.outcome is OperatingModeOutcome.BLOCKED
+    assert "environment.local-execution-absent" in decision.blocker_codes
+    assert decision.required_environment_capabilities == ("local-execution",)
+
+
+def test_b4_legacy_not_verified_still_indeterminate():
+    """NOT_VERIFIED keeps its legacy meaning: never evidence of absence."""
+    decision = evaluate_operating_mode_decision(
+        state(),
+        "draft-pr",
+        environment(push_state=EnvironmentCapabilityState.NOT_VERIFIED),
+    )
+    assert "environment.push-not-verified" in decision.blocker_codes
+    assert "environment.push-absent" not in decision.blocker_codes
+    assert "environment.push-unprobed" not in decision.blocker_codes
+
+
+def test_b4_absent_and_unprobed_serialize_round_trip():
+    evidence = environment(
+        local_execution_state=EnvironmentCapabilityState.ABSENT,
+        push_state=EnvironmentCapabilityState.UNPROBED,
+    )
+    restored = EnvironmentCapabilityEvidence.from_dict(evidence.to_dict())
+    assert restored.local_execution_state is EnvironmentCapabilityState.ABSENT
+    assert restored.push_state is EnvironmentCapabilityState.UNPROBED

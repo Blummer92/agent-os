@@ -29,6 +29,11 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
 from scripts.agent_os_issue_labels.ready_for_review_admission import (
     evaluate_ready_for_review_admission,
 )
+from scripts.agent_os_github_target_guard import (
+    GitHubTargetEvidence,
+    GitHubTargetKind,
+    check_operation_compatibility,
+)
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
@@ -54,6 +59,99 @@ from agent_os_execution_service.validation_supersession import ValidationSuperse
 from workflow_scheduler.execution.recovery_progress import RecoverySemanticEvidence
 
 mcp = MCPServer("Agent OS")
+
+
+class GitHubTargetRefused(ValueError):
+    """Fail-closed signal from the GitHub target-identity entry guard.
+
+    Raised before any other tool logic when an issue_number/pr_number path
+    cannot construct canonical target evidence: ambiguous or missing target,
+    a non-positive or non-integer number, a malformed repository, or a target
+    kind incompatible with the requested operation (e.g. an issue target
+    routed into a pull-request operation). Carries a stable reason_code; never
+    grants authority and never manufactures target state.
+    """
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        super().__init__(f"{reason_code}: {detail}")
+        self.reason_code = reason_code
+        self.detail = detail
+
+
+# Operation -> permitted target kinds, mirroring
+# scripts.agent_os_github_target_guard._OPERATION_KINDS for the
+# repository-agnostic tool paths that cannot bind a canonical URL.
+# Parity is pinned by tests/test_mcp_github_target_guard.py.
+_GITHUB_TARGET_OPERATION_KINDS: dict[str, tuple[GitHubTargetKind, ...]] = {
+    "read-issue": (GitHubTargetKind.ISSUE,),
+    "update-issue": (GitHubTargetKind.ISSUE,),
+    "read-pull-request": (GitHubTargetKind.PULL_REQUEST,),
+    "review-pull-request": (GitHubTargetKind.PULL_REQUEST,),
+    "merge-pull-request": (GitHubTargetKind.PULL_REQUEST,),
+}
+
+
+def _github_target_entry_guard(
+    *,
+    repository: str | None,
+    issue_number: int | None = None,
+    pr_number: int | None = None,
+    operation: str,
+) -> GitHubTargetEvidence | None:
+    """Construct canonical GitHub target evidence at the MCP boundary.
+
+    Every MCP tool path taking issue_number or pr_number invokes this guard
+    before any other logic. The declared kind comes from the parameter name
+    (issue_number -> issue, pr_number -> pull-request); a kind incompatible
+    with the requested operation fails closed instead of being coerced.
+
+    Returns the constructed GitHubTargetEvidence when a repository is
+    supplied; repository-agnostic tools still get the number/kind/operation
+    checks and receive None. Raises GitHubTargetRefused (fail-closed) on any
+    mismatch. Performs no I/O and grants no authority.
+    """
+    if (issue_number is None) == (pr_number is None):
+        raise GitHubTargetRefused(
+            "github-target-ambiguous-or-missing",
+            "exactly one of issue_number or pr_number is required",
+        )
+    kind = (
+        GitHubTargetKind.ISSUE if issue_number is not None else GitHubTargetKind.PULL_REQUEST
+    )
+    number = issue_number if issue_number is not None else pr_number
+    if type(number) is not int or number < 1:
+        raise GitHubTargetRefused(
+            "github-target-number-invalid",
+            "issue_number/pr_number must be a positive built-in integer",
+        )
+    if repository is None:
+        allowed = _GITHUB_TARGET_OPERATION_KINDS.get(operation)
+        if allowed is None or kind not in allowed:
+            raise GitHubTargetRefused(
+                "github-target-kind-incompatible",
+                f"target kind {kind.value} is not compatible with operation {operation}",
+            )
+        return None
+    try:
+        target = GitHubTargetEvidence(
+            repository=repository,
+            number=number,
+            kind=kind,
+            canonical_url=(
+                "https://github.com/"
+                f"{repository}/"
+                f"{'pull' if kind is GitHubTargetKind.PULL_REQUEST else 'issues'}/"
+                f"{number}"
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise GitHubTargetRefused("github-target-identity-invalid", str(exc)) from exc
+    compatibility = check_operation_compatibility(target, operation)
+    if not compatibility.compatible:
+        raise GitHubTargetRefused(
+            "github-target-kind-incompatible", compatibility.reason
+        )
+    return target
 
 
 def _lesson_route(lesson_rows: list[dict[str, object]] | None):
@@ -142,6 +240,18 @@ def plan_connected_issue_creation_tool(
     candidate_enumeration_complete: bool = False,
 ) -> dict[str, object]:
     """Project canonical connected-issue admission evidence without performing writes."""
+    if canonical_issue_number is not None:
+        _github_target_entry_guard(
+            repository=repository,
+            issue_number=canonical_issue_number,
+            operation="read-issue",
+        )
+    for _candidate_item in candidate_evidence or ():
+        _github_target_entry_guard(
+            repository=repository,
+            issue_number=_candidate_item["issue_number"],
+            operation="read-issue",
+        )
     inspected = tuple(
         DuplicateCandidateEvidence(
             issue_number=item["issue_number"],
@@ -165,12 +275,18 @@ def plan_connected_issue_creation_tool(
 
 @mcp.tool()
 def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
     return dict(plan_agent_os_continuation(repository=repository, issue_number=issue_number, canonical_handoff_id=canonical_handoff_id))
 
 
 @mcp.tool()
 def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]], changed_files: int, in_scope_changed_files: int, branch_exists: bool = False, canonical_no_diff_permitted: bool = False) -> dict[str, object]:
     """Classify create/reuse/conflict immediately before Draft PR materialization."""
+    _github_target_entry_guard(
+        repository=None, issue_number=issue_number, operation="read-issue"
+    )
     claims = tuple(
         ActivePrimaryPr(
             pull_request_number=item["pull_request_number"],
@@ -201,6 +317,12 @@ def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool,
 @mcp.tool()
 def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object]], evidence_current: bool) -> dict[str, object]:
     """Preserve independent primary-PR lineage across one batch (#2447)."""
+    for _batch_item in issue_evidence:
+        _github_target_entry_guard(
+            repository=None,
+            issue_number=_batch_item["issue_number"],
+            operation="read-issue",
+        )
     evidence = tuple(
         BatchIssuePrimaryPrEvidence(
             issue_number=item["issue_number"],
@@ -242,6 +364,9 @@ def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object
 
 @mcp.tool()
 def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
     if lesson_rows is not None:
         execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
         result = activate_issue_start_lesson_preflight(repository=repository, issue_number=issue_number, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read)
@@ -259,6 +384,9 @@ def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: in
 
 @mcp.tool()
 def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, attempt_id: str, failed_hypothesis: str, result_summary: str, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None, repair_context: str = "failed-pr-repair") -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
     execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
     result = activate_agent_os_failed_repair(repository=repository, issue_number=issue_number, attempt_id=attempt_id, failed_hypothesis=failed_hypothesis, result_summary=result_summary, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read, repair_context=repair_context)
     return _with_lesson_route(result, route_status, reason_code, source_unavailable)
@@ -376,6 +504,9 @@ def admit_agent_os_ready_for_review_tool(repository: str, pr_number: int, pr_lif
     grants no merge, closure, workflow, protected-setting, production, or
     external-write authority.
     """
+    _github_target_entry_guard(
+        repository=repository, pr_number=pr_number, operation="review-pull-request"
+    )
     if expected_body_revision is not None and observed_body_revision != expected_body_revision:
         return _refused_ready_review_projection(
             repository=repository,
@@ -448,29 +579,65 @@ def admit_agent_os_ready_for_review_tool(repository: str, pr_number: int, pr_lif
 
 
 @mcp.tool()
-def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False, live_consumer_required: bool = False, live_consumer_requirement_source: str | None = None, live_consumer_reachability_proven: bool = False, live_consumer_identity: str | None = None, live_consumer_evidence_source: str | None = None, live_consumer_evidence_current: bool = False, live_consumer_evidence_kind: str | None = None, successor_issue_number: int | None = None, successor_current: bool = False, successor_owns_residual_live_acceptance: bool = False) -> dict[str, object]:
-    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required, live_consumer_required=live_consumer_required, live_consumer_requirement_source=live_consumer_requirement_source, live_consumer_reachability_proven=live_consumer_reachability_proven, live_consumer_identity=live_consumer_identity, live_consumer_evidence_source=live_consumer_evidence_source, live_consumer_evidence_current=live_consumer_evidence_current, live_consumer_evidence_kind=live_consumer_evidence_kind, successor_issue_number=successor_issue_number, successor_current=successor_current, successor_owns_residual_live_acceptance=successor_owns_residual_live_acceptance)
+def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool, implementation_pr_required: bool = False, live_consumer_required: bool = False, live_consumer_requirement_source: str | None = None, live_consumer_reachability_proven: bool = False, live_consumer_identity: str | None = None, live_consumer_evidence_source: str | None = None, live_consumer_evidence_current: bool = False, live_consumer_evidence_kind: str | None = None, successor_issue_number: int | None = None, successor_current: bool = False, successor_owns_residual_live_acceptance: bool = False, canonical_pr_readback_binding: str | None = None, live_consumer_observation_binding: str | None = None) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only, implementation_pr_required=implementation_pr_required, live_consumer_required=live_consumer_required, live_consumer_requirement_source=live_consumer_requirement_source, live_consumer_reachability_proven=live_consumer_reachability_proven, live_consumer_identity=live_consumer_identity, live_consumer_evidence_source=live_consumer_evidence_source, live_consumer_evidence_current=live_consumer_evidence_current, live_consumer_evidence_kind=live_consumer_evidence_kind, successor_issue_number=successor_issue_number, successor_current=successor_current, successor_owns_residual_live_acceptance=successor_owns_residual_live_acceptance, canonical_pr_readback_binding=canonical_pr_readback_binding, live_consumer_observation_binding=live_consumer_observation_binding)
 
 
 @mcp.tool()
 def classify_agent_os_issue_batch_completion_tool(repository: str, issue_number: int, lane_evidence: list[dict[str, object]]) -> dict[str, object]:
     """Require PR-or-explicit-no-PR terminal proof for every selected issue lane."""
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    for _lane_item in lane_evidence:
+        _github_target_entry_guard(
+            repository=repository,
+            issue_number=_lane_item.get("issue_number"),
+            operation="read-issue",
+        )
     return classify_issue_batch_completion(repository=repository, issue_number=issue_number, lane_evidence=lane_evidence)
 
 
 @mcp.tool()
 def classify_agent_os_investigation_completion_tool(repository: str, issue_number: int, material_branch_states: tuple[str, ...], executable_next_action_available: bool, subordinate_write_performed: bool) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
     decision = evaluate_investigation_completion_admission(repository=repository, issue_number=issue_number, material_branch_states=material_branch_states, executable_next_action_available=executable_next_action_available, subordinate_write_performed=subordinate_write_performed)
     payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = completion_continuation_payload(terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.executable_next_action_available), next_action=decision.next_action, reason_codes=decision.reason_codes); return payload
 
 
 @mcp.tool()
 def classify_agent_os_continuation_tool(repository: str, issue_number: int, operation_id: str, surface_outcome: str, approved_alternative_capability: str | None = None, branch: str | None = None, pull_request: int | None = None, checkpoint_id: str | None = None, lease_id: str | None = None, prior_effect: str = "none-proven", target_identity_reacquired: bool = False, requires_exact_blob_identity: bool = False, exact_blob_identity_reacquired: bool = False, runtime_surface_transition: bool = False, evidence_compatibility_confirmed: bool = False, active_foreign_lease: bool = False, equivalent_transition_repeated: bool = False, material_decision_required: bool = False, alternative_widens_authority: bool = False, non_absorbed_domain: str | None = None) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    if pull_request is not None:
+        _github_target_entry_guard(
+            repository=repository, pr_number=pull_request, operation="read-pull-request"
+        )
     return classify_agent_os_continuation(repository=repository, issue_number=issue_number, operation_id=operation_id, surface_outcome=surface_outcome, approved_alternative_capability=approved_alternative_capability, branch=branch, pull_request=pull_request, checkpoint_id=checkpoint_id, lease_id=lease_id, prior_effect=prior_effect, target_identity_reacquired=target_identity_reacquired, requires_exact_blob_identity=requires_exact_blob_identity, exact_blob_identity_reacquired=exact_blob_identity_reacquired, runtime_surface_transition=runtime_surface_transition, evidence_compatibility_confirmed=evidence_compatibility_confirmed, active_foreign_lease=active_foreign_lease, equivalent_transition_repeated=equivalent_transition_repeated, material_decision_required=material_decision_required, alternative_widens_authority=alternative_widens_authority, non_absorbed_domain=non_absorbed_domain)
 
 
 @mcp.tool()
 def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]]) -> dict[str, object]:
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    for _requested_pr in requested_pull_requests:
+        _github_target_entry_guard(
+            repository=repository, pr_number=_requested_pr, operation="read-pull-request"
+        )
+    for _repair_candidate in candidate_evidence:
+        if _repair_candidate.get("pull_request_number") is not None:
+            _github_target_entry_guard(
+                repository=repository,
+                pr_number=_repair_candidate.get("pull_request_number"),
+                operation="read-pull-request",
+            )
     return classify_bulk_repair_continuation(repository=repository, issue_number=issue_number, requested_pull_requests=requested_pull_requests, candidate_evidence=candidate_evidence)
 
 
@@ -489,6 +656,19 @@ def admit_agent_os_issue_comment_mutation_tool(
     comments: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Run the issue-comment write boundary: pre-write verify-open guard (#2741) or post-write canonical readback (#2785). Never performs the write."""
+    _github_target_entry_guard(
+        repository=None, issue_number=issue_number, operation="update-issue"
+    )
+    if open_owner_issue_number is not None:
+        _github_target_entry_guard(
+            repository=None, issue_number=open_owner_issue_number, operation="read-issue"
+        )
+    if historical_lineage_issue_number is not None:
+        _github_target_entry_guard(
+            repository=None,
+            issue_number=historical_lineage_issue_number,
+            operation="read-issue",
+        )
     return evaluate_issue_comment_mutation_boundary_for_host(
         phase=phase,
         issue_number=issue_number,
@@ -519,6 +699,15 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
     plan: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority."""
+    _github_target_entry_guard(
+        repository=None, issue_number=issue_number, operation="read-issue"
+    )
+    if linked_pull_request_number:
+        _github_target_entry_guard(
+            repository=None,
+            pr_number=linked_pull_request_number,
+            operation="read-pull-request",
+        )
     return project_lane_post_pr_issue_reconciliation_for_host(
         phase=phase,
         issue_number=issue_number,
