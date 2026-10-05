@@ -1,9 +1,9 @@
-"""Bind existing fixed GCE dev-validation evidence to #1985 observations.
+"""Bind existing fixed dev-validation evidence to #1985 observations.
 
 This module does not execute validation and accepts no command, argv, runner, or
 timestamp input from the first-run caller. It only validates the evidence emitted
-by the existing fixed dev-validation runner and projects it into the canonical
-#1985 ``ObservedDevValidationCommand`` type.
+by the existing fixed dev-validation runners (GCE and Codespaces) and projects it
+into the canonical #1985 ``ObservedDevValidationCommand`` type.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from .dev_validation_profiles import canonical_profile_id, profile_argv
 from .pre_pr_dev_validation_evidence import ObservedDevValidationCommand
 
 FIXED_GCE_RUNNER_ID = "agent-os-gce-dev-validation-v1"
+CODESPACES_RUNNER_ID = "agent-os-codespaces-dev-validation-v1"
 
 # The first-run lane may only execute a validation plan the *existing* fixed GCE
 # dev-validation runner already knows how to run. ``VALIDATION_REGISTRY`` is that
@@ -61,16 +62,17 @@ def _instant(value: object, name: str) -> datetime:
     return parsed
 
 
-def observed_command_from_fixed_gce_evidence(
+def _project_runner_evidence(
     evidence: object,
     *,
+    expected_runner_id: str,
     expected_repository: str,
     expected_issue_number: int,
     expected_sha: str,
     expected_profile_id: str,
     expected_request_id: str,
 ) -> ObservedDevValidationCommand:
-    """Project one exact fixed-runner result into the existing #1985 adapter input."""
+    """Shared fail-closed projector used by the fixed-runner entry points."""
     if type(evidence) is not dict:
         raise FirstRunValidationObservationError("runner-evidence-malformed")
     expected_profile = canonical_profile_id(expected_profile_id)
@@ -85,7 +87,7 @@ def observed_command_from_fixed_gce_evidence(
         raise FirstRunValidationObservationError("runner-evidence-identity-mismatch")
     if actual_profile != expected_profile:
         raise FirstRunValidationObservationError("runner-evidence-profile-mismatch")
-    if evidence.get("runner_id") != FIXED_GCE_RUNNER_ID:
+    if evidence.get("runner_id") != expected_runner_id:
         raise FirstRunValidationObservationError("runner-id-invalid")
     started = _instant(evidence.get("started_at"), "started-at")
     completed = _instant(evidence.get("completed_at"), "completed-at")
@@ -111,7 +113,7 @@ def observed_command_from_fixed_gce_evidence(
         raise FirstRunValidationObservationError("runner-diagnostic-invalid")
     return ObservedDevValidationCommand(
         profile_id=expected_profile,
-        runner_id=FIXED_GCE_RUNNER_ID,
+        runner_id=expected_runner_id,
         started_at=evidence["started_at"],
         completed_at=evidence["completed_at"],
         status=status,
@@ -121,10 +123,61 @@ def observed_command_from_fixed_gce_evidence(
     )
 
 
+def observed_command_from_fixed_gce_evidence(
+    evidence: object,
+    *,
+    expected_repository: str,
+    expected_issue_number: int,
+    expected_sha: str,
+    expected_profile_id: str,
+    expected_request_id: str,
+) -> ObservedDevValidationCommand:
+    """Project one exact fixed-runner result into the existing #1985 adapter input."""
+    return _project_runner_evidence(
+        evidence,
+        expected_runner_id=FIXED_GCE_RUNNER_ID,
+        expected_repository=expected_repository,
+        expected_issue_number=expected_issue_number,
+        expected_sha=expected_sha,
+        expected_profile_id=expected_profile_id,
+        expected_request_id=expected_request_id,
+    )
+
+
+def observed_command_from_codespaces_evidence(
+    evidence: object,
+    *,
+    expected_repository: str,
+    expected_issue_number: int,
+    expected_sha: str,
+    expected_profile_id: str,
+    expected_request_id: str,
+) -> ObservedDevValidationCommand:
+    """Project one exact Codespaces-runner result into the #1985 adapter input.
+
+    Mirrors ``observed_command_from_fixed_gce_evidence`` exactly: strict identity
+    binding on repository / issue / SHA / request_id / profile, and the runner id
+    must be the fixed Codespaces runner — evidence from any other runner fails
+    closed. Projects evidence only; grants no execution, merge, or publication
+    authority.
+    """
+    return _project_runner_evidence(
+        evidence,
+        expected_runner_id=CODESPACES_RUNNER_ID,
+        expected_repository=expected_repository,
+        expected_issue_number=expected_issue_number,
+        expected_sha=expected_sha,
+        expected_profile_id=expected_profile_id,
+        expected_request_id=expected_request_id,
+    )
+
+
 __all__ = [
+    "CODESPACES_RUNNER_ID",
     "FIRST_RUN_SUPPORTED_VALIDATION_IDS",
     "FIXED_GCE_RUNNER_ID",
     "FirstRunValidationObservationError",
+    "observed_command_from_codespaces_evidence",
     "observed_command_from_fixed_gce_evidence",
     "resolve_fixed_first_run_validation_id",
 ]
