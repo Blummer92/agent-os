@@ -180,3 +180,135 @@ def test_experiment_record_carries_all_eleven_fields() -> None:
     assert zero["http_get_requests"] == 2
     assert zero["http_write_requests"] == 0
     assert zero["github_mutations"] == 0
+
+
+# ---------------------------------------------------------------------------
+# #3329 real-live composition: actual sources for the previously-None inputs.
+# ---------------------------------------------------------------------------
+
+import json
+
+
+class _FakeGitHubClient:
+    """Stub for _fetch_repository_head_sha: canned GET responses, read-only."""
+
+    def __init__(self, responses: dict):
+        self._responses = responses
+        self.get_requests = 0
+        self.write_requests = 0
+
+    def get(self, path: str):
+        self.get_requests += 1
+        status, body = self._responses[path]
+        return status, {}, json.dumps(body).encode("utf-8")
+
+
+def _repo_responses(sha: str = "a" * 40):
+    return {
+        "/repos/Blummer92/agent-os": (200, {"default_branch": "main"}),
+        "/repos/Blummer92/agent-os/branches/main": (
+            200,
+            {"commit": {"sha": sha}},
+        ),
+    }
+
+
+def test_fetch_repository_head_sha_returns_live_ref() -> None:
+    sha = cli._fetch_repository_head_sha(
+        _FakeGitHubClient(_repo_responses()), "Blummer92/agent-os"
+    )
+    assert sha == "a" * 40
+
+
+def test_fetch_repository_head_sha_fail_closed_on_http_error() -> None:
+    responses = {"/repos/Blummer92/agent-os": (404, {"message": "Not Found"})}
+    with pytest.raises(RuntimeError, match="repository read failed"):
+        cli._fetch_repository_head_sha(
+            _FakeGitHubClient(responses), "Blummer92/agent-os"
+        )
+
+
+def test_fetch_repository_head_sha_fail_closed_on_malformed_sha() -> None:
+    responses = _repo_responses(sha="not-a-sha")
+    with pytest.raises(RuntimeError, match="sha malformed"):
+        cli._fetch_repository_head_sha(
+            _FakeGitHubClient(responses), "Blummer92/agent-os"
+        )
+
+
+def test_request_context_args_parsed() -> None:
+    args = cli._parse_args(
+        [
+            "--campaign-id",
+            "c1",
+            "--requested-mode",
+            "planning",
+            "--dependency-depth",
+            "2",
+            "--substitutable",
+        ]
+    )
+    assert args.requested_mode == "planning"
+    assert args.dependency_depth == 2
+    assert args.substitutable is True
+
+
+def test_request_context_args_absent_stays_absent() -> None:
+    args = cli._parse_args(["--campaign-id", "c1"])
+    assert args.requested_mode is None
+    assert args.dependency_depth is None
+    assert args.substitutable is None
+
+
+def test_no_substitutable_explicit_false() -> None:
+    args = cli._parse_args(["--campaign-id", "c1", "--no-substitutable"])
+    assert args.substitutable is False
+
+
+def test_requested_mode_rejects_unknown_choice() -> None:
+    with pytest.raises(SystemExit):
+        cli._parse_args(["--campaign-id", "c1", "--requested-mode", "turbo"])
+
+
+def test_shadow_environment_capability_is_honest_read_only() -> None:
+    env = cli._shadow_environment_capability()
+    assert env.local_execution_state is cli.EnvironmentCapabilityState.UNPROBED
+    assert env.push_state is cli.EnvironmentCapabilityState.UNSUPPORTED
+
+
+def test_wired_composition_advances_past_sourced_inputs_to_lifecycle_blocker() -> None:
+    """With real sources wired, the fail-closed gate moves to lifecycle_stage.
+
+    source_revision (live API), freshness (CURRENT: the composition performs
+    the live read), environment (honest read-only), and request context are
+    now supplied; lifecycle_stage/primary_claims/approval_applicability have
+    no canonical live owner (#1460), so the reader names the lifecycle
+    blocker -- the bounded #3329 outcome, not manufactured evidence.
+    """
+
+    class _NeverCalled:
+        def get_issue(self, repository: str, issue_number: int):
+            raise AssertionError("fail-closed checks must precede any live read")
+
+    inner = cli.LiveCandidateEvidenceReader(
+        cli.LiveCandidateEvidence(
+            repository="Blummer92/agent-os",
+            issue_transport=_NeverCalled(),
+            observed_at="2026-10-05T18:00:00Z",
+            source_revision="a" * 40,
+            lifecycle_stage=None,
+            primary_claims=None,
+            approval_applicability=None,
+            freshness_state=cli.FreshnessState.CURRENT,
+            requested_mode="planning",
+            environment=cli._shadow_environment_capability(),
+            dependency_depth=0,
+            substitutable=False,
+        )
+    )
+    reader = cli._RecordingCandidateEvidenceReader(inner)
+    assert reader.read_candidate_evidence("Blummer92/agent-os", 3082) is None
+    assert (
+        reader.first_failure_reason
+        == "candidate-evidence.no-canonical-lifecycle-stage"
+    )

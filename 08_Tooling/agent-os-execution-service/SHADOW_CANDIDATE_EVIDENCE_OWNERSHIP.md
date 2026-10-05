@@ -22,16 +22,16 @@ issue number, or AI judgment.
 |---|---|---|---|
 | issue/repository identity | existing scanner/live issue contracts (`LiveIssueReader` over injected `SingleIssueTransport`) | live single-issue read per admitted candidate; #1451 enforces `snapshot.repository`/`snapshot.issue_number` identity joins | fail closed: `candidate-evidence.issue-read-failed:<outcome>` on transport failure; `candidate-evidence.repository-identity-mismatch` on repository mismatch |
 | issue revision | existing `issue_source_revision` contract (`scripts/agent_os_github_issue_provider/revision.py`) | content-addressed `github-issue-v1:<sha256>` derived inside the reused #1464 `LiveCurrentIssueSnapshotReader`; carried in `evidence_ids`; the seam joins it against the scanned revision (`candidate-revision-mismatch`) | fail closed: `candidate-evidence.composition-contract-violation` when the payload cannot yield a revision |
-| repository source revision | existing repository/currentness owner — none exists in the shadow path | caller-supplied canonical SHA only (e.g. a governed checkout identity) | fail closed: `candidate-evidence.no-canonical-repository-source-revision` |
+| repository source revision | GitHub API: the repository's default-branch HEAD SHA, read live by `scripts/agent-os-shadow-run.py` (`_fetch_repository_head_sha`: `GET /repos/{repo}` -> `default_branch`, then `GET /repos/{repo}/branches/{branch}` -> `commit.sha`) | the API-based equivalent of the "current checkout SHA" the snapshot-reader contract expects the caller to know; fail-closed (`RuntimeError` -> CLI transport failure) when the ref cannot be read | fail closed: `candidate-evidence.no-canonical-repository-source-revision` (unreachable only when the API ref read fails) |
 | lifecycle / operational state | `IssueOperationalState` owner via unchanged #1451 `acquire_issue_operational_state` | live snapshot + caller-supplied lifecycle stage + approval/dependency/claim/validation/freshness acquirers | fail closed: any missing acquirer input fails closed with its own named reason; conflicting composition raises into `candidate-evidence.composition-contract-violation` |
 | primary PR claim | existing claim owner — no canonical live PR-linkage reader exists; #1460 forbids inventing one | caller-supplied `tuple[PrimaryIssueClaim, ...]` only | fail closed: `candidate-evidence.no-canonical-primary-claims` |
-| dependency state/depth | #1185/#1197 `DependencyReadinessEvidence` authority via the canonical `RepositoryEvidenceReader` (`LiveRepositoryEvidenceReader`; the #1155 truthful always-`UNAVAILABLE` reader when the caller supplies none) | reused #1464 `dependency_state_from_evidence` projection; `dependency_depth` is caller-supplied request context, never derived | fail closed: no reader → `DependencyState.UNKNOWN` (in-value); missing `dependency_depth` → `candidate-evidence.no-canonical-dependency-depth` |
+| dependency state/depth | #1185/#1197 `DependencyReadinessEvidence` authority via the canonical `RepositoryEvidenceReader` (`LiveRepositoryEvidenceReader`; the #1155 truthful always-`UNAVAILABLE` reader when the caller supplies none) | reused #1464 `dependency_state_from_evidence` projection; `dependency_depth` is explicit request context (`--dependency-depth`, non-negative int; absent stays absent) | fail closed: no reader → `DependencyState.UNKNOWN` (in-value); missing `dependency_depth` → `candidate-evidence.no-canonical-dependency-depth` |
 | validation state | `scripts.agent_os_remote_validation` advisory pre-PR evidence authority via the canonical `RepositoryEvidenceReader` | reused #1464 `validation_state_from_evidence` projection | fail closed: no reader → `ValidationState.NOT_RUN` (in-value); unmappable `UNAVAILABLE` evidence → `candidate-evidence.composition-contract-violation` |
-| freshness/currentness | existing freshness/currentness owner(s) — no general-purpose owner exists | caller-supplied `FreshnessState` only | fail closed: `candidate-evidence.no-canonical-freshness-state` |
+| freshness/currentness | the shadow-run composition itself: it performs the live issue read, so the evidence is current as of `observed_at` (the `live_route_context.py` precedent for live-verified evidence) | `FreshnessState.CURRENT` supplied by the CLI composition, not the general reader (which stays fail-closed) | fail closed: `candidate-evidence.no-canonical-freshness-state` (only when the composition cannot supply it) |
 | approval/applicability | existing evaluator `approval_records.evaluate_approval_applicability` — its evidence graph is not reconstructible for arbitrary backlog issues | caller-supplied `ApprovalApplicabilityResult` only | fail closed: `candidate-evidence.no-canonical-approval-applicability` |
 | implementation authorization | existing authority projection, derived inside #1451 via `AuthorityProjection.from_approval_applicability` | canonical evaluation/current binding; optional execution/external-write acquirers left unset (fail-closed `NOT_APPLICABLE`) | fail closed: follows the approval input |
-| operating mode | `operating_mode.py` `evaluate_operating_mode_decision` (unchanged) | acquired state + caller-supplied requested mode + caller-supplied `EnvironmentCapabilityEvidence`; the `state_id` join is preserved by the evaluator and re-checked by the `CandidateIssueEvidence` model | fail closed: `candidate-evidence.no-canonical-requested-mode` when absent (an absent mode would otherwise be silently defaulted to `PLANNING`); `candidate-evidence.no-canonical-environment-capability` when no environment owner exists |
-| explicit request/substitution semantics | existing request interpretation — no canonical live owner in the shadow path | caller-supplied `substitutable` only | fail closed: `candidate-evidence.no-canonical-substitutable` (never defaulted to `True`) |
+| operating mode | `operating_mode.py` `evaluate_operating_mode_decision` (unchanged) | acquired state + explicit request mode (`--requested-mode`, one of the `RequestedMode` values; absent stays absent) + the CLI's honest read-only environment self-description (`local_execution_state=UNPROBED`, `push_state=UNSUPPORTED` -- this composition never executes or mutates, so these states can authorize nothing) | fail closed: `candidate-evidence.no-canonical-requested-mode` when absent (an absent mode would otherwise be silently defaulted to `PLANNING`); `candidate-evidence.no-canonical-environment-capability` when no environment owner exists |
+| explicit request/substitution semantics | existing request interpretation — no canonical live owner in the shadow path | explicit request context (`--substitutable` / `--no-substitutable`; absent stays absent) | fail closed: `candidate-evidence.no-canonical-substitutable` (never defaulted to `True`) |
 
 ## Identity discipline
 
@@ -43,14 +43,25 @@ joins: `operational_state.issue_number == issue_number` and
 
 ## Current shadow-run wiring
 
-`scripts/agent-os-shadow-run.py` wires the production reader with the live
-read seam only. Every other required canonical input currently has no
-canonical live owner in that context, so the reader fail-closes on the first
-missing owner (`candidate-evidence.no-canonical-repository-source-revision`)
-and the experiment record carries that exact named reason. The real-backlog
-acceptance canary (Shadow Admission Test 2B) remains gated on #3328's
-legitimate cohort plus caller-supplied request context; it is not claimed
-complete by this wiring.
+`scripts/agent-os-shadow-run.py` wires the production reader with every input
+that has an actual source in the shadow-run context:
+
+- the live read seam (issue snapshot over the injected transport);
+- the repository HEAD SHA, read live from the GitHub API;
+- `FreshnessState.CURRENT` (the composition performs the live read itself);
+- the honest read-only environment self-description
+  (`UNPROBED` local execution, `UNSUPPORTED` push);
+- explicit request context (`--requested-mode`, `--dependency-depth`,
+  `--substitutable` / `--no-substitutable`; absent stays absent).
+
+`lifecycle_stage`, `primary_claims`, and `approval_applicability` have no
+canonical live owner for arbitrary backlog issues, so the reader fail-closes
+on the first of these (`candidate-evidence.no-canonical-lifecycle-stage`)
+and the experiment record carries that exact named reason. These three are
+#3329's bounded blockers: surfaced with named reasons per the issue's
+acceptance criteria, not manufactured. The real-backlog acceptance canary
+(Shadow Admission Test 2B) remains gated on #3328's legitimate cohort plus
+caller-supplied request context; it is not claimed complete by this wiring.
 
 ## Validation
 
