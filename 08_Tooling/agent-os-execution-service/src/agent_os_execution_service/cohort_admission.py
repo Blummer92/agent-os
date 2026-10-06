@@ -180,7 +180,7 @@ def admit_request_cohort(
         f"request.target.repository={target['repository']}",
         f"request.target.resource_id={target['resource_id']}",
     )
-    if target["system"] != "github" or target["resource_kind"] != "issue":
+    if target["system"] != "github" or target["resource_kind"] not in {"issue", "repository"}:
         return fail(
             "cohort-admission.request-not-applicable",
             request_id=request_id,
@@ -193,32 +193,41 @@ def admit_request_cohort(
             request_id=request_id,
             constraints=constraints,
         )
-    raw_issue = target["resource_id"]
-    try:
-        issue_number = int(raw_issue)
-    except (TypeError, ValueError):
-        return fail(
-            "cohort-admission.request-ambiguous",
-            request_id=request_id,
-            constraints=constraints,
-        )
-    if issue_number < 1 or str(issue_number) != raw_issue:
-        return fail(
-            "cohort-admission.request-ambiguous",
-            request_id=request_id,
-            constraints=constraints,
-        )
-
-    candidates = (issue_number,)
-    membership = issue_number in set(population)
-    if not membership:
-        return fail(
-            "cohort-admission.candidate-not-in-population",
-            request_id=request_id,
-            constraints=constraints,
-            candidates=candidates,
-            membership=False,
-        )
+    if target["resource_kind"] == "repository":
+        if target["resource_id"] is not None:
+            return fail(
+                "cohort-admission.request-ambiguous",
+                request_id=request_id,
+                constraints=constraints,
+            )
+        candidates = population
+        membership = True
+    else:
+        raw_issue = target["resource_id"]
+        try:
+            issue_number = int(raw_issue)
+        except (TypeError, ValueError):
+            return fail(
+                "cohort-admission.request-ambiguous",
+                request_id=request_id,
+                constraints=constraints,
+            )
+        if issue_number < 1 or str(issue_number) != raw_issue:
+            return fail(
+                "cohort-admission.request-ambiguous",
+                request_id=request_id,
+                constraints=constraints,
+            )
+        candidates = (issue_number,)
+        membership = issue_number in set(population)
+        if not membership:
+            return fail(
+                "cohort-admission.candidate-not-in-population",
+                request_id=request_id,
+                constraints=constraints,
+                candidates=candidates,
+                membership=False,
+            )
     if not candidates:
         return fail(
             "cohort-admission.candidate-population-empty",
