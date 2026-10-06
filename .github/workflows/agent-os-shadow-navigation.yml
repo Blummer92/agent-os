@@ -42,8 +42,15 @@ jobs:
       - name: Check out canonical source
         uses: actions/checkout@v7
 
-      - name: Set up Python development runtime
-        uses: ./.github/actions/setup-python-dev
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Run Agent OS shadow navigation
         id: shadow
