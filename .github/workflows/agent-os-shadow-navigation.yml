@@ -1,0 +1,134 @@
+name: Agent OS Shadow Navigation
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        description: Shadow experiment campaign identifier
+        required: true
+        default: github-actions-shadow
+        type: string
+      candidates:
+        description: Optional comma-separated deterministic narrowing set
+        required: false
+        type: string
+      narrowing_criterion:
+        description: Required when candidates is supplied
+        required: false
+        type: string
+      explicit_order:
+        description: Optional comma-separated explicit request order
+        required: false
+        type: string
+      mission_id:
+        description: Optional finite-mission evidence-ledger identifier
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: agent-os-shadow-navigation-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  shadow-navigation:
+    name: Run read-only shadow navigation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run Agent OS shadow navigation
+        id: shadow
+        uses: ./.github/actions/agent-os-shadow-navigation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          repository: ${{ github.repository }}
+          campaign_id: ${{ inputs.campaign_id }}
+          candidates: ${{ inputs.candidates }}
+          narrowing_criterion: ${{ inputs.narrowing_criterion }}
+          explicit_order: ${{ inputs.explicit_order }}
+          mission_id: ${{ inputs.mission_id }}
+
+      - name: Verify zero-mutation boundary
+        env:
+          SHADOW_REPORT: ${{ steps.shadow.outputs.report_path }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["SHADOW_REPORT"]).read_text(encoding="utf-8"))
+          zero = report["zero_mutation_verification"]
+          deterministic = report["deterministic_selector_result"]
+
+          assert zero["http_write_requests"] == 0
+          assert zero["github_mutations"] == 0
+          assert zero["execution_authorized"] is False
+          assert zero["side_effects_performed"] is False
+          assert deterministic["execution_authorized"] is False
+          assert deterministic["side_effects_performed"] is False
+          PY
+
+      - name: Publish shadow-navigation summary
+        env:
+          SHADOW_REPORT: ${{ steps.shadow.outputs.report_path }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["SHADOW_REPORT"]).read_text(encoding="utf-8"))
+          receipt = report["population_receipt"]
+          candidates = report["candidate_population"]
+          selection = report["deterministic_selector_result"]
+          zero = report["zero_mutation_verification"]
+
+          lines = [
+              "## Agent OS Shadow Navigation",
+              "",
+              f"- Repository: `{report['repository']}`",
+              f"- Campaign: `{report['campaign_id']}`",
+              f"- Population complete: `{receipt['scan_complete']}`",
+              f"- Open issues scanned: `{receipt['scan_item_count']}`",
+              f"- Scan pages: `{receipt['scan_page_count']}`",
+              f"- Candidates considered: `{len(candidates['candidate_issue_numbers'])}`",
+              f"- Deterministic status: `{selection['status']}`",
+              f"- Selected issue: `{selection['selected_issue_number']}`",
+              f"- Reason codes: `{','.join(selection['reason_codes'])}`",
+              f"- Manual-review cases: `{len(report['manual_review_cases'])}`",
+              f"- HTTP writes: `{zero['http_write_requests']}`",
+              f"- GitHub mutations: `{zero['github_mutations']}`",
+              "",
+              "Read-only boundary: this workflow observes and reports only. It does not authorize or initiate governed execution.",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload shadow-navigation evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-shadow-navigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.shadow.outputs.report_path }}
+          if-no-files-found: error
+          retention-days: 7
