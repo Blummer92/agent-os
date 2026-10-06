@@ -1,100 +1,115 @@
-# #3305 Bounded Lessons Learned Write Route
-GitHub controls this finite route; Notion remains the working source of truth.
-Authorization is owned by `00_Governance/write-authorization-policy.md` and
-Notion field definitions by
-`01_Shared_Standards/notion/notion-learning-databases.md`. Neither this document
-nor the reviewed catalog creates write authority.
+# #3305 — Bounded Lessons Learned write route
 
-## Owner and field boundary
+GitHub owns governance and execution; Notion owns Lessons Learned working knowledge.
+ChatGPT Orchestrator routes explicit requests to GitHub Service Agent. This route
+consumes `00_Governance/write-authorization-policy.md`; it creates no authority.
+#2283 and CKR6 stay read-only and unchanged.
 
-ChatGPT Orchestrator owns cross-system routing. GitHub Service Agent implements
-and executes the separately approved finite transport. The repository owner's
-2026-10-06 authorization covers its workflow change and one live canary using
-the existing `NOTION_TOKEN` and `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID`.
-It excludes merge, closure, credentials/permissions, schema, sharing, archive,
-deletion, bulk/scheduled writes, and other production changes.
+## Requests and scope
 
-Only one reviewed, non-sensitive lesson is currently representable:
-`ckr6-execution-path-2026-10-05`. Its public narrative is in
-`scripts/agent_os_notion_lessons_write/catalog.py`; adding another request needs
-a deliberate governed repository change. Comments cannot supply lesson content,
-URLs, data-source IDs, property names, API paths, filters or authority flags.
-
-| Writable field | Live type | Ownership |
-| --- | --- | --- |
-| Lesson Learned | title | Routine lesson narrative |
-| What Happened | rich_text | Routine context |
-| What To Do Next Time | rich_text | Advisory next-time action |
-| Guardrail | rich_text | Advisory caution |
-
-Owner / Agent, Status, Lesson ID, relations, source/provenance-authority,
-readiness, approval and audit fields are never supplied or changed by this route.
-New records may therefore remain ineligible for CKR6 selection until their
-existing separately governed activation metadata is supplied by its owner.
-
-## Normal ingress after default-branch activation
-
-An explicit owner-created comment on open issue #3305:
+After separately authorized default-branch activation, the repository owner may
+post one unedited command on open issue #3305:
 
 ```text
-/agent-os notion-write ckr6-execution-path-2026-10-05
+/agent-os notion-write <reviewed-request-id>
+/agent-os notion-write <reviewed-request-id> <exact-page-uuid> <exact-last-edited-time>
 ```
 
-The credential-free admission rejects edits, PR conversations, other actors,
-targets, branches, workflow identities, reruns and expanded input. Immediately
-before credential use, canonical GitHub reads verify the issue is still open
-and the exact owner comment remains current.
+`catalog.py` holds immutable, reviewed public request payloads keyed by slug.
+Admission, reconciliation, transport and readback work for any reviewed entry;
+adding an entry requires a governed repository review, not new executor code.
+Only `ckr6-execution-path-2026-10-05` is currently registered. This is a finite
+catalog route, not free-form routine capture: comment text cannot supply narrative,
+property names, destinations, API paths or authorization. Catalog payloads are
+write proposals, never a replacement canonical lesson store. Review must exclude
+private/student/sensitive information; runtime shape checks cannot prove privacy.
 
-The client reuses #2283's live Lessons Learned anchor verification and #936
-reader for all prechecks/readback. The configured source must equal that live
-anchor. The live schema must retain the four narrative types plus read-only
-Lesson ID/Status types. One exact-title query is capped at two results/one page;
-multiple matches, incomplete pagination and destination/schema drift refuse.
+| Writable property | Type |
+| --- | --- |
+| Lesson Learned | title |
+| What Happened | rich_text |
+| What To Do Next Time | rich_text |
+| Guardrail | rich_text |
 
-Identical content returns `unchanged` with zero mutation. Differing content
-returns `conflict` with sanitized page/revision metadata. An owner may approve
-the exact existing-target update with:
+Each value is nonempty and at most 512 characters. No ownership, readiness,
+approval, audit, provenance, relation, schema, sharing, deletion/archive, bulk or
+scheduled operation is admitted. Existing `NOTION_TOKEN` and
+`AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID` are reused without permission changes.
 
-```text
-/agent-os notion-write ckr6-execution-path-2026-10-05 <page-uuid> <last-edited-time>
-```
+## Execution and failure behavior
 
-The writer reacquires that revision immediately before writing. It performs at
-most one POST-create or PATCH-properties, immediately GETs the exact returned
-target, and verifies identity, destination and all intended fields. Updates also
-verify preservation of non-routine properties. Only canonical matching readback
-permits `persisted`. A failed/ambiguous write or readback reports `uncertain`;
-never automatically rerun it. Creation without an exact receipt stays uncertain.
+The workflow accepts only created owner issue comments, serializes the destination,
+and refuses reruns. Admission checks repository/owner identity, issue, default-branch
+workflow context, command and optional exact update binding before credentials.
+Execution rereads the current issue/comment before constructing the Notion client.
 
-## Separately approved one-shot canary before merge
+The writer reuses the canonical binding verifier and read adapter, checks live
+property types, and queries at most two exact-title matches. Duplicate or incomplete
+results refuse. Identical content returns `unchanged` with zero writes. Changed
+content requires the explicit page/revision and a second unchanged read. Create
+rechecks absence. One separate POST/PATCH is followed immediately by an exact GET
+that verifies page, parent, narrative and preservation of other update properties.
 
-Issue-comment workflows require default-branch activation. The same workflow
-also admits only the first owner-created Draft PR opening from the fixed
-`issue-3305-lessons-write-20261006` branch in this same repository. Before secrets,
-it verifies current Draft/open/head identity, open #3305, the exact-head/field-map
-canary binding on owner comment 6026930367, and complete Actions history proving
-this is the only canary run for that authorized head. Reruns, another PR on that
-head, forks, new heads, synchronization, missing binding and expanded scope fail
-closed. This is the explicit one-canary authorization, not standing autonomous
-row-writing authority. The canary resolves an existing exact target/revision
-and uses the same writer for one create/update and immediate readback.
+There is no retry. An uncertain create without a returned identity remains
+`uncertain`; an update can verify its already-known target after an ambiguous
+response. Concurrency with external Notion clients is not atomic CAS. Titles that
+have been renamed or semantically similar lessons require human reconciliation.
+Public evidence contains only bounded status, identifiers, revision and digest.
 
-## Evidence, limits and rollback
+## Persistence versus CKR6 use
 
-Contents-read workflow permissions are sufficient; no GitHub write permission
-is requested. Secrets exist only in the admitted execute step. No raw Notion
-values, provider diagnostics, headers or tokens are published. A bounded summary
-and three-day artifact carry disposition, attempt count, exact page/revision,
-readback state and a digest of the reviewed intended narrative.
+A successful readback proves persistence only. The existing consumer additionally
+needs a stable Lesson ID and revision, recognized Status/Area/Learning Type,
+valid Applies To values, guidance, `Surface Before Work? = true`, and a canonical
+GitHub Source Link for sufficient evidence. Task signals must match the lesson.
+The writer deliberately leaves activation metadata untouched.
 
-#2283, its adapter and CKR6 retain their read-only contracts. The writer has no
-retry, redirect, generic API, scheduler, queue or second knowledge store.
-Concurrent external Notion edits remain a risk: Notion offers no atomic
-compare-and-swap here. Ambiguous creates require canonical investigation before
-any later request; uncertain evidence never authorizes a retry or deletion.
+Offline tests exercise missing metadata rejection and selection with synthetic
+owner-supplied metadata; they do not prove live activation. Any live metadata repair
+belongs to the Notion field owner, routed by ChatGPT Orchestrator under separate
+per-action approval where required. Acceptance is fresh exact-page readback plus
+selection by the unchanged CKR6 path, followed by evidence of use in a real task.
 
-Rollback before activation is to leave the PR unmerged. Disabling a merged route
-requires an authorized repository change removing this workflow/finite writer.
-No automatic Notion rollback, archive or deletion is permitted. A previously
-updated narrative may be restored only through a separately approved exact-target
-write with fresh evidence; credentials/sharing/permissions remain untouched.
+## Historical live write evidence
+
+The single authorized canary was consumed on 2026-10-06 at head
+`78a02b647f99dcac89a2f9fe1c05a08a9771da4b`:
+
+- [Authorization](https://github.com/Blummer92/agent-os/issues/3305#issuecomment-6026930367).
+- [Successful run](https://github.com/Blummer92/agent-os/actions/runs/37544722979):
+  one mutation, immediate verified readback, 44 original focused tests passed.
+- Page `3f17ac78-3131-81c5-ba2f-f2c98de26ed4`, revision `2026-10-06T23:07:00.000Z`.
+- Narrative SHA-256 `44c16eccf067de9cd830e8595795ae7d9e11c31b90117cd2a716b9a29f8a127c`.
+- [Durable handoff](https://github.com/Blummer92/agent-os/issues/3305#issuecomment-6027106093).
+
+The canary module, PR-open write trigger and canary-only tests are removed.
+No second live write is authorized. Current evidence and validation disposition
+remain on #3305 / PR #3358; old-head passes do not validate the revised head.
+
+## Live consumer evidence and owner handoff
+
+[Read-only run 37548974650](https://github.com/Blummer92/agent-os/actions/runs/37548974650)
+on `fd22a463158a4f0dab138d11071074c2986d3d9d` verified the same page/revision as
+**LL-93**, with matching narrative and zero Notion writes. Existing CKR6 known-ID
+retrieval returned `insufficient`, `no-relevant-candidate`, no selected lessons;
+normalization rejected `ambiguous-status-vocabulary`.
+
+The bounded live metadata checks found: Status ineligible; Surface Before Work
+false; Area and Learning Type invalid/unset; Applies To empty; canonical Source
+Link absent/rejected. These are observed gaps, not an authorization to fill them.
+ChatGPT Orchestrator must route LL-93 to its Notion metadata owner for a reviewed
+eligible Status, meaningful Area/Learning Type/Applies To, a canonical Source Link
+and an explicit surfacing decision. Then repeat read-only known-ID and task-relevant
+selection. No later execution use is proven until a real task consumes the result.
+The temporary read-only verification job is removed from the final workflow.
+
+## Validation and rollback
+
+Run `python -m unittest discover -s tests/agent_os_notion_lessons_write -t . -q`
+with `PYTHONPATH=src:08_Tooling/workflow-scheduler/src:.` and PyYAML installed.
+The existing focused profile also collects these tests through pytest. Required
+exact-head aggregate validation remains independent of focused passes.
+
+Leave the PR unmerged until separately authorized release. Rollback is a reviewed
+repository revert or disabling activation; no automatic Notion deletion, archive,
+metadata reversal, credential rotation or permission change is allowed.

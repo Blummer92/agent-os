@@ -4,15 +4,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
+import json
+import urllib.request
 from uuid import UUID
 
-from .catalog import ISSUE_NUMBER, REQUEST_ID
+from .catalog import ISSUE_NUMBER, REQUEST_ID, lesson_for
 
 REPOSITORY = "Blummer92/agent-os"
 REPOSITORY_ID = 1289370915
 OWNER_ID = 32861845
 WORKFLOW_REF = REPOSITORY + "/.github/workflows/agent-os-notion-lessons-write.yml@refs/heads/main"
-COMMAND = "/agent-os notion-write " + REQUEST_ID
+COMMAND_PREFIX = "/agent-os notion-write "
 MAX_EVENT_BYTES = 64 * 1024
 
 
@@ -34,6 +36,7 @@ class AdmittedRequest:
     comment_id: int
     expected_page_id: str | None = None
     expected_revision: str | None = None
+    request_id: str = REQUEST_ID
 
 
 def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
@@ -61,11 +64,18 @@ def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
     if type(created) is not str or created != comment.get("updated_at"):
         raise WriteBlocked("edited-comment-refused")
     body = comment.get("body")
-    if body == COMMAND:
-        return AdmittedRequest(comment["id"])
-    if type(body) is not str or len(body) > 512 or not body.startswith(COMMAND + " "):
+    if type(body) is not str or len(body) > 512 or not body.startswith(COMMAND_PREFIX):
         raise WriteBlocked("finite-request-required")
-    parts = body[len(COMMAND) + 1:].split(" ")
+    parts = body[len(COMMAND_PREFIX):].split(" ")
+    request_id = parts.pop(0)
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", request_id):
+        raise WriteBlocked("finite-request-required")
+    try:
+        lesson_for(request_id)
+    except ValueError:
+        raise WriteBlocked("finite-request-required") from None
+    if not parts:
+        return AdmittedRequest(comment["id"], request_id=request_id)
     if len(parts) != 2:
         raise WriteBlocked("exact-update-binding-required")
     page_id = notion_id(parts[0])
@@ -76,4 +86,35 @@ def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
         datetime.fromisoformat(revision.replace("Z", "+00:00"))
     except ValueError:
         raise WriteBlocked("exact-update-binding-required") from None
-    return AdmittedRequest(comment["id"], page_id, revision)
+    return AdmittedRequest(comment["id"], page_id, revision, request_id)
+
+
+def _get(path: str) -> dict:
+    # Fixed internal paths only, never a user-provided URL. Refuse redirects.
+    from .live import _NoRedirect
+    request = urllib.request.Request("https://api.github.com/repos/" + REPOSITORY + path,
+                                     headers={"Accept": "application/vnd.github+json",
+                                              "User-Agent": "agent-os-lessons-write"})
+    with urllib.request.build_opener(_NoRedirect()).open(request, timeout=15) as response:
+        raw = response.read(64 * 1024 + 1)
+    if len(raw) > 64 * 1024:
+        raise WriteBlocked("canonical-owner-request-unavailable")
+    value = json.loads(raw)
+    if type(value) is not dict:
+        raise WriteBlocked("canonical-owner-request-unavailable")
+    return value
+
+
+def verify_current_request(event: dict, request: AdmittedRequest, *, context: dict) -> None:
+    try:
+        issue = _get(f"/issues/{ISSUE_NUMBER}")
+        comment = _get(f"/issues/comments/{request.comment_id}")
+        if comment.get("issue_url") != f"https://api.github.com/repos/{REPOSITORY}/issues/{ISSUE_NUMBER}":
+            raise WriteBlocked("canonical-comment-target-mismatch")
+        current = {**event, "issue": issue, "comment": comment}
+        if admit(current, **context) != request or comment.get("body") != event["comment"]["body"]:
+            raise WriteBlocked("canonical-owner-request-changed")
+    except WriteBlocked:
+        raise
+    except Exception:
+        raise WriteBlocked("canonical-owner-request-unavailable") from None

@@ -6,17 +6,16 @@ import json
 import os
 from pathlib import Path
 
-from .admission import MAX_EVENT_BYTES, WriteBlocked, admit
-from .catalog import REQUEST_ID
+from .admission import MAX_EVENT_BYTES, WriteBlocked, admit, verify_current_request
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=("admit", "execute", "canary-admit", "canary-execute"), required=True)
+    parser.add_argument("--phase", choices=("admit", "execute"), required=True)
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    result = {"request_id": REQUEST_ID, "status": "blocked", "reason_code": "admission-failed",
+    result = {"request_id": None, "status": "blocked", "reason_code": "admission-failed",
               "write_attempts": 0, "readback_verified": False}
     try:
         with args.event.open("rb") as source:
@@ -28,26 +27,16 @@ def main(argv: list[str] | None = None) -> int:
                        ref=os.environ.get("GITHUB_REF", ""),
                        workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF", ""),
                        run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""))
-        canary = args.phase.startswith("canary-")
-        if canary:
-            from .canary import admit_canary
-            request = admit_canary(event, **context, run_id=os.environ.get("GITHUB_RUN_ID", ""))
-        else:
-            request = admit(event, **context)
-        if args.phase in {"admit", "canary-admit"}:
+        request = admit(event, **context)
+        result["request_id"] = request.request_id
+        if args.phase == "admit":
             result.update(status="admitted", reason_code="explicit-bounded-owner-request",
                           comment_id=request.comment_id)
         else:
-            if not canary:
-                from .currentness import verify_current_request
-                verify_current_request(event, request, context=context)
+            verify_current_request(event, request, context=context)
             from .live import LiveLessonsClient
             from .writer import execute
-            if canary:
-                from .canary import execute_canary
-                result = execute_canary(request, LiveLessonsClient())
-            else:
-                result = execute(request, LiveLessonsClient())
+            result = execute(request, LiveLessonsClient(request.request_id))
     except WriteBlocked as exc:
         result["reason_code"] = str(exc)
     except Exception:

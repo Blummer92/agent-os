@@ -8,6 +8,7 @@ import urllib.request
 
 from .admission import WriteBlocked, notion_id
 from .writer import properties
+from .catalog import REQUEST_ID, lesson_for
 
 DATA_SOURCE_ENV = "AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"
 MAX_RESPONSE_BYTES = 512 * 1024
@@ -21,7 +22,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class LiveLessonsClient:
     """Fixed source + two page-property mutation shapes, no API proxy."""
 
-    def __init__(self) -> None:
+    def __init__(self, request_id: str = REQUEST_ID) -> None:
+        self.request_id = request_id
+        self.lesson = lesson_for(request_id)
         # Called only after credential-free owner admission. Imports remain
         # lazy and reuse the existing read composition, credential and version.
         self._token = os.environ.get("NOTION_TOKEN", "").strip()
@@ -54,8 +57,7 @@ class LiveLessonsClient:
         return self._read("get_data_source", data_source_id=self.source_id)
 
     def find_exact(self, title: str) -> Mapping:
-        from .catalog import LESSON
-        if title != LESSON["Lesson Learned"]:
+        if title != self.lesson["Lesson Learned"]:
             raise WriteBlocked("finite-lesson-identity-required")
         return self._read("query_data_source", data_source_id=self.source_id,
                           filter={"property": "Lesson Learned", "title": {"equals": title}},
@@ -65,7 +67,7 @@ class LiveLessonsClient:
         return self._read("get_page", page_id=notion_id(page_id))
 
     def _mutate(self, *, page_id: str | None, intended: Mapping) -> Mapping:
-        if intended != properties():
+        if intended != properties(self.request_id):
             raise WriteBlocked("reviewed-narrative-fields-required")
         if page_id is None:
             path, method = "/pages", "POST"

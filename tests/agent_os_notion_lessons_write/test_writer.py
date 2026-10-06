@@ -7,10 +7,13 @@ import unittest
 from unittest.mock import patch
 
 from scripts.agent_os_notion_lessons_write.admission import (
-    COMMAND, OWNER_ID, REPOSITORY, REPOSITORY_ID, WORKFLOW_REF,
+    COMMAND_PREFIX, OWNER_ID, REPOSITORY, REPOSITORY_ID, WORKFLOW_REF,
     AdmittedRequest, WriteBlocked, admit,
 )
-from scripts.agent_os_notion_lessons_write.catalog import LESSON, WRITABLE_TYPES
+from scripts.agent_os_notion_lessons_write.catalog import REQUEST_ID, WRITABLE_TYPES, lesson_for
+
+LESSON = lesson_for(REQUEST_ID)
+COMMAND = COMMAND_PREFIX + REQUEST_ID
 from scripts.agent_os_notion_lessons_write.runner import main
 from scripts.agent_os_notion_lessons_write.writer import execute, properties
 

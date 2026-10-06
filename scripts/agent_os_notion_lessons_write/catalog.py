@@ -19,7 +19,7 @@ WRITABLE_TYPES = MappingProxyType({
 # Every value is bounded, reviewed, non-sensitive Agent OS working knowledge.
 # No readiness, approval, audit, owner, provenance-authority, relation or schema
 # field is admitted, even if the existing integration could technically write it.
-LESSON = MappingProxyType({
+LESSONS = MappingProxyType({REQUEST_ID: MappingProxyType({
     "Lesson Learned": "CKR6 must run in the actual execution path",
     "What Happened": (
         "On 2026-10-05, the repository owner requested that the CKR6 lesson "
@@ -38,4 +38,15 @@ LESSON = MappingProxyType({
         "authorization, code, tests and exact-head evidence remain authoritative. "
         "Never claim a lesson was persisted without canonical Notion readback."
     ),
-})
+})})
+
+
+def lesson_for(request_id: str):
+    """Select reviewed public narrative only; catalog edits require review."""
+    lesson = LESSONS.get(request_id)
+    if lesson is None or set(lesson) != set(WRITABLE_TYPES) or any(
+        type(value) is not str or not value.strip() or len(value) > 512
+        for value in lesson.values()
+    ):
+        raise ValueError("reviewed-narrative-fields-required")
+    return lesson
