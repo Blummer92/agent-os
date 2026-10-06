@@ -117,9 +117,11 @@ def admit_request_cohort(
 
     The only currently governed membership rule is an exact GitHub issue target
     from the canonical request-interpretation-v1 record. That target is identity
-    evidence, not rank. Repository-level/unknown targets and request records with
-    unresolved reason codes fail closed rather than promoting arbitrary
-    constraints, labels, prose, or operator filtering into cohort authority.
+    evidence, not rank. A repository target denotes the complete proven source
+    population and is admitted only when already within the bounded capacity.
+    Unknown targets and request records with unresolved reason codes fail closed
+    rather than promoting arbitrary constraints, labels, prose, or operator
+    filtering into cohort authority.
     """
 
     if type(repository) is not str or repository.count("/") != 1:
