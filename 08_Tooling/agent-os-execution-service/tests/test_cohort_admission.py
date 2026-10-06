@@ -144,3 +144,42 @@ def test_admission_boundary_contains_no_backlog_ranking_or_operational_authority
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_ambiguous_canonical_request_fails_closed() -> None:
+    payload = {
+        "schema_name": "request-interpretation",
+        "contract_version": "request-interpretation-v1",
+        "record_revision": 1,
+        "observed_at": "2026-10-06T22:00:00Z",
+        "interpreter_id": "chatgpt-orchestrator",
+        "raw_input_digest": "b" * 64,
+        "instruction_origin": "direct-user",
+        "action": "unknown",
+        "requested_effect": "read",
+        "continuation_mode": "new",
+        "target": {
+            "system": "github",
+            "resource_kind": "issue",
+            "repository": REPOSITORY,
+            "resource_id": "150",
+        },
+        "requested_outputs": [],
+        "constraints": [],
+        "reason_codes": [],
+        "evidence_references": [],
+    }
+    validation = validate_request_interpretation(payload)
+    assert validation.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert validation.record is not None
+
+    result = admit_request_cohort(
+        repository=REPOSITORY,
+        population_issue_numbers=tuple(range(1, 203)),
+        population_source_query=SOURCE_QUERY,
+        request_interpretation=RequestInterpretation(validation.record),
+    )
+
+    assert result.status is CohortAdmissionStatus.FAIL_CLOSED
+    assert result.candidate_issue_numbers == ()
+    assert result.fail_closed_reason == "cohort-admission.request-ambiguous"
