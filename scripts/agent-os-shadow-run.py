@@ -606,9 +606,12 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.request_interpretation).read_text(encoding="utf-8")
             )
             validation = validate_request_interpretation(raw_request)
-            if validation.status is not ValidationStatus.VALID or validation.record is None:
+            if validation.status not in {
+                ValidationStatus.VALID,
+                ValidationStatus.MANUAL_REVIEW_REQUIRED,
+            } or validation.record is None:
                 raise ValueError(
-                    "request interpretation must be canonical VALID request-interpretation-v1"
+                    "request interpretation must be a canonical request-interpretation-v1 record"
                 )
             request_interpretation = RequestInterpretation(validation.record)
         if request_interpretation is not None and (
