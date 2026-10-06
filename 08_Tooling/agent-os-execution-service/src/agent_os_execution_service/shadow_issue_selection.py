@@ -22,6 +22,12 @@ from enum import Enum
 import re
 from typing import Literal, Protocol
 
+from instructional_workflow_contracts.request_interpretation import RequestInterpretation
+from agent_os_execution_service.cohort_admission import (
+    CohortAdmissionResult,
+    CohortAdmissionStatus,
+    admit_request_cohort,
+)
 from scripts.agent_os_candidate_packet.executable_lane_selection import (
     MAX_CANDIDATES,
     CandidateIssueEvidence,
@@ -56,6 +62,7 @@ REASON_CODES = frozenset(
         "shadow-selection.current",
         "shadow-selection.population-incomplete",
         "shadow-selection.population-narrowed",
+        "shadow-selection.cohort-admission-failed",
         "shadow-selection.candidate-population-empty",
         "shadow-selection.candidate-population-too-broad",
         "shadow-selection.candidate-not-in-population",
@@ -195,6 +202,7 @@ class ShadowIssueSelectionResult:
     status: ShadowSelectionStatus
     reason_codes: tuple[str, ...]
     narrowing_criterion: str | None = None
+    cohort_admission: CohortAdmissionResult | None = None
     # Phase 1 B5: per-page scan provenance. Additive: every field defaults so
     # all existing constructors keep working unchanged.
     scan_started_at: str | None = None
@@ -247,6 +255,8 @@ class ShadowIssueSelectionResult:
         object.__setattr__(
             self, "narrowing_criterion", _validate_narrowing_criterion(self.narrowing_criterion)
         )
+        if self.cohort_admission is not None and type(self.cohort_admission) is not CohortAdmissionResult:
+            raise TypeError("cohort_admission must be exact CohortAdmissionResult or None")
         for name in ("scan_started_at", "scan_ended_at"):
             value = getattr(self, name)
             if value is not None and (
@@ -293,6 +303,7 @@ def select_shadow_issue(
     candidate_issue_numbers: tuple[int, ...] | None = None,
     narrowing_criterion: str | None = None,
     explicit_request_order: tuple[int, ...] = (),
+    request_interpretation: RequestInterpretation | None = None,
     scan_provenance_log: ScanProvenanceLog | None = None,
 ) -> ShadowIssueSelectionResult:
     """Return one current read-only selector result or an explicit fail-closed stop.
@@ -340,6 +351,12 @@ def select_shadow_issue(
         "scan_page_provenance": provenance_entries,
     }
 
+    if request_interpretation is not None and (
+        candidate_issue_numbers is not None or narrowing_criterion is not None
+    ):
+        raise ValueError(
+            "canonical request cohort admission cannot be combined with manual candidate narrowing"
+        )
     if candidate_issue_numbers is None:
         if narrowing_criterion is not None:
             raise ValueError(
@@ -364,11 +381,39 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.population-incomplete",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
         )
 
     records = {record.issue_number: record for record in scan.records}
-    if candidate_issue_numbers is None:
+    cohort_admission: CohortAdmissionResult | None = None
+    if request_interpretation is not None:
+        cohort_admission = admit_request_cohort(
+            repository=repository,
+            population_issue_numbers=population,
+            population_source_query=scan_source_query,
+            request_interpretation=request_interpretation,
+        )
+        narrowed_criterion = (
+            f"canonical-request:{cohort_admission.request_constraint_identity}"
+            if cohort_admission.request_constraint_identity is not None
+            else "canonical-request:unresolved"
+        )
+        candidates = cohort_admission.candidate_issue_numbers
+        if cohort_admission.status is CohortAdmissionStatus.FAIL_CLOSED:
+            return _result(
+                repository=repository,
+                retrieved_at=retrieved_at,
+                population=population,
+                candidates=candidates,
+                scan_page_count=scan.page_count,
+                scan_item_count=scan.item_count,
+                reason="shadow-selection.cohort-admission-failed",
+                narrowing_criterion=narrowed_criterion,
+                cohort_admission=cohort_admission,
+                **provenance_kwargs,
+            )
+    elif candidate_issue_numbers is None:
         candidates = population
     else:
         if type(candidate_issue_numbers) is not tuple or any(
@@ -398,6 +443,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-empty",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
         )
     if any(issue_number not in records for issue_number in candidates):
@@ -410,6 +456,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-not-in-population",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
         )
     if len(candidates) > MAX_CANDIDATES:
@@ -422,6 +469,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.candidate-population-too-broad",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
         )
 
@@ -494,6 +542,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.repository-revision-conflict",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
         )
     repository_source_revision = next(iter(repository_revisions))
@@ -516,6 +565,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selector-no-executable-lane",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
             repository_source_revision=repository_source_revision,
             selection=selection,
@@ -533,6 +583,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
@@ -550,6 +601,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-reacquire-failed",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
@@ -565,6 +617,7 @@ def select_shadow_issue(
             scan_item_count=scan.item_count,
             reason="shadow-selection.selected-issue-changed",
             narrowing_criterion=narrowed_criterion,
+            cohort_admission=cohort_admission,
             **provenance_kwargs,
             status=ShadowSelectionStatus.REPLAN_REQUIRED,
             repository_source_revision=repository_source_revision,
@@ -589,6 +642,7 @@ def select_shadow_issue(
             else ("shadow-selection.current", "shadow-selection.population-narrowed")
         ),
         narrowing_criterion=narrowed_criterion,
+        cohort_admission=cohort_admission,
         **provenance_kwargs,
     )
 
@@ -603,6 +657,7 @@ def _result(
     scan_item_count: int,
     reason: str,
     narrowing_criterion: str | None = None,
+    cohort_admission: CohortAdmissionResult | None = None,
     status: ShadowSelectionStatus = ShadowSelectionStatus.NO_SELECTION,
     repository_source_revision: str | None = None,
     selection: ExecutableLaneSelection | None = None,
@@ -629,6 +684,7 @@ def _result(
         status=status,
         reason_codes=reasons,
         narrowing_criterion=narrowing_criterion,
+        cohort_admission=cohort_admission,
         scan_started_at=scan_started_at,
         scan_ended_at=scan_ended_at,
         scan_source_query=scan_source_query,
