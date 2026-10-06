@@ -269,6 +269,27 @@ Other SSH failures, remote-result errors, and the read-only diagnostic operation
 remain fail closed. The GCE result replaces the provisional developer-validation
 result; the Codespaces reason remains in the route artifact.
 
+## Target-bound lifecycle contract (#3345)
+
+Repository-side lifecycle composition is deliberately separate from the existing
+read-only `AGENT_OS_CODESPACES_TOKEN`. A caller with separately authorized
+configuration may inject a lifecycle credential whose only required repository
+permission is Codespaces lifecycle admin write. Repository code never creates,
+rotates, stores, or broadens that credential.
+
+The lifecycle target is authorization-bound and must match the canonical Agent OS
+repository/owner surface. The bounded sequence is start when the pre-state is
+`Shutdown`, wait for GitHub `Available`, independently prove `gh codespace ssh`
+readiness, consume one already-registered operation, then stop the same Codespace
+in cleanup and read back `Shutdown`. API `Available` alone is not execution
+readiness. Cleanup failure is a fail-closed `needs-decision` result.
+
+The lifecycle adapter does not expose create/delete/rebuild/rename/export, a
+generic shell, caller-selected arbitrary Codespace targets, repository-write
+authority, merge/closure authority, or credential provisioning. Live lifecycle
+use remains separately authorized configuration; offline tests use injected fake
+credentials and provider calls only.
+
 ## Persistence and continuation
 
 Codespaces repository/worktree files may persist across stop/start, while running
