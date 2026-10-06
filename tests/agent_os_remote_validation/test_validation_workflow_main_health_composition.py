@@ -88,6 +88,52 @@ def test_authoritative_aggregate_path_consumes_exact_main_health_before_candidat
     assert "main-health.exact-main-red" in before_aggregate
 
 
+def test_3351_main_health_wait_is_bounded_and_only_for_in_flight_evidence():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\\n", 1
+    )[1].split("\\n      - name: ", 1)[0]
+
+    assert "main_health_wait_seconds=900" in step
+    assert "main_health_poll_seconds=30" in step
+    assert 'if [ "$check_status" != "queued" ] && [ "$check_status" != "in_progress" ]; then' in step
+    assert 'if [ "$main_health_elapsed_seconds" -ge "$main_health_wait_seconds" ]; then' in step
+    assert 'sleep "$sleep_seconds"' in step
+    assert "main_health_elapsed_seconds=$((main_health_elapsed_seconds + sleep_seconds))" in step
+
+
+def test_3351_main_health_wait_rechecks_before_existing_classification():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\\n", 1
+    )[1].split("\\n      - name: ", 1)[0]
+
+    lookup = 'check-runs?check_name=Run%20aggregate%20validation&per_page=100'
+    assert step.count(lookup) == 1
+    assert step.index("while true; do") < step.index('check_conclusion="$(jq -r')
+    assert step.index('check_conclusion="$(jq -r') < step.index('case "$check_status" in')
+
+
+def test_3351_timeout_preserves_pending_fail_closed_classification():
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\\n", 1
+    )[1].split("\\n      - name: ", 1)[0]
+
+    timeout = 'if [ "$main_health_elapsed_seconds" -ge "$main_health_wait_seconds" ]; then'
+    pending = 'queued|in_progress)\\n              validation_conclusion="pending"'
+    assert timeout in step
+    assert pending in step
+    assert step.index(timeout) < step.index(pending)
+    assert "main-health.validation-pending" in step
+
+
+def test_3351_does_not_change_pr_concurrency_key():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    concurrency = text.split("concurrency:", 1)[1].split("\\njobs:", 1)[0]
+
+    assert "cancel-in-progress:" in concurrency
+    assert "github.event.pull_request.number" in concurrency
+    assert "github.event.pull_request.head.sha" not in concurrency
+
+
 def test_main_health_gate_is_fail_closed_for_unproven_current_main():
     text = WORKFLOW.read_text(encoding="utf-8")
     aggregate_job = text.split("  validate:\n", 1)[1]
