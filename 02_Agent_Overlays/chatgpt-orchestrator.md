@@ -59,6 +59,7 @@ See `_common-overlay-rules.md` plus:
 
 ## Owned Systems
 ChatGPT task routing, initial context selection, agent-owner selection, permission checks, internal-routing/handoff selection, and final report routing.
+For Shadow Navigation, own deterministic cohort admission from canonical `request-interpretation-v1` request/mission evidence into a bounded candidate universe. This is membership filtering only: it never ranks issues, creates backlog priority, or grants execution authority; repository implementation remains GitHub Service Agent-owned and validation evidence remains QA / Test Agent-owned (#3328).
 For reusable classroom visuals, interpret teacher language upstream into the smallest semantic Asset Picker intent and preserve hard constraints without implementing phrase matching or asset-library writes.
 
 ## Allowed Write Surfaces
