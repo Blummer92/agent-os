@@ -290,7 +290,11 @@ fail-closed `needs-decision` result.
 The stronger lifecycle credential is used only for the authenticated-user
 lifecycle API. SSH readiness uses a distinct weaker transport credential, and
 the registered operation receives neither credential. The two injected
-credential values must be distinct.
+credential values must be distinct. Each `gh` child inherits the caller's
+environment (PATH, HOME, proxy, and CA settings) with inherited `GH_TOKEN` and
+`GITHUB_TOKEN` removed and only the selected credential set as `GH_TOKEN`;
+replacing the whole environment bypasses a credential-injecting proxy and
+surfaces as HTTP 401.
 
 The lifecycle adapter does not expose create/delete/rebuild/rename/export, a
 generic shell, caller-selected arbitrary Codespace targets, repository-write

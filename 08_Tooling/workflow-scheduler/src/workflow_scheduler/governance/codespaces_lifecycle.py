@@ -9,6 +9,7 @@ authorization owner rather than introducing a second state store.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -24,7 +25,8 @@ from .dev_validation_codespaces import (
 )
 
 _CODESPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$", re.ASCII)
-Run = Callable[..., subprocess.CompletedProcess[str]]
+_GITHUB_TOKEN_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN")
+Run =Callable[..., subprocess.CompletedProcess[str]]
 Sleep = Callable[[float], None]
 Resolve = Callable[[], CodespaceSelection]
 
@@ -61,6 +63,23 @@ class LifecycleEvidence:
     repository_writes_authorized: bool = False
 
 
+def _credential_env(token: str) -> dict[str, str]:
+    """Inherit the parent environment, replacing only GitHub credentials.
+
+    PATH, HOME, proxy, and CA settings must survive: a credential-injecting
+    proxy is bypassed when they are dropped (#3345 HTTP 401). Inherited
+    GitHub token variables are removed so they cannot override the selected
+    credential.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GITHUB_TOKEN_ENV_KEYS
+    }
+    env["GH_TOKEN"] = token
+    return env
+
+
 def _api(
     run: Run, method: str, endpoint: str, token: str
 ) -> subprocess.CompletedProcess[str]:
@@ -75,7 +94,7 @@ def _api(
             endpoint,
         ),
         timeout=30,
-        env={"GH_TOKEN": token},
+        env=_credential_env(token),
     )
 
 
@@ -104,7 +123,7 @@ def _ssh_ready(run: Run, name: str, transport_token: str) -> bool:
     result = run(
         ("gh", "codespace", "ssh", "-c", name, "--", "true"),
         timeout=30,
-        env={"GH_TOKEN": transport_token},
+        env=_credential_env(transport_token),
     )
     return result.returncode == 0
 
