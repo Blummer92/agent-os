@@ -420,15 +420,43 @@ jobs:
             exit 1
           fi
 
-          check_json="$(
-            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               --jq '[.check_runs[]
-                | select(.name == "Run aggregate validation")
-                | {status, conclusion, details_url, started_at, completed_at}]
-                | sort_by(.started_at // "")
-                | last // {}'
-          )"
+          # A current-main aggregate can still be legitimately in flight when this
+          # candidate reaches the gate (#3351 / #3335 chronology). Give that
+          # already-running exact-main authority a bounded opportunity to become
+          # terminal instead of manufacturing a transient red Actions result.
+          # The existing classification below remains authoritative after the
+          # wait; timeout therefore still projects validation-pending fail-closed.
+          main_health_wait_seconds=900
+          main_health_poll_seconds=30
+          main_health_elapsed_seconds=0
 
-          check_status="$(jq -r '.status // "missing"' <<<"$check_json")"
+          while true; do
+            check_json="$(
+              gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               --jq '[.check_runs[]
+                  | select(.name == "Run aggregate validation")
+                  | {status, conclusion, details_url, started_at, completed_at}]
+                  | sort_by(.started_at // "")
+                  | last // {}'
+            )"
+
+            check_status="$(jq -r '.status // "missing"' <<<"$check_json")"
+            if [ "$check_status" != "queued" ] && [ "$check_status" != "in_progress" ]; then
+              break
+            fi
+            if [ "$main_health_elapsed_seconds" -ge "$main_health_wait_seconds" ]; then
+              break
+            fi
+
+            remaining_seconds=$((main_health_wait_seconds - main_health_elapsed_seconds))
+            sleep_seconds="$main_health_poll_seconds"
+            if [ "$remaining_seconds" -lt "$sleep_seconds" ]; then
+              sleep_seconds="$remaining_seconds"
+            fi
+            echo "Exact-current main validation is $check_status; waiting ${sleep_seconds}s before rechecking."
+            sleep "$sleep_seconds"
+            main_health_elapsed_seconds=$((main_health_elapsed_seconds + sleep_seconds))
+          done
+
           check_conclusion="$(jq -r '.conclusion // ""' <<<"$check_json")"
           details_url="$(jq -r '.details_url // ""' <<<"$check_json")"
           evidence_sha="$current_main_sha"
