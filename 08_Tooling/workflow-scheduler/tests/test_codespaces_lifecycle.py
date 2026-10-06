@@ -58,9 +58,12 @@ def test_shutdown_start_ready_operation_stop_shutdown() -> None:
     seen = []
     evidence = run_authorized_lifecycle(
         _auth(),
-        lifecycle_token="redacted",
+        lifecycle_token="lifecycle-test-value",
+        transport_token="transport-test-value",
         run=run,
         operation=lambda name: seen.append(name) is None,
+        consume_authorization=lambda _: True,
+        resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(False, "codespaces-not-available", NAME, "Shutdown"),
         sleep=lambda _: None,
     )
     assert evidence.status == "success"
@@ -78,7 +81,7 @@ def test_shutdown_start_ready_operation_stop_shutdown() -> None:
 def test_available_but_ssh_not_ready_still_stops() -> None:
     run = FakeRun(["Available"] + ["Available"] * 12 + ["Shutdown"], ssh=1)
     evidence = run_authorized_lifecycle(
-        _auth(), lifecycle_token="redacted", run=run, operation=lambda _: True, sleep=lambda _: None
+        _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(True, "codespaces-capable", NAME, "Available"), sleep=lambda _: None
     )
     assert evidence.status == "needs-decision"
     assert evidence.reason == "codespace-ssh-not-ready"
@@ -89,7 +92,7 @@ def test_available_but_ssh_not_ready_still_stops() -> None:
 def test_operation_failure_still_stops() -> None:
     run = FakeRun(["Available", "Available", "Shutdown"])
     evidence = run_authorized_lifecycle(
-        _auth(), lifecycle_token="redacted", run=run, operation=lambda _: False, sleep=lambda _: None
+        _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: False, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(True, "codespaces-capable", NAME, "Available"), sleep=lambda _: None
     )
     assert evidence.status == "failure"
     assert evidence.reason == "operation-failed"
@@ -99,7 +102,7 @@ def test_operation_failure_still_stops() -> None:
 def test_stop_failure_overrides_success() -> None:
     run = FakeRun(["Available", "Available"], stop=1)
     evidence = run_authorized_lifecycle(
-        _auth(), lifecycle_token="redacted", run=run, operation=lambda _: True, sleep=lambda _: None
+        _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(True, "codespaces-capable", NAME, "Available"), sleep=lambda _: None
     )
     assert evidence.status == "needs-decision"
     assert evidence.reason == "codespace-cleanup-failed"
@@ -124,7 +127,7 @@ def test_invalid_authorization_never_calls_provider(auth, token) -> None:
         calls.append(argv)
         raise AssertionError("provider must not run")
     with pytest.raises(ValueError):
-        run_authorized_lifecycle(auth, lifecycle_token=token, run=run, operation=lambda _: True)
+        run_authorized_lifecycle(auth, lifecycle_token=token, transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True)
     assert calls == []
 
 
@@ -140,8 +143,59 @@ def test_identity_mismatch_fails_before_mutation() -> None:
         }
         return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
     evidence = run_authorized_lifecycle(
-        _auth(), lifecycle_token="redacted", run=run, operation=lambda _: True
+        _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(False, "codespaces-not-available", NAME, "Shutdown")
     )
     assert evidence.status == "needs-decision"
     assert evidence.reason == "codespace-prestate-invalid"
     assert len(calls) == 1
+
+
+def test_canonical_target_mismatch_never_mutates() -> None:
+    from workflow_scheduler.governance.dev_validation_codespaces import CodespaceSelection
+    calls = []
+    def run(argv, *, timeout, env):
+        calls.append(argv)
+        raise AssertionError("provider must not run")
+    evidence = run_authorized_lifecycle(
+        _auth(),
+        lifecycle_token="lifecycle-test-value",
+        transport_token="transport-test-value",
+        run=run,
+        operation=lambda _: True,
+        consume_authorization=lambda _: True,
+        resolve_codespace=lambda: CodespaceSelection(False, "codespaces-not-available", "different-codespace", "Shutdown"),
+    )
+    assert evidence.reason == "codespace-canonical-target-mismatch"
+    assert evidence.authorization_consumed is False
+    assert calls == []
+
+
+def test_replayed_authorization_rejected_before_mutation() -> None:
+    from workflow_scheduler.governance.dev_validation_codespaces import CodespaceSelection
+    run = FakeRun(["Shutdown"])
+    evidence = run_authorized_lifecycle(
+        _auth(),
+        lifecycle_token="lifecycle-test-value",
+        transport_token="transport-test-value",
+        run=run,
+        operation=lambda _: True,
+        consume_authorization=lambda _: False,
+        resolve_codespace=lambda: CodespaceSelection(False, "codespaces-not-available", NAME, "Shutdown"),
+    )
+    assert evidence.reason == "codespace-authorization-replay-blocked"
+    assert evidence.authorization_consumed is False
+    assert len(run.calls) == 1
+
+
+def test_lifecycle_and_transport_credentials_must_be_distinct() -> None:
+    from workflow_scheduler.governance.dev_validation_codespaces import CodespaceSelection
+    with pytest.raises(ValueError):
+        run_authorized_lifecycle(
+            _auth(),
+            lifecycle_token="same-test-value",
+            transport_token="same-test-value",
+            run=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+            operation=lambda _: True,
+            consume_authorization=lambda _: True,
+            resolve_codespace=lambda: CodespaceSelection(False, "codespaces-not-available", NAME, "Shutdown"),
+        )
