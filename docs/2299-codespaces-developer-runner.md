@@ -278,11 +278,19 @@ permission is Codespaces lifecycle admin write. Repository code never creates,
 rotates, stores, or broadens that credential.
 
 The lifecycle target is authorization-bound and must match the canonical Agent OS
-repository/owner surface. The bounded sequence is start when the pre-state is
-`Shutdown`, wait for GitHub `Available`, independently prove `gh codespace ssh`
-readiness, consume one already-registered operation, then stop the same Codespace
-in cleanup and read back `Shutdown`. API `Available` alone is not execution
-readiness. Cleanup failure is a fail-closed `needs-decision` result.
+repository/owner surface returned by the existing #2965 resolver. One-shot
+consumption is injected from the existing authorization owner; the lifecycle
+adapter does not create a replay database or second authority store. The bounded
+sequence is start when the pre-state is `Shutdown`, wait for GitHub `Available`,
+independently prove `gh codespace ssh` readiness, consume one already-registered
+operation, then stop the same Codespace in cleanup and read back `Shutdown`.
+API `Available` alone is not execution readiness. Cleanup failure is a
+fail-closed `needs-decision` result.
+
+The stronger lifecycle credential is used only for the authenticated-user
+lifecycle API. SSH readiness uses a distinct weaker transport credential, and
+the registered operation receives neither credential. The two injected
+credential values must be distinct.
 
 The lifecycle adapter does not expose create/delete/rebuild/rename/export, a
 generic shell, caller-selected arbitrary Codespace targets, repository-write
