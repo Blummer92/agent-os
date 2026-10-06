@@ -489,6 +489,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-evidence-incomplete",
                 narrowing_criterion=narrowed_criterion,
+                cohort_admission=cohort_admission,
                 **provenance_kwargs,
             )
         state = candidate.operational_state
@@ -502,6 +503,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-repository-mismatch",
                 narrowing_criterion=narrowed_criterion,
+                cohort_admission=cohort_admission,
                 **provenance_kwargs,
             )
         scanned_revision = records[issue_number].source_revision
@@ -515,6 +517,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.issue-revision-unavailable",
                 narrowing_criterion=narrowed_criterion,
+                cohort_admission=cohort_admission,
                 **provenance_kwargs,
             )
         if scanned_revision not in state.evidence_ids:
@@ -527,6 +530,7 @@ def select_shadow_issue(
                 scan_item_count=scan.item_count,
                 reason="shadow-selection.candidate-revision-mismatch",
                 narrowing_criterion=narrowed_criterion,
+                cohort_admission=cohort_admission,
                 **provenance_kwargs,
             )
         repository_revisions.add(state.source_revision)
