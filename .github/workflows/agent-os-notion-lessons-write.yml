@@ -4,8 +4,7 @@ on:
   issue_comment:
     types: [created]
   pull_request:
-    branches: [main]
-    types: [opened]
+    types: [synchronize]
 
 permissions:
   contents: read
@@ -18,7 +17,7 @@ concurrency:
 
 jobs:
   lessons_write:
-    if: ${{ (github.event_name == 'issue_comment' && github.event.issue.pull_request == null && github.event.issue.number == 3305 && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-write ')) || (github.event_name == 'pull_request' && github.event.action == 'opened' && github.event.pull_request.draft == true && github.event.pull_request.user.id == 32861845 && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'issue-3305-lessons-write-20261006') }}
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request == null && github.event.issue.number == 3305 && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-write ') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -27,7 +26,7 @@ jobs:
       - name: Check out canonical source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -36,27 +35,18 @@ jobs:
           python-version: '3.11'
 
       - name: Admit exact owner request without credentials
-        env:
-          ADMISSION_PHASE: ${{ github.event_name == 'pull_request' && 'canary-admit' || 'admit' }}
         run: |
           python -m scripts.agent_os_notion_lessons_write.runner \
-            --phase "$ADMISSION_PHASE" --event "$GITHUB_EVENT_PATH" \
+            --phase admit --event "$GITHUB_EVENT_PATH" \
             --output "$RUNNER_TEMP/agent-os-lessons-write/admission.json"
-
-      - name: Validate exact canary source before credential use
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          python -m pip install 'PyYAML>=6.0,<7'
-          python -m unittest discover -s tests/agent_os_notion_lessons_write -t . -v
 
       - name: Execute one bounded write and immediate canonical readback
         env:
-          EXECUTION_PHASE: ${{ github.event_name == 'pull_request' && 'canary-execute' || 'execute' }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
         run: |
           python -m scripts.agent_os_notion_lessons_write.runner \
-            --phase "$EXECUTION_PHASE" --event "$GITHUB_EVENT_PATH" \
+            --phase execute --event "$GITHUB_EVENT_PATH" \
             --output "$RUNNER_TEMP/agent-os-lessons-write/result.json"
 
       - name: Publish sanitized result summary
@@ -84,4 +74,93 @@ jobs:
           name: agent-os-lessons-write-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-lessons-write/*.json
           if-no-files-found: warn
+          retention-days: 3
+
+  consumer_verification:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 3358 && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'issue-3305-lessons-write-20261006' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: src:08_Tooling/workflow-scheduler/src:08_Tooling/agent-memory-context-manager/src:.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'PyYAML>=6.0,<7'
+      - name: Read exact saved lesson through existing read-only adapter and CKR6
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+        run: |
+          python - <<'PY'
+          """Temporary read-only acceptance: removed from the final PR tree."""
+          import json
+          import os
+          import runpy
+          from pathlib import Path
+          from agent_os_notion_binding import new_read_adapter, build_read_task
+          from scripts.agent_os_notion_read_request.binding_verification import verify_lessons_learned_binding
+          from scripts.agent_os_notion_lessons_write.catalog import LESSON
+          from scripts.agent_os_notion_lessons_write.writer import _page, _values
+          from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
+          from agent_memory_context_manager.lesson_activation_bridge import (
+              normalize_lesson_row, LessonActivationSkip, orchestrate_lesson_activation,
+              _rich_text_or_unique_id, _AREA_ECOSYSTEM, _LEARNING_TYPE_CAPABILITY, _github_source_link,
+          )
+          
+          out = {'status': 'unavailable', 'notion_write_attempts': 0}
+          try:
+              reader = new_read_adapter()
+              binding = verify_lessons_learned_binding(reader, generated_at='3305-read-only-acceptance')
+              source = binding['lessons_learned']['data_source_id']
+              from uuid import UUID
+              assert UUID(source) == UUID(os.environ['AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID'])
+              page_id = '3f17ac78-3131-81c5-ba2f-f2c98de26ed4'
+              task = build_read_task(task_id='3305-consumer-read', workflow_id='3305-read-only-acceptance',
+                  owner='github-service-agent', action='get_page', idempotency_key='3305-consumer-read',
+                  payload={'action': 'get_page', 'page_id': page_id})
+              response = reader.execute(task)
+              assert response['status'] == 'success'
+              row = response['output']
+              _page(row, str(UUID(source)), page_id)
+              props = row['properties']
+              lesson_id = _rich_text_or_unique_id(props.get('Lesson ID'))
+              assert lesson_id
+              normalized = normalize_lesson_row(row)
+              resolve = runpy.run_path('08_Tooling/agent-os-execution-service/src/agent_os_execution_service/lesson_reader_composition.py')['resolve_lesson_read_route']
+              route = resolve(data_source_id=source, adapter=reader)
+              result = orchestrate_lesson_activation(CodingKnowledgeRequest(
+                  task_reference='CKR6 must run in the actual execution path', known_knowledge_refs=(lesson_id,),
+                  ecosystem_hints=('agent-os',), capability_keywords=('failure-avoidance', 'authorization-routing', 'Notion'),
+                  specialized_knowledge_required=True), execute_read=route.execute_read)
+              def select(name):
+                  return (props.get(name, {}).get('select') or {}).get('name')
+              out.update(status='read-verified', page_id=page_id, revision=row['last_edited_time'], lesson_id=lesson_id,
+                  narrative_matches=_values(row) == dict(LESSON),
+                  metadata={'status_eligible': select('Status') in {'New', 'Applied', 'Needs follow-up'},
+                            'surface_before_work': props.get('Surface Before Work?', {}).get('checkbox') is True,
+                            'area_valid': select('Area') in _AREA_ECOSYSTEM,
+                            'learning_type_valid': select('Learning Type') in _LEARNING_TYPE_CAPABILITY,
+                            'applies_to_present': bool(props.get('Applies To', {}).get('multi_select')),
+                            'canonical_source_link_present': bool(_github_source_link(props.get('Source Link')))},
+                  normalization_reason=normalized.reason if isinstance(normalized, LessonActivationSkip) else 'normalized',
+                  consumer_status=result.lesson_retrieval_status.value,
+                  consumer_reason_codes=list(result.selection_reason_codes),
+                  target_selected=lesson_id in result.selected_lesson_ids,
+                  selected_lesson_ids=list(result.selected_lesson_ids))
+          except Exception:
+              out['reason_code'] = 'bounded-consumer-read-unavailable'
+          Path(os.environ['RUNNER_TEMP'], '3305-consumer.json').write_text(json.dumps(out, sort_keys=True))
+          print(json.dumps(out, sort_keys=True))
+          raise SystemExit(0 if out['status'] == 'read-verified' else 1)
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: 3305-consumer-readback
+          path: ${{ runner.temp }}/3305-consumer.json
           retention-days: 3
