@@ -122,3 +122,25 @@ def test_identical_inputs_produce_identical_output() -> None:
     )
 
     assert admit_request_cohort(**kwargs) == admit_request_cohort(**kwargs)
+
+
+def test_admission_boundary_contains_no_backlog_ranking_or_operational_authority() -> None:
+    from pathlib import Path
+    import agent_os_execution_service.cohort_admission as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    forbidden = (
+        "status:ready",
+        "created_at",
+        "popularity",
+        "priority_score",
+        "search_issues",
+        "/search/issues",
+        "issue.title",
+        "issue.body",
+        "select_executable_lanes",
+        "Scheduler",
+        "GitHubReadClient",
+    )
+    for token in forbidden:
+        assert token not in source
