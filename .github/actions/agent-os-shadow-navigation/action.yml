@@ -1,0 +1,75 @@
+name: Agent OS Shadow Navigation
+description: Run the existing Agent OS shadow-navigation experiment and emit a read-only JSON report.
+
+inputs:
+  repository:
+    description: Repository to scan in owner/name form.
+    required: true
+    default: Blummer92/agent-os
+  campaign_id:
+    description: Stable identifier for this shadow-navigation campaign.
+    required: true
+  candidates:
+    description: Optional comma-separated deterministic narrowing set.
+    required: false
+    default: ""
+  narrowing_criterion:
+    description: Required when candidates is supplied; names the deterministic narrowing rule.
+    required: false
+    default: ""
+  explicit_order:
+    description: Optional comma-separated explicit request order within candidates.
+    required: false
+    default: ""
+  mission_id:
+    description: Optional finite-mission evidence-ledger identifier.
+    required: false
+    default: ""
+
+outputs:
+  report_path:
+    description: Path to the generated shadow-navigation JSON report.
+    value: ${{ steps.shadow.outputs.report_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run shadow navigation
+      id: shadow
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        output_dir="${RUNNER_TEMP}/agent-os-shadow-navigation"
+        report_path="${output_dir}/shadow-navigation-report.json"
+        mkdir -p "${output_dir}"
+
+        args=(
+          --repository "${{ inputs.repository }}"
+          --campaign-id "${{ inputs.campaign_id }}"
+          --output "${report_path}"
+        )
+
+        if [ -n "${{ inputs.candidates }}" ]; then
+          if [ -z "${{ inputs.narrowing_criterion }}" ]; then
+            echo "::error::narrowing_criterion is required when candidates is supplied"
+            exit 2
+          fi
+          args+=(--candidates "${{ inputs.candidates }}")
+          args+=(--narrowing-criterion "${{ inputs.narrowing_criterion }}")
+        elif [ -n "${{ inputs.narrowing_criterion }}" ]; then
+          echo "::error::narrowing_criterion cannot be supplied without candidates"
+          exit 2
+        fi
+
+        if [ -n "${{ inputs.explicit_order }}" ]; then
+          args+=(--explicit-order "${{ inputs.explicit_order }}")
+        fi
+
+        if [ -n "${{ inputs.mission_id }}" ]; then
+          args+=(--mission-id "${{ inputs.mission_id }}")
+        fi
+
+        python scripts/agent-os-shadow-run.py "${args[@]}"
+
+        echo "report_path=${report_path}" >> "${GITHUB_OUTPUT}"
