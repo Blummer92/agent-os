@@ -75,7 +75,14 @@ def test_shutdown_start_ready_operation_stop_shutdown() -> None:
     endpoints = [call[0][-1] for call in run.calls if call[0][:2] == ("gh", "api")]
     assert f"/user/codespaces/{NAME}/start" in endpoints
     assert f"/user/codespaces/{NAME}/stop" in endpoints
-    assert all(env == {"GH_TOKEN": "redacted"} for _, env in run.calls)
+    api_envs = [
+        env for argv, env in run.calls if argv[:3] == ("gh", "api", "--method")
+    ]
+    ssh_envs = [
+        env for argv, env in run.calls if argv[:3] == ("gh", "codespace", "ssh")
+    ]
+    assert api_envs and all(env == {"GH_TOKEN": "lifecycle-test-value"} for env in api_envs)
+    assert ssh_envs == [{"GH_TOKEN": "transport-test-value"}]
 
 
 def test_available_but_ssh_not_ready_still_stops() -> None:
@@ -100,7 +107,7 @@ def test_operation_failure_still_stops() -> None:
 
 
 def test_stop_failure_overrides_success() -> None:
-    run = FakeRun(["Available", "Available"], stop=1)
+    run = FakeRun(["Available"] * 13, stop=1)
     evidence = run_authorized_lifecycle(
         _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(True, "codespaces-capable", NAME, "Available"), sleep=lambda _: None
     )
