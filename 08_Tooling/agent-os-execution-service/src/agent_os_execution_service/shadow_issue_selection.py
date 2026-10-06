@@ -371,6 +371,7 @@ def select_shadow_issue(
             )
         narrowed_criterion = _validate_narrowing_criterion(narrowing_criterion)
 
+    cohort_admission: CohortAdmissionResult | None = None
     if not scan.complete:
         return _result(
             repository=repository,
@@ -386,7 +387,6 @@ def select_shadow_issue(
         )
 
     records = {record.issue_number: record for record in scan.records}
-    cohort_admission: CohortAdmissionResult | None = None
     if request_interpretation is not None:
         cohort_admission = admit_request_cohort(
             repository=repository,
