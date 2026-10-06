@@ -107,7 +107,7 @@ def test_operation_failure_still_stops() -> None:
 
 
 def test_stop_failure_overrides_success() -> None:
-    run = FakeRun(["Available"] * 13, stop=1)
+    run = FakeRun(["Available"] * 14, stop=1)
     evidence = run_authorized_lifecycle(
         _auth(), lifecycle_token="lifecycle-test-value", transport_token="transport-test-value", run=run, operation=lambda _: True, consume_authorization=lambda _: True, resolve_codespace=lambda: __import__("workflow_scheduler.governance.dev_validation_codespaces", fromlist=["CodespaceSelection"]).CodespaceSelection(True, "codespaces-capable", NAME, "Available"), sleep=lambda _: None
     )
