@@ -1,3 +1,26 @@
+"""Canonical governed continuation driver and host continuation payload (#2137).
+
+Native-host integration boundary (#2826):
+``agent_os_continuation`` is a projection, not a dispatch mechanism. It reaches
+a live host only through two registered consumers:
+
+1. MCP tool return payloads, and only when the Agent OS app is explicitly
+   selected or invoked (the v1 MCP contract applies only then);
+2. the Claude Code Stop seam (``hook_adapter.run_stop_hook``), which requires
+   the HOST to supply the structured payload -- the repository can react to a
+   premature Stop once, it can never inject continuation into the host loop.
+
+A native ChatGPT chat turn has no repository-registered continuation ingestion:
+no Stop hook, no structured-continuation output consumption, and no response
+interception. Repository code therefore cannot place ``agent_os_continuation``
+into a native chat turn, and emitting the payload from repository code cannot
+prevent the native host from treating an intermediate prose response as
+terminal. Closing that loop requires host-side consumption; a repository-only
+change cannot enforce next-dispatch. Do not represent this projection, its
+tests, or reconstructed controller fixtures as proof that the native ChatGPT
+tool loop is enforced.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
