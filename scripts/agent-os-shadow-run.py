@@ -86,6 +86,11 @@ from agent_os_execution_service.shadow_issue_selection import (  # noqa: E402
     ShadowSelectionStatus,
     select_shadow_issue,
 )
+from instructional_workflow_contracts.request_interpretation import (  # noqa: E402
+    RequestInterpretation,
+    validate_request_interpretation,
+)
+from instructional_workflow_contracts.common import ValidationStatus  # noqa: E402
 from agent_os_execution_service.evidence_ledger import (  # noqa: E402
     EvidenceLedger,
     NavigationDecisionType,
@@ -456,6 +461,30 @@ def _build_experiment_record(
         # 4. AI-selected/recommended candidate (filled by the experiment operator)
         "ai_recommended_candidate": None,
         # 5. deterministic selector result
+        "cohort_admission": (
+            None
+            if result.cohort_admission is None
+            else {
+                "status": result.cohort_admission.status.value,
+                "population_identity": result.cohort_admission.population_identity,
+                "population_source_query": result.cohort_admission.population_source_query,
+                "request_constraint_identity": result.cohort_admission.request_constraint_identity,
+                "canonical_constraints_applied": list(
+                    result.cohort_admission.canonical_constraints_applied
+                ),
+                "candidate_issue_numbers": list(
+                    result.cohort_admission.candidate_issue_numbers
+                ),
+                "candidate_count": result.cohort_admission.candidate_count,
+                "population_membership_proven": (
+                    result.cohort_admission.population_membership_proven
+                ),
+                "reason_codes": list(result.cohort_admission.reason_codes),
+                "fail_closed_reason": result.cohort_admission.fail_closed_reason,
+                "execution_authorized": result.cohort_admission.execution_authorized,
+                "side_effects_performed": result.cohort_admission.side_effects_performed,
+            }
+        ),
         "deterministic_selector_result": {
             "status": result.status.value,
             "reason_codes": list(result.reason_codes),
@@ -502,6 +531,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="comma-separated explicit narrowing set (requires --narrowing-criterion)",
     )
     parser.add_argument("--narrowing-criterion", default=None)
+    parser.add_argument(
+        "--request-interpretation",
+        default=None,
+        help=(
+            "path to canonical request-interpretation-v1 JSON; when supplied, "
+            "ChatGPT Orchestrator cohort admission replaces manual --candidates"
+        ),
+    )
     parser.add_argument(
         "--explicit-order",
         default=None,
@@ -563,6 +600,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         candidates = _parse_issue_list(args.candidates, "candidates")
         explicit_order = _parse_issue_list(args.explicit_order, "explicit-order") or ()
+        request_interpretation = None
+        if args.request_interpretation is not None:
+            raw_request = json.loads(
+                Path(args.request_interpretation).read_text(encoding="utf-8")
+            )
+            validation = validate_request_interpretation(raw_request)
+            if validation.status is not ValidationStatus.VALID or validation.record is None:
+                raise ValueError(
+                    "request interpretation must be canonical VALID request-interpretation-v1"
+                )
+            request_interpretation = RequestInterpretation(validation.record)
+        if request_interpretation is not None and (
+            candidates is not None or args.narrowing_criterion is not None
+        ):
+            raise ValueError(
+                "--request-interpretation cannot be combined with manual candidate narrowing"
+            )
         retrieved_at = args.retrieved_at or _datetime.datetime.now(
             _datetime.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -642,6 +696,7 @@ def main(argv: list[str] | None = None) -> int:
             candidate_issue_numbers=candidates,
             narrowing_criterion=args.narrowing_criterion,
             explicit_request_order=explicit_order,
+            request_interpretation=request_interpretation,
             scan_provenance_log=provenance_log,
         )
     except (TypeError, ValueError) as exc:
