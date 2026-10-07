@@ -161,7 +161,10 @@ def test_already_terminal_candidate_is_accounted_without_padding():
     assert result.remaining_pull_requests == (21,)
 
 
-def test_unrepairable_shared_validation_outage_halts_with_exact_reason():
+def test_single_shared_claim_does_not_halt_batch_with_unvisited_remainder():
+    # Decision A (#2602): one candidate's shared-blocker claim never stops
+    # the batch. PR 32 is unvisited and therefore unproven, so the batch
+    # advances instead of halting.
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=(30, 31, 32),
         evidence=(
@@ -169,9 +172,44 @@ def test_unrepairable_shared_validation_outage_halts_with_exact_reason():
             ev(31, RepairDisposition.BLOCKED, "shared-validation-outage", True),
         ),
     )
+    assert result.next_action == "reacquire-next-candidate"
+    assert result.finite_admission.completion_admissible is False
+    assert result.remaining_pull_requests == (32,)
+
+
+def test_population_proven_shared_blocker_halts_with_exact_reason():
+    # Decision A (#2602): the halt is legitimate only when the current
+    # evidence proves every remaining actionable item carries the blocker.
+    # Here the whole population is visited and every non-delivered item is
+    # parked on the same unrepairable shared blocker.
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(30, 31, 32),
+        evidence=(
+            ev(30, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(31, RepairDisposition.BLOCKED, "shared-validation-outage", True),
+            ev(32, RepairDisposition.BLOCKED, "shared-validation-outage", True),
+        ),
+    )
     assert result.next_action == "halt-shared-blocker"
     assert result.finite_admission.completion_admissible is True
-    assert result.remaining_pull_requests == (32,)
+    assert "shared-terminal-blocker" in result.finite_admission.reason_codes
+    assert result.remaining_pull_requests == ()
+
+
+def test_deferred_candidate_without_shared_blocker_defeats_terminal_halt():
+    # Decision A (#2602): a deferred candidate still carries an executable
+    # next action and does not carry the blocker, so the batch revisits it
+    # instead of halting on the single shared claim.
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(30, 31, 32),
+        evidence=(
+            ev(30, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(31, RepairDisposition.BLOCKED, "shared-validation-outage", True),
+            ev(32, RepairDisposition.DEFERRED, "pending-ci"),
+        ),
+    )
+    assert result.next_action == "revisit-deferred-or-stale-candidates"
+    assert result.finite_admission.completion_admissible is False
 
 
 def test_five_pr_shared_main_health_blocker_routes_one_canonical_repair():

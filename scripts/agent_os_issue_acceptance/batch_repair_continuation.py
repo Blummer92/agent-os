@@ -218,8 +218,24 @@ def evaluate_bulk_repair_continuation(
     shared_repair_available = shared_signature[2] if shared_signature is not None else False
     shared_repair_completed = shared_signature[3] if shared_signature is not None else False
     repairable_shared_blocker = bool(shared) and shared_repair_available
-    terminal_shared_blocker = bool(shared) and not shared_repair_available
     remaining = tuple(number for number in requested if number not in set(visited))
+
+    # Decision A, recorded on #2602: a shared blocker is campaign-terminal
+    # only when current evidence proves it applies to every remaining
+    # actionable item — population-proven shared stop. One candidate's claim
+    # never stops the batch. The actionable remainder is the unvisited
+    # remainder plus deferred/reacquire candidates, which still carry an
+    # executable next action; unvisited items are unproven by definition, so
+    # any remainder member not proven to carry the blocker defeats the
+    # terminal halt and the batch advances instead.
+    shared_actionable_remainder = tuple(
+        number
+        for number in (*remaining, *deferred, *reacquire)
+        if number not in set(shared_pull_requests)
+    )
+    terminal_shared_blocker = (
+        bool(shared) and not shared_repair_available and not shared_actionable_remainder
+    )
 
     # A candidate parked on a repairable shared blocker is reconciled but not
     # delivered: the batch still owes it the shared repair and a revalidation
