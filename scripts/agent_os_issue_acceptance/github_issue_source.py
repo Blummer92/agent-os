@@ -10,7 +10,6 @@ from .issue_scanner import (
     IssueScanPage,
     IssueStateFilter,
     scan_issues,
-    scan_open_issues,
 )
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -157,22 +156,6 @@ def scan_connected_issues(
         retrieved_at=retrieved_at,
         source_query=f"repo={repository} state={state.value}",
     )
-
-
-def scan_connected_open_issues(
-    repository: str,
-    reader: GitHubIssuePageReader,
-    *,
-    per_page: int = 100,
-):
-    """Compatibility wrapper for the legacy connected open-only scan."""
-    source = GitHubIssuePageSource(
-        repository,
-        reader,
-        state=IssueStateFilter.OPEN,
-        per_page=per_page,
-    )
-    return scan_open_issues(source, source_query=f"repo={repository} state=open")
 
 
 def result_to_report(result: object) -> dict[str, Any]:

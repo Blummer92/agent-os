@@ -11,14 +11,12 @@ from scripts.agent_os_issue_acceptance.github_issue_source import (
     GitHubIssuePageSource,
     result_to_report,
     scan_connected_issues,
-    scan_connected_open_issues,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import (
     IssueStateFilter,
     RetrievalFinding,
     RetrievalStatus,
     scan_issues,
-    scan_open_issues,
 )
 
 
@@ -172,31 +170,21 @@ def test_report_handoff_preserves_existing_keys_and_adds_state_evidence():
     assert reader.calls == [("Blummer92/agent-os", 1, 50, "closed")]
 
 
-def test_compatibility_connected_wrapper_preserves_open_contract_without_clock():
-    reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None, terminal_page_proven=True)})
-
-    result = scan_connected_open_issues("Blummer92/agent-os", reader, per_page=25)
-    report = result_to_report(result)
-
-    assert result.requested_state == IssueStateFilter.OPEN
-    assert result.retrieved_at is None
-    assert report["requested_state"] == "open"
-    assert report["retrieved_at"] is None
-    assert reader.calls == [("Blummer92/agent-os", 1, 25, "open")]
-
-
 def test_source_excludes_pull_request_records_from_issue_endpoint():
     pull_request = dict(_issue(9), pull_request={"url": "example"})
     reader = FakeReader(
         {1: GitHubIssuePageResponse((_issue(1), pull_request), None, terminal_page_proven=True)}
     )
 
-    result = scan_open_issues(
+    result = scan_issues(
         GitHubIssuePageSource(
             "Blummer92/agent-os",
             reader,
             state=IssueStateFilter.OPEN,
-        )
+        ),
+        requested_state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        source_query="repo=Blummer92/agent-os state=open",
     )
 
     assert result.status == RetrievalStatus.COMPLETE
@@ -211,12 +199,15 @@ def test_incomplete_page_fails_closed_without_false_exact_total():
         }
     )
 
-    result = scan_open_issues(
+    result = scan_issues(
         GitHubIssuePageSource(
             "Blummer92/agent-os",
             reader,
             state=IssueStateFilter.OPEN,
-        )
+        ),
+        requested_state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        source_query="repo=Blummer92/agent-os state=open",
     )
     report = result_to_report(result)
 
@@ -230,12 +221,15 @@ def test_incomplete_page_fails_closed_without_false_exact_total():
 def test_nonadvancing_page_fails_closed():
     reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), 1)})
 
-    result = scan_open_issues(
+    result = scan_issues(
         GitHubIssuePageSource(
             "Blummer92/agent-os",
             reader,
             state=IssueStateFilter.OPEN,
-        )
+        ),
+        requested_state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        source_query="repo=Blummer92/agent-os state=open",
     )
 
     assert result.status == RetrievalStatus.INCOMPLETE
@@ -257,12 +251,15 @@ def test_bounded_error_classes_remain_visible(error_kind):
         {1: GitHubIssuePageResponse((), None, error_kind=error_kind)}
     )
 
-    result = scan_open_issues(
+    result = scan_issues(
         GitHubIssuePageSource(
             "Blummer92/agent-os",
             reader,
             state=IssueStateFilter.OPEN,
-        )
+        ),
+        requested_state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        source_query="repo=Blummer92/agent-os state=open",
     )
 
     assert result.status == RetrievalStatus.INCOMPLETE
@@ -282,12 +279,15 @@ def test_bounded_error_classes_remain_visible(error_kind):
 def test_reader_exceptions_are_bounded(error, reason):
     reader = FakeReader({1: error})
 
-    result = scan_open_issues(
+    result = scan_issues(
         GitHubIssuePageSource(
             "Blummer92/agent-os",
             reader,
             state=IssueStateFilter.OPEN,
-        )
+        ),
+        requested_state=IssueStateFilter.OPEN,
+        retrieved_at=RETRIEVED_AT,
+        source_query="repo=Blummer92/agent-os state=open",
     )
 
     assert result.status == RetrievalStatus.INCOMPLETE
