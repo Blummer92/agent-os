@@ -11,7 +11,6 @@ from scripts.agent_os_issue_acceptance.issue_scanner import (
     RetrievalFinding,
     RetrievalStatus,
     scan_issues,
-    scan_open_issues,
 )
 
 
@@ -144,15 +143,6 @@ def test_state_aware_scan_rejects_malformed_timestamp(retrieved_at):
     source = FakePageSource({1: IssueScanPage((), None)})
     with pytest.raises((TypeError, ValueError)):
         scan_issues(source, requested_state=IssueStateFilter.OPEN, retrieved_at=retrieved_at)
-
-
-def test_compatibility_wrapper_yields_open_state_without_reading_clock():
-    source = FakePageSource({1: IssueScanPage((_issue(1),), None)})
-    result = scan_open_issues(source)
-    assert result.complete is True
-    assert result.requested_state == IssueStateFilter.OPEN
-    assert result.retrieved_at is None
-    assert result.source_query == "state=open"
 
 
 @pytest.mark.parametrize("actual_state", ["all", "OPEN", "", True, None])

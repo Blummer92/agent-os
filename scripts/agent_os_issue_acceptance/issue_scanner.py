@@ -215,17 +215,6 @@ def scan_issues(
         page_number = page.next_page
 
 
-def scan_open_issues(source: IssuePageSource, *, source_query: str = "state=open") -> IssueScanResult:
-    """Compatibility wrapper for the legacy open-only scanner contract."""
-    return scan_issues(
-        source,
-        requested_state=IssueStateFilter.OPEN,
-        retrieved_at=None,
-        source_query=source_query,
-        _allow_missing_retrieved_at=True,
-    )
-
-
 def issue_record_from_mapping(
     raw_item: Mapping[str, object],
     *,
