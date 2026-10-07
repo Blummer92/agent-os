@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
+import workflow_scheduler.adapters.instructional_materials_contract as contract_module
 import workflow_scheduler.adapters.instructional_materials_dry_run_adapter as adapter_module
 import workflow_scheduler.adapters.registry as registry_module
 from workflow_scheduler.adapters import InstructionalMaterialsDryRunAdapter
@@ -17,11 +19,13 @@ from workflow_scheduler.models import ExecutionContext, ExecutionRequest, TaskSt
 
 def _payload():
     return {
-        "contract_version": "imc-materials-task-v1",
+        "contract_version": "imc-materials-task-v2",
         "operation": "build_materials_bundle",
         "dry_run": True,
         "execution_authorized": False,
         "content_path": "lessons/example lesson.yaml",
+        "material_requirement_path": "governed/example-material-requirement.json",
+        "current_curriculum_evidence_path": "governed/example-current-curriculum-evidence.json",
         "slides_template_id": "slides-template-example",
         "doc_template_id": "doc-template-example",
         "target_drive_folder_id": "drive-folder-example",
@@ -169,12 +173,34 @@ def test_adapter_source_has_no_execution_or_external_io_sink():
         assert banned not in source
 
 
-def test_example_loads_as_draft_without_adapter_execution():
-    example = (
+def test_contract_module_never_imports_the_materials_coach_package():
+    # The receipt names the CLI entry point as inert text; the validator itself
+    # must stay pure-local (C3A boundary, preserved by #3377).
+    source = inspect.getsource(contract_module)
+    assert "import instructional_materials_coach" not in source
+    assert "from instructional_materials_coach" not in source
+
+
+def _example_path():
+    return (
         Path(__file__).resolve().parents[1]
         / "examples"
         / "instructional-materials-dry-run.yaml"
     )
+
+
+def test_example_payload_validates_under_the_current_contract():
+    example = yaml.safe_load(_example_path().read_text(encoding="utf-8"))
+    payload = example["tasks"][0]["payload"]
+
+    result = validate_instructional_materials_contract(_request(payload=payload))
+    assert result["status"] == "success"
+    assert "--material-requirement" in result["output"]["command"]
+    assert "--current-curriculum-evidence" in result["output"]["command"]
+
+
+def test_example_loads_as_draft_without_adapter_execution():
+    example = _example_path()
     cli = WorkflowSchedulerCLI(db_path=":memory:")
     result = cli.create_workflow(str(example))
 

@@ -14,11 +14,13 @@ tasks:
     production_ready: false
     depends_on: []
     payload:
-      contract_version: "imc-materials-task-v1"
+      contract_version: "imc-materials-task-v2"
       operation: "build_materials_bundle"
       dry_run: true
       execution_authorized: false
       content_path: "lessons/example-lesson.yaml"
+      material_requirement_path: "governed/example-material-requirement.json"
+      current_curriculum_evidence_path: "governed/example-current-curriculum-evidence.json"
       slides_template_id: "slides-template-example"
       doc_template_id: "doc-template-example"
       target_drive_folder_id: "drive-folder-example"

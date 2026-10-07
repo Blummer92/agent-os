@@ -1,4 +1,10 @@
-"""Pure-local validation for the Instructional Materials Coach v1 dry-run contract."""
+"""Pure-local validation for the Instructional Materials Coach v2 dry-run contract.
+
+v2 (#3377) carries the governed MaterialRequirement and current-curriculum
+evidence paths that ``imc-build build`` requires before credentials. A v1
+payload omits them, so it fails validation rather than rendering a plan the
+CLI would refuse.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,7 @@ from typing import Any
 
 from workflow_scheduler.models import ExecutionContext, ExecutionRequest
 
-CONTRACT_VERSION = "imc-materials-task-v1"
+CONTRACT_VERSION = "imc-materials-task-v2"
 OPERATION = "build_materials_bundle"
 OWNER = "instructional-materials-coach"
 SUCCESS_MESSAGE = "Instructional Materials Coach command plan validated; no execution performed."
@@ -23,6 +29,8 @@ _PAYLOAD_KEYS = {
     "dry_run",
     "execution_authorized",
     "content_path",
+    "material_requirement_path",
+    "current_curriculum_evidence_path",
     "slides_template_id",
     "doc_template_id",
     "target_drive_folder_id",
@@ -118,7 +126,7 @@ def _has_exact_keys(value: object, expected: set[str]) -> bool:
 
 
 def validate_instructional_materials_contract(request: ExecutionRequest) -> dict[str, Any]:
-    """Validate one C2 v1 dry-run request and render a bounded inert receipt."""
+    """Validate one v2 dry-run request and render a bounded inert receipt."""
     if not _valid_request_shell(request):
         return _failure()
 
@@ -138,8 +146,9 @@ def validate_instructional_materials_contract(request: ExecutionRequest) -> dict
         return _failure()
     if type(payload["governed_field_risk"]) is not bool or type(payload["writes_governed_field"]) is not bool:
         return _failure()
-    if not _relative_path(payload["content_path"]) or not _relative_path(payload["lessons_dir"]):
-        return _failure()
+    for key in ("content_path", "material_requirement_path", "current_curriculum_evidence_path", "lessons_dir"):
+        if not _relative_path(payload[key]):
+            return _failure()
     if not _safe_token(payload["slides_template_id"]):
         return _failure()
     if not _safe_token(payload["doc_template_id"]):
@@ -196,6 +205,10 @@ def validate_instructional_materials_contract(request: ExecutionRequest) -> dict
                 payload["doc_template_id"],
                 "--target-folder",
                 payload["target_drive_folder_id"],
+                "--material-requirement",
+                payload["material_requirement_path"],
+                "--current-curriculum-evidence",
+                payload["current_curriculum_evidence_path"],
                 "--lessons-dir",
                 payload["lessons_dir"],
             ],

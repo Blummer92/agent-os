@@ -13,11 +13,13 @@ from workflow_scheduler.models import ExecutionContext, ExecutionRequest
 
 def _payload():
     return {
-        "contract_version": "imc-materials-task-v1",
+        "contract_version": "imc-materials-task-v2",
         "operation": "build_materials_bundle",
         "dry_run": True,
         "execution_authorized": False,
         "content_path": "lessons/unit-1.yaml",
+        "material_requirement_path": "governed/material-requirement.json",
+        "current_curriculum_evidence_path": "governed/current-curriculum-evidence.json",
         "slides_template_id": "slides-template_123",
         "doc_template_id": "doc-template_123",
         "target_drive_folder_id": "folder_123",
@@ -78,9 +80,14 @@ def test_valid_request_returns_exact_bounded_deterministic_receipt():
         "doc-template_123",
         "--target-folder",
         "folder_123",
+        "--material-requirement",
+        "governed/material-requirement.json",
+        "--current-curriculum-evidence",
+        "governed/current-curriculum-evidence.json",
         "--lessons-dir",
         "reports/lessons",
     ]
+    assert first["output"]["contract_version"] == "imc-materials-task-v2"
     assert isinstance(first["output"]["command"], list)
     assert first["output"]["authority"] == {
         "approval": False,
@@ -95,7 +102,15 @@ def test_valid_request_returns_exact_bounded_deterministic_receipt():
 
 
 @pytest.mark.parametrize(
-    "field", ["contract_version", "operation", "content_path", "lessons_dir"]
+    "field",
+    [
+        "contract_version",
+        "operation",
+        "content_path",
+        "material_requirement_path",
+        "current_curriculum_evidence_path",
+        "lessons_dir",
+    ],
 )
 def test_missing_and_blank_required_payload_fields_fail(field):
     payload = _payload()
@@ -156,9 +171,13 @@ def test_unknown_and_secret_like_keys_fail_without_echo(key):
         "C:/secret",
     ],
 )
-def test_hostile_paths_fail(value):
+@pytest.mark.parametrize(
+    "field",
+    ["content_path", "material_requirement_path", "current_curriculum_evidence_path"],
+)
+def test_hostile_paths_fail(field, value):
     payload = _payload()
-    payload["content_path"] = value
+    payload[field] = value
     assert (
         validate_instructional_materials_contract(_request(payload=payload))["status"]
         == "failure"
@@ -249,12 +268,13 @@ def test_malformed_types_and_bounds_fail_closed():
         validate_instructional_materials_contract(_request(payload=payload))["status"]
         == "failure"
     )
-    payload = _payload()
-    payload["content_path"] = "a" * 257
-    assert (
-        validate_instructional_materials_contract(_request(payload=payload))["status"]
-        == "failure"
-    )
+    for field in ("content_path", "material_requirement_path", "current_curriculum_evidence_path"):
+        payload = _payload()
+        payload[field] = "a" * 257
+        assert (
+            validate_instructional_materials_contract(_request(payload=payload))["status"]
+            == "failure"
+        )
     payload = _payload()
     payload["production_gates"]["evidence_target"] = "a" * 513
     assert (
@@ -278,6 +298,28 @@ def test_request_payload_and_context_are_not_mutated():
     validate_instructional_materials_contract(request)
     assert request.payload == payload_before
     assert request.execution_context == context_before
+
+
+def test_superseded_v1_payload_cannot_render_a_command_plan():
+    # #3377: the v1 shape omits the governed inputs imc-build requires before
+    # credentials, so it must fail closed instead of reporting a plan the CLI
+    # would refuse.
+    v1_payload = _payload()
+    v1_payload["contract_version"] = "imc-materials-task-v1"
+    v1_payload.pop("material_requirement_path")
+    v1_payload.pop("current_curriculum_evidence_path")
+    result = validate_instructional_materials_contract(_request(payload=v1_payload))
+    assert result == {
+        "status": "failure",
+        "message": "Instructional Materials Coach contract validation failed.",
+    }
+
+    labelled_v1 = _payload()
+    labelled_v1["contract_version"] = "imc-materials-task-v1"
+    assert (
+        validate_instructional_materials_contract(_request(payload=labelled_v1))["status"]
+        == "failure"
+    )
 
 
 def test_wrong_contract_operation_owner_and_gate_shape_fail_closed():
@@ -350,6 +392,8 @@ def test_semantically_identical_builtin_payload_order_is_byte_stable():
     "field,value",
     [
         ("content_path", ExplosiveValue()),
+        ("material_requirement_path", ExplosiveValue()),
+        ("current_curriculum_evidence_path", EvilString("governed/x.json")),
         ("slides_template_id", EvilIterable()),
         ("dry_run", EvilBoolLike()),
         ("operation", EvilException("do-not-inspect")),
