@@ -1,0 +1,66 @@
+name: Agent OS Bounded Lessons Learned Write
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# Serialize this one destination across all admitted comments. Do not cancel a
+# secret-bearing write. Reruns are refused by admission before credential use.
+concurrency:
+  group: agent-os-lessons-write-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  lessons_write:
+    if: ${{ github.event.issue.pull_request == null && github.event.issue.number == 3305 && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-write ') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Admit exact owner request without credentials
+        run: |
+          python -m scripts.agent_os_notion_lessons_write.runner \
+            --phase admit --event "$GITHUB_EVENT_PATH" \
+            --output "$RUNNER_TEMP/agent-os-lessons-write/admission.json"
+
+      - name: Execute one bounded write and immediate canonical readback
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+        run: |
+          python -m scripts.agent_os_notion_lessons_write.runner \
+            --phase execute --event "$GITHUB_EVENT_PATH" \
+            --output "$RUNNER_TEMP/agent-os-lessons-write/result.json"
+
+      - name: Publish sanitized result summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'agent-os-lessons-write'
+          target = root / 'result.json'
+          if not target.exists():
+              target = root / 'admission.json'
+          result = json.loads(target.read_text()) if target.exists() else {}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
+              for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision'):
+                  summary.write(f'{key}: `{result.get(key)}`\n\n')
+          PY
