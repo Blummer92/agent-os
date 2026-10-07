@@ -347,6 +347,10 @@ class PullRequestBranchRefreshReceipt:
     final_current_proven: bool
     blockers: tuple[str, ...]
     reason_codes: tuple[str, ...]
+    # #3120: the underlying #1187 result's head-evidence invalidation list,
+    # preserved (not inferred) so the published receipt satisfies the release
+    # evaluator's canonical refresh contract without a lossy reconstruction.
+    invalidated_head_evidence: tuple[str, ...]
     rollback_posture: str
     side_effects_performed: bool
     ready_for_review_authorized: bool = field(default=False, init=False)
@@ -604,6 +608,7 @@ def _blocked_refresh_receipt(
         final_current_proven=False,
         blockers=tuple(sorted(set(reason_codes))),
         reason_codes=tuple(sorted(set(reason_codes))),
+        invalidated_head_evidence=(),
         rollback_posture="no-branch-mutation",
         side_effects_performed=False,
     )
@@ -646,6 +651,7 @@ def _receipt_from_result(
         final_current_proven="branch.current-proven" in reasons,
         blockers=blockers,
         reason_codes=reasons,
+        invalidated_head_evidence=tuple(result.invalidated_head_evidence),
         rollback_posture=(
             "restore-old-head-with-separate-authorization"
             if side_effects
