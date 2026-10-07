@@ -424,29 +424,22 @@ def _validate_validation_head(state: ReleaseRunState) -> None:
 
 
 
-def _refresh_shapes(raw: Any) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
-    """Return (Actions wrapper, refresh evidence) without erasing wrapper status."""
+def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
     if raw is None:
-        return None, None
-    if not isinstance(raw, Mapping):
+        return
+    if not isinstance(raw, dict):
         raise TypeError("branch_refresh_result must be object or null")
-    if "refresh_receipt" not in raw:
-        return None, raw
-    nested = raw.get("refresh_receipt")
-    if nested is None:
-        return raw, None
-    if not isinstance(nested, Mapping):
-        raise TypeError("branch_refresh_result refresh_receipt must be object or null")
-    return raw, nested
-
-
-def _validate_direct_1187_result(state: ReleaseRunState, refresh: Mapping[str, Any]) -> None:
-    invalidated = refresh.get("invalidated_head_evidence", [])
+    if raw.get("status") != "converged":
+        state.blockers.append("#1187 refresh result is not converged")
+        return
+    if raw.get("new_head_sha") != state.observed_head_sha:
+        state.blockers.append("#1187 refresh result does not match current head")
+    invalidated = raw.get("invalidated_head_evidence", [])
     if not isinstance(invalidated, (list, tuple)):
         state.blockers.append("#1187 invalidation receipt is malformed")
     elif not REQUIRED_REFRESH_INVALIDATIONS.issubset(set(invalidated)):
         state.blockers.append("#1187 refresh did not prove required head-evidence invalidation")
-    validation = refresh.get("validation")
+    validation = raw.get("validation")
     if not isinstance(validation, dict):
         state.blockers.append("#1187 refreshed-head validation receipt is missing")
     else:
@@ -456,69 +449,10 @@ def _validate_direct_1187_result(state: ReleaseRunState, refresh: Mapping[str, A
             state.blockers.append("#1187 refreshed-head validation is not green")
 
 
-def _validate_actions_refresh_result(
-    state: ReleaseRunState,
-    wrapper: Mapping[str, Any],
-    refresh: Mapping[str, Any] | None,
-) -> None:
-    if wrapper.get("repository") != state.repository or wrapper.get("pr_number") != state.pull_request_number:
-        state.blockers.append("#1187 published refresh result identity does not match release target")
-    if wrapper.get("status") != "converged":
-        state.blockers.append("#1187 governed refresh workflow is not converged")
-        return
-    if refresh is None:
-        state.blockers.append("#1187 converged governed refresh result is missing its receipt")
-        return
-    if wrapper.get("authorization_receipt_published") is not True:
-        state.blockers.append("#1187 refresh authorization-consumption receipt is not published")
-    if refresh.get("status") != "converged":
-        state.blockers.append("#1187 refresh result is not converged")
-        return
-    if refresh.get("repository") != state.repository or refresh.get("pr_number") != state.pull_request_number:
-        state.blockers.append("#1187 refresh receipt identity does not match release target")
-    wrapper_authorization = wrapper.get("authorization_id")
-    refresh_authorization = refresh.get("authorization_id")
-    if (
-        not isinstance(wrapper_authorization, str)
-        or not wrapper_authorization
-        or refresh_authorization != wrapper_authorization
-    ):
-        state.blockers.append("#1187 refresh authorization identity is missing or mismatched")
-    if refresh.get("authorization_consumed") is not True or refresh.get("mutation_count") != 1:
-        state.blockers.append("#1187 refresh authorization consumption is not proven")
-    if refresh.get("final_current_proven") is not True:
-        state.blockers.append("#1187 refreshed branch currentness is not proven")
-    if refresh.get("validation_head_sha") != state.observed_head_sha:
-        state.blockers.append("#1187 refreshed-head validation is stale")
-    if refresh.get("validation_status") != "green":
-        state.blockers.append("#1187 refreshed-head validation is not green")
-
-
-def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
-    wrapper, refresh = _refresh_shapes(raw)
-    if wrapper is not None:
-        _validate_actions_refresh_result(state, wrapper, refresh)
-        return
-    if refresh is None:
-        return
-    if refresh.get("status") != "converged":
-        state.blockers.append("#1187 refresh result is not converged")
-        return
-    if refresh.get("new_head_sha") != state.observed_head_sha:
-        state.blockers.append("#1187 refresh result does not match current head")
-    _validate_direct_1187_result(state, refresh)
-
-
 def _refresh_proves_head_transition(raw: Any, old_head: str | None, new_head: str) -> bool:
-    wrapper, refresh = _refresh_shapes(raw)
-    if refresh is None or refresh.get("status") != "converged":
+    if not isinstance(raw, dict) or raw.get("status") != "converged":
         return False
-    if wrapper is not None:
-        if wrapper.get("repository") != refresh.get("repository") or wrapper.get("pr_number") != refresh.get("pr_number"):
-            return False
-        if wrapper.get("authorization_id") != refresh.get("authorization_id"):
-            return False
-    return refresh.get("old_head_sha") == old_head and refresh.get("new_head_sha") == new_head
+    return raw.get("old_head_sha") == old_head and raw.get("new_head_sha") == new_head
 
 
 def _invalidate_head_bound_authority_after_refresh(

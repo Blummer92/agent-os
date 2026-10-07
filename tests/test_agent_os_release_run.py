@@ -96,51 +96,6 @@ def evidence(**overrides):
     return base
 
 
-def operator_refresh_receipt(**overrides):
-    item = {
-        "repository": "Blummer92/agent-os",
-        "pr_number": 123,
-        "status": "converged",
-        "authorization_id": "refresh-auth-1",
-        "authorization_consumed": True,
-        "admitted_main_sha": MAIN,
-        "old_head_sha": OLD,
-        "new_head_sha": HEAD,
-        "mutation_count": 1,
-        "validation_status": "green",
-        "validation_head_sha": HEAD,
-        "final_current_proven": True,
-        "blockers": [],
-        "reason_codes": ["branch.current-proven", "refresh.rebased"],
-        "rollback_posture": "restore-old-head-with-separate-authorization",
-        "side_effects_performed": True,
-        "ready_for_review_authorized": False,
-        "merge_authorized": False,
-    }
-    item.update(overrides)
-    return item
-
-
-def published_refresh_result(*, status="converged", receipt="default", **overrides):
-    item = {
-        "repository": "Blummer92/agent-os",
-        "pr_number": 123,
-        "status": status,
-        "reason_codes": [],
-        "authorization_id": "refresh-auth-1",
-        "refresh_receipt": (
-            operator_refresh_receipt()
-            if receipt == "default" and status == "converged"
-            else receipt
-        ),
-        "authorization_receipt_published": status == "converged",
-        "mutation_count": 1 if status == "converged" else 0,
-        "side_effects_performed": status == "converged",
-    }
-    item.update(overrides)
-    return item
-
-
 def failure_evidence(**overrides):
     item = {
         "pr_head_sha": HEAD,
@@ -381,146 +336,7 @@ def test_1187_refresh_proves_head_advance_and_new_validation():
     assert state.phase == "merge-authorization-pause"
 
 
-def test_1187_published_actions_result_advances_to_exact_head_validation():
-    state = release_run.evaluate_release_run(
-        evidence(
-            checkpoint_head_sha=OLD,
-            branch_refresh_result=published_refresh_result(),
-        )
-    )
-    assert state.external_transition is None
-    assert state.phase == "merge-authorization-pause"
-
-
-def test_1187_published_result_still_requires_current_exact_head_validation():
-    state = release_run.evaluate_release_run(
-        evidence(
-            checkpoint_head_sha=OLD,
-            validation_head_sha=OLD,
-            branch_refresh_result=published_refresh_result(),
-        )
-    )
-    assert "authoritative validation is bound to a stale head" in state.blockers
-
-
-def test_1187_pre_mutation_terminal_workflow_evidence_needs_no_receipt():
-    state = release_run.evaluate_release_run(
-        evidence(
-            checkpoint_head_sha=HEAD,
-            branch_refresh_result=published_refresh_result(
-                status="blocked",
-                receipt=None,
-            ),
-        )
-    )
-    assert "#1187 governed refresh workflow is not converged" in state.blockers
-    assert state.external_transition is None
-
-
-def test_1187_published_result_with_malformed_nested_receipt_fails_closed():
-    result = published_refresh_result()
-    result["refresh_receipt"] = "malformed"
-    try:
-        release_run.evaluate_release_run(
-            evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-        )
-    except TypeError as error:
-        assert "refresh_receipt must be object or null" in str(error)
-    else:
-        raise AssertionError("malformed nested refresh receipt must fail closed")
-
-
-def test_1187_outer_needs_decision_cannot_be_erased_by_nested_convergence():
-    result = published_refresh_result(
-        status="needs-decision",
-        receipt=operator_refresh_receipt(),
-        authorization_receipt_published=False,
-        side_effects_performed=True,
-        mutation_count=1,
-    )
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert state.external_transition is None
-    assert "#1187 governed refresh workflow is not converged" in state.blockers
-    assert state.classification == "BLOCKED"
-
-
-def test_1187_outer_blocked_cannot_be_erased_by_nested_convergence():
-    result = published_refresh_result(
-        status="blocked",
-        receipt=operator_refresh_receipt(),
-        authorization_receipt_published=False,
-        side_effects_performed=True,
-        mutation_count=1,
-    )
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert "#1187 governed refresh workflow is not converged" in state.blockers
-
-
-def test_1187_outer_converged_rejects_nested_blocked_result():
-    result = published_refresh_result(
-        receipt=operator_refresh_receipt(status="blocked")
-    )
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert "#1187 refresh result is not converged" in state.blockers
-
-
-def test_1187_published_result_requires_authorization_receipt_publication():
-    result = published_refresh_result(authorization_receipt_published=False)
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert "#1187 refresh authorization-consumption receipt is not published" in state.blockers
-
-
-def test_1187_published_result_binds_repository_and_pr_identity():
-    result = published_refresh_result(repository="other/repo")
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert "#1187 published refresh result identity does not match release target" in state.blockers
-
-
-def test_1187_published_receipt_binds_repository_and_pr_identity():
-    result = published_refresh_result(
-        receipt=operator_refresh_receipt(pr_number=999)
-    )
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert state.external_transition == "unexpected-head-movement"
-
-
-def test_1187_published_result_binds_authorization_identity():
-    result = published_refresh_result(
-        receipt=operator_refresh_receipt(authorization_id="refresh-auth-other")
-    )
-    state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-    )
-    assert state.external_transition == "unexpected-head-movement"
-
-
-def test_1187_published_result_requires_consumption_currentness_and_refresh_validation():
-    for overrides, blocker in (
-        ({"authorization_consumed": False, "mutation_count": 0}, "#1187 refresh authorization consumption is not proven"),
-        ({"final_current_proven": False}, "#1187 refreshed branch currentness is not proven"),
-        ({"validation_head_sha": OLD}, "#1187 refreshed-head validation is stale"),
-        ({"validation_status": "failing"}, "#1187 refreshed-head validation is not green"),
-    ):
-        result = published_refresh_result(receipt=operator_refresh_receipt(**overrides))
-        state = release_run.evaluate_release_run(
-            evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
-        )
-        assert blocker in state.blockers
-
-
-def test_1187_direct_result_retains_invalidation_and_nested_validation_contract():
+def test_1187_refresh_requires_head_evidence_invalidation():
     receipt = refresh()
     receipt["invalidated_head_evidence"] = ["tested-sha"]
     state = release_run.evaluate_release_run(
@@ -534,7 +350,7 @@ def test_1187_refresh_invalidates_caller_supplied_merge_authority_at_new_head():
         evidence(
             checkpoint_head_sha=OLD,
             merge_authorized=True,
-            branch_refresh_result=published_refresh_result(),
+            branch_refresh_result=refresh(),
         )
     )
     assert state.merge_authorized is False
@@ -548,7 +364,7 @@ def test_1187_refresh_invalidates_caller_supplied_ready_authority_at_new_head():
             checkpoint_head_sha=OLD,
             pr_lifecycle_state="draft",
             ready_for_review_authorized=True,
-            branch_refresh_result=published_refresh_result(),
+            branch_refresh_result=refresh(),
         )
     )
     assert state.ready_for_review_authorized is False
