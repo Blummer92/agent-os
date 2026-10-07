@@ -29,6 +29,16 @@ credential, or authority. The selected candidate supplies #918's existing
 `governed_runner_capabilities`, environment profile, environment-health evidence,
 and workflow runtime identity.
 
+### Production consumer (#3333)
+
+`scripts/agent_os_execution_interface/codespace_implementation_dispatch.py` is
+the canonical production consumer of this chain for an already-admitted
+implementation mission: `dispatch_admitted_operation_to_codespace(...)` runs
+`choose_governed_runner` → `executor_route_inputs` → `select_executor_route`
+(requiring `CHATGPT_GOVERNED_RUNNER`) → the #3335 `TransportRequest` /
+`run_codespace_transport`, failing closed with reason-coded evidence at each
+junction. It creates no second router, transport, or authority.
+
 ## Developer-loop validation
 
 Use the canonical validation plan/profile. Run the smallest sufficient focused
