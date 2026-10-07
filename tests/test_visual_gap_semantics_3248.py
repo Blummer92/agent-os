@@ -297,9 +297,9 @@ def test_duplicate_selected_is_policy_unassigned_never_a_brief() -> None:
     assert entry["rejected_candidate_ids"] != []
 
 
-def test_load_rejection_is_policy_unassigned_never_a_brief() -> None:
-    # Classification slot only: the load model itself belongs to #3250 and is
-    # not redefined here. The ceiling (2, from the fixture) rejects rating 5.
+def test_cognitive_load_rating_is_advisory_never_a_brief() -> None:
+    # #3250 option (b): load evidence remains observable, but no governed load
+    # model exists, so rating 5 must not reject an otherwise eligible asset.
     plan = _needs(_requirement())
     heavy = _raw_envelope(
         asset_id="asset-heavy",
@@ -314,10 +314,14 @@ def test_load_rejection_is_policy_unassigned_never_a_brief() -> None:
     unfilled_roles, unfilled, briefs = _unfilled(planned)
     assert briefs == []
     assert unfilled_roles == []
-    assert len(unfilled) == 1
-    entry = unfilled[0]
-    assert entry["outcome_code"] == "policy-unassigned"
-    assert "asset-cognitive-load-exceeded" in entry["reason_codes"]
+    assert unfilled == []
+    assert planned.record is not None
+    payload = planned.record.to_dict()
+    assert payload["cognitive_load"]["total"] == 5
+    assert all(
+        "asset-cognitive-load-exceeded" not in item["reason_codes"]
+        for item in payload["rejected_set_combinations"]
+    )
 
 
 def test_incompatible_candidate_never_becomes_a_brief() -> None:
