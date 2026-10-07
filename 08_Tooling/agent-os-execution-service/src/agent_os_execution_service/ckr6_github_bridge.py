@@ -25,6 +25,36 @@ MAX_COMMENT_BYTES = 16 * 1024
 MAX_HINTS = 20
 MAX_TEXT = 512
 OPERATIONS = frozenset({"issue-start", "failed-repair"})
+# Marker for the bounded CKR6 result comment posted back to the issue (#2851).
+# The marker is an HTML comment (invisible in rendered view) and deliberately
+# does NOT start with COMMAND_PREFIX, so the postback can never retrigger the
+# ingress workflow.
+CKR6_RESULT_MARKER = "<!-- agent-os-ckr6-result:v1 -->"
+MAX_RESULT_COMMENT_BYTES = 16 * 1024
+# Exact result-envelope fields the postback transport may carry. The CKR6
+# projection stays fixed; transport metadata is added only at serialization.
+RESULT_FIELDS = frozenset({
+    "operation",
+    "repository",
+    "issue_number",
+    "status",
+    "reason_codes",
+    "selected_lesson_ids",
+    "canonical_github_refs",
+    "rejected_candidate_provenance",
+    "handoff_projection",
+    "substantial_hypothesis_admissible",
+    "mutation_admissible",
+    "blocking_attempt_id",
+    "execution_authorized",
+    "github_writes_authorized",
+    "merge_authorized",
+    "closure_authorized",
+    "side_effects_performed",
+    "notion_read_performed",
+    "retrieval_required",
+    "recommended_escalation",
+})
 COMMON_FIELDS = frozenset({
     "operation", "repository", "issue_number", "task_reference",
     "ecosystem_hints", "language_hints", "library_hints",
@@ -207,14 +237,24 @@ def classify_envelope(envelope: Ckr6Envelope) -> dict[str, object]:
 def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dict[str, object]:
     route = resolve_lesson_read_route() if retrieval_required else None
     if retrieval_required and (route is None or route.execute_read is None):
+        route_reason = route.reason_code if route is not None else "lesson-read-route-unavailable"
         return {
             "operation": envelope.operation,
             "repository": envelope.repository,
             "issue_number": envelope.issue_number,
             "status": "manual-review",
-            "reason_codes": [route.reason_code if route is not None else "lesson-read-route-unavailable"],
+            "reason_codes": [route_reason],
             "selected_lesson_ids": [],
             "canonical_github_refs": [],
+            # The host consumes stop_conditions to know WHY it must stop; the
+            # shape mirrors the canonical CKR6 fallback handoff projection.
+            "handoff_projection": {
+                "known_facts": ["coding-knowledge-sufficiency:manual-review"],
+                "prior_decisions": [],
+                "allowed_inspect_first": [],
+                "stop_conditions": ["coding-knowledge:" + route_reason],
+            },
+            "substantial_hypothesis_admissible": False,
             "mutation_admissible": False,
             "execution_authorized": False,
             "github_writes_authorized": False,
@@ -238,6 +278,13 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     )
     if envelope.operation == "issue-start":
         raw = activate_issue_start_lesson_preflight(**common, execute_read=reader)
+        # The handoff_projection is the host-consumable unit: the overlay
+        # instructs the host to put exactly this projection into its governed
+        # context packet. It was previously computed and dropped, which left
+        # the GitHub-ingress result without a consumable lesson payload.
+        handoff = raw["handoff_projection"]
+        if type(handoff) is not dict:
+            raise TypeError("handoff_projection must be a dict")
         return {
             "operation": envelope.operation,
             "repository": envelope.repository,
@@ -247,6 +294,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "selected_lesson_ids": raw["selected_lesson_ids"],
             "canonical_github_refs": raw["canonical_github_refs"],
             "rejected_candidate_provenance": raw.get("rejected_candidate_provenance", []),
+            "handoff_projection": handoff,
             "substantial_hypothesis_admissible": raw["substantial_hypothesis_admissible"],
             "mutation_admissible": False,
             "execution_authorized": False,
@@ -281,6 +329,157 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     }
 
 
+def _canonical_result_json(payload: Mapping[str, object]) -> str:
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+
+
+def serialize_ckr6_result_comment(
+    result: Mapping[str, object], *, request_comment_id: int
+) -> str:
+    """Serialize one bounded CKR6 result as a host-consumable issue comment.
+
+    The comment is the machine-consumable ChatGPT boundary for the finite
+    GitHub ingress (#2851): marker line + canonical compact JSON, following
+    the existing receipt pattern. It never starts with COMMAND_PREFIX, so the
+    postback cannot retrigger the ingress workflow. Only RESULT_FIELDS are
+    carried; anything else fails closed instead of being passed through.
+    """
+    if type(result) is not dict:
+        raise TypeError("result must be a dict")
+    if type(request_comment_id) is not int or request_comment_id < 1:
+        raise ValueError("request_comment_id must be a positive integer")
+    unknown = set(result) - RESULT_FIELDS
+    if unknown:
+        raise ValueError(f"result carries unexpected fields: {sorted(unknown)}")
+    payload = {**result, "request_comment_id": request_comment_id}
+    body = CKR6_RESULT_MARKER + "\n" + _canonical_result_json(payload)
+    if len(body.encode("utf-8")) > MAX_RESULT_COMMENT_BYTES:
+        raise ValueError("serialized CKR6 result exceeds the bounded comment size")
+    return body
+
+
+def parse_ckr6_result_comment(body: object) -> dict[str, object]:
+    """Parse one CKR6 result comment back into its bounded payload.
+
+    This is the consumption-side contract for the host: strict marker + exactly
+    two lines + canonical compact JSON. A missing result comment is
+    ``result-not-returned`` evidence, never an admission.
+    """
+    if type(body) is not str:
+        raise TypeError("comment body must be str")
+    prefix = CKR6_RESULT_MARKER + "\n"
+    if not body.startswith(prefix):
+        raise ValueError("comment is not a CKR6 result comment")
+    if body.count("\n") != 1:
+        raise ValueError("CKR6 result comment must contain exactly two lines")
+    serialized = body[len(prefix):]
+    payload = json.loads(serialized)
+    if type(payload) is not dict or _canonical_result_json(payload) != serialized:
+        raise ValueError("CKR6 result payload must be canonical compact JSON")
+    return payload
+
+
+def _fallback_result(repository: str, issue_number: int) -> dict[str, object]:
+    """Bounded manual-review result when no CKR6 result evidence exists.
+
+    The host must receive an explicit terminal signal rather than silence:
+    silence would be indistinguishable from a lost result.
+    """
+    return {
+        "operation": "unknown",
+        "repository": repository,
+        "issue_number": issue_number,
+        "status": "manual-review",
+        "reason_codes": ["ckr6-result-unavailable"],
+        "selected_lesson_ids": [],
+        "canonical_github_refs": [],
+        "substantial_hypothesis_admissible": False,
+        "mutation_admissible": False,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _load_result(path: str) -> dict[str, object] | None:
+    text = Path(path).read_text(encoding="utf-8")
+    payload = json.loads(text)
+    if type(payload) is not dict:
+        raise ValueError("CKR6 result payload must be one JSON object")
+    unknown = set(payload) - RESULT_FIELDS
+    if unknown:
+        raise ValueError(f"CKR6 result carries unexpected fields: {sorted(unknown)}")
+    return payload
+
+
+def postback_result_comment(
+    *,
+    event: Mapping[str, object],
+    repository: str,
+    result: dict[str, object] | None,
+    api_url: str,
+    token: str,
+) -> dict[str, object]:
+    """Post the bounded CKR6 result comment to the originating issue.
+
+    This closes the ``result-not-returned`` seam: the host's GitHub MCP surface
+    can read issue comments, but not workflow step summaries or artifacts.
+    Fail-closed: transport errors raise instead of reporting a posted result.
+    The token is never logged or embedded in returned evidence.
+    """
+    if not isinstance(event, Mapping):
+        raise TypeError("event must be a mapping")
+    if type(repository) is not str or "/" not in repository or not repository.strip():
+        raise ValueError("repository must use bounded owner/name syntax")
+    issue = event.get("issue")
+    comment = event.get("comment")
+    if not isinstance(issue, Mapping) or type(issue.get("number")) is not int:
+        raise ValueError("event issue number missing")
+    if not isinstance(comment, Mapping) or type(comment.get("id")) is not int:
+        raise ValueError("event request comment id missing")
+    if type(api_url) is not str or not api_url.startswith("https://"):
+        raise ValueError("api_url must be an https URL")
+    if type(token) is not str or not token:
+        raise ValueError("GitHub token is required for result postback")
+
+    issue_number: int = issue["number"]
+    request_comment_id: int = comment["id"]
+    payload = result if result is not None else _fallback_result(repository, issue_number)
+    body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+
+    import urllib.request
+
+    target = f"{api_url.rstrip('/')}/repos/{repository}/issues/{issue_number}/comments"
+    request = urllib.request.Request(
+        target,
+        data=json.dumps({"body": body}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "User-Agent": "agent-os-ckr6-bridge",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            posted = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"CKR6 result postback failed: {type(exc).__name__}") from exc
+    if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
+        raise RuntimeError("CKR6 result postback returned an unexpected response")
+    return {
+        "issue_number": issue_number,
+        "request_comment_id": request_comment_id,
+        "posted_comment_id": posted["id"],
+        "result_status": payload["status"],
+    }
+
+
 def _load_event(path: str) -> Mapping[str, object]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, Mapping):
@@ -290,16 +489,36 @@ def _load_event(path: str) -> Mapping[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=("classify", "execute"), required=True)
+    parser.add_argument("--phase", choices=("classify", "execute", "postback"), required=True)
     parser.add_argument("--event", required=True)
     parser.add_argument("--repository", required=True)
-    parser.add_argument("--allowed-actor", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--allowed-actor", required=False, default="Blummer92")
+    parser.add_argument("--output", required=False)
     parser.add_argument("--retrieval-required", choices=("true", "false"))
+    parser.add_argument("--result", required=False)
+    parser.add_argument("--api-url", required=False, default="https://api.github.com")
     args = parser.parse_args()
 
+    event = _load_event(args.event)
+    if args.phase == "postback":
+        # The workflow job gate already admitted this event; postback needs no
+        # actor re-check, only the issue/comment identity for correlation.
+        result = _load_result(args.result) if args.result and Path(args.result).exists() else None
+        token = os.environ.get("GITHUB_TOKEN", "")
+        posted = postback_result_comment(
+            event=event,
+            repository=args.repository,
+            result=result,
+            api_url=args.api_url,
+            token=token,
+        )
+        print(json.dumps(posted, sort_keys=True))
+        return 0
+
+    if not args.allowed_actor or not args.output:
+        raise ValueError("--allowed-actor and --output are required for classify/execute")
     envelope = envelope_from_event(
-        _load_event(args.event),
+        event,
         expected_repository=args.repository,
         allowed_actor=args.allowed_actor,
     )

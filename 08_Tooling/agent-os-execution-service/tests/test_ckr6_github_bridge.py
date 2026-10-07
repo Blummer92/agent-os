@@ -103,6 +103,12 @@ def test_3032_issue_start_projects_bounded_rejected_candidate_provenance(monkeyp
                 "currentness": "unverifiable",
                 "provenance": "canonical-github-ref-missing-or-rejected",
             }],
+            "handoff_projection": {
+                "known_facts": ["coding-knowledge-sufficiency:manual-review"],
+                "prior_decisions": [],
+                "allowed_inspect_first": [],
+                "stop_conditions": ["coding-knowledge:unverifiable-relevant-candidate"],
+            },
             "substantial_hypothesis_admissible": False,
         },
     )
@@ -271,3 +277,219 @@ def test_2984_bridge_contract_distinguishes_transport_from_retrieval_activation(
         "#2854 as the binding owner",
     ):
         assert phrase in contract
+
+
+def _result(**changes):
+    value = {
+        "operation": "issue-start",
+        "repository": "Blummer92/agent-os",
+        "issue_number": 2851,
+        "status": "not-needed",
+        "reason_codes": ["knowledge-not-needed"],
+        "selected_lesson_ids": [],
+        "canonical_github_refs": [],
+        "handoff_projection": {
+            "known_facts": ["coding-knowledge-sufficiency:not-needed"],
+            "prior_decisions": [],
+            "allowed_inspect_first": [],
+            "stop_conditions": [],
+        },
+        "substantial_hypothesis_admissible": True,
+        "mutation_admissible": False,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+    value.update(changes)
+    return value
+
+
+def test_2851_result_comment_serializes_marker_plus_canonical_json():
+    body = bridge.serialize_ckr6_result_comment(_result(), request_comment_id=777)
+    assert body.startswith(bridge.CKR6_RESULT_MARKER + "\n")
+    assert body.count("\n") == 1
+    parsed = bridge.parse_ckr6_result_comment(body)
+    assert parsed["status"] == "not-needed"
+    assert parsed["request_comment_id"] == 777
+    assert parsed["substantial_hypothesis_admissible"] is True
+    assert parsed["handoff_projection"]["known_facts"] == [
+        "coding-knowledge-sufficiency:not-needed"
+    ]
+
+
+def test_2851_result_comment_never_starts_with_command_prefix():
+    # The postback must not retrigger the ingress workflow.
+    body = bridge.serialize_ckr6_result_comment(_result(), request_comment_id=1)
+    assert not body.startswith(bridge.COMMAND_PREFIX)
+    assert bridge.COMMAND_PREFIX not in body.split("\n")[0]
+
+
+def test_2851_result_comment_rejects_unexpected_fields():
+    with pytest.raises(ValueError):
+        bridge.serialize_ckr6_result_comment(
+            _result(surprise_field=True), request_comment_id=1
+        )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "no marker at all",
+        bridge.CKR6_RESULT_MARKER + "\n" + '{"a":1}\n' + '{"b":2}',
+        bridge.CKR6_RESULT_MARKER + "\nnot json",
+    ],
+)
+def test_2851_result_comment_parse_rejects_non_canonical(bad):
+    with pytest.raises(ValueError):
+        bridge.parse_ckr6_result_comment(bad)
+
+
+def test_2851_execute_envelope_carries_handoff_projection(monkeypatch):
+    # The host-consumable unit must survive the bridge projection.
+    monkeypatch.setattr(
+        bridge,
+        "resolve_lesson_read_route",
+        lambda: (_ for _ in ()).throw(AssertionError("zero-read path must not resolve")),
+    )
+    envelope = bridge.parse_envelope(payload(specialized_knowledge_required=False))
+    result = bridge.execute_envelope(envelope, retrieval_required=False)
+    assert result["status"] == "not-needed"
+    assert result["handoff_projection"]["known_facts"] == [
+        "coding-knowledge-sufficiency:not-needed"
+    ]
+
+
+def _postback_event():
+    return {
+        "repository": {"full_name": "Blummer92/agent-os"},
+        "issue": {"number": 2851},
+        "comment": {"id": 777, "body": "ignored", "user": {"login": "Blummer92"}},
+    }
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def read(self):
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_2851_postback_posts_bounded_comment_to_originating_issue(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=30):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode("utf-8"))["body"]
+        captured["auth"] = request.headers.get("Authorization")
+        return _FakeResponse({"id": 888})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    posted = bridge.postback_result_comment(
+        event=_postback_event(),
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    assert captured["url"] == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/2851/comments"
+    )
+    assert captured["url"].startswith("https://")
+    assert captured["auth"] == "Bearer token-value"
+    assert "token-value" not in captured["body"]
+    parsed = bridge.parse_ckr6_result_comment(captured["body"])
+    assert parsed["request_comment_id"] == 777
+    assert posted["posted_comment_id"] == 888
+    assert posted["result_status"] == "not-needed"
+
+
+def test_2851_postback_falls_back_to_manual_review_when_result_missing(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=30):
+        captured["body"] = json.loads(request.data.decode("utf-8"))["body"]
+        return _FakeResponse({"id": 889})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    posted = bridge.postback_result_comment(
+        event=_postback_event(),
+        repository="Blummer92/agent-os",
+        result=None,
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    parsed = bridge.parse_ckr6_result_comment(captured["body"])
+    assert parsed["status"] == "manual-review"
+    assert parsed["reason_codes"] == ["ckr6-result-unavailable"]
+    assert parsed["substantial_hypothesis_admissible"] is False
+    assert parsed["execution_authorized"] is False
+    assert posted["result_status"] == "manual-review"
+
+
+def test_2851_postback_fails_closed_on_transport_error(monkeypatch):
+    def fake_urlopen(request, timeout=30):
+        raise OSError("connection refused")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError):
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+
+
+def test_2851_workflow_posts_bounded_result_with_least_privilege():
+    root = Path(__file__).resolve().parents[3]
+    text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
+    # Top-level stays least-privilege; the execute job alone gains issues:write.
+    assert "permissions:\n  contents: read" in text
+    execute_block = text.split("name: Execute finite CKR6 request", 1)[1]
+    assert "issues: write" in execute_block.split("steps:", 1)[0]
+    # The postback always runs so the host gets a terminal signal, and it
+    # cannot retrigger the ingress.
+    assert "Post bounded CKR6 result to issue" in text
+    assert "if: ${{ always() }}" in text
+    assert "--phase postback" in text
+    postback_step = text.split("Post bounded CKR6 result to issue", 1)[1]
+    assert "/agent-os ckr6" not in postback_step.split("- name:", 1)[0]
+
+
+def test_2851_unbound_route_carries_admission_flag_and_stop_conditions(monkeypatch):
+    # CASE C: the blocked result must be machine-readable as blocked and tell
+    # the host why it must stop.
+    route = type("Route", (), {"execute_read": None, "reason_code": "current-surface-unbound"})()
+    monkeypatch.setattr(bridge, "resolve_lesson_read_route", lambda: route)
+    envelope = bridge.parse_envelope(payload(specialized_knowledge_required=True))
+    result = bridge.execute_envelope(envelope, retrieval_required=True)
+    assert result["status"] == "manual-review"
+    assert result["reason_codes"] == ["current-surface-unbound"]
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert result["handoff_projection"]["stop_conditions"] == [
+        "coding-knowledge:current-surface-unbound"
+    ]
+    assert result["handoff_projection"]["known_facts"] == [
+        "coding-knowledge-sufficiency:manual-review"
+    ]
+    # The blocked result must still serialize through the postback contract.
+    body = bridge.serialize_ckr6_result_comment(result, request_comment_id=5)
+    parsed = bridge.parse_ckr6_result_comment(body)
+    assert parsed["substantial_hypothesis_admissible"] is False

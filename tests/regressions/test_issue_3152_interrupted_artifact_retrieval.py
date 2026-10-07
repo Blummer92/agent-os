@@ -73,5 +73,5 @@ def test_reuses_existing_continuation_architecture_without_new_framework() -> No
 
 def test_changelog_records_issue_3152() -> None:
     text = ORCHESTRATOR.read_text(encoding="utf-8")
-    assert "## Version\n0.3.16" in text
+    assert "## Version\n0.3.17" in text
     assert "#3152" in text
