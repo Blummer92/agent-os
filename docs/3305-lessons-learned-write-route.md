@@ -54,7 +54,7 @@ There is no retry. An uncertain create without a returned identity remains
 `uncertain`; an update can verify its already-known target after an ambiguous
 response. Concurrency with external Notion clients is not atomic CAS. Titles that
 have been renamed or semantically similar lessons require human reconciliation.
-Public evidence contains only bounded status, identifiers, revision and digest.
+Public evidence contains only bounded status, identifiers and revision.
 
 ## Persistence versus CKR6 use
 
