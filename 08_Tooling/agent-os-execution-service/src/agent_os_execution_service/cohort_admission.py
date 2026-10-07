@@ -29,6 +29,7 @@ REASON_CODES = frozenset(
         "cohort-admission.request-missing",
         "cohort-admission.request-not-applicable",
         "cohort-admission.request-ambiguous",
+        "cohort-admission.constraint-unsupported",
         "cohort-admission.repository-mismatch",
         "cohort-admission.candidate-not-in-population",
         "cohort-admission.candidate-population-empty",
@@ -121,7 +122,9 @@ def admit_request_cohort(
     population and is admitted only when already within the bounded capacity.
     Unknown targets and request records with unresolved reason codes fail closed
     rather than promoting arbitrary constraints, labels, prose, or operator
-    filtering into cohort authority.
+    filtering into cohort authority. Request ``constraints`` carry no governed
+    membership meaning: a repository target that carries any fails closed
+    instead of silently admitting the whole population while dropping them.
     """
 
     if type(repository) is not str or repository.count("/") != 1:
@@ -199,6 +202,12 @@ def admit_request_cohort(
         if target["resource_id"] is not None:
             return fail(
                 "cohort-admission.request-ambiguous",
+                request_id=request_id,
+                constraints=constraints,
+            )
+        if payload["constraints"]:
+            return fail(
+                "cohort-admission.constraint-unsupported",
                 request_id=request_id,
                 constraints=constraints,
             )

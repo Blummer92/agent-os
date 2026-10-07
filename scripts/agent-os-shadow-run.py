@@ -34,8 +34,11 @@ reconstructible for arbitrary backlog issues). Those three are #3329's
 bounded blockers -- surfaced, not manufactured. The seam therefore still
 fail-closes with ``candidate-evidence-incomplete`` for the real backlog,
 and the experiment record names the exact missing owner instead of filling
-the gap. The real-backlog acceptance canary remains gated on #3328's
-legitimate cohort plus caller-supplied request context. Feeding a
+the gap. #3328: ``--request-interpretation`` supplies the canonical
+request-interpretation-v1 record from which the existing cohort admission
+(``cohort_admission.py``) derives the bounded candidate cohort, or fails
+closed, before any candidate evidence is read; manual ``--candidates`` stays
+a diagnostic/experiment input and cannot be combined with it. Feeding a
 ``SELECTED`` result into the governed issue-start path is #3082 (Phase 1+);
 this CLI is the producer side of that future connection.
 
@@ -390,14 +393,18 @@ def _build_experiment_record(
     repository: str,
     retrieved_at: str,
     campaign_id: str,
-    narrowing_criterion: str | None,
     result: ShadowIssueSelectionResult,
     client: GitHubReadClient,
     ledger_entries: tuple[dict[str, object], ...] = (),
     evidence_gap_reason: str | None = None,
 ) -> dict[str, object]:
+    # The selector result is the single source for the narrowing actually
+    # applied: the operator-declared criterion on the manual path, or the
+    # canonical ``canonical-request:<record>`` criterion from #3328 cohort
+    # admission (which no CLI flag carries).
     population = result.population_issue_numbers
     candidates = result.candidate_issue_numbers
+    narrowing_criterion = result.narrowing_criterion
     candidate_set = set(candidates)
 
     if result.reason_codes and "shadow-selection.population-incomplete" in result.reason_codes:
@@ -722,6 +729,21 @@ def main(argv: list[str] | None = None) -> int:
             else None,
             "narrowing_criterion": args.narrowing_criterion,
             "explicit_request_order": list(explicit_order),
+            "cohort_admission": (
+                None
+                if result.cohort_admission is None
+                else {
+                    "request_constraint_identity": (
+                        result.cohort_admission.request_constraint_identity
+                    ),
+                    "population_identity": result.cohort_admission.population_identity,
+                    "status": result.cohort_admission.status.value,
+                    "candidate_issue_numbers": list(
+                        result.cohort_admission.candidate_issue_numbers
+                    ),
+                    "reason_codes": list(result.cohort_admission.reason_codes),
+                }
+            ),
             "population_issue_numbers": list(result.population_issue_numbers),
             "scan_page_count": result.scan_page_count,
             "scan_item_count": result.scan_item_count,
@@ -759,7 +781,6 @@ def main(argv: list[str] | None = None) -> int:
         repository=args.repository,
         retrieved_at=retrieved_at,
         campaign_id=args.campaign_id,
-        narrowing_criterion=args.narrowing_criterion,
         result=result,
         client=client,
         ledger_entries=tuple(entry.to_dict() for entry in ledger.entries),
