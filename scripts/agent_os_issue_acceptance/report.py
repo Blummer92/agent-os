@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import AcceptanceReport, LinkedIssueParseStatus, Status
+from .models import AcceptanceReport, CheckResult, LinkedIssueParseStatus, Status
 
 # Fixed compatibility line for the informational reuse-evidence section (#248 §7).
 # Kept as one rendered line; states the evidence/authorization boundary plainly so

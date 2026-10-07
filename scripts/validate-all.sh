@@ -412,6 +412,8 @@ for target in "${normalized_focused_targets[@]}"; do
   run_focused_target "$target"
 done
 
+run_check "Ruff lint" "$ROOT_DIR" "$PYTHON_BIN -m ruff check ." "$PYTHON_BIN" -m ruff check .
+
 run_check "structural validation" "$ROOT_DIR" "PYTHON_BIN=$PYTHON_BIN bash $STRUCTURAL_SCRIPT" env PYTHON_BIN="$PYTHON_BIN" bash "$STRUCTURAL_SCRIPT"
 
 mapfile -t test_dirs < <(

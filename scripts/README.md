@@ -49,8 +49,8 @@ The contract now fails closed on behind/conflicted/unknown freshness, stale vali
 
 ## validate-all.sh
 
-Aggregate local validation runner: structural validation plus every discovered
-pytest suite.
+Aggregate local validation runner: conservative Ruff linting, structural
+validation, plus every discovered pytest suite.
 
 ```bash
 ./scripts/validate-all.sh
@@ -58,7 +58,7 @@ pytest suite.
 
 After execution, `TIMING RESULTS` reports observational elapsed time for each
 check that already runs through the canonical runner boundary, including
-structural validation, optional focused checks, every discovered pytest suite,
+Ruff linting, structural validation, optional focused checks, every discovered pytest suite,
 and `aggregate total`. Durations are reported in seconds to millisecond display
 precision. Timing does not change command selection, command order, failure
 handling, overall status, or exit authority. If the runner cannot obtain a safe

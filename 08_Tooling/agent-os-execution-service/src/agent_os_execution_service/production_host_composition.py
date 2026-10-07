@@ -44,6 +44,7 @@ import os
 from typing import Callable
 
 from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
+    GovernedInvocationDescriptor,
     load_invocation_descriptor,
 )
 from workflow_scheduler.execution.concrete_runtime_adapters import (

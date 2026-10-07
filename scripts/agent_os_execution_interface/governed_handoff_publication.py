@@ -24,7 +24,10 @@ from agent_os_execution_service.execution_authorization_source import (
     ExecutionAuthorizationSourceStatus,
 )
 from agent_os_execution_service.executor_routing import ExecutorHandoff, ExecutorRouteDecision
-from agent_os_execution_service.handoff_publication import publish_governed_handoff
+from agent_os_execution_service.handoff_publication import (
+    SingleIssuePilotInput,
+    publish_governed_handoff,
+)
 from scripts.agent_os_candidate_packet.cli import PreparedCandidatePacket
 from scripts.agent_os_candidate_packet.execution_packet_stage import (
     ExecutionPacketDisposition,
