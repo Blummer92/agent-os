@@ -96,6 +96,20 @@ def evidence(**overrides):
     return base
 
 
+def published_refresh_result(*, status="converged", receipt=None):
+    return {
+        "repository": "Blummer92/agent-os",
+        "pr_number": 123,
+        "status": status,
+        "reason_codes": [],
+        "authorization_id": "refresh-auth-1",
+        "refresh_receipt": refresh() if receipt is None and status == "converged" else receipt,
+        "authorization_receipt_published": status == "converged",
+        "mutation_count": 1 if status == "converged" else 0,
+        "side_effects_performed": status == "converged",
+    }
+
+
 def failure_evidence(**overrides):
     item = {
         "pr_head_sha": HEAD,
@@ -336,13 +350,59 @@ def test_1187_refresh_proves_head_advance_and_new_validation():
     assert state.phase == "merge-authorization-pause"
 
 
-def test_1187_refresh_requires_head_evidence_invalidation():
+def test_1187_published_actions_result_advances_to_exact_head_validation():
     receipt = refresh()
-    receipt["invalidated_head_evidence"] = ["tested-sha"]
+    receipt.pop("invalidated_head_evidence")
+    receipt.pop("validation")
     state = release_run.evaluate_release_run(
-        evidence(checkpoint_head_sha=OLD, branch_refresh_result=receipt)
+        evidence(
+            checkpoint_head_sha=OLD,
+            branch_refresh_result=published_refresh_result(receipt=receipt),
+        )
     )
-    assert "#1187 refresh did not prove required head-evidence invalidation" in state.blockers
+    assert state.external_transition is None
+    assert state.phase == "merge-authorization-pause"
+
+
+def test_1187_refresh_does_not_duplicate_exact_head_validation_requirements():
+    receipt = refresh()
+    receipt.pop("invalidated_head_evidence")
+    receipt.pop("validation")
+    state = release_run.evaluate_release_run(
+        evidence(
+            checkpoint_head_sha=OLD,
+            validation_head_sha=OLD,
+            branch_refresh_result=published_refresh_result(receipt=receipt),
+        )
+    )
+    assert "authoritative validation is bound to a stale head" in state.blockers
+
+
+def test_1187_pre_mutation_terminal_workflow_evidence_needs_no_receipt():
+    state = release_run.evaluate_release_run(
+        evidence(
+            checkpoint_head_sha=HEAD,
+            branch_refresh_result=published_refresh_result(
+                status="blocked",
+                receipt=None,
+            ),
+        )
+    )
+    assert "#1187 refresh result is not converged" in state.blockers
+    assert state.external_transition is None
+
+
+def test_1187_published_result_with_malformed_nested_receipt_fails_closed():
+    result = published_refresh_result()
+    result["refresh_receipt"] = "malformed"
+    try:
+        release_run.evaluate_release_run(
+            evidence(checkpoint_head_sha=OLD, branch_refresh_result=result)
+        )
+    except TypeError as error:
+        assert "refresh_receipt must be object or null" in str(error)
+    else:
+        raise AssertionError("malformed nested refresh receipt must fail closed")
 
 
 def test_draft_to_ready_outside_governed_operation_is_detected():
