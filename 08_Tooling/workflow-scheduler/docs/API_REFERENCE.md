@@ -282,12 +282,25 @@ adapter = InstructionalMaterialsDryRunAdapter()
 result = adapter.execute(execution_request)
 ```
 
+The current payload contract is `imc-materials-task-v2` (#3377). In addition to
+the content path, template IDs, target folder, and lessons directory, it requires
+`material_requirement_path` and `current_curriculum_evidence_path`. Both are
+validated with the same relative-path and hostile-input rules as `content_path`
+and rendered as `--material-requirement` and `--current-curriculum-evidence`.
+The rendered plan therefore matches the governed inputs `imc-build build`
+requires before it will request credentials. An `imc-materials-task-v1` payload
+lacks those inputs and fails closed with `failure` (unsupported contract
+version/shape); it never returns a plan the CLI would refuse. The root
+`tests/test_3377_imc_invocation_contract.py` guard feeds the rendered plan to the
+real CLI so future drift fails validation.
+
 A successful result proves only local contract validation and deterministic
-receipt rendering. It does **not** prove approval, execution authorization,
-source freshness, external capability, template access, target-folder access,
-credentials, artifact quality, or permission to write. The receipt command is an
-inert argument list and is never executed by this adapter. The sanitized authoring
-example is `examples/instructional-materials-dry-run.yaml`.
+receipt rendering. Matching the CLI's governed-input contract does **not** prove
+approval, execution authorization, source freshness, external capability,
+template access, target-folder access, credentials, artifact quality, or
+permission to write. The receipt command is an inert argument list and is never
+executed by this adapter. The sanitized authoring example is
+`examples/instructional-materials-dry-run.yaml`.
 
 
 ### InstructionalMaterialsLiveAdapter (C4B)
