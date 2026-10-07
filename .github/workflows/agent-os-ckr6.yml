@@ -69,6 +69,13 @@ jobs:
     name: Execute finite CKR6 request
     needs: classify
     runs-on: ubuntu-latest
+    # issues:write is scoped to this job only: it posts the bounded CKR6
+    # result comment back to the originating issue (#2851) so the ChatGPT
+    # host can consume it through its GitHub MCP surface. Top-level
+    # permissions stay contents:read. No other GitHub write is performed.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check out canonical source
         uses: actions/checkout@v7
@@ -157,3 +164,25 @@ jobs:
           path: ${{ runner.temp }}/agent-os-ckr6/result.json
           if-no-files-found: warn
           retention-days: 3
+
+      # #2851 result-consumption seam: the step summary and artifact above are
+      # not readable through the ChatGPT host's GitHub MCP surface. Post the
+      # bounded result back to the originating issue as a machine-readable
+      # comment so the host can consume it and continue the parent mission.
+      # The comment never starts with "/agent-os ckr6", so it cannot retrigger
+      # this workflow. When result.json is absent, an explicit manual-review
+      # fallback is posted instead of silence.
+      - name: Post bounded CKR6 result to issue
+        if: ${{ always() }}
+        env:
+          AGENT_OS_EVENT: ${{ github.event_path }}
+          AGENT_OS_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m agent_os_execution_service.ckr6_github_bridge \
+            --phase postback \
+            --event "$AGENT_OS_EVENT" \
+            --repository "$AGENT_OS_REPOSITORY" \
+            --result "$RUNNER_TEMP/agent-os-ckr6/result.json" \
+            --api-url "$GITHUB_API_URL"
