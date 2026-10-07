@@ -26,7 +26,7 @@ Run the aggregate local validation command from the repository root:
 ./scripts/validate-all.sh
 ```
 
-It runs `07_Agent_Tests/validate-repo-structure.sh` and discovered Python pytest suites. Exit code `0` means pass, `1` means validation failure, and `2` means the runner could not start.
+It runs a conservative repository-wide Ruff lint pass, `07_Agent_Tests/validate-repo-structure.sh`, and discovered Python pytest suites. Exit code `0` means pass, `1` means validation failure, and `2` means the runner could not start.
 
 ### Cloud Build Validation
 
