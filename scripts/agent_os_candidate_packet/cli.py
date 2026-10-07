@@ -145,6 +145,7 @@ def prepare_candidate_packet(
     candidate_runtime_inputs: CandidateRuntimeInputs | None = None,
     external_build_sha: str | None = None,
     compiler_evaluated_at: str | None = None,
+    approval_record_exists: bool = True,
 ) -> PreparedCandidatePacket:
     """Compose #750-#755 end to end, stopping at the first truthful blocker.
 
@@ -166,16 +167,23 @@ def prepare_candidate_packet(
     approval_evaluated_at = approval_evaluated_at or observed_at
     approval_projected_at = approval_projected_at or observed_at
     compiler_evaluated_at = compiler_evaluated_at or observed_at
+    if not isinstance(approval_record_exists, bool):
+        raise TypeError("approval_record_exists must be a bool")
 
     # Pass 1: resolve the exact source snapshot and scan its governed
     # IssuePlan fields with no planning context yet -- this is the only way
     # to obtain the normalized semantic fields the fingerprint is derived
     # from before ``IssuePlanningContext`` can be built.
+    #
+    # ``approval_record_exists`` keys the phase-aware readiness contract
+    # (#3354): False only when the caller has established that no
+    # ApprovalRecord or approved execution projection exists for this issue.
     request = IssueReadinessStageRequest(
         repository=repository,
         issue_number=issue_number,
         observed_at=observed_at,
         freshness_boundary=freshness_boundary,
+        approval_record_exists=approval_record_exists,
     )
     precheck = prepare_issue_readiness(
         request,
@@ -697,6 +705,7 @@ def _prepare_from_fixture(fixture: dict[str, object]) -> PreparedCandidatePacket
             else _candidate_runtime_inputs_from_dict(candidate_runtime_inputs)
         ),
         external_build_sha=fixture.get("external_build_sha"),
+        approval_record_exists=fixture.get("approval_record_exists", True),
     )
 
 

@@ -470,7 +470,19 @@ _READINESS_OUTCOME_MAP = {
 
 @dataclass(frozen=True, slots=True)
 class IssueReadinessStageRequest:
-    """Bounded request describing exactly which issue snapshot to prepare."""
+    """Bounded request describing exactly which issue snapshot to prepare.
+
+    ``approval_record_exists`` keys the phase-aware readiness contract
+    (#3354): ``True`` (the default) preserves the legacy post-approval
+    contract, requiring ``DependencyReadinessEvidence`` and
+    ``AdvisoryEvidenceResult``. Set it to ``False`` only when the caller has
+    established that no ``ApprovalRecord`` or approved execution projection
+    exists for this issue; readiness then runs in first-packet mode --
+    strict/current IssuePlan plus pre-approval issue-dependency
+    identity/current-state evidence, without consulting the post-approval
+    evidence owners. The default is fail-closed toward the stricter legacy
+    contract.
+    """
 
     repository: str
     issue_number: int
@@ -478,10 +490,13 @@ class IssueReadinessStageRequest:
     freshness_boundary: str = "stage-observation"
     expected_source_revision: str | None = None
     governed_field_names: tuple[str, ...] = ()
+    approval_record_exists: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.issue_number, int) or isinstance(self.issue_number, bool):
             raise TypeError("issue_number must be an int")
+        if not isinstance(self.approval_record_exists, bool):
+            raise TypeError("approval_record_exists must be a bool")
         object.__setattr__(
             self, "governed_field_names", tuple(self.governed_field_names)
         )

@@ -27,6 +27,7 @@ _GOVERNED_FIELDS = {
     "documentation_impact",
     "documentation_expected_change",
     "documentation_exemption_reason",
+    "depends_on",
 }
 _STRICT_REQUIRED_FIELDS = {
     "profile_version",
@@ -42,6 +43,43 @@ _STRICT_REQUIRED_FIELDS = {
     "documentation_impact",
 }
 _RECOGNIZED_PROFILE_VERSIONS = {"issueplan-core/v1"}
+
+# Canonical structured dependency-identity form (#3354). One exact form is
+# admitted so the scanner can validate it with no external context: a fully
+# qualified ``owner/repository#NNNN`` reference. Bare ``#NNNN`` references,
+# URLs, prose, and any other shape are rejected as malformed -- resolving them
+# would require inferring repository context the scanner does not hold, and
+# #776 forbids deriving identities from anything but this structured field.
+_DEPENDS_ON_ENTRY_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
+    r"/[A-Za-z0-9][A-Za-z0-9_.-]*"
+    r"#[1-9][0-9]*$"
+)
+
+
+def normalize_depends_on(value: object) -> tuple[str, ...] | None:
+    """Validate and canonicalize an IssuePlan ``depends_on`` field value.
+
+    Returns the deterministically ordered, duplicate-free identity tuple, or
+    ``None`` when the value is malformed. ``None`` (absent/empty field) is
+    valid and normalizes to no identities; an empty list is a positive
+    declaration of no dependencies. Anything else -- a non-list, a non-string
+    entry, or an entry that is not canonical ``owner/repository#NNNN`` form --
+    is malformed and fails closed at the caller.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        return None
+    identities: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str):
+            return None
+        candidate = entry.strip()
+        if not _DEPENDS_ON_ENTRY_RE.match(candidate):
+            return None
+        identities.append(candidate)
+    return tuple(sorted(set(identities)))
 
 
 class ScanFinding(str, Enum):
@@ -215,7 +253,17 @@ def _discover_candidates(content: str) -> list[MetadataCandidate]:
         if not isinstance(block, dict):
             candidates.append(MetadataCandidate(index, raw, None, True))
             continue
-        candidates.append(MetadataCandidate(index, raw, dict(block)))
+        normalized_block = dict(block)
+        if "depends_on" in normalized_block:
+            normalized = normalize_depends_on(normalized_block["depends_on"])
+            if normalized is None:
+                # A malformed dependency declaration means the dependency set
+                # is unknowable; the whole candidate fails closed rather than
+                # being read as "no dependencies".
+                candidates.append(MetadataCandidate(index, raw, None, True))
+                continue
+            normalized_block["depends_on"] = list(normalized)
+        candidates.append(MetadataCandidate(index, raw, normalized_block))
     return candidates
 
 

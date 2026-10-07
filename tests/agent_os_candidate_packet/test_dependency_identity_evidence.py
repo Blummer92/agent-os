@@ -414,6 +414,7 @@ _ALLOWED_READINESS_STAGE_IMPORTS = {
     "scripts.agent_os_issue_acceptance.issueplan_scanner",
     "scripts.agent_os_issue_acceptance.models",
     "scripts.agent_os_issue_acceptance.readiness",
+    ".preapproval_dependency_evidence",
     ".source_stage",
     ".stage_models",
 }
