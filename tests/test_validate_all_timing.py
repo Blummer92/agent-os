@@ -52,7 +52,7 @@ def test_validate_all_reports_structure_suite_and_total_timings(tmp_path: Path) 
     assert re.search(r"^- structural validation \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- root \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- aggregate total \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
-    assert len(TIMING_LINE.findall(result.stdout)) == 3
+    assert len(TIMING_LINE.findall(result.stdout)) == 5
     assert "OVERALL STATUS\nPASS\n\nEXIT CODE\n0\n" in result.stdout
 
 
