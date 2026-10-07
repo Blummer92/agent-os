@@ -332,6 +332,16 @@ def test_3246_policy_guard_closure_ownership_text() -> None:
         assert phrase in text, f"missing #3246 closure policy text: {phrase}"
 
 
+def test_3246_policy_guard_disposition_evidence_bound_text() -> None:
+    text = normalized_text(LIFECYCLE)
+    for phrase in (
+        "disposition comment that materially claims closure-readiness or live acceptance",
+        "must name the evidence class it is based on and must not exceed that evidence",
+        "Headline wording must not claim implementation acceptance, terminal QA, or readiness for owner close",
+    ):
+        assert phrase in text, f"missing #3246 disposition-evidence policy text: {phrase}"
+
+
 def test_3246_policy_guard_recurrence_routing_text() -> None:
     text = normalized_text(LIFECYCLE)
     for phrase in (
