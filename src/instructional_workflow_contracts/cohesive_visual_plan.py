@@ -803,9 +803,12 @@ def _set_rejection_reasons(
         )
         reasons.extend(cohesion_reasons)
 
-    candidate_load = candidate["cohesion_profile"]["cognitive_load_rating"]
-    if current_cognitive_load + candidate_load > cognitive_ceiling:
-        reasons.append("asset-cognitive-load-exceeded")
+    # #3250 owner decision (b): no governed cognitive-load budget exists.
+    # Keep the observed rating/total as advisory evidence, but do not reject an
+    # otherwise eligible visual by comparing the summed 1-5 ratings with the
+    # producer's visual-count ceiling. Reintroducing a load gate requires a
+    # separately governed model with consistent units and a live rating source.
+    del current_cognitive_load, cognitive_ceiling
     return tuple(sorted(set(reasons)))
 
 

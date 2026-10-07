@@ -166,7 +166,9 @@ def test_multiple_required_roles_receive_compatible_candidates() -> None:
     plan_payload["required_roles"] = [plan_payload["required_roles"][0], optional]
     plan_payload["optional_roles"] = []
     plan_payload["maximum_visual_count"] = 2
-    plan_payload["cognitive_load_ceiling"] = 4
+    # Keep the producer-derived ceiling. #3250 option (b) makes this advisory,
+    # so tests must not hand-build a ceiling the producer cannot emit.
+    assert plan_payload["cognitive_load_ceiling"] == 2
     plan_payload["plan_id"] = "visual-needs-plan-multi-required"
 
     candidate_payload = _candidate_result().to_dict()
@@ -193,6 +195,46 @@ def test_multiple_required_roles_receive_compatible_candidates() -> None:
     assert payload["outcome"] == "complete-set"
     assert len(payload["required_role_assignments"]) == 2
     assert payload["unfilled_required_roles"] == []
+
+
+def test_cognitive_load_rating_is_advisory_not_a_selection_gate() -> None:
+    """#3250 option (b): an eligible rating-5 asset still fills a one-visual plan."""
+    plan = _plan()
+    plan_payload = plan.to_dict()
+    assert plan_payload["maximum_visual_count"] == 2
+    # Tighten the producer count to one without inventing a load unit. The
+    # advisory ceiling follows the producer's count and must not reject rating 5.
+    plan_payload["maximum_visual_count"] = 1
+    plan_payload["cognitive_load_ceiling"] = 1
+    plan_payload["optional_roles"] = []
+    plan_payload["plan_id"] = "visual-needs-plan-load-advisory"
+
+    candidate_payload = _candidate_result().to_dict()
+    candidate_payload["visual_needs_plan"] = {
+        "contract_version": plan_payload["contract_version"],
+        "plan_id": plan_payload["plan_id"],
+        "record_revision": 1,
+        "fingerprint": sha256_hex(plan_payload),
+    }
+    candidate_payload["eligible"][0]["cohesion_profile"]["cognitive_load_rating"] = 5
+
+    result = plan_cohesive_visual_set(
+        _plan_record(plan_payload),
+        _candidate_record(candidate_payload),
+    )
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    payload = result.record.to_dict()
+    assert payload["outcome"] == "complete-set"
+    assert len(payload["required_role_assignments"]) == 1
+    assert payload["unfilled_required_roles"] == []
+    assert payload["image_gap_briefs"] == []
+    assert payload["cognitive_load"] == {"total": 5, "ceiling": 1}
+    assert all(
+        "asset-cognitive-load-exceeded" not in item["reason_codes"]
+        for item in payload["rejected_set_combinations"]
+    )
 
 
 def test_role_incompatible_candidate_never_produces_gap_brief() -> None:
