@@ -24,7 +24,6 @@ class LiveLessonsClient:
 
     def __init__(self, request_id: str = REQUEST_ID) -> None:
         self.request_id = request_id
-        self.lesson = lesson_for(request_id)
         # Called only after credential-free owner admission. Imports remain
         # lazy and reuse the existing read composition, credential and version.
         self._token = os.environ.get("NOTION_TOKEN", "").strip()
@@ -57,7 +56,7 @@ class LiveLessonsClient:
         return self._read("get_data_source", data_source_id=self.source_id)
 
     def find_exact(self, title: str) -> Mapping:
-        if title != self.lesson["Lesson Learned"]:
+        if title != lesson_for(self.request_id)["Lesson Learned"]:
             raise WriteBlocked("finite-lesson-identity-required")
         return self._read("query_data_source", data_source_id=self.source_id,
                           filter={"property": "Lesson Learned", "title": {"equals": title}},
