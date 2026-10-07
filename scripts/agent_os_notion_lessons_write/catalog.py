@@ -7,9 +7,6 @@ from types import MappingProxyType
 
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 ISSUE_NUMBER = 3305
-TASK_OWNER = "ChatGPT Orchestrator"
-EXECUTOR = "GitHub Service Agent"
-AUTHORIZATION_POLICY = "00_Governance/write-authorization-policy.md"
 WRITABLE_TYPES = MappingProxyType({
     "Lesson Learned": "title",
     "What Happened": "rich_text",
