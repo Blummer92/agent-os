@@ -1,5 +1,34 @@
 # Shadow Issue Selection — Phase 1 (#2832)
 
+
+## Canonical cohort admission (#3328)
+
+The ChatGPT Orchestrator owns the request/mission-constraint -> candidate-cohort
+admission boundary. The production shadow CLI can consume a canonical
+`request-interpretation-v1` JSON record through `--request-interpretation`.
+The cohort projection runs after the complete open-issue scan and before
+candidate evidence acquisition or `ExecutableLaneSelection`.
+
+The current governed membership vocabulary is deliberately small:
+
+- an exact GitHub issue target admits that issue only when it belongs to the
+  proven complete source population;
+- a GitHub repository target denotes the complete proven open-issue population
+  and therefore fails closed when that population exceeds `MAX_CANDIDATES`;
+- missing, ambiguous, repository-mismatched, or non-applicable targets fail
+  closed.
+
+This is admission, not ranking. The projection records the complete population
+identity/source query, canonical request record identity, applied target
+constraints, emitted issue numbers/count, population-membership proof, bounded
+reason codes, and fail-closed reason. It always records
+`execution_authorized=false` and `side_effects_performed=false`.
+
+Manual `candidate_issue_numbers` + `narrowing_criterion` remains available
+for fixtures, diagnostics, and explicitly governed experiments. It cannot be
+combined with canonical request admission and is not the canonical production
+owner. A free-form `narrowing_criterion` remains descriptive evidence only.
+
 ## Purpose
 
 `shadow_issue_selection.py` is the Phase-1 read-only composition seam for selecting one **next executable issue under the existing canonical selector semantics**.

@@ -3,6 +3,7 @@
 | Responsibility | Primary | Support |
 |---|---|---|
 | ChatGPT request triage | ChatGPT Orchestrator | Agent Orchestrator |
+| Canonical request/mission cohort admission for Shadow Navigation | ChatGPT Orchestrator | GitHub Service Agent; QA / Test Agent |
 | Repository implementation (all languages and technical domains) | GitHub Service Agent | QA / Test Agent |
 | GitHub repository writes | GitHub Service Agent | QA / Test Agent |
 | GitHub change handoffs | GitHub Service Agent | ChatGPT Orchestrator |

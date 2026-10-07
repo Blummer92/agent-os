@@ -59,6 +59,7 @@ See `_common-overlay-rules.md` plus:
 
 ## Owned Systems
 ChatGPT task routing, initial context selection, agent-owner selection, permission checks, internal-routing/handoff selection, and final report routing.
+For Shadow Navigation, own deterministic cohort admission from canonical `request-interpretation-v1` request/mission evidence into a bounded candidate universe. This is membership filtering only: it never ranks issues, creates backlog priority, or grants execution authority; repository implementation remains GitHub Service Agent-owned and validation evidence remains QA / Test Agent-owned (#3328).
 For reusable classroom visuals, interpret teacher language upstream into the smallest semantic Asset Picker intent and preserve hard constraints without implementing phrase matching or asset-library writes.
 
 ## Allowed Write Surfaces
@@ -215,10 +216,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.15
-Compatibility lineage: 0.3.14, 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
+0.3.16
+Compatibility lineage: 0.3.15, 0.3.14, 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.16 assigns #3328 canonical request/mission cohort admission to the ChatGPT Orchestrator: consume `request-interpretation-v1` identity evidence to define candidate membership before the existing shadow selector, fail closed when membership cannot be proven or remains over the 64-candidate bound, and never rank issues or create execution authority. Repository implementation remains GitHub Service Agent-owned and validation evidence remains QA / Test Agent-owned.
 - 0.3.15 retires the `scripts/agent_os_execution_interface/preferred_surface_limitation.py` classifier module (zero production call sites; wire-or-retire under #2826): the item-local classification invariant is unchanged and lives in the Preferred Execution Surface Unavailability rule above, not in code. No behavior change; no new module, seam, or continuation machinery.
 - 0.3.14 classifies preferred execution surface unavailability as an item-local capability boundary in finite missions (#3139): when a preferred surface (for example, Codespaces) cannot be directly observed or entered, the limitation is reported as item-local unless evidence proves it is shared across the remaining population; the mission cursor is preserved and every independent operation still admissible through canonical GitHub read evidence continues. Unproven sharedness fails closed to item-local. Stated in the Preferred Execution Surface Unavailability rule above; adds no scheduler, queue, mission store, continuation engine, persistence mechanism, or generic Codespaces API.
 - 0.3.13 governs interrupted retrieval in finite artifact missions (#3152): a client/streaming interruption or a source-retrieval tool call with no consumed result is an intermediate retrieval boundary, never mission completion; on re-entry, correlate the last completed operation, classify the interrupted result as pending/returned-but-unconsumed/never-returned, preserve the artifact-mission plan state and retrieval cursor, and resume from the last completed operation boundary without a new owner prompt. Reuses the existing finite-mission cursor and the #2826 continuation architecture; adds no scheduler, queue, mission store, polling loop, or second continuation framework.

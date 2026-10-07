@@ -544,3 +544,65 @@ def test_narrowed_fail_closed_result_still_advertises_narrowing() -> None:
     assert result.narrowing_criterion == "explicit-request:test-suite"
     assert "shadow-selection.population-narrowed" in result.reason_codes
     assert "shadow-selection.candidate-evidence-incomplete" in result.reason_codes
+
+
+def _canonical_request(issue_number: int):
+    from instructional_workflow_contracts.common import ValidationStatus
+    from instructional_workflow_contracts.request_interpretation import (
+        RequestInterpretation,
+        validate_request_interpretation,
+    )
+
+    payload = {
+        "schema_name": "request-interpretation",
+        "contract_version": "request-interpretation-v1",
+        "record_revision": 1,
+        "observed_at": RETRIEVED_AT,
+        "interpreter_id": "chatgpt-orchestrator",
+        "raw_input_digest": "c" * 64,
+        "instruction_origin": "direct-user",
+        "action": "implement",
+        "requested_effect": "mutate",
+        "continuation_mode": "new",
+        "target": {
+            "system": "github",
+            "resource_kind": "issue",
+            "repository": REPOSITORY,
+            "resource_id": str(issue_number),
+        },
+        "requested_outputs": ["implementation"],
+        "constraints": [],
+        "reason_codes": [],
+        "evidence_references": [],
+    }
+    validation = validate_request_interpretation(payload)
+    assert validation.status is ValidationStatus.VALID
+    assert validation.record is not None
+    return RequestInterpretation(validation.record)
+
+
+def test_canonical_request_admission_runs_before_candidate_evidence() -> None:
+    items = tuple(raw_issue(number) for number in range(1, 102))
+
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-3328",
+        page_reader=terminal_reader(items),
+        issue_transport=Transport({}),
+        candidate_evidence_reader=ExplodingEvidenceReader(),
+        request_interpretation=_canonical_request(500),
+    )
+
+    assert result.status is ShadowSelectionStatus.NO_SELECTION
+    assert result.reason_codes == (
+        "shadow-selection.cohort-admission-failed",
+        "shadow-selection.population-narrowed",
+    )
+    assert result.cohort_admission is not None
+    assert (
+        result.cohort_admission.fail_closed_reason
+        == "cohort-admission.candidate-not-in-population"
+    )
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
