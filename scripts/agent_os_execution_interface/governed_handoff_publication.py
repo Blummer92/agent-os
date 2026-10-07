@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
+
 from agent_os_execution_service.execution_authorization_source import (
     ExecutionAuthorizationReadResult,
     ExecutionAuthorizationSourceStatus,
