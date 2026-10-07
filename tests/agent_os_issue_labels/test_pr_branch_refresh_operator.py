@@ -458,6 +458,97 @@ def test_refresh_pr_success_receipt_is_bounded_and_non_authorizing(monkeypatch):
         assert getattr(receipt, name) is False
 
 
+def test_refresh_pr_receipt_preserves_invalidated_head_evidence():
+    """#3120: the operator projection must preserve the underlying #1187 result's
+    head-evidence invalidation list. The release evaluator's canonical contract
+    requires it, and it cannot be faithfully reconstructed downstream from
+    reason codes alone."""
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+    from scripts.agent_os_issue_labels.pr_branch_refresh import _INVALIDATED_HEAD_EVIDENCE
+
+    monkeypatch_result = _result()
+    receipt = operator._receipt_from_result(
+        result=monkeypatch_result,
+        authorization_id="auth:1363",
+        admitted_main_sha="b" * 40,
+    )
+    # _result() carries a minimal list; preservation (not content) is the contract
+    assert receipt.invalidated_head_evidence == ("tested-sha",)
+    assert set(receipt.invalidated_head_evidence) <= set(_INVALIDATED_HEAD_EVIDENCE)
+
+
+def test_published_converged_receipt_satisfies_evaluator_refresh_contract():
+    """#3120 end-to-end regression: the asdict-published operator receipt (the
+    artifact's nested form) must satisfy the release evaluator's refresh
+    contract after the faithful flat→nested validation reshape. A real
+    converged refresh previously failed closed here."""
+    from dataclasses import asdict
+
+    import scripts.agent_os_issue_labels.pr_branch_refresh_operator as operator
+    import scripts.agent_os_release_run_core as release_run
+    from scripts.agent_os_issue_labels.pr_branch_refresh import (
+        BranchRefreshValidationResult,
+        PullRequestBranchRefreshResult,
+        _INVALIDATED_HEAD_EVIDENCE,
+    )
+
+    result = PullRequestBranchRefreshResult(
+        repository="Blummer92/agent-os",
+        pr_number=1363,
+        status="converged",
+        old_head_sha="a" * 40,
+        new_head_sha="c" * 40,
+        invalidated_head_evidence=_INVALIDATED_HEAD_EVIDENCE,
+        validation=BranchRefreshValidationResult(
+            head_sha="c" * 40,
+            status="green",
+            command_ids=("pytest:pr-branch-refresh",),
+        ),
+        reason_codes=("branch.current-proven", "head-evidence.invalidated", "refresh.rebased"),
+        branch_refresh_authorized=True,
+        side_effects_performed=True,
+    )
+    receipt = operator._receipt_from_result(
+        result=result, authorization_id="auth:1363", admitted_main_sha="b" * 40
+    )
+    published = asdict(receipt)
+    # the published form must carry the invalidation evidence the evaluator requires
+    assert release_run.REQUIRED_REFRESH_INVALIDATIONS.issubset(
+        set(published["invalidated_head_evidence"])
+    )
+    # faithful flat→nested validation reshape (no information loss)
+    branch_refresh_result = dict(published)
+    branch_refresh_result["validation"] = {
+        "head_sha": published["validation_head_sha"],
+        "status": published["validation_status"],
+    }
+    evidence = {
+        "repository": "Blummer92/agent-os",
+        "pull_request_number": 1363,
+        "issue_number": 3120,
+        "expected_head_sha": "c" * 40,
+        "observed_head_sha": "c" * 40,
+        "current_main_sha": "b" * 40,
+        "validation_head_sha": "c" * 40,
+        "branch_state": "current",
+        "pr_state": "open",
+        "pr_lifecycle_state": "ready",
+        "issue_state": "open",
+        "checkpoint_head_sha": "a" * 40,
+        "changed_files": [],
+        "allowed_changed_files": [],
+        "required_checks": {"aggregate": "success"},
+        "canonical_required_checks": ["aggregate"],
+        "authoritative_aggregate_check": "aggregate",
+        "authorized_merge_method": "squash",
+        "review_thread_summary": {"blocking_unresolved": 0},
+        "branch_refresh_result": branch_refresh_result,
+    }
+    state = release_run.evaluate_release_run(evidence)
+    assert state.external_transition is None
+    assert not [b for b in state.blockers if b.startswith("#1187")]
+
+
 @pytest.mark.parametrize(
     ("status", "side_effects", "validation_status", "reason"),
     [
@@ -524,6 +615,7 @@ def test_receipt_rejects_mutation_count_outside_closed_vocabulary():
             validation_failed_command_id=None, validation_failure_reason=None,
             final_current_proven=False,
             blockers=("blocked",), reason_codes=("blocked",),
+            invalidated_head_evidence=(),
             rollback_posture="no-branch-mutation", side_effects_performed=False,
         )
 
