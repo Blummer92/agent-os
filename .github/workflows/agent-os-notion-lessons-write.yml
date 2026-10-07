@@ -61,15 +61,6 @@ jobs:
           result = json.loads(target.read_text()) if target.exists() else {}
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
               summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
-              for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision', 'content_sha256'):
+              for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision'):
                   summary.write(f'{key}: `{result.get(key)}`\n\n')
           PY
-
-      - name: Publish bounded evidence only
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: agent-os-lessons-write-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agent-os-lessons-write/*.json
-          if-no-files-found: warn
-          retention-days: 3
