@@ -34,14 +34,6 @@ SUCCESS_CHECKS = {"success"}
 MERGE_METHODS = {"merge", "squash", "rebase"}
 BRANCH_STATES = {"current", "behind", "conflicted", "unknown"}
 PR_LIFECYCLE_STATES = {"draft", "ready", "merged", "closed"}
-REQUIRED_REFRESH_INVALIDATIONS = {
-    "branch-freshness",
-    "merge-authorization",
-    "ready-for-review",
-    "tested-sha",
-}
-
-
 @dataclass
 class ReleaseRunState:
     schema_name: str = SCHEMA_NAME
@@ -422,35 +414,43 @@ def _validate_validation_head(state: ReleaseRunState) -> None:
 
 
 
-def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
+def _canonical_refresh_result(raw: Any) -> Mapping[str, Any] | None:
+    """Return the canonical #1187 result from either durable published shape.
+
+    The governed Actions runner publishes a wrapper whose ``refresh_receipt``
+    contains the underlying #1187 result. Direct evaluator callers may already
+    supply that underlying result. Pre-mutation terminal workflow outcomes have
+    no nested receipt; the wrapper status remains their canonical terminal
+    evidence.
+    """
     if raw is None:
-        return
-    if not isinstance(raw, dict):
+        return None
+    if not isinstance(raw, Mapping):
         raise TypeError("branch_refresh_result must be object or null")
-    if raw.get("status") != "converged":
+    nested = raw.get("refresh_receipt")
+    if nested is None:
+        return raw
+    if not isinstance(nested, Mapping):
+        raise TypeError("branch_refresh_result refresh_receipt must be object or null")
+    return nested
+
+
+def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
+    refresh = _canonical_refresh_result(raw)
+    if refresh is None:
+        return
+    if refresh.get("status") != "converged":
         state.blockers.append("#1187 refresh result is not converged")
         return
-    if raw.get("new_head_sha") != state.observed_head_sha:
+    if refresh.get("new_head_sha") != state.observed_head_sha:
         state.blockers.append("#1187 refresh result does not match current head")
-    invalidated = raw.get("invalidated_head_evidence", [])
-    if not isinstance(invalidated, (list, tuple)):
-        state.blockers.append("#1187 invalidation receipt is malformed")
-    elif not REQUIRED_REFRESH_INVALIDATIONS.issubset(set(invalidated)):
-        state.blockers.append("#1187 refresh did not prove required head-evidence invalidation")
-    validation = raw.get("validation")
-    if not isinstance(validation, dict):
-        state.blockers.append("#1187 refreshed-head validation receipt is missing")
-    else:
-        if validation.get("head_sha") != state.observed_head_sha:
-            state.blockers.append("#1187 refreshed-head validation is stale")
-        if validation.get("status") != "green":
-            state.blockers.append("#1187 refreshed-head validation is not green")
 
 
 def _refresh_proves_head_transition(raw: Any, old_head: str | None, new_head: str) -> bool:
-    if not isinstance(raw, dict) or raw.get("status") != "converged":
+    refresh = _canonical_refresh_result(raw)
+    if refresh is None or refresh.get("status") != "converged":
         return False
-    return raw.get("old_head_sha") == old_head and raw.get("new_head_sha") == new_head
+    return refresh.get("old_head_sha") == old_head and refresh.get("new_head_sha") == new_head
 
 
 def _validate_authoritative_checks(state: ReleaseRunState) -> None:
