@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from agent_os_execution_service.shadow_issue_selection import (
     ShadowSelectionStatus,
     select_shadow_issue,
@@ -606,3 +608,92 @@ def test_canonical_request_admission_runs_before_candidate_evidence() -> None:
     )
     assert result.execution_authorized is False
     assert result.side_effects_performed is False
+
+
+def test_canonical_request_cohort_reaches_existing_selector_without_ranking() -> None:
+    """>64 population + canonical exact-issue request -> one admitted member.
+
+    The admitted member sits past the first 64 population positions, so a
+    first-N truncation could never produce it; the existing selector then
+    makes the only selection decision over that cohort.
+    """
+    items = tuple(raw_issue(number) for number in range(1, 102))
+    target = items[89]
+    reader = EvidenceReader({90: candidate(target)})
+
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-3328",
+        page_reader=terminal_reader(items),
+        issue_transport=Transport({90: target}),
+        candidate_evidence_reader=reader,
+        request_interpretation=_canonical_request(90),
+    )
+
+    assert result.status is ShadowSelectionStatus.SELECTED
+    assert result.selected_issue_number == 90
+    assert result.candidate_issue_numbers == (90,)
+    assert reader.calls == 1
+    assert result.reason_codes == (
+        "shadow-selection.current",
+        "shadow-selection.population-narrowed",
+    )
+    admission = result.cohort_admission
+    assert admission is not None
+    assert admission.status.value == "admitted"
+    assert admission.population_issue_numbers == result.population_issue_numbers
+    assert admission.population_membership_proven is True
+    assert result.narrowing_criterion == (
+        f"canonical-request:{admission.request_constraint_identity}"
+    )
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
+def test_canonical_request_is_not_admitted_against_incomplete_population() -> None:
+    reader = PageReader(
+        pages={
+            1: GitHubIssuePageResponse(
+                items=(raw_issue(1),),
+                next_page=None,
+                complete=False,
+                terminal_page_proven=False,
+            )
+        }
+    )
+
+    result = select_shadow_issue(
+        repository=REPOSITORY,
+        retrieved_at=RETRIEVED_AT,
+        campaign_id="campaign-3328",
+        page_reader=reader,
+        issue_transport=Transport({}),
+        candidate_evidence_reader=ExplodingEvidenceReader(),
+        request_interpretation=_canonical_request(1),
+    )
+
+    assert result.status is ShadowSelectionStatus.NO_SELECTION
+    assert result.reason_codes == ("shadow-selection.population-incomplete",)
+    assert result.cohort_admission is None
+    assert result.candidate_issue_numbers == ()
+
+
+def test_canonical_request_cannot_be_mixed_with_manual_narrowing() -> None:
+    items = tuple(raw_issue(number) for number in range(1, 5))
+    for manual in (
+        {"candidate_issue_numbers": (1,), "narrowing_criterion": "explicit-request:x"},
+        {"narrowing_criterion": "explicit-request:x"},
+        {"candidate_issue_numbers": (1,)},
+    ):
+        with pytest.raises(ValueError):
+            select_shadow_issue(
+                repository=REPOSITORY,
+                retrieved_at=RETRIEVED_AT,
+                campaign_id="campaign-3328",
+                page_reader=terminal_reader(items),
+                issue_transport=Transport({}),
+                candidate_evidence_reader=ExplodingEvidenceReader(),
+                request_interpretation=_canonical_request(1),
+                **manual,
+            )

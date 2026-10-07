@@ -117,7 +117,6 @@ def test_experiment_record_carries_named_evidence_gap_reason() -> None:
         repository="Blummer92/agent-os",
         retrieved_at="2026-10-05T14:00:00Z",
         campaign_id="campaign-test",
-        narrowing_criterion="explicit-request:test-suite",
         result=_fail_closed_result(),
         client=client,
         evidence_gap_reason="candidate-evidence.no-canonical-requested-mode",
@@ -137,7 +136,6 @@ def test_experiment_record_carries_all_eleven_fields() -> None:
         repository="Blummer92/agent-os",
         retrieved_at="2026-10-05T14:00:00Z",
         campaign_id="campaign-test",
-        narrowing_criterion="explicit-request:test-suite",
         result=_fail_closed_result(),
         client=client,
     )
@@ -312,3 +310,231 @@ def test_wired_composition_advances_past_sourced_inputs_to_lifecycle_blocker() -
         reader.first_failure_reason
         == "candidate-evidence.no-canonical-lifecycle-stage"
     )
+
+
+# ---------------------------------------------------------------------------
+# #3328: the production CLI consumes canonical request/mission cohort
+# admission end to end (live scan -> admission -> existing selector -> record).
+# ---------------------------------------------------------------------------
+
+_SHA = "c" * 40
+_REPO = "Blummer92/agent-os"
+
+
+def _raw_issue(number: int) -> dict:
+    return {
+        "number": number,
+        "title": f"Issue {number}",
+        "state": "open",
+        "body": f"body-{number}",
+        "html_url": f"https://github.com/{_REPO}/issues/{number}",
+        "created_at": "2026-10-07T10:00:00Z",
+        "updated_at": "2026-10-07T10:30:00Z",
+        "closed_at": None,
+        "state_reason": None,
+        "labels": [{"name": "agent-os"}],
+    }
+
+
+class _FakeLiveClient:
+    """GET-only stand-in for GitHubReadClient over a 2-page, 101-issue backlog."""
+
+    instances: list["_FakeLiveClient"] = []
+
+    def __init__(self) -> None:
+        self.get_requests = 0
+        self.write_requests = 0
+        self.paths: list[str] = []
+        _FakeLiveClient.instances.append(self)
+
+    def get(self, path: str):
+        self.get_requests += 1
+        self.paths.append(path)
+        if path == f"/repos/{_REPO}":
+            return 200, {}, json.dumps({"default_branch": "main"}).encode()
+        if path == f"/repos/{_REPO}/branches/main":
+            return 200, {}, json.dumps({"commit": {"sha": _SHA}}).encode()
+        if path == f"/repos/{_REPO}/issues?state=open&per_page=100&page=1":
+            items = [_raw_issue(n) for n in range(1, 101)]
+            link = f'<https://api.github.com/repos/{_REPO}/issues?page=2>; rel="next"'
+            return 200, {"link": link}, json.dumps(items).encode()
+        if path == f"/repos/{_REPO}/issues?state=open&per_page=100&page=2":
+            return 200, {}, json.dumps([_raw_issue(101)]).encode()
+        if path.startswith(f"/repos/{_REPO}/issues/"):
+            number = int(path.rsplit("/", 1)[1])
+            return 200, {}, json.dumps(_raw_issue(number)).encode()
+        raise AssertionError(f"unexpected GET {path}")
+
+
+def _request_file(tmp_path: Path, *, kind: str, resource_id: str | None) -> Path:
+    payload = {
+        "schema_name": "request-interpretation",
+        "contract_version": "request-interpretation-v1",
+        "record_revision": 1,
+        "observed_at": "2026-10-07T11:00:00Z",
+        "interpreter_id": "chatgpt-orchestrator",
+        "raw_input_digest": "d" * 64,
+        "instruction_origin": "direct-user",
+        "action": "implement",
+        "requested_effect": "mutate",
+        "continuation_mode": "new",
+        "target": {
+            "system": "github",
+            "resource_kind": kind,
+            "repository": _REPO,
+            "resource_id": resource_id,
+        },
+        "requested_outputs": ["implementation"],
+        "constraints": [],
+        "reason_codes": [],
+        "evidence_references": [],
+    }
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _run_cli(monkeypatch, tmp_path: Path, *extra: str) -> tuple[int, dict | None]:
+    _FakeLiveClient.instances.clear()
+    monkeypatch.setattr(cli, "GitHubReadClient", _FakeLiveClient)
+    output = tmp_path / "record.json"
+    code = cli.main(
+        [
+            "--repository",
+            _REPO,
+            "--campaign-id",
+            "campaign-3328",
+            "--retrieved-at",
+            "2026-10-07T11:00:00Z",
+            "--output",
+            str(output),
+            *extra,
+        ]
+    )
+    record = json.loads(output.read_text()) if output.exists() else None
+    return code, record
+
+
+def test_cli_consumes_canonical_cohort_admission_end_to_end(monkeypatch, tmp_path) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
+
+    assert code == 0
+    admission = record["cohort_admission"]
+    assert admission["status"] == "admitted"
+    assert admission["candidate_issue_numbers"] == [90]
+    assert admission["population_membership_proven"] is True
+    assert admission["execution_authorized"] is False
+    assert admission["side_effects_performed"] is False
+    assert record["population_receipt"]["population_issue_numbers"] == list(range(1, 102))
+    assert record["population_receipt"]["scan_page_count"] == 2
+    # The record names the canonical criterion actually applied (no CLI flag
+    # carries it) and every excluded population member.
+    criterion = f"canonical-request:{admission['request_constraint_identity']}"
+    assert record["candidate_population"] == {
+        "candidate_issue_numbers": [90],
+        "narrowing_criterion": criterion,
+    }
+    assert [item["issue_number"] for item in record["excluded_candidates"]] == [
+        n for n in range(1, 102) if n != 90
+    ]
+    # The existing selector seam is reached; candidate evidence for the one
+    # admitted issue then fails closed on #3329's named lifecycle gap.
+    selector = record["deterministic_selector_result"]
+    assert selector["status"] == "no-selection"
+    assert "shadow-selection.candidate-evidence-incomplete" in selector["reason_codes"]
+    assert selector["execution_authorized"] is False
+    zero = record["zero_mutation_verification"]
+    assert zero["http_write_requests"] == 0
+    assert zero["github_mutations"] == 0
+    (client,) = _FakeLiveClient.instances
+    assert client.write_requests == 0
+    # #3329's lifecycle fail-closed precedes any per-issue read.
+    assert not [p for p in client.paths if "/issues/" in p]
+    assert record["stale_or_ambiguous_evidence"] == [
+        "candidate-evidence-unavailable:candidate-evidence.no-canonical-lifecycle-stage"
+    ]
+
+
+def test_cli_repository_request_over_capacity_fails_closed(monkeypatch, tmp_path) -> None:
+    request = _request_file(tmp_path, kind="repository", resource_id=None)
+    code, record = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
+
+    assert code == 0
+    admission = record["cohort_admission"]
+    assert admission["status"] == "fail-closed"
+    assert admission["fail_closed_reason"] == "cohort-admission.candidate-population-too-broad"
+    assert admission["candidate_issue_numbers"] == list(range(1, 102))
+    selector = record["deterministic_selector_result"]
+    assert selector["status"] == "no-selection"
+    assert "shadow-selection.cohort-admission-failed" in selector["reason_codes"]
+    assert record["manual_review_cases"]
+    (client,) = _FakeLiveClient.instances
+    assert not [p for p in client.paths if "/issues/" in p]
+    assert client.write_requests == 0
+
+
+def test_cli_ledger_digest_binds_canonical_request(monkeypatch, tmp_path) -> None:
+    digests = []
+    for target in ("90", "91"):
+        request = _request_file(tmp_path, kind="issue", resource_id=target)
+        code, record = _run_cli(
+            monkeypatch, tmp_path, "--request-interpretation", str(request),
+            "--mission-id", "mission-3328",
+        )
+        assert code == 0
+        (entry,) = record["evidence_ledger"]
+        digests.append(entry["inputs_digest"])
+    assert digests[0] != digests[1]
+
+
+def test_cli_rejects_request_mixed_with_manual_candidates(monkeypatch, tmp_path) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch,
+        tmp_path,
+        "--request-interpretation",
+        str(request),
+        "--candidates",
+        "90",
+        "--narrowing-criterion",
+        "explicit-request:x",
+    )
+    assert code == 2
+    assert record is None
+    assert _FakeLiveClient.instances == []
+
+
+def test_cli_rejects_non_canonical_request_record(monkeypatch, tmp_path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"target": "issue 90"}), encoding="utf-8")
+    code, record = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(bad))
+    assert code == 2
+    assert record is None
+    assert _FakeLiveClient.instances == []
+
+
+def test_cli_has_one_scan_path_and_one_selection_authority() -> None:
+    """#3328 boundary: the CLI composes; it never admits, ranks, or selects."""
+    import ast
+
+    tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+    calls = [
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, (ast.Name, ast.Attribute))
+    ]
+    assert calls.count("select_shadow_issue") == 1
+    assert calls.count("LivePageReader") == 1
+    assert calls.count("GitHubReadClient") == 1
+    # Scanning, cohort admission, and lane selection stay inside the
+    # select_shadow_issue seam; the CLI never calls them a second time.
+    for forbidden in (
+        "admit_request_cohort",
+        "select_executable_lanes",
+        "scan_connected_issues",
+        "scan_issues",
+        "scan_open_issues",
+    ):
+        assert forbidden not in calls

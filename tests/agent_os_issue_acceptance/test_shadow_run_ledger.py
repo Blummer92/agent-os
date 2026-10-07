@@ -184,7 +184,6 @@ def test_experiment_record_gains_evidence_ledger_section() -> None:
         repository="Blummer92/agent-os",
         retrieved_at="2026-10-05T14:00:00Z",
         campaign_id="campaign-test",
-        narrowing_criterion="explicit-request:test-suite",
         result=_fail_closed_result(),
         client=client,
         ledger_entries=entries,
@@ -201,7 +200,6 @@ def test_experiment_record_defaults_to_empty_ledger() -> None:
         repository="Blummer92/agent-os",
         retrieved_at="2026-10-05T14:00:00Z",
         campaign_id="campaign-test",
-        narrowing_criterion=None,
         result=_fail_closed_result(),
         client=client,
     )

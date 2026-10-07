@@ -16,7 +16,10 @@ The current governed membership vocabulary is deliberately small:
 - a GitHub repository target denotes the complete proven open-issue population
   and therefore fails closed when that population exceeds `MAX_CANDIDATES`;
 - missing, ambiguous, repository-mismatched, or non-applicable targets fail
-  closed.
+  closed;
+- request `constraints` have no governed membership meaning, so a repository
+  target carrying any fails closed (`cohort-admission.constraint-unsupported`)
+  instead of admitting the whole population while dropping them.
 
 This is admission, not ranking. The projection records the complete population
 identity/source query, canonical request record identity, applied target
@@ -28,6 +31,14 @@ Manual `candidate_issue_numbers` + `narrowing_criterion` remains available
 for fixtures, diagnostics, and explicitly governed experiments. It cannot be
 combined with canonical request admission and is not the canonical production
 owner. A free-form `narrowing_criterion` remains descriptive evidence only.
+
+The shadow experiment record and its evidence-ledger digest are built from the
+selector result, so canonical admission records its applied
+`canonical-request:<record>` criterion, the excluded population members, and
+the bound request/population identities even though no CLI flag carries them.
+The `.github/actions/agent-os-shadow-navigation` wrapper still exposes only the
+manual inputs; adding a request-interpretation input there is a separately
+authorized workflow-surface change.
 
 ## Purpose
 
