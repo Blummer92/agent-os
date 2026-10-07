@@ -40,6 +40,9 @@ REQUIRED_CLASSIFIERS = {
 RETIRED_CLASSIFIERS = (
     "decide_validated_workspace_continuation",
     "classify_preferred_surface_limitation",
+    # #2826 deletion slice: zero production callers on 49ba7d3e; shared-stop
+    # semantic recorded on #2602 before retirement.
+    "evaluate_batch_item_cursor",
 )
 
 
