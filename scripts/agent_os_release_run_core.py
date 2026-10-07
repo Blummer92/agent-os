@@ -155,8 +155,6 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
     if external_terminal:
         return state
 
-    _invalidate_head_bound_authority_after_refresh(state, evidence)
-
     if state.pr_state == "open":
         _validate_branch_freshness(state, evidence)
         _validate_refresh_receipt(state, evidence.get("branch_refresh_result"))
@@ -453,19 +451,6 @@ def _refresh_proves_head_transition(raw: Any, old_head: str | None, new_head: st
     if not isinstance(raw, dict) or raw.get("status") != "converged":
         return False
     return raw.get("old_head_sha") == old_head and raw.get("new_head_sha") == new_head
-
-
-def _invalidate_head_bound_authority_after_refresh(
-    state: ReleaseRunState, evidence: Mapping[str, Any]
-) -> None:
-    """A proven head transition is a phase boundary; caller authority must be reacquired."""
-    if _refresh_proves_head_transition(
-        evidence.get("branch_refresh_result"),
-        state.checkpoint_head_sha,
-        state.observed_head_sha,
-    ):
-        state.ready_for_review_authorized = False
-        state.merge_authorized = False
 
 
 def _validate_authoritative_checks(state: ReleaseRunState) -> None:

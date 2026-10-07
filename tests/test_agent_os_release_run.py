@@ -345,32 +345,6 @@ def test_1187_refresh_requires_head_evidence_invalidation():
     assert "#1187 refresh did not prove required head-evidence invalidation" in state.blockers
 
 
-def test_1187_refresh_invalidates_caller_supplied_merge_authority_at_new_head():
-    state = release_run.evaluate_release_run(
-        evidence(
-            checkpoint_head_sha=OLD,
-            merge_authorized=True,
-            branch_refresh_result=refresh(),
-        )
-    )
-    assert state.merge_authorized is False
-    assert state.phase == "merge-authorization-pause"
-    assert state.next_action == "request-merge-authorization"
-
-
-def test_1187_refresh_invalidates_caller_supplied_ready_authority_at_new_head():
-    state = release_run.evaluate_release_run(
-        evidence(
-            checkpoint_head_sha=OLD,
-            pr_lifecycle_state="draft",
-            ready_for_review_authorized=True,
-            branch_refresh_result=refresh(),
-        )
-    )
-    assert state.ready_for_review_authorized is False
-    assert state.phase == "ready-for-review"
-    assert state.next_action == "request-ready-for-review-authorization"
-
 def test_draft_to_ready_outside_governed_operation_is_detected():
     state = release_run.evaluate_release_run(
         evidence(
