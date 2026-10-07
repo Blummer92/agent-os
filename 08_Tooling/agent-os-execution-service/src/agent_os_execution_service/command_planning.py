@@ -90,6 +90,12 @@ _COMMAND_REGISTRY = MappingProxyType(
             "pytest",
             "tests/agent_os_notion_read_request",
         ),
+        "python -m pytest tests/agent_os_notion_lessons_write": (
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_notion_lessons_write",
+        ),
         "python -m pytest 08_Tooling/agent-os-execution-service/tests": (
             "python",
             "-m",
