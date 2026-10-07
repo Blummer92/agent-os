@@ -6,21 +6,8 @@ value, credential or provider diagnostic is emitted as public result evidence.
 from __future__ import annotations
 
 from collections.abc import Mapping
-import hashlib
-import json
-from typing import Protocol
-
 from .admission import AdmittedRequest, WriteBlocked, notion_id
-from .catalog import AUTHORIZATION_POLICY, EXECUTOR, REQUEST_ID, TASK_OWNER, WRITABLE_TYPES, lesson_for
-
-
-class LessonsClient(Protocol):
-    def verify_binding(self) -> str: ...
-    def schema(self) -> Mapping: ...
-    def find_exact(self, title: str) -> Mapping: ...
-    def get_page(self, page_id: str) -> Mapping: ...
-    def create(self, properties: Mapping) -> Mapping: ...
-    def update(self, page_id: str, properties: Mapping) -> Mapping: ...
+from .catalog import REQUEST_ID, WRITABLE_TYPES, lesson_for
 
 
 def properties(request_id: str = REQUEST_ID) -> dict:
@@ -68,7 +55,7 @@ def _page(page: Mapping, source_id: str, expected_id: str | None = None) -> str:
     return page_id
 
 
-def _find(client: LessonsClient, source_id: str, lesson: Mapping) -> Mapping | None:
+def _find(client, source_id: str, lesson: Mapping) -> Mapping | None:
     result = client.find_exact(lesson["Lesson Learned"])
     if not isinstance(result, Mapping) or result.get("has_more") is not False:
         raise WriteBlocked("incomplete-reconciliation")
@@ -83,21 +70,16 @@ def _find(client: LessonsClient, source_id: str, lesson: Mapping) -> Mapping | N
     return rows[0]
 
 
-def execute(request: AdmittedRequest, client: LessonsClient) -> dict:
+def execute(request: AdmittedRequest, client) -> dict:
     """Consume owner admission under the existing policy, never infer authority."""
     result = {
         "request_id": request.request_id, "comment_id": request.comment_id,
-        "task_owner": TASK_OWNER, "executor": EXECUTOR,
-        "authorization_policy": AUTHORIZATION_POLICY,
         "status": "blocked", "reason_code": "precheck-incomplete",
         "write_attempts": 0, "readback_verified": False,
         "page_id": None, "revision": None,
-        "content_sha256": None,
-        "merge_authorized": False, "closure_authorized": False,
     }
     try:
         lesson = lesson_for(request.request_id)
-        result["content_sha256"] = hashlib.sha256(json.dumps(dict(lesson), sort_keys=True).encode()).hexdigest()
         source_id = notion_id(client.verify_binding())
         schema = client.schema()
         if not isinstance(schema, Mapping) or notion_id(schema.get("id")) != source_id:
