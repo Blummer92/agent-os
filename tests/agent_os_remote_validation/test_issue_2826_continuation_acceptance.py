@@ -40,6 +40,12 @@ REGRESSIONS = tuple("tests/agent_os_execution_interface/" + name for name in (
     "test_2203_through_pr_batch_continuation.py", "test_operation_target_admission.py",
 ))
 
+# #3297: the fixed regression bundle takes about 45 s on an idle machine and
+# previously had only 15 s of headroom under the 60 s subprocess ceiling.
+# Keep a bounded failure ceiling, but allow >2x the measured baseline so normal
+# shared-runner contention does not turn healthy main into a false red.
+FIXED_REGRESSION_TIMEOUT_SECONDS = 120
+
 
 @pytest.fixture(scope="session")
 def acceptance_evidence(request):
@@ -276,7 +282,7 @@ def test_fixed_current_main_regressions(request, tmp_path, acceptance_evidence):
     start = time.monotonic()
     try:
         completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
-                                   timeout=60, check=False,
+                                   timeout=FIXED_REGRESSION_TIMEOUT_SECONDS, check=False,
                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     except subprocess.TimeoutExpired as exc:
         def text_tail(value, bound):
@@ -284,12 +290,16 @@ def test_fixed_current_main_regressions(request, tmp_path, acceptance_evidence):
             return text[-bound:]
         acceptance_evidence["regressions"] = {
             "command": list(command), "exit": None, "timed_out": True,
-            "seconds": round(time.monotonic() - start, 3), "timeout_seconds": 60,
+            "seconds": round(time.monotonic() - start, 3),
+            "timeout_seconds": FIXED_REGRESSION_TIMEOUT_SECONDS,
             "counts_complete": False, "modules": len(REGRESSIONS),
             "stdout_tail": text_tail(exc.stdout, 600),
             "stderr_tail": text_tail(exc.stderr, 300),
         }
-        pytest.fail("Fixed canonical regressions exceeded the unchanged 60-second bound")
+        pytest.fail(
+            "Fixed canonical regressions exceeded the bounded "
+            f"{FIXED_REGRESSION_TIMEOUT_SECONDS}-second ceiling"
+        )
     suites = ET.parse(report).getroot().findall("testsuite")
     counts = {name: sum(int(s.get(name, "0")) for s in suites)
               for name in ("tests", "failures", "errors", "skipped")}
