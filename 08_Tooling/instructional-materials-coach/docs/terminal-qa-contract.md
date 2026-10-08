@@ -59,6 +59,13 @@ can never ride a stale success to "final".
    `placement-unverified`, `artifact-stale`).
 5. Build attribution: expectations and evidence are bound to the same
    build idempotency key.
+7. Worksheet heading pagination (#3416): every Docs heading paragraph
+   (`HEADING_1`–`HEADING_6`, including table cells) has effective
+   `keepWithNext` — its own value, else its named style's, else
+   `NORMAL_TEXT`'s, else false. A missing rule is a
+   `qa-heading-keep-with-next-missing` finding (`layout-rule-violated`).
+   The build sets the rule before #3257 placement; QA verifies it on
+   readback with the same resolver (`worksheet_pagination.py`).
 6. Readback succeeded: the persisted artifact was actually read
    (`artifact-inaccessible`, `verification-runtime-unavailable` refuse
    terminal success — never silent).
@@ -73,8 +80,8 @@ Advisory findings never admit terminal success by themselves.
 ## State taxonomy
 
 `verified` · `token-unresolved` · `content-missing` · `content-mismatch` ·
-`visual-missing` · `visual-mismatch` · `placement-unverified` ·
-`artifact-stale` · `artifact-inaccessible` · `artifact-conflict` ·
+`visual-missing` · `visual-mismatch` · `layout-rule-violated` ·
+`placement-unverified` · `artifact-stale` · `artifact-inaccessible` · `artifact-conflict` ·
 `evidence-incomplete` · `verification-runtime-unavailable` (+ `not-run`
 before QA executes).
 
@@ -153,7 +160,9 @@ Both artifact types share the contract. Capability differences:
 ## Retry and continuation
 
 - QA evidence persists per idempotency key (`reports/terminal-qa/`),
-  atomically, bound to expectations hash + artifact revisions.
+  atomically, bound to expectations hash + artifact revisions. The
+  evidence contract is `terminal-qa-evidence-v2` (#3416); v1 evidence
+  predates the heading rule and is never recovered as `verified`.
 - Retry with unchanged artifact: a prior `verified` report is recovered
   while revision and expectations still match (no re-evaluation).
 - Retry after artifact mutation: revision mismatch → prior proof is NOT

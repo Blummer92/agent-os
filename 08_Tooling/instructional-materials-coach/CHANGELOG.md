@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Worksheet heading keep-with-next (#3416): the canonical worksheet build
+  sets `keepWithNext` on every heading paragraph (`HEADING_1`–`HEADING_6`,
+  body and table cells) whose effective value is not already true, in one
+  revision-bound `updateParagraphStyle` batch after text requests and before
+  #3257 placement; nothing is written when no heading needs it. Terminal QA
+  verifies the rule on the persisted readback (`layout-rule-violated` /
+  `qa-heading-keep-with-next-missing`), and the QA evidence contract is now
+  `terminal-qa-evidence-v2` so pre-rule verified evidence is never
+  recovered. Shared pure resolver: `worksheet_pagination.py`.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.

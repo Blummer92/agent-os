@@ -43,11 +43,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .placement_receipts import load_placement_records
+from .worksheet_pagination import HeadingParagraph, headings_missing_keep_with_next
 from .worksheet_revision_qa import validate_revision_render_visuals
 
 
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
-QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v1"
+# v2 (#3416): verified evidence now includes the heading keep-with-next
+# rule; v1 evidence predates it and is never recovered as verified.
+QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v2"
 
 # Default directory for durable terminal-QA evidence (mirrors the
 # placement-receipts default; the CLI overrides it with --qa-evidence-dir).
@@ -61,6 +64,9 @@ QA_STATE_CONTENT_MISSING = "content-missing"
 QA_STATE_CONTENT_MISMATCH = "content-mismatch"
 QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
+# #3416: a worksheet heading lacks effective keepWithNext, so it can be
+# stranded at the foot of a page away from the content it introduces.
+QA_STATE_LAYOUT_RULE_VIOLATED = "layout-rule-violated"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
@@ -80,6 +86,7 @@ _STATE_SEVERITY = {
     QA_STATE_TOKEN_UNRESOLVED: 10,
     QA_STATE_CONTENT_MISSING: 10,
     QA_STATE_CONTENT_MISMATCH: 10,
+    QA_STATE_LAYOUT_RULE_VIOLATED: 10,
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
@@ -268,6 +275,8 @@ class ArtifactObservation:
     token_hits: tuple[str, ...] = ()
     image_element_ids: tuple[str, ...] = ()
     slide_texts: tuple[str, ...] = ()  # per-slide normalized text; () for docs
+    # #3416: docs heading paragraphs lacking effective keepWithNext; () for slides
+    headings_without_keep_with_next: tuple[HeadingParagraph, ...] = ()
     observed_at: str = ""
 
 
@@ -467,9 +476,11 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
             f"artifact-conflict: readback for {artifact_id} returned a "
             f"different {artifact_type} artifact {echoed}"
         )
+    headings: tuple[HeadingParagraph, ...] = ()
     if artifact_type == "docs":
         full_text, image_ids = _docs_text_and_images(resource)
         slide_texts: tuple[str, ...] = ()
+        headings = headings_missing_keep_with_next(resource)
     else:
         slide_texts_list, image_ids = _slides_text_and_images(resource)
         slide_texts = tuple(slide_texts_list)
@@ -482,6 +493,7 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
         token_hits=scan_unresolved_tokens(full_text),
         image_element_ids=tuple(image_ids),
         slide_texts=slide_texts,
+        headings_without_keep_with_next=headings,
         observed_at=_utc_now(),
     )
 
@@ -819,6 +831,18 @@ def evaluate_artifact_qa(
                 f"{len(observation.token_hits) - _MAX_TOKEN_FINDINGS} further "
                 "unresolved tokens omitted from this report.",
                 total_token_hits=len(observation.token_hits),
+            )
+        )
+
+    for heading in observation.headings_without_keep_with_next:
+        findings.append(
+            _fail(
+                "qa-heading-keep-with-next-missing", QA_STATE_LAYOUT_RULE_VIOLATED,
+                f"{heading.named_style_type} heading at index {heading.start_index} "
+                "lacks effective keepWithNext and can be stranded at a page foot.",
+                named_style_type=heading.named_style_type,
+                start_index=heading.start_index,
+                end_index=heading.end_index,
             )
         )
 

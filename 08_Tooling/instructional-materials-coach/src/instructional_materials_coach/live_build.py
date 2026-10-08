@@ -38,6 +38,7 @@ from .workspace_clients import (
     get_docs_revision_id,
     get_slides_revision_id,
 )
+from .worksheet_pagination import plan_heading_keep_with_next_requests
 
 ArtifactState = Literal["planned", "recovered", "created", "updated", "failed", "ambiguous"]
 ArtifactDeliveryKind = Literal["pending", "final"]
@@ -420,6 +421,26 @@ def _apply_requests_tracked(
         on_applied(index)
 
 
+def _apply_heading_keep_with_next(docs_service: Any, document_id: str) -> None:
+    """#3416: guarantee worksheet headings stay with their following content.
+
+    Reads the document once and, only when some heading lacks effective
+    ``keepWithNext``, applies one revision-bound ``updateParagraphStyle``
+    batch. An empty plan writes nothing, so no revision bump. Runs before
+    #3257 placement because placement receipts bind the artifact revision.
+    """
+    document = docs_service.documents().get(documentId=document_id).execute()
+    if not isinstance(document, dict):
+        raise RuntimeError("Docs readback for heading keep-with-next did not return a document")
+    requests = list(plan_heading_keep_with_next_requests(document))
+    if not requests:
+        return
+    revision = document.get("revisionId")
+    if not isinstance(revision, str) or not revision:
+        raise RuntimeError("Docs revisionId is required before heading keep-with-next mutation")
+    apply_docs_requests(docs_service, document_id, requests, required_revision_id=revision)
+
+
 def _place_artifact_visuals(
     *,
     build: LiveBuildInput,
@@ -662,6 +683,7 @@ def build_live_materials(
                     _persist(),
                 ),
             )
+            _apply_heading_keep_with_next(docs_service, worksheet.file_id)
             _place_artifact_visuals(
                 build=build,
                 artifact_type="docs",
