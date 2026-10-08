@@ -41,7 +41,7 @@ Use `--format json` for stable machine-readable report fields.
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `live_compute_control_binding.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `lifecycle_stage_acquisition.py`, `live_compute_control_binding.py` |
 
 ## Live compute-control binding (#1460)
 
@@ -260,3 +260,40 @@ Seam 1, the issue-comment write boundary:
 Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`).
 
 Fail-closed reasons: every seam tool is pure admission/readback composition with `side_effects_performed: False` and no GitHub write authority; uncertain or stale evidence resolves to non-terminal, non-retrying dispositions rather than optimistic success; and missing closure authority surfaces visibly as `reconcile-ready-awaiting-closure-authority` instead of silently leaving the issue looking actionable.
+
+## Canonical lifecycle-stage acquisition (#3433)
+
+`lifecycle_stage_acquisition.py` is a deterministic, pure-local evaluator that
+derives one issue's `LifecycleStage` from caller-supplied canonical evidence,
+or fails closed with a named reason. It performs no GitHub reads or writes,
+builds no client, and creates no scheduler, router, approval store, or
+persistence.
+
+Evidence contract:
+
+- Issue identity, structured state, content-addressed `github-issue-v1:<sha256>`
+  revision, repository SHA, and observation timestamp are caller-supplied and
+  re-echoed on the result as currentness bindings (`acquisition_bindings_current`
+  detects a changed issue revision or repository SHA).
+- PR-lineage evidence is a bounded tuple of already-read PR facts. Each claim's
+  linkage is re-verified with the existing GitHub-authoritative
+  `parse_pr.parse_linked_issue_result` parser; a caller assertion alone is never
+  trusted. Lineage completeness is a caller attestation
+  (`PrLineageEnumeration`): an incomplete enumeration fails closed instead of
+  proving that no PR exists.
+
+Stage rules: closed issue -> `closed`; one verified open draft PR -> `draft-pr`;
+one verified open ready PR -> `review`; one verified merged PR -> `merged`
+(issue closure stays a separate fact). Zero verified claims, incomplete
+enumeration, competing claims, unverifiable linkage, wrong-repository PRs, and
+closed-unmerged PRs fail closed with `lifecycle-acquisition.*` reason codes.
+`planning` and `implementation` are never emitted: the absence of a PR proves
+neither, and no governed implementation-activity signal exists for arbitrary
+backlog issues yet.
+
+Production seam: `lifecycle_stage_from_acquisition` adapts an acquired result
+to the `LifecycleStage | None` input of `LiveCandidateEvidence` /
+`LiveCurrentIssueSnapshotReader`, preserving the existing
+`candidate-evidence.no-canonical-lifecycle-stage` fail-closed behavior when no
+stage is acquirable. `primary_claims` and `approval_applicability` remain
+separately governed boundaries.
