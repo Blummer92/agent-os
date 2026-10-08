@@ -155,8 +155,18 @@ def prepare_planning_handoff(
     *,
     evaluator_sha: str,
     created_at: str,
+    legacy_identity: bool = False,
+    identity_reason_codes: tuple[str, ...] | None = None,
 ) -> PlanningHandoffStageResult:
-    """Construct node, graph, plan, and handoff without external I/O or authority."""
+    """Construct the canonical handoff with phase-neutral approval identity.
+
+    READY nodes bind their structured IssuePlan, dependency identities and
+    readiness outcome, not phase-specific diagnostic reason codes.  Legacy
+    replay is permitted only for verified approved-packet reconciliation; it
+    does not change the readiness classification or suppress diagnostics.
+    """
+    if identity_reason_codes is not None and not legacy_identity:
+        raise ValueError("identity reason replay requires legacy identity mode")
     if not isinstance(readiness_stage_result, IssueReadinessStageResult):
         raise TypeError("readiness_stage_result must be an IssueReadinessStageResult")
 
@@ -215,11 +225,23 @@ def prepare_planning_handoff(
         if node_readiness is ReadinessOutcome.READY:
             node_readiness = ReadinessOutcome.NEEDS_DECISION
 
+    # Diagnostics remain on the stage result; only identity-bearing READY
+    # graph inputs are phase-neutral. Blocked states retain full reasons.
+    if legacy_identity and node_readiness is ReadinessOutcome.READY:
+        identity_reasons = (
+            tuple(sorted(set(identity_reason_codes)))
+            if identity_reason_codes is not None
+            else tuple(sorted(stage_reasons))
+        )
+    else:
+        identity_reasons = (
+            () if node_readiness is ReadinessOutcome.READY else tuple(sorted(stage_reasons))
+        )
     node = IssueBatchNode(
         node_id=f"issue-{snapshot.issue_number}",
         readiness=node_readiness,
         readiness_evidence=(
-            *sorted(stage_reasons),
+            *identity_reasons,
             f"issueplan-evidence:{issueplan.evidence_id}",
         ),
         owner=owner,
