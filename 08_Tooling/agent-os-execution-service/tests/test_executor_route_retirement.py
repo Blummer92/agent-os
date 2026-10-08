@@ -7,9 +7,8 @@ executor_routing.py``), per owner decision via closed #3323 / ADR-8.
 
 These tests lock in the retirement: they fail if the retired module is
 reintroduced, if a second ``select_executor_route`` appears anywhere in the
-tree, if the canonical route vocabulary drifts, if the ported #907 resume
-invariant (``_prior_route_available``) disappears, or if a competing
-route-name vocabulary shows up in live code.
+tree, or if competing legacy route names return to live code. Canonical #918
+vocabulary and resume behavior are covered separately by PR #3445.
 """
 
 from __future__ import annotations
