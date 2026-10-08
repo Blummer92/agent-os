@@ -61,6 +61,55 @@ _OPTIONAL_GOVERNED_FIELD_STATES = frozenset(
     {"absent", "null", "intentionally-omitted"}
 )
 
+PHASE_SPECIFIC_DIAGNOSTIC_REASON_CODES = frozenset(
+    {
+        "validation.first-packet-not-required",
+        "dependency-graph.no-dependencies-declared",
+        "dependency-graph.all-dependencies-closed",
+    }
+)
+"""Readiness reason codes excluded from approval-bound identity composition (#3413).
+
+These codes are phase-specific diagnostics: they describe *how* readiness was
+evaluated in a particular phase (the first-packet bootstrap), not the semantic
+evidence an approval binds. A first-packet approval emits
+``validation.first-packet-not-required`` plus the pre-approval producer's
+``dependency-graph.no-dependencies-declared`` /
+``dependency-graph.all-dependencies-closed``; a post-approval rebuild of the
+same candidate with clear evidence emits none of them. Hashing them into the
+node readiness evidence (and therefore the graph digest, handoff digest,
+proposal id, and approval candidate) makes a first-packet approval
+unconsumable by post-approval consumers.
+
+Security-relevant semantic evidence (``authorization.not-granted``, issueplan
+blocking codes, reader error codes) and current-state identity
+(``issueplan-evidence:…``, dependency ids, entity id, provenance) stay
+identity-bound. The excluded codes remain on the stage result's diagnostic
+``reason_codes``; exclusion applies to identity composition only, never to
+diagnostics or to the readiness-outcome downgrade rules below.
+"""
+
+
+def identity_bound_reason_codes(
+    reason_codes: set[str] | frozenset[str],
+    *,
+    composition: Literal["current", "legacy"] = "current",
+) -> tuple[str, ...]:
+    """Return the sorted reason codes that participate in identity composition.
+
+    ``"current"`` (#3413) excludes ``PHASE_SPECIFIC_DIAGNOSTIC_REASON_CODES``.
+    ``"legacy"`` reproduces the pre-#3413 composition (every reason code bound)
+    for the explicit legacy approved-packet compatibility path and its tests
+    only; never use it for new approvals.
+    """
+    if composition == "current":
+        codes = set(reason_codes) - PHASE_SPECIFIC_DIAGNOSTIC_REASON_CODES
+    elif composition == "legacy":
+        codes = set(reason_codes)
+    else:
+        raise ValueError(f"unknown identity composition: {composition!r}")
+    return tuple(sorted(codes))
+
 
 class PlanningHandoffStageStatus(str, Enum):
     READY = "ready"
@@ -155,8 +204,16 @@ def prepare_planning_handoff(
     *,
     evaluator_sha: str,
     created_at: str,
+    identity_composition: Literal["current", "legacy"] = "current",
 ) -> PlanningHandoffStageResult:
-    """Construct node, graph, plan, and handoff without external I/O or authority."""
+    """Construct node, graph, plan, and handoff without external I/O or authority.
+
+    ``identity_composition`` selects the reason-code identity composition
+    (#3413): ``"current"`` excludes phase-specific diagnostic codes from the
+    approval-bound node identity; ``"legacy"`` reproduces the pre-#3413
+    composition for the explicit legacy approved-packet compatibility path and
+    its tests only, never for new approvals.
+    """
     if not isinstance(readiness_stage_result, IssueReadinessStageResult):
         raise TypeError("readiness_stage_result must be an IssueReadinessStageResult")
 
@@ -219,7 +276,9 @@ def prepare_planning_handoff(
         node_id=f"issue-{snapshot.issue_number}",
         readiness=node_readiness,
         readiness_evidence=(
-            *sorted(stage_reasons),
+            *identity_bound_reason_codes(
+                stage_reasons, composition=identity_composition
+            ),
             f"issueplan-evidence:{issueplan.evidence_id}",
         ),
         owner=owner,

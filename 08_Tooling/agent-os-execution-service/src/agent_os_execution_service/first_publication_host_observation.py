@@ -103,6 +103,9 @@ from .production_handoff_publication import (
     _repository_observation,
     _runtime_inputs,
 )
+from .post_approval_dependency_identities import (
+    post_approval_dependency_identity_evidence,
+)
 from .production_host_bootstrap import (
     ProductionHostConfiguration,
     build_subprocess_verifier_runner,
@@ -280,23 +283,33 @@ def activate_first_publication_from_host(
             evaluated_at=now,
             run_verifier=verifier,
         )
+        issue_reader = LiveIssueReader(issue_transport)
         prepared = prepare_candidate_packet(
             repository=packet.repository,
             issue_number=packet.issue_number,
-            issue_reader=LiveIssueReader(issue_transport),
+            issue_reader=issue_reader,
             repository_reader=repository_reader,
             observed_at=now,
             base_branch=packet.base_branch,
             evaluated_repository_sha=observation.base_sha,
             invocation_id=packet.invocation_id,
             evaluator_sha=packet.evaluator_sha,
+            # #3413 point 3: canonical dependency identities from the structured
+            # IssuePlan depends_on governed field; None keeps the fail-closed
+            # dependency-identity.not-supplied path.
+            dependency_identity_evidence=post_approval_dependency_identity_evidence(
+                issue_reader=issue_reader,
+                repository=packet.repository,
+                issue_number=packet.issue_number,
+                observed_at=now,
+            ),
             repository_observation=observation,
             requested_phase=CandidatePacketPhase.APPROVAL_READY,
             external_build_sha=packet.external_build_sha,
             compiler_evaluated_at=now,
         )
         approval_stage, proposal, issueplan, repository_state = _rebuild_approval(
-            prepared, packet, source, now
+            prepared, packet, source, now, observation
         )
         preauth = _runtime_inputs(
             packet=packet,

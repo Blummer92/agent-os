@@ -353,6 +353,51 @@ def _read_validation_evidence(
     return result
 
 
+def dependency_identity_evidence_from_scan(
+    scan_result, *, provenance: str
+) -> DependencyIdentityEvidence | None:
+    """Build canonical dependency-identity evidence from one IssuePlan scan.
+
+    Pure extraction shared by first-packet mode and post-approval consumers
+    (#3413): the scanner-normalized ``depends_on`` governed field is the one
+    structured identity source. Returns ``None`` when the scan yields no
+    structured finding (ambiguous parse); a present-but-malformed
+    ``depends_on`` is an explicit ``UNAVAILABLE`` finding, never a guess.
+    Nothing here reads issue prose, comments, labels, PR text, timeline
+    events, sub-issues, or CI status. Strictness policy stays with the caller:
+    first-packet mode records its own ``first-packet.issueplan-not-strict``
+    check, while post-approval consumers fail closed via
+    ``dependency-identity.not-supplied``.
+    """
+    valid = [
+        candidate for candidate in scan_result.candidates if candidate.parsed is not None
+    ]
+    if len(valid) != 1:
+        return None
+    raw = valid[0].parsed.get("depends_on")
+    if raw is None:
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
+        )
+    if not isinstance(raw, list) or not all(isinstance(entry, str) for entry in raw):
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.UNAVAILABLE,
+            reason_codes=("dependency-identity.malformed-source",),
+        )
+    # The scanner normalized depends_on to a sorted, duplicate-free tuple of
+    # canonical owner/repository#NNNN identities.
+    identities = tuple(raw)
+    if not identities:
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
+        )
+    return DependencyIdentityEvidence(
+        status=DependencyIdentityStatus.RESOLVED,
+        dependency_ids=identities,
+        provenance=(provenance,),
+    )
+
+
 def _first_packet_identity_evidence(
     *,
     envelope: SourceEnvelope,
@@ -396,31 +441,12 @@ def _first_packet_identity_evidence(
                 ["reason_code=first-packet.issueplan-not-strict"],
             )
         )
-    valid = [candidate for candidate in scan_result.candidates if candidate.parsed is not None]
-    if len(valid) != 1:
+    extracted = dependency_identity_evidence_from_scan(
+        scan_result, provenance=provenance
+    )
+    if extracted is None:
         return DependencyIdentityEvidence(
             status=DependencyIdentityStatus.UNAVAILABLE,
             reason_codes=("dependency-identity.no-structured-source",),
         )
-    raw = valid[0].parsed.get("depends_on")
-    if raw is None:
-        return DependencyIdentityEvidence(
-            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
-        )
-    if not isinstance(raw, list) or not all(isinstance(entry, str) for entry in raw):
-        return DependencyIdentityEvidence(
-            status=DependencyIdentityStatus.UNAVAILABLE,
-            reason_codes=("dependency-identity.malformed-source",),
-        )
-    # The scanner normalized depends_on to a sorted, duplicate-free tuple of
-    # canonical owner/repository#NNNN identities.
-    identities = tuple(raw)
-    if not identities:
-        return DependencyIdentityEvidence(
-            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
-        )
-    return DependencyIdentityEvidence(
-        status=DependencyIdentityStatus.RESOLVED,
-        dependency_ids=identities,
-        provenance=(provenance,),
-    )
+    return extracted

@@ -36,6 +36,9 @@ from .production_handoff_publication import (
     _rebuild_approval,
     _repository_observation,
 )
+from .post_approval_dependency_identities import (
+    post_approval_dependency_identity_evidence,
+)
 from .production_host_bootstrap import (
     ProductionHostConfiguration,
     build_subprocess_verifier_runner,
@@ -125,23 +128,33 @@ def run_production_authorized_validation(
             evaluated_at=now,
             run_verifier=verifier,
         )
+        issue_reader = LiveIssueReader(github)
         prepared = prepare_candidate_packet(
             repository=packet.repository,
             issue_number=packet.issue_number,
-            issue_reader=LiveIssueReader(github),
+            issue_reader=issue_reader,
             repository_reader=repository_reader,
             observed_at=now,
             base_branch=packet.base_branch,
             evaluated_repository_sha=observation.base_sha,
             invocation_id=packet.invocation_id,
             evaluator_sha=packet.evaluator_sha,
+            # #3413 point 3: canonical dependency identities from the structured
+            # IssuePlan depends_on governed field; None keeps the fail-closed
+            # dependency-identity.not-supplied path.
+            dependency_identity_evidence=post_approval_dependency_identity_evidence(
+                issue_reader=issue_reader,
+                repository=packet.repository,
+                issue_number=packet.issue_number,
+                observed_at=now,
+            ),
             repository_observation=observation,
             requested_phase=CandidatePacketPhase.APPROVAL_READY,
             external_build_sha=packet.external_build_sha,
             compiler_evaluated_at=now,
         )
         approval_stage, proposal, issueplan, repository_state = _rebuild_approval(
-            prepared, packet, view, now
+            prepared, packet, view, now, observation
         )
         if approval_stage.projection is None:
             raise ProductionAuthorizedValidationCallerError("projection-incomplete")
