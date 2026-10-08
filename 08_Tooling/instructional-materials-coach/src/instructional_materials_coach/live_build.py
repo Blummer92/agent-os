@@ -38,6 +38,7 @@ from .workspace_clients import (
     get_docs_revision_id,
     get_slides_revision_id,
 )
+from .worksheet_pagination import plan_keep_with_next_requests
 
 ArtifactState = Literal["planned", "recovered", "created", "updated", "failed", "ambiguous"]
 ArtifactDeliveryKind = Literal["pending", "final"]
@@ -420,6 +421,27 @@ def _apply_requests_tracked(
         on_applied(index)
 
 
+def _apply_heading_keep_with_next(*, docs_service: Any, document_id: str) -> None:
+    """#3416: keep worksheet headings with their sections (#3176 rule).
+
+    Runs after text requests and before #3257 placement: placement receipts
+    bind the artifact revision, so a later style write would stale them.
+    Reads the document once, plans only headings lacking an effective
+    ``keepWithNext``, and applies the plan in one batch bound to the revision
+    it was planned from. An empty plan writes nothing, so a resume does not
+    bump the revision. A non-mapping readback writes nothing; terminal QA
+    reads the same document and refuses ``final``.
+    """
+    document = docs_service.documents().get(documentId=document_id).execute()
+    requests = plan_keep_with_next_requests(document)
+    if not requests:
+        return
+    revision = document.get("revisionId")
+    if not revision:
+        raise RuntimeError("Docs revisionId is required before mutation")
+    apply_docs_requests(docs_service, document_id, requests, required_revision_id=revision)
+
+
 def _place_artifact_visuals(
     *,
     build: LiveBuildInput,
@@ -662,6 +684,7 @@ def build_live_materials(
                     _persist(),
                 ),
             )
+            _apply_heading_keep_with_next(docs_service=docs_service, document_id=worksheet.file_id)
             _place_artifact_visuals(
                 build=build,
                 artifact_type="docs",

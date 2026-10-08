@@ -17,6 +17,9 @@ repository tests are green.
 - `src/instructional_materials_coach/artifact_content_qa.py` — the QA
   contract: expectations, persisted-artifact observation, evaluation,
   machine-readable reports, durable evidence store.
+- `src/instructional_materials_coach/worksheet_pagination.py` — the pure
+  heading keep-with-next resolver and planner (#3416), shared by the build
+  and QA observation.
 - `src/instructional_materials_coach/live_build.py` — terminal admission:
   `LiveBuildReceipt.succeeded` (the single completion owner) requires both
   artifacts terminal-QA `verified`. `ArtifactReceipt.is_persisted`
@@ -62,6 +65,14 @@ can never ride a stale success to "final".
 6. Readback succeeded: the persisted artifact was actually read
    (`artifact-inaccessible`, `verification-runtime-unavailable` refuse
    terminal success — never silent).
+7. Worksheet heading pagination (#3416): every `HEADING_1`–`HEADING_6`
+   paragraph in the persisted worksheet (body and table cells) has an
+   effective `keepWithNext` — the paragraph's own value, else its named
+   style's, else `NORMAL_TEXT`'s, else false. A heading without it fails
+   with `qa-heading-keep-with-next-missing` (`pagination-unverified`); the
+   finding records the exact count and up to 10 headings. This is the
+   #3176 rule migrated into the canonical build under #3259 D1/D1b; the
+   build applies it before placement, and QA proves it on readback.
 
 **Sufficient:** the conjunction of all necessary checks → `verified` →
 terminal admission.
@@ -73,7 +84,8 @@ Advisory findings never admit terminal success by themselves.
 ## State taxonomy
 
 `verified` · `token-unresolved` · `content-missing` · `content-mismatch` ·
-`visual-missing` · `visual-mismatch` · `placement-unverified` ·
+`pagination-unverified` · `visual-missing` · `visual-mismatch` ·
+`placement-unverified` ·
 `artifact-stale` · `artifact-inaccessible` · `artifact-conflict` ·
 `evidence-incomplete` · `verification-runtime-unavailable` (+ `not-run`
 before QA executes).
@@ -144,7 +156,8 @@ marker/target verification) plus QA's artifact/revision binding. See
 Both artifact types share the contract. Capability differences:
 
 - Docs observation: body paragraphs + tables text; inline objects
-  (`inlineObjectElement.embeddedObjectId` + `inlineObjects` map).
+  (`inlineObjectElement.embeddedObjectId` + `inlineObjects` map); heading
+  paragraphs with their effective `keepWithNext` (#3416).
 - Slides observation: per-slide text; all page-element object ids (image
   elements carry `image`; the inserted element is matched by id, mirroring
   the #3257 post-insertion verification).
@@ -163,6 +176,9 @@ Both artifact types share the contract. Capability differences:
   prior evidence is never required to be re-proven from scratch, stale
   evidence is never reused.
 - Changed expectations invalidate stored proof.
+- Evidence is versioned (`terminal-qa-evidence-v2` since #3416): evidence
+  recorded under an earlier version predates the heading-pagination check
+  and is never recovered.
 - Retries perform no external mutations (QA is read-only).
 
 ## What blocks terminal completion
