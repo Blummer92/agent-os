@@ -6,7 +6,12 @@ from pathlib import Path
 
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
 
-from .issue_metadata import load_issue_form_fields, metadata_contract, parse_issue_form_body
+from .issue_metadata import (
+    load_issue_form_fields,
+    metadata_contract,
+    parse_issue_form_body,
+    parse_label_metadata,
+)
 from .issue_reconciler import IssueLabelProvider, IssueLabelReconciliationResult, reconcile_issue_labels
 from .label_map import expected_labels, load_label_map
 
@@ -211,7 +216,7 @@ def evaluate_duplicate_review_admission(
 
 def managed_labels_for_create(issue_body: str, *, issue_form_path: str | Path, label_map_path: str | Path) -> tuple[str, ...]:
     fields = load_issue_form_fields(issue_form_path)
-    metadata = parse_issue_form_body(issue_body, fields)
+    metadata = parse_label_metadata(issue_body, fields)
     if metadata_contract(metadata) != "tiered":
         raise ValueError("canonical tiered metadata is required before connected issue creation")
     desired, unknown = expected_labels(metadata, load_label_map(label_map_path))
