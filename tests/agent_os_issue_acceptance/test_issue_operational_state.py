@@ -392,6 +392,7 @@ def test_absent_status_label_asserts_nothing_and_preserves_ready_projection():
 def test_contradicting_status_label_on_ready_issue_fails_closed(labels):
     current = build_issue_operational_state(evidence(observed_labels=labels))
     assert current.reconciliation_required is True
+    assert current.outcome is OperationalOutcome.NEEDS_DECISION
     assert "reconciliation.open-status-label-conflict" in current.blocker_codes
 
 
@@ -720,12 +721,8 @@ def test_2148_equivalent_drift_evidence_is_deterministic() -> None:
     assert first.state_id == second.state_id
 
 
-def test_3448_authorized_implementation_with_needs_decision_readiness_is_mechanical_only() -> None:
-    """#3448 regression: an owner-approved implementation whose readiness still
-    reads NEEDS_DECISION (decision text lingering in the body) must emit the
-    mechanical-only signal instead of looking like a genuine human decision
-    gap. The outcome stays NEEDS_DECISION (enum-stable); the signal is what
-    lets consumers proceed without re-prompting."""
+def test_3448_authorized_implementation_does_not_override_unresolved_readiness() -> None:
+    """Implementation authority alone never proves the substantive decision resolved."""
     state = build_issue_operational_state(
         evidence(
             readiness=ReadinessState.NEEDS_DECISION,
@@ -733,44 +730,52 @@ def test_3448_authorized_implementation_with_needs_decision_readiness_is_mechani
             implementation_authorization=authority(AuthorizationState.AUTHORIZED),
         )
     )
-
     assert state.outcome is OperationalOutcome.NEEDS_DECISION
-    assert "contract.readiness-mechanical-only" in state.reason_codes
-    # The signal is advisory, never a blocker: the only blocker is the
-    # mechanical readiness gap itself.
-    assert "contract.readiness-mechanical-only" not in state.blocker_codes
-    assert state.implementation_authorization.state is AuthorizationState.AUTHORIZED
-
-
-def test_3448_needs_decision_readiness_without_authorization_is_not_mechanical_only() -> None:
-    """Negative control for #3448: when the implementation itself still needs a
-    decision, the mechanical-only signal must be absent -- this is a genuine
-    human decision gap and must keep prompting."""
-    state = build_issue_operational_state(
-        evidence(
-            readiness=ReadinessState.NEEDS_DECISION,
-            observed_labels=("status:needs-decision",),
-            implementation_authorization=authority(AuthorizationState.NEEDS_DECISION),
-        )
-    )
-
-    assert state.outcome is OperationalOutcome.NEEDS_DECISION
-    assert "contract.readiness-mechanical-only" not in state.reason_codes
     assert "contract.readiness-needs-decision" in state.blocker_codes
 
 
-def test_3448_mechanical_only_requires_all_other_signals_clear() -> None:
-    """The mechanical-only signal must not fire when any other signal is
-    unclean -- e.g. a blocked dependency means the gap is not merely
-    mechanical."""
+@pytest.mark.parametrize("label", ["status:needs-decision", "status:blocked"])
+def test_3448_current_canonical_ready_with_one_stale_managed_label_is_ready(label) -> None:
+    """A stale managed projection is repair work, not a second owner approval."""
+    state = build_issue_operational_state(
+        evidence(readiness=ReadinessState.READY, observed_labels=(label,))
+    )
+    assert state.outcome is OperationalOutcome.READY
+    assert state.reconciliation_required is True
+    assert "reconciliation.open-status-label-conflict" in state.reason_codes
+    assert "reconciliation.open-status-label-conflict" not in state.blocker_codes
+    assert state.implementation_authorization.state is AuthorizationState.AUTHORIZED
+    assert state.merge_authorization.state is AuthorizationState.NOT_AUTHORIZED
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ("status:ready", "status:blocked"),
+        ("status:ready", "status:deferred"),
+        ("status:deferred",),
+    ],
+)
+def test_3448_ambiguous_or_unknown_labels_still_fail_closed(labels) -> None:
+    state = build_issue_operational_state(evidence(observed_labels=labels))
+    assert state.outcome is OperationalOutcome.NEEDS_DECISION
+    assert "reconciliation.open-status-label-conflict" in state.blocker_codes
+
+
+def test_3448_stale_authorization_still_stops_even_with_stale_label() -> None:
     state = build_issue_operational_state(
         evidence(
-            readiness=ReadinessState.NEEDS_DECISION,
             observed_labels=("status:needs-decision",),
-            implementation_authorization=authority(AuthorizationState.AUTHORIZED),
-            dependency_state=DependencyState.BLOCKED,
+            implementation_authorization=authority(AuthorizationState.STALE),
         )
     )
+    assert state.outcome is OperationalOutcome.STALE
+    assert "authorization.implementation-stale" in state.blocker_codes
 
+
+def test_3448_blocked_canonical_readiness_not_overridden_by_ready_label() -> None:
+    state = build_issue_operational_state(
+        evidence(readiness=ReadinessState.BLOCKED, observed_labels=("status:ready",))
+    )
     assert state.outcome is OperationalOutcome.BLOCKED
-    assert "contract.readiness-mechanical-only" not in state.reason_codes
+    assert "contract.readiness-blocked" in state.blocker_codes
