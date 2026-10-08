@@ -36,6 +36,19 @@ This package composes, and never replaces, `agent_os_github_issue_provider.revis
 
 `DependencyIdentityEvidence` (#776) records *which* dependencies an issue has: `resolved` (structured identities supplied), `unresolved` (declared, not resolved), `absent` (none reported), `unavailable` (no source). Only `resolved` carries `dependency_ids`, deduplicated and sorted. `prepare_issue_readiness(..., dependency_identity_evidence=...)` is the only entry point; nothing derives an identity from prose or a repository-wide guess. `STAGE_SCHEMA_VERSION` is `1.1`; schema `1.0` is rejected outright.
 
+### Canonical structured source: IssuePlan `depends_on` (#3354)
+
+The IssuePlan (issueplan-core/v1) carries a governed `depends_on` field: a list of canonical `owner/repository#NNNN` identities -- the one exact form the scanner validates with no external context. Bare `#NNNN` references, URLs, prose, and non-list values are malformed and fail the whole candidate closed (`METADATA_MALFORMED`); entries are normalized to a sorted, duplicate-free list and covered by the IssuePlan current-state fingerprint like any other set-like governed field. Dependency identity and parent/child composition are different concepts: GitHub sub-issues are never used as a proxy for `depends_on`.
+
+### Phase-aware readiness (#3354)
+
+Readiness is keyed on the caller-established absence of any `ApprovalRecord` or approved execution projection -- never on phase alone, since an `APPROVAL_READY` re-preparation can also occur for already-approved work. `IssueReadinessStageRequest.approval_record_exists` (default `True`, fail-closed toward the legacy contract) and the matching `prepare_candidate_packet(..., approval_record_exists=...)` parameter (also accepted as an `approval_record_exists` key in the operator JSON fixture) thread the mode explicitly; nothing infers it from prose, labels, or phase.
+
+- **Legacy mode** (`approval_record_exists=True`): unchanged. `DependencyReadinessEvidence` (#1185/#1197) and `AdvisoryEvidenceResult` remain required; `LiveRepositoryEvidenceReader` semantics under #1320 are untouched.
+- **First-packet mode** (`approval_record_exists=False`): readiness is strict/current IssuePlan evidence plus pre-approval issue-dependency identity/current-state evidence. The post-approval owners are not consulted and not required (`validation.first-packet-not-required` is an explicit not-applicable marking, never a guessed pass). `preapproval_dependency_evidence.py` is the one bounded producer: it takes the scanner-normalized `depends_on` identities and reads each dependency's current open/closed state through the injected `IssueSourceReader` (production: `LiveIssueReader` over the existing `SingleIssueTransport`), emitting `DependencyEvidence` about the *issue-dependency graph* -- strictly separate from runtime-package `DependencyReadinessEvidence`. A caller-supplied `dependency_identity_evidence` alongside first-packet mode is a conflicting source and fails closed to needs-decision; a non-strict IssuePlan fails closed (`first-packet.issueplan-not-strict`).
+
+Post-approval, execution, and resume paths (`repository_reader.py`, `approval_stage.py`, `compiler.py`, and the execution-service constructors) are byte-for-byte unchanged.
+
 ## Round trip
 
 `issue_readiness_stage_result_to_dict` / `_from_dict`, and `serialize_planning_binding_evidence` / `reconstruct_...`, reconstruct every field with no semantic drift; malformed payloads fail closed. Registry admission is deferred.

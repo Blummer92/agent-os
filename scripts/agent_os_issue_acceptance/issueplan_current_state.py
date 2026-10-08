@@ -20,6 +20,9 @@ _SET_LIKE_FIELDS = frozenset(
         "required_docs",
         "banned_patterns",
         "manual_review",
+        # #3354: canonical sorted/duplicate-free projection so the
+        # content fingerprint covers depends_on deterministically.
+        "depends_on",
     }
 )
 _FIELD_STATES = frozenset(

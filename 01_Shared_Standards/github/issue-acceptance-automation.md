@@ -84,9 +84,13 @@ agent_os_issue_acceptance:
   documentation_exemption_reason: null
   banned_patterns: []
   manual_review: []
+  depends_on: []  # canonical owner/repository#NNNN identities (#3354); the structured dependency-identity source
 ```
 Metadata narrows checks; it does not replace the issue body, governance, or
-reviewer judgment.
+reviewer judgment. `depends_on` declares issue dependencies as canonical
+`owner/repository#NNNN` identities -- the only structured source dependency
+identities are ever read from (#776); bare `#NNNN` references, URLs, and prose
+are never identities.
 ## Pull Request Evidence
 PRs should include linked issue, summary, files changed, tests, docs, blockers,
 handoffs, risks, and an Issue Acceptance Report or manual-only explanation.

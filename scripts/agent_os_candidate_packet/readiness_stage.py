@@ -26,10 +26,12 @@ from scripts.agent_os_issue_acceptance.models import (
 )
 from scripts.agent_os_issue_acceptance.readiness import evaluate_issue_readiness_with_labels
 
+from .preapproval_dependency_evidence import build_preapproval_dependency_evidence
 from .source_stage import resolve_issue_snapshot
 from .stage_models import (
     DependencyEvidence,
     DependencyIdentityEvidence,
+    DependencyIdentityStatus,
     EvidenceStatus,
     IssuePlanningContext,
     IssueReadinessStageRequest,
@@ -74,11 +76,18 @@ def prepare_issue_readiness(
     function never infers a boolean from missing or ambiguous evidence.
 
     ``dependency_identity_evidence`` is the only way canonical dependency
-    identities enter a stage result. It must already be structured; this
-    function never derives identities from ``snapshot.body``, ``Depends on:``
-    text, reason codes, evidence details, comments, PR text, or labels. A caller
-    that omits it gets explicit fail-closed ``unavailable`` identity evidence,
-    which is distinct from a structured source reporting no dependencies.
+    identities enter a stage result outside first-packet mode. It must already
+    be structured; this function never derives identities from
+    ``snapshot.body``, ``Depends on:`` text, reason codes, evidence details,
+    comments, PR text, or labels. A caller that omits it gets explicit
+    fail-closed ``unavailable`` identity evidence, which is distinct from a
+    structured source reporting no dependencies.
+
+    In first-packet mode (``request.approval_record_exists`` is ``False``,
+    #3354) identities are derived from the scanned IssuePlan ``depends_on``
+    governed field -- the one canonical structured identity source -- and a
+    caller-supplied ``dependency_identity_evidence`` is treated as a
+    conflicting source that fails closed to needs-decision.
 
     ``planning_context`` is the single authoritative pre-planning source for the
     repository, base branch, evaluated repository SHA, implementation-contract
@@ -178,12 +187,55 @@ def prepare_issue_readiness(
             )
         )
 
-    dependency_evidence = _read_dependency_evidence(
-        repository_reader, request.repository, request.issue_number
-    )
-    validation_evidence = _read_validation_evidence(
-        repository_reader, request.repository, request.issue_number
-    )
+    # Phase-aware readiness contract (#3354). First-packet mode is keyed on
+    # the caller-established absence of any ApprovalRecord or approved
+    # execution projection -- never on phase alone, since an APPROVAL_READY
+    # re-preparation can also occur for already-approved work. In
+    # first-packet mode the post-approval evidence owners
+    # (DependencyReadinessEvidence, AdvisoryEvidenceResult) are not consulted
+    # and not required; readiness is strict/current IssuePlan evidence plus
+    # pre-approval issue-dependency identity/current-state evidence.
+    first_packet_mode = not request.approval_record_exists
+    if first_packet_mode:
+        dependency_identity_evidence = _first_packet_identity_evidence(
+            envelope=envelope,
+            scan_result=scan_result,
+            caller_supplied=dependency_identity_evidence,
+            extra_checks=extra_checks,
+        )
+        dependency_evidence = build_preapproval_dependency_evidence(
+            repository=request.repository,
+            dependency_identities=(
+                dependency_identity_evidence.dependency_ids
+                if dependency_identity_evidence.status
+                == DependencyIdentityStatus.RESOLVED
+                else ()
+            ),
+            issue_reader=issue_reader,
+            provenance=(
+                f"issueplan:depends_on@{envelope.source_locator}"
+                f"@{envelope.source_revision}"
+            ),
+        )
+        # AdvisoryEvidenceResult binds approved proposal/projection/approval
+        # lineage (#1320) and therefore cannot exist before the first
+        # approval; the first-packet contract does not require it. This is an
+        # explicit not-applicable marking, never a guessed validation pass.
+        validation_evidence = ValidationEvidence(
+            status=EvidenceStatus.RESOLVED_CLEAR,
+            reason_codes=("validation.first-packet-not-required",),
+            details=(
+                "AdvisoryEvidenceResult is a post-approval owner and is not "
+                "required before the first approval (#3354).",
+            ),
+        )
+    else:
+        dependency_evidence = _read_dependency_evidence(
+            repository_reader, request.repository, request.issue_number
+        )
+        validation_evidence = _read_validation_evidence(
+            repository_reader, request.repository, request.issue_number
+        )
 
     dependency_blocked = dependency_evidence.status == EvidenceStatus.RESOLVED_BLOCKED
     if dependency_evidence.status == EvidenceStatus.NEEDS_DECISION:
@@ -299,3 +351,76 @@ def _read_validation_evidence(
             reason_codes=("validation.reader-contract-violation",),
         )
     return result
+
+
+def _first_packet_identity_evidence(
+    *,
+    envelope: SourceEnvelope,
+    scan_result,
+    caller_supplied: DependencyIdentityEvidence | None,
+    extra_checks: list[CheckResult],
+) -> DependencyIdentityEvidence:
+    """Derive canonical dependency identities from the IssuePlan (#3354).
+
+    The scanned ``depends_on`` governed field is the one structured identity
+    source in first-packet mode. A caller-supplied identity evidence alongside
+    it is a conflicting source and fails closed to needs-decision; a
+    non-strict IssuePlan fails closed because first-packet mode requires
+    strict/current evidence. ``resolved`` carries the scanner-normalized
+    identities, ``absent`` is a positive none-declared finding, and anything
+    else is explicit ``unavailable``.
+    """
+    provenance = (
+        f"issueplan:depends_on@{envelope.source_locator}@{envelope.source_revision}"
+    )
+    if caller_supplied is not None:
+        extra_checks.append(
+            CheckResult(
+                "dependency identity source",
+                Status.MANUAL_REVIEW,
+                "Caller-supplied dependency identities conflict with the canonical "
+                "IssuePlan depends_on source; failing closed to needs-decision.",
+                ["reason_code=dependency-identity.conflicting-sources"],
+            )
+        )
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.UNAVAILABLE,
+            reason_codes=("dependency-identity.conflicting-sources",),
+        )
+    if not scan_result.strict_valid:
+        extra_checks.append(
+            CheckResult(
+                "first-packet IssuePlan",
+                Status.FAIL,
+                "First-packet mode requires a strict/current IssuePlan.",
+                ["reason_code=first-packet.issueplan-not-strict"],
+            )
+        )
+    valid = [candidate for candidate in scan_result.candidates if candidate.parsed is not None]
+    if len(valid) != 1:
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.UNAVAILABLE,
+            reason_codes=("dependency-identity.no-structured-source",),
+        )
+    raw = valid[0].parsed.get("depends_on")
+    if raw is None:
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
+        )
+    if not isinstance(raw, list) or not all(isinstance(entry, str) for entry in raw):
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.UNAVAILABLE,
+            reason_codes=("dependency-identity.malformed-source",),
+        )
+    # The scanner normalized depends_on to a sorted, duplicate-free tuple of
+    # canonical owner/repository#NNNN identities.
+    identities = tuple(raw)
+    if not identities:
+        return DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.ABSENT, provenance=(provenance,)
+        )
+    return DependencyIdentityEvidence(
+        status=DependencyIdentityStatus.RESOLVED,
+        dependency_ids=identities,
+        provenance=(provenance,),
+    )
