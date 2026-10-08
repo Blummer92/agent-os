@@ -8,7 +8,7 @@ import urllib.request
 
 from .admission import WriteBlocked, notion_id
 from .writer import properties
-from .catalog import REQUEST_ID, lesson_for
+from .catalog import LESSON_ID, REQUEST_ID, lesson_for, target_for
 
 DATA_SOURCE_ENV = "AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"
 MAX_RESPONSE_BYTES = 512 * 1024
@@ -20,7 +20,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class LiveLessonsClient:
-    """Fixed source + two page-property mutation shapes, no API proxy."""
+    """Fixed source + two page-property mutation shapes, no API proxy.
+
+    The mutation body is always exactly ``properties(request_id)``: reviewed
+    narrative plus optional reviewed descriptive metadata, never activation.
+    """
 
     def __init__(self, request_id: str = REQUEST_ID) -> None:
         self.request_id = request_id
@@ -60,6 +64,16 @@ class LiveLessonsClient:
             raise WriteBlocked("finite-lesson-identity-required")
         return self._read("query_data_source", data_source_id=self.source_id,
                           filter={"property": "Lesson Learned", "title": {"equals": title}},
+                          page_size=2, max_pages=1, max_results=2)
+
+    def find_lesson(self, number: int) -> Mapping:
+        # Only the reviewed target of this request's update entry is queryable.
+        target = target_for(self.request_id)
+        match = LESSON_ID.fullmatch(target) if target is not None else None
+        if match is None or int(match.group(1)) != number:
+            raise WriteBlocked("finite-lesson-identity-required")
+        return self._read("query_data_source", data_source_id=self.source_id,
+                          filter={"property": "Lesson ID", "unique_id": {"equals": number}},
                           page_size=2, max_pages=1, max_results=2)
 
     def get_page(self, page_id: str) -> Mapping:

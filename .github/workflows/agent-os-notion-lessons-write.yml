@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   lessons_write:
-    if: ${{ github.event.issue.pull_request == null && github.event.issue.number == 3305 && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-write ') }}
+    # #3417: any ordinary (non-PR) issue is a durable request surface. The
+    # reviewed catalog entry authorizes content; the owner comment the write.
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os notion-write ') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
