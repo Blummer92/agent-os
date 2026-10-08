@@ -183,7 +183,12 @@ def _template_revision(drive_service: Any, template_id: str) -> str:
 
 
 def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict[str, Any]]:
-    """Per-role selected visuals with Lane-D content identity for the key."""
+    """Per-(role, slot) selected visuals with Lane-D content identity for the key.
+
+    Bindings key on (role_id, slot_id) (#3251): one asset shared across
+    roles/slots appears once per binding, so the idempotency key
+    distinguishes the placements instead of collapsing them.
+    """
     from instructional_workflow_contracts.asset_content_identity import (
         content_identity_from_fingerprint,
     )
@@ -220,9 +225,11 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
                 )
             except (ValueError, TypeError):
                 identity = None
+            slot_id = assignment.get("slot_id", "0")
             visuals.append(
                 {
                     "role": assignment.get("role_id"),
+                    "slot": str(slot_id),
                     "asset_id": asset_id,
                     "content_identity": identity,
                 }
@@ -260,7 +267,14 @@ def _require_visual_placement_support(
 
 
 def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[str, str | None]:
-    """Map each selected asset ID to the candidate Drive file ID bound by the governed plan."""
+    """Map each selected asset ID to the candidate Drive file ID bound by the governed plan.
+
+    Deliberately keyed by asset ID, not (role_id, slot_id): slot resolution
+    proves each DISTINCT governed asset resolves to one live Drive file whose
+    bytes match the approved content identity. Placement multiplicity lives
+    in the per-(role, slot) bindings (connected_visual_placement) and the
+    idempotency key (_selected_visuals_for_key), not here.
+    """
     bound: dict[str, str | None] = {}
     result = visual_plan.cohesive_visual_plan_result
     payload = result.record.to_dict() if result is not None and result.record is not None else {}

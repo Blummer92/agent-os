@@ -301,6 +301,8 @@ def test_explicit_v1_selection_preserves_default_output_exactly() -> None:
         "reason_codes",
         "asset_reference",
         "library_reference",
+        # #3251: eligible entries name the role_ids that admitted them.
+        "matched_role_ids",
     }
 
 
@@ -366,6 +368,8 @@ def test_valid_v2_candidate_preserves_exact_validated_projection() -> None:
         "matched_asset",
         "cohesion_profile",
         "authority",
+        # #3251: eligible entries name the role_ids that admitted them.
+        "matched_role_ids",
     }
     assert entry["compatibility_contract_version"] == (
         V2_COMPATIBILITY_CONTRACT_ID
@@ -412,6 +416,21 @@ def test_valid_v2_candidate_preserves_exact_validated_projection() -> None:
         "publication_authorized": False,
         "side_effects_performed": False,
     }
+    # #3251: the admitting role is recoverable downstream. The fixture
+    # candidate is approved for worked-example (landscape); the plan's
+    # worked-example role admits it, the optional comparison role does not.
+    plan_roles = {
+        role["role_id"]: role
+        for role in (
+            plan.to_dict()["required_roles"] + plan.to_dict()["optional_roles"]
+        )
+    }
+    assert entry["matched_role_ids"] == [
+        role_id
+        for role_id, role in sorted(plan_roles.items())
+        if role["role_type"] == "worked-example"
+    ]
+    assert len(entry["matched_role_ids"]) == 1
 
 
 def test_candidate_versions_do_not_convert_compatibility_records() -> None:

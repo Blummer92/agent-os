@@ -98,6 +98,7 @@ def _raw_envelope(
     palette_family: str | None = None,
     cognitive_load_rating: int | None = None,
     access_state: str | None = None,
+    duplicate_group_id: str | None = None,
 ) -> dict:
     """Real compatibility envelope, manifest re-signed through the producer."""
     raw = _load("valid_visual_asset_compatibility_v2.json")
@@ -106,6 +107,8 @@ def _raw_envelope(
     asset["asset_id"] = asset_id
     asset["stable_ref"] = f"{asset_id}-ref"
     asset["content_fingerprint"] = sha256_hex({"asset": asset_id})
+    if duplicate_group_id is not None:
+        asset["duplicate_group_id"] = duplicate_group_id
     if access_state is not None:
         manifest["external_identity"]["access_state"] = access_state
         # A non-verified access state is only representable on a manifest that
@@ -276,7 +279,12 @@ def test_cohesion_rejection_is_policy_unassigned_never_a_brief() -> None:
     assert entry["remedy_class"] == "policy-unassigned"
 
 
-def test_duplicate_selected_is_policy_unassigned_never_a_brief() -> None:
+def test_shared_asset_permit_fills_both_roles_never_a_brief() -> None:
+    # #3251 shared-asset policy: one governed asset approved for two roles
+    # fills BOTH roles when it passes each binding's role-intrinsic
+    # compatibility independently. The old unconditional
+    # asset-duplicate-selected rejection is waived for the identical asset;
+    # each binding is its own (role_id, slot_id) record sharing the asset.
     plan = _needs(_requirement(two_required_roles=True))
     only = _raw_envelope(
         asset_id="asset-shared",
@@ -287,14 +295,63 @@ def test_duplicate_selected_is_policy_unassigned_never_a_brief() -> None:
     assert filtered.status is ValidationStatus.VALID
     planned = plan_cohesive_visual_set(plan, filtered.record)
     assert planned.status is ValidationStatus.VALID
-    unfilled_roles, unfilled, briefs = _unfilled(planned)
+    payload = planned.record.to_dict()
+    assert payload["outcome"] == "complete-set"
+    brief_roles, unfilled, briefs = _unfilled(planned)
     assert briefs == []
-    assert unfilled_roles == []
+    assert brief_roles == []
+    assert unfilled == []
+    bindings = [
+        (assignment["role_id"], assignment["slot_id"])
+        for assignment in payload["required_role_assignments"]
+    ]
+    assert len(bindings) == 2
+    assert len(set(bindings)) == 2
+    assert {
+        assignment["selected_candidate"]["asset_reference"]["asset_id"]
+        for assignment in payload["required_role_assignments"]
+    } == {"asset-shared"}
+
+
+def test_duplicate_group_collision_is_policy_unassigned_never_a_brief() -> None:
+    # #3251: the shared-asset permit covers only the IDENTICAL governed
+    # asset. A different asset that collides with an already-selected asset
+    # (same duplicate group) is still an explicit policy rejection:
+    # policy-unassigned, never a visual gap, never a brief.
+    plan = _needs(_requirement(two_required_roles=True))
+    # asset-first fills the comparison role. asset-second is a DIFFERENT
+    # asset in the same duplicate group, role-compatible only with the
+    # worked-example role (landscape): the identical-asset permit cannot
+    # apply (asset-first is square and fails the worked-example
+    # orientation check), so the duplicate-group collision stays an
+    # explicit policy rejection.
+    first = _raw_envelope(
+        asset_id="asset-first",
+        role_types=["comparison"],
+        orientation="square",
+        duplicate_group_id="duplicate-group-1",
+    )
+    second = _raw_envelope(
+        asset_id="asset-second",
+        role_types=["worked-example"],
+        orientation="landscape",
+        duplicate_group_id="duplicate-group-1",
+    )
+    filtered = _filter(plan, [first, second])
+    assert filtered.status is ValidationStatus.VALID
+    assert len(filtered.record.to_dict()["eligible"]) == 2
+    planned = plan_cohesive_visual_set(plan, filtered.record)
+    assert planned.status is ValidationStatus.VALID
+    brief_roles, unfilled, briefs = _unfilled(planned)
+    assert briefs == []
+    assert brief_roles == []
     assert len(unfilled) == 1
     entry = unfilled[0]
+    assert entry["role_type"] == "worked-example"
     assert entry["outcome_code"] == "policy-unassigned"
     assert "asset-duplicate-selected" in entry["reason_codes"]
     assert entry["rejected_candidate_ids"] != []
+    assert entry["remedy_class"] == "policy-unassigned"
 
 
 def test_cognitive_load_rating_is_advisory_never_a_brief() -> None:
