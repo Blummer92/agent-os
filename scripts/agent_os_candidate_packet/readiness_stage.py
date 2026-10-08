@@ -230,6 +230,17 @@ def prepare_issue_readiness(
             ),
         )
     else:
+        # The strict scanned IssuePlan is also a canonical post-approval
+        # identity source when the caller has no separately retained structured
+        # DependencyIdentityEvidence. This never substitutes for #1320's
+        # dependency-readiness or advisory-validation evidence owners.
+        if dependency_identity_evidence is None:
+            dependency_identity_evidence = _first_packet_identity_evidence(
+                envelope=envelope,
+                scan_result=scan_result,
+                caller_supplied=None,
+                extra_checks=extra_checks,
+            )
         dependency_evidence = _read_dependency_evidence(
             repository_reader, request.repository, request.issue_number
         )
