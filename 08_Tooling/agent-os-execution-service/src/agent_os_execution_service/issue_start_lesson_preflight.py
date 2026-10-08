@@ -24,6 +24,25 @@ _ADMISSIBLE = frozenset(
 )
 
 
+def selected_lesson_provenance(result: Any) -> list[dict[str, object]]:
+    """Exact identity + revision + selection reasons for each selected lesson.
+
+    #3418: a later application receipt is valid only against these exact
+    (lesson_id, source_revision) pairs, so retrieval alone never proves use.
+    """
+    selection = getattr(result, "selection", None)
+    if selection is None:
+        return []
+    return [
+        {
+            "lesson_id": item.candidate.knowledge_id,
+            "source_revision": item.candidate.source_revision,
+            "selection_reason_codes": list(item.reason_codes),
+        }
+        for item in selection.selected
+    ]
+
+
 def activate_issue_start_lesson_preflight(
     *,
     repository: str,
@@ -59,6 +78,12 @@ def activate_issue_start_lesson_preflight(
     issue_start_materiality = specialized_knowledge_required
     if issue_start_materiality is None:
         issue_start_materiality = bool(known_knowledge_refs or library_hints)
+        # #3418/#2425: the #2780 default is unchanged, but an inferred decision
+        # is reported as inferred so omitted materiality never silently reads
+        # as a caller-asserted not-needed.
+        materiality_source = "inferred-" + ("material" if issue_start_materiality else "not-material")
+    else:
+        materiality_source = "caller-asserted-" + ("material" if issue_start_materiality else "not-material")
 
     request = CodingKnowledgeRequest(
         task_reference=task_reference,
@@ -73,15 +98,22 @@ def activate_issue_start_lesson_preflight(
     )
     result = orchestrate_lesson_retrieval(request, execute_read=execute_read)
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
+    handoff = dict(result.handoff_projection)
+    handoff["known_facts"] = [
+        *handoff.get("known_facts", []), "coding-knowledge-materiality:" + materiality_source,
+    ]
     return {
         "repository": repository,
         "issue_number": issue_number,
         "lesson_retrieval_status": result.lesson_retrieval_status.value,
         "selected_lesson_ids": list(result.selected_lesson_ids),
+        "selected_lessons": selected_lesson_provenance(result),
+        "rejected_candidate_provenance": [dict(item) for item in result.rejected_candidate_provenance],
+        "materiality_source": materiality_source,
         "selection_reason_codes": list(result.selection_reason_codes),
         "canonical_github_refs": list(result.canonical_github_refs),
         "knowledge_refs": list(result.knowledge_refs),
-        "handoff_projection": result.handoff_projection,
+        "handoff_projection": handoff,
         "substantial_hypothesis_admissible": admissible,
         "preflight_resolved": True,
         "source_authority": "advisory-only",
@@ -91,4 +123,4 @@ def activate_issue_start_lesson_preflight(
     }
 
 
-__all__ = ["activate_issue_start_lesson_preflight"]
+__all__ = ["activate_issue_start_lesson_preflight", "selected_lesson_provenance"]
