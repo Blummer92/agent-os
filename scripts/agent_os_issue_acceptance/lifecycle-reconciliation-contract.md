@@ -83,6 +83,13 @@ The focused suite covers:
 - Ready-for-Review without merge authority;
 - merged implementation with stale roadmap/dependency projection;
 - merged PR with open issue requiring closure authority/admission;
+- merged PR with open issue and authorized closure/admission issuing governed
+  close and stale-label mutations (#3409);
+- merged PR with open issue and no closure authority refusing close while
+  still repairing stale `status:ready` when admitted (#3409);
+- closed completed issue with stale `status:ready` repairing labels only, with
+  no close mutation (#3377);
+- post-mutation canonical readback converging to consistent (#3409);
 - closed/superseded PR still projected active;
 - stale lifecycle labels;
 - duplicate primary claims;
