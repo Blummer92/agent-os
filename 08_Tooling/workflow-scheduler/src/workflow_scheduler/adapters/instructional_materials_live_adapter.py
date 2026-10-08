@@ -182,6 +182,8 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
         except (TypeError, ValueError, RuntimeError):
             return _failure("live-build-input-invalid")
 
+        from instructional_materials_coach.build_receipt import build_receipt_record
+
         receipt = self._live_builder(
             build_input,
             drive_service=self._drive_service,
@@ -204,5 +206,6 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
                 "task_id": request.task_id,
                 "attempt_number": request.attempt_number,
                 "receipt": receipt,
+                "build_receipt_record": build_receipt_record(build_input, receipt),
             },
         }
