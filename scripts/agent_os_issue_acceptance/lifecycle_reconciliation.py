@@ -374,16 +374,9 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
     if s.repository != e.repository or s.issue_number != e.issue_number:
         reasons.add("source.identity-mismatch")
         decision = True
-    # #3448: a NEEDS_DECISION readiness that is mechanical-only (owner already
-    # authorized the implementation; the operational state carries
-    # "contract.readiness-mechanical-only") must not force a manual decision.
-    # The governed label mutation for the mechanical status move is the correct
-    # action; forcing MANUAL_DECISION here is what induced the redundant
-    # re-prompt. Every other trigger of this branch is unchanged.
-    readiness_forces_decision = (
-        s.readiness is ReadinessState.NEEDS_DECISION
-        and "contract.readiness-mechanical-only" not in s.reason_codes
-    )
+    # Canonical unresolved readiness still needs a human decision. A stale
+    # managed label on canonical READY is repaired below, without re-prompting.
+    readiness_forces_decision = s.readiness is ReadinessState.NEEDS_DECISION
     if s.freshness_state is FreshnessState.STALE or s.outcome in {OperationalOutcome.CONFLICTING, OperationalOutcome.INVALID} or s.dependency_state is DependencyState.UNKNOWN or readiness_forces_decision:
         reasons.add("source.canonical-conflict")
         decision = True
