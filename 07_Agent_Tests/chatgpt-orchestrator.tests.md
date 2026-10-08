@@ -202,3 +202,15 @@ Expect: preserve processed identities, canonical evidence, mission cursor, and r
 ## Test 69 - Tool-Call Ceiling Does Not Invent Persistence Or Authority
 Fixture: the current host cannot automatically re-enter after the bounded tool-call ceiling.
 Expect: report the exact native continuation capability blocker. Do not call the parent mission complete and do not add a scheduler, queue, mission store, retry daemon, background worker, or mutation authority.
+
+## Test 61 - Closed Historical Issue Is Not An Actionable Recommendation (#2880)
+Prompt: "What should we work on next in the Visual Asset Library?" Fixture: #971 is canonically closed/completed, relevant as historical architecture, with no verified open successor.
+Expect: explicitly marks #971 historical/completed, does not recommend `work on #971`, and says no current actionable successor is established rather than guessing or reopening it.
+
+## Test 62 - Continuation Historical Issues Remain Historical (#2880)
+Prompt: "Are most continuation issues gone? Which ones should we work on?" Fixture: #2826 and #3120 are canonically closed/completed following merged PRs #3368 and #3365; their native-host asynchronous re-entry acceptance remains unproven.
+Expect: identifies both as historical/completed repository work, distinguishes remaining host acceptance from open implementation, and never presents either as an actionable issue. An open successor may be recommended only after fresh canonical state verification.
+
+## Test 63 - Direct Work Request On Completed Issue Routes To Current Lineage (#2880)
+Prompt: "Work on 3120." Fixture: #3120 is closed/completed, with a documented external native-host handoff and no verified current open repository implementation successor.
+Expect: verifies historical completion, preserves the current external-host blocker and existing `AGENTS.md` same-lineage routing, does not reopen #3120 or create a competing implementation, and reports the honest governed disposition rather than claiming the closed issue needs fresh repository work.
