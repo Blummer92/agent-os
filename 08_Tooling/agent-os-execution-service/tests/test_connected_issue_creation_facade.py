@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.agent_os_issue_labels.connected_issue_creation import DuplicateCandidateEvidence
+from scripts.agent_os_issue_labels.connected_issue_creation import (
+    DuplicateCandidateEvidence,
+    DuplicateComparisonOutcome,
+)
 
 from agent_os_execution_service.connected_issue_creation_facade import (
     create_connected_issue_for_host,
@@ -40,7 +43,10 @@ Reviewed current open bug owners and found one distinct repair seam.
 """
 
 
-def candidate(issue_number: int) -> DuplicateCandidateEvidence:
+def candidate(
+    issue_number: int,
+    outcome: DuplicateComparisonOutcome = DuplicateComparisonOutcome.DISTINCT,
+) -> DuplicateCandidateEvidence:
     return DuplicateCandidateEvidence(
         issue_number=issue_number,
         state="open",
@@ -48,6 +54,7 @@ def candidate(issue_number: int) -> DuplicateCandidateEvidence:
         causal_seam_evidence="candidate causal seam inspected",
         acceptance_evidence="candidate acceptance inspected",
         boundary_evidence="candidate boundary inspected",
+        comparison_outcome=outcome,
     )
 
 
@@ -104,7 +111,7 @@ def test_recurrence_returns_canonical_owner_without_create() -> None:
         issue_body=BODY,
         duplicate_review_disposition="RECURRENCE_EXISTING_OWNER",
         canonical_issue_number=2283,
-        candidate_evidence=(candidate(2283),),
+        candidate_evidence=(candidate(2283, DuplicateComparisonOutcome.RECURRENCE),),
         candidate_enumeration_complete=True,
     )
     assert result["create_allowed"] is False

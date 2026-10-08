@@ -23,6 +23,22 @@ class DuplicateReviewDisposition(str, Enum):
     MANUAL_REVIEW = "MANUAL_REVIEW"
 
 
+class DuplicateComparisonOutcome(str, Enum):
+    """Per-candidate comparison outcome bound to the duplicate-review admission.
+
+    The outcome is caller-declared audit evidence: the admission binds the
+    disposition claim to the recorded per-candidate outcome, but does not
+    semantically verify the comparison itself (semantic classification is a
+    non-goal of #2660). UNRESOLVED fails closed in every disposition.
+    """
+
+    DISTINCT = "distinct"
+    RECURRENCE = "recurrence"
+    DUPLICATE = "duplicate"
+    PARTIAL_OVERLAP = "partial-overlap"
+    UNRESOLVED = "unresolved"
+
+
 @dataclass(frozen=True, slots=True)
 class DuplicateCandidateEvidence:
     issue_number: int
@@ -31,6 +47,7 @@ class DuplicateCandidateEvidence:
     causal_seam_evidence: str
     acceptance_evidence: str
     boundary_evidence: str
+    comparison_outcome: DuplicateComparisonOutcome | str = DuplicateComparisonOutcome.UNRESOLVED
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +162,34 @@ def evaluate_duplicate_review_admission(
                 ("duplicate-review.canonical-owner-not-inspected-open-candidate",),
             )
 
+    def _bound_manual_review(canonical: int | None, reason_code: str) -> DuplicateReviewAdmission:
+        return DuplicateReviewAdmission(
+            DuplicateReviewDisposition.MANUAL_REVIEW,
+            canonical,
+            review,
+            False,
+            "manual-review-duplicate-admission-required",
+            (reason_code,),
+        )
+
+    open_inspected = tuple(item for item in inspected if item.state == "open")
+    if any(
+        item.comparison_outcome is DuplicateComparisonOutcome.UNRESOLVED
+        for item in open_inspected
+    ):
+        return _bound_manual_review(
+            canonical_issue_number,
+            "duplicate-review.candidate-comparison-unresolved",
+        )
     if resolved is DuplicateReviewDisposition.NEW_DISTINCT_BUG:
+        if any(
+            item.comparison_outcome is not DuplicateComparisonOutcome.DISTINCT
+            for item in open_inspected
+        ):
+            return _bound_manual_review(
+                None,
+                "duplicate-review.distinctness-unproven-for-candidate",
+            )
         return DuplicateReviewAdmission(
             resolved,
             None,
@@ -164,6 +208,14 @@ def evaluate_duplicate_review_admission(
                 "manual-review-partial-overlap",
                 ("duplicate-review.focused-successor-seam-unproven",),
             )
+        if any(
+            item.comparison_outcome is not DuplicateComparisonOutcome.DISTINCT
+            for item in open_inspected
+        ):
+            return _bound_manual_review(
+                canonical_issue_number,
+                "duplicate-review.focused-successor-seam-contradicted",
+            )
         return DuplicateReviewAdmission(
             resolved,
             canonical_issue_number,
@@ -172,6 +224,19 @@ def evaluate_duplicate_review_admission(
             "create-then-canonical-readback-and-converge",
             ("duplicate-review.focused-successor-proven",),
         )
+    canonical_outcome_agreement = {
+        DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER: DuplicateComparisonOutcome.RECURRENCE,
+        DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER: DuplicateComparisonOutcome.DUPLICATE,
+    }
+    if resolved in canonical_outcome_agreement:
+        canonical = next(
+            item for item in open_inspected if item.issue_number == canonical_issue_number
+        )
+        if canonical.comparison_outcome is not canonical_outcome_agreement[resolved]:
+            return _bound_manual_review(
+                canonical_issue_number,
+                "duplicate-review.canonical-outcome-disagrees",
+            )
     if resolved is DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER:
         return DuplicateReviewAdmission(
             resolved,
@@ -245,6 +310,7 @@ def _validated_candidate_evidence(
     if type(candidates) is not tuple:
         raise ValueError("candidate_evidence must be a tuple")
     seen: set[int] = set()
+    normalized: list[DuplicateCandidateEvidence] = []
     for candidate in candidates:
         if type(candidate) is not DuplicateCandidateEvidence:
             raise ValueError("candidate_evidence must contain DuplicateCandidateEvidence")
@@ -255,6 +321,14 @@ def _validated_candidate_evidence(
         seen.add(candidate.issue_number)
         if candidate.state not in {"open", "closed"}:
             raise ValueError("candidate state must be open or closed")
+        outcome = candidate.comparison_outcome
+        if type(outcome) is str:
+            try:
+                outcome = DuplicateComparisonOutcome(outcome)
+            except ValueError:
+                raise ValueError("candidate comparison_outcome must be a canonical comparison outcome")
+        elif type(outcome) is not DuplicateComparisonOutcome:
+            raise ValueError("candidate comparison_outcome must be a canonical comparison outcome")
         for value in (
             candidate.objective_evidence,
             candidate.causal_seam_evidence,
@@ -263,4 +337,18 @@ def _validated_candidate_evidence(
         ):
             if type(value) is not str or not value.strip():
                 raise ValueError("candidate comparison evidence must be non-empty")
-    return candidates
+        if type(candidate.comparison_outcome) is str:
+            normalized.append(
+                DuplicateCandidateEvidence(
+                    issue_number=candidate.issue_number,
+                    state=candidate.state,
+                    objective_evidence=candidate.objective_evidence,
+                    causal_seam_evidence=candidate.causal_seam_evidence,
+                    acceptance_evidence=candidate.acceptance_evidence,
+                    boundary_evidence=candidate.boundary_evidence,
+                    comparison_outcome=outcome,
+                )
+            )
+        else:
+            normalized.append(candidate)
+    return tuple(normalized)

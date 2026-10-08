@@ -249,6 +249,7 @@ def test_connected_issue_creation_tool_passes_existing_owner_admission() -> None
                 "causal_seam_evidence": "candidate causal seam inspected",
                 "acceptance_evidence": "candidate acceptance inspected",
                 "boundary_evidence": "candidate boundary inspected",
+                "comparison_outcome": "recurrence",
             }
         ],
         candidate_enumeration_complete=True,
@@ -266,6 +267,7 @@ def test_connected_issue_creation_tool_passes_existing_owner_admission() -> None
                 "causal_seam_evidence": "candidate causal seam inspected",
                 "acceptance_evidence": "candidate acceptance inspected",
                 "boundary_evidence": "candidate boundary inspected",
+                "comparison_outcome": "duplicate",
             }
         ],
         candidate_enumeration_complete=True,
@@ -292,6 +294,7 @@ def test_connected_issue_creation_tool_passes_focused_successor_evidence() -> No
                 "causal_seam_evidence": "candidate causal seam inspected",
                 "acceptance_evidence": "candidate acceptance inspected",
                 "boundary_evidence": "candidate boundary inspected",
+                "comparison_outcome": "distinct",
             }
         ],
         candidate_enumeration_complete=True,
