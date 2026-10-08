@@ -73,18 +73,13 @@ class BulkRepairReviewInput:
 class BulkRepairReviewProjection:
     repository: str
     pull_request_number: int
-    reviewed_head_sha: str
     review_depth: ReviewDepth
     disposition: BulkReviewDisposition
     packet: ReviewEvidencePacket
-    unresolved_finding_ids: tuple[str, ...]
-    repaired_finding_ids: tuple[str, ...]
-    invalidated_finding_ids: tuple[str, ...]
     blocking_coverage_ids: tuple[str, ...]
     invalidated_paths: tuple[str, ...]
     reason_codes: tuple[str, ...]
     handoff_to_br3: bool
-    repair_required: bool
     manual_review_required: bool
     execution_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
@@ -199,17 +194,12 @@ def evaluate_bulk_repair_review(evidence: BulkRepairReviewInput) -> BulkRepairRe
     return BulkRepairReviewProjection(
         repository=evidence.repository,
         pull_request_number=evidence.pull_request_number,
-        reviewed_head_sha=evidence.head_sha,
         review_depth=depth.depth,
         disposition=disposition,
         packet=packet,
-        unresolved_finding_ids=tuple(sorted(unresolved)),
-        repaired_finding_ids=tuple(sorted(repaired)),
-        invalidated_finding_ids=tuple(sorted(invalidated)),
         blocking_coverage_ids=blocking_coverage,
         invalidated_paths=invalidated_paths,
         reason_codes=tuple(reasons),
         handoff_to_br3=disposition is BulkReviewDisposition.CLEARED,
-        repair_required=disposition is BulkReviewDisposition.REPAIR_REQUIRED,
         manual_review_required=disposition is BulkReviewDisposition.MANUAL_BLOCKED,
     )

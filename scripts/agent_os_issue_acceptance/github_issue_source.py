@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Mapping, Protocol
 
 from .issue_scanner import (
     IssueScanPage,
@@ -156,47 +156,3 @@ def scan_connected_issues(
         retrieved_at=retrieved_at,
         source_query=f"repo={repository} state={state.value}",
     )
-
-
-def result_to_report(result: object) -> dict[str, Any]:
-    """Project scanner evidence into a stable report-only payload for #346."""
-    required = (
-        "status",
-        "complete",
-        "page_count",
-        "item_count",
-        "requested_state",
-        "retrieved_at",
-        "source_query",
-        "findings",
-        "reasons",
-        "records",
-    )
-    if not all(hasattr(result, name) for name in required):
-        raise TypeError("result must be an IssueScanResult")
-    return {
-        "status": result.status.value,
-        "complete": result.complete,
-        "page_count": result.page_count,
-        "item_count": result.item_count,
-        "requested_state": result.requested_state.value,
-        "retrieved_at": result.retrieved_at,
-        "source_query": result.source_query,
-        "findings": [finding.value for finding in result.findings],
-        "reasons": list(result.reasons),
-        "issues": [
-            {
-                "issue_number": record.issue_number,
-                "title": record.title,
-                "state": record.state,
-                "labels": list(record.labels),
-                "url": record.url,
-                "created_at": record.created_at,
-                "updated_at": record.updated_at,
-                "source_revision": record.source_revision,
-                "closed_at": record.closed_at,
-                "state_reason": record.state_reason,
-            }
-            for record in result.records
-        ],
-    }

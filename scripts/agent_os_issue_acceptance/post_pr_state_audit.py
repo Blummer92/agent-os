@@ -47,15 +47,12 @@ class RepositoryHealth(str, Enum):
 class SubsystemMaturity(str, Enum):
     EARLY = "early"
     PROGRESSING = "progressing"
-    NEAR_COMPLETE = "near-complete"
     COMPLETE = "complete"
 
 
 class CandidateRankTier(int, Enum):
     DEPENDENCY_UNBLOCKED = 1
-    QUEUE_SELECTION = 2
     SAME_SUBSYSTEM_SEQUENCE = 3
-    VALIDATION_PREREQUISITE = 4
 
 
 class RecommendationOutcome(str, Enum):
