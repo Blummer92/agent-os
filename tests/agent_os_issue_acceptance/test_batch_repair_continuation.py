@@ -212,6 +212,70 @@ def test_deferred_candidate_without_shared_blocker_defeats_terminal_halt():
     assert result.finite_admission.completion_admissible is False
 
 
+def test_parent_authorization_invalidation_proves_global_stop_without_candidate_claims():
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(30, 31, 32),
+        evidence=(),
+        parent_authorization_current=False,
+    )
+    assert result.next_action == "halt-shared-blocker"
+    assert result.parent_authorization_current is False
+    assert result.remaining_pull_requests == (30, 31, 32)
+    assert result.visited_pull_requests == ()
+    assert result.finite_admission.shared_blocker is True
+    assert result.finite_admission.delivered_count == 0
+    assert result.finite_admission.reconciled_candidate_count == 0
+    assert "shared-terminal-blocker" in result.finite_admission.reason_codes
+    assert result.mutation_authorized is False
+
+
+def test_parent_authorization_invalidation_preempts_repairable_shared_work():
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(30, 31),
+        evidence=(
+            ev(30, RepairDisposition.BLOCKED, "shared-main-health", True,
+               attempt="pr30-red", retry_boundary=boundary("pr30-red", False),
+               shared_key="main-health", shared_owner="issue:#2652",
+               repair_available=True),
+        ),
+        parent_authorization_current=False,
+    )
+    assert result.next_action == "halt-shared-blocker"
+    assert result.remaining_pull_requests == (31,)
+    assert result.shared_repair_available is True
+    assert result.lesson_reentry_blocked_pull_requests == (30,)
+    assert result.finite_admission.delivered_count == 0
+    assert result.finite_admission.reconciled_candidate_count == 1
+
+
+def test_parent_authorization_currentness_requires_exact_boolean():
+    for invalid in (None, 0, 1, "false", "true"):
+        try:
+            evaluate_bulk_repair_continuation(
+                requested_pull_requests=(30, 31), evidence=(),
+                parent_authorization_current=invalid,
+            )
+        except TypeError as error:
+            assert "parent_authorization_current must use built-in bool" in str(error)
+        else:
+            raise AssertionError("malformed parent authorization evidence must fail closed")
+
+
+def test_different_unkeyed_shared_claims_fail_closed():
+    try:
+        evaluate_bulk_repair_continuation(
+            requested_pull_requests=(30, 31),
+            evidence=(
+                ev(30, RepairDisposition.BLOCKED, "provider-unavailable", True),
+                ev(31, RepairDisposition.BLOCKED, "parent-authorization-invalidated", True),
+            ),
+        )
+    except ValueError as error:
+        assert "one canonical blocker and repair state" in str(error)
+    else:
+        raise AssertionError("different shared blocker identities must fail closed")
+
+
 def test_five_pr_shared_main_health_blocker_routes_one_canonical_repair():
     affected = (2658, 2655, 2653, 2649, 2646)
     evidence = tuple(
