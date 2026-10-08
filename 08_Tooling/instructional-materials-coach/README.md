@@ -191,3 +191,6 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 - The student-material PDF seam renders from an exact caller-supplied authorized payload; it does not yet export Google Docs/Slides bytes through a live Google API. Live Docs/Slides-to-PDF export or Drive persistence remains separately governed.
 - Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
 - Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.
+## Opt-in build receipt (#3454)
+
+`imc-build build --receipt-out PATH` writes an atomic local JSON record after a successful or failed attempt. Without the flag no build-receipt file is written. `imc-build-receipt-v1` records governed requirement identity, template identifiers/revisions, artifact identifiers and QA revision/state, idempotency, expected-format completeness, placement role/slot references, and installed renderer version when available. Missing evidence remains null, never guessed. The record grants no execution, production or classroom-readiness authority; it contains no lesson copy or credentials.
