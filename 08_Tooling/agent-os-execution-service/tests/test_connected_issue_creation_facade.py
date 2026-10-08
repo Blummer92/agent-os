@@ -312,3 +312,41 @@ def test_3027_malformed_minimal_body_fails_before_native_create():
     assert provider.created_with == ()
     assert provider.read_count == 0
     assert provider.reconcile_count == 0
+
+
+# Realistic body shaped like production host-created issues (bare key:value
+# metadata lead block, #3407 shape; see #3092 root-cause investigation).
+# The canonical planner must derive labels from it through the facade.
+REALISTIC_BARE_KV_BODY = """tier:1-standard-implementation
+owner:chatgpt-orchestrator
+status:needs-decision
+type:bug
+Source of truth: GitHub
+External-write boundary: no-external-write
+
+## Prior scope, duplicate, and supersession review
+
+Reviewed current open bug owners and found one distinct repair seam.
+
+## Reproduction
+
+Shared-file overlap was interpreted as combination permission.
+"""
+
+
+def test_host_projection_plans_labels_for_realistic_bare_kv_body() -> None:
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=REALISTIC_BARE_KV_BODY,
+        **distinct_kwargs(),
+    )
+    assert set(result["proposed_labels"]) == {
+        "agent-os",
+        "owner:chatgpt-orchestrator",
+        "status:needs-decision",
+        "type:bug",
+    }
+    assert result["create_allowed"] is True
+    assert result["terminal_success_requires_label_convergence"] is True
+    assert result["post_create_readback_required"] is True
+    assert result["side_effects_performed"] is False
