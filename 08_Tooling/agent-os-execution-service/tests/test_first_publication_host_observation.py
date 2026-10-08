@@ -110,6 +110,7 @@ def test_bounded_issue_transport_reuses_one_exact_issue_result() -> None:
 def test_first_publication_reuses_one_bounded_issue_acquisition() -> None:
     source = inspect.getsource(observation.activate_first_publication_from_host)
     assert source.count("github.get_issue(") == 1
-    assert "issue_reader=LiveIssueReader(issue_transport)" in source
+    assert "issue_reader = LiveIssueReader(issue_transport)" in source
+    assert "issue_reader=issue_reader" in source
     assert "transport=issue_transport" in source
     assert "transport=github" not in source[source.index("issue_reader = LiveCurrentIssueSnapshotReader("):]
