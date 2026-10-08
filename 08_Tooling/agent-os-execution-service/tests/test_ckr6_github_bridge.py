@@ -96,6 +96,8 @@ def test_3032_issue_start_projects_bounded_rejected_candidate_provenance(monkeyp
             "lesson_retrieval_status": "manual-review",
             "selection_reason_codes": ["unverifiable-relevant-candidate"],
             "selected_lesson_ids": [],
+            "selected_lessons": [],
+            "materiality_source": "caller-asserted-material",
             "canonical_github_refs": [],
             "rejected_candidate_provenance": [{
                 "lesson_id": "LL-42",
@@ -357,7 +359,9 @@ def test_2851_execute_envelope_carries_handoff_projection(monkeypatch):
     result = bridge.execute_envelope(envelope, retrieval_required=False)
     assert result["status"] == "not-needed"
     assert result["handoff_projection"]["known_facts"] == [
-        "coding-knowledge-sufficiency:not-needed"
+        "coding-knowledge-sufficiency:not-needed",
+        # #3418: materiality provenance travels with the host-consumable unit.
+        "coding-knowledge-materiality:caller-asserted-not-material",
     ]
 
 

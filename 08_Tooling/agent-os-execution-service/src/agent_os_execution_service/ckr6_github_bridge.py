@@ -18,6 +18,7 @@ from agent_memory_context_manager.coding_knowledge_selection import CodingKnowle
 from agent_memory_context_manager.lesson_preflight import RepairContext, plan_lesson_preflight
 
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
+from .lesson_learning_loop import capture_lesson_candidate, propose_lesson_refinement
 from .lesson_reader_composition import resolve_lesson_read_route
 from .mcp_facade import activate_agent_os_failed_repair
 
@@ -25,7 +26,10 @@ COMMAND_PREFIX = "/agent-os ckr6 "
 MAX_COMMENT_BYTES = 16 * 1024
 MAX_HINTS = 20
 MAX_TEXT = 512
-OPERATIONS = frozenset({"issue-start", "failed-repair"})
+# #3418: lesson-candidate (CKR5 capture) and lesson-refinement (CKR7) reuse
+# this ingress. Both return authority-false proposals; neither writes Notion.
+OPERATIONS = frozenset({"issue-start", "failed-repair", "lesson-candidate", "lesson-refinement"})
+LEARNING_OPERATIONS = {"lesson-candidate": "candidate", "lesson-refinement": "refinement"}
 # Marker for the bounded CKR6 result comment posted back to the issue (#2851).
 # The marker is an HTML comment (invisible in rendered view) and deliberately
 # does NOT start with COMMAND_PREFIX, so the postback can never retrigger the
@@ -41,6 +45,10 @@ RESULT_FIELDS = frozenset({
     "status",
     "reason_codes",
     "selected_lesson_ids",
+    "selected_lessons",
+    "materiality_source",
+    "lesson_proposal",
+    "revision_proposal",
     "canonical_github_refs",
     "rejected_candidate_provenance",
     "handoff_projection",
@@ -85,6 +93,7 @@ class Ckr6Envelope:
     failed_hypothesis: str | None = None
     result_summary: str | None = None
     repair_context: str = "failed-pr-repair"
+    detail: Mapping[str, object] | None = None
 
 
 def _text(value: object, name: str) -> str:
@@ -121,12 +130,38 @@ def _repair_context(value: object) -> str:
     return parsed.value
 
 
+def _parse_learning_envelope(payload: Mapping[str, object], operation: str) -> Ckr6Envelope:
+    key = LEARNING_OPERATIONS[operation]
+    allowed = {"operation", "repository", "issue_number", "task_reference", key}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"unsupported CKR6 envelope fields: {sorted(unknown)}")
+    repository = _text(payload.get("repository"), "repository")
+    if repository.count("/") != 1:
+        raise ValueError("repository must use owner/name syntax")
+    issue_number = payload.get("issue_number")
+    if type(issue_number) is not int or issue_number < 1:
+        raise ValueError("issue_number must be a positive integer")
+    detail = payload.get(key)
+    if not isinstance(detail, Mapping):
+        raise ValueError(f"{key} must be a mapping")
+    return Ckr6Envelope(
+        operation=operation,
+        repository=repository,
+        issue_number=issue_number,
+        task_reference=_text(payload.get("task_reference"), "task_reference"),
+        detail=detail,
+    )
+
+
 def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
     if not isinstance(payload, Mapping):
         raise TypeError("CKR6 envelope must be a mapping")
     operation = payload.get("operation")
     if operation not in OPERATIONS:
         raise ValueError("operation must be issue-start or failed-repair")
+    if operation in LEARNING_OPERATIONS:
+        return _parse_learning_envelope(payload, operation)
     allowed = COMMON_FIELDS | (FAILED_REPAIR_FIELDS if operation == "failed-repair" else frozenset())
     unknown = set(payload) - allowed
     if unknown:
@@ -297,6 +332,22 @@ def _request(envelope: Ckr6Envelope) -> CodingKnowledgeRequest:
 
 
 def classify_envelope(envelope: Ckr6Envelope) -> dict[str, object]:
+    if envelope.operation in LEARNING_OPERATIONS:
+        # Capture never reads; refinement reads exactly the named lesson.
+        return {
+            "operation": envelope.operation,
+            "repository": envelope.repository,
+            "issue_number": envelope.issue_number,
+            "retrieval_required": envelope.operation == "lesson-refinement",
+            "reason_codes": ["learning-operation:" + envelope.operation],
+            "recommended_escalation": "known-reference" if envelope.operation == "lesson-refinement" else "none",
+            "notion_read_performed": False,
+            "execution_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+            "closure_authorized": False,
+            "side_effects_performed": False,
+        }
     context = (
         RepairContext(envelope.repair_context)
         if envelope.operation == "failed-repair"
@@ -350,6 +401,8 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "side_effects_performed": False,
         }
     reader = route.execute_read if route is not None else None
+    if envelope.operation in LEARNING_OPERATIONS:
+        return _execute_learning(envelope, reader)
     common = dict(
         repository=envelope.repository,
         issue_number=envelope.issue_number,
@@ -379,8 +432,10 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "status": raw["lesson_retrieval_status"],
             "reason_codes": raw["selection_reason_codes"],
             "selected_lesson_ids": raw["selected_lesson_ids"],
+            "selected_lessons": raw["selected_lessons"],
+            "materiality_source": raw["materiality_source"],
             "canonical_github_refs": raw["canonical_github_refs"],
-            "rejected_candidate_provenance": raw.get("rejected_candidate_provenance", []),
+            "rejected_candidate_provenance": raw["rejected_candidate_provenance"],
             "handoff_projection": handoff,
             "substantial_hypothesis_admissible": raw["substantial_hypothesis_admissible"],
             "mutation_admissible": False,
@@ -405,9 +460,39 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
         "status": raw["lesson_retrieval_status"],
         "reason_codes": raw["reason_codes"],
         "selected_lesson_ids": raw["selected_lesson_ids"],
+        "selected_lessons": raw["selected_lessons"],
         "canonical_github_refs": raw["canonical_github_refs"],
         "mutation_admissible": raw["mutation_admissible"],
         "blocking_attempt_id": raw["blocking_attempt_id"],
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
+    if envelope.operation == "lesson-candidate":
+        outcome = capture_lesson_candidate(envelope.detail)
+        extra = {"lesson_proposal": outcome["lesson_proposal"]}
+        read = False
+    else:
+        outcome = propose_lesson_refinement(envelope.detail, reader)
+        extra = {"revision_proposal": outcome["revision_proposal"]}
+        read = True
+    return {
+        "operation": envelope.operation,
+        "repository": envelope.repository,
+        "issue_number": envelope.issue_number,
+        "status": outcome["status"],
+        "reason_codes": outcome["reason_codes"],
+        "selected_lesson_ids": [],
+        "canonical_github_refs": [],
+        **extra,
+        "notion_read_performed": read,
+        "substantial_hypothesis_admissible": False,
+        "mutation_admissible": False,
         "execution_authorized": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
