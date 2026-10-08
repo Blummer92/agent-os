@@ -389,67 +389,33 @@ def test_equivalent_supplied_evidence_is_deterministic_and_authority_preserving(
     assert ra.external_write_authorization is current.external_write_authorization.state
 
 
-def test_3448_mechanical_only_readiness_does_not_force_manual_decision():
-    """#3448 regression: when the owner has already authorized the implementation
-    and readiness is NEEDS_DECISION only mechanically (decision text lingering
-    in the body), lifecycle reconciliation must NOT collapse to a lone
-    MANUAL_DECISION. The governed label mutation for the mechanical status move
-    must survive so the agent proceeds without re-prompting."""
+def test_3448_canonical_ready_with_stale_label_requests_governed_repair():
+    """Resolved readiness permits label reconciliation without new owner approval."""
     current = state(
-        readiness=ReadinessState.NEEDS_DECISION,
+        readiness=ReadinessState.READY,
         observed_labels=("status:needs-decision",),
     )
-    assert "contract.readiness-mechanical-only" in current.reason_codes
-    # Snapshot advertises no status label while readiness says NEEDS_DECISION:
-    # the label is stale and the governed mutation is the correct repair.
-    snap = snapshot(status=None, value="none", issue_state="open")
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
-
     assert result.outcome is ReconciliationOutcome.REQUIRED
     label_action = next(
         item for item in result.actions if item.reason_code == "lifecycle.status-label-stale"
     )
     assert label_action.category is ActionCategory.GOVERNED_MUTATION
-    assert label_action.expected == "status:needs-decision"
-    # No manual-decision action may be present: that is the redundant prompt.
-    assert not any(
-        item.category is ActionCategory.MANUAL_DECISION for item in result.actions
-    )
+    assert label_action.expected == "status:ready"
+    assert label_action.admission_result_id is None
+    assert "authorization.lifecycle-admission-required" in result.reason_codes
+    assert not any(item.category is ActionCategory.MANUAL_DECISION for item in result.actions)
 
 
-def test_3448_genuine_decision_gap_still_forces_manual_decision():
-    """Negative control for #3448: when the implementation itself is not
-    authorized, the NEEDS_DECISION readiness must still force a manual
-    decision -- the mechanical-only exemption must not swallow genuine gaps."""
-    current = build_issue_operational_state(
-        IssueOperationalEvidence(
-            repository="Blummer92/agent-os",
-            issue_number=996,
-            source_revision=SOURCE,
-            observed_at="2026-08-09T17:10:00Z",
-            evidence_ids=(EVIDENCE,),
-            source_state=SourceState.COMPLETE,
-            issue_state=IssueState.OPEN,
-            lifecycle_stage=LifecycleStage.IMPLEMENTATION,
-            terminal_disposition=TerminalDisposition.NONE,
-            readiness=ReadinessState.NEEDS_DECISION,
-            implementation_authorization=authority(AuthorizationState.NEEDS_DECISION),
-            ready_for_review_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-            execution_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-            merge_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-            closure_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-            external_write_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-            dependency_state=DependencyState.CLEAR,
-            primary_claims=(),
-            validation_state=ValidationState.NOT_RUN,
-            freshness_state=FreshnessState.CURRENT,
-            observed_labels=("status:needs-decision",),
-        )
+def test_3448_unresolved_readiness_still_forces_manual_decision():
+    """Current implementation authority cannot silently resolve readiness."""
+    current = state(
+        readiness=ReadinessState.NEEDS_DECISION,
+        observed_labels=("status:needs-decision",),
     )
-    assert "contract.readiness-mechanical-only" not in current.reason_codes
-    snap = snapshot(status=None, value="none", issue_state="open")
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
-
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert len(result.actions) == 1
     assert result.actions[0].category is ActionCategory.MANUAL_DECISION
