@@ -200,3 +200,10 @@ def test_guard_accepts_the_non_conflicts_it_must_not_flag() -> None:
     # Exactly-at-the-cap is excluded; one release below it is not.
     assert not _is_satisfiable(SpecifierSet("==7.0"), SpecifierSet("<7"))
     assert _is_satisfiable(SpecifierSet("==6.9"), SpecifierSet("<7"))
+
+def test_guard_rejects_split_mcp_minor_updates_in_either_direction() -> None:
+    old = SpecifierSet(">=2.2.0,<2.3")
+    new = SpecifierSet(">=2.3,<2.4")
+    assert not _is_satisfiable(old, new)
+    assert not _is_satisfiable(new, old)
+    assert _is_satisfiable(new, new)
