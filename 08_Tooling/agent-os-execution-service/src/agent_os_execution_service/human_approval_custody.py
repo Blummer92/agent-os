@@ -12,6 +12,10 @@ from typing import Literal
 
 from scripts.agent_os_candidate_packet.approval_stage import ApprovalDecision
 from scripts.agent_os_candidate_packet.cli import prepare_candidate_packet
+from scripts.agent_os_candidate_packet.legacy_identity_compatibility import (
+    PostApprovalIdentityOutcome,
+    verify_post_approval_stage_identities,
+)
 from scripts.agent_os_candidate_packet.models import CandidatePacketPhase
 from scripts.agent_os_issue_acceptance.approval_records import ApprovalState
 
@@ -20,6 +24,9 @@ from .candidate_approval_provenance import (
     load_candidate_approval_provenance,
 )
 from .execution_authorization_source import ExecutionAuthorizationSourceTransport
+from .post_approval_dependency_identities import (
+    post_approval_dependency_identity_evidence,
+)
 from .pre_publication_evidence_capsule import build_approval_custody_evidence
 from .pre_publication_evidence_store import append_pre_publication_evidence
 from .production_host_bootstrap import (
@@ -82,7 +89,12 @@ def reacquire_human_approval_decision(
         decision_id=f"github-comment:{current.comment_id}",
         authorizer_id=snapshot.owner_login,
         decision_at=current.created_at,
-        reason_codes=("repository-owner-fixed-approval-command",),
+        # No reason codes: ApprovalDecision reason codes must use the ratified
+        # #347 vocabulary, and the fixed-command provenance is already carried
+        # by decision_id/authorizer_id. (#3413 integration: a non-vocabulary
+        # code here made record_approval_decision always reject, so custody
+        # could never complete.)
+        reason_codes=(),
     )
     return HumanApprovalDecisionEvidence(
         candidate_provenance_id=candidate_provenance_id,
@@ -133,6 +145,16 @@ def produce_human_approval_custody(
         evaluated_repository_sha=packet.base_sha,
         invocation_id=packet.invocation_id,
         evaluator_sha=packet.evaluator_sha,
+        # #3413 point 3: post-approval consumers reuse canonical dependency
+        # identities from the structured IssuePlan depends_on governed field --
+        # never prose, labels, CI, or guessed state. None keeps the existing
+        # fail-closed dependency-identity.not-supplied path.
+        dependency_identity_evidence=post_approval_dependency_identity_evidence(
+            issue_reader=issue_reader,
+            repository=packet.repository,
+            issue_number=packet.issue_number,
+            observed_at=observed_at,
+        ),
         repository_observation=repository_observation,
         candidate_context=provenance.candidate_context,
         approval_decision=decision.approval_decision,
@@ -153,14 +175,24 @@ def produce_human_approval_custody(
     ):
         raise HumanApprovalCustodyError("execution-candidate-not-verified")
 
-    prior = dict(packet.stage_identities)
-    current = dict(execution_packet.stage_identities)
-    for name in (
-        "source", "issueplan", "planning-handoff", "repository-evidence",
-        "proposal", "approval-candidate",
-    ):
-        if prior.get(name) != current.get(name):
-            raise HumanApprovalCustodyError("candidate-provenance-drift")
+    # #3413 point 2: composition-independent identities compare strictly;
+    # composition-affected identities fall back to the explicit legacy
+    # compatibility path, which proves (or fails to prove) a pre-#3413
+    # composition by recomputation. Old approvals are never silently
+    # rewritten or re-authorized.
+    verdict = verify_post_approval_stage_identities(
+        expected_identities=dict(packet.stage_identities),
+        current_identities=dict(execution_packet.stage_identities),
+        planning_stage_result=prepared.planning_stage_result,
+        approved_packet=packet,
+        repository_observation=repository_observation,
+        candidate_context=provenance.candidate_context,
+        observed_at=observed_at,
+    )
+    if verdict.outcome is PostApprovalIdentityOutcome.DRIFT:
+        raise HumanApprovalCustodyError("candidate-provenance-drift")
+    if verdict.outcome is PostApprovalIdentityOutcome.LEGACY_UNPROVABLE:
+        raise HumanApprovalCustodyError("candidate-legacy-compatibility-unprovable")
 
     capsule = build_approval_custody_evidence(
         candidate_packet=execution_packet,

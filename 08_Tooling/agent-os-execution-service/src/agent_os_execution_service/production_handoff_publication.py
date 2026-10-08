@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import Sequence
 
 from scripts.agent_os_candidate_packet.approval_stage import (
+    ApprovalCandidateContext,
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
@@ -23,6 +24,10 @@ from scripts.agent_os_candidate_packet.cli import prepare_candidate_packet
 from scripts.agent_os_candidate_packet.execution_packet_stage import (
     ExecutionPacketDisposition,
     prepare_execution_packet,
+)
+from scripts.agent_os_candidate_packet.legacy_identity_compatibility import (
+    PostApprovalIdentityOutcome,
+    verify_post_approval_stage_identities,
 )
 from scripts.agent_os_candidate_packet.models import CandidatePacketPhase
 from scripts.agent_os_candidate_packet.validation_stage import CandidateRuntimeInputs
@@ -81,6 +86,9 @@ from .production_host_bootstrap import (
     build_subprocess_verifier_runner,
     canonical_evaluated_at,
     load_production_host_configuration,
+)
+from .post_approval_dependency_identities import (
+    post_approval_dependency_identity_evidence,
 )
 from scripts.agent_os_candidate_packet_live_input.repository_observation import (
     build_repository_observation_from_verifier_stdout,
@@ -202,23 +210,33 @@ def publish_production_handoff(
             evaluated_at=now,
             run_verifier=verifier,
         )
+        issue_reader = LiveIssueReader(github)
         prepared = prepare_candidate_packet(
             repository=packet.repository,
             issue_number=packet.issue_number,
-            issue_reader=LiveIssueReader(github),
+            issue_reader=issue_reader,
             repository_reader=repository_reader,
             observed_at=now,
             base_branch=packet.base_branch,
             evaluated_repository_sha=observation.base_sha,
             invocation_id=packet.invocation_id,
             evaluator_sha=packet.evaluator_sha,
+            # #3413 point 3: canonical dependency identities from the structured
+            # IssuePlan depends_on governed field; None keeps the fail-closed
+            # dependency-identity.not-supplied path.
+            dependency_identity_evidence=post_approval_dependency_identity_evidence(
+                issue_reader=issue_reader,
+                repository=packet.repository,
+                issue_number=packet.issue_number,
+                observed_at=now,
+            ),
             repository_observation=observation,
             requested_phase=CandidatePacketPhase.APPROVAL_READY,
             external_build_sha=packet.external_build_sha,
             compiler_evaluated_at=now,
         )
         approval_stage, proposal, issueplan, repository_state = _rebuild_approval(
-            prepared, packet, capsule, now
+            prepared, packet, capsule, now, observation
         )
 
         preauth_inputs = _runtime_inputs(
@@ -410,7 +428,7 @@ def _repository_observation(*, config, packet, capsule, payload, evaluated_at, r
     )
 
 
-def _rebuild_approval(prepared, packet, capsule, evaluated_at):
+def _rebuild_approval(prepared, packet, capsule, evaluated_at, repository_observation):
     readiness = prepared.readiness_stage_result
     planning = prepared.planning_stage_result
     proposal_result = prepared.proposal_stage_result
@@ -428,6 +446,7 @@ def _rebuild_approval(prepared, packet, capsule, evaluated_at):
     issueplan = readiness.issueplan_current_state_evidence
     repository_state = proposal_result.repository_state_evidence
     proposal = proposal_result.proposal
+    approval = capsule.approval_record
     expected = dict(packet.stage_identities)
     current = {
         "source": readiness.snapshot.source_revision,
@@ -436,9 +455,34 @@ def _rebuild_approval(prepared, packet, capsule, evaluated_at):
         "repository-evidence": repository_state.evidence_id,
         "proposal": proposal.proposal_id,
     }
-    if any(expected.get(name) != value for name, value in current.items()):
+    # #3413 point 2: composition-independent identities compare strictly;
+    # composition-affected identities fall back to the explicit legacy
+    # compatibility path. Old approvals are never silently rewritten.
+    verdict = verify_post_approval_stage_identities(
+        expected_identities=expected,
+        current_identities=current,
+        planning_stage_result=planning,
+        approved_packet=packet,
+        repository_observation=repository_observation,
+        candidate_context=(
+            None
+            if approval is None
+            else ApprovalCandidateContext(
+                approval_kind=approval.approval_kind,
+                authorizer_id=approval.authorizer_id,
+                decision_id=approval.decision_id,
+                decision_at=approval.decision_at,
+                expires_at=approval.expires_at,
+            )
+        ),
+        observed_at=evaluated_at,
+    )
+    if verdict.outcome is PostApprovalIdentityOutcome.DRIFT:
         raise ProductionHandoffPublicationError("candidate-stage-identity-drift")
-    approval = capsule.approval_record
+    if verdict.outcome is PostApprovalIdentityOutcome.LEGACY_UNPROVABLE:
+        raise ProductionHandoffPublicationError(
+            "candidate-legacy-compatibility-unprovable"
+        )
     applicability = evaluate_approval_applicability(
         approval,
         proposal,

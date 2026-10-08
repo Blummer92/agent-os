@@ -90,6 +90,9 @@ from .production_host_state_sources import (
     ProductionHostStateSources,
     RepositoryObservationReader,
 )
+from .post_approval_dependency_identities import (
+    post_approval_dependency_identity_evidence,
+)
 from .runtime_execution_request import RuntimeExecutionRequest
 
 #: Static host locations. ``AGENT_OS_CHECKPOINT_STORE_ROOT`` is the existing
@@ -456,6 +459,28 @@ class ProductionHostBootstrap:
         )
 
 
+def _issueplan_dependency_identity_reader(issue_transport, evaluated_at):
+    """Build the default #3413 dependency-identity reader from the IssuePlan.
+
+    When no explicit ``dependency_identity_evidence_reader`` is supplied, the
+    governed-resume path derives canonical dependency identities from the
+    structured IssuePlan ``depends_on`` governed field -- never prose,
+    labels, CI, or guessed state. An explicit reader still overrides this
+    default; a ``None`` return keeps the fail-closed not-supplied path.
+    """
+    reader = LiveIssueReader(transport=issue_transport)
+
+    def _read(descriptor):
+        return post_approval_dependency_identity_evidence(
+            issue_reader=reader,
+            repository=descriptor.repository,
+            issue_number=descriptor.issue_number,
+            observed_at=evaluated_at,
+        )
+
+    return _read
+
+
 def build_production_host_bootstrap(
     *,
     issue_transport: SingleIssueTransport,
@@ -477,6 +502,12 @@ def build_production_host_bootstrap(
     invented an evidence source would be exactly the second source of truth
     #1319 forbids. An absent binding fails closed here, before any Scheduler
     dispatch is reachable.
+
+    ``dependency_identity_evidence_reader`` is optional: when omitted, the
+    bootstrap defaults to the #3413 structured IssuePlan ``depends_on``
+    derivation (``post_approval_dependency_identity_evidence``) rather than
+    the fail-closed not-supplied path, so post-approval resume can re-verify
+    first-packet-approved candidates.
     """
     bound = load_production_host_configuration() if configuration is None else configuration
     if type(bound) is not ProductionHostConfiguration:
@@ -523,7 +554,13 @@ def build_production_host_bootstrap(
         workspace_parent=bound.workspace_parent,
         lease_directory=bound.lease_directory,
         delegated_parent_cgroup=bound.delegated_parent_cgroup,
-        dependency_identity_evidence_reader=dependency_identity_evidence_reader,
+        dependency_identity_evidence_reader=(
+            dependency_identity_evidence_reader
+            if dependency_identity_evidence_reader is not None
+            else _issueplan_dependency_identity_reader(
+                issue_transport, moment
+            )
+        ),
         runtime_request=runtime_request,
     )
     return ProductionHostBootstrap(

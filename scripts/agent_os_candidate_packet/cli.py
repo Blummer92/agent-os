@@ -146,6 +146,7 @@ def prepare_candidate_packet(
     external_build_sha: str | None = None,
     compiler_evaluated_at: str | None = None,
     approval_record_exists: bool = True,
+    identity_composition: Literal["current", "legacy"] = "current",
 ) -> PreparedCandidatePacket:
     """Compose #750-#755 end to end, stopping at the first truthful blocker.
 
@@ -160,6 +161,12 @@ def prepare_candidate_packet(
     objects (source revision, IssuePlan fingerprints, the derived
     implementation-contract fingerprint, candidate ref, base/tested SHA) are
     derived here rather than asked of the caller a second time.
+
+    ``identity_composition`` selects the planning-stage reason-code identity
+    composition (#3413): ``"current"`` excludes phase-specific diagnostic
+    codes from approval-bound identities; ``"legacy"`` reproduces the
+    pre-#3413 composition for the explicit legacy approved-packet
+    compatibility path and its tests only, never for new approvals.
     """
     planning_evaluator_sha = planning_evaluator_sha or evaluator_sha
     planning_created_at = planning_created_at or observed_at
@@ -246,7 +253,10 @@ def prepare_candidate_packet(
     assert readiness.snapshot is not None
 
     planning = prepare_planning_handoff(
-        readiness, evaluator_sha=planning_evaluator_sha, created_at=planning_created_at
+        readiness,
+        evaluator_sha=planning_evaluator_sha,
+        created_at=planning_created_at,
+        identity_composition=identity_composition,
     )
 
     proposal: RepositoryProposalStageResult | None = None

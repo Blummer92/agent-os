@@ -16,10 +16,15 @@ from pathlib import Path
 from typing import Callable
 
 from scripts.agent_os_candidate_packet.approval_stage import (
+    ApprovalCandidateContext,
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
 from scripts.agent_os_candidate_packet.cli import PreparedCandidatePacket, prepare_candidate_packet
+from scripts.agent_os_candidate_packet.legacy_identity_compatibility import (
+    PostApprovalIdentityOutcome,
+    verify_post_approval_stage_identities,
+)
 from scripts.agent_os_candidate_packet.models import CandidatePacket, CandidatePacketPhase
 from scripts.agent_os_candidate_packet.repository_stage import RepositoryObservation
 from scripts.agent_os_candidate_packet.stage_models import (
@@ -497,13 +502,37 @@ class ProductionHostStateSources:
             "repository-evidence": repository_state.evidence_id,
             "proposal": proposal.proposal_id,
         }
-        for name, observed in current_identities.items():
-            if expected.get(name) != observed:
-                raise CurrentInvocationResolutionError(
-                    f"current {name} identity does not match candidate packet"
-                )
-
         approval_record = capsule.approval_record
+        # #3413 point 2: composition-independent identities compare strictly;
+        # composition-affected identities fall back to the explicit legacy
+        # compatibility path. Old approvals are never silently rewritten.
+        verdict = verify_post_approval_stage_identities(
+            expected_identities=expected,
+            current_identities=current_identities,
+            planning_stage_result=planning,
+            approved_packet=packet,
+            repository_observation=observation,
+            candidate_context=(
+                None
+                if approval_record is None
+                else ApprovalCandidateContext(
+                    approval_kind=approval_record.approval_kind,
+                    authorizer_id=approval_record.authorizer_id,
+                    decision_id=approval_record.decision_id,
+                    decision_at=approval_record.decision_at,
+                    expires_at=approval_record.expires_at,
+                )
+            ),
+            observed_at=self.evaluated_at,
+        )
+        if verdict.outcome is PostApprovalIdentityOutcome.DRIFT:
+            raise CurrentInvocationResolutionError(
+                "current stage identity does not match candidate packet"
+            )
+        if verdict.outcome is PostApprovalIdentityOutcome.LEGACY_UNPROVABLE:
+            raise CurrentInvocationResolutionError(
+                "candidate-legacy-compatibility-unprovable"
+            )
         try:
             applicability = evaluate_approval_applicability(
                 approval_record,
