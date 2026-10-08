@@ -134,7 +134,6 @@ REASON_CODES = frozenset(
         "source.stale",
         "contract.readiness-blocked",
         "contract.readiness-needs-decision",
-        "contract.readiness-mechanical-only",
         "contract.readiness-terminal",
         "authorization.implementation-not-authorized",
         "authorization.implementation-stale",
@@ -748,6 +747,7 @@ def build_issue_operational_state(
     primary_pr_numbers = tuple(item.pull_request_number for item in claims)
     primary_claim_ids = tuple(item.claim_id for item in claims)
     reconciliation_required = False
+    blocking_reconciliation_required = False
     if not claims:
         claim_state = ClaimState.NONE
         active_branch = None
@@ -759,6 +759,7 @@ def build_issue_operational_state(
         primary_pr_state = PrimaryPrState(claim.state)
         if claim.state == "merged" and evidence.issue_state is IssueState.OPEN:
             reconciliation_required = True
+            blocking_reconciliation_required = True
             reasons.add("reconciliation.merged-pr-open-issue")
             blockers.add("reconciliation.merged-pr-open-issue")
     else:
@@ -766,6 +767,7 @@ def build_issue_operational_state(
         active_branch = None
         primary_pr_state = PrimaryPrState.CONFLICTING
         reconciliation_required = True
+        blocking_reconciliation_required = True
         reasons.add("claim.multiple-primary")
         blockers.add("claim.multiple-primary")
 
@@ -777,13 +779,15 @@ def build_issue_operational_state(
         reasons.add("lifecycle.closed")
         if "status:ready" in evidence.observed_labels:
             reconciliation_required = True
+            blocking_reconciliation_required = True
             reasons.add("reconciliation.closed-with-ready-label")
             blockers.add("reconciliation.closed-with-ready-label")
     else:
-        # A present lifecycle status label that contradicts canonical readiness
-        # (e.g. #2673: `status:ready` while a dependency blocks it) is a conflict.
-        # An absent label asserts nothing, so it stays a non-blocking label repair
-        # owned by lifecycle reconciliation.
+        # Status labels are a projection, not a second readiness authority.
+        # One stale *managed* label cannot veto current canonical READY evidence.
+        # Unknown or duplicate statuses, and labels contradicting unresolved or
+        # blocked canonical readiness, remain fail-closed (#2673, #3448).
+        # An absent label asserts nothing and may be reconciled separately.
         observed_statuses = tuple(
             sorted(label for label in evidence.observed_labels if label.startswith("status:"))
         )
@@ -793,14 +797,23 @@ def build_issue_operational_state(
         if observed_statuses and observed_statuses != expected_status:
             reconciliation_required = True
             reasons.add("reconciliation.open-status-label-conflict")
-            blockers.add("reconciliation.open-status-label-conflict")
+            mechanical_label_drift = (
+                evidence.readiness is ReadinessState.READY
+                and len(observed_statuses) == 1
+                and observed_statuses[0] in _MANAGED_READINESS_LABELS.values()
+            )
+            if not mechanical_label_drift:
+                blocking_reconciliation_required = True
+                blockers.add("reconciliation.open-status-label-conflict")
     if evidence.terminal_disposition is not TerminalDisposition.NONE:
         reasons.add("lifecycle.terminal-disposition")
     if evidence.issue_state is IssueState.CLOSED and evidence.lifecycle_stage is not LifecycleStage.CLOSED:
         reasons.add("lifecycle.stage-conflict")
         reconciliation_required = True
+        blocking_reconciliation_required = True
     if evidence.lifecycle_stage is LifecycleStage.MERGED and evidence.issue_state is IssueState.OPEN:
         reconciliation_required = True
+        blocking_reconciliation_required = True
         reasons.add("reconciliation.merged-pr-open-issue")
         blockers.add("reconciliation.merged-pr-open-issue")
 
@@ -808,30 +821,6 @@ def build_issue_operational_state(
     any_stale_authority = any(
         authority.state is AuthorizationState.STALE for authority in authorities.values()
     )
-
-    # #3448: mechanical-only readiness gap. When readiness is NEEDS_DECISION
-    # solely because the decision text is still present in the issue body, but
-    # the owner has already approved the implementation (authorization envelope
-    # is AUTHORIZED) and every other signal is clear, the remaining gap is the
-    # mechanical status-label move -- not a human decision. Emit a
-    # distinguishing reason code so consumers (orchestrator, lifecycle
-    # reconciliation) can proceed with the governed mutation without
-    # re-prompting. The outcome stays NEEDS_DECISION (enum-stable); the signal
-    # is purely additive and never lands in blocker_codes.
-    readiness_mechanical_only = (
-        evidence.readiness is ReadinessState.NEEDS_DECISION
-        and implementation_state is AuthorizationState.AUTHORIZED
-        and not any_stale_authority
-        and evidence.source_state is SourceState.COMPLETE
-        and evidence.freshness_state is FreshnessState.CURRENT
-        and evidence.dependency_state is DependencyState.CLEAR
-        and evidence.validation_state
-        in {ValidationState.NOT_RUN, ValidationState.PASSED}
-        and not reconciliation_required
-        and not terminal
-    )
-    if readiness_mechanical_only:
-        reasons.add("contract.readiness-mechanical-only")
 
     if evidence.source_state is SourceState.UNSUPPORTED:
         outcome = OperationalOutcome.INVALID
@@ -858,7 +847,7 @@ def build_issue_operational_state(
         or evidence.dependency_state is DependencyState.UNKNOWN
         or evidence.validation_state is ValidationState.PENDING
         or implementation_state is AuthorizationState.NEEDS_DECISION
-        or reconciliation_required
+        or blocking_reconciliation_required
     ):
         outcome = OperationalOutcome.NEEDS_DECISION
     elif evidence.readiness is ReadinessState.READY and implementation_state is AuthorizationState.AUTHORIZED:
