@@ -298,7 +298,7 @@ a second fixed root-owned runtime published at:
 ```
 
 After exact branch/SHA checkout the host runner requires that fixed wrapper and
-that fixed overlay, proves the overlay resolves Vitest `4.1.10` on a Node `22.x`
+that fixed overlay, proves the overlay resolves Vitest `5.0.0` on a Node `22.x`
 interpreter, links the root-owned overlay into the ephemeral checkout so Node can
 resolve the package's declared dependencies, and runs only the fixed argv above
 from the fixed package directory. Cleanup removes the ephemeral link, never the
@@ -343,3 +343,4 @@ argv whose test paths exist in the fixed package, rejects supplied commands,
 argv, paths, filters, globs, and shell text, pins the same Vitest/Node identity
 the package declares, keeps the host runner free of install and shell surface,
 preserves both existing identities unchanged, and stays non-authorizing.
+
