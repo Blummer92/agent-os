@@ -173,7 +173,7 @@ def test_profile_requests_are_non_authorizing() -> None:
 
 def test_local_vitest_projection_preserves_transport_identity_and_targets() -> None:
     profile = get_profile("picture-perfect")
-    assert profile.runtime_id == "node22-vitest-5.0.3"
+    assert profile.runtime_id == "node22-vitest-5.0.0"
     assert profile_argv(profile.profile_id)[:3] == ("node", "vitest", "run")
     assert profile_local_argv(profile.profile_id) == (
         "node", "node_modules/vitest/vitest.mjs", "run", *profile.fixed_targets

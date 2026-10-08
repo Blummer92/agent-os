@@ -34,7 +34,7 @@ SCANNER_PROOF_VALIDATION_ARGV = ("python", "-m", "scripts.agent_os_github_issue_
 # caller-selectable interpreter, package, or argv surface.
 DEV_VALIDATION_NODE = "/usr/local/libexec/agent-os-dev-validation-node"
 DEV_VALIDATION_NODE_MODULES = "/opt/agent-os/dev-validation-node-runtime/node_modules"
-DEV_VALIDATION_VITEST_VERSION = "5.0.3"
+DEV_VALIDATION_VITEST_VERSION = "5.0.0"
 _FRAME_START = "===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
@@ -68,7 +68,7 @@ SHEETS_SMOKE_PROBE=SHEETS_SMOKE_IMPORT_PRELUDE+";import json;from workflow_sched
 NODE="/usr/local/libexec/agent-os-dev-validation-node"
 NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
 VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
-NODE_PROBE="const v=require(process.argv[1]+'/vitest/package.json').version;if(v!=='5.0.3'||!process.versions.node.startsWith('22.'))process.exit(1)"
+NODE_PROBE="const v=require(process.argv[1]+'/vitest/package.json').version;if(v!=='5.0.0'||!process.versions.node.startsWith('22.'))process.exit(1)"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
  MATERIALS_ID:(
