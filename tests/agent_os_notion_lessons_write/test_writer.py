@@ -1,4 +1,4 @@
-"""Offline safety cases for one explicit Lessons Learned create/update."""
+"""Offline safety cases for one explicit Lessons Learned create/update (#3305, #3417)."""
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -10,31 +10,52 @@ from scripts.agent_os_notion_lessons_write.admission import (
     COMMAND_PREFIX, OWNER_ID, REPOSITORY, REPOSITORY_ID, WORKFLOW_REF,
     AdmittedRequest, WriteBlocked, admit,
 )
-from scripts.agent_os_notion_lessons_write.catalog import REQUEST_ID, WRITABLE_TYPES, lesson_for
-
-LESSON = lesson_for(REQUEST_ID)
-COMMAND = COMMAND_PREFIX + REQUEST_ID
+from scripts.agent_os_notion_lessons_write.catalog import (
+    LL93_METADATA_REQUEST_ID, NARRATIVE_TYPES, REQUEST_ID, WRITABLE_TYPES, lesson_for,
+)
 from scripts.agent_os_notion_lessons_write.runner import main
 from scripts.agent_os_notion_lessons_write.writer import execute, properties
 
+LESSON = lesson_for(REQUEST_ID)
+COMMAND = COMMAND_PREFIX + REQUEST_ID
+UPDATE = LL93_METADATA_REQUEST_ID
 SOURCE_ID = "00000000-0000-0000-0000-000000000001"
 PAGE_ID = "00000000-0000-0000-0000-000000000002"
 REVISION = "2026-10-06T20:00:00.000Z"
+UPDATE_COMMAND = f"{COMMAND_PREFIX}{UPDATE} LL-93 {REVISION}"
 CONTEXT = dict(event_name="issue_comment", ref="refs/heads/main", workflow_ref=WORKFLOW_REF, run_attempt="1")
+OPTIONS = {"Area": ["Governance", "Testing"], "Learning Type": ["Mistake", "Testing lesson"],
+           "Applies To": ["Notion", "Drive"]}
 
 
-def event(body=COMMAND):
+def event(body=COMMAND, *, number=3417, state="open"):
     return {"action": "created", "repository": {"full_name": REPOSITORY, "id": REPOSITORY_ID},
-            "issue": {"number": 3305, "state": "open"},
+            "issue": {"number": number, "state": state},
             "comment": {"id": 100, "body": body, "created_at": REVISION, "updated_at": REVISION,
                         "user": {"id": OWNER_ID, "login": "Blummer92", "type": "User"}}}
 
 
-def page(*, intended=True):
-    props = {name: {"type": kind, **deepcopy(properties()[name])} for name, kind in WRITABLE_TYPES.items()}
-    props["Owner / Agent"] = {"type": "rich_text", "rich_text": [{"type": "text", "plain_text": "existing owner"}]}
+def _prop(name, value):
+    kind = WRITABLE_TYPES[name]
+    if kind in ("title", "rich_text"):
+        return {"type": kind, kind: [{"type": "text", "plain_text": value, "text": {"content": value}}]}
+    if kind == "select":
+        return {"type": "select", "select": None if value is None else {"name": value}}
+    if kind == "multi_select":
+        return {"type": "multi_select", "multi_select": [{"name": item} for item in value]}
+    return {"type": "url", "url": value}
+
+
+def page(*, intended=True, metadata=None):
+    values = dict(LESSON)
     if not intended:
-        props["What Happened"]["rich_text"][0]["text"]["content"] = "Earlier context"
+        values["What Happened"] = "Earlier context"
+    values.update(metadata or {"Area": None, "Learning Type": None, "Applies To": (), "Source Link": None})
+    props = {name: _prop(name, value) for name, value in values.items()}
+    props["Owner / Agent"] = {"type": "rich_text", "rich_text": [{"type": "text", "plain_text": "existing owner"}]}
+    props["Status"] = {"type": "select", "select": None}
+    props["Surface Before Work?"] = {"type": "checkbox", "checkbox": False}
+    props["Lesson ID"] = {"type": "unique_id", "unique_id": {"prefix": "LL", "number": 93}}
     return {"id": PAGE_ID, "parent": {"type": "data_source_id", "data_source_id": SOURCE_ID},
             "last_edited_time": REVISION, "properties": props, "archived": False, "in_trash": False}
 
@@ -45,8 +66,11 @@ class Client:
         self.rows = [] if existing is None else [deepcopy(existing)]
         self.calls = []
         self.source = SOURCE_ID
-        self.schema_value = {"id": SOURCE_ID, "properties": {
-            name: {"type": kind} for name, kind in {**WRITABLE_TYPES, "Lesson ID": "unique_id", "Status": "select"}.items()}}
+        schema = {name: {"type": kind} for name, kind in
+                  {**WRITABLE_TYPES, "Lesson ID": "unique_id", "Status": "select"}.items()}
+        for name, options in OPTIONS.items():
+            schema[name][WRITABLE_TYPES[name]] = {"options": [{"name": item} for item in options]}
+        self.schema_value = {"id": SOURCE_ID, "properties": schema}
         self.more = False
         self.receipt_id = PAGE_ID
         self.raise_mutation = False
@@ -57,6 +81,7 @@ class Client:
         self.appear = False
         self.reads = 0
         self.stale = False
+        self.sent = []
 
     def verify_binding(self):
         self.calls.append("binding")
@@ -72,6 +97,11 @@ class Client:
         rows = [page(intended=False)] if self.appear and self.query_count > 1 else self.rows
         return {"results": deepcopy(rows), "has_more": self.more}
 
+    def find_lesson(self, number):
+        self.calls.append("query-id")
+        self.lesson_number = number
+        return {"results": deepcopy(self.rows), "has_more": self.more}
+
     def get_page(self, page_id):
         self.calls.append("get")
         self.reads += 1
@@ -86,34 +116,50 @@ class Client:
 
     def create(self, intended):
         self.calls.append("write")
+        self.sent.append(deepcopy(intended))
         self.page = page()
+        for name, value in intended.items():
+            self.page["properties"][name] = {"type": WRITABLE_TYPES[name], **deepcopy(value)}
         if self.raise_mutation:
             raise TimeoutError("credential-class diagnostic")
         return {"id": self.receipt_id}
 
     def update(self, page_id, intended):
         self.calls.append("write")
+        self.sent.append(deepcopy(intended))
         for name, value in intended.items():
             self.page["properties"][name] = {"type": WRITABLE_TYPES[name], **deepcopy(value)}
+        self.page["last_edited_time"] = "2026-10-08T21:00:00.000Z"
         if self.change_protected:
-            self.page["properties"]["Approval"] = {"type": "checkbox", "checkbox": True}
+            self.page["properties"]["Status"] = {"type": "select", "select": {"name": "Applied"}}
         if self.raise_mutation:
             raise TimeoutError("credential-class diagnostic")
         return {"id": self.receipt_id}
 
 
+def update_request(revision=REVISION, lesson_id="LL-93"):
+    return AdmittedRequest(100, lesson_id, revision, UPDATE, 3417)
+
+
 class AdmissionTests(unittest.TestCase):
-    def test_owner_create_is_admitted(self):
-        self.assertEqual(admit(event(), **CONTEXT), AdmittedRequest(100))
+    def test_owner_create_is_admitted_on_any_ordinary_issue(self):
+        # #3417 regression: the request surface no longer depends on #3305.
+        for number, state in ((3305, "closed"), (3305, "open"), (3417, "open"), (9999, "closed")):
+            with self.subTest(number=number, state=state):
+                self.assertEqual(admit(event(number=number, state=state), **CONTEXT),
+                                 AdmittedRequest(100, issue_number=number))
 
-    def test_exact_update_is_admitted(self):
-        actual = admit(event(COMMAND + " " + PAGE_ID + " " + REVISION), **CONTEXT)
-        self.assertEqual(actual.expected_page_id, PAGE_ID)
-        self.assertEqual(actual.expected_revision, REVISION)
+    def test_lesson_id_update_is_admitted_only_for_reviewed_target(self):
+        actual = admit(event(UPDATE_COMMAND), **CONTEXT)
+        self.assertEqual((actual.expected_lesson_id, actual.expected_revision), ("LL-93", REVISION))
+        for body in (f"{COMMAND_PREFIX}{UPDATE} LL-94 {REVISION}", f"{COMMAND_PREFIX}{UPDATE}",
+                     f"{COMMAND_PREFIX}{UPDATE} {PAGE_ID} {REVISION}", f"{COMMAND} LL-93 {REVISION}"):
+            with self.subTest(body=body), self.assertRaises(WriteBlocked):
+                admit(event(body), **CONTEXT)
 
-    def test_foreign_or_edited_or_closed_inputs_are_refused(self):
+    def test_foreign_or_edited_inputs_are_refused(self):
         cases = [("repository", "id", 123), ("repository", "full_name", "other/repo"),
-                 ("issue", "number", 3306), ("issue", "state", "closed"),
+                 ("issue", "number", 0), ("issue", "number", "3417"),
                  ("comment", "updated_at", "edited"), ("comment", "id", True)]
         for section, key, value in cases:
             with self.subTest(section=section, key=key):
@@ -141,7 +187,8 @@ class AdmissionTests(unittest.TestCase):
         for body in (COMMAND + ' {"Approval":true}', COMMAND + ' {"student":"private"}',
                      COMMAND + " archive", COMMAND + " bulk", COMMAND + "\nprivate notes",
                      "/agent-os notion-write https://api.notion.com/v1/pages", COMMAND + " ",
-                     COMMAND + " " + PAGE_ID + " invalid-revision", COMMAND + " ; echo token"):
+                     f"{COMMAND_PREFIX}{UPDATE} LL-93 invalid-revision", COMMAND + " ; echo token",
+                     COMMAND + " Status=Applied", f"{COMMAND_PREFIX}{UPDATE} LL-93 {REVISION} Surface"):
             with self.subTest(body=body), self.assertRaises(WriteBlocked):
                 admit(event(body), **CONTEXT)
 
@@ -153,6 +200,7 @@ class WriterTests(unittest.TestCase):
         self.assertEqual(result["status"], "persisted")
         self.assertTrue(result["readback_verified"])
         self.assertEqual(result["write_attempts"], 1)
+        self.assertEqual(result["lesson_id"], "LL-93")
         self.assertEqual(client.calls, ["binding", "schema", "query", "query", "write", "get"])
 
     def test_unchanged_skips_write_and_reads_exact_target(self):
@@ -170,56 +218,100 @@ class WriterTests(unittest.TestCase):
         self.assertEqual(execute(AdmittedRequest(101), client)["status"], "unchanged")
         self.assertEqual(client.calls.count("write"), 1)
 
-    def test_differing_existing_content_requires_explicit_exact_update(self):
+    def test_create_entry_never_overwrites_differing_existing_lesson(self):
         client = Client(page(intended=False))
         result = execute(AdmittedRequest(100), client)
-        self.assertEqual(result["status"], "conflict")
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("conflict", "existing-lesson-requires-reviewed-update-entry"))
         self.assertEqual(result["page_id"], PAGE_ID)
         self.assertNotIn("write", client.calls)
 
-    def test_exact_update_preserves_non_routine_fields(self):
-        client = Client(page(intended=False))
-        owner = deepcopy(client.page["properties"]["Owner / Agent"])
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
-        self.assertEqual(result["status"], "persisted")
-        self.assertEqual(client.page["properties"]["Owner / Agent"], owner)
-        self.assertEqual(client.calls[-2:], ["write", "get"])
+    def test_lesson_id_update_writes_descriptive_metadata_and_preserves_other_fields(self):
+        client = Client(page())
+        protected = {name: deepcopy(client.page["properties"][name])
+                     for name in ("Owner / Agent", "Status", "Surface Before Work?", *NARRATIVE_TYPES)}
+        result = execute(update_request(), client)
+        self.assertEqual((result["status"], result["lesson_id"]), ("persisted", "LL-93"))
+        self.assertEqual(client.lesson_number, 93)
+        self.assertEqual(client.calls, ["binding", "schema", "query-id", "get", "get", "write", "get"])
+        self.assertEqual(set(client.sent[0]), {"Area", "Learning Type", "Applies To", "Source Link"})
+        for name, value in protected.items():
+            self.assertEqual(client.page["properties"][name], value)
+        self.assertEqual(result["revision"], "2026-10-08T21:00:00.000Z")
 
-    def test_stale_update_binding_performs_zero_writes(self):
-        client = Client(page(intended=False))
-        result = execute(AdmittedRequest(100, PAGE_ID, "old"), client)
-        self.assertEqual(result["status"], "conflict")
+    def test_identical_update_is_unchanged_without_revision_dependence(self):
+        metadata = dict(lesson_for(UPDATE))
+        client = Client(page(metadata=metadata))
+        result = execute(update_request(revision="2020-01-01T00:00:00Z"), client)
+        self.assertEqual(result["status"], "unchanged")
+        self.assertNotIn("write", client.calls)
+
+    def test_stale_revision_is_refused_with_zero_writes(self):
+        client = Client(page())
+        result = execute(update_request(revision="2026-10-01T00:00:00.000Z"), client)
+        self.assertEqual((result["status"], result["reason_code"]), ("conflict", "stale-revision-refused"))
         self.assertNotIn("write", client.calls)
 
     def test_concurrent_page_change_performs_zero_writes(self):
-        client = Client(page(intended=False))
+        client = Client(page())
         client.stale = True
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
-        self.assertEqual(result["status"], "conflict")
+        result = execute(update_request(), client)
+        self.assertEqual((result["status"], result["reason_code"]), ("conflict", "page-changed-before-write"))
         self.assertNotIn("write", client.calls)
+
+    def test_request_target_must_match_reviewed_entry(self):
+        for request in (AdmittedRequest(100, "LL-93", REVISION), update_request(lesson_id=None),
+                        update_request(lesson_id="LL-94")):
+            client = Client(page())
+            with self.subTest(request=request):
+                result = execute(request, client)
+                self.assertEqual(result["reason_code"], "reviewed-target-lesson-mismatch")
+                self.assertEqual(client.calls, [])
+
+    def test_wrong_lesson_identity_row_is_refused(self):
+        other = page()
+        other["properties"]["Lesson ID"]["unique_id"]["number"] = 94
+        client = Client(other)
+        result = execute(update_request(), client)
+        self.assertEqual(result["reason_code"], "query-identity-mismatch")
+        self.assertNotIn("write", client.calls)
+
+    def test_missing_update_target_never_creates(self):
+        client = Client()
+        result = execute(update_request(), client)
+        self.assertEqual(result["reason_code"], "update-target-missing")
+        self.assertNotIn("write", client.calls)
+
+    def test_descriptive_value_outside_live_options_is_refused(self):
+        # Writing an unknown select option would create schema; refuse instead.
+        client = Client(page())
+        client.schema_value["properties"]["Area"]["select"]["options"] = [{"name": "Testing"}]
+        result = execute(update_request(), client)
+        self.assertEqual(result["reason_code"], "descriptive-option-not-in-live-schema")
+        self.assertNotIn("write", client.calls)
+
+    def test_activation_fields_are_never_sent(self):
+        for request_id in (REQUEST_ID, UPDATE):
+            sent = properties(request_id)
+            self.assertFalse({"Status", "Surface Before Work?"} & set(sent))
 
     def test_duplicate_and_incomplete_queries_fail_closed(self):
         for kind in ("duplicate", "more"):
-            client = Client(page())
-            if kind == "duplicate":
-                client.rows.append(page())
-            else:
-                client.more = True
-            result = execute(AdmittedRequest(100), client)
-            self.assertEqual(result["status"], "blocked")
-            self.assertNotIn("write", client.calls)
+            for request in (AdmittedRequest(100), update_request()):
+                client = Client(page())
+                if kind == "duplicate":
+                    client.rows.append(page())
+                else:
+                    client.more = True
+                result = execute(request, client)
+                self.assertEqual(result["status"], "blocked")
+                self.assertNotIn("write", client.calls)
 
     def test_appeared_target_prevents_create(self):
         client = Client()
         client.appear = True
         result = execute(AdmittedRequest(100), client)
         self.assertEqual(result["status"], "conflict")
-        self.assertNotIn("write", client.calls)
-
-    def test_missing_update_target_prevents_create(self):
-        client = Client()
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
-        self.assertEqual(result["reason_code"], "update-target-missing")
         self.assertNotIn("write", client.calls)
 
     def test_schema_drift_and_wrong_destination_fail_before_write(self):
@@ -271,24 +363,24 @@ class WriterTests(unittest.TestCase):
         self.assertNotIn("credential-class", json.dumps(result))
 
     def test_update_timeout_is_followed_by_exact_readback(self):
-        client = Client(page(intended=False))
+        client = Client(page())
         client.raise_mutation = True
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
+        result = execute(update_request(), client)
         self.assertEqual(result["status"], "persisted")
         self.assertEqual(client.calls[-2:], ["write", "get"])
 
     def test_receipt_identity_mismatch_stays_uncertain(self):
-        client = Client(page(intended=False))
+        client = Client(page())
         client.receipt_id = SOURCE_ID
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
+        result = execute(update_request(), client)
         self.assertEqual(result["status"], "uncertain")
         self.assertEqual(result["reason_code"], "write-receipt-target-mismatch")
         self.assertEqual(client.calls[-1], "get")
 
-    def test_non_routine_provider_change_stays_uncertain(self):
-        client = Client(page(intended=False))
+    def test_activation_field_change_during_write_stays_uncertain(self):
+        client = Client(page())
         client.change_protected = True
-        result = execute(AdmittedRequest(100, PAGE_ID, REVISION), client)
+        result = execute(update_request(), client)
         self.assertEqual(result["status"], "uncertain")
         self.assertEqual(result["reason_code"], "non-routine-property-changed")
 
@@ -308,7 +400,7 @@ class RunnerTests(unittest.TestCase):
                "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
         with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
             root = Path(directory)
-            (root / "event.json").write_text(json.dumps(event()))
+            (root / "event.json").write_text(json.dumps(event(number=3305, state="closed")))
             with patch("scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", side_effect=AssertionError):
                 code = main(["--phase", "admit", "--event", str(root / "event.json"), "--output", str(root / "result.json")])
             self.assertEqual(code, 0)

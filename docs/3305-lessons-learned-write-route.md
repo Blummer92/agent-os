@@ -7,47 +7,78 @@ consumes `00_Governance/write-authorization-policy.md`; it creates no authority.
 
 ## Requests and scope
 
-After separately authorized default-branch activation, the repository owner may
-post one unedited command on open issue #3305:
+The repository owner may post one unedited command on **any ordinary (non-PR)
+issue** in this repository (#3417). The issue's open/closed state is not an
+authorization signal: the reviewed catalog entry authorizes content and the owner
+comment authorizes the one write. The original #3305-open binding was removed
+because closing the implementation issue made the route unreachable.
 
 ```text
 /agent-os notion-write <reviewed-request-id>
-/agent-os notion-write <reviewed-request-id> <exact-page-uuid> <exact-last-edited-time>
+/agent-os notion-write <reviewed-update-request-id> <LL-n> <exact-last-edited-time>
 ```
 
-`catalog.py` holds immutable, reviewed public request payloads keyed by slug.
-Admission, reconciliation, transport and readback work for any reviewed entry;
-adding an entry requires a governed repository review, not new executor code.
-Only `ckr6-execution-path-2026-10-05` is currently registered. This is a finite
-catalog route, not free-form routine capture: comment text cannot supply narrative,
-property names, destinations, API paths or authorization. Catalog payloads are
-write proposals, never a replacement canonical lesson store. Review must exclude
+`catalog.py` holds immutable, reviewed public request entries keyed by slug.
+Each entry is `{target_lesson_id, properties}`:
+
+- **create entry** (`target_lesson_id = None`): the four narrative fields are
+  required; reconciliation is by exact title and an existing lesson with
+  different content is never overwritten
+  (`existing-lesson-requires-reviewed-update-entry`).
+- **update entry** (`target_lesson_id = "LL-n"`): any nonempty subset of writable
+  fields of that reviewed target. The command must name the same Lesson ID and
+  the exact current `last_edited_time`; a stale revision is refused with zero
+  writes (`stale-revision-refused`).
+
+New or refined lessons enter **only** through an ordinary reviewed catalog PR by
+GitHub Service Agent; admission, reconciliation, transport and readback need no
+executor change. Comment text cannot supply narrative, property names, values,
+destinations, API paths, targets or authorization. Catalog payloads are write
+proposals, never a replacement canonical lesson store. Review must exclude
 private/student/sensitive information; runtime shape checks cannot prove privacy.
 
-| Writable property | Type |
-| --- | --- |
-| Lesson Learned | title |
-| What Happened | rich_text |
-| What To Do Next Time | rich_text |
-| Guardrail | rich_text |
+| Writable property | Type | Class |
+| --- | --- | --- |
+| Lesson Learned | title | narrative |
+| What Happened | rich_text | narrative |
+| What To Do Next Time | rich_text | narrative |
+| Guardrail | rich_text | narrative |
+| Area | select | descriptive (owner decision D1) |
+| Learning Type | select | descriptive (D1) |
+| Applies To | multi_select | descriptive (D1) |
+| Source Link | url (`https://github.com/Blummer92/agent-os/issues|pull/<n>` only) | descriptive (D1) |
 
-Each value is nonempty and at most 512 characters. No ownership, readiness,
-approval, audit, provenance, relation, schema, sharing, deletion/archive, bulk or
-scheduled operation is admitted. Existing `NOTION_TOKEN` and
-`AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID` are reused without permission changes.
+Text values are nonempty and at most 512 characters. Select and multi-select
+values must already exist as live options; otherwise the write is refused
+(`descriptive-option-not-in-live-schema`) because Notion would otherwise create
+an option, which is a schema change. **`Status` and `Surface Before Work?` are
+activation fields: no catalog entry may name them and the writer never sends
+them** (`protected-activation-field-refused`). Descriptive metadata never
+activates a lesson. No ownership, readiness, approval, audit, relation, schema,
+sharing, deletion/archive, bulk or scheduled operation is admitted. Existing
+`NOTION_TOKEN` and `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID` are reused without
+permission changes.
+
+Registered entries: `ckr6-execution-path-2026-10-05` (create; the LL-93 canary
+narrative) and `ll-93-descriptive-metadata-2026-10-08` (update of LL-93:
+Area=Governance, Learning Type=Mistake, Applies To=Notion, Source Link=#3305).
+Executing the latter still requires the owner's per-action command and does not
+set Status or Surface Before Work?.
 
 ## Execution and failure behavior
 
-The workflow accepts only created owner issue comments, serializes the destination,
-and refuses reruns. Admission checks repository/owner identity, issue, default-branch
-workflow context, command and optional exact update binding before credentials.
-Execution rereads the current issue/comment before constructing the Notion client.
+The workflow accepts only created owner comments on ordinary issues, serializes the
+destination, and refuses reruns. Admission checks repository/owner identity, the
+non-PR issue, default-branch workflow context, command and optional exact Lesson ID
+update binding before credentials. Execution rereads the event's own issue and
+comment before constructing the Notion client.
 
 The writer reuses the canonical binding verifier and read adapter, checks live
-property types, and queries at most two exact-title matches. Duplicate or incomplete
-results refuse. Identical content returns `unchanged` with zero writes. Changed
-content requires the explicit page/revision and a second unchanged read. Create
-rechecks absence. One separate POST/PATCH is followed immediately by an exact GET
+property types and options, and queries at most two exact-title matches (create)
+or two `Lesson ID` unique_id matches (update). Duplicate or incomplete results
+refuse. Identical content returns `unchanged` with zero writes. An update requires
+the bound revision to equal the live revision and a second unchanged read at the
+mutation boundary. Create rechecks absence. One separate POST/PATCH is followed immediately by an exact GET
 that verifies page, parent, narrative and preservation of other update properties.
 
 There is no retry. An uncertain create without a returned identity remains
@@ -62,7 +93,9 @@ A successful readback proves persistence only. The existing consumer additionall
 needs a stable Lesson ID and revision, recognized Status/Area/Learning Type,
 valid Applies To values, guidance, `Surface Before Work? = true`, and a canonical
 GitHub Source Link for sufficient evidence. Task signals must match the lesson.
-The writer deliberately leaves activation metadata untouched.
+Reviewed entries may now supply Area, Learning Type, Applies To and Source Link
+(D1); Status and `Surface Before Work?` remain separately governed, per-action
+owner decisions outside this writer.
 
 Offline tests exercise missing metadata rejection and selection with synthetic
 owner-supplied metadata; they do not prove live activation. Any live metadata repair
@@ -83,7 +116,7 @@ The single authorized canary was consumed on 2026-10-06 at head
 - [Durable handoff](https://github.com/Blummer92/agent-os/issues/3305#issuecomment-6027106093).
 
 The canary module, PR-open write trigger and canary-only tests are removed.
-No second live write is authorized. Current evidence and validation disposition
+Each further live write needs its own owner command under the write policy. Current evidence and validation disposition
 remain on #3305 / PR #3358; old-head passes do not validate the revised head.
 
 ## Live consumer evidence and owner handoff

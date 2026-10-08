@@ -8,7 +8,7 @@ import json
 import urllib.request
 from uuid import UUID
 
-from .catalog import ISSUE_NUMBER, REQUEST_ID, lesson_for
+from .catalog import LESSON_ID, REQUEST_ID, entry_for
 
 REPOSITORY = "Blummer92/agent-os"
 REPOSITORY_ID = 1289370915
@@ -34,9 +34,10 @@ def notion_id(value: object) -> str:
 @dataclass(frozen=True)
 class AdmittedRequest:
     comment_id: int
-    expected_page_id: str | None = None
+    expected_lesson_id: str | None = None
     expected_revision: str | None = None
     request_id: str = REQUEST_ID
+    issue_number: int = 0
 
 
 def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
@@ -51,9 +52,13 @@ def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
     repository = event.get("repository", {})
     if (repository.get("full_name"), repository.get("id")) != (REPOSITORY, REPOSITORY_ID):
         raise WriteBlocked("repository-mismatch")
+    # #3417: the request surface is any ordinary (non-PR) issue in this
+    # repository. Issue open/closed state is not an authorization signal: the
+    # reviewed catalog entry authorizes content, the owner comment the write.
     issue = event.get("issue", {})
-    if (issue.get("number"), issue.get("state")) != (ISSUE_NUMBER, "open") or "pull_request" in issue:
-        raise WriteBlocked("open-canonical-issue-required")
+    if (not isinstance(issue, dict) or type(issue.get("number")) is not int
+            or issue["number"] < 1 or "pull_request" in issue):
+        raise WriteBlocked("ordinary-issue-request-required")
     comment = event.get("comment", {})
     user = comment.get("user", {})
     if (user.get("id"), user.get("login"), user.get("type")) != (OWNER_ID, "Blummer92", "User"):
@@ -71,22 +76,26 @@ def admit(event: object, *, event_name: str, ref: str, workflow_ref: str,
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", request_id):
         raise WriteBlocked("finite-request-required")
     try:
-        lesson_for(request_id)
+        target = entry_for(request_id)["target_lesson_id"]
     except ValueError:
         raise WriteBlocked("finite-request-required") from None
-    if not parts:
-        return AdmittedRequest(comment["id"], request_id=request_id)
+    if target is None:
+        # Create entry: an update binding can never retarget it.
+        if parts:
+            raise WriteBlocked("update-binding-not-applicable")
+        return AdmittedRequest(comment["id"], request_id=request_id, issue_number=issue["number"])
     if len(parts) != 2:
         raise WriteBlocked("exact-update-binding-required")
-    page_id = notion_id(parts[0])
-    revision = parts[1]
+    lesson_id, revision = parts
+    if not LESSON_ID.fullmatch(lesson_id) or lesson_id != target:
+        raise WriteBlocked("reviewed-target-lesson-mismatch")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision):
         raise WriteBlocked("exact-update-binding-required")
     try:
         datetime.fromisoformat(revision.replace("Z", "+00:00"))
     except ValueError:
         raise WriteBlocked("exact-update-binding-required") from None
-    return AdmittedRequest(comment["id"], page_id, revision, request_id)
+    return AdmittedRequest(comment["id"], lesson_id, revision, request_id, issue["number"])
 
 
 def _get(path: str) -> dict:
@@ -107,9 +116,9 @@ def _get(path: str) -> dict:
 
 def verify_current_request(event: dict, request: AdmittedRequest, *, context: dict) -> None:
     try:
-        issue = _get(f"/issues/{ISSUE_NUMBER}")
+        issue = _get(f"/issues/{request.issue_number}")
         comment = _get(f"/issues/comments/{request.comment_id}")
-        if comment.get("issue_url") != f"https://api.github.com/repos/{REPOSITORY}/issues/{ISSUE_NUMBER}":
+        if comment.get("issue_url") != f"https://api.github.com/repos/{REPOSITORY}/issues/{request.issue_number}":
             raise WriteBlocked("canonical-comment-target-mismatch")
         current = {**event, "issue": issue, "comment": comment}
         if admit(current, **context) != request or comment.get("body") != event["comment"]["body"]:
