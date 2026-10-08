@@ -718,3 +718,59 @@ def test_2148_equivalent_drift_evidence_is_deterministic() -> None:
     second = build_issue_operational_state(evidence(**changes))
 
     assert first.state_id == second.state_id
+
+
+def test_3448_authorized_implementation_with_needs_decision_readiness_is_mechanical_only() -> None:
+    """#3448 regression: an owner-approved implementation whose readiness still
+    reads NEEDS_DECISION (decision text lingering in the body) must emit the
+    mechanical-only signal instead of looking like a genuine human decision
+    gap. The outcome stays NEEDS_DECISION (enum-stable); the signal is what
+    lets consumers proceed without re-prompting."""
+    state = build_issue_operational_state(
+        evidence(
+            readiness=ReadinessState.NEEDS_DECISION,
+            observed_labels=("status:needs-decision",),
+            implementation_authorization=authority(AuthorizationState.AUTHORIZED),
+        )
+    )
+
+    assert state.outcome is OperationalOutcome.NEEDS_DECISION
+    assert "contract.readiness-mechanical-only" in state.reason_codes
+    # The signal is advisory, never a blocker: the only blocker is the
+    # mechanical readiness gap itself.
+    assert "contract.readiness-mechanical-only" not in state.blocker_codes
+    assert state.implementation_authorization.state is AuthorizationState.AUTHORIZED
+
+
+def test_3448_needs_decision_readiness_without_authorization_is_not_mechanical_only() -> None:
+    """Negative control for #3448: when the implementation itself still needs a
+    decision, the mechanical-only signal must be absent -- this is a genuine
+    human decision gap and must keep prompting."""
+    state = build_issue_operational_state(
+        evidence(
+            readiness=ReadinessState.NEEDS_DECISION,
+            observed_labels=("status:needs-decision",),
+            implementation_authorization=authority(AuthorizationState.NEEDS_DECISION),
+        )
+    )
+
+    assert state.outcome is OperationalOutcome.NEEDS_DECISION
+    assert "contract.readiness-mechanical-only" not in state.reason_codes
+    assert "contract.readiness-needs-decision" in state.blocker_codes
+
+
+def test_3448_mechanical_only_requires_all_other_signals_clear() -> None:
+    """The mechanical-only signal must not fire when any other signal is
+    unclean -- e.g. a blocked dependency means the gap is not merely
+    mechanical."""
+    state = build_issue_operational_state(
+        evidence(
+            readiness=ReadinessState.NEEDS_DECISION,
+            observed_labels=("status:needs-decision",),
+            implementation_authorization=authority(AuthorizationState.AUTHORIZED),
+            dependency_state=DependencyState.BLOCKED,
+        )
+    )
+
+    assert state.outcome is OperationalOutcome.BLOCKED
+    assert "contract.readiness-mechanical-only" not in state.reason_codes

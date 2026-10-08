@@ -134,6 +134,7 @@ REASON_CODES = frozenset(
         "source.stale",
         "contract.readiness-blocked",
         "contract.readiness-needs-decision",
+        "contract.readiness-mechanical-only",
         "contract.readiness-terminal",
         "authorization.implementation-not-authorized",
         "authorization.implementation-stale",
@@ -807,6 +808,30 @@ def build_issue_operational_state(
     any_stale_authority = any(
         authority.state is AuthorizationState.STALE for authority in authorities.values()
     )
+
+    # #3448: mechanical-only readiness gap. When readiness is NEEDS_DECISION
+    # solely because the decision text is still present in the issue body, but
+    # the owner has already approved the implementation (authorization envelope
+    # is AUTHORIZED) and every other signal is clear, the remaining gap is the
+    # mechanical status-label move -- not a human decision. Emit a
+    # distinguishing reason code so consumers (orchestrator, lifecycle
+    # reconciliation) can proceed with the governed mutation without
+    # re-prompting. The outcome stays NEEDS_DECISION (enum-stable); the signal
+    # is purely additive and never lands in blocker_codes.
+    readiness_mechanical_only = (
+        evidence.readiness is ReadinessState.NEEDS_DECISION
+        and implementation_state is AuthorizationState.AUTHORIZED
+        and not any_stale_authority
+        and evidence.source_state is SourceState.COMPLETE
+        and evidence.freshness_state is FreshnessState.CURRENT
+        and evidence.dependency_state is DependencyState.CLEAR
+        and evidence.validation_state
+        in {ValidationState.NOT_RUN, ValidationState.PASSED}
+        and not reconciliation_required
+        and not terminal
+    )
+    if readiness_mechanical_only:
+        reasons.add("contract.readiness-mechanical-only")
 
     if evidence.source_state is SourceState.UNSUPPORTED:
         outcome = OperationalOutcome.INVALID
