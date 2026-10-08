@@ -616,3 +616,38 @@ def test_blocked_investigation_completion_preserves_existing_next_action() -> No
     assert result["agent_os_continuation"]["terminal"] is False
     assert result["agent_os_continuation"]["blocked"] is True
     assert result["agent_os_continuation"]["action"] == result["next_action"]
+
+def test_sdk_lists_and_dispatches_agent_os_tools_in_process() -> None:
+    """Exercise the installed SDK registration, schema and dispatch boundary."""
+    import anyio
+    from mcp import Client
+
+    async def probe() -> None:
+        with anyio.fail_after(10):
+            async with Client(mcp_server.mcp) as client:
+                listed = await client.list_tools()
+                assert {tool.name for tool in listed.tools} == EXPECTED_TOOLS
+
+                payload = _request_interpretation_payload()
+                valid = await client.call_tool(
+                    "bind_agent_os_request_interpretation_tool", {"request": payload}
+                )
+                assert valid.is_error is False
+                result = valid.structured_content
+                assert result is not None
+                assert result["status"] == "valid"
+                assert result["dispatch_admitted"] is True
+                assert result["execution_authorized"] is False
+                assert result["github_writes_authorized"] is False
+                assert result["side_effects_performed"] is False
+
+                payload["action"] = "unknown"
+                refused = await client.call_tool(
+                    "bind_agent_os_request_interpretation_tool", {"request": payload}
+                )
+                assert refused.is_error is False
+                assert refused.structured_content is not None
+                assert refused.structured_content["dispatch_admitted"] is False
+                assert refused.structured_content["execution_authorized"] is False
+
+    anyio.run(probe)
