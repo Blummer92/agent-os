@@ -2,7 +2,7 @@
 
 - Default Notion, Sheets, Drive, and memory review to read-only unless an explicit standing authorization below or separate per-action approval applies.
 - Do not write to production systems without explicit approval.
-- Do not modify readiness, approval, audit, or source-of-truth fields automatically.
+- Do not modify governed readiness, approval, audit, or source-of-truth fields automatically. Managed GitHub issue `status:*` labels are projections of separately established canonical readiness; their bounded, authorized reconciliation is governed by the Safe Implementation Lane and does not itself create authority.
 - Confirm target, system of record, field ownership, and authorization before any write.
 - If authorization is unclear, stop and ask.
 
