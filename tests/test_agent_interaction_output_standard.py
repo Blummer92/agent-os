@@ -5,10 +5,7 @@ contract, that former schema surfaces are compatibility pointers rather than
 competing policy sources, and that the ten required presentation profiles keep
 predictable visible ordering plus machine-checkable summary compatibility.
 """
-import re
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 STANDARD = ROOT / "01_Shared_Standards/global-engineering/agent-interaction-output-standard.md"
