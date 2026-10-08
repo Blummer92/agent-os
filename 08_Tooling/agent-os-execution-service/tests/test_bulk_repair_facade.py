@@ -43,12 +43,13 @@ def retry_boundary(attempt, admitted):
     }
 
 
-def classify(evidence, requested=None):
+def classify(evidence, requested=None, *, parent_authorization_current=True):
     return classify_bulk_repair_continuation(
         repository="Blummer92/agent-os",
         issue_number=2664,
         requested_pull_requests=requested or [2475, 2477, 2479],
         candidate_evidence=evidence,
+        parent_authorization_current=parent_authorization_current,
     )
 
 
@@ -80,22 +81,112 @@ def test_failed_repair_gate_is_recorded_without_discarding_parent_batch():
     assert result["agent_os_continuation"]["terminal"] is False
 
 
-def test_shared_provider_blocker_without_repair_path_halts_parent_batch():
+def test_single_shared_provider_claim_reacquires_independent_remaining_prs():
     result = classify([
         candidate(2475, "blocked", "provider-unavailable", shared=True),
     ])
     assert result["remaining_pull_requests"] == (2477, 2479)
-    assert result["next_action"] == "halt-shared-blocker"
-    assert result["agent_os_continuation"]["terminal"] is True
-    assert result["agent_os_continuation"]["blocked"] is True
+    assert result["next_action"] == "reacquire-next-candidate"
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["blocked"] is False
+    assert result["finite_admission"]["completion_admissible"] is False
 
 
-def test_parent_authorization_invalidation_is_a_shared_stop():
+def test_candidate_authorization_claim_does_not_prove_parent_invalidation():
     result = classify([
         candidate(2475, "blocked", "parent-authorization-invalidated", shared=True),
     ])
+    assert result["next_action"] == "reacquire-next-candidate"
+    assert result["parent_authorization_current"] is True
+    assert result["agent_os_continuation"]["terminal"] is False
+
+
+def test_parent_authorization_invalidation_is_a_shared_stop():
+    result = classify([], parent_authorization_current=False)
+    assert result["parent_authorization_current"] is False
+    assert result["visited_pull_requests"] == ()
+    assert result["remaining_pull_requests"] == (2475, 2477, 2479)
     assert result["next_action"] == "halt-shared-blocker"
+    assert result["agent_os_continuation"]["terminal"] is True
+    assert result["agent_os_continuation"]["blocked"] is True
     assert result["agent_os_continuation"]["action"] == ""
+    assert "shared-terminal-blocker" in result["agent_os_continuation"]["reason_codes"]
+    assert result["finite_admission"]["delivered_count"] == 0
+
+
+def test_population_proven_shared_provider_blocker_halts_parent_batch():
+    result = classify([
+        candidate(pr, "blocked", "provider-unavailable", shared=True)
+        for pr in (2475, 2477, 2479)
+    ])
+    assert result["remaining_pull_requests"] == ()
+    assert result["next_action"] == "halt-shared-blocker"
+    assert result["agent_os_continuation"]["terminal"] is True
+    assert result["agent_os_continuation"]["blocked"] is True
+    assert "shared-terminal-blocker" in result["agent_os_continuation"]["reason_codes"]
+
+
+def test_parent_authorization_currentness_rejects_non_boolean_evidence():
+    for invalid in (None, 0, 1, "false", "true"):
+        try:
+            classify([], parent_authorization_current=invalid)
+        except TypeError as error:
+            assert "parent_authorization_current must use built-in bool" in str(error)
+        else:
+            raise AssertionError("malformed parent currentness must fail closed")
+
+
+def test_unkeyed_shared_blocker_identities_cannot_be_collapsed():
+    try:
+        classify([
+            candidate(2475, "blocked", "provider-unavailable", shared=True),
+            candidate(2477, "blocked", "parent-authorization-invalidated", shared=True),
+        ])
+    except ValueError as error:
+        assert "one canonical blocker and repair state" in str(error)
+    else:
+        raise AssertionError("different shared blockers must fail closed")
+
+
+def test_registered_mcp_tool_forwards_whole_parent_authorization_currentness():
+    import inspect
+    from agent_os_execution_service import mcp_server
+
+    tool = mcp_server.classify_agent_os_bulk_repair_continuation_tool
+    assert inspect.signature(tool).parameters["parent_authorization_current"].default is True
+    result = tool(
+        repository="Blummer92/agent-os",
+        issue_number=3369,
+        requested_pull_requests=[2475, 2477, 2479],
+        candidate_evidence=[],
+        parent_authorization_current=False,
+    )
+    assert result["parent_authorization_current"] is False
+    assert result["remaining_pull_requests"] == (2475, 2477, 2479)
+    assert result["agent_os_continuation"]["terminal"] is True
+    assert result["agent_os_continuation"]["blocked"] is True
+    assert result["agent_os_continuation"]["action"] == ""
+    assert result["mutation_authorized"] is False
+    assert result["merge_authorized"] is False
+    assert result["agent_os_continuation"]["execution_authorized"] is False
+
+
+def test_registered_mcp_tool_rejects_malformed_parent_currentness():
+    from agent_os_execution_service import mcp_server
+
+    for invalid in (None, 0, 1, "false", "true"):
+        try:
+            mcp_server.classify_agent_os_bulk_repair_continuation_tool(
+                repository="Blummer92/agent-os",
+                issue_number=3369,
+                requested_pull_requests=[2475, 2477, 2479],
+                candidate_evidence=[],
+                parent_authorization_current=invalid,
+            )
+        except TypeError as error:
+            assert "parent_authorization_current must use built-in bool" in str(error)
+        else:
+            raise AssertionError("malformed MCP currentness must fail closed")
 
 
 def test_repairable_shared_main_health_blocker_is_nonterminal():

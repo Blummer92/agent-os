@@ -154,6 +154,7 @@ class BulkRepairContinuation:
     evidence: tuple[RepairCandidateEvidence, ...]
     finite_admission: FiniteBatchAdmission
     next_action: str
+    parent_authorization_current: bool = True
     mutation_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
@@ -163,7 +164,13 @@ def evaluate_bulk_repair_continuation(
     *,
     requested_pull_requests: tuple[int, ...],
     evidence: tuple[RepairCandidateEvidence, ...],
+    parent_authorization_current: bool = True,
 ) -> BulkRepairContinuation:
+    # This is normalized evidence for the entire parent authorization, not a
+    # reason claimed by one candidate. Its invalidation is deterministic proof
+    # that no remaining requested repair may proceed under this authorization.
+    if type(parent_authorization_current) is not bool:
+        raise TypeError("parent_authorization_current must use built-in bool")
     requested = _targets(requested_pull_requests)
     if type(evidence) is not tuple or any(type(item) is not RepairCandidateEvidence for item in evidence):
         raise TypeError("evidence must be a tuple of RepairCandidateEvidence")
@@ -175,7 +182,7 @@ def evaluate_bulk_repair_continuation(
         raise ValueError("evidence contains a PR outside the frozen target set")
 
     shared = tuple(item for item in evidence if item.shared_blocker)
-    shared_signature: tuple[str | None, str | None, bool, bool] | None = None
+    shared_signature: tuple[str | None, str | None, bool, bool, str | None] | None = None
     if shared:
         signatures = {
             (
@@ -183,6 +190,7 @@ def evaluate_bulk_repair_continuation(
                 item.shared_repair_owner,
                 item.shared_repair_available,
                 item.shared_repair_completed,
+                item.reason_code if item.shared_blocker_key is None else None,
             )
             for item in shared
         }
@@ -218,8 +226,25 @@ def evaluate_bulk_repair_continuation(
     shared_repair_available = shared_signature[2] if shared_signature is not None else False
     shared_repair_completed = shared_signature[3] if shared_signature is not None else False
     repairable_shared_blocker = bool(shared) and shared_repair_available
-    terminal_shared_blocker = bool(shared) and not shared_repair_available
     remaining = tuple(number for number in requested if number not in set(visited))
+
+    # Decision A, recorded on #2602: a shared blocker is campaign-terminal
+    # only when current evidence proves it applies to every remaining
+    # actionable item — population-proven shared stop. One candidate's claim
+    # never stops the batch. The actionable remainder is the unvisited
+    # remainder plus deferred/reacquire candidates, which still carry an
+    # executable next action; unvisited items are unproven by definition, so
+    # any remainder member not proven to carry the blocker defeats the
+    # terminal halt and the batch advances instead.
+    shared_actionable_remainder = tuple(
+        number
+        for number in (*remaining, *deferred, *reacquire)
+        if number not in set(shared_pull_requests)
+    )
+    terminal_shared_blocker = (
+        not parent_authorization_current
+        or (bool(shared) and not shared_repair_available and not shared_actionable_remainder)
+    )
 
     # A candidate parked on a repairable shared blocker is reconciled but not
     # delivered: the batch still owes it the shared repair and a revalidation
@@ -256,7 +281,9 @@ def evaluate_bulk_repair_continuation(
         shared_blocker=terminal_shared_blocker,
     )
 
-    if repairable_shared_blocker and shared_repair_completed:
+    if not parent_authorization_current:
+        next_action = "halt-shared-blocker"
+    elif repairable_shared_blocker and shared_repair_completed:
         next_action = "reacquire-shared-repair-candidates"
     elif repairable_shared_blocker:
         next_action = "advance-shared-repair"
@@ -289,6 +316,7 @@ def evaluate_bulk_repair_continuation(
         evidence,
         admission,
         next_action,
+        parent_authorization_current,
     )
 
 

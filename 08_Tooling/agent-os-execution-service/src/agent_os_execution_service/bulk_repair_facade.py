@@ -29,6 +29,7 @@ def classify_bulk_repair_continuation(
     issue_number: int,
     requested_pull_requests: list[int],
     candidate_evidence: list[dict[str, object]],
+    parent_authorization_current: bool = True,
 ) -> dict[str, object]:
     """Project finite repair-batch evidence into the existing continuation model."""
 
@@ -40,6 +41,7 @@ def classify_bulk_repair_continuation(
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=requested,
         evidence=evidence,
+        parent_authorization_current=parent_authorization_current,
     )
     payload = asdict(result)
     payload["repository"] = repo

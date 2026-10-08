@@ -1,7 +1,8 @@
 # Finite bulk-repair continuation
 
 Issue: #2487. Canonical generic continuation owner: #2220. Shared-repair
-continuation hardening: #2664.
+continuation hardening: #2664. Population-proven shared stop: #3369 / #2602
+Decision A (comment 6041308224).
 
 ## Purpose
 
@@ -10,7 +11,8 @@ continuation hardening: #2664.
 Agent OS execution-service host.
 
 The tool freezes the requested PR set supplied by the caller, consumes only
-per-candidate disposition evidence, and returns the existing finite-batch next
+per-candidate disposition and parent-authorization currentness evidence, and
+returns the existing finite-batch next
 action. It does not execute a repair, retry a blocked mutation, select a new
 candidate population, create a scheduler/queue, or mutate GitHub.
 
@@ -34,12 +36,34 @@ reacquire the affected PR heads/checks and re-evaluate exact-head validation;
 the old blocked classifications cannot satisfy batch completion.
 
 A shared blocker terminates the parent batch only when no governed canonical
-repair path is supplied. That case returns `halt-shared-blocker` and preserves
-unattempted requested PRs for final reporting.
+repair path is supplied and matching current evidence proves the blocker across
+every remaining actionable candidate. An unvisited PR or a deferred/reacquire
+candidate without that blocker defeats the halt and requires bounded
+reacquisition. One candidate's shared claim never stops independent remaining
+PRs.
+
+`parent_authorization_current=false` is the deterministic equivalent for a
+genuine whole-parent authorization invalidation. The caller supplies normalized
+current evidence about the parent authorization, independently of candidate
+reason codes. Invalidation prevents every requested repair under that parent
+authorization and takes precedence even over an available shared repair. It
+returns `halt-shared-blocker` and preserves unvisited PRs for final reporting.
+The optional input defaults to `true` for existing callers and requires a built-in
+boolean; neither value grants execution or write authority.
+
+For example, with requested PRs `[30, 31, 32]`, one provider-blocked PR 30
+leaves PRs 31 and 32 unproven and returns `reacquire-next-candidate`. Matching
+unrepairable provider evidence for all three permits `halt-shared-blocker`.
+Separately, `parent_authorization_current=false` with no candidate evidence
+halts immediately, preserves all three unvisited PRs, and leaves delivered and
+reconciled candidate counts at zero. A halt therefore never pads finite-batch
+delivery accounting or bypasses the exact-attempt CKR6 retry boundary.
 
 All current shared-blocker evidence in one projection must agree on blocker
 identity, repair owner, availability, and completion state. Conflicting shared
 repair evidence fails closed instead of guessing which repair path owns the batch.
+Without an explicit blocker key, the candidate reason code identifies the
+blocker, so distinct unkeyed diagnoses cannot be collapsed into one shared stop.
 
 ## Failed-repair boundary
 

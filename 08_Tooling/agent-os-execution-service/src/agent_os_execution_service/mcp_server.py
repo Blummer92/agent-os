@@ -632,7 +632,7 @@ def classify_agent_os_continuation_tool(repository: str, issue_number: int, oper
 
 
 @mcp.tool()
-def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]]) -> dict[str, object]:
+def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]], parent_authorization_current: bool = True) -> dict[str, object]:
     _github_target_entry_guard(
         repository=repository, issue_number=issue_number, operation="read-issue"
     )
@@ -647,7 +647,7 @@ def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_numbe
                 pr_number=_repair_candidate.get("pull_request_number"),
                 operation="read-pull-request",
             )
-    return classify_bulk_repair_continuation(repository=repository, issue_number=issue_number, requested_pull_requests=requested_pull_requests, candidate_evidence=candidate_evidence)
+    return classify_bulk_repair_continuation(repository=repository, issue_number=issue_number, requested_pull_requests=requested_pull_requests, candidate_evidence=candidate_evidence, parent_authorization_current=parent_authorization_current)
 
 
 @mcp.tool()
