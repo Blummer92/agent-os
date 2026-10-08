@@ -387,7 +387,7 @@ def test_absent_status_label_asserts_nothing_and_preserves_ready_projection():
 
 @pytest.mark.parametrize(
     "labels",
-    [("status:blocked",), ("status:ready", "status:blocked"), ("status:ready", "status:deferred")],
+    [("status:ready", "status:blocked"), ("status:ready", "status:deferred"), ("status:deferred",)],
 )
 def test_contradicting_status_label_on_ready_issue_fails_closed(labels):
     current = build_issue_operational_state(evidence(observed_labels=labels))
