@@ -859,3 +859,7 @@ if result1.success:
 events = logger.get_events()
 audit = repo.get_audit_log(workflow_id="test")
 ```
+
+## IMC live build receipt (#3454)
+
+The C4B instructional-materials live adapter returns its existing raw `receipt` and an additional `build_receipt_record` in `output`. The record uses `imc-build-receipt-v1`, is JSON-safe evidence only, and grants no execution, production or classroom-readiness authority. The host must supply canonical requirement/template identity separately; missing values remain unknown rather than inferred.
