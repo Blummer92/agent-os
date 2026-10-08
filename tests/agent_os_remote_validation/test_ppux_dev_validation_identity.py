@@ -170,12 +170,27 @@ def test_host_runner_owns_the_ppux_selection_and_its_fixed_node_runtime() -> Non
 def test_host_runner_pins_the_same_node_and_vitest_identity_the_package_declares() -> None:
     manifest = json.loads((PACKAGE / "package.json").read_text(encoding="utf-8"))
     assert manifest["devDependencies"]["vitest"] == dev_validation_gce.DEV_VALIDATION_VITEST_VERSION
-    assert manifest["engines"]["node"] == ">=22.12 <23"
+    # The installed remote runner remains deliberately pinned to Node 22,
+    # which is still in the declared Node 22/24 compatibility range.
+    assert manifest["engines"]["node"] == ">=22.12 <25"
     source = dev_validation_gce._HOST_RUNNER_SOURCE
     assert f"v!=='{dev_validation_gce.DEV_VALIDATION_VITEST_VERSION}'" in source
     assert "process.versions.node.startsWith('22.')" in source
     assert dev_validation_gce.DEV_VALIDATION_NODE == "/usr/local/libexec/agent-os-dev-validation-node"
     assert dev_validation_gce.DEV_VALIDATION_NODE_MODULES == "/opt/agent-os/dev-validation-node-runtime/node_modules"
+
+
+
+def test_capture_and_picture_perfect_node_engines_match_the_lockfiles() -> None:
+    for directory in (
+        ROOT / "08_Tooling" / "instructional-materials-coach" / "capture",
+        PACKAGE,
+    ):
+        manifest = json.loads((directory / "package.json").read_text(encoding="utf-8"))
+        lockfile = json.loads((directory / "package-lock.json").read_text(encoding="utf-8"))
+        assert manifest["engines"]["node"] == ">=22.12 <25"
+        assert lockfile["packages"][""]["engines"]["node"] == manifest["engines"]["node"]
+
 
 
 def test_host_command_carries_only_the_fixed_runner_plus_identity_arguments() -> None:
