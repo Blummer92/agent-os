@@ -1,5 +1,6 @@
 from scripts.agent_os_issue_labels.connected_issue_creation import (
     DuplicateCandidateEvidence,
+    DuplicateComparisonOutcome,
     DuplicateReviewDisposition,
     converge_connected_issue_creation,
     evaluate_duplicate_review_admission,
@@ -47,6 +48,7 @@ def candidate(
     issue_number: int,
     *,
     state: str = "open",
+    outcome: DuplicateComparisonOutcome | str = DuplicateComparisonOutcome.DISTINCT,
     objective: str = "same governed outcome",
     causal: str = "same causal seam",
     acceptance: str = "same acceptance boundary",
@@ -59,6 +61,7 @@ def candidate(
         causal_seam_evidence=causal,
         acceptance_evidence=acceptance,
         boundary_evidence=boundary,
+        comparison_outcome=outcome,
     )
 
 
@@ -97,7 +100,7 @@ def test_2621_recurrence_routes_to_2283_without_create():
     result = duplicate_admission(
         disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
         canonical_issue_number=2283,
-        candidate_evidence=(candidate(2283),),
+        candidate_evidence=(candidate(2283, outcome=DuplicateComparisonOutcome.RECURRENCE),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2283
@@ -108,7 +111,7 @@ def test_2615_duplicate_routes_to_2602_without_create():
     result = duplicate_admission(
         disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
         canonical_issue_number=2602,
-        candidate_evidence=(candidate(2602),),
+        candidate_evidence=(candidate(2602, outcome=DuplicateComparisonOutcome.DUPLICATE),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2602
@@ -181,7 +184,7 @@ def test_historical_issue_with_current_successor_uses_supplied_current_owner():
     result = duplicate_admission(
         disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
         canonical_issue_number=2602,
-        candidate_evidence=(candidate(2602),),
+        candidate_evidence=(candidate(2602, outcome=DuplicateComparisonOutcome.RECURRENCE),),
     )
     assert result.create_allowed is False
     assert result.canonical_issue_number == 2602
@@ -197,7 +200,7 @@ def test_duplicate_admission_is_not_derived_from_issue_wording():
         differently_worded_body,
         disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
         canonical_issue_number=2283,
-        candidate_evidence=(candidate(2283),),
+        candidate_evidence=(candidate(2283, outcome=DuplicateComparisonOutcome.DUPLICATE),),
         candidate_enumeration_complete=True,
         issue_form_path=FORM,
     )
@@ -269,7 +272,11 @@ def test_2660_candidate_comparison_requires_objective_causal_acceptance_and_boun
 
 
 def test_2660_one_incident_routes_three_existing_symptoms_and_one_distinct_bug():
-    candidates = (candidate(2349), candidate(2647), candidate(2602))
+    candidates = (
+        candidate(2349, outcome=DuplicateComparisonOutcome.RECURRENCE),
+        candidate(2647, outcome=DuplicateComparisonOutcome.RECURRENCE),
+        candidate(2602, outcome=DuplicateComparisonOutcome.DUPLICATE),
+    )
     cases = (
         duplicate_admission(disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER, canonical_issue_number=2349, candidate_evidence=candidates),
         duplicate_admission(disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER, canonical_issue_number=2647, candidate_evidence=candidates),
@@ -277,13 +284,152 @@ def test_2660_one_incident_routes_three_existing_symptoms_and_one_distinct_bug()
     )
     assert all(result.create_allowed is False for result in cases)
     assert [result.canonical_issue_number for result in cases] == [2349, 2647, 2602]
+    assert cases[0].disposition is DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER
+    assert cases[2].disposition is DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER
     distinct = duplicate_admission(
         disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
-        candidate_evidence=candidates,
+        candidate_evidence=(candidate(2816, outcome=DuplicateComparisonOutcome.DISTINCT),),
     )
     assert distinct.create_allowed is True
     assert distinct.canonical_issue_number is None
     assert distinct.next_operation == "create-then-canonical-readback-and-converge"
+
+
+def test_2660_outcome_binding_routes_one_incident_across_owners():
+    # Positive: per-candidate outcomes recorded during review route each
+    # disposition; only an all-distinct inspection admits creation.
+    owners = (
+        candidate(2349, outcome=DuplicateComparisonOutcome.RECURRENCE),
+        candidate(2647, outcome=DuplicateComparisonOutcome.RECURRENCE),
+        candidate(2602, outcome=DuplicateComparisonOutcome.DUPLICATE),
+    )
+    recurrence = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2349,
+        candidate_evidence=owners,
+    )
+    assert recurrence.create_allowed is False
+    assert recurrence.disposition is DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER
+    assert recurrence.canonical_issue_number == 2349
+    assert recurrence.next_operation == "append-recurrence-evidence-to-canonical-issue"
+    duplicate = duplicate_admission(
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2602,
+        candidate_evidence=owners,
+    )
+    assert duplicate.create_allowed is False
+    assert duplicate.disposition is DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER
+    assert duplicate.canonical_issue_number == 2602
+    assert duplicate.next_operation == "reuse-canonical-issue-no-create"
+
+
+def test_2660_new_distinct_bug_fails_closed_when_any_open_candidate_is_not_distinct():
+    mixed = (
+        candidate(2349, outcome=DuplicateComparisonOutcome.DISTINCT),
+        candidate(2602, outcome=DuplicateComparisonOutcome.RECURRENCE),
+    )
+    result = duplicate_admission(
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=mixed,
+    )
+    assert result.create_allowed is False
+    assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+    assert result.next_operation == "manual-review-duplicate-admission-required"
+    assert result.reason_codes == ("duplicate-review.distinctness-unproven-for-candidate",)
+
+
+def test_2660_unresolved_comparison_outcome_fails_closed_in_every_disposition():
+    unresolved = (
+        candidate(2349, outcome=DuplicateComparisonOutcome.DISTINCT),
+        candidate(2602, outcome=DuplicateComparisonOutcome.UNRESOLVED),
+    )
+    distinct = duplicate_admission(
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=unresolved,
+    )
+    recurrence = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2602,
+        candidate_evidence=(candidate(2602, outcome=DuplicateComparisonOutcome.UNRESOLVED),),
+    )
+    for result in (distinct, recurrence):
+        assert result.create_allowed is False
+        assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+        assert result.reason_codes == ("duplicate-review.candidate-comparison-unresolved",)
+
+
+def test_2660_recurrence_and_duplicate_require_canonical_outcome_agreement():
+    mismatch_recurrence = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283, outcome=DuplicateComparisonOutcome.DISTINCT),),
+    )
+    mismatch_duplicate = duplicate_admission(
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283, outcome=DuplicateComparisonOutcome.RECURRENCE),),
+    )
+    for result in (mismatch_recurrence, mismatch_duplicate):
+        assert result.create_allowed is False
+        assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+        assert result.reason_codes == ("duplicate-review.canonical-outcome-disagrees",)
+        assert result.canonical_issue_number == 2283
+
+
+def test_2660_focused_successor_fails_closed_on_contradicting_outcome():
+    contradicted = duplicate_admission(
+        disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283, outcome=DuplicateComparisonOutcome.DUPLICATE),),
+        distinct_repair_seam=True,
+    )
+    contradicted_elsewhere = duplicate_admission(
+        disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
+        canonical_issue_number=2283,
+        candidate_evidence=(
+            candidate(2283, outcome=DuplicateComparisonOutcome.DISTINCT),
+            candidate(2602, outcome=DuplicateComparisonOutcome.RECURRENCE),
+        ),
+        distinct_repair_seam=True,
+    )
+    for result in (contradicted, contradicted_elsewhere):
+        assert result.create_allowed is False
+        assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+        assert result.reason_codes == ("duplicate-review.focused-successor-seam-contradicted",)
+
+
+def test_2660_outcome_string_values_coerce_to_canonical_outcomes():
+    result = duplicate_admission(
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        candidate_evidence=(candidate(2283, outcome="recurrence"),),
+    )
+    assert result.create_allowed is False
+    assert result.disposition is DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER
+    bogus = duplicate_admission(
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=(candidate(2283, outcome="looks-similar"),),
+    )
+    assert bogus.create_allowed is False
+    assert bogus.reason_codes == ("duplicate-review.candidate-evidence-invalid",)
+
+
+def test_2660_caller_declared_outcomes_are_bound_not_semantically_verified():
+    # Adversarial: identical causal-seam strings across every candidate, but
+    # the caller records outcome=distinct for each. The admission binds the
+    # declared claim (an auditable per-candidate record) and does not
+    # semantically verify distinctness — semantic verification remains a
+    # non-goal of #2660.
+    identical = (
+        candidate(2283, outcome=DuplicateComparisonOutcome.DISTINCT),
+        candidate(2602, outcome=DuplicateComparisonOutcome.DISTINCT),
+    )
+    result = duplicate_admission(
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        candidate_evidence=identical,
+    )
+    assert result.create_allowed is True
+    assert result.disposition is DuplicateReviewDisposition.NEW_DISTINCT_BUG
 
 
 def test_2660_semantic_or_title_similarity_is_not_candidate_comparison_evidence():

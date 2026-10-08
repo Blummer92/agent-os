@@ -41,7 +41,10 @@ from .governed_mutation_seams_facade import (
     evaluate_issue_comment_mutation_boundary_for_host,
     project_lane_post_pr_issue_reconciliation_for_host,
 )
-from scripts.agent_os_issue_labels.connected_issue_creation import DuplicateCandidateEvidence
+from scripts.agent_os_issue_labels.connected_issue_creation import (
+    DuplicateCandidateEvidence,
+    DuplicateComparisonOutcome,
+)
 from .issue_batch_completion import classify_issue_batch_completion
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_reader_composition import resolve_lesson_read_route
@@ -260,6 +263,8 @@ def plan_connected_issue_creation_tool(
             causal_seam_evidence=item["causal_seam_evidence"],
             acceptance_evidence=item["acceptance_evidence"],
             boundary_evidence=item["boundary_evidence"],
+            comparison_outcome=item.get("comparison_outcome")
+            or DuplicateComparisonOutcome.UNRESOLVED,
         )
         for item in (candidate_evidence or [])
     )
