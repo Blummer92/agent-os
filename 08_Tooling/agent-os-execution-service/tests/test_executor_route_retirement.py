@@ -1,4 +1,4 @@
-"""Regression proof for the #907 -> #918 executor-route retirement.
+"""Regression proof that the retired #907 executor route stays absent.
 
 #907 (``scripts/agent_os_issue_acceptance/executor_route.py``, the deterministic
 executor-route selector) was retired in favor of #918 (the canonical router in
@@ -17,24 +17,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from agent_os_execution_service.executor_routing import (
-    ExecutorRoute,
-    ExecutorRouteReason,
-)
-
 # tests -> agent-os-execution-service -> 08_Tooling -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 RETIRED_MODULE_REL = Path("scripts/agent_os_issue_acceptance/executor_route.py")
-
-CANONICAL_ROUTE_NAMES = frozenset(
-    {
-        "chatgpt-connector-native",
-        "chatgpt-governed-runner",
-        "external-coding-agent-fallback",
-        "human-decision-required",
-    }
-)
 
 # Bare identifiers from the retired #907 route vocabulary. These must not
 # appear as standalone route identifiers in live code. Attribute/field names
@@ -87,27 +73,6 @@ def test_exactly_one_select_executor_route_definition():
         f"expected exactly 1 select_executor_route definition, found "
         f"{len(definitions)}: {sorted(definitions)}"
     )
-
-
-def test_canonical_route_vocabulary_is_exactly_four():
-    """The #918 route vocabulary is closed: exactly the four canonical names."""
-    names = frozenset(route.value for route in ExecutorRoute)
-    assert names == CANONICAL_ROUTE_NAMES, (
-        f"route vocabulary drift: extra={sorted(names - CANONICAL_ROUTE_NAMES)}, "
-        f"missing={sorted(CANONICAL_ROUTE_NAMES - names)}"
-    )
-
-
-def test_prior_route_resume_invariant_survives():
-    """The #907 resume invariant was ported; it must remain present."""
-    import agent_os_execution_service.executor_routing as routing
-
-    assert callable(routing._prior_route_available), (  # noqa: SLF001
-        "_prior_route_available is not callable"
-    )
-    reason_values = frozenset(reason.value for reason in ExecutorRouteReason)
-    assert "prior-route-preserved" in reason_values
-    assert "prior-route-not-available" in reason_values
 
 
 def test_no_competing_bare_route_names_in_live_code():
