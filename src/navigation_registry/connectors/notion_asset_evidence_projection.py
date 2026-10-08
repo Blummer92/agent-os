@@ -56,6 +56,39 @@ SOURCE_APPROVED_PROPERTY = "Source Approved?"
 REUSABLE_ACROSS_UNITS_PROPERTY = "Reusable Across Units?"
 
 # ---------------------------------------------------------------------------
+# Governed per-source filter vocabulary (#2816).
+#
+# A provider query filter may only name a property the resolved logical
+# source's governed vocabulary exposes. "Reusable Across Units?" is an Icon
+# System property: filtering the Visual Asset Library on it provably 400s at
+# Notion (run 37845400763: "Could not find property with name or id:
+# Reusable Across Units?"), so it is deliberately absent from the Visual
+# Asset Library vocabulary. The orchestrator consults these sets before a
+# filter is dispatched; anything outside fails closed with a bounded reason.
+# ---------------------------------------------------------------------------
+VISUAL_ASSET_LIBRARY_PROPERTIES = frozenset(
+    {
+        ASSET_ID_PROPERTY,
+        ASSET_TITLE_PROPERTY,
+        DRIVE_FILE_ID_PROPERTY,
+        REUSE_STATUS_PROPERTY,
+        HUMAN_REVIEW_DONE_PROPERTY,
+        APPROVED_USE_PROPERTY,
+        STYLE_FAMILY_PROPERTY,
+        COGNITIVE_LOAD_PROPERTY,
+        CANONICAL_UNIT_PROPERTY,
+        SCOPE_UNIT_IDS_PROPERTY,
+    }
+)
+
+ICON_SYSTEM_PROPERTIES = frozenset(
+    {
+        SOURCE_APPROVED_PROPERTY,
+        REUSABLE_ACROSS_UNITS_PROPERTY,
+    }
+)
+
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Single governed material-type vocabulary (#3254).
 #
