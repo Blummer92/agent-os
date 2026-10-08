@@ -219,3 +219,36 @@ def test_3279_no_new_closing_reference_parser_introduced() -> None:
     assert "_GITHUB_EFFECTIVE_CLOSING_RE" not in source
     assert "from scripts.agent_os_issue_acceptance.parse_pr import" not in source
     assert "import scripts.agent_os_issue_acceptance.parse_pr" not in source
+
+
+def test_3350_tool_derives_final_candidate_mode_from_aggregate_success() -> None:
+    """#3350: the MCP surface passes the mode label through verbatim; the
+    server derives final-candidate mode from genuine aggregate success, so a
+    wrong label does not block the Ready transition."""
+    result = mcp_server.admit_agent_os_ready_for_review_tool(
+        **_ready_kwargs(
+            validation_admission_mode="operator-typo",
+            aggregate_status="success",
+        )
+    )
+    assert result["transition_admissible"] is True
+    assert result["next_action"] == "perform-ready-for-review-at-exact-head"
+    assert "draft-final-candidate-ready-converged" in result["reason_codes"]
+
+
+def test_3350_tool_refuses_unknown_mode_with_named_reason() -> None:
+    """#3350: an uninterpretable mode with a deferred aggregate fails closed
+    at the MCP surface with a named reason instead of silently entering the
+    provisional path."""
+    result = mcp_server.admit_agent_os_ready_for_review_tool(
+        **_ready_kwargs(
+            validation_admission_mode="not-a-mode",
+            aggregate_status="skipped",
+            focused_status="success",
+        )
+    )
+    assert result["transition_admissible"] is False
+    assert result["provisional_ready"] is False
+    assert result["reason_codes"] == ["unknown-validation-admission-mode"]
+    assert result["next_action"] == "supply-canonical-validation-admission-mode"
+    assert result["merge_authorized"] is False

@@ -13,7 +13,16 @@ from scripts.agent_os_issue_acceptance.parse_pr import (
 )
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
-_FINAL_CANDIDATE_MODE = "draft-final-candidate"
+
+#: Closed vocabulary for ``validation_admission_mode`` (#3350). The mode label
+#: names the validation story the caller ran; it is not a second authority and
+#: never substitutes for the authoritative aggregate evidence itself.
+FINAL_CANDIDATE_MODE = "draft-final-candidate"
+DRAFT_FOCUSED_MODE = "pull-request-draft-focused"
+VALIDATION_ADMISSION_MODES = frozenset({FINAL_CANDIDATE_MODE, DRAFT_FOCUSED_MODE})
+
+_UNKNOWN_MODE_REASON = "unknown-validation-admission-mode"
+_UNKNOWN_MODE_NEXT_ACTION = "supply-canonical-validation-admission-mode"
 _MAX_CLOSURE_ADMISSIONS = 256
 
 
@@ -71,6 +80,17 @@ def evaluate_ready_for_review_admission(
     reconciled after the Ready-triggered aggregate; non-success or head drift
     requires conversion back to Draft before later lifecycle progression.
 
+    ``validation_admission_mode`` belongs to the closed vocabulary
+    ``VALIDATION_ADMISSION_MODES`` (``FINAL_CANDIDATE_MODE`` for the ordinary
+    path, ``DRAFT_FOCUSED_MODE`` for the provisional path). The server derives
+    the effective mode from the authoritative aggregate evidence: a successful
+    authoritative aggregate proves final-candidate mode regardless of the label
+    supplied (#3350), so a genuine exact-head success with a wrong or missing
+    label converges instead of forcing re-dispatch. An uninterpretable mode
+    with any other aggregate state fails closed with
+    ``unknown-validation-admission-mode``; it can no longer silently select
+    the provisional path.
+
     The Ready transition starts the merge path, so it also fails closed on
     GitHub-effective closing references (#3157): the same detected-targets
     minus canonically-authorized-targets comparison merge admission uses runs
@@ -84,11 +104,31 @@ def evaluate_ready_for_review_admission(
     _validate_identity(repository, pr_number)
     _validate_bool(requested_changes, "requested_changes")
     _validate_bool(ready_for_review_authority_supplied, "ready_for_review_authority_supplied")
+    if type(validation_admission_mode) is not str:
+        raise TypeError("validation_admission_mode must be a built-in string")
     if type(blocking_unresolved) is not int or blocking_unresolved < 0:
         raise ValueError("blocking_unresolved must be a non-negative built-in integer")
     if type(pr_title) is not str or type(pr_body) is not str:
         raise TypeError("pr_title and pr_body must be built-in strings")
     admissions = _validated_closure_admissions(closure_admissions)
+    effective_mode = _derive_validation_admission_mode(
+        validation_admission_mode=validation_admission_mode,
+        aggregate_status=aggregate_status,
+    )
+    if effective_mode not in VALIDATION_ADMISSION_MODES:
+        return ReadyForReviewAdmissionResult(
+            repository=repository,
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            observed_head_sha=observed_head_sha,
+            validation_head_sha=validation_head_sha,
+            validation_admission_mode=validation_admission_mode,
+            transition_admissible=False,
+            provisional_ready=False,
+            rollback_to_draft_required=False,
+            reason_codes=(_UNKNOWN_MODE_REASON,),
+            next_action=_UNKNOWN_MODE_NEXT_ACTION,
+        )
 
     reasons: list[str] = []
     if pr_lifecycle_state != "draft":
@@ -119,11 +159,11 @@ def evaluate_ready_for_review_admission(
         reasons.append("multiple-implemented-issues-linked")
 
     final_candidate_green = (
-        validation_admission_mode == _FINAL_CANDIDATE_MODE
+        effective_mode == FINAL_CANDIDATE_MODE
         and aggregate_status == "success"
     )
     provisional_aggregate_missing = (
-        validation_admission_mode != _FINAL_CANDIDATE_MODE
+        effective_mode != FINAL_CANDIDATE_MODE
         and focused_status == "success"
         and aggregate_status in {"missing", "skipped"}
     )
@@ -143,7 +183,7 @@ def evaluate_ready_for_review_admission(
         rollback_to_draft_required = True
         reasons.append("provisional-ready-aggregate-trigger-admitted")
     else:
-        if validation_admission_mode != _FINAL_CANDIDATE_MODE:
+        if effective_mode != FINAL_CANDIDATE_MODE:
             reasons.append("draft-final-candidate-validation-not-proven")
         if focused_status != "success":
             reasons.append("focused-validation-not-green")
@@ -192,6 +232,24 @@ def _validate_bool(value: bool, field_name: str) -> None:
 
 def _is_sha40(value: object) -> bool:
     return type(value) is str and _SHA40_RE.fullmatch(value) is not None
+
+
+def _derive_validation_admission_mode(
+    *, validation_admission_mode: str, aggregate_status: object
+) -> str:
+    """Derive the effective admission mode from authoritative aggregate evidence (#3350).
+
+    The authoritative aggregate's terminal state is the evidence; the caller's
+    mode label is only a claim about which validation story ran. A successful
+    authoritative aggregate proves the final-candidate story regardless of the
+    label supplied, so a genuine exact-head final-candidate success with a
+    wrong or missing mode label still converges instead of forcing a wasted
+    re-dispatch. Any other aggregate state leaves the caller's label in
+    effect, and the closed-vocabulary guard then applies to it.
+    """
+    if aggregate_status == "success":
+        return FINAL_CANDIDATE_MODE
+    return validation_admission_mode
 
 
 def _validated_closure_admissions(

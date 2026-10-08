@@ -1,4 +1,9 @@
+import pytest
+
 from scripts.agent_os_issue_labels.ready_for_review_admission import (
+    DRAFT_FOCUSED_MODE,
+    FINAL_CANDIDATE_MODE,
+    VALIDATION_ADMISSION_MODES,
     evaluate_provisional_ready_reconciliation,
     evaluate_ready_for_review_admission,
 )
@@ -378,3 +383,63 @@ def test_3246_non_closing_linkage_is_permitted_while_acceptance_is_unresolved():
     result = admission(pr_body="Refs #3246. Part of #3246.")
     assert result.transition_admissible is True
     assert "unauthorized-closing-reference" not in result.reason_codes
+
+
+def test_3350_vocabulary_is_closed_and_exported():
+    assert FINAL_CANDIDATE_MODE == "draft-final-candidate"
+    assert DRAFT_FOCUSED_MODE == "pull-request-draft-focused"
+    assert VALIDATION_ADMISSION_MODES == frozenset(
+        {"draft-final-candidate", "pull-request-draft-focused"}
+    )
+
+
+def test_3350_wrong_mode_label_with_genuine_success_still_converges():
+    """#3350 server-side derivation: the authoritative aggregate evidence
+    determines the mode, so a genuine exact-head final-candidate success with
+    a wrong mode label converges instead of forcing a wasted re-dispatch."""
+    result = admission(
+        validation_admission_mode="operator-typo",
+        aggregate_status="success",
+    )
+    assert result.transition_admissible is True
+    assert result.provisional_ready is False
+    assert result.next_action == "perform-ready-for-review-at-exact-head"
+    assert result.reason_codes == ("draft-final-candidate-ready-converged",)
+
+
+def test_3350_missing_mode_label_with_genuine_success_still_converges():
+    result = admission(
+        validation_admission_mode="",
+        aggregate_status="success",
+    )
+    assert result.transition_admissible is True
+    assert result.next_action == "perform-ready-for-review-at-exact-head"
+
+
+def test_3350_unknown_mode_with_deferred_aggregate_fails_closed_with_named_reason():
+    """#3350: an uninterpretable mode can no longer silently select the
+    provisional path when the aggregate was deferred."""
+    result = admission(
+        validation_admission_mode="draft-final-candiadte",  # transposed typo
+        aggregate_status="skipped",
+        focused_status="success",
+    )
+    assert result.transition_admissible is False
+    assert result.provisional_ready is False
+    assert result.reason_codes == ("unknown-validation-admission-mode",)
+    assert result.next_action == "supply-canonical-validation-admission-mode"
+
+
+def test_3350_unknown_mode_with_failed_aggregate_names_the_mode_not_the_evidence():
+    result = admission(
+        validation_admission_mode="not-a-mode",
+        aggregate_status="failure",
+    )
+    assert result.transition_admissible is False
+    assert result.reason_codes == ("unknown-validation-admission-mode",)
+    assert "draft-final-candidate-validation-not-proven" not in result.reason_codes
+
+
+def test_3350_non_string_mode_raises_type_error():
+    with pytest.raises(TypeError):
+        admission(validation_admission_mode=None)
