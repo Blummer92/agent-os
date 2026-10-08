@@ -51,6 +51,14 @@ returns `halt-shared-blocker` and preserves unvisited PRs for final reporting.
 The optional input defaults to `true` for existing callers and requires a built-in
 boolean; neither value grants execution or write authority.
 
+For example, with requested PRs `[30, 31, 32]`, one provider-blocked PR 30
+leaves PRs 31 and 32 unproven and returns `reacquire-next-candidate`. Matching
+unrepairable provider evidence for all three permits `halt-shared-blocker`.
+Separately, `parent_authorization_current=false` with no candidate evidence
+halts immediately, preserves all three unvisited PRs, and leaves delivered and
+reconciled candidate counts at zero. A halt therefore never pads finite-batch
+delivery accounting or bypasses the exact-attempt CKR6 retry boundary.
+
 All current shared-blocker evidence in one projection must agree on blocker
 identity, repair owner, availability, and completion state. Conflicting shared
 repair evidence fails closed instead of guessing which repair path owns the batch.
