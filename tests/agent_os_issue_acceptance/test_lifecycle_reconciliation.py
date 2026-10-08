@@ -387,3 +387,35 @@ def test_equivalent_supplied_evidence_is_deterministic_and_authority_preserving(
     assert ra.merge_authorization is current.merge_authorization.state
     assert ra.closure_authorization is current.closure_authorization.state
     assert ra.external_write_authorization is current.external_write_authorization.state
+
+
+def test_3448_canonical_ready_with_stale_label_requests_governed_repair():
+    """Resolved readiness permits label reconciliation without new owner approval."""
+    current = state(
+        readiness=ReadinessState.READY,
+        observed_labels=("status:needs-decision",),
+    )
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    label_action = next(
+        item for item in result.actions if item.reason_code == "lifecycle.status-label-stale"
+    )
+    assert label_action.category is ActionCategory.GOVERNED_MUTATION
+    assert label_action.expected == "status:ready"
+    assert label_action.admission_result_id is None
+    assert "authorization.lifecycle-admission-required" in result.reason_codes
+    assert not any(item.category is ActionCategory.MANUAL_DECISION for item in result.actions)
+
+
+def test_3448_unresolved_readiness_still_forces_manual_decision():
+    """Current implementation authority cannot silently resolve readiness."""
+    current = state(
+        readiness=ReadinessState.NEEDS_DECISION,
+        observed_labels=("status:needs-decision",),
+    )
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    assert len(result.actions) == 1
+    assert result.actions[0].category is ActionCategory.MANUAL_DECISION

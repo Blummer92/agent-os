@@ -374,7 +374,10 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
     if s.repository != e.repository or s.issue_number != e.issue_number:
         reasons.add("source.identity-mismatch")
         decision = True
-    if s.freshness_state is FreshnessState.STALE or s.outcome in {OperationalOutcome.CONFLICTING, OperationalOutcome.INVALID} or s.dependency_state is DependencyState.UNKNOWN or s.readiness is ReadinessState.NEEDS_DECISION:
+    # Canonical unresolved readiness still needs a human decision. A stale
+    # managed label on canonical READY is repaired below, without re-prompting.
+    readiness_forces_decision = s.readiness is ReadinessState.NEEDS_DECISION
+    if s.freshness_state is FreshnessState.STALE or s.outcome in {OperationalOutcome.CONFLICTING, OperationalOutcome.INVALID} or s.dependency_state is DependencyState.UNKNOWN or readiness_forces_decision:
         reasons.add("source.canonical-conflict")
         decision = True
     if s.claim_state is ClaimState.CONFLICTING:
