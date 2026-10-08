@@ -2,6 +2,7 @@ from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
 
 from runtime_dependency_preflight import (
     RuntimeDependencyMismatch,
@@ -29,7 +30,7 @@ def test_compatible_mcp_runtime_passes():
     )
 
     assert observed == "2.3.0"
-    assert "2.3.0" in specifier
+    assert observed in SpecifierSet(specifier)
 
 
 @pytest.mark.parametrize("observed_version", ("1.28.1", "2.2.0", "2.4.0"))
