@@ -500,7 +500,16 @@ def admit_agent_os_ready_for_review_tool(repository: str, pr_number: int, pr_lif
     the PR title/body are detected with the single canonical parser consumed
     by `evaluate_ready_for_review_admission`; targets without canonical
     close-issue authorization refuse the transition
-    (`unauthorized-closing-reference`). This projects admissibility only; it
+    (`unauthorized-closing-reference`).
+
+    `validation_admission_mode` names the validation story the caller ran and
+    belongs to the closed vocabulary exported by `ready_for_review_admission`
+    (`FINAL_CANDIDATE_MODE` / `DRAFT_FOCUSED_MODE`); it is passed through
+    verbatim. The server derives the effective mode from the authoritative
+    aggregate evidence, so a successful exact-head authoritative aggregate
+    proves final-candidate mode regardless of the label supplied (#3350), and
+    an uninterpretable mode with any other aggregate state fails closed with
+    `unknown-validation-admission-mode`. This projects admissibility only; it
     grants no merge, closure, workflow, protected-setting, production, or
     external-write authority.
     """

@@ -28,6 +28,12 @@ Owns implementation evidence: files changed, exact source head, tested SHA or sy
 
 Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; ordinary Safe Lane merge and all excluded surfaces remain separately authorized unless the opt-in Terminal Fast Lane contract applies.
 
+## Ready-for-Review Validation Consumption (#3350)
+
+One canonical rule answers whether an exact-head successful Draft final-candidate aggregate satisfies the Ready-for-Review prerequisite: it does. The Ready transition consumes and reuses that evidence without requiring another same-head aggregate, and the manual `workflow_dispatch` final-candidate route is an authoritative pre-Ready route when it runs at the exact head. #2063 Draft admission safety and #2132 merge-blocking aggregate safety are preserved; #2215/#1904 same-head duplicate prevention still applies.
+
+The `validation_admission_mode` label names which validation story the caller ran and belongs to a closed vocabulary: `draft-final-candidate` (ordinary path) and `pull-request-draft-focused` (provisional path, used only when the Draft trigger deferred the aggregate). The server derives the effective mode from the authoritative aggregate evidence: a successful exact-head authoritative aggregate proves final-candidate mode regardless of the mode label supplied, so a genuine success with a wrong or missing label converges instead of forcing re-dispatch. Any other mode label fails closed with `unknown-validation-admission-mode`.
+
 ## Child-Issue Creation Test
 
 Split a child issue only when all are true: independent objective; different allowlist; independently mergeable; standalone value; combining would make one PR unsafe or oversized. Otherwise use acceptance criteria, checklist items, or regression tests in the existing issue.
@@ -119,9 +125,11 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.6.0
+0.7.0
 
 ## Changelog
+
+- 0.7.0 adds the #3350 canonical Ready-for-Review validation consumption rule: an exact-head successful Draft final-candidate aggregate satisfies the Ready prerequisite and is reused without a duplicate same-head aggregate; `validation_admission_mode` is a closed vocabulary (`draft-final-candidate`, `pull-request-draft-focused`) with server-side derivation from the authoritative aggregate evidence, and unknown modes fail closed with `unknown-validation-admission-mode`. No new validation state, aggregate trigger, or execution authority is added.
 
 - 0.6.0 extends the #3246 evidence bound to disposition comments: a disposition that materially claims closure-readiness or live acceptance must name the evidence class it is based on and must not exceed that evidence; headline wording must not claim implementation acceptance, terminal QA, or readiness for owner close while the corresponding evidence is pending, external, or contradicted. No new review framework, issue lifecycle, status store, or closure taxonomy is added; enforcement stays with existing structural policy guards and QA disposition review.
 
