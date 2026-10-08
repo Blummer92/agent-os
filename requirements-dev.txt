@@ -14,6 +14,7 @@ packaging>=26.3
 black>=26.5.1
 flake8>=7.4.1
 ruff>=0.16.8
+vulture>=2.14,<3
 mypy>=2.3.1
 isort>=9.0.2
 
