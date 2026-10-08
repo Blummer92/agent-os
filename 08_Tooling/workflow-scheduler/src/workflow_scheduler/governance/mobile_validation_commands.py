@@ -63,9 +63,9 @@ _RUNTIME_PREREQUISITES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "instructional-materials-coach Python dependencies importable",
             "a Blummer92/agent-os checkout at the validated SHA",
         ),
-        "node22-vitest-5.0.0": (
+        "node22-vitest-5.0.3": (
             "Node.js 22 available as `node`",
-            "Vitest 5.0.0 installed, matching the registered package/runtime",
+            "Vitest 5.0.3 installed, matching the registered package/runtime",
             "picture-perfect-coach node_modules installed",
             "a Blummer92/agent-os checkout at the validated SHA",
         ),
