@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from agent_os_execution_service.mcp_server import (
     _CHATGPT_PUBLICATION_TOOLS,
@@ -35,7 +36,7 @@ def test_publication_removes_excluded_tools_from_sdk_catalog_and_dispatch() -> N
     _apply_chatgpt_publication_profile(server)
     assert {tool.name for tool in asyncio.run(server.list_tools())} == _CHATGPT_PUBLICATION_TOOLS
     assert asyncio.run(server.call_tool("admit_agent_os_ready_for_review_tool", {}))
-    with pytest.raises((ValueError, KeyError)):
+    with pytest.raises(ToolError, match="Unknown tool: excluded_tool"):
         asyncio.run(server.call_tool("excluded_tool", {}))
 
 
