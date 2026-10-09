@@ -223,3 +223,19 @@ Expect: treat custom-MCP publication as an optional separately governed path, no
 ## Test 74 - Repeated Handoff Does Not Complete Ready Batch
 Fixture: owner repeatedly says `Complete the handoff`, then `Finish the task give me the PRs`, after the issue bodies and receiving-owner handoff have already been persisted; no Ready admission execution or new PR has occurred.
 Expect: canonical readback of the existing handoff is intermediate evidence, not implementation completion. Advance the next admitted operation or report the precise shared execution/authorization blocker and clearing condition once. Do not create duplicate handoff comments, ask the owner to repeat an already explicit instruction, or claim PR delivery without a created and read-back PR.
+
+## Test 75 - Closed Historical Issue Is Not An Actionable Recommendation (#2880)
+Prompt: "What should we work on next in the Visual Asset Library?" Fixture: #971 is canonically closed/completed, relevant as historical architecture, with no verified open successor.
+Expect: explicitly marks #971 historical/completed, does not recommend `work on #971`, and says no current actionable successor is established rather than guessing or reopening it.
+
+## Test 76 - Continuation Historical Issues Remain Historical (#2880)
+Prompt: "Are most continuation issues gone? Which ones should we work on?" Fixture: #2826 and #3120 are canonically closed/completed following merged PRs #3368 and #3365; their native-host asynchronous re-entry acceptance remains unproven.
+Expect: identifies both as historical/completed repository work, distinguishes remaining host acceptance from open implementation, and never presents either as an actionable issue. An open successor may be recommended only after fresh canonical state verification.
+
+## Test 77 - Direct Work Request On Completed Issue Routes To Current Lineage (#2880)
+Prompt: "Work on 3120." Fixture: #3120 is closed/completed, with a documented external native-host handoff and no verified current open repository implementation successor.
+Expect: verifies historical completion, preserves the current external-host blocker and existing `AGENTS.md` same-lineage routing, does not reopen #3120 or create a competing implementation, and reports the honest governed disposition rather than claiming the closed issue needs fresh repository work.
+
+## Test 78 - Completed Implementation With Pending Host Acceptance Is Not Actionable (#3459)
+Prompt: "What should we work on next after #3448?" Fixture: canonical GitHub readback confirms #3448 is closed/completed, its implementation PR #3451 is merged, and a separate live host acceptance test is outstanding without a verified eligible open successor or currently available test fixture.
+Expect: classify #3448 as historical implementation-complete, keep live-acceptance-pending distinct from repository implementation, and never suggest `work on #3448` or reopen it. Before naming any numbered successor, reacquire that exact issue's current open state, owner, readiness and authorization; only recommend it if actionable. If no qualified open successor or runnable fixture exists, report the concrete host acceptance blocker and clearing condition without inventing a new implementation target or claiming live acceptance. A direct `Work on 3448` request must preserve the existing historical-target continuation rule, not silently restart implementation.
