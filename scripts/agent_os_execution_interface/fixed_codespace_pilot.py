@@ -100,6 +100,18 @@ def consume_fixed_codespace_pilot(
         descriptor_loader, current_resolver, lease_reader, codespace_selection, evaluated_at
     )):
         return receipt
+    # The existing #1287 production composition owns these exact providers.
+    # An Actions job with only a parsed comment cannot reconstruct them.
+    # Reject a partial host binding rather than treating its mere presence as
+    # current execution authority.
+    if not (
+        callable(descriptor_loader)
+        and callable(getattr(current_resolver, "reacquire", None))
+        and callable(getattr(lease_reader, "inspect", None))
+        and type(evaluated_at) is str
+        and evaluated_at.endswith("Z")
+    ):
+        return _receipt("blocked", "canonical-host-binding-incomplete", envelope)
 
     from agent_os_execution_service.invocation_reconstruction import (
         InvocationReconstructionStatus,
