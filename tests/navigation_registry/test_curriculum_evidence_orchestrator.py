@@ -21,6 +21,12 @@ from navigation_registry.connectors.curriculum_evidence_orchestrator import (
 from instructional_workflow_contracts.current_curriculum_state import (
     resolve_current_curriculum_state,
 )
+from navigation_registry.connectors.notion_asset_evidence_projection import (
+    CANONICAL_UNIT_PROPERTY,
+    ICON_SYSTEM_PROPERTIES,
+    REUSABLE_ACROSS_UNITS_PROPERTY,
+    VISUAL_ASSET_LIBRARY_PROPERTIES,
+)
 
 UNIT_PAGE = "3907ac78-3131-8129-8c73-cd9f6b8e8a7d"
 
@@ -158,69 +164,58 @@ def test_worksheet_lesson_and_teach_next_plans_remain_bounded() -> None:
     assert PRODUCTION not in sources(lesson)
 
 
-def test_pf010_is_reached_by_relation_and_provider_filter_is_hidden_downstream() -> None:
+def test_coursewide_checkbox_filter_fails_closed_before_provider_400() -> None:
+    """#2816 regression: the coursewide step must not dispatch a provider
+    filter on the Icon System "Reusable Across Units?" checkbox against the
+    Visual Asset Library, which does not expose it (live Notion 400
+    validation_error, run 37845400763). The failure is bounded and names the
+    schema mismatch; the relation-first unit read is unaffected and still
+    dispatches first."""
     calls = []
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("make", "slides", requires_reusable_assets=True),
-        canonical_unit=unit(),
-        resolve_identity=identity,
-        execute_read=fake_reader(calls),
-    )
+    with pytest.raises(
+        CurriculumReadError,
+        match=r"filter-property-unavailable.*Reusable Across Units\?.*visual-asset-library",
+    ):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("make", "slides", requires_reusable_assets=True),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=fake_reader(calls),
+        )
     asset_calls = [payload for step, payload in calls if step.logical_source == VISUAL_ASSETS]
+    # The relation-first unit read still dispatched with its governed filter.
+    assert len(asset_calls) == 1
     assert asset_calls[0]["relation_filter"] == {
         "property": "Canonical Unit",
         "contains_page_id": "3907ac78313181298c73cd9f6b8e8a7d",
     }
-    # #3253: the coursewide step selects on the reusable checkbox, never a
-    # fabricated unit relation.
-    assert "relation_filter" not in asset_calls[1]
-    assert asset_calls[1]["property_filter"] == {
-        "property": "Reusable Across Units?",
-        "checkbox": {"equals": True},
-    }
-    # The same asset returned by both steps is deduplicated; the
-    # relation-first (unit-specific) record wins.
-    assert packet["asset_evidence"] == [{
-        "asset_id": "pf-010",
-        "approved_for_requested_use": False,
-        "approved_student_reuse": False,
-        "exists": True,
-        "source_revision": 1,
-        "reuse_scope": "unit-specific",
-        "reuse_status": "unknown",
-        "library_reference": {
-            "page_id": "notion-page-pf-010",
-            "drive_file_id": "drive-file-pf-010",
-        },
-    }]
-    assert "relation_filter" not in repr(packet)
-    assert "deliberately-not-photography-named" not in repr(packet)
-    assert packet["asset_evidence"][0]["library_reference"] == {
-        "page_id": "notion-page-pf-010",
-        "drive_file_id": "drive-file-pf-010",
-    }
-    state = resolve_current_curriculum_state(packet)
-    assert state.record is not None
-    record = state.record.to_dict()
-    assert record["assets"]["matching_asset_exists"] is True
-    assert record["assets"]["approved_reusable_student_facing_exists"] is False
-    assert "asset-reusable-unavailable" in record["blockers"]
-    assert record["disposition"] == "blocked"
-    assert record["authority"]["production_authorized"] is False
+    # No dispatched payload ever carried the unanswerable checkbox filter.
+    assert "property_filter" not in repr(calls)
+    assert "Reusable Across Units?" not in repr(calls)
+
+
+def test_filter_vocabulary_is_source_segregated_2816() -> None:
+    """#2816: the governed filter vocabulary keeps Icon System properties off
+    the Visual Asset Library query surface."""
+    assert REUSABLE_ACROSS_UNITS_PROPERTY in ICON_SYSTEM_PROPERTIES
+    assert REUSABLE_ACROSS_UNITS_PROPERTY not in VISUAL_ASSET_LIBRARY_PROPERTIES
+    assert CANONICAL_UNIT_PROPERTY in VISUAL_ASSET_LIBRARY_PROPERTIES
 
 
 
-def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> None:
+def test_raw_notion_visual_asset_page_coursewide_step_fails_closed_2816() -> None:
+    """#2816: the coursewide step fails closed before dispatching its
+    unanswerable checkbox filter; the relation-first unit read still
+    dispatches and its raw page is still projected."""
+    calls = []
+
     def reader(step, payload):
+        calls.append((step, dict(payload)))
         if step.logical_source == CANONICAL_UNIT:
             return {"id": UNIT_PAGE}
         assert step.logical_source == VISUAL_ASSETS
-        if step.relation_first:
-            assert payload["relation_filter"]["property"] == "Canonical Unit"
-        else:
-            # #3253: coursewide step never carries a relation filter.
-            assert "relation_filter" not in payload
-            assert payload["property_filter"]["property"] == "Reusable Across Units?"
+        assert step.relation_first
+        assert payload["relation_filter"]["property"] == "Canonical Unit"
         return {
             "results": [{
                 "id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
@@ -238,33 +233,23 @@ def test_raw_notion_visual_asset_page_becomes_bounded_unapproved_evidence() -> N
             }]
         }
 
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit=unit(),
-        resolve_identity=identity,
-        execute_read=reader,
-    )
-
-    assert packet["asset_evidence"] == []
-    # #3254: no governed Asset ID on the page -> explicit incomplete-evidence,
-    # never a page-UUID substitution, never absence, never approval.
-    assert packet["incomplete_asset_evidence"] == [{
-        "page_id": "3907ac78-3131-8111-9999-aaaaaaaaaaaa",
-        "projection_status": "incomplete-evidence",
-        "evidence_gaps": [
-            "identity: no governed Asset ID on the Notion record",
-            "drive binding: no Drive File ID on the Notion record",
-        ],
-    }]
-    state = resolve_current_curriculum_state(packet)
-    assert state.record is not None
-    assert state.record.to_dict()["assets"]["matching_asset_exists"] is False
-    # Incomplete identity is not absence: the resolver must not claim it.
-    assert "asset-approval-ambiguous" not in state.record.to_dict()["assets"].get("reason_codes", [])
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+    # The relation-first unit read dispatched; the coursewide step never did.
+    assert [step.logical_source for step, _ in calls] == [CANONICAL_UNIT, VISUAL_ASSETS]
+    assert "property_filter" not in repr(calls)
+    assert "Reusable Across Units?" not in repr(calls)
 
 
-def test_raw_notion_visual_asset_with_governed_asset_id_becomes_evidence() -> None:
-    """#3254: a page carrying the governed Asset ID projects to asset evidence."""
+def test_raw_notion_visual_asset_governed_id_still_fails_closed_on_coursewide_2816() -> None:
+    """#3254: a page carrying the governed Asset ID still projects at the
+    #3254 projection level; at the orchestrator level the images read now
+    fails closed on the #2816 coursewide schema mismatch before dispatch."""
     def reader(step, payload):
         if step.logical_source == CANONICAL_UNIT:
             return {"id": UNIT_PAGE}
@@ -298,50 +283,30 @@ def test_raw_notion_visual_asset_with_governed_asset_id_becomes_evidence() -> No
             }]
         }
 
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit=unit(),
-        resolve_identity=identity,
-        execute_read=reader,
-    )
-
-    assert packet["asset_evidence"] == [{
-        "asset_id": "VA-20260925-0001",
-        "exists": True,
-        "approved_for_requested_use": True,
-        "approved_student_reuse": None,
-        "source_revision": 1,
-        "reuse_scope": "unit-specific",
-        "reuse_status": "unknown",
-        "library_reference": {
-            "page_id": "3907ac78-3131-8111-9999-bbbbbbbbbbbb",
-            "drive_file_id": "drive-file-1",
-        },
-    }]
-    assert "incomplete_asset_evidence" not in packet
-    state = resolve_current_curriculum_state(packet)
-    assert state.record is not None
-    assert state.record.to_dict()["assets"]["matching_asset_exists"] is True
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+    # #2816: the coursewide step fails closed before the provider; raw-page
+    # projection itself stays covered by the #3254 projection tests.
 
 
-
-def test_raw_notion_visual_asset_zero_match_stays_explicitly_empty() -> None:
+def test_raw_notion_visual_asset_zero_match_fails_closed_on_coursewide_2816() -> None:
     def reader(step, payload):
         if step.logical_source == CANONICAL_UNIT:
             return {"id": UNIT_PAGE}
         return {"results": []}
 
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit=unit(),
-        resolve_identity=identity,
-        execute_read=reader,
-    )
-
-    assert packet["asset_evidence"] == []
-    state = resolve_current_curriculum_state(packet)
-    assert state.record is not None
-    assert state.record.to_dict()["assets"]["matching_asset_exists"] is False
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
 
 
 
@@ -537,7 +502,9 @@ def test_inputs_are_not_mutated_and_normal_tests_need_no_credentials() -> None:
     before = copy.deepcopy(original)
     calls = []
     orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
+        # #2816: blockers mode carries no asset steps, so the coursewide
+        # schema-mismatch guard does not fire here.
+        request=CurriculumReadRequest("what-is-blocking"),
         canonical_unit=original,
         resolve_identity=identity,
         execute_read=fake_reader(calls),

@@ -54,6 +54,12 @@ def run(catalog, executor, **kwargs):
     )
 
 
+def canonical_unit_transport():
+    # #2816: the canonical-unit request carries no asset steps, so the
+    # coursewide schema-mismatch guard does not fire here.
+    return transport(request_id="photography-foundations-canonical-unit")
+
+
 # --------------------------------------------------------------------------
 # The canonical components are actually invoked
 # --------------------------------------------------------------------------
@@ -74,7 +80,7 @@ def test_request_planning_is_performed_by_the_canonical_980_planner(
         curriculum_evidence_orchestrator, "build_curriculum_read_plan", spy
     )
 
-    run(verified_catalog, RecordingExecutor())
+    run(verified_catalog, RecordingExecutor(), payload=canonical_unit_transport())
 
     assert seen, "the canonical #980 planner was never invoked"
     assert all(isinstance(request, CurriculumReadRequest) for request in seen)
@@ -97,7 +103,7 @@ def test_evidence_assembly_is_performed_by_the_canonical_975_assembler(
         spy,
     )
 
-    run(verified_catalog, RecordingExecutor())
+    run(verified_catalog, RecordingExecutor(), payload=canonical_unit_transport())
 
     assert len(calls) == 1, "the canonical #975 assembler was never invoked"
     assert "asset_evidence" in calls[0]
@@ -116,7 +122,7 @@ def test_authority_and_disposition_come_from_the_canonical_973_resolver(
 
     monkeypatch.setattr(execution_module, "resolve_current_curriculum_state", spy)
 
-    evidence = run(verified_catalog, RecordingExecutor())
+    evidence = run(verified_catalog, RecordingExecutor(), payload=canonical_unit_transport())
 
     assert calls, "the canonical #973 resolver was never invoked"
     assert evidence["result"]["currentness"]["state_id"]
@@ -180,7 +186,7 @@ def test_non_active_canonical_unit_still_requires_a_decision(
     status label must also distinguish archived from review-flagged, so each
     canonical evidence field is independently load-bearing.
     """
-    evidence = run(verified_catalog, RecordingExecutor(page=page))
+    evidence = run(verified_catalog, RecordingExecutor(page=page), payload=canonical_unit_transport())
 
     assert evidence["result"]["canonical_unit"]["status"] == expected_status
     assert evidence["result"]["currentness"]["disposition"] == expected_disposition
@@ -213,7 +219,7 @@ def test_unit_status_is_derived_from_canonical_normalizer_booleans(
         }
     )
 
-    evidence = run(verified_catalog, executor)
+    evidence = run(verified_catalog, executor, payload=canonical_unit_transport())
 
     assert evidence["result"]["currentness"]["disposition"] == "needs-decision"
 
