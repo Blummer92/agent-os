@@ -106,3 +106,19 @@ def test_existing_discovery_ingress_unchanged():
     assert result.status == "accepted"
     assert result.reason == "accepted-discovery-envelope"
     assert result.codespace_implementation_handoff_id_or_none is None
+
+
+def test_incomplete_production_host_binding_is_refused():
+    transport = admit(event()).to_dict()
+    result = consume_fixed_codespace_pilot(
+        transport,
+        descriptor_loader=lambda handoff: object(),
+        current_resolver=object(),
+        lease_reader=object(),
+        codespace_selection=object(),
+        evaluated_at="2026-10-09T19:00:00Z",
+    )
+    assert result["status"] == "blocked"
+    assert result["reason_codes"] == ["canonical-host-binding-incomplete"]
+    assert result["side_effects_performed"] is False
+    assert result["request_id"] is None
