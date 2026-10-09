@@ -53,8 +53,12 @@ MAX_RECEIPT_REFS = 5
 CATALOG_TEXT_LIMIT = 512
 LESSON_ID = re.compile(r"LL-([1-9][0-9]{0,8})")
 GITHUB_URL = re.compile(r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}(?:#[A-Za-z0-9_-]{1,64})?")
+# Canonical receipt comment references. The anchor-free API form exists
+# because some GitHub write hosts rewrite `#issuecomment-` anchors in comment
+# bodies (observed on #3418, comment 6080494403); both name one exact comment.
 RECEIPT_COMMENT_URL = re.compile(
     r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}#issuecomment-[1-9][0-9]{0,14}"
+    r"|https://api\.github\.com/repos/Blummer92/agent-os/issues/comments/[1-9][0-9]{0,14}"
 )
 REVISION = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z")
 

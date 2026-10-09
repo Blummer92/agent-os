@@ -239,6 +239,9 @@ _REJECTION_CODES = (
     ("specialized_knowledge_required must be", "materiality-invalid"),
     ("repair_context must be", "repair-context-invalid"),
     ("failed-repair must use", "repair-context-invalid"),
+    ("refinement receipt_refs", "refinement-receipt-refs-invalid"),
+    ("refinement", "refinement-detail-invalid"),
+    ("candidate", "candidate-detail-invalid"),
 )
 
 
@@ -473,14 +476,21 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
 
 
 def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
-    if envelope.operation == "lesson-candidate":
-        outcome = capture_lesson_candidate(envelope.detail)
-        extra = {"lesson_proposal": outcome["lesson_proposal"]}
+    key = "lesson_proposal" if envelope.operation == "lesson-candidate" else "revision_proposal"
+    try:
+        if envelope.operation == "lesson-candidate":
+            outcome = capture_lesson_candidate(envelope.detail)
+        else:
+            outcome = propose_lesson_refinement(envelope.detail, reader)
+    except (TypeError, ValueError) as exc:
+        # Detail validation precedes any read. A malformed candidate or
+        # refinement returns a bounded finite-code rejection, never a crash
+        # into the generic ckr6-result-unavailable fallback.
+        outcome = {"status": "rejected", "reason_codes": [rejection_reason(exc)], key: None}
         read = False
     else:
-        outcome = propose_lesson_refinement(envelope.detail, reader)
-        extra = {"revision_proposal": outcome["revision_proposal"]}
-        read = True
+        read = envelope.operation == "lesson-refinement"
+    extra = {key: outcome[key]}
     return {
         "operation": envelope.operation,
         "repository": envelope.repository,
