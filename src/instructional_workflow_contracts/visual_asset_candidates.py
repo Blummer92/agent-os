@@ -112,12 +112,15 @@ def _filter_with_transport_bound(
             max_length=MAX_SOURCE_REVISION_LENGTH,
         )
         raw_candidates = _candidate_list(candidates)
+        # #3251: roles are keyed by stable role_id, never by role_type.
+        # Two roles sharing a role_type keep their own orientation and
+        # compatibility evidence; same-type roles never collapse.
         required_roles = {
-            item["role_type"]: item
+            item["role_id"]: item
             for item in plan_payload["required_roles"]
         }
         optional_roles = {
-            item["role_type"]: item
+            item["role_id"]: item
             for item in plan_payload["optional_roles"]
         }
         governed_roles = {**optional_roles, **required_roles}
@@ -163,7 +166,7 @@ def _filter_with_transport_bound(
                 manual_review.append(entry)
                 continue
 
-            reasons = _plan_mismatch_reasons(
+            reasons, matched_role_ids = _plan_mismatch_reasons(
                 payload,
                 governed_roles=governed_roles,
                 material_type=plan_payload["material_type"],
@@ -173,6 +176,9 @@ def _filter_with_transport_bound(
                 entry["reason_codes"] = list(reasons)
                 rejected.append(entry)
             else:
+                # The roles that admitted this candidate stay recoverable
+                # downstream (#3251): eligibility is per role, not per type.
+                entry["matched_role_ids"] = list(matched_role_ids)
                 eligible.append(entry)
 
         def key(item: dict[str, Any]) -> tuple[object, ...]:
@@ -481,10 +487,15 @@ def _plan_record(value: object) -> ValidatedRecord:
             "visual-needs roles must be built-in lists",
         )
     for role in [*payload["required_roles"], *payload["optional_roles"]]:
-        if type(role) is not dict or "role_type" not in role or "orientation" not in role:
+        if (
+            type(role) is not dict
+            or "role_id" not in role
+            or "role_type" not in role
+            or "orientation" not in role
+        ):
             raise ContractValidationError(
                 "asset-candidates-invalid-plan",
-                "visual-needs role entries must declare role_type and orientation",
+                "visual-needs role entries must declare role_id, role_type and orientation",
             )
     return supplied
 
@@ -588,24 +599,43 @@ def _plan_mismatch_reasons(
     *,
     governed_roles: dict[str, dict[str, Any]],
     material_type: str,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Evaluate one candidate against every governed role individually.
+
+    Returns ``(reason codes, matched role ids)``. A role admits the
+    candidate only when the candidate's purpose and approved use both name
+    the role's type AND the orientation policy accepts the role's own
+    orientation. Two roles sharing a ``role_type`` are judged on their own
+    terms (#3251): the landscape role admits a landscape candidate even
+    when its same-type sibling is portrait.
+    """
     reasons: list[str] = []
-    compatible_roles = set(compatibility["purpose"]["role_types"])
-    approved_roles = set(compatibility["approved_use"]["role_types"])
-    matched_roles = compatible_roles & approved_roles & set(governed_roles)
-    if not matched_roles:
+    matched: list[str] = []
+    compatible_types = set(compatibility["purpose"]["role_types"])
+    approved_types = set(compatibility["approved_use"]["role_types"])
+    orientation = compatibility["orientation"]["orientation"]
+    type_matched_any = False
+    for role_id in sorted(governed_roles):
+        role = governed_roles[role_id]
+        role_type = role["role_type"]
+        if role_type not in compatible_types or role_type not in approved_types:
+            continue
+        type_matched_any = True
+        role_orientation = role["orientation"]
+        if orientation != "flexible" and role_orientation not in {
+            orientation,
+            "unspecified",
+        }:
+            continue
+        matched.append(role_id)
+    if not type_matched_any:
         reasons.append("visual-candidate-role-mismatch")
+    elif not matched:
+        reasons.append("visual-candidate-orientation-mismatch")
     approved_materials = set(compatibility["approved_use"]["material_types"])
     if material_type not in approved_materials:
         reasons.append("visual-candidate-material-mismatch")
-    orientation = compatibility["orientation"]["orientation"]
-    if matched_roles and orientation != "flexible":
-        if not any(
-            governed_roles[role]["orientation"] in {orientation, "unspecified"}
-            for role in matched_roles
-        ):
-            reasons.append("visual-candidate-orientation-mismatch")
-    return tuple(sorted(reasons))
+    return tuple(sorted(reasons)), tuple(matched)
 
 
 def _candidate_set_id(

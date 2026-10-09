@@ -87,6 +87,7 @@ def test_receipt_requires_exact_identity_before_verified():
         "asset_id": request.asset_id,
         "drive_file_id": request.drive_file_id,
         "role_id": request.role_id,
+        "slot_id": request.slot_id,
         "artifact_type": request.target.artifact_type,
         "artifact_id": request.target.artifact_id,
         "artifact_revision_id": request.target.artifact_revision_id,
@@ -97,6 +98,7 @@ def test_receipt_requires_exact_identity_before_verified():
     }
     verified = verify_placement_receipt(request, receipt)
     assert verified.state == "verified"
+    assert verified.slot_id == request.slot_id
     bad = dict(receipt, asset_id="asset-other")
     with pytest.raises(VisualPlacementError, match="asset_id mismatch"):
         verify_placement_receipt(request, bad)

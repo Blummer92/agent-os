@@ -60,6 +60,13 @@ from instructional_workflow_contracts.visual_needs import plan_visual_needs
 FIXTURES = Path(__file__).parent / "fixtures" / "instructional_workflow_contracts"
 
 
+# Largest "small" population whose inline projection still fits the shared
+# 16 KiB result bound. #3251 adds a per-entry `matched_role_ids` field, so the
+# inline/by-reference boundary moved from 6 to 5 candidates; both transports
+# remain covered (inline here, by-reference at 64 and under a forced tiny bound).
+_INLINE_POPULATION = 5
+
+
 def _hex(seed: str) -> str:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
@@ -236,7 +243,7 @@ def test_bounded_plan_is_identical_to_unbounded_reference_run() -> None:
     # forces the by-reference transport on a small population with a tiny
     # bound and proves selection is identical to the inline form.
     plan = _plan()
-    envelopes, store = _build_population(6)
+    envelopes, store = _build_population(_INLINE_POPULATION)
 
     inline = filter_approved_visual_candidates(
         plan,
@@ -309,7 +316,7 @@ def test_count_bound_reports_explicit_capacity_exceeded() -> None:
 
 def test_small_populations_keep_inline_transport_unchanged() -> None:
     plan = _plan()
-    envelopes, _ = _build_population(6)
+    envelopes, _ = _build_population(_INLINE_POPULATION)
 
     result = filter_approved_visual_candidates(
         plan,
@@ -322,7 +329,7 @@ def test_small_populations_keep_inline_transport_unchanged() -> None:
     assert result.record is not None
     payload = result.record.to_dict()
     assert payload["projection_transport"] == PROJECTION_TRANSPORT_INLINE
-    assert len(payload["eligible"]) == 6
+    assert len(payload["eligible"]) == _INLINE_POPULATION
     # Inline entries keep the full validated projection.
     assert "cohesion_profile" in payload["eligible"][0]
     assert "matched_asset" in payload["eligible"][0]

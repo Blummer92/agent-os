@@ -313,6 +313,32 @@ def _roles(value: object, *, source_fingerprint: str) -> list[dict[str, Any]]:
             ),
             "accessibility_reference": "requirements.accessibility_requirements",
         }
+        # #3254: optional concept/vocabulary reference. Never invented: only
+        # carried when the requirement author supplies it. Survives onto
+        # the planned role so gap briefs and downstream role records can
+        # carry it to image intents.
+        concept = role.get("concept")
+        if concept is not None:
+            normalized["concept"] = validate_text(
+                concept,
+                "visual role concept",
+                max_length=256,
+            )
+        # #3251: explicit slot bindings are placement evidence, not role
+        # identity: carried through (already validated by the Material
+        # Requirement contract) without entering the semantic role key.
+        slots = role.get("slots")
+        if slots is not None:
+            if (
+                type(slots) is not list
+                or not slots
+                or any(type(slot) is not str or not slot for slot in slots)
+            ):
+                raise ContractValidationError(
+                    "material-visual-needs-incompatible-upstream",
+                    "visual role slots are malformed",
+                )
+            normalized["slots"] = list(slots)
         normalized["role_id"] = _role_id(role=normalized)
         validate_stable_id(normalized["role_id"], "visual role_id")
         roles.append(normalized)

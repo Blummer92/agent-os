@@ -48,6 +48,14 @@ When ambiguity can be resolved safely by presenting actual eligible candidates, 
 ## Downstream Handoff
 Preserve stable selected asset identity, source/reference, review/eligibility evidence, associated visual requirement/role, active hard constraints, and relevant search/source context. Instructional Materials Coach consumes these selected references and must not independently reinterpret the original teacher request to choose different assets.
 
+Every selection is bound to its governed `(role_id, slot_id)` (#3251):
+`SelectedAssetReference` carries the `role_id` (the visual-needs plan's
+stable semantic role identity, never a bare role_type string) and the
+`slot_id` of the placement it satisfies. A selection bound to role R1 must
+never be silently re-attributed to R2's slot -- presenting a reference for
+a different binding fails closed. The picker's `visual_roles` intent field
+likewise binds plan `role_id`s.
+
 The handoff must distinguish `discovered`, `selected`, `materialized`, and `placed` evidence. An artifact-producing path may claim a required visual fulfilled only from evidence that reaches the materialized/placed state required by that artifact type; selected identity alone is insufficient.
 
 ## Ownership Boundaries
@@ -60,4 +68,7 @@ Asset selection is advisory. It grants no production, publication, approval, cla
 Use fixture-first offline tests. Prove semantic equivalence across paraphrases, correction/late-override precedence, candidate-first ambiguity, multiple/no/review candidates, library failure, selected-asset invalidation, ranking precedence, downstream identity/constraint preservation, eligible-but-unmaterialized failure, project/export recovery precedence, and the distinction between metadata discovery and artifact fulfillment. Tests should prove behavior, not a phrase dictionary.
 
 ## Version
-0.1.1
+0.2.0
+
+## Changelog
+- 0.2.0: #3251 — selections bind their governed `(role_id, slot_id)`; identity conflicts fail closed.

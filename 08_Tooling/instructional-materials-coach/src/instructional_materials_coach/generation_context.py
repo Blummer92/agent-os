@@ -105,13 +105,19 @@ def compose_generation_context(
             + (f": {reasons}" if reasons else "")
         )
 
-    visual_asset_ids, visual_assignments = _visual_context(governed_visual_plan)
-    supplied_asset_ids = tuple(sorted(set(selected_asset_ids)))
+    visual_bindings, visual_assignments = _visual_context(governed_visual_plan)
+    # #3251: compare as multisets, not deduped sets. One asset shared
+    # across roles/slots appears once per binding; collapsing to a set
+    # would accept a caller selection that drops a governed binding.
+    # (Teacher decisions may legitimately narrow the selection, so the
+    # supplied multiset must be covered by the plan's, not equal to it.)
+    supplied_asset_ids = tuple(sorted(selected_asset_ids))
     if supplied_asset_ids and governed_visual_plan is None:
         raise GenerationContextError(
             "Selected visual identities require governed #944 visual-plan evidence"
         )
-    if supplied_asset_ids and supplied_asset_ids != visual_asset_ids:
+    plan_asset_ids = tuple(sorted(asset_id for _, _, asset_id in visual_bindings))
+    if supplied_asset_ids and not _multiset_covered(supplied_asset_ids, plan_asset_ids):
         raise GenerationContextError("Selected visual identity does not match governed visual plan")
 
     requirement = requirement_result.record.to_dict()
@@ -145,7 +151,10 @@ def compose_generation_context(
             ),
             "context_template_ids": _join(item["template_id"] for item in requirement["templates"]),
             "context_requirement_asset_ids": _join(item["asset_id"] for item in requirement["assets"]),
-            "context_selected_asset_ids": _join(visual_asset_ids),
+            # #3251: per-binding asset ids with multiplicity preserved -- a
+            # shared asset across N slots appears N times, keyed downstream
+            # on (role_id, slot_id) via context_selected_visual_assignments.
+            "context_selected_asset_ids": _join(asset_id for _, _, asset_id in visual_bindings),
             "context_selected_visual_assignments": visual_assignments,
             _ASSESSMENT_DEPENDENCY_TOKEN: assessment_dependency,
             _ASSESSMENT_CURRENTNESS_TOKEN: "current",
@@ -303,7 +312,13 @@ def _reference_stable_id(value: object) -> str:
     return stable_id if isinstance(stable_id, str) else ""
 
 
-def _visual_context(value: object | None) -> tuple[tuple[str, ...], str]:
+def _visual_context(value: object | None) -> tuple[tuple[tuple[str, str, str], ...], str]:
+    """Extract governed visual bindings and their assignment evidence.
+
+    Returns ``(bindings, assignments_json)`` where each binding is a
+    ``(role_id, slot_id, asset_id)`` triple (#3251). Bindings are sorted
+    for determinism; a shared asset appears once per binding it fills.
+    """
     if value is None:
         return (), "[]"
     if type(value) is not ValidationResult:
@@ -324,18 +339,40 @@ def _visual_context(value: object | None) -> tuple[tuple[str, ...], str]:
         *payload.get("required_role_assignments", []),
         *payload.get("optional_role_assignments", []),
     ]
-    asset_ids: set[str] = set()
+    bindings: list[tuple[str, str, str]] = []
     for assignment in assignments:
         try:
+            role_id = assignment["role_id"]
+            slot_id = assignment.get("slot_id", "0")
             asset_id = assignment["selected_candidate"]["asset_reference"]["asset_id"]
         except (KeyError, TypeError):
             raise GenerationContextError("Governed visual assignment identity is incomplete") from None
+        if not isinstance(role_id, str) or not role_id:
+            raise GenerationContextError("Governed visual assignment role identity is invalid")
+        if not isinstance(slot_id, str) or not slot_id:
+            raise GenerationContextError("Governed visual assignment slot identity is invalid")
         if not isinstance(asset_id, str) or not asset_id:
             raise GenerationContextError("Governed visual assignment asset identity is invalid")
-        asset_ids.add(asset_id)
+        bindings.append((role_id, slot_id, asset_id))
 
     encoded = json.dumps(assignments, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return tuple(sorted(asset_ids)), encoded
+    return tuple(sorted(bindings)), encoded
+
+
+def _multiset_covered(supplied: tuple[str, ...], plan: tuple[str, ...]) -> bool:
+    """True when every supplied asset id is covered by the plan's bindings.
+
+    Multiplicity-aware: supplying an asset twice requires two plan bindings
+    for it. Teacher decisions may narrow the selection, so exact multiset
+    equality is not required -- only that the plan authorizes at least what
+    was supplied.
+    """
+    remaining = list(plan)
+    for asset_id in supplied:
+        if asset_id not in remaining:
+            return False
+        remaining.remove(asset_id)
+    return True
 
 
 def curriculum_decision_token(decision_key: str) -> str:
