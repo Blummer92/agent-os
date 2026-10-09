@@ -863,3 +863,7 @@ audit = repo.get_audit_log(workflow_id="test")
 ## Shared IMC C4B build composition (#3453)
 
 The injected `live_build_input_factory` may return `GovernedBuildRequest` from the Materials Coach package. The C4B adapter forwards its exact `resume_dir`, `placement_transport`, `placement_receipts_dir`, and `qa_evidence_dir` options to the existing live builder. Approval and authorization reacquisition remain unchanged; the host still owns subject-to-governed-input resolution.
+
+## IMC live build receipt (#3454)
+
+The C4B instructional-materials live adapter returns its existing raw `receipt` and an additional `build_receipt_record` in `output`. The record uses `imc-build-receipt-v1`, is JSON-safe evidence only, and grants no execution, production or classroom-readiness authority. The host must supply canonical requirement/template identity separately; missing values remain unknown rather than inferred.

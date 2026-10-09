@@ -182,6 +182,9 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
         except (TypeError, ValueError, RuntimeError):
             return _failure("live-build-input-invalid")
 
+        from instructional_materials_coach.build_receipt import build_receipt_record
+        from instructional_materials_coach.live_build import LiveBuildInput, LiveBuildReceipt
+
         composed_options = {}
         if hasattr(build_input, "build_input") and hasattr(build_input, "builder_options"):
             composed_options = dict(build_input.builder_options)
@@ -209,5 +212,12 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
                 "task_id": request.task_id,
                 "attempt_number": request.attempt_number,
                 "receipt": receipt,
+                # Only the real typed build input / receipt can supply governed
+                # identities; any other injected value is reported as unavailable
+                # (unknown, never inferred) rather than guessed at (#3454).
+                "build_receipt_record": build_receipt_record(
+                    build_input if isinstance(build_input, LiveBuildInput) else None,
+                    receipt if isinstance(receipt, LiveBuildReceipt) else None,
+                ),
             },
         }

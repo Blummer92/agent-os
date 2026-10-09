@@ -14,6 +14,7 @@ from .artifact_structure import PASS, validate_required_worksheet_sections
 from .artifact_content_qa import DEFAULT_QA_EVIDENCE_DIR, TerminalQAExpectations
 from .asset_slot_resolution import resolve_asset_slots
 from .build_resume import DEFAULT_BUILD_RESUME_DIR
+from .build_receipt import build_receipt_record, write_build_receipt_atomic
 from .build_request import compose_governed_build_request
 from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
@@ -43,6 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     build = subparsers.add_parser("build", help="Build a slide deck and worksheet from an approved template and lesson content.")
     build.add_argument("--content", required=True)
+    build.add_argument("--receipt-out", default="", help="Optional local JSON build evidence (not authorization).")
     build.add_argument("--slides-template", default="")
     build.add_argument("--doc-template", default="")
     build.add_argument("--template-candidates", default="")
@@ -390,6 +392,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     context = {"slides_template": args.slides_template, "doc_template": args.doc_template, "target_folder": args.target_folder, "content_path": args.content, "material_requirement_path": args.material_requirement, "current_curriculum_evidence_path": args.current_curriculum_evidence}
+    build_input = None
+    receipt = None
+    requirement_identity = {}
+    template_revisions = {}
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
@@ -549,12 +555,16 @@ def main(argv: list[str] | None = None) -> int:
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
         )
+        build_input = composed.build_input
+        template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
         receipt = build_live_materials(
-            composed.build_input, drive_service=drive_service,
+            build_input, drive_service=drive_service,
             slides_service=build_slides_service(credentials),
             docs_service=build_docs_service(credentials),
             **composed.builder_options,
         )
+        if args.receipt_out:
+            write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions))
         if not receipt.succeeded:
             qa_summary = _terminal_qa_summary(receipt)
             raise RuntimeError(
@@ -569,6 +579,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Worksheet final (native Google Docs, canonical editable): {receipt.worksheet.web_view_link}")
         return 0
     except Exception as exc:
+        if args.receipt_out:
+            try:
+                write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__))
+            except OSError as receipt_error:
+                print(f"Receipt persistence failed: {receipt_error}", file=sys.stderr)
         lesson_path = record_lesson(lesson_from_exception(exc, context), args.lessons_dir)
         print(f"Build failed: {exc}", file=sys.stderr)
         print(f"Lesson recorded: {lesson_path}", file=sys.stderr)

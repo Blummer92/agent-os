@@ -194,3 +194,7 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 ## Shared governed build composition (#3453)
 
 The CLI uses `compose_governed_build_request` for its final `LiveBuildInput`, terminal QA expectations, and builder options. The repository `live_build_input_factory` requires a host-injected governed-inputs resolver; it does not resolve a subject, grant authority, or activate Scheduler runtime. Missing identities fail closed.
+
+## Opt-in build receipt (#3454)
+
+`imc-build build --receipt-out PATH` writes an atomic local JSON record after a successful or failed attempt. Without the flag no build-receipt file is written. `imc-build-receipt-v1` records governed requirement identity, template identifiers/revisions, artifact identifiers and QA revision/state, idempotency, expected-format completeness, placement role/slot references, and installed renderer version when available. Missing evidence remains null, never guessed. The record grants no execution, production or classroom-readiness authority; it contains no lesson copy or credentials.

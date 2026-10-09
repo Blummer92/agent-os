@@ -207,3 +207,48 @@ def test_partial_live_receipt_is_returned_without_retry_or_cleanup(_validate):
     assert result["error"] == "live-build-incomplete"
     assert result["output"]["receipt"] is receipt
     builder.assert_called_once()
+
+
+@patch(
+    "workflow_scheduler.adapters.instructional_materials_live_adapter.validate_typed_subject_reference",
+    return_value=_subject_ref(),
+)
+def test_typed_build_input_and_receipt_populate_governed_build_receipt_record(_validate):
+    """#3454: real typed objects yield identities; injected doubles stay unknown."""
+    from instructional_materials_coach.live_build import (
+        ArtifactReceipt,
+        LiveBuildInput,
+        LiveBuildReceipt,
+    )
+
+    build = LiveBuildInput(
+        slides_template_id="slides-template", doc_template_id="docs-template",
+        target_folder_id="folder", slides_name="Slides", doc_name="Worksheet",
+        idempotency_key="exact-key", slides_requests=(), docs_requests=(),
+    )
+    receipt = LiveBuildReceipt(
+        slides=ArtifactReceipt(role="slides", state="failed"),
+        worksheet=ArtifactReceipt(role="worksheet", state="planned"),
+    )
+    adapter = InstructionalMaterialsLiveAdapter(
+        approval_revalidator=MagicMock(return_value=_approval()),
+        authorization_reacquirer=MagicMock(return_value=_authorization()),
+        live_build_input_factory=MagicMock(return_value=build),
+        live_builder=MagicMock(return_value=receipt),
+        drive_service="drive",
+        slides_service="slides",
+        docs_service="docs",
+        evaluated_at=lambda: "2026-09-21T21:00:00Z",
+    )
+
+    record = adapter.execute(_request())["output"]["build_receipt_record"]
+
+    assert record["idempotency_key"] == "exact-key"
+    assert record["templates"]["slides"]["file_id"] == "slides-template"
+    assert record["succeeded"] is False
+    assert not any(record["authority"].values())
+
+    # An injected non-typed build input never fabricates identities.
+    unknown = _adapter().execute(_request())["output"]["build_receipt_record"]
+    assert unknown["idempotency_key"] is None
+    assert unknown["succeeded"] is False
