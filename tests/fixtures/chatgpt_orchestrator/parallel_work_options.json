@@ -1,6 +1,6 @@
 {
   "completed_mission": "#3503",
-  "candidate_count": 14,
+  "candidate_count": 15,
   "requested_parallel_count": 10,
   "candidates": [
     {
@@ -156,6 +156,18 @@
       "scope": "src/m",
       "active_lineage": false,
       "disposition": "exclude-stale"
+    },
+    {
+      "issue": 3615,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/a-copy",
+      "active_lineage": false,
+      "duplicate_claim_of": 3601,
+      "disposition": "exclude-duplicate-owner"
     }
   ]
 }
