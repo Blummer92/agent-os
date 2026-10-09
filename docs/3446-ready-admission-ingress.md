@@ -8,7 +8,7 @@ classification, PR #3481), #3372 (optional custom-MCP host publication), #3281.
 | Operation | Route | Status |
 |---|---|---|
 | Read PR/issue/checks, native Mark Ready, readback | Connected GitHub MCP | Available |
-| Fixed Ready admission (`/agent-os ready-admit`) | GitHub MCP issue comment -> `agent-os-governed-invocation` -> GitHub-hosted consumer -> receipt | Ingress + consumer implemented here; workflow job pending owner approval |
+| Fixed Ready admission (`/agent-os ready-admit`) | GitHub MCP issue comment -> `agent-os-governed-invocation` -> GitHub-hosted consumer -> receipt | Ingress + consumer implemented here; workflow job in this change |
 | Fixed Codespaces/GCE operations | Same ingress, Codespaces-first router | Unchanged; Ready is deliberately **not** routed there |
 | `admit_agent_os_ready_for_review_tool` over MCP | Optional repository-local server | Unchanged; #3372 owns host publication |
 
@@ -60,51 +60,15 @@ job log.
 Repeating the same request yields the same trigger id and receipt id; the host must
 not re-post identical handoffs while a matching unconsumed receipt exists.
 
-## Pending: protected workflow change
+## Workflow integration
 
-`.github/workflows/agent-os-governed-invocation.yml` is an excluded surface and was
-**not** modified. It needs (a) the existing `ingress` job to skip this trigger and
-(b) one new read-only job:
-
-```yaml
-    # ingress job: add to its `if`
-    #   && !startsWith(github.event.comment.body, '/agent-os ready-admit')
-  ready_admission:
-    name: Run finite Ready-for-Review admission
-    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os ready-admit ') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-      checks: read
-      statuses: read
-    steps:
-      - uses: actions/checkout@v7
-      - run: python -m pip install PyGithub==2.10.0
-      - name: Parse low-trust issue comment envelope
-        run: |
-          mkdir -p "$RUNNER_TEMP/agent-os-ready"
-          PYTHONPATH=08_Tooling/workflow-scheduler/src \
-            python -m workflow_scheduler.governance.github_issue_comment_ingress \
-              --event "$GITHUB_EVENT_PATH" --repository "$GITHUB_REPOSITORY" \
-              --allowed-actor Blummer92 --run-attempt "$GITHUB_RUN_ATTEMPT" \
-              --output "$RUNNER_TEMP/agent-os-ready/transport.json"
-      - name: Evaluate Ready admission
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python -m scripts.agent_os_issue_labels.ready_admission_actions \
-            --transport "$RUNNER_TEMP/agent-os-ready/transport.json" \
-            --repository "$GITHUB_REPOSITORY" \
-            --output "$RUNNER_TEMP/agent-os-ready/receipt.json"
-      - uses: actions/upload-artifact@v7
-        if: ${{ always() }}
-        with:
-          name: agent-os-ready-admission-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agent-os-ready/*.json
-          if-no-files-found: warn
-          retention-days: 7
-```
+Owner-approved (2026-10-09) minimal change to
+`.github/workflows/agent-os-governed-invocation.yml`: the `ingress` job skips the
+`/agent-os ready-admit` trigger, and one new read-only `ready_admission` job
+(`contents`/`pull-requests`/`checks`/`statuses: read`, no secrets, no GCP auth)
+parses the envelope with the existing ingress module, runs the consumer, and
+publishes the summary and `agent-os-ready-admission-<run>-<attempt>` artifact.
+Contract tests: `tests/test_agent_os_ready_admission_workflow.py`.
 
 Live acceptance (host-observed Draft -> Ready, negative refusals, Ready-triggered
-aggregate, mixed batch) remains open under #3446 until this job is merged.
+aggregate, mixed batch) remains open under #3446 until this job is on `main`.
