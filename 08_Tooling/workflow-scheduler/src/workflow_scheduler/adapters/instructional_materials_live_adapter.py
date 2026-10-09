@@ -182,11 +182,16 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
         except (TypeError, ValueError, RuntimeError):
             return _failure("live-build-input-invalid")
 
+        composed_options = {}
+        if hasattr(build_input, "build_input") and hasattr(build_input, "builder_options"):
+            composed_options = dict(build_input.builder_options)
+            build_input = build_input.build_input
         receipt = self._live_builder(
             build_input,
             drive_service=self._drive_service,
             slides_service=self._slides_service,
             docs_service=self._docs_service,
+            **composed_options,
         )
         return {
             "success": bool(getattr(receipt, "succeeded", False)),
