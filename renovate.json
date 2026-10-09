@@ -24,7 +24,47 @@
       ]
     },
     {
-      "description": "Nested-only surfaces. Root pip (requirements-dev.txt) and GitHub Actions stay with Dependabot — this config never touches them.",
+      "description": "Coupled vitest group: the pinned vitest version moves together with the fixed runner identity (DEV_VALIDATION_VITEST_VERSION, picture-perfect runtime_id). Never bundled with unrelated updates.",
+      "groupName": "vitest",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "vitest"
+      ],
+      "matchPaths": [
+        "08_Tooling/**",
+        "src/**"
+      ]
+    },
+    {
+      "description": "Coupled mcp group: the nested mcp declaration moves in one isolated PR so it stays reviewable against the Dependabot-owned root requirements-dev.txt (mcp runtime/dependency parity). Never bundled with unrelated updates.",
+      "groupName": "mcp",
+      "matchManagers": [
+        "pep621",
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "mcp"
+      ],
+      "matchPaths": [
+        "08_Tooling/**",
+        "src/**"
+      ]
+    },
+    {
+      "description": "Node engine updates keep their own PR scope, separate from dependency updates, preserving the fixed Node runtime identity (host runner pins Node 22).",
+      "groupName": "node",
+      "matchManagers": [
+        "node"
+      ],
+      "matchPaths": [
+        "08_Tooling/**",
+        "src/**"
+      ]
+    },
+    {
+      "description": "Remaining nested-only minor/patch surfaces, excluding the coupled groups above. Root pip (requirements-dev.txt) and GitHub Actions stay with Dependabot \u2014 this config never touches them.",
       "groupName": "nested minor/patch",
       "matchPaths": [
         "08_Tooling/**",
@@ -35,6 +75,11 @@
         "patch",
         "pin",
         "digest"
+      ],
+      "excludePackageNames": [
+        "vitest",
+        "mcp",
+        "node"
       ]
     },
     {
