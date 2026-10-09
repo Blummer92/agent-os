@@ -191,3 +191,6 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 - The student-material PDF seam renders from an exact caller-supplied authorized payload; it does not yet export Google Docs/Slides bytes through a live Google API. Live Docs/Slides-to-PDF export or Drive persistence remains separately governed.
 - Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
 - Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.
+## Shared governed build composition (#3453)
+
+The CLI uses `compose_governed_build_request` for its final `LiveBuildInput`, terminal QA expectations, and builder options. The repository `live_build_input_factory` requires a host-injected governed-inputs resolver; it does not resolve a subject, grant authority, or activate Scheduler runtime. Missing identities fail closed.

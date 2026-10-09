@@ -3,7 +3,6 @@ from pathlib import Path
 import yaml
 
 from scripts.agent_os_issue_acceptance.metadata_validation import (
-    validate_fixture_case,
     validate_metadata_evidence,
 )
 from scripts.agent_os_issue_acceptance.models import Status
@@ -30,14 +29,15 @@ def _case(case_id: str) -> dict:
 
 def test_metadata_validation_matches_fixture_expected_outcomes():
     for case in _load_cases():
-        result = validate_fixture_case(case)
+        result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
         assert result.classification == case["classification"]
         assert result.outcome.value == case["expected_outcome"]
 
 
 def test_metadata_validation_check_output_is_report_only_evidence():
-    result = validate_fixture_case(_case("issue-tier-candidate-alias-high-risk"))
+    case = _case("issue-tier-candidate-alias-high-risk")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
     check = result.to_check()
 
     assert check.name == "metadata:issue_tier"
@@ -47,7 +47,8 @@ def test_metadata_validation_check_output_is_report_only_evidence():
 
 
 def test_candidate_alias_does_not_become_canonical():
-    result = validate_fixture_case(_case("issue-tier-candidate-alias-high-risk"))
+    case = _case("issue-tier-candidate-alias-high-risk")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
     assert result.classification == "candidate-alias"
     assert result.outcome == Status.MANUAL_REVIEW
@@ -62,7 +63,8 @@ def test_generic_tier_language_does_not_silently_normalize():
 
 
 def test_body_label_readiness_conflict_requires_manual_review():
-    result = validate_fixture_case(_case("readiness-body-label-conflict"))
+    case = _case("readiness-body-label-conflict")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
     assert result.classification == "ambiguous"
     assert result.outcome == Status.MANUAL_REVIEW
@@ -75,28 +77,32 @@ def test_legacy_metadata_remains_evidence_only():
         "legacy-system-github",
         "legacy-phase-governance",
     ):
-        result = validate_fixture_case(_case(case_id))
+        case = _case(case_id)
+        result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
         assert result.classification == "legacy-evidence-only"
         assert result.outcome == Status.MANUAL_REVIEW
 
 
 def test_unknown_governed_enum_value_fails():
-    result = validate_fixture_case(_case("unknown-governed-enum-value"))
+    case = _case("unknown-governed-enum-value")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
     assert result.classification == "invalid"
     assert result.outcome == Status.FAIL
 
 
 def test_owner_registry_surface_gap_warns_without_invalidating_owner():
-    result = validate_fixture_case(_case("owner-registry-form-surface-gap"))
+    case = _case("owner-registry-form-surface-gap")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
     assert result.classification == "canonical"
     assert result.outcome == Status.WARN
 
 
 def test_unregistered_owner_prose_requires_manual_review():
-    result = validate_fixture_case(_case("owner-unregistered-prose"))
+    case = _case("owner-unregistered-prose")
+    result = validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
     assert result.classification == "ambiguous"
     assert result.outcome == Status.MANUAL_REVIEW

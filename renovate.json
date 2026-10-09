@@ -16,6 +16,14 @@
   ],
   "packageRules": [
     {
+      "description": "Root pip stays with Dependabot: Renovate must not raise PRs for root requirements-dev.txt or pyproject.toml (cf. #3398).",
+      "enabled": false,
+      "matchFileNames": [
+        "requirements-dev.txt",
+        "pyproject.toml"
+      ]
+    },
+    {
       "description": "Coupled vitest group: the pinned vitest version moves together with the fixed runner identity (DEV_VALIDATION_VITEST_VERSION, picture-perfect runtime_id). Never bundled with unrelated updates.",
       "groupName": "vitest",
       "matchManagers": [
@@ -56,7 +64,7 @@
       ]
     },
     {
-      "description": "Remaining nested-only minor/patch surfaces, excluding the coupled groups above. Root pip (requirements-dev.txt) and GitHub Actions stay with Dependabot — this config never touches them.",
+      "description": "Remaining nested-only minor/patch surfaces, excluding the coupled groups above. Root pip (requirements-dev.txt) and GitHub Actions stay with Dependabot \u2014 this config never touches them.",
       "groupName": "nested minor/patch",
       "matchPaths": [
         "08_Tooling/**",

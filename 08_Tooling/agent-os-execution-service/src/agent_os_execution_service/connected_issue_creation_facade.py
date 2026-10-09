@@ -14,6 +14,7 @@ from typing import Protocol
 
 from scripts.agent_os_issue_labels.connected_issue_creation import (
     DuplicateCandidateEvidence,
+    DuplicateReviewAdmission,
     DuplicateReviewDisposition,
     evaluate_duplicate_review_admission,
     managed_labels_for_create,
@@ -42,6 +43,43 @@ class ConnectedIssueCreateResult:
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
+def _build_plan(
+    *,
+    repository: str,
+    duplicate_review: DuplicateReviewAdmission,
+    labels: tuple[str, ...],
+    create_allowed: bool,
+    next_operation: str,
+    reason_codes: tuple[str, ...],
+    classification_denial_detail: str | None = None,
+) -> dict[str, object]:
+    plan: dict[str, object] = {
+        "repository": repository,
+        "proposed_labels": list(labels),
+        "duplicate_review_disposition": duplicate_review.disposition.value,
+        "canonical_issue_number": duplicate_review.canonical_issue_number,
+        "duplicate_review_reason_codes": list(reason_codes),
+        "create_allowed": create_allowed,
+        "next_operation": next_operation,
+        "create_contract": "canonical-labels-readback-convergence-required",
+        "create_response_terminal": False,
+        "post_create_readback_required": create_allowed,
+        "post_create_reconciliation_required_on_mismatch": create_allowed,
+        "required_managed_label_readback": list(labels) if create_allowed else [],
+        "missing_required_managed_label_action": "reconcile-via-1962-before-terminal" if create_allowed else None,
+        "terminal_success_requires_label_convergence": create_allowed,
+        "reconciliation_owner": "#1962",
+        "implementation_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "external_write_authorized": False,
+        "side_effects_performed": False,
+    }
+    if classification_denial_detail is not None:
+        plan["classification_denial_detail"] = classification_denial_detail
+    return plan
+
+
 def plan_connected_issue_creation_for_host(
     *,
     repository: str,
@@ -54,17 +92,18 @@ def plan_connected_issue_creation_for_host(
     issue_form_path: str | Path = _REPO_ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml",
     label_map_path: str | Path = _REPO_ROOT / ".github/labeler/agent-os-issue-label-map.yml",
 ) -> dict[str, object]:
-    """Return the bounded pre-create projection without creating write authority."""
+    """Return the bounded pre-create projection without creating write authority.
+
+    #3092: duplicate-review admission is evaluated before managed-label
+    planning. A body whose owner/readiness evidence is missing or ambiguous
+    fails closed as a governed manual-review denial the host can consume --
+    never as a raw tool error the host can route around via native create.
+    """
     if type(repository) is not str or repository.count("/") != 1 or not all(repository.split("/")):
         raise ValueError("repository must use bounded owner/name syntax")
     if type(issue_body) is not str or not issue_body.strip():
         raise ValueError("issue_body must be non-empty canonical text")
 
-    labels = managed_labels_for_create(
-        issue_body,
-        issue_form_path=issue_form_path,
-        label_map_path=label_map_path,
-    )
     duplicate_review = evaluate_duplicate_review_admission(
         issue_body,
         disposition=duplicate_review_disposition,
@@ -74,28 +113,42 @@ def plan_connected_issue_creation_for_host(
         candidate_enumeration_complete=candidate_enumeration_complete,
         issue_form_path=issue_form_path,
     )
-    return {
-        "repository": repository,
-        "proposed_labels": list(labels),
-        "duplicate_review_disposition": duplicate_review.disposition.value,
-        "canonical_issue_number": duplicate_review.canonical_issue_number,
-        "duplicate_review_reason_codes": list(duplicate_review.reason_codes),
-        "create_allowed": duplicate_review.create_allowed,
-        "next_operation": duplicate_review.next_operation,
-        "create_contract": "canonical-labels-readback-convergence-required",
-        "create_response_terminal": False,
-        "post_create_readback_required": duplicate_review.create_allowed,
-        "post_create_reconciliation_required_on_mismatch": duplicate_review.create_allowed,
-        "required_managed_label_readback": list(labels) if duplicate_review.create_allowed else [],
-        "missing_required_managed_label_action": "reconcile-via-1962-before-terminal" if duplicate_review.create_allowed else None,
-        "terminal_success_requires_label_convergence": duplicate_review.create_allowed,
-        "reconciliation_owner": "#1962",
-        "implementation_authorized": False,
-        "merge_authorized": False,
-        "closure_authorized": False,
-        "external_write_authorized": False,
-        "side_effects_performed": False,
-    }
+    if not duplicate_review.create_allowed:
+        return _build_plan(
+            repository=repository,
+            duplicate_review=duplicate_review,
+            labels=(),
+            create_allowed=False,
+            next_operation=duplicate_review.next_operation,
+            reason_codes=duplicate_review.reason_codes,
+        )
+    try:
+        labels = managed_labels_for_create(
+            issue_body,
+            issue_form_path=issue_form_path,
+            label_map_path=label_map_path,
+        )
+    except ValueError as exc:
+        return _build_plan(
+            repository=repository,
+            duplicate_review=duplicate_review,
+            labels=(),
+            create_allowed=False,
+            next_operation="manual-review-classification-required",
+            reason_codes=(
+                *duplicate_review.reason_codes,
+                "connected-create.managed-label-planning-failed",
+            ),
+            classification_denial_detail=str(exc),
+        )
+    return _build_plan(
+        repository=repository,
+        duplicate_review=duplicate_review,
+        labels=labels,
+        create_allowed=True,
+        next_operation=duplicate_review.next_operation,
+        reason_codes=duplicate_review.reason_codes,
+    )
 
 
 def create_connected_issue_for_host(
