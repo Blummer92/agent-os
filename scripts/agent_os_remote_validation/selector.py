@@ -468,7 +468,7 @@ def select_validation_plan(
 
     def documentation_without_focused_owner(path: str) -> bool:
         return (
-            path.startswith(doc_prefixes)
+            (path == "CHANGELOG.md" or path.startswith(doc_prefixes))
             and path.endswith(doc_suffixes)
             and not _focused_matches(path, focused_rules)
         )
@@ -489,7 +489,7 @@ def select_validation_plan(
             matched_rules.update(name for name, _ in path_matches)
             matched_commands.extend(path_matches[0][1])
             continue
-        if path.startswith(doc_prefixes) and path.endswith(doc_suffixes):
+        if (path == "CHANGELOG.md" or path.startswith(doc_prefixes)) and path.endswith(doc_suffixes):
             covered.add(path)
     if matched_commands and len(covered) == len(paths):
         commands = _apply_subsumption(
