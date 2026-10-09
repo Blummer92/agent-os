@@ -43,11 +43,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .placement_receipts import load_placement_records
+from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
 
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
-QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v1"
+# v2 (#3416): verified evidence now includes the heading keep-with-next
+# check, so v1 evidence recorded before that rule is never recovered.
+QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v2"
 
 # Default directory for durable terminal-QA evidence (mirrors the
 # placement-receipts default; the CLI overrides it with --qa-evidence-dir).
@@ -62,6 +65,7 @@ QA_STATE_CONTENT_MISMATCH = "content-mismatch"
 QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
+QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
 QA_STATE_ARTIFACT_CONFLICT = "artifact-conflict"
@@ -80,6 +84,7 @@ _STATE_SEVERITY = {
     QA_STATE_TOKEN_UNRESOLVED: 10,
     QA_STATE_CONTENT_MISSING: 10,
     QA_STATE_CONTENT_MISMATCH: 10,
+    QA_STATE_PAGINATION_UNVERIFIED: 10,
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
@@ -98,6 +103,10 @@ _TOKEN_RE = re.compile(r"\{\{[^{}\n]*\}\}")
 
 # Cap on token findings listed per artifact; the count is always exact.
 _MAX_TOKEN_FINDINGS = 10
+
+# Cap on headings listed in the #3416 pagination finding; the count is
+# always exact.
+_MAX_HEADING_DETAILS = 10
 
 
 class ArtifactInaccessibleError(RuntimeError):
@@ -269,6 +278,7 @@ class ArtifactObservation:
     image_element_ids: tuple[str, ...] = ()
     slide_texts: tuple[str, ...] = ()  # per-slide normalized text; () for docs
     observed_at: str = ""
+    headings: tuple[HeadingParagraph, ...] = ()  # #3416; () for slides
 
 
 @dataclass(frozen=True)
@@ -467,9 +477,11 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
             f"artifact-conflict: readback for {artifact_id} returned a "
             f"different {artifact_type} artifact {echoed}"
         )
+    headings: tuple[HeadingParagraph, ...] = ()
     if artifact_type == "docs":
         full_text, image_ids = _docs_text_and_images(resource)
         slide_texts: tuple[str, ...] = ()
+        headings = heading_paragraphs(resource)
     else:
         slide_texts_list, image_ids = _slides_text_and_images(resource)
         slide_texts = tuple(slide_texts_list)
@@ -483,6 +495,7 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
         image_element_ids=tuple(image_ids),
         slide_texts=slide_texts,
         observed_at=_utc_now(),
+        headings=headings,
     )
 
 
@@ -570,6 +583,28 @@ def _evaluate_content(
                     )
                 )
     return findings
+
+
+def _evaluate_pagination(observation: ArtifactObservation) -> list[QAFinding]:
+    """#3416: every worksheet heading must keep with its following content."""
+    unkept = [heading for heading in observation.headings if not heading.keep_with_next]
+    if not unkept:
+        return []
+    return [
+        _fail(
+            "qa-heading-keep-with-next-missing", QA_STATE_PAGINATION_UNVERIFIED,
+            f"{len(unkept)} worksheet heading(s) lack an effective keepWithNext "
+            "and can be stranded at the bottom of a page, apart from their "
+            "section.",
+            count=len(unkept),
+            headings=[
+                {"start_index": heading.start_index,
+                 "named_style_type": heading.named_style_type,
+                 "text": heading.text[:80]}
+                for heading in unkept[:_MAX_HEADING_DETAILS]
+            ],
+        )
+    ]
 
 
 def _evaluate_visuals(
@@ -829,6 +864,7 @@ def evaluate_artifact_qa(
             expectations=expectations.for_artifact(artifact_type),
         )
     )
+    findings.extend(_evaluate_pagination(observation))
     findings.extend(
         _evaluate_visuals(
             artifact_type=artifact_type,

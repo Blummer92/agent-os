@@ -30,7 +30,7 @@ Excluded unless separately authorized:
 Reference this file from issues, templates, overlays, and shared standards when
 the same excluded-surface list would otherwise be repeated.
 
-This file restates existing authorization boundaries. It does not authorize work,
+Managed GitHub issue `status:*` labels are non-authoritative readiness projections, not governed Notion/Sheets/Drive readiness fields. Their correction remains a GitHub write requiring the existing GitHub Service Agent label-mutation authorization and canonical readback; a label alone cannot establish or erase a substantive owner decision. Unknown or conflicting labels still fail closed.\n\nThis file restates existing authorization boundaries. It does not authorize work,
 replace live verification, or create a new governance mechanism.
 
 For protected settings, `separately authorized` means the exact mutation needs

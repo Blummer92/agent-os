@@ -314,6 +314,39 @@ def test_connected_issue_creation_tool_missing_admission_fails_closed() -> None:
     assert result["next_operation"] == "manual-review-duplicate-admission-required"
 
 
+# #3092 regression at the real host-consumed boundary: a #3088/#3412-shaped
+# free-form host body (no canonical tiered metadata) must come back as a
+# governed manual-review denial -- never as a raised tool error the host can
+# route around by creating natively with labels omitted.
+FREEFORM_HOST_BODY_3092 = """## Observed reproduction (2026-10-08)
+The user requested `Work on 3361`. The flow fetched the correct open issue
+but focused on a historical dependency, reported it resolved, and stopped
+without implementing the selected work.
+
+## Expected behavior
+Preserve the explicitly selected canonical issue through all dependency checks.
+
+## Actual behavior
+Dependency verification became the final outcome. No implementation was produced.
+"""
+
+
+def test_3092_connected_issue_creation_tool_denies_freeform_body_without_raising() -> None:
+    result = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=FREEFORM_HOST_BODY_3092,
+    )
+    assert result["create_allowed"] is False
+    assert result["duplicate_review_disposition"] == "MANUAL_REVIEW"
+    assert result["next_operation"] == "manual-review-duplicate-admission-required"
+    assert result["proposed_labels"] == []
+    assert result["required_managed_label_readback"] == []
+    assert result["post_create_readback_required"] is False
+    assert result["post_create_reconciliation_required_on_mismatch"] is False
+    assert result["terminal_success_requires_label_convergence"] is False
+    assert result["side_effects_performed"] is False
+
+
 def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
     result = mcp_server.admit_agent_os_primary_pr_creation_tool(
         issue_number=2609,

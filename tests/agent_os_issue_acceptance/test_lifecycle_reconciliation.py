@@ -387,3 +387,163 @@ def test_equivalent_supplied_evidence_is_deterministic_and_authority_preserving(
     assert ra.merge_authorization is current.merge_authorization.state
     assert ra.closure_authorization is current.closure_authorization.state
     assert ra.external_write_authorization is current.external_write_authorization.state
+
+
+def test_3448_canonical_ready_with_stale_label_requests_governed_repair():
+    """Resolved readiness permits label reconciliation without new owner approval."""
+    current = state(
+        readiness=ReadinessState.READY,
+        observed_labels=("status:needs-decision",),
+    )
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    label_action = next(
+        item for item in result.actions if item.reason_code == "lifecycle.status-label-stale"
+    )
+    assert label_action.category is ActionCategory.GOVERNED_MUTATION
+    assert label_action.expected == "status:ready"
+    assert label_action.admission_result_id is None
+    assert "authorization.lifecycle-admission-required" in result.reason_codes
+    assert not any(item.category is ActionCategory.MANUAL_DECISION for item in result.actions)
+
+
+def test_3448_unresolved_readiness_still_forces_manual_decision():
+    """Current implementation authority cannot silently resolve readiness."""
+    current = state(
+        readiness=ReadinessState.NEEDS_DECISION,
+        observed_labels=("status:needs-decision",),
+    )
+    snap = snapshot(status="status:needs-decision", value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    assert len(result.actions) == 1
+    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
+
+
+def test_3409_merged_pr_open_issue_authorized_closure_issues_governed_mutations():
+    # #3409 reproduction (#3369/#3376): the primary implementation PR merged,
+    # the issue stayed open with `status:ready`, and the owner separately
+    # authorized closure. With closure authority and both admissions admitted,
+    # reconciliation must plan the governed close AND the stale label repair,
+    # never invent authority and never auto-close without it.
+    current = state(claims=(claim(value="merged"),), closure=AuthorizationState.AUTHORIZED)
+    snap = snapshot(status="status:ready", value="ready", merged=True)
+    close_admission = LifecycleMutationAdmissionResult(
+        requested_mutation="close-issue", admitted=True, status=AdmissionStatus.ADMITTED,
+        reason_codes=(), details=(), authorization_id=current.closure_authorization.evidence_id,
+        snapshot_id=snap.snapshot_id,
+    )
+    result = reconcile_lifecycle(input_for(
+        current, lifecycle_snapshot=snap, current_pull_request=pr(value=PullRequestState.MERGED),
+        admissions=(admission_for(snap), close_admission),
+    ))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    assert "lifecycle.merged-pr-open-issue" in result.reason_codes
+    assert "authorization.closure-required" not in result.reason_codes
+    assert "authorization.lifecycle-admission-required" not in result.reason_codes
+    close = next(item for item in result.actions if item.reason_code == "lifecycle.merged-pr-open-issue")
+    assert close.category is ActionCategory.GOVERNED_MUTATION
+    assert close.required_mutation == "close-issue"
+    assert close.authorization_id == current.closure_authorization.evidence_id
+    assert close.admission_result_id == close_admission.result_id
+    assert (close.observed, close.expected) == ("open", "closed")
+    label = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert label.category is ActionCategory.GOVERNED_MUTATION
+    assert label.required_mutation == "replace-lifecycle-labels"
+    assert (label.observed, label.expected) == ("status:ready", "none")
+    assert label.admission_result_id is not None
+    assert result.side_effects_performed is False
+
+
+def test_3409_stale_ready_cleanup_proceeds_while_closure_awaits_authority():
+    # #3409 (#3369/#3376 pre-authorization): the label-repair admission is
+    # admitted but closure authority is absent. The stale `status:ready`
+    # repair must still be planned as a governed mutation while closure stays
+    # an explicit pending manual decision; the issue is preserved, never
+    # auto-closed.
+    current = state(claims=(claim(value="merged"),))
+    snap = snapshot(status="status:ready", value="ready", merged=True)
+    label_admission = admission_for(snap)
+    result = reconcile_lifecycle(input_for(
+        current, lifecycle_snapshot=snap, current_pull_request=pr(value=PullRequestState.MERGED),
+        admissions=(label_admission,),
+    ))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    label = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert label.category is ActionCategory.GOVERNED_MUTATION
+    assert label.admission_result_id == label_admission.result_id
+    assert (label.observed, label.expected) == ("status:ready", "none")
+    close = next(item for item in result.actions if item.reason_code == "lifecycle.merged-pr-open-issue")
+    assert close.category is ActionCategory.MANUAL_DECISION
+    assert close.required_mutation == "close-issue"
+    assert close.authorization_id is None
+    assert "authorization.closure-required" in result.reason_codes
+    assert result.closure_authorization is AuthorizationState.NOT_AUTHORIZED
+    assert not any(
+        item.category is ActionCategory.GOVERNED_MUTATION and item.required_mutation == "close-issue"
+        for item in result.actions
+    )
+
+
+def test_3409_merged_pr_open_issue_without_stale_labels_still_surfaces_closure_pending():
+    # #3409 (#3362/#3364): the implementation PR merged and the linked issue
+    # stayed open with no stale readiness. Reconciliation must still surface
+    # the explicit closure pending disposition instead of silently leaving
+    # the completed issue open.
+    current = state(claims=(claim(value="merged"),), observed_labels=())
+    snap = snapshot(status=None, value="ready", merged=True)
+    result = reconcile_lifecycle(input_for(
+        current, lifecycle_snapshot=snap, current_pull_request=pr(value=PullRequestState.MERGED),
+    ))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    assert "lifecycle.status-label-stale" not in result.reason_codes
+    assert "lifecycle.merged-pr-open-issue" in result.reason_codes
+    assert "authorization.closure-required" in result.reason_codes
+    close = next(item for item in result.actions if item.reason_code == "lifecycle.merged-pr-open-issue")
+    assert close.category is ActionCategory.MANUAL_DECISION
+    assert close.required_mutation == "close-issue"
+    assert close.authorization_id is None
+    assert (close.observed, close.expected) == ("open", "closed")
+
+
+def test_3377_closed_completed_issue_stale_ready_repairs_labels_without_close_mutation():
+    # #3409 additional reproduction (#3377/#3379): the merged PR auto-closed
+    # the issue as completed but `status:ready` survived. Label cleanup is an
+    # independent operation from closure: no close-issue mutation and no
+    # open-issue close reasons may appear alongside the label repair.
+    current = state(
+        issue_state=IssueState.CLOSED,
+        terminal=TerminalDisposition.COMPLETED,
+        claims=(claim(value="merged"),),
+    )
+    snap = snapshot(status="status:ready", value="none", issue_state="closed")
+    label_admission = admission_for(snap)
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, admissions=(label_admission,)))
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    assert "lifecycle.status-label-stale" in result.reason_codes
+    assert "lifecycle.merged-pr-open-issue" not in result.reason_codes
+    assert "lifecycle.terminal-open-issue" not in result.reason_codes
+    assert not any(item.required_mutation == "close-issue" for item in result.actions)
+    label = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert label.category is ActionCategory.GOVERNED_MUTATION
+    assert label.required_mutation == "replace-lifecycle-labels"
+    assert (label.observed, label.expected) == ("status:ready", "none")
+    assert label.admission_result_id == label_admission.result_id
+
+
+def test_3409_post_mutation_readback_converges_consistent():
+    # #3409 "verify both canonical issue state and labels": after the governed
+    # close and label repairs are applied, reconciling the fresh canonical
+    # evidence must converge with no remaining actions.
+    current = state(
+        issue_state=IssueState.CLOSED,
+        terminal=TerminalDisposition.COMPLETED,
+        observed_labels=(),
+        claims=(claim(value="merged"),),
+    )
+    snap = snapshot(status=None, value="none", issue_state="closed")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.CONSISTENT
+    assert not result.actions
+    assert not result.reason_codes

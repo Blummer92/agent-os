@@ -19,7 +19,13 @@ from instructional_workflow_contracts.current_curriculum_state import (
 )
 
 from .notion_asset_evidence_projection import (
+    CANONICAL_UNIT_PROPERTY as _CANONICAL_UNIT_PROPERTY,
+)
+from .notion_asset_evidence_projection import (
     REUSABLE_ACROSS_UNITS_PROPERTY as _REUSABLE_ACROSS_UNITS_PROPERTY,
+)
+from .notion_asset_evidence_projection import (
+    VISUAL_ASSET_LIBRARY_PROPERTIES as _VISUAL_ASSET_LIBRARY_PROPERTIES,
 )
 from .notion_asset_evidence_projection import (
     project_notion_asset_page,
@@ -64,6 +70,19 @@ class CurriculumReadStep:
 # governed property the coursewide read filter selects on.
 REUSABLE_ACROSS_UNITS_PROPERTY = _REUSABLE_ACROSS_UNITS_PROPERTY
 COURSEWIDE_SCOPE = "coursewide"
+
+
+# #2816: governed per-source filter vocabulary. A provider filter may only
+# name a property the resolved source's governed vocabulary exposes
+# (owned by the #3254 projection module). Dispatching a filter on any other
+# property provably 400s at the provider — live Notion validation_error on
+# the coursewide "Reusable Across Units?" filter, run 37845400763 — so it
+# fails closed here with a bounded reason instead of reaching the provider.
+# The relation-first unit read is unaffected: "Canonical Unit" is in the
+# Visual Asset Library vocabulary.
+_SOURCE_FILTER_VOCABULARY: dict[str, frozenset[str]] = {
+    VISUAL_ASSETS: _VISUAL_ASSET_LIBRARY_PROPERTIES,
+}
 
 
 @dataclass(frozen=True)
@@ -177,13 +196,27 @@ def orchestrate_curriculum_evidence(
             "max_results": MAX_RESULTS,
         }
         if step.relation_first:
+            _require_filter_property(
+                step.logical_source, _CANONICAL_UNIT_PROPERTY, filter_kind="relation-first"
+            )
             payload["relation_filter"] = {
-                "property": "Canonical Unit",
+                "property": _CANONICAL_UNIT_PROPERTY,
                 "contains_page_id": _compact_notion_id(provider_page_id),
             }
         elif step.reuse_scope == COURSEWIDE_SCOPE:
-            # #3253: governed coursewide selection on the Icon System
-            # "Reusable Across Units?" checkbox — never a unit relation.
+            # #2816: never dispatch a provider filter on a property the
+            # resolved source does not expose. "Reusable Across Units?" is
+            # an Icon System checkbox (#3253); the Visual Asset Library
+            # schema does not carry it, and Notion 400s the filter. This
+            # fails closed with a bounded reason instead of sending a query
+            # the provider provably rejects. Coursewide eligibility itself
+            # is not removed: the step stays in the plan, and the governed
+            # scope-field decision remains owned by #3253/#3254.
+            _require_filter_property(
+                step.logical_source,
+                REUSABLE_ACROSS_UNITS_PROPERTY,
+                filter_kind="coursewide",
+            )
             payload["property_filter"] = {
                 "property": REUSABLE_ACROSS_UNITS_PROPERTY,
                 "checkbox": {"equals": True},
@@ -273,6 +306,30 @@ def _verified_identity(value: Mapping[str, object], logical_source: str) -> dict
         if not isinstance(data_source_id, str) or not data_source_id.strip():
             raise CurriculumReadError(f"missing data-source identity for {logical_source}")
     return identity
+
+
+def _require_filter_property(
+    logical_source: str, property_name: str, *, filter_kind: str
+) -> None:
+    """Fail closed when a provider filter names a property the source cannot answer.
+
+    The #3254 projection module owns the governed per-source property
+    vocabulary. A filter on a property outside the resolved source's
+    vocabulary provably fails at the provider, so it never dispatches: the
+    read fails closed here with a bounded, greppable reason instead of a
+    provider 400.
+    """
+    vocabulary = _SOURCE_FILTER_VOCABULARY.get(logical_source)
+    if vocabulary is None:
+        raise CurriculumReadError(
+            f"filter-property-unavailable: no governed filter vocabulary for {logical_source!r}"
+        )
+    if property_name not in vocabulary:
+        raise CurriculumReadError(
+            f"filter-property-unavailable: {filter_kind} filter names {property_name!r} "
+            f"but the {logical_source} source vocabulary does not expose it "
+            "(governed scope-field decision: #3253/#3254)"
+        )
 
 
 def _provider_failure_detail(value: Mapping[str, object]) -> str:

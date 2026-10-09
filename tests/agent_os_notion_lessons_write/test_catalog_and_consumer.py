@@ -10,42 +10,64 @@ from agent_memory_context_manager.coding_knowledge_selection import CodingKnowle
 from agent_memory_context_manager.lesson_activation_bridge import normalize_lesson_row, LessonActivationSkip
 from agent_memory_context_manager.lesson_preflight import consume_lesson_preflight
 from scripts.agent_os_notion_lessons_write.admission import admit, AdmittedRequest, WriteBlocked
-from scripts.agent_os_notion_lessons_write.catalog import LESSONS, REQUEST_ID, lesson_for
+from scripts.agent_os_notion_lessons_write.catalog import (
+    LESSONS, LL93_METADATA_REQUEST_ID, PROTECTED_FIELDS, REQUEST_ID, lesson_for, target_for,
+)
 from scripts.agent_os_notion_lessons_write.writer import execute, properties
-from tests.agent_os_notion_lessons_write.test_writer import Client, CONTEXT, PAGE_ID, REVISION, event, page
+from tests.agent_os_notion_lessons_write.test_writer import Client, CONTEXT, event, page
+
+
+def entry(properties, target=None):
+    return {'target_lesson_id': target, 'properties': properties}
 
 
 class CatalogTests(unittest.TestCase):
     def test_second_reviewed_request_uses_same_admission_and_writer(self):
-        lesson = {**lesson_for(REQUEST_ID), 'Lesson Learned': 'Synthetic reviewed second lesson'}
-        with patch('scripts.agent_os_notion_lessons_write.catalog.LESSONS', {**LESSONS, 'second-lesson': lesson}):
-            request = admit(event('/agent-os notion-write second-lesson'), **CONTEXT)
-            existing = page()
-            for name, prop in properties('second-lesson').items():
-                existing['properties'][name] = {'type': next(iter(prop)), **prop}
-            client = Client(existing)
+        # #3417 onboarding: a reviewed catalog entry needs no executor change.
+        lesson = {**lesson_for(REQUEST_ID), 'Lesson Learned': 'Synthetic reviewed second lesson',
+                  'Area': 'Testing', 'Learning Type': 'Testing lesson'}
+        with patch('scripts.agent_os_notion_lessons_write.catalog.LESSONS', {**LESSONS, 'second-lesson': entry(lesson)}):
+            request = admit(event('/agent-os notion-write second-lesson', number=4000, state='closed'), **CONTEXT)
+            client = Client()
             result = execute(request, client)
-            self.assertEqual(result['request_id'], 'second-lesson')
-            self.assertEqual(result['status'], 'unchanged')
-            self.assertNotIn('write', client.calls)
-            existing['properties']['What Happened']['rich_text'] = [{'type': 'text', 'text': {'content': 'Earlier'}}]
-            client = Client(existing)
-            request = admit(event('/agent-os notion-write second-lesson ' + PAGE_ID + ' ' + REVISION), **CONTEXT)
-            result = execute(request, client)
-            self.assertEqual(result['status'], 'persisted')
+            self.assertEqual((result['request_id'], result['status']), ('second-lesson', 'persisted'))
             self.assertEqual(client.calls.count('write'), 1)
-            self.assertEqual(client.calls[-2:], ['write', 'get'])
+            self.assertEqual(set(client.sent[0]), set(lesson))
+            client.rows = [deepcopy(client.page)]
+            for name, prop in properties('second-lesson').items():
+                client.rows[0]['properties'][name] = {'type': next(iter(prop)), **deepcopy(prop)}
+            client.page = deepcopy(client.rows[0])
+            self.assertEqual(execute(request, client)['status'], 'unchanged')
+            self.assertEqual(client.calls.count('write'), 1)
+
+    def test_shipped_catalog_entries_are_valid_and_activation_free(self):
+        for request_id in LESSONS:
+            with self.subTest(request_id=request_id):
+                self.assertFalse(PROTECTED_FIELDS & set(lesson_for(request_id)))
+        self.assertEqual(target_for(LL93_METADATA_REQUEST_ID), 'LL-93')
+        self.assertIsNone(target_for(REQUEST_ID))
 
     def test_unknown_or_unreviewed_payload_is_refused(self):
         for command in ('/agent-os notion-write unknown', '/agent-os notion-write https://other.example',
                         '/agent-os notion-write ' + REQUEST_ID + ' private student details'):
             with self.subTest(command=command), self.assertRaises(WriteBlocked):
                 admit(event(command), **CONTEXT)
-        for lesson in ({**lesson_for(REQUEST_ID), 'Approval': True},
-                       {**lesson_for(REQUEST_ID), 'Guardrail': 'x' * 513}):
-            with patch('scripts.agent_os_notion_lessons_write.catalog.LESSONS', {'invalid': lesson}):
+        base = dict(lesson_for(REQUEST_ID))
+        invalid = {
+            'governed': entry({**base, 'Approval': True}),
+            'oversized': entry({**base, 'Guardrail': 'x' * 513}),
+            'status': entry({**base, 'Status': 'Applied'}),
+            'surface': entry({**base, 'Surface Before Work?': True}),
+            'activation-update': entry({'Status': 'Applied'}, 'LL-93'),
+            'foreign-link': entry({**base, 'Source Link': 'https://example.com/x'}),
+            'missing-narrative': entry({'Area': 'Testing'}),
+            'bad-target': entry({'Area': 'Testing'}, 'lesson-93'),
+            'shape': {**entry(base), 'extra': 1},
+        }
+        for name, value in invalid.items():
+            with self.subTest(name=name), patch('scripts.agent_os_notion_lessons_write.catalog.LESSONS', {name: value}):
                 client = Client()
-                self.assertEqual(execute(AdmittedRequest(1, request_id='invalid'), client)['status'], 'blocked')
+                self.assertEqual(execute(AdmittedRequest(1, request_id=name), client)['status'], 'blocked')
                 self.assertEqual(client.calls, [])
 
 
@@ -99,3 +121,20 @@ class ConsumerTests(unittest.TestCase):
         row['properties']['Surface Before Work?']['checkbox'] = True
         row['properties']['Source Link']['url'] = None
         self.assertNotEqual(consume_lesson_preflight(request, (normalize_lesson_row(row),)).lesson_retrieval_status.value, 'sufficient')
+
+
+class DescriptiveMetadataIsNotActivationTests(unittest.TestCase):
+    def test_reviewed_ll93_metadata_still_requires_governed_status_and_surface(self):
+        row = page(metadata=dict(lesson_for(LL93_METADATA_REQUEST_ID)))
+        for name in ('Lesson Learned', 'What Happened', 'What To Do Next Time', 'Guardrail'):
+            prop = row['properties'][name]
+            for text in prop[prop['type']]:
+                text['plain_text'] = text['text']['content']
+        result = normalize_lesson_row(row)
+        self.assertIsInstance(result, LessonActivationSkip)
+        self.assertEqual(result.reason, 'ambiguous-status-vocabulary')
+        # Even with an owner-set Status, Surface Before Work? stays governed.
+        row['properties']['Status'] = {'type': 'select', 'select': {'name': 'New'}}
+        evidence = normalize_lesson_row(row)
+        self.assertFalse(evidence.surface_before_work)
+        self.assertEqual(evidence.canonical_github_refs, ('https://github.com/Blummer92/agent-os/issues/3305',))

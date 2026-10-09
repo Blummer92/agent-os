@@ -30,12 +30,17 @@ time. Confirm the live schema before writing if it may have changed.
 - `Source Link` (url)
 - `Follow-up Needed?` (checkbox)
 - `Surface Before Work?` (checkbox)
+- `Usage Count`, `Recurrence Count` (number) — present on the live data
+  source (verified 2026-10-08, #3418). No Agent OS code writes them; usage is
+  measured from GitHub lesson receipts, and any count reconciliation is a
+  reviewed per-action owner write, never automatic.
 - `Related Task`, `Related Automation` (relations) — set only if a
   matching record already exists; do not create one just to link it.
 
 ## Version
-0.1.3
+0.1.4
 
 ## Changelog
+- 0.1.4 documents the live `Usage Count` and `Recurrence Count` number properties (#3418) and that they are not automatically written.
 - 0.1.3 pins the live-verified `Lesson ID` (unique ID) and `Status` (select)
   property types and their query filter types (#3032).

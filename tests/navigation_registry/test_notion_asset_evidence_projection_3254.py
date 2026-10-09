@@ -15,6 +15,7 @@ from instructional_workflow_contracts.material_type_vocabulary import map_materi
 from navigation_registry.connectors.curriculum_evidence_orchestrator import (
     CANONICAL_UNIT,
     VISUAL_ASSETS,
+    CurriculumReadError,
     CurriculumReadRequest,
     orchestrate_curriculum_evidence,
 )
@@ -111,27 +112,21 @@ def test_v2_field_table_names_every_source_and_failure():
 # producer chain (orchestrator coursewide step -> assembler admission).
 # ---------------------------------------------------------------------------
 
-def test_eight_coursewide_icons_reach_candidate_filtering():
-    """#3253 matrix acceptance: the 8 approved coursewide icons survive real
-    evidence assembly via the coursewide read step and are admitted as
-    candidates. No matching_asset_exists: false for coursewide assets."""
+def test_eight_coursewide_icons_fail_closed_before_unanswerable_dispatch():
+    """#2816: the 8 approved coursewide icons can no longer be reached via a
+    provider checkbox filter against the Visual Asset Library — that filter
+    provably 400s at Notion (run 37845400763: "Could not find property with
+    name or id: Reusable Across Units?"). The read fails closed with the
+    bounded schema-mismatch reason before any dispatch; icon projection
+    itself stays covered at the projection level."""
     icons = _fixture("coursewide_icons_8.json")
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit=_unit(),
-        resolve_identity=_identity,
-        execute_read=_reader_for({"coursewide": icons}),
-    )
-    asset_ids = [item["asset_id"] for item in packet["asset_evidence"]]
-    assert len(asset_ids) == 8
-    assert asset_ids == sorted(asset_ids)
-    for item in packet["asset_evidence"]:
-        assert item["reuse_scope"] == "coursewide"
-        assert item["approved_for_requested_use"] is True
-        assert "library_reference" in item
-    # None are scope-excluded; none are incomplete.
-    assert packet.get("scope_excluded_asset_ids", []) == []
-    assert "incomplete_asset_evidence" not in packet
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=_unit(),
+            resolve_identity=_identity,
+            execute_read=_reader_for({"coursewide": icons}),
+        )
 
 
 def test_raw_page_join_without_drive_binding_never_admits():
