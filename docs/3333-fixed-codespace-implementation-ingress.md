@@ -70,3 +70,24 @@ authorization and qualified host configuration. This increment cannot close
 Revert only the new fixed ingress, dedicated consumer, workflow gating, and
 their tests/docs. Existing transport, developer-validation, diagnostic,
 discovery, GCE control, publication and CI remain unchanged.
+
+## Production host provider compatibility (#1287)
+
+The existing `ProductionHostBootstrap.governed_resume_bindings(...)` composes
+`build_production_governed_resume_bindings(...)`, which owns the descriptor
+loader, `CanonicalCurrentInvocationResolver`, and `HostLocalLeaseAdapter`.
+It requires host-controlled `AGENT_OS_CHECKPOINT_STORE_ROOT`, repository and
+workspace roots, a lease directory, current GitHub authorization transport,
+and live repository evidence readers. These dependencies are not provided by
+the issue-comment Actions runner.
+
+The existing composition reconstructs a Scheduler `SingleIssuePilotInput`;
+it is not automatically the admission source for ordinary ChatGPT coding
+missions. Before wiring production dispatch, verify that the actual admitted
+mission is compatible with that model, including the exact issue, source SHA,
+execution identity, and lease. Never create synthetic authorization records,
+lease observations, or a second persistence store to make the adapter runnable.
+
+The consumer now also rejects a partial host binding with
+`canonical-host-binding-incomplete`. This is a repository-side safety check,
+not a claim that the live host provider is connected.
