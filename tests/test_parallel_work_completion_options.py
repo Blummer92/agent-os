@@ -61,6 +61,7 @@ def test_fixture_contains_fail_closed_exclusions() -> None:
         "exclude-blocked",
         "exclude-active-lineage",
         "exclude-conflicting-scope",
+        "exclude-duplicate-owner",
         "exclude-stale",
     }
 
