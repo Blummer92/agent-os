@@ -29,13 +29,9 @@ class Compatibility(str, Enum):
 class RiskCategory(str, Enum):
     ARCHITECTURE = "architecture"
     IMPLEMENTATION = "implementation"
-    DEPENDENCY = "dependency"
     VALIDATION = "validation"
-    COMPUTE = "compute"
     DOCUMENTATION = "documentation"
     GOVERNANCE = "governance"
-    SECURITY = "security"
-    TECHNICAL_DEBT = "technical-debt"
 
 
 class RiskSeverity(str, Enum):
@@ -56,9 +52,7 @@ class RiskStatus(str, Enum):
 class RecommendationAction(str, Enum):
     UPDATE_EXISTING_ISSUE = "update-existing-issue"
     UPDATE_ROADMAP = "update-roadmap"
-    CREATE_ADR = "create-adr"
     CREATE_NEW_ISSUE = "create-new-issue"
-    CLOSE_OR_MERGE_DUPLICATE = "close-or-merge-duplicate"
     NEEDS_DECISION = "needs-decision"
     NO_ACTION = "no-action"
 

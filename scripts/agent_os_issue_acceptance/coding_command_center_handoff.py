@@ -28,7 +28,6 @@ CODING_COMMAND_CENTER_HANDOFF_SCHEMA_VERSION = "1.0"
 MAX_TEXT_BYTES = 4096
 MAX_REASON_CODES = 32
 MAX_SERIALIZED_BYTES = 64 * 1024
-_UNAVAILABLE = "unavailable"
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -245,30 +244,6 @@ def serialize_coding_command_center_handoff(
         raise TypeError("handoff must be exact CodingCommandCenterHandoff")
     handoff.__post_init__()
     return handoff.to_dict()
-
-
-def render_coding_command_center_handoff(
-    handoff: CodingCommandCenterHandoff,
-) -> str:
-    """Render #926-compatible operator ordering without adding new semantics."""
-    payload = serialize_coding_command_center_handoff(handoff)
-    route = payload["executor_route"] or _UNAVAILABLE
-    validation = payload["validation_classification"] or _UNAVAILABLE
-    blocker = payload["primary_blocker"] or _UNAVAILABLE
-    target = f"{payload['repository']}#{payload['issue_number']}"
-    lines = (
-        f"Current target: {target}",
-        f"Smallest safe next action: {payload['smallest_next_action']}",
-        f"Route / escalation reason: {route}",
-        f"Validation or blocker evidence: validation={validation}; blocker={blocker}",
-        f"Handoff target: {payload['handoff_target'] or _UNAVAILABLE}",
-        f"Canonical state: {payload['canonical_state_reference']}",
-        f"Source revision: {payload['source_revision']}",
-        "authority_created: false",
-        "side_effects_performed: false",
-        "notion_write_performed: false",
-    )
-    return "\n".join(lines)
 
 
 def _state_next_action(state: IssueOperationalState) -> str:

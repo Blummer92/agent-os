@@ -11,7 +11,6 @@ from scripts.agent_os_issue_acceptance.typed_subject_approval import (
     TYPED_SUBJECT_APPROVAL_SCHEMA_VERSION,
     TYPED_SUBJECT_PROJECTION_SCHEMA_VERSION,
     TypedSubjectReference,
-    record_typed_subject_approval_decision,
     validate_typed_subject_reference,
 )
 

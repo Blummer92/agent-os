@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
@@ -186,42 +186,6 @@ def classify_validation_failure(
         authorization_boundary=boundary,
         evidence_id=evidence_id,
     )
-
-
-def serialize_validation_failure_classification(
-    result: ValidationFailureClassificationResult,
-) -> str:
-    if not isinstance(result, ValidationFailureClassificationResult):
-        raise TypeError("result must be ValidationFailureClassificationResult")
-    payload = asdict(result)
-    payload["classification"] = result.classification.value
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
-
-
-def render_validation_failure_classification(
-    result: ValidationFailureClassificationResult,
-) -> str:
-    if not isinstance(result, ValidationFailureClassificationResult):
-        raise TypeError("result must be ValidationFailureClassificationResult")
-    unavailable = "unavailable"
-    sources = ", ".join(result.source_identifiers) or unavailable
-    lines = (
-        f"PR head SHA: {result.pr_head_sha}",
-        f"Comparison main SHA: {result.comparison_main_sha or unavailable}",
-        f"Command: {result.command}",
-        f"Failed subcommand/test/check: {result.failed_requirement or unavailable}",
-        f"Error: {result.error_excerpt or unavailable}",
-        f"Classification: {result.classification.value}",
-        f"Reason: {result.reason}",
-        f"Evidence completeness: {result.evidence_completeness}",
-        f"Source identifiers: {sources}",
-        f"Recommended next action: {result.recommended_next_action}",
-        f"Authorization boundary: {result.authorization_boundary or 'none'}",
-        "repair_authorized: false",
-        "merge_authorized: false",
-        "side_effects_performed: false",
-    )
-    return "\n".join(lines)
 
 
 def _classify(

@@ -9,7 +9,6 @@ import pytest
 from scripts.agent_os_issue_acceptance.github_issue_source import (
     GitHubIssuePageResponse,
     GitHubIssuePageSource,
-    result_to_report,
     scan_connected_issues,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import (
@@ -107,69 +106,6 @@ def test_connected_all_state_passes_requested_state_unchanged_to_reader():
     assert reader.calls == [("Blummer92/agent-os", 1, 50, "all")]
 
 
-def test_report_handoff_preserves_existing_keys_and_adds_state_evidence():
-    reader = FakeReader(
-        {
-            1: GitHubIssuePageResponse(
-                (
-                    _issue(
-                        3,
-                        state="closed",
-                        closed_at="2026-07-21T00:00:00Z",
-                        state_reason="completed",
-                    ),
-                ),
-                None,
-                terminal_page_proven=True,
-            )
-        }
-    )
-
-    result = scan_connected_issues(
-        "Blummer92/agent-os",
-        reader,
-        state=IssueStateFilter.CLOSED,
-        retrieved_at=RETRIEVED_AT,
-        per_page=50,
-    )
-    report = result_to_report(result)
-
-    assert list(report) == [
-        "status",
-        "complete",
-        "page_count",
-        "item_count",
-        "requested_state",
-        "retrieved_at",
-        "source_query",
-        "findings",
-        "reasons",
-        "issues",
-    ]
-    assert report["status"] == "complete"
-    assert report["complete"] is True
-    assert report["page_count"] == 1
-    assert report["item_count"] == 1
-    assert report["requested_state"] == "closed"
-    assert report["retrieved_at"] == RETRIEVED_AT
-    assert report["source_query"] == "repo=Blummer92/agent-os state=closed"
-    assert report["issues"] == [
-        {
-            "issue_number": 3,
-            "title": "Issue 3",
-            "state": "closed",
-            "labels": ["status:ready"],
-            "url": "https://github.com/Blummer92/agent-os/issues/3",
-            "created_at": "2026-07-20T00:00:00Z",
-            "updated_at": "2026-07-20T00:00:03Z",
-            "source_revision": "2026-07-20T00:00:03Z",
-            "closed_at": "2026-07-21T00:00:00Z",
-            "state_reason": "completed",
-        }
-    ]
-    assert reader.calls == [("Blummer92/agent-os", 1, 50, "closed")]
-
-
 def test_source_excludes_pull_request_records_from_issue_endpoint():
     pull_request = dict(_issue(9), pull_request={"url": "example"})
     reader = FakeReader(
@@ -209,12 +145,10 @@ def test_incomplete_page_fails_closed_without_false_exact_total():
         retrieved_at=RETRIEVED_AT,
         source_query="repo=Blummer92/agent-os state=open",
     )
-    report = result_to_report(result)
-
     assert result.status == RetrievalStatus.INCOMPLETE
-    assert report["complete"] is False
-    assert report["item_count"] == 1
-    assert [issue["issue_number"] for issue in report["issues"]] == [1]
+    assert result.complete is False
+    assert result.item_count == 1
+    assert [record.issue_number for record in result.records] == [1]
     assert RetrievalFinding.PAGE_MISSING_NEXT in result.findings
 
 
@@ -314,29 +248,10 @@ def test_invalid_source_configuration_is_rejected():
             state=IssueStateFilter.OPEN,
             per_page=101,
         )
-    with pytest.raises(TypeError):
-        result_to_report(object())
-
-
 def test_response_is_immutable():
     response = GitHubIssuePageResponse((), None)
     with pytest.raises(FrozenInstanceError):
         response.complete = False
-
-
-def test_repeated_report_output_is_deterministic():
-    def build_report():
-        reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None, terminal_page_proven=True)})
-        return result_to_report(
-            scan_connected_issues(
-                "Blummer92/agent-os",
-                reader,
-                state=IssueStateFilter.OPEN,
-                retrieved_at=RETRIEVED_AT,
-            )
-        )
-
-    assert build_report() == build_report()
 
 
 def test_adapter_defines_no_write_surface():

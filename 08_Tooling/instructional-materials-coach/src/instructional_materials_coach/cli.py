@@ -15,6 +15,7 @@ from .artifact_content_qa import DEFAULT_QA_EVIDENCE_DIR, TerminalQAExpectations
 from .asset_slot_resolution import resolve_asset_slots
 from .build_resume import DEFAULT_BUILD_RESUME_DIR
 from .build_receipt import build_receipt_record, write_build_receipt_atomic
+from .build_request import compose_governed_build_request
 from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
@@ -531,33 +532,22 @@ def main(argv: list[str] | None = None) -> int:
         # these expectations; metadata-only success is "persisted", never
         # "final".
         slides_requests = tuple(build_slides_replace_requests(content))
-        qa_expectations = TerminalQAExpectations.build_from_requests(
-            idempotency_key=idempotency_key,
-            docs_requests=docs_requests,
-            slides_requests=slides_requests,
-            visual_placements=tuple(visual_placements),
-        )
-        build_input = LiveBuildInput(
-                slides_template_id=args.slides_template, doc_template_id=args.doc_template,
-                target_folder_id=args.target_folder, slides_name=f"{content.title} - Slides",
-                doc_name=f"{content.title} - Worksheet",
-                idempotency_key=idempotency_key,
-                input_fingerprint=idempotency_key,
-                slides_requests=slides_requests,
-                docs_requests=docs_requests,
-                visual_placements=tuple(visual_placements),
-                qa_expectations=qa_expectations,
-            )
-        template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
-        receipt = build_live_materials(
-            build_input,
-            drive_service=drive_service,
-            slides_service=build_slides_service(credentials),
-            docs_service=build_docs_service(credentials),
-            resume_dir=args.resume_dir,
-            placement_transport=placement_transport,
+        composed = compose_governed_build_request(
+            slides_template_id=args.slides_template, doc_template_id=args.doc_template,
+            target_folder_id=args.target_folder, content_title=content.title,
+            idempotency_key=idempotency_key, slides_requests=slides_requests,
+            docs_requests=docs_requests, visual_placements=tuple(visual_placements),
+            resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+        )
+        build_input = composed.build_input
+        template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
+        receipt = build_live_materials(
+            build_input, drive_service=drive_service,
+            slides_service=build_slides_service(credentials),
+            docs_service=build_docs_service(credentials),
+            **composed.builder_options,
         )
         if args.receipt_out:
             write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions))

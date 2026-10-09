@@ -7,7 +7,6 @@ import pytest
 from instructional_workflow_contracts.current_curriculum_state import resolve_current_curriculum_state
 from navigation_registry.connectors import curriculum_execution_surface_router
 from navigation_registry.connectors.curriculum_evidence_orchestrator import (
-    CANONICAL_UNIT,
     MATERIALS,
     MODELING,
     PACKET,
@@ -20,7 +19,6 @@ from navigation_registry.connectors.curriculum_evidence_orchestrator import (
     CurriculumReadStep,
 )
 from navigation_registry.connectors.curriculum_execution_surface_router import (
-    FALLBACK_ROUTE,
     READ_ONLY_ACTIONS,
     CurriculumSurfaceError,
     build_scheduler_fallback_read_executor,
@@ -112,12 +110,15 @@ IMAGES = CurriculumReadRequest("images", "images")
 SLIDES = CurriculumReadRequest("make", "slides", requires_reusable_assets=True)
 
 
-def test_single_governed_route_uses_existing_agent_os_reader() -> None:
+def test_single_governed_route_fails_closed_on_schema_mismatch_2816() -> None:
+    """#2816: the governed reader still uses the single #936 route, but the
+    images read now fails closed with the bounded schema-mismatch reason
+    instead of dispatching the unanswerable checkbox filter."""
     tasks: list[dict[str, object]] = []
-    result = via_agent_os(IMAGES, calls=tasks)
-    assert result["read_route"] == FALLBACK_ROUTE
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES, calls=tasks)
     assert tasks
-    assert set(result) == {"read_route", "curriculum_evidence"}
+    assert {task["action"] for task in tasks} <= READ_ONLY_ACTIONS
 
 
 def test_missing_governed_executor_fails_closed() -> None:
@@ -132,7 +133,11 @@ def test_missing_governed_executor_fails_closed() -> None:
 
 def test_governed_reader_builds_only_canonical_936_read_payloads() -> None:
     tasks: list[dict[str, object]] = []
-    via_agent_os(SLIDES, calls=tasks)
+    # #2816: the coursewide step fails closed before its own dispatch, so the
+    # dispatched payloads below are the canonical-unit read and the
+    # relation-first asset query only.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(SLIDES, calls=tasks)
     actions = {task["action"] for task in tasks}
     assert actions == {"get_page", "query_data_source"}
     assert actions <= READ_ONLY_ACTIONS
@@ -172,8 +177,11 @@ def test_out_of_bound_result_request_fails_closed_before_dispatch() -> None:
     assert tasks == []
 
 
-@pytest.mark.parametrize("request_", [IMAGES, SLIDES, CurriculumReadRequest("improve-modeling"), CurriculumReadRequest("what-is-blocking"), CurriculumReadRequest("make", "worksheet"), CurriculumReadRequest("next-teaching")])
+@pytest.mark.parametrize("request_", [CurriculumReadRequest("improve-modeling"), CurriculumReadRequest("what-is-blocking"), CurriculumReadRequest("make", "worksheet"), CurriculumReadRequest("next-teaching")])
 def test_governed_route_preserves_current_state_semantics(request_: CurriculumReadRequest) -> None:
+    # #2816: images/slides modes carry the coursewide step, which now fails
+    # closed on the schema mismatch; the remaining modes prove the route's
+    # state semantics are otherwise preserved.
     packet = via_agent_os(request_)["curriculum_evidence"]
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
@@ -192,18 +200,22 @@ def test_owner_class_currentness_and_provenance_survive_governed_route() -> None
 
 
 def test_canonical_unit_identity_survives_governed_route() -> None:
-    packet = via_agent_os(IMAGES)["curriculum_evidence"]
+    # #2816: blockers mode carries no asset steps, so the coursewide
+    # schema-mismatch guard does not fire here.
+    packet = via_agent_os(CurriculumReadRequest("what-is-blocking"))["curriculum_evidence"]
     assert packet["canonical_unit"]["stable_id"] == "photography-foundations"
     assert "provider_page_id" not in packet["canonical_unit"]
 
 
-def test_image_request_stays_request_sensitive() -> None:
+def test_image_request_coursewide_step_never_dispatches_unanswerable_filter() -> None:
     tasks: list[dict[str, object]] = []
-    via_agent_os(IMAGES, calls=tasks)
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES, calls=tasks)
     queried = [task["data_source_id"] for task in tasks if task["action"] == "query_data_source"]
-    # #3253: the relation-first and coursewide steps share the one governed
-    # visual-asset source; no other surface is read.
-    assert queried == [f"ds-{VISUAL_ASSETS}", f"ds-{VISUAL_ASSETS}"]
+    # #2816: only the relation-first unit query dispatched; the coursewide
+    # step failed closed before its unanswerable filter could reach the
+    # provider. No other surface is read.
+    assert queried == [f"ds-{VISUAL_ASSETS}"]
     for unrelated in (MODELING, PACKET, MATERIALS, SOURCE_CONTROL, PRODUCTION, UNIT_ALIGNMENT):
         assert f"ds-{unrelated}" not in queried
 
@@ -215,43 +227,46 @@ def test_modeling_request_does_not_reach_packet_or_material_surfaces() -> None:
     assert queried == [f"ds-{MODELING}"]
 
 
-def test_visual_asset_lookup_is_relation_first_in_provider_payload() -> None:
+def test_visual_asset_lookup_stays_relation_first_and_coursewide_fails_closed() -> None:
     tasks: list[dict[str, object]] = []
-    via_agent_os(IMAGES, calls=tasks)
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES, calls=tasks)
     asset_tasks = [task for task in tasks if task.get("data_source_id") == f"ds-{VISUAL_ASSETS}"]
     assert asset_tasks[0]["filter"] == {"property": "Canonical Unit", "relation": {"contains": UNIT_PAGE_COMPACT}}
-    # #3253: the second governed asset query selects on the reusable
-    # checkbox — never a fabricated unit relation, never keyword matching.
-    assert asset_tasks[1]["filter"] == {
-        "property": "Reusable Across Units?",
-        "checkbox": {"equals": True},
-    }
+    # #2816: no dispatched provider payload ever carried the unanswerable
+    # Icon System checkbox filter — never a fabricated unit relation, never
+    # keyword matching, and now never a provider 400 either.
+    assert "Reusable Across Units?" not in repr(tasks)
 
 
-def test_provider_filter_syntax_stays_behind_read_boundary() -> None:
-    packet = via_agent_os(IMAGES)["curriculum_evidence"]
-    rendered = repr(packet)
-    assert "relation_filter" not in rendered
-    assert "contains_page_id" not in rendered
-    assert UNIT_PAGE_COMPACT not in rendered
+def test_provider_filter_syntax_never_reaches_provider_on_mismatch_2816() -> None:
+    tasks: list[dict[str, object]] = []
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES, calls=tasks)
+    rendered = repr(tasks)
+    # The unanswerable checkbox filter was never composed into a provider
+    # payload. (The relation-first query's own filter legitimately carries
+    # the compact unit id — that read still dispatches.)
+    assert "property_filter" not in rendered
+    assert "Reusable Across Units?" not in rendered
 
 
 def test_asset_title_cannot_substitute_for_governed_approval_evidence() -> None:
-    packet = via_agent_os(IMAGES)["curriculum_evidence"]
-    assert "Photography Foundations hero image" not in repr(packet)
-    assert packet["asset_evidence"] == [{"asset_id": "pf-010", "approved_for_requested_use": False, "approved_student_reuse": False, "exists": True, "source_revision": 1, "reuse_scope": "unit-specific", "reuse_status": "unknown"}]
+    tasks: list[dict[str, object]] = []
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES, calls=tasks)
+    # #2816: no evidence packet is produced at all — the read fails closed
+    # before dispatching the unanswerable filter, so a title can never stand
+    # in for governed approval evidence.
+    assert "Photography Foundations hero image" not in repr(tasks)
 
 
 def test_teacher_facing_asset_existence_is_not_production_authority() -> None:
-    packet = via_agent_os(IMAGES)["curriculum_evidence"]
-    state = resolve_current_curriculum_state(packet)
-    assert state.record is not None
-    record = state.record.to_dict()
-    assert record["assets"]["matching_asset_exists"] is True
-    assert record["assets"]["approved_reusable_student_facing_exists"] is False
-    assert "asset-reusable-unavailable" in record["blockers"]
-    assert record["disposition"] == "blocked"
-    assert record["authority"]["production_authorized"] is False
+    # #2816: the images read fails closed on the coursewide schema mismatch
+    # before any asset evidence is normalized, so no existence claim can be
+    # mistaken for production authority.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        via_agent_os(IMAGES)
 
 
 @pytest.mark.parametrize("scheduler_result", [{"status": "failure", "message": "source is not shared with the integration"}, {"status": "retryable", "message": "rate limited", "retry_after": 5.0}, {"status": "", "message": "malformed"}])

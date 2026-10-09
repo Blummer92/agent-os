@@ -27,7 +27,6 @@ from scripts.agent_os_issue_acceptance.coding_command_center_handoff import (
     MAX_SERIALIZED_BYTES,
     CodingCommandCenterEvidence,
     build_coding_command_center_handoff,
-    render_coding_command_center_handoff,
     serialize_coding_command_center_handoff,
 )
 from agent_os_execution_service.executor_routing import (
@@ -430,14 +429,6 @@ def test_malformed_observed_head_is_rejected():
 def test_unavailable_pull_request_is_explicitly_unavailable():
     result = _handoff()
     assert result.pull_request_number is None
-    assert "Handoff target: unavailable" in render_coding_command_center_handoff(result)
-
-
-def test_missing_optional_evidence_remains_explicitly_unavailable_in_rendering():
-    rendered = render_coding_command_center_handoff(_handoff())
-    assert "Route / escalation reason: unavailable" in rendered
-    assert "validation=unavailable" in rendered
-    assert "blocker=unavailable" in rendered
 
 
 # --- no synthesis, no authority --------------------------------------------
@@ -446,8 +437,6 @@ def test_missing_optional_evidence_remains_explicitly_unavailable_in_rendering()
 def test_no_percentage_progress_is_synthesized():
     payload = serialize_coding_command_center_handoff(_handoff(_state(validation_state=ValidationState.PENDING)))
     assert not any("percent" in key or "progress" in key for key in payload)
-    rendered = render_coding_command_center_handoff(_handoff())
-    assert "%" not in rendered
 
 
 def test_projection_creates_no_authority_and_performs_no_side_effects():
@@ -487,7 +476,6 @@ def test_identical_input_produces_identical_deterministic_output():
     assert first == second
     assert first.handoff_id == second.handoff_id
     assert serialize_coding_command_center_handoff(first) == serialize_coding_command_center_handoff(second)
-    assert render_coding_command_center_handoff(first) == render_coding_command_center_handoff(second)
 
 
 def test_different_input_produces_a_different_handoff_identity():
@@ -496,7 +484,7 @@ def test_different_input_produces_a_different_handoff_identity():
     assert baseline.handoff_id != changed.handoff_id
 
 
-def test_render_and_serialization_stay_bounded():
+def test_serialization_stays_bounded():
     result = _handoff(
         executor_route_decision=_route(
         required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
@@ -509,9 +497,6 @@ def test_render_and_serialization_stay_bounded():
     )
     payload = serialize_coding_command_center_handoff(result)
     assert len(repr(payload).encode("utf-8")) < MAX_SERIALIZED_BYTES
-    rendered = render_coding_command_center_handoff(result)
-    assert len(rendered.encode("utf-8")) < MAX_SERIALIZED_BYTES
-    assert len(rendered.splitlines()) == 10
 
 
 def test_oversized_evidence_reference_is_rejected():
@@ -555,29 +540,6 @@ def test_module_performs_no_external_io():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert not {"open", "eval", "exec", "__import__"} & called
-
-
-# --- #926 ordering ----------------------------------------------------------
-
-
-def test_rendering_preserves_required_visible_order():
-    lines = render_coding_command_center_handoff(_handoff()).splitlines()
-    assert lines[0].startswith("Current target:")
-    assert lines[1].startswith("Smallest safe next action:")
-    assert lines[2].startswith("Route / escalation reason:")
-    assert lines[3].startswith("Validation or blocker evidence:")
-    assert lines[4].startswith("Handoff target:")
-    assert lines[5].startswith("Canonical state:")
-    assert lines[6].startswith("Source revision:")
-
-
-def test_rendering_repeats_the_non_authority_declaration():
-    lines = render_coding_command_center_handoff(_handoff()).splitlines()
-    assert lines[-3:] == [
-        "authority_created: false",
-        "side_effects_performed: false",
-        "notion_write_performed: false",
-    ]
 
 
 def test_serialization_rejects_a_foreign_object():
