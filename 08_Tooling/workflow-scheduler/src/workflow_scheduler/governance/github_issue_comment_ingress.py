@@ -58,18 +58,12 @@ _DIAGNOSTIC_RE = re.compile(
     re.ASCII,
 )
 
-_CODESPACE_SMOKE_RE = re.compile(
-    r"/agent-os codespace-smoke (?P<sha>[0-9a-f]{40})", re.ASCII
-)
-CODESPACE_SMOKE_ISSUE = 3333
-
 IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope", "accepted-discovery-envelope", "accepted-runtime-inspection-envelope",
     "accepted-dev-validation-envelope", "accepted-first-publication-activation-envelope",
     "accepted-first-run-validation-envelope", "accepted-notion-read-envelope",
     "accepted-codespaces-diagnostic-envelope", "accepted-ruleset-admin-envelope",
-    "accepted-codespace-smoke-envelope", "codespace-smoke-issue-mismatch",
     "accepted-ppux-projection-envelope",
     "event-not-created", "pull-request-comment",
     "repository-mismatch", "workflow-rerun", "actor-not-allowed", "actor-evidence-mismatch",
@@ -93,12 +87,11 @@ class IssueCommentIngressResult:
     diagnostic_id_or_none: str | None = None
     diagnostic_request_id_or_none: str | None = None
     ruleset_prestate_sha256_or_none: str | None = None
-    codespace_smoke_sha_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
     def to_dict(self) -> dict[str, object]:
-        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"codespace_smoke_sha_or_none":self.codespace_smoke_sha_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
+        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
@@ -124,10 +117,6 @@ def _diagnostic_trigger_id(repository:str,issue_number:int,diagnostic_id:str,req
     material=f"{repository}\0{issue_number}\0diagnose\0{diagnostic_id}\0{request_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _codespace_smoke_trigger_id(repository: str, issue_number: int, sha: str) -> str:
-    material = f"{repository}\0{issue_number}\0codespace-smoke\0{sha}".encode("ascii")
-    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
-
 def _ruleset_admin_trigger_id(repository:str,issue_number:int,prestate:str)->str:
     material=f"{repository}\0{issue_number}\0apply-required-validation-gate\0{prestate}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
@@ -139,19 +128,18 @@ def _ppux_projection_trigger_id(repository:str,issue_number:int,branch:str,sha:s
     material=f"{repository}\0{issue_number}\0project-ppux-prompts\0{branch}\0{sha}\0{input_ref}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,codespace_smoke_sha:str|None=None)->IssueCommentIngressResult:
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
     elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
     elif first_run_candidate_sha is not None and issue_number is not None: logical_id=_first_run_validation_trigger_id(repository,issue_number,first_run_candidate_sha)
     elif notion_read_request_id is not None and issue_number is not None: logical_id=_notion_read_trigger_id(repository,issue_number,notion_read_request_id)
     elif diagnostic_id is not None and diagnostic_request_id is not None and issue_number is not None: logical_id=_diagnostic_trigger_id(repository,issue_number,diagnostic_id,diagnostic_request_id)
-    elif codespace_smoke_sha is not None and issue_number is not None: logical_id=_codespace_smoke_trigger_id(repository,issue_number,codespace_smoke_sha)
     elif ruleset_prestate_sha256 is not None and issue_number is not None: logical_id=_ruleset_admin_trigger_id(repository,issue_number,ruleset_prestate_sha256)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif ppux_projection_branch is not None and ppux_projection_sha is not None and ppux_projection_input_ref is not None and issue_number is not None: logical_id=_ppux_projection_trigger_id(repository,issue_number,ppux_projection_branch,ppux_projection_sha,ppux_projection_input_ref)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_smoke_sha_or_none=codespace_smoke_sha)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
@@ -201,12 +189,6 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
         request_id=notion_read.group("request_id")
         if not _valid_notion_read_request_id(request_id):return _result(status="ignored",reason="malformed-trigger",**common)
         return _result(status="accepted",reason="accepted-notion-read-envelope",notion_read_request_id=request_id,**common)
-    smoke = _CODESPACE_SMOKE_RE.fullmatch(body)
-    if smoke is not None:
-        if issue_number != CODESPACE_SMOKE_ISSUE:
-            return _result(status="blocked", reason="codespace-smoke-issue-mismatch", **common)
-        return _result(status="accepted", reason="accepted-codespace-smoke-envelope",
-                       codespace_smoke_sha=smoke.group("sha"), **common)
     diagnostic=_DIAGNOSTIC_RE.fullmatch(body)
     if diagnostic is not None:
         return _result(status="accepted",reason="accepted-codespaces-diagnostic-envelope",diagnostic_id=diagnostic.group("diagnostic_id"),diagnostic_request_id=diagnostic.group("request_id"),**common)
