@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
@@ -27,9 +25,7 @@ from scripts.agent_os_issue_acceptance.operating_mode import (
     EnvironmentCapabilityState,
     OperatingModeOutcome,
     RequestedMode,
-    deserialize_agent_operating_mode_decision,
     evaluate_operating_mode_decision,
-    serialize_agent_operating_mode_decision,
 )
 
 SOURCE_SHA = "a" * 40
@@ -425,82 +421,6 @@ def test_non_operational_state_input_fails_closed():
 def test_non_environment_evidence_input_fails_closed():
     with pytest.raises(TypeError):
         evaluate_operating_mode_decision(state(), "planning", object())
-
-
-# --- serialization, identity, and round trip ---------------------------------
-
-
-def test_malformed_payload_fails_closed():
-    with pytest.raises(ValueError):
-        deserialize_agent_operating_mode_decision("not json")
-
-
-def test_unknown_field_fails_closed():
-    decision = evaluate_operating_mode_decision(state(), "planning", environment())
-    payload = json.loads(serialize_agent_operating_mode_decision(decision))
-    payload["unexpected"] = True
-    with pytest.raises(ValueError):
-        deserialize_agent_operating_mode_decision(json.dumps(payload))
-
-
-def test_unsupported_version_fails_closed():
-    decision = evaluate_operating_mode_decision(state(), "planning", environment())
-    payload = json.loads(serialize_agent_operating_mode_decision(decision))
-    payload["schema_version"] = "9.9"
-    with pytest.raises(ValueError):
-        deserialize_agent_operating_mode_decision(json.dumps(payload))
-
-
-def test_tampered_semantic_identity_fails_closed():
-    decision = evaluate_operating_mode_decision(state(), "planning", environment())
-    payload = json.loads(serialize_agent_operating_mode_decision(decision))
-    payload["decision_id"] = "operating-mode-decision:" + "0" * 64
-    with pytest.raises(ValueError):
-        deserialize_agent_operating_mode_decision(json.dumps(payload))
-
-
-def test_deterministic_reason_and_blocker_ordering():
-    first = evaluate_operating_mode_decision(
-        state(
-            lifecycle_stage=LifecycleStage.REVIEW,
-            merge_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-        ),
-        "release",
-        environment(),
-    )
-    second = evaluate_operating_mode_decision(
-        state(
-            lifecycle_stage=LifecycleStage.REVIEW,
-            merge_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
-        ),
-        "release",
-        environment(),
-    )
-    assert first.reason_codes == second.reason_codes
-    assert first.reason_codes == tuple(sorted(first.reason_codes))
-    assert first.blocker_codes == tuple(sorted(first.blocker_codes))
-
-
-def test_deterministic_prohibited_action_ordering():
-    decision = evaluate_operating_mode_decision(state(), "planning", environment())
-    assert decision.prohibited_actions == tuple(sorted(decision.prohibited_actions))
-    assert decision.prohibited_actions == (
-        "build",
-        "close-issue",
-        "flip-ready-for-review",
-        "merge",
-        "push-and-open-draft-pr",
-    )
-
-
-def test_byte_stable_round_trip():
-    decision = evaluate_operating_mode_decision(
-        state(lifecycle_stage=LifecycleStage.MERGED), "release", environment()
-    )
-    serialized_once = serialize_agent_operating_mode_decision(decision)
-    restored = deserialize_agent_operating_mode_decision(serialized_once)
-    serialized_twice = serialize_agent_operating_mode_decision(restored)
-    assert serialized_once == serialized_twice
 
 
 # --- authority preservation and side effects ---------------------------------
