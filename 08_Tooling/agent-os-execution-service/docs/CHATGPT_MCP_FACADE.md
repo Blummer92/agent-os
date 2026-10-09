@@ -58,7 +58,7 @@ The MCP server has no GitHub repository-write credential in this phase. GitHub m
 
 ## Protocol binding
 
-`agent_os_execution_service.mcp_server` uses the official Python MCP SDK (`mcp>=2.2.0,<2.3`) and registers exactly the two tools above with `MCPServer`. The supported MCP range is owned by `08_Tooling/agent-os-execution-service/pyproject.toml`; this documentation mirrors that canonical package requirement. The repository phase does not start a network listener or choose a deployment transport.
+`agent_os_execution_service.mcp_server` uses the official Python MCP SDK (`mcp>=2.3,<2.4`) and registers the existing bounded Agent OS tool set with `MCPServer`. The supported MCP range is owned by `08_Tooling/agent-os-execution-service/pyproject.toml`; this documentation mirrors that canonical package requirement. The repository phase does not start a network listener or choose a deployment transport.
 
 `mcp_facade` imports the #1237 owner from `scripts.agent_os_execution_interface.post_selection_continuation`. That package is already distributed by `workflow-scheduler` (#1426), and this distribution declares `workflow-scheduler>=0.18.0,<0.19.0`, so a clean host installation resolves the continuation owner through the existing single-owner distribution boundary. It is deliberately not re-packaged here: #1300 requires that no runtime module be carried by two distributions.
 
@@ -85,3 +85,39 @@ This facade does not solve or fake the canonical `AuthorizedValidationLifecycleR
 ## Rollback
 
 Remove `mcp_facade.py`, `mcp_server.py`, their focused tests/docs, and the `mcp` dependency. Existing #1237 policy, #1284 server-side discovery, #1203/#1217 transport, #1218 currentness, GitHub connector, Scheduler state, and all external systems remain unchanged.
+
+## #3372 bounded ChatGPT publication profile
+
+The installed `agent-os-mcp` launcher remains the existing stdio MCP server.
+Its full 16-tool registration is preserved for the default local profile.
+To publish only the three owner-approved tools, start the **same launcher**
+with `AGENT_OS_MCP_TOOL_PROFILE=chatgpt-governance` in the approved private
+host's Secure MCP Tunnel stdio command environment. Do not use an unfiltered
+launcher for the ChatGPT custom connection.
+
+The opt-in profile uses the MCP SDK's `list_tools` and `remove_tool`
+operations before stdio startup. It fails closed when any approved tool is
+missing, the filtered catalog differs from the allowlist, or an unknown profile
+is supplied. The exact approved list is:
+- `admit_agent_os_issue_comment_mutation_tool`
+- `project_agent_os_lane_post_pr_issue_reconciliation_tool`
+- `admit_agent_os_ready_for_review_tool`
+
+On the approved host, verify `tools/list` exposes exactly these names and
+`tools/call` refuses each excluded name. An app UI toggle is not sufficient
+containment evidence. Record non-secret host identity, deployed SHA, tunnel
+identity, workspace/principal binding, and invocation receipts. Use the current
+OpenAI Secure MCP Tunnel and custom MCP app documentation for supported
+installation/authentication, not a hardcoded tunnel command. Keep credentials
+only in approved secret mechanisms. No tunnel or app is created by this
+repository change.
+
+Run `python -m pytest 08_Tooling/agent-os-execution-service/tests/test_mcp_publication_profile.py`
+and the repository's required aggregate validation on the exact PR head.
+After actual ChatGPT attachment, prove host invocation and readback for #3281
+and #3446; repository tests alone cannot satisfy #3372.
+
+**Disconnect / rollback:** disable or remove the custom ChatGPT connection,
+stop the bounded tunnel process, and verify the three tools are absent from a
+new ChatGPT session. Remove the environment variable to restore the existing
+local 16-tool behavior. Do not remove the canonical MCP server or its guards.
