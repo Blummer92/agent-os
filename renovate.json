@@ -16,6 +16,14 @@
   ],
   "packageRules": [
     {
+      "description": "Root pip stays with Dependabot: Renovate must not raise PRs for root requirements-dev.txt or pyproject.toml (cf. #3398).",
+      "enabled": false,
+      "matchFileNames": [
+        "requirements-dev.txt",
+        "pyproject.toml"
+      ]
+    },
+    {
       "description": "Nested-only surfaces. Root pip (requirements-dev.txt) and GitHub Actions stay with Dependabot — this config never touches them.",
       "groupName": "nested minor/patch",
       "matchPaths": [
