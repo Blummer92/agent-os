@@ -71,11 +71,20 @@ jobs:
               # #2940: notion-read envelopes are GitHub-hosted reads; they must
               # never trigger the GCP authentication / gcloud setup steps below.
               output.write(f"is_notion_read={'true' if payload['reason'] == 'accepted-notion-read-envelope' else 'false'}\n")
+              output.write(f"is_codespace_implementation={'true' if payload['reason'] == 'accepted-codespace-implementation-envelope' else 'false'}\n")
           PY
+
+      - name: Evaluate fixed #3333 Codespaces operation admission
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.is_codespace_implementation == 'true' }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src:08_Tooling/agent-os-execution-service/src:. \
+            python -m scripts.agent_os_execution_interface.fixed_codespace_pilot \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
 
       - name: Resolve Codespaces-first transport route
         id: route
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
         run: |
           PYTHONPATH=08_Tooling/workflow-scheduler/src \
             python -m workflow_scheduler.governance.codespaces_first_route \
@@ -106,7 +115,7 @@ jobs:
           PY
 
       - name: Record non-accepted bounded transport evidence
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
         run: |
           python - <<'PY'
           import json
@@ -131,7 +140,7 @@ jobs:
 
       - name: Attempt bounded read-only Codespaces diagnostic
         id: codespaces_diagnostic
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -154,7 +163,7 @@ jobs:
 
       - name: Attempt read-only Codespaces developer validation
         id: codespaces
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -176,7 +185,7 @@ jobs:
 
       - name: Attempt Codespaces discovery
         id: codespaces_discovery
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -202,18 +211,18 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
-        if: ${{ steps.host_install.outputs.requested == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' }}
         shell: bash
         env:
           HOST_RUNTIME_SOURCE_SHA: 36ccd1715b8b11e30f8d92196b8e7f0791c10547
@@ -387,7 +396,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
