@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
@@ -598,5 +598,75 @@ jobs:
         with:
           name: agent-os-refresh-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-refresh/result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  ready_admission:
+    name: Run finite Ready-for-Review admission
+    # Coarse prefilter only; the exact fixed grammar is owned solely by
+    # workflow_scheduler.governance.github_issue_comment_ingress (#3446). The
+    # job is read-only: it evaluates admission and publishes a non-authorizing
+    # receipt. It never marks a PR Ready; the host does that after verifying
+    # the receipt against a fresh PR readback.
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os ready-admit ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Install bounded admission runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
+
+      - name: Parse low-trust issue comment envelope
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-ready"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-ready/transport.json"
+
+      - name: Evaluate fixed Ready-for-Review admission
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.agent_os_issue_labels.ready_admission_actions \
+            --transport "$RUNNER_TEMP/agent-os-ready/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/agent-os-ready/receipt.json"
+
+      - name: Publish bounded admission summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ready" / "receipt.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS Ready-for-Review admission\n\n")
+              if not path.exists():
+                  summary.write("Receipt unavailable; manual review required.\n")
+              else:
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Admissible: `{receipt.get('transition_admissible')}`\n\n")
+                  summary.write(f"Provisional Ready: `{receipt.get('provisional_ready')}`\n\n")
+                  summary.write(f"Reasons: `{','.join(receipt.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Receipt: `{receipt.get('receipt_id')}`\n")
+          PY
+
+      - name: Publish bounded admission evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-ready-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-ready/*.json
           if-no-files-found: warn
           retention-days: 7
