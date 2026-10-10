@@ -333,3 +333,16 @@ through canonical GitHub read evidence; see the ChatGPT Orchestrator overlay's
 
 Runtime preference creates no implementation, GitHub-write, merge, issue-closure,
 production, credential, workflow, protected-setting, or external-write authority.
+
+
+## Teacher OS frontend validation (proposed, not yet runtime-qualified)
+
+The existing affected-package selector recognizes `08_Tooling/teacher-os-web/**` and selects these exact commands, bound to that directory and in this order:
+
+1. `npm ci`
+2. `npm run build`
+3. `npm run test:unit`
+4. `npx playwright install chromium`
+5. `npx playwright test`
+
+The executor admits only the fixed argument vectors, not arbitrary caller commands. Selection and command admission do not prove runtime success. `npm ci` requires a genuine dependency-resolved `package-lock.json` on the Teacher OS implementation branch. Until a qualified npm registry executor generates and verifies that lockfile, this plan is **blocked**, not passing. The existing workflow's Node setup and browser dependencies must also be qualified; workflow edits remain separately authorization-gated. Actual command exit codes, stdout/stderr, exact checked-out head and browser evidence are required for QA acceptance. A passing build does not establish a working preview or production integration.
