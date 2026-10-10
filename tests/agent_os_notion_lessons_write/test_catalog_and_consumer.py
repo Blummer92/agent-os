@@ -57,7 +57,8 @@ class CatalogTests(unittest.TestCase):
         command = '/agent-os notion-write ' + LL87_GUARDRAIL_REQUEST_ID + ' LL-87 2026-10-05T13:06:00.000Z'
         request = admit(event(command, number=3418), **CONTEXT)
         self.assertEqual(request.request_id, LL87_GUARDRAIL_REQUEST_ID)
-        self.assertEqual(request.target_lesson_id, 'LL-87')
+        self.assertEqual(request.expected_lesson_id, 'LL-87')
+        self.assertEqual(request.expected_revision, '2026-10-05T13:06:00.000Z')
 
     def test_unknown_or_unreviewed_payload_is_refused(self):
         for command in ('/agent-os notion-write unknown', '/agent-os notion-write https://other.example',
