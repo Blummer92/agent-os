@@ -115,7 +115,7 @@ def model_call(key: str, text: str) -> dict:
     if result.get("status") != "completed":
         raise ValueError("model response not completed")
     return {"context_token_count": usage["input_tokens"],
-            "agent_step_count": 1,
+            "agent_step_count": None,
             "output_tokens": usage.get("output_tokens"),
             "model_response_id": result.get("id")}
 
@@ -131,7 +131,7 @@ def main() -> int:
     args = parser.parse_args()
     tasks = frozen_tasks()
     selected = parse_tasks(args.tasks, tasks)
-    api_key = os.environ["CKR4_MODEL_API_KEY"]
+    # Acceptance gate: this prototype must never incur paid model calls before\n    # canonical CKR2 integration, task isolation, grading and QA admission.\n    if os.environ.get("CKR4_QA_ACCEPTED") != "true":\n        raise ValueError("qa-acceptance-required: benchmark dispatch disabled")\n    api_key = os.environ["CKR4_MODEL_API_KEY"]
     notion_token = os.environ["NOTION_TOKEN"]
     source = os.environ["NOTION_SOURCE"]
     evidence = {"schema_version": 1, "benchmark_issue": 1146,
