@@ -1,0 +1,173 @@
+{
+  "completed_mission": "#3503",
+  "candidate_count": 15,
+  "requested_parallel_count": 10,
+  "candidates": [
+    {
+      "issue": 3601,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/a",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3602,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/b",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3603,
+      "state": "open",
+      "tier": 0,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/c",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3604,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "qa-test-agent",
+      "boundary": "no-external-write",
+      "scope": "tests/d",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3605,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/e",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3606,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/f",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3607,
+      "state": "open",
+      "tier": 0,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/g",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3608,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "qa-test-agent",
+      "boundary": "no-external-write",
+      "scope": "tests/h",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3609,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/i",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3610,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/j",
+      "active_lineage": false,
+      "disposition": "eligible"
+    },
+    {
+      "issue": 3611,
+      "state": "open",
+      "tier": 1,
+      "status": "blocked",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/k",
+      "active_lineage": false,
+      "disposition": "exclude-blocked"
+    },
+    {
+      "issue": 3612,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/l",
+      "active_lineage": true,
+      "disposition": "exclude-active-lineage"
+    },
+    {
+      "issue": 3613,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/a",
+      "active_lineage": false,
+      "disposition": "exclude-conflicting-scope"
+    },
+    {
+      "issue": 3614,
+      "state": "closed",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/m",
+      "active_lineage": false,
+      "disposition": "exclude-stale"
+    },
+    {
+      "issue": 3615,
+      "state": "open",
+      "tier": 1,
+      "status": "ready",
+      "owner": "github-service-agent",
+      "boundary": "no-external-write",
+      "scope": "src/a-copy",
+      "active_lineage": false,
+      "duplicate_claim_of": 3601,
+      "disposition": "exclude-duplicate-owner"
+    }
+  ]
+}

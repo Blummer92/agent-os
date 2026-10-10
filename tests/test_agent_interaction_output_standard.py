@@ -408,7 +408,7 @@ def test_2677_classroom_pilot_defers_unknown_drive_target_until_after_preview() 
     assert "performs no write" in materials
 
 def test_standard_is_registered_and_navigable() -> None:
-    assert "| Agent Interaction Output Standard | 0.2.1 |" in read(VERSION_MAP)
+    assert "| Agent Interaction Output Standard | 0.2.2 |" in read(VERSION_MAP)
     navigation = read(NAVIGATION)
     assert "@interaction-output" in navigation
     assert CANONICAL_PATH in navigation
