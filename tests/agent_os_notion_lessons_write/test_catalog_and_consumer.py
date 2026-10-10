@@ -11,7 +11,7 @@ from agent_memory_context_manager.lesson_activation_bridge import normalize_less
 from agent_memory_context_manager.lesson_preflight import consume_lesson_preflight
 from scripts.agent_os_notion_lessons_write.admission import admit, AdmittedRequest, WriteBlocked
 from scripts.agent_os_notion_lessons_write.catalog import (
-    LESSONS, LL93_METADATA_REQUEST_ID, PROTECTED_FIELDS, REQUEST_ID, lesson_for, target_for,
+    LESSONS, LL93_METADATA_REQUEST_ID, LL87_GUARDRAIL_REQUEST_ID, PROTECTED_FIELDS, REQUEST_ID, lesson_for, target_for,
 )
 from scripts.agent_os_notion_lessons_write.writer import execute, properties
 from tests.agent_os_notion_lessons_write.test_writer import Client, CONTEXT, event, page
@@ -46,6 +46,19 @@ class CatalogTests(unittest.TestCase):
                 self.assertFalse(PROTECTED_FIELDS & set(lesson_for(request_id)))
         self.assertEqual(target_for(LL93_METADATA_REQUEST_ID), 'LL-93')
         self.assertIsNone(target_for(REQUEST_ID))
+
+    def test_ll87_refinement_is_reviewed_guardrail_only_and_revision_bound(self):
+        # AOS-3483-F: exact proposal receipt 6096274166; no activation or write authority.
+        self.assertEqual(target_for(LL87_GUARDRAIL_REQUEST_ID), 'LL-87')
+        self.assertEqual(lesson_for(LL87_GUARDRAIL_REQUEST_ID), {
+            'Guardrail': 'If a PR description contains a GitHub closing keyword referencing an issue, merging may close that issue. When live acceptance remains, use a non-closing Part of reference and verify the PR description before merge.',
+        })
+        self.assertFalse(PROTECTED_FIELDS & set(lesson_for(LL87_GUARDRAIL_REQUEST_ID)))
+        command = '/agent-os notion-write ' + LL87_GUARDRAIL_REQUEST_ID + ' LL-87 2026-10-05T13:06:00.000Z'
+        request = admit(event(command, number=3418), **CONTEXT)
+        self.assertEqual(request.request_id, LL87_GUARDRAIL_REQUEST_ID)
+        self.assertEqual(request.expected_lesson_id, 'LL-87')
+        self.assertEqual(request.expected_revision, '2026-10-05T13:06:00.000Z')
 
     def test_unknown_or_unreviewed_payload_is_refused(self):
         for command in ('/agent-os notion-write unknown', '/agent-os notion-write https://other.example',
