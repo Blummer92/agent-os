@@ -111,17 +111,23 @@ def test_runtime_inspection_dispatch_includes_cloud_identity(monkeypatch):
     assert all("generate-access-token" not in " ".join(command).lower() for command in calls)
 
 
-def test_stopped_vm_blocks_before_cloud_identity_reads(monkeypatch):
-    def forbidden(*args, **kwargs):
-        raise AssertionError("cloud identity read must not occur for stopped VM")
+def test_stopped_vm_allows_read_only_cloud_identity_without_ssh(monkeypatch):
+    calls = []
 
-    monkeypatch.setattr(live, "_run", forbidden)
+    def provider_read(argv, *, timeout=60):
+        calls.append(tuple(argv))
+        return SimpleNamespace(returncode=1, stdout="", stderr="redacted provider failure")
+
+    monkeypatch.setattr(live, "_run", provider_read)
     adapter = Adapter(VmState.STOPPED)
     result = live.execute_transport(_ingress(), claims=_claims(), adapter=adapter)
 
     assert adapter.calls == ["observe"]
-    assert set(result) == {"runtime_inspection"}
+    assert set(result) == {"runtime_inspection", "cloud_identity"}
     assert result["runtime_inspection"]["reason_codes"] == ["host-not-running"]
+    assert result["cloud_identity"]["status"] != "observed"
+    assert calls
+    assert all("ssh" not in argv and "start" not in argv and "stop" not in argv for argv in calls)
 
 
 def test_rejected_claims_block_before_cloud_identity_reads(monkeypatch):
