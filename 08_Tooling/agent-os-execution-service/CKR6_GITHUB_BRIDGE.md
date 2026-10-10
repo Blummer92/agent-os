@@ -16,6 +16,22 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+## Failed-repair diagnostic postback (#2851)
+
+The existing failed-repair CKR6 activation produces two independent, finite
+diagnostics: `retry_reentry_outcome` and `lesson_disposition`. The GitHub
+bridge passes both values through unchanged into its bounded result-comment
+allowlist, alongside `status`, `reason_codes`, and `mutation_admissible`.
+The result serializer and parser preserve them verbatim; no new CKR6
+classifier, lesson reader, operation, or authority is introduced.
+
+These diagnostics explain whether the current attempt's lesson re-entry was
+consumed, not material, or unavailable/failed, and preserve the canonical
+lesson disposition separately from the host-facing status. They do not grant
+GitHub writes, execution, merge, issue closure, or a repair retry. Blocked
+outcomes continue to carry the canonical `mutation_admissible=false`.
+Issue-start and learning-loop receipts are unchanged.
+
 ## Host attribution trailer and rejection receipts (#2851)
 
 Some GitHub write hosts append an attribution footer to every comment they
