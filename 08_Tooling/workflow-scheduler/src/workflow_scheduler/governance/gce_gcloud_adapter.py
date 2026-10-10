@@ -104,8 +104,9 @@ class GcloudIapAdapter:
   return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=timeout)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
- def inspect_retirement_inventory(self,resource:GceResourceTuple)->dict[str,object]:
-  return collect_retirement_inventory(_run,lambda command:self._ssh(resource,command))
+ def inspect_retirement_inventory(self,resource:GceResourceTuple,*,include_host:bool=True)->dict[str,object]:
+  host_run=(lambda command:self._ssh(resource,command)) if include_host else None
+  return collect_retirement_inventory(_run,host_run)
  def inspect_sudo_admission(self,resource:GceResourceTuple)->dict[str,object]:
   try:expected_sha=expected_runtime_source_sha()
   except (OSError,ValueError):return unavailable_sudo_admission("runtime-source-sha-unavailable")
@@ -225,15 +226,18 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if ingress.handoff_id_or_none is not None:raise ValueError("runtime inspection must not carry a handoff identity")
   if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform runtime inspection")
   if not _policy().accepts(claims):return {"runtime_inspection":_non_authorizing("blocked","claims-rejected")}
-  if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"runtime_inspection":_non_authorizing("needs-decision","host-not-running")}
-  runtime_inspection=adapter.inspect_runtime(RESOURCE)
-  response={"runtime_inspection":runtime_inspection}
-  inspect_sudo=getattr(adapter,"inspect_sudo_admission",None)
-  if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
+  try:state=adapter.observe_state(RESOURCE)
+  except (GcloudCommandError,ValueError,subprocess.TimeoutExpired):state=VmState.UNKNOWN
+  running=state is VmState.RUNNING
+  response={"runtime_inspection":adapter.inspect_runtime(RESOURCE) if running else _non_authorizing("needs-decision","host-not-running")}
+  if running:
+   inspect_sudo=getattr(adapter,"inspect_sudo_admission",None)
+   if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
   response["cloud_identity"]=collect_cloud_identity(_run)
   inspect_retirement=getattr(adapter,"inspect_retirement_inventory",None)
-  if callable(inspect_retirement):response["retirement_inventory"]=inspect_retirement(RESOURCE)
+  if callable(inspect_retirement):
+   response["retirement_inventory"]=inspect_retirement(RESOURCE,include_host=running) if isinstance(adapter,GcloudIapAdapter) else inspect_retirement(RESOURCE)
   return response
  if ingress.reason=="accepted-first-publication-activation-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
