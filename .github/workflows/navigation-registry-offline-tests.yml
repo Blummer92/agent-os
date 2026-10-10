@@ -14,6 +14,9 @@ concurrency:
 
 jobs:
   offline-notion-connector-tests:
+    # CodeQL alert #1 (actions/missing-workflow-permissions): least privilege.
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
