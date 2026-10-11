@@ -127,3 +127,22 @@ def test_ready_recovery_has_scoped_concurrency():
     assert "ready-recovery-{0}-{1}" in content
     assert "cancel-in-progress:" in content
     assert "github.run_id" in content
+
+
+def test_source_run_uses_stable_workflow_identity():
+    content = workflow()
+    assert '.workflow_id == $workflow_id' in content
+    assert 'expected_workflow_id=' in content
+    assert '.name == "Agent OS Validation Gate"' not in content
+
+
+def test_retry_history_cannot_reset_across_branches():
+    content = workflow()
+    assert (
+        'runs?event=workflow_dispatch&per_page=100'
+        in content
+    )
+    assert (
+        'runs?event=workflow_dispatch&branch='
+        not in content
+    )

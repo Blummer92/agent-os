@@ -348,14 +348,22 @@ jobs:
               exit 1
             fi
 
+            expected_workflow_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-validation.yml" --jq .id
+            )"
+            if ! [[ "$expected_workflow_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Canonical workflow identity unavailable" >&2
+              exit 1
+            fi
             source_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_VALIDATION_RUN_ID")"
-            if ! jq -e               --arg sha "$EXPECTED_HEAD_SHA"               --arg branch "$head_name"               --argjson pr "$PR_NUMBER"               '
+            if ! jq -e               --arg sha "$EXPECTED_HEAD_SHA"               --arg branch "$head_name"               --argjson pr "$PR_NUMBER" \
+              --argjson workflow_id "$expected_workflow_id"               '
                 .status == "completed" and
                 .conclusion == "action_required" and
                 .event == "pull_request" and
                 .head_sha == $sha and
                 .head_branch == $branch and
-                .name == "Agent OS Validation Gate" and
+                .workflow_id == $workflow_id and
                 .path == ".github/workflows/agent-os-validation.yml" and
                 (
                   (.pull_requests // []) as $prs |
@@ -380,7 +388,7 @@ jobs:
             recovery_title="agent-os-ready-recovery:$PR_NUMBER:$EXPECTED_HEAD_SHA"
 
             run_records="$(
-              gh api --paginate                 "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-validation.yml/runs?event=workflow_dispatch&branch=$GITHUB_REF_NAME&per_page=100"                 --jq '.workflow_runs[] | [.id, .display_title] | @tsv'
+              gh api --paginate                 "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-validation.yml/runs?event=workflow_dispatch&per_page=100"                 --jq '.workflow_runs[] | [.id, .display_title] | @tsv'
             )"
 
             recovery_attempts=0
