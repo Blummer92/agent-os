@@ -4,14 +4,15 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+import pytest
 import yaml
 
-ROOT = Path.home() / "agent-os-ready-recovery-3486"
+ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 
-TARGET = "868bd7e46a682adb9c31a215b829c25c0dc130f8"
-MAIN = "b7e42a6507fd3ea1eb8611ae791b1dd83b617d35"
-REPAIR = "1a506b4c07eab77f3234401d3b2f4fe1811bafed"
+TARGET = "a" * 40
+MAIN = "b" * 40
+REPAIR = "c" * 40
 
 data = yaml.safe_load(WORKFLOW.read_text())
 steps = data["jobs"]["validate"]["steps"]
@@ -118,10 +119,10 @@ def execute(**overrides):
 cases = [
     ("valid Ready recovery", {}, True),
     ("Draft PR rejected", {"MOCK_DRAFT": "true"}, False),
-    ("stale candidate rejected", {"MOCK_HEAD": "a" * 40}, False),
-    ("main changed rejected", {"MOCK_MAIN": "b" * 40}, False),
+    ("stale candidate rejected", {"MOCK_HEAD": "d" * 40}, False),
+    ("main changed rejected", {"MOCK_MAIN": "e" * 40}, False),
     ("wrong actor rejected", {"GITHUB_ACTOR": "other-user"}, False),
-    ("wrong workflow ref rejected", {"GITHUB_SHA": "c" * 40}, False),
+    ("wrong workflow ref rejected", {"GITHUB_SHA": "f" * 40}, False),
     ("wrong workflow ID rejected", {"MOCK_WORKFLOW_ID": "123"}, False),
     ("wrong source PR rejected", {"MOCK_SOURCE_PR": "9999"}, False),
     ("executed source jobs rejected", {"MOCK_JOB_COUNT": "2"}, False),
@@ -130,15 +131,19 @@ cases = [
     ("missing current run rejected", {"MOCK_MISSING_CURRENT": "true"}, False),
 ]
 
-failed = 0
-for name, overrides, expected_success in cases:
-    code, logs, output = execute(**overrides)
-    actual_success = code == 0 and "mode=ready-recovery" in output
-    passed = actual_success == expected_success
-    print(("PASS" if passed else "FAIL") + ": " + name)
-    if not passed:
-        failed += 1
-        print(logs[-1000:])
 
-print(f"\nDynamic admission QA: {len(cases) - failed}/{len(cases)} passed")
-raise SystemExit(1 if failed else 0)
+@pytest.mark.parametrize(
+    "name,overrides,expected_success",
+    cases,
+    ids=[case[0] for case in cases],
+)
+def test_ready_recovery_admission(
+    name, overrides, expected_success
+):
+    code, logs, output = execute(**overrides)
+    actual_success = (
+        code == 0 and "mode=ready-recovery" in output
+    )
+    assert actual_success == expected_success, (
+        f"{name}: exit={code}\\n{logs[-2000:]}\\n{output}"
+    )
