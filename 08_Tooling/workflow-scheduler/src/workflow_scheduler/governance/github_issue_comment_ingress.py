@@ -55,7 +55,7 @@ _READY_ADMISSION_RE = re.compile(
     r"(?P<head_sha>[0-9a-f]{40}) (?P<body_sha256>[0-9a-f]{64})",
     re.ASCII,
 )
-_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe")
+_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe", "codespaces-environment-qualification-readonly")
 _DIAGNOSTIC_RE = re.compile(
     r"/agent-os diagnose (?P<diagnostic_id>"
     + "|".join(re.escape(value) for value in _DIAGNOSTIC_IDS)
