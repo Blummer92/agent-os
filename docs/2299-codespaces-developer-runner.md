@@ -333,3 +333,37 @@ through canonical GitHub read evidence; see the ChatGPT Orchestrator overlay's
 
 Runtime preference creates no implementation, GitHub-write, merge, issue-closure,
 production, credential, workflow, protected-setting, or external-write authority.
+
+
+### Replacement Codespace environment qualification (issue #3463)
+
+The existing #2947 diagnostic ingress now recognizes one additional fixed, read-only
+operation identity: `codespaces-environment-qualification-readonly`. The
+registered owner-authored issue-comment grammar is:
+
+```text
+/agent-os diagnose codespaces-environment-qualification-readonly <request-id>
+```
+
+The request ID is a bounded lowercase slug. It is not a Codespace name,
+terminal command, URL, path, port, profile, or permission grant. The operation
+uses the existing #2965 resolver to select the one current owner/repository-
+qualified `Available` Codespace, then uses the existing bounded
+`gh codespace ssh` transport and verifies `CODESPACE_NAME`, the fixed
+`/workspaces/agent-os` checkout, and the existing
+`agent-os-codespaces-v1` environment-health contract. The result includes a
+bounded workspace commit identity, content-bound environment-health evidence,
+fail-closed reason codes, and existing workflow/job/artifact correlation. No
+browser, port, lifecycle, credential, GitHub-write, or production mutation is
+authorized. An unavailable or ambiguous Codespace is a diagnostic blocker,
+not a reason to silently execute this Codespaces-specific diagnostic on GCE.
+
+The existing workflow's `--allowed-actor Blummer92` rule remains unchanged:
+registration does not authorize an assistant-authored trigger or prove native
+ChatGPT dispatch. A live replacement-VM acceptance needs the authorized
+owner-actor ingress, actual SSH/health result, GitHub Actions run/job/artifact
+readback, and host consumption without an operator terminal relay. A
+successful workflow with its Codespaces step skipped is not acceptance.
+Changes to `.github/workflows/**`, actor admission, credentials, or
+Codespace lifecycle require separate exact authorization. Issue #3463 remains
+open for the broader host-routing and live-acceptance obligations.

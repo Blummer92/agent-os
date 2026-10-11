@@ -312,3 +312,21 @@ def test_3094_adobe_diagnostic_cannot_accept_shell_url_argv_or_browser_flags() -
         result = admit(event(ADOBE_DIAGNOSTIC_TRIGGER + suffix))
         assert (result.status, result.reason) == ("ignored", "malformed-trigger")
         assert result.diagnostic_id_or_none is None
+
+
+def test_3463_fixed_environment_qualification_ingress_is_bounded() -> None:
+    trigger = "/agent-os diagnose codespaces-environment-qualification-readonly qualify-3463-1"
+    result = admit(event(trigger))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-codespaces-diagnostic-envelope"
+    assert result.diagnostic_id_or_none == "codespaces-environment-qualification-readonly"
+    assert result.diagnostic_request_id_or_none == "qualify-3463-1"
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    for bad in (trigger + " --command id", trigger + " https://example.invalid", trigger + "; whoami"):
+        assert admit(event(bad)).reason == "malformed-trigger"
+    assert admit(event(trigger, actor="unapproved")).reason == "actor-not-allowed"
+    assert admit(event(trigger), run_attempt=2).reason == "workflow-rerun"
+    again = event(trigger)
+    again["comment"]["id"] = 9982
+    assert admit(event(trigger)).logical_trigger_id_or_none == admit(again).logical_trigger_id_or_none
