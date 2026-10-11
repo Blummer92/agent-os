@@ -30,6 +30,7 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 
 DIAGNOSTIC_ID = "ppux-canva-cdp-readonly"
 ADOBE_DIAGNOSTIC_ID = "ppux-adobe-minimum-probe"
+QUALIFICATION_DIAGNOSTIC_ID = "codespaces-environment-qualification-readonly"
 ADOBE_EXPRESS_URL = "https://new.express.adobe.com/"
 ADOBE_DISPOSITIONS = frozenset({
     "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
@@ -39,7 +40,7 @@ ADOBE_DISPOSITIONS = frozenset({
     "CODESPACES_EXECUTION_PATH_BLOCKED",
     "MANUAL_REVIEW",
 })
-DIAGNOSTIC_IDS = frozenset({DIAGNOSTIC_ID, ADOBE_DIAGNOSTIC_ID})
+DIAGNOSTIC_IDS = frozenset({DIAGNOSTIC_ID, ADOBE_DIAGNOSTIC_ID, QUALIFICATION_DIAGNOSTIC_ID})
 DIAGNOSTIC_REASON = "accepted-codespaces-diagnostic-envelope"
 _FRAME_START = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
@@ -300,6 +301,47 @@ def _extract_framed_payload(stdout: object) -> str | None:
     )
 
 
+_QUALIFICATION_REMOTE_RUNNER_SOURCE = r'''import json,os,re,subprocess,sys
+PROFILE_ID="agent-os-codespaces-v1"
+DIAGNOSTIC_ID="codespaces-environment-qualification-readonly"
+FRAME_START="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
+FRAME_END="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
+REQ=re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$",re.ASCII)
+SHA=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
+def emit(payload):
+ print(FRAME_START);print(json.dumps(payload,sort_keys=True,separators=(",",":")));print(FRAME_END)
+def run(argv,*,cwd,timeout):
+ try:return subprocess.run(tuple(argv),cwd=cwd,check=False,capture_output=True,text=True,timeout=timeout)
+ except (OSError,subprocess.TimeoutExpired):return None
+issue_text,diagnostic_id,request_id,codespace_name=sys.argv[1:] if len(sys.argv)==5 else ("0","","","")
+try:issue=int(issue_text)
+except ValueError:issue=0
+result={"schema_version":"1.0","status":"needs-decision","reason_codes":["invalid-codespaces-diagnostic-identity"],"repository":"Blummer92/agent-os","issue_number":issue,"diagnostic_id":DIAGNOSTIC_ID,"request_id":request_id,"codespace_name":codespace_name,"codespaces_profile_id":PROFILE_ID,"execution_surface_id":f"codespace:{codespace_name}","environment_health_evidence_id":None,"workspace_head":None,"workspace_branch":None,"cleanup_complete":True,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
+if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
+ emit(result);raise SystemExit(0)
+if os.environ.get("CODESPACE_NAME")!=codespace_name:
+ result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
+primary="/workspaces/agent-os"
+if not os.path.isdir(primary):
+ result["reason_codes"]=["codespaces-workspace-unavailable"];emit(result);raise SystemExit(0)
+health=run(("python3","scripts/agent-os-environment-health.py","--execution-surface-id",f"codespace:{codespace_name}"),cwd=primary,timeout=20)
+try:hp=json.loads(health.stdout) if health is not None and health.returncode==0 else {}
+except (ValueError,TypeError):hp={}
+authority=hp.get("authority") if isinstance(hp,dict) else None
+safe=isinstance(authority,dict) and bool(authority) and all(value is False for value in authority.values())
+if not safe or hp.get("status")!="pass" or hp.get("profile_id")!=PROFILE_ID or hp.get("execution_surface_id")!=f"codespace:{codespace_name}":
+ result["reason_codes"]=["codespaces-environment-health-invalid"];emit(result);raise SystemExit(0)
+evidence_id=hp.get("environment_health_evidence_id")
+if not isinstance(evidence_id,str) or re.fullmatch(r"sha256:[0-9a-f]{64}",evidence_id) is None:
+ result["reason_codes"]=["codespaces-environment-health-evidence-invalid"];emit(result);raise SystemExit(0)
+result["environment_health_evidence_id"]=evidence_id
+head=run(("git","rev-parse","HEAD"),cwd=primary,timeout=10)
+if head is None or head.returncode!=0 or SHA.fullmatch(head.stdout.strip()) is None:
+ result["reason_codes"]=["codespaces-workspace-head-invalid"];emit(result);raise SystemExit(0)
+result["workspace_head"]=head.stdout.strip()
+result["status"]="success";result["reason_codes"]=["codespaces-environment-qualified"];emit(result)
+'''
+
 _ADOBE_REMOTE_RUNNER_SOURCE = r'''import json,os,platform,re,shutil,subprocess,sys
 PROFILE_ID="agent-os-codespaces-v1"
 DIAGNOSTIC_ID="ppux-adobe-minimum-probe"
@@ -436,7 +478,7 @@ def run_codespaces_diagnostic(
                 "--",
                 "python3",
                 "-c",
-                _ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE,
+                (_ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _QUALIFICATION_REMOTE_RUNNER_SOURCE if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE),
                 str(request.issue_number),
                 request.diagnostic_id,
                 request.request_id,
