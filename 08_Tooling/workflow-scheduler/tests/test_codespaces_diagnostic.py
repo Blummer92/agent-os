@@ -698,3 +698,126 @@ def test_3094_existing_canva_behavioral_payload_still_round_trips() -> None:
         ),
     )
     assert evidence == payload
+
+
+def _qualification_ingress() -> IssueCommentIngressResult:
+    from workflow_scheduler.governance.codespaces_diagnostic import QUALIFICATION_DIAGNOSTIC_ID
+    base = _ingress()
+    return IssueCommentIngressResult(
+        schema_version=base.schema_version,
+        status="accepted",
+        reason="accepted-codespaces-diagnostic-envelope",
+        repository=REPOSITORY,
+        issue_number=3463,
+        comment_id=base.comment_id,
+        actor="Blummer92",
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none=base.logical_trigger_id_or_none,
+        run_attempt=1,
+        diagnostic_id_or_none=QUALIFICATION_DIAGNOSTIC_ID,
+        diagnostic_request_id_or_none="qualify-3463-1",
+    )
+
+
+def _qualification_payload() -> dict[str, object]:
+    from workflow_scheduler.governance.codespaces_diagnostic import QUALIFICATION_DIAGNOSTIC_ID
+    return {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["codespaces-environment-qualified"],
+        "repository": REPOSITORY,
+        "issue_number": 3463,
+        "diagnostic_id": QUALIFICATION_DIAGNOSTIC_ID,
+        "request_id": "qualify-3463-1",
+        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + "a" * 64,
+        "workspace_head": "b" * 40,
+        "workspace_branch": None,
+        "cleanup_complete": True,
+        "workspace_side_effects_performed": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+    }
+
+
+def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        QUALIFICATION_DIAGNOSTIC_ID, _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    import os
+    old = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = "fixture-not-a-real-token"
+    try:
+        route, request = select_codespaces_diagnostic(
+            _qualification_ingress(),
+            run=lambda argv, timeout: subprocess.CompletedProcess(
+                argv, 0, stdout=_codespace_payload(), stderr=""
+            ),
+        )
+    finally:
+        if old is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = old
+    assert route["selected"] is True
+    assert request is not None
+    assert route["codespace_name"] == APPROVED_CODESPACE_NAME
+    payload = _qualification_payload()
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "success"
+    assert result["environment_health_evidence_id"].startswith("sha256:")
+    assert calls[0][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
+    assert calls[0][8] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert calls[0][-3] == QUALIFICATION_DIAGNOSTIC_ID
+    assert "scripts/agent-os-environment-health.py" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "CODESPACE_NAME" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "rm -rf" not in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "pip install" not in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+
+
+def test_3463_qualification_rejects_mismatched_surface_and_bad_health_receipt() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY,
+        issue_number=3463,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID,
+        request_id="qualify-3463-1",
+    )
+    for field, value, reason in (
+        ("codespace_name", "old-deleted-codespace", "codespaces-diagnostic-evidence-identity-mismatch"),
+        ("environment_health_evidence_id", "not-a-hash", "codespaces-environment-health-evidence-invalid"),
+    ):
+        payload = _qualification_payload()
+        payload[field] = value
+        result = run_codespaces_diagnostic(
+            request,
+            codespace_name=APPROVED_CODESPACE_NAME,
+            run=lambda argv, timeout, payload=payload: subprocess.CompletedProcess(
+                argv, 0, stdout=_diagnostic_stdout(payload), stderr=""
+            ),
+        )
+        assert result["status"] == "needs-decision"
+        assert result["reason_codes"] == [reason]
+
+
+def test_3463_qualification_runner_is_read_only_and_does_not_embed_target_name() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    source = _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "animated-computing-machine-pgjg5796p96h69q5" not in source
+    assert "gh codespace start" not in source
+    assert "gh codespace stop" not in source
+    assert "os.environ.get(\"CODESPACE_NAME\")!=codespace_name" in source
+    assert 'hp.get("profile_id")!=PROFILE_ID' in source
+    assert 'hp.get("execution_surface_id")!=f"codespace:{codespace_name}"' in source
