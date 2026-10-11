@@ -23,8 +23,18 @@ dispatch only when:
 - Provider-backed recovery history is available.
 - The existing two-attempt recovery limit is not exceeded.
 
-Recovery invocations for the same PR/head share a concurrency group.
-Run-history count includes unsuccessful attempts.
+The workflow-wide concurrency group keeps manual runs distinct
+before admission, using their unique GitHub run IDs.
+
+The aggregate-validation job separately serializes all manual
+workflow dispatches for this repository using trusted GitHub
+event identity. Caller-supplied PR numbers do not select the group.
+
+GitHub may replace a pending manual validation job with a newer
+pending job; running jobs are not canceled by this rule.
+Ordering is not guaranteed. Provider run history is still used
+to enforce the bounded two-attempt recovery limit, including
+unsuccessful and canceled attempts.
 
 ## Execution
 

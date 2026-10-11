@@ -153,3 +153,31 @@ def test_retry_history_cannot_reset_across_branches():
         'runs?event=workflow_dispatch&branch='
         not in content
     )
+
+
+def test_manual_dispatch_validation_job_is_serialized_safely():
+    import yaml
+
+    data = yaml.safe_load(workflow())
+    top = data["concurrency"]["group"]
+    job = data["jobs"]["validate"]["concurrency"]
+    group = job["group"]
+
+    assert "github.run_id" in top
+    assert "github.event_name == 'workflow_dispatch'" in group
+    assert "github.repository_id" in group
+    assert "github.run_id" in group
+    assert "inputs." not in group
+    assert "github.event.inputs" not in group
+    assert "github.ref" not in group
+    assert job["cancel-in-progress"] is False
+
+
+def test_recovery_documentation_explains_pending_replacement():
+    documentation = (
+        WORKFLOW.parent.parent.parent
+        / "docs/3486-ready-pr-validation-recovery.md"
+    ).read_text()
+    assert "serializes all manual" in documentation
+    assert "replace a pending" in documentation
+    assert "Caller-supplied PR numbers do not select the group" in documentation
