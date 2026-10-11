@@ -124,9 +124,16 @@ def test_recovery_attempt_limit_matches_canonical_contract():
 
 def test_ready_recovery_has_scoped_concurrency():
     content = workflow()
-    assert "ready-recovery-{0}-{1}" in content
+    import yaml
+
+    data = yaml.safe_load(content)
+    group = data["concurrency"]["group"]
+
+    assert "github.run_id" in group
+    assert "inputs.pr_number" not in group
+    assert "inputs.expected_head_sha" not in group
+    assert "github.event.inputs" not in group
     assert "cancel-in-progress:" in content
-    assert "github.run_id" in content
 
 
 def test_source_run_uses_stable_workflow_identity():

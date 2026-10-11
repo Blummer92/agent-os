@@ -43,7 +43,7 @@ permissions:
   checks: read
 
 concurrency:
-  group: agent-os-validation-${{ github.event_name == 'pull_request' && github.event.pull_request.number || (inputs.ready_recovery && format('ready-recovery-{0}-{1}', inputs.pr_number, inputs.expected_head_sha)) || github.run_id }}
+  group: agent-os-validation-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}
 
 jobs:
@@ -864,7 +864,9 @@ jobs:
               echo "- Pull request head SHA: \`$PR_HEAD_SHA\`"
             fi
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-              if [ "$DISPATCH_MODE" = "final-candidate" ] || [ "$DISPATCH_MODE" = "ready-recovery" ]; then
+              if [ "$DISPATCH_MODE" = "final-candidate" ]; then
+                echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
+              elif [ "$DISPATCH_MODE" = "ready-recovery" ]; then
                 echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
               fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
