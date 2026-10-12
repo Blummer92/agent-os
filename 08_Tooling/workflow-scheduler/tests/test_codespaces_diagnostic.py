@@ -29,8 +29,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _mock_transport_auth_for_existing_diagnostic_cases(monkeypatch):
-    # Existing tests cover SSH and remote health stages independently of API auth.
+def _mock_transport_auth_for_existing_diagnostic_cases(monkeypatch, request):
+    # Only legacy SSH/remote-health tests bypass API auth. Auth-specific and
+    # integrated tests exercise the real preflight without a global stub.
+    if request.node.name.startswith((
+        "test_3345_transport_authentication_",
+        "test_3345_integrated_auth_",
+    )):
+        return
     from workflow_scheduler.governance import codespaces_diagnostic
     monkeypatch.setattr(codespaces_diagnostic, "_check_transport_authentication", lambda *args, **kwargs: None)
 
