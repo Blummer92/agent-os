@@ -892,7 +892,7 @@ def test_3345_python_start_probe_failure_is_distinct() -> None:
     assert result["reason_codes"] == ["codespaces-python-probe-failed"]
     assert result["failed_stage"] == "python"
     assert len(calls) == 2
-    assert calls[1][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
+    assert calls[1][-3:] == ("python3", "-V")
 
 
 def test_3345_stage_probes_precede_existing_health_runner() -> None:
@@ -963,7 +963,7 @@ def test_3345_python_probe_timeout_fails_before_health_runner() -> None:
     assert result["failed_stage"] == "python"
     assert result["stage_timeout_seconds"] == _SSH_STAGE_TIMEOUT_SECONDS
     assert len(calls) == 2
-    assert calls[1][0][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
+    assert calls[1][0][-3:] == ("python3", "-V")
     assert calls[1][1] == _SSH_STAGE_TIMEOUT_SECONDS
 
 
@@ -1035,7 +1035,7 @@ def test_3345_integrated_auth_ssh_python_health_and_fail_closed(monkeypatch) -> 
     payload["request_id"] = "integrated-auth-ssh"
 
     def execute(*, auth_exit=0, auth_output="Blummer92\n", ssh_exit=0,
-                python_marker="agent-os-qualification-python-ready\n",
+                python_marker="Python 3.11.13\n",
                 health_payload=None):
         calls = []
         def run(argv, *, timeout):
@@ -1059,7 +1059,7 @@ def test_3345_integrated_auth_ssh_python_health_and_fail_closed(monkeypatch) -> 
     assert len(calls) == 4
     assert calls[0][0] == ("gh", "api", "--method", "GET", "/user", "--jq", ".login")
     assert calls[1][0] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "true")
-    assert calls[2][0][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
+    assert calls[2][0][-3:] == ("python3", "-V")
     assert "scripts/agent-os-environment-health.py" in calls[3][0][8]
     assert "private credential" not in json.dumps(good)
 
@@ -1100,3 +1100,32 @@ def test_3463_ssh_timeout_records_bounded_duration_without_raw_output() -> None:
     assert result["probe_elapsed_ms"] >= 0
     assert "private-token" not in str(result)
     assert "secret-ssh-debug" not in str(result)
+
+
+def test_3534_python_probe_is_shell_safe_and_version_bounded(monkeypatch) -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _qualify_ssh_stages,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3534,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="python-shell-safe",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\\n", stderr="")
+    assert _qualify_ssh_stages(request, codespace_name=APPROVED_CODESPACE_NAME, run=run) is None
+    assert calls[1] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "python3", "-V")
+    assert not any("(" in arg or "'" in arg for arg in calls[1])
+
+    for bad in ("Python 2.7.18\\n", "Python 3.11.13 extra\\n", "not-python\\n"):
+        def bad_run(argv, *, timeout):
+            if argv[-1] == "true":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=bad, stderr="secret=redacted-test-token")
+        result = _qualify_ssh_stages(request, codespace_name=APPROVED_CODESPACE_NAME, run=bad_run)
+        assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+        assert "redacted-test-token" not in json.dumps(result)
