@@ -1,0 +1,173 @@
+# Pure-local mergeability classification fixtures for #3402.
+# No retrieval, merging, polling, or external writes.
+# Each step contains fresh caller-supplied evidence.
+cases:
+  - id: 3402-transient-mergeability
+    note: >-
+      mergeable=false on the first read with re-read budget remaining is not
+      terminal (#3402): bounded re-read, then mergeable=true on the unchanged
+      head proceeds.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 36f8ebd0df4b7ae5d674c1acf0125f18193d44e7
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 36f8ebd0df4b7ae5d674c1acf0125f18193d44e7
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: proceed
+        expected_reason_codes: [all-evidence-green]
+
+  - id: 3402-persistent-mergeability-false
+    note: >-
+      mergeable=false on every re-read is persistent evidence about the item
+      (#3402): once the re-read budget is spent, the item is blocked locally.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 0
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [mergeability-false-persistent]
+
+  - id: item-local-checks-failing
+    note: >-
+      A failing check blocks this item only, even with otherwise green
+      evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 7a9a677c7229350f499dc1daf3ab814341526fc5
+          head_sha_stable: true
+          checks_failing: true
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [checks-failing]
+
+  - id: all-green-exact-head
+    note: Positive control -- open, non-draft, mergeable, aggregate success on a stable head.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: f3a927aeeeb4756c2d90ad89f23b919522b20078
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: proceed
+        expected_reason_codes: [all-evidence-green]
+
+  - id: draft-pr
+    note: Guard rail -- a draft PR never proceeds regardless of green evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: true
+          mergeable: true
+          aggregate: success
+          head_sha: 0e7766b460fd2a39a2fd81d4a3a636b033b52be4
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [pr-not-ready]
+
+  - id: closed-pr
+    note: Guard rail -- a closed PR never proceeds regardless of green evidence.
+    steps:
+      - evidence:
+          pr_open: false
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: ea88fbaa99b73225752e2ef67593f775848160ad
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [pr-closed]
+
+  - id: mergeability-unknown-then-ceiling
+    note: >-
+      mergeable not yet computed by the provider (observed live as
+      mergeable=None) is re-read boundedly; an exhausted re-read budget with
+      still no verdict stops the loop fail-closed with precise evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: null
+          aggregate: success
+          head_sha: 010ef65dd2ef0b61c529c485b0df936a1b73c1ab
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-state-unknown]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: null
+          aggregate: success
+          head_sha: 010ef65dd2ef0b61c529c485b0df936a1b73c1ab
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 0
+          polls_remaining: 5
+        expected_disposition: ceiling_exceeded
+        expected_reason_codes: [mergeability-reacquire-budget-exhausted]
