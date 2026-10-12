@@ -511,7 +511,7 @@ def _qualify_ssh_stages(
             "python",
             (
                 "gh", "codespace", "ssh", "-c", codespace_name,
-                "--", "python3", "-c", "print('agent-os-qualification-python-ready')",
+                "--", "python3", "-V",
             ),
             _REMOTE_START_MARKER,
         ),
@@ -534,7 +534,7 @@ def _qualify_ssh_stages(
             result["failure_detail"] = "undetermined"
             return result
         if completed.returncode != 0 or (
-            marker is not None and completed.stdout.strip() != marker
+            marker is not None and not re.fullmatch(r"Python 3\.\d+\.\d+", completed.stdout.strip())
         ):
             result = _failure(request, f"codespaces-{stage}-probe-failed", codespace_name)
             result["failed_stage"] = stage
