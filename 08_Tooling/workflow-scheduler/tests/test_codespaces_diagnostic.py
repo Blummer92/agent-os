@@ -791,7 +791,7 @@ def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
         if len(calls) == 1:
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if len(calls) == 2:
-            return subprocess.CompletedProcess(argv, 0, stdout="agent-os-qualification-python-ready\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\n", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
     result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert result["status"] == "success"
@@ -828,7 +828,7 @@ def test_3463_qualification_rejects_mismatched_surface_and_bad_health_receipt() 
                 return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
             if len(calls) == 2:
                 return subprocess.CompletedProcess(
-                    argv, 0, stdout="agent-os-qualification-python-ready\n", stderr=""
+                    argv, 0, stdout="Python 3.11.13\n", stderr=""
                 )
             return subprocess.CompletedProcess(
                 argv, 0, stdout=_diagnostic_stdout(payload), stderr=""
@@ -912,7 +912,7 @@ def test_3345_stage_probes_precede_existing_health_runner() -> None:
         if len(calls) == 1:
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if len(calls) == 2:
-            return subprocess.CompletedProcess(argv, 0, stdout="agent-os-qualification-python-ready\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\n", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
     result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert result["status"] == "success"
