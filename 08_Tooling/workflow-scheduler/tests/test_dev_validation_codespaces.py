@@ -536,3 +536,36 @@ def test_2944_prestart_timeout_projects_fallback_without_stale_result(
     assert route["ssh_exit_code"] == 1
     assert route["cleanup_complete"] is False
     assert not result_path.exists()
+
+
+def test_codespaces_api_read_failure_classification_is_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    cases = (
+        ("HTTP 403: Resource not accessible by integration", "codespaces-read-permission-denied"),
+        ("HTTP 429: Too Many Requests", "codespaces-read-rate-limited"),
+        ("HTTP 401: Bad credentials", "codespaces-read-unavailable"),
+        ("secret=redacted-test-token", "codespaces-read-unavailable"),
+    )
+    for stderr, expected in cases:
+        def run(argv, *, timeout):
+            assert argv[:2] == ("gh", "api")
+            assert timeout == 30
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+        selection = resolve_current_codespace(run)
+        assert selection.selected is False
+        assert selection.reason == expected
+        assert "redacted-test-token" not in selection.reason
+
+
+def test_codespaces_api_read_timeout_and_transport_error_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+
+    def timeout_run(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    def missing_cli_run(argv, *, timeout):
+        raise FileNotFoundError("gh unavailable")
+
+    assert resolve_current_codespace(timeout_run).reason == "codespaces-read-timeout"
+    assert resolve_current_codespace(missing_cli_run).reason == "codespaces-read-transport-error"
