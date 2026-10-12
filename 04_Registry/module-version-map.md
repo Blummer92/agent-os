@@ -4,9 +4,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Module | Version |
 |---|---|
 | Global Engineering | 0.4.0 |
-| Agent Interaction Output Standard | 0.2.1 |
+| Agent Interaction Output Standard | 0.2.2 |
 | Testing And Release | 0.7.0 |
-| ChatGPT Orchestrator | 0.3.10 |
+| ChatGPT Orchestrator | 0.3.19 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
@@ -46,7 +46,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
-**Agent Interaction Output Standard** `0.2.1` requires explicit console/shell/GitHub CLI requests to render executable, connected, read-only-by-default commands rather than conversational prompts (#2794). `0.2.0` added compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
+**Agent Interaction Output Standard** `0.2.2` adds #3503's bounded terminal/safe-handoff continuation choices: when fresh backlog evidence supports independent work, ChatGPT may offer 5-issue, 10-issue, current-lineage-only, or stop options; selected batches reuse canonical eligibility/conflict/finite-mission contracts, preserve one issue -> one PR, and add no scheduler, queue, background work, or authority. `0.2.1` requires explicit console/shell/GitHub CLI requests to render executable, connected, read-only-by-default commands rather than conversational prompts (#2794). `0.2.0` added compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
+
+**ChatGPT Orchestrator** `0.3.19` consumes the #3503 bounded parallel-work option contract at terminal/safe handoff while preserving fresh open-backlog admission, item-local continuation, and all existing authority ceilings. This also reconciles the previously stale module-map row to the overlay's current version lineage. No new execution state or scheduler is introduced.
 
 **Safe Implementation Lane** `0.7.0` adds opt-in Terminal Fast Lane (#1309) by composing the canonical #924 `request-interpretation-v1` record, existing `operating_mode.py` `RequestedMode.RELEASE` ceiling, existing #1187 branch refresh, and existing `agent-os-release-run.py` terminal progression for eligible Tier 0/1 `no-external-write` work. The Orchestrator does not add a second raw-language parser, and no new lifecycle stage, router, merge/closure authority model, or Scheduler is introduced. This registry entry was previously stale at `0.5.0` against the standard's own `0.6.0` (#1274); `0.6.0` distinguished artifact non-authority from later direct-owner authorization and carried one instruction across a single mechanical readiness intervention. `0.5.0` composed existing #895 checkpoint/resume and #758 Scheduler lease evidence into resumable authorized work, distinguished same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and required current replacement evidence before cancelled stale-head validation was treated as superseded (#1188).
 

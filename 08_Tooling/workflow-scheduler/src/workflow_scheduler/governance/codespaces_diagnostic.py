@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -30,6 +32,7 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 
 DIAGNOSTIC_ID = "ppux-canva-cdp-readonly"
 ADOBE_DIAGNOSTIC_ID = "ppux-adobe-minimum-probe"
+QUALIFICATION_DIAGNOSTIC_ID = "codespaces-environment-qualification-readonly"
 ADOBE_EXPRESS_URL = "https://new.express.adobe.com/"
 ADOBE_DISPOSITIONS = frozenset({
     "CODESPACES_BLOCKED_UNSUPPORTED_PLATFORM",
@@ -39,7 +42,7 @@ ADOBE_DISPOSITIONS = frozenset({
     "CODESPACES_EXECUTION_PATH_BLOCKED",
     "MANUAL_REVIEW",
 })
-DIAGNOSTIC_IDS = frozenset({DIAGNOSTIC_ID, ADOBE_DIAGNOSTIC_ID})
+DIAGNOSTIC_IDS = frozenset({DIAGNOSTIC_ID, ADOBE_DIAGNOSTIC_ID, QUALIFICATION_DIAGNOSTIC_ID})
 DIAGNOSTIC_REASON = "accepted-codespaces-diagnostic-envelope"
 _FRAME_START = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
@@ -70,7 +73,10 @@ except ValueError: issue=0
 result=base("needs-decision","codespaces-diagnostic-failed",issue,request_id,codespace_name)
 if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
  result["reason_codes"]=["invalid-codespaces-diagnostic-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -300,6 +306,50 @@ def _extract_framed_payload(stdout: object) -> str | None:
     )
 
 
+_QUALIFICATION_REMOTE_RUNNER_SOURCE = r'''import json,os,re,subprocess,sys
+PROFILE_ID="agent-os-codespaces-v1"
+DIAGNOSTIC_ID="codespaces-environment-qualification-readonly"
+FRAME_START="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
+FRAME_END="===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
+REQ=re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$",re.ASCII)
+SHA=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
+def emit(payload):
+ print(FRAME_START);print(json.dumps(payload,sort_keys=True,separators=(",",":")));print(FRAME_END)
+def run(argv,*,cwd,timeout):
+ try:return subprocess.run(tuple(argv),cwd=cwd,check=False,capture_output=True,text=True,timeout=timeout)
+ except (OSError,subprocess.TimeoutExpired):return None
+issue_text,diagnostic_id,request_id,codespace_name=sys.argv[1:] if len(sys.argv)==5 else ("0","","","")
+try:issue=int(issue_text)
+except ValueError:issue=0
+result={"schema_version":"1.0","status":"needs-decision","reason_codes":["invalid-codespaces-diagnostic-identity"],"repository":"Blummer92/agent-os","issue_number":issue,"diagnostic_id":DIAGNOSTIC_ID,"request_id":request_id,"codespace_name":codespace_name,"codespaces_profile_id":PROFILE_ID,"execution_surface_id":f"codespace:{codespace_name}","environment_health_evidence_id":None,"workspace_head":None,"workspace_branch":None,"cleanup_complete":True,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
+if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
+ emit(result);raise SystemExit(0)
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
+ result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
+primary="/workspaces/agent-os"
+if not os.path.isdir(primary):
+ result["reason_codes"]=["codespaces-workspace-unavailable"];emit(result);raise SystemExit(0)
+health=run(("python3","scripts/agent-os-environment-health.py","--execution-surface-id",f"codespace:{codespace_name}"),cwd=primary,timeout=20)
+try:hp=json.loads(health.stdout) if health is not None and health.returncode==0 else {}
+except (ValueError,TypeError):hp={}
+authority=hp.get("authority") if isinstance(hp,dict) else None
+safe=isinstance(authority,dict) and bool(authority) and all(value is False for value in authority.values())
+if not safe or hp.get("status")!="pass" or hp.get("profile_id")!=PROFILE_ID or hp.get("execution_surface_id")!=f"codespace:{codespace_name}":
+ result["reason_codes"]=["codespaces-environment-health-invalid"];emit(result);raise SystemExit(0)
+evidence_id=hp.get("environment_health_evidence_id")
+if not isinstance(evidence_id,str) or re.fullmatch(r"sha256:[0-9a-f]{64}",evidence_id) is None:
+ result["reason_codes"]=["codespaces-environment-health-evidence-invalid"];emit(result);raise SystemExit(0)
+result["environment_health_evidence_id"]=evidence_id
+head=run(("git","rev-parse","HEAD"),cwd=primary,timeout=10)
+if head is None or head.returncode!=0 or SHA.fullmatch(head.stdout.strip()) is None:
+ result["reason_codes"]=["codespaces-workspace-head-invalid"];emit(result);raise SystemExit(0)
+result["workspace_head"]=head.stdout.strip()
+result["status"]="success";result["reason_codes"]=["codespaces-environment-qualified"];emit(result)
+'''
+
 _ADOBE_REMOTE_RUNNER_SOURCE = r'''import json,os,platform,re,shutil,subprocess,sys
 PROFILE_ID="agent-os-codespaces-v1"
 DIAGNOSTIC_ID="ppux-adobe-minimum-probe"
@@ -331,7 +381,10 @@ except ValueError: issue=0
 result=base("needs-decision","codespaces-diagnostic-failed",issue,request_id,codespace_name)
 if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
  result["reason_codes"]=["invalid-codespaces-diagnostic-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -417,6 +470,91 @@ emit(result)
 '''
 
 
+_SSH_STAGE_TIMEOUT_SECONDS = 25
+_AUTH_PREFLIGHT_TIMEOUT_SECONDS = 12
+
+
+def _check_transport_authentication(
+    request: CodespacesDiagnosticRequest,
+    *,
+    codespace_name: str,
+    run: Run,
+) -> dict[str, object] | None:
+    """Read-only auth check; API authentication does not establish SSH permission."""
+    argv = ("gh", "api", "--method", "GET", "/user", "--jq", ".login")
+    try:
+        completed = run(argv, timeout=_AUTH_PREFLIGHT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        evidence = _failure(request, "codespaces-transport-auth-timeout", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    except OSError:
+        evidence = _failure(request, "codespaces-transport-auth-unavailable", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    if completed.returncode != 0 or not completed.stdout.strip():
+        evidence = _failure(request, "codespaces-transport-auth-failed", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    return None
+_REMOTE_START_MARKER = "agent-os-qualification-python-ready"
+
+
+def _qualify_ssh_stages(
+    request: CodespacesDiagnosticRequest,
+    *,
+    codespace_name: str,
+    run: Run,
+) -> dict[str, object] | None:
+    """Classify SSH transport and Python startup without exposing remote output.
+
+    Both probes are fixed read-only commands. A timed-out SSH probe cannot
+    establish whether authentication or the remote shell stalled.
+    """
+    stages = (
+        (
+            "ssh",
+            ("gh", "codespace", "ssh", "-c", codespace_name, "--", "true"),
+            None,
+        ),
+        (
+            "python",
+            (
+                "gh", "codespace", "ssh", "-c", codespace_name,
+                "--", "python3", "-V",
+            ),
+            _REMOTE_START_MARKER,
+        ),
+    )
+    for stage, argv, marker in stages:
+        started = time.monotonic()
+        try:
+            completed = run(argv, timeout=_SSH_STAGE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            result = _failure(request, f"codespaces-{stage}-probe-timeout", codespace_name)
+            result["failed_stage"] = stage
+            result["stage_timeout_seconds"] = _SSH_STAGE_TIMEOUT_SECONDS
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
+            return result
+        except OSError:
+            result = _failure(request, f"codespaces-{stage}-probe-unavailable", codespace_name)
+            result["failed_stage"] = stage
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
+            return result
+        if completed.returncode != 0 or (
+            marker is not None and not re.fullmatch(r"Python 3\.\d+\.\d+", completed.stdout.strip())
+        ):
+            result = _failure(request, f"codespaces-{stage}-probe-failed", codespace_name)
+            result["failed_stage"] = stage
+            result["probe_exit_code"] = completed.returncode
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
+            return result
+    return None
+
+
 def run_codespaces_diagnostic(
     request: CodespacesDiagnosticRequest,
     *,
@@ -425,6 +563,13 @@ def run_codespaces_diagnostic(
 ) -> dict[str, object]:
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+        auth_failure = _check_transport_authentication(request, codespace_name=codespace_name, run=run)
+        if auth_failure is not None:
+            return auth_failure
+        stage_failure = _qualify_ssh_stages(request, codespace_name=codespace_name, run=run)
+        if stage_failure is not None:
+            return stage_failure
     try:
         completed = run(
             (
@@ -436,7 +581,7 @@ def run_codespaces_diagnostic(
                 "--",
                 "python3",
                 "-c",
-                _ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE,
+                shlex.quote(_ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _QUALIFICATION_REMOTE_RUNNER_SOURCE if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE),
                 str(request.issue_number),
                 request.diagnostic_id,
                 request.request_id,
@@ -448,6 +593,10 @@ def run_codespaces_diagnostic(
         evidence = _failure(request, "codespaces-diagnostic-transport-timeout", codespace_name)
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
+        if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+            # Qualification output is not a safe public diagnostic surface.
+            stdout_tail, stderr_tail = "", ""
+            stdout_truncated = stderr_truncated = False
         evidence.update(
             {
                 "ssh_exit_code": None,
@@ -463,6 +612,8 @@ def run_codespaces_diagnostic(
     if completed.returncode != 0:
         evidence = _failure(request, "codespaces-diagnostic-ssh-failed", codespace_name)
         stderr_tail, stderr_truncated = _bounded_text(completed.stderr)
+        if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+            stderr_tail, stderr_truncated = "", False
         evidence.update(
             {
                 "ssh_exit_code": completed.returncode,

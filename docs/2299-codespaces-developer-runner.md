@@ -333,3 +333,71 @@ through canonical GitHub read evidence; see the ChatGPT Orchestrator overlay's
 
 Runtime preference creates no implementation, GitHub-write, merge, issue-closure,
 production, credential, workflow, protected-setting, or external-write authority.
+
+
+### Replacement Codespace environment qualification (issue #3463)
+
+The existing #2947 diagnostic ingress now recognizes one additional fixed, read-only
+operation identity: `codespaces-environment-qualification-readonly`. The
+registered owner-authored issue-comment grammar is:
+
+```text
+/agent-os diagnose codespaces-environment-qualification-readonly <request-id>
+```
+
+The request ID is a bounded lowercase slug. It is not a Codespace name,
+terminal command, URL, path, port, profile, or permission grant. The operation
+uses the existing #2965 resolver to select the one current owner/repository-
+qualified `Available` Codespace, then uses the existing bounded
+`gh codespace ssh` transport and verifies `CODESPACE_NAME`, the fixed
+`/workspaces/agent-os` checkout, and the existing
+`agent-os-codespaces-v1` environment-health contract. The result includes a
+bounded workspace commit identity, content-bound environment-health evidence,
+fail-closed reason codes, and existing workflow/job/artifact correlation. No
+browser, port, lifecycle, credential, GitHub-write, or production mutation is
+authorized. An unavailable or ambiguous Codespace is a diagnostic blocker,
+not a reason to silently execute this Codespaces-specific diagnostic on GCE.
+
+The existing workflow's `--allowed-actor Blummer92` rule remains unchanged:
+registration does not authorize an assistant-authored trigger or prove native
+ChatGPT dispatch. A live replacement-VM acceptance needs the authorized
+owner-actor ingress, actual SSH/health result, GitHub Actions run/job/artifact
+readback, and host consumption without an operator terminal relay. A
+successful workflow with its Codespaces step skipped is not acceptance.
+Changes to `.github/workflows/**`, actor admission, credentials, or
+Codespace lifecycle require separate exact authorization. Issue #3463 remains
+open for the broader host-routing and live-acceptance obligations.
+
+
+### Fixed read-only SSH stage isolation (#3345 follow-up)
+
+When the `codespaces-environment-qualification-readonly` operation selects one
+current `Available` Codespace, the existing diagnostic runner now performs
+two fixed read-only preflight commands before the full environment-health probe:
+`gh codespace ssh -c <resolved> -- true` and a Python startup marker.
+These are diagnostic operations, not general-purpose shell/argv authority.
+Each preflight has a bounded 25-second timeout and distinct
+`codespaces-ssh-probe-*` or `codespaces-python-probe-*` failure codes.
+The original 90-second bounded full diagnostic remains unchanged and runs
+only after both preflights succeed. A successful SSH preflight alone is not
+environment-health PASS; the full identity-bound health receipt is still required.
+An SSH preflight timeout cannot distinguish network establishment from
+authentication or remote shell readiness and must not be overclassified.
+
+No Codespace lifecycle mutation, token scope change, actor-allowlist change,
+GitHub Actions workflow edit, browser credential exposure, or production action
+is part of this stage-isolation increment. The live owner-reported replacement
+Codespace remains subject to independent QA and correlated artifact readback.
+
+
+### Fixed read-only CLI authentication preflight (#3345 follow-up)
+
+Before the two SSH/Python qualification stages, the fixed diagnostic now
+checks `gh api --method GET /user --jq .login` using the same transport
+credential. It returns only a bounded status/reason, never the user identity,
+token, stderr, or raw API response. The 12-second authentication timeout and
+fail-closed classifications distinguish CLI API authentication failure from
+subsequent SSH-stage timeout. A successful API authentication check **does not**
+establish SSH authorization, network connectivity, or environment health.
+The fixed `gh codespace ssh` commands and their existing timeouts remain
+unchanged. No lifecycle mutation, credential or workflow edits are included.

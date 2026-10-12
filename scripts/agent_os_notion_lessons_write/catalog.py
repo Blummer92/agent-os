@@ -10,6 +10,7 @@ import re
 
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
+LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -61,6 +62,14 @@ LESSONS = MappingProxyType({
                 "authorization, code, tests and exact-head evidence remain authoritative. "
                 "Never claim a lesson was persisted without canonical Notion readback."
             ),
+        }),
+    }),
+    # #3418 Test G: reviewed narrative-only LL-87 update from CKR6 receipt 6096274166.
+    # The owner must separately bind the live last_edited_time at execution.
+    LL87_GUARDRAIL_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": "LL-87",
+        "properties": MappingProxyType({
+            "Guardrail": "If a PR description contains a GitHub closing keyword referencing an issue, merging may close that issue. When live acceptance remains, use a non-closing Part of reference and verify the PR description before merge.",
         }),
     }),
     # #3417/#3418 D1: descriptive classification for the existing LL-93 page.
