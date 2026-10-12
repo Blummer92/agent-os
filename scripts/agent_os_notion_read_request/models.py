@@ -33,6 +33,12 @@ REQUEST_CLASSES: tuple[str, ...] = (
     "teacher-modeling",
     "packet-materials",
     "destination-verification",
+    # #2816: governed source-schema reads name a catalog-declared logical
+    # source and project only its property id/name/type triples. Like
+    # destination-verification, this class is record-driven rather than
+    # #980-plan-driven: its read plan is exactly one schema step, so the
+    # #3476 coursewide filter guard is bypassed by construction.
+    "source-schema",
 )
 
 #: Each request class resolves to already-resolved #980 intent. The read plan,
@@ -62,6 +68,17 @@ REQUEST_CLASS_INTENT: dict[str, dict[str, object]] = {
     "packet-materials": {
         "action": "packet-materials",
         "artifact_type": "worksheet",
+        "requires_reusable_assets": False,
+    },
+    # #2816: the source-schema intent resolves through the same
+    # planner/assembler vocabulary. Both #980 _request_mode classifiers fall
+    # through to "bounded" for this action, so the mode-consistency invariant
+    # holds with no orchestrator or assembler change. The class is executed
+    # by the record-driven schema path (see execution.execute_source_schema),
+    # never by a #980 plan.
+    "source-schema": {
+        "action": "source-schema",
+        "artifact_type": "none",
         "requires_reusable_assets": False,
     },
 }
@@ -165,6 +182,9 @@ class NotionReadRequestRecord:
     issue_number: int
     fixed_page_id: str | None = None
     expected_title: str | None = None
+    # #2816: source-schema requests name the catalog-declared logical source
+    # whose schema is read. Only this class may carry it.
+    logical_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
