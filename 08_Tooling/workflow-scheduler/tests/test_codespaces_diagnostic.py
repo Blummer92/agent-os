@@ -850,7 +850,9 @@ def test_3463_qualification_runner_is_read_only_and_does_not_embed_target_name()
     assert "animated-computing-machine-pgjg5796p96h69q5" not in source
     assert "gh codespace start" not in source
     assert "gh codespace stop" not in source
-    assert "os.environ.get(\"CODESPACE_NAME\")!=codespace_name" in source
+    assert 'remote_codespace_name=os.environ.get("CODESPACE_NAME")' in source
+    assert "remote_codespace_name is not None and remote_codespace_name!=codespace_name" in source
+    assert 'result["reason_codes"]=["codespaces-surface-identity-mismatch"]' in source
     assert 'hp.get("profile_id")!=PROFILE_ID' in source
     assert 'hp.get("execution_surface_id")!=f"codespace:{codespace_name}"' in source
 
@@ -1156,3 +1158,32 @@ def test_3536_fixed_multiline_runner_is_shell_quoted(monkeypatch) -> None:
     assert shlex.split("python3 -c " + calls[0][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert calls[0][-4:] == ("3536", QUALIFICATION_DIAGNOSTIC_ID, "multiline-shell-quote", APPROVED_CODESPACE_NAME)
     assert "private-token" not in str(evidence)
+
+
+def test_3536_noninteractive_codespace_identity_contract() -> None:
+    """Absent SSH environment identity is not itself a mismatch; conflicts fail closed."""
+    import os
+    import subprocess
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    base = os.environ.copy()
+    base.pop("CODESPACE_NAME", None)
+    argv = ("python3", "-c", _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+            "3536", "codespaces-environment-qualification-readonly",
+            "identity-probe", APPROVED_CODESPACE_NAME)
+    def check(env):
+        completed = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=15)
+        assert completed.returncode == 0
+        start = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
+        end = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
+        return json.loads(completed.stdout.split(start, 1)[1].split(end, 1)[0])
+    absent = check(base)
+    assert absent["reason_codes"] != ["codespaces-surface-identity-mismatch"]
+    conflict = check({**base, "CODESPACE_NAME": "wrong-codespace"})
+    assert conflict["reason_codes"] == ["codespaces-surface-identity-mismatch"]
+    assert conflict["environment_health_evidence_id"] is None
+    # A matching identity still requires normal workspace and health checks.
+    matching = check({**base, "CODESPACE_NAME": APPROVED_CODESPACE_NAME})
+    assert matching["reason_codes"] != ["codespaces-surface-identity-mismatch"]
+    assert matching["status"] != "success" or matching["environment_health_evidence_id"]
