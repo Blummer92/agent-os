@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -571,7 +572,7 @@ def run_codespaces_diagnostic(
                 "--",
                 "python3",
                 "-c",
-                (_ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _QUALIFICATION_REMOTE_RUNNER_SOURCE if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE),
+                shlex.quote(_ADOBE_REMOTE_RUNNER_SOURCE if request.diagnostic_id == ADOBE_DIAGNOSTIC_ID else _QUALIFICATION_REMOTE_RUNNER_SOURCE if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID else _REMOTE_RUNNER_SOURCE),
                 str(request.issue_number),
                 request.diagnostic_id,
                 request.request_id,
