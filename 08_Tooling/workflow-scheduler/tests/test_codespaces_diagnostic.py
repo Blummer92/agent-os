@@ -1084,6 +1084,7 @@ def test_3345_integrated_auth_ssh_python_health_and_fail_closed(monkeypatch) -> 
 
 
 def test_3463_ssh_timeout_records_bounded_duration_without_raw_output() -> None:
+    from workflow_scheduler.governance import codespaces_diagnostic
     request = codespaces_diagnostic.CodespacesDiagnosticRequest(
         repository="Blummer92/agent-os", issue_number=3463,
         diagnostic_id="codespaces-environment-qualification-readonly", request_id="timing-test",
