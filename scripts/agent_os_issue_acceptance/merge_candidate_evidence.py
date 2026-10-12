@@ -1,9 +1,47 @@
-"""Pure-local pre-merge mergeability evidence classifier for #3402.
+"""Pure-local pre-merge evidence classifier for one batch-canary candidate.
 
-Normalizes already-read candidate evidence into bounded, fail-closed
-dispositions. The caller performs all actual re-reads, merge admission,
-authorization, validation, and other I/O. This module performs none.
-This foundational classifier does not implement validation polling.
+Classifies already-read, normalized evidence about a single merge candidate
+into a closed-vocabulary disposition. It performs no retrieval, validation,
+merge, scheduling, repair, or external mutation -- the same philosophy as
+``batch_repair_continuation.py`` ("performs no retrieval, repair, scheduling,
+validation, merge...").
+
+This module does NOT duplicate ``merge_authorization.py`` (which owns
+authorization records) or ``finite_batch_admission.py`` (which owns batch
+counts): it classifies evidence freshness/readiness only. Callers supply the
+evidence; the classifier decides only what the next bounded action is, and
+never authorizes a merge.
+
+Soft-absorbs the bounded-behavior evidence behind #3402 (mergeability
+transient-false: bounded re-read, never treat a single false as terminal) and
+#3431 (validation in_progress: bounded poll wait, never merge early and never
+stop terminally). The issues stay open; nothing here closes them.
+
+Disposition precedence (first match wins; fail-closed throughout):
+
+1. PR closed -> ``blocked_item_local`` (``pr-closed``)
+2. PR draft -> ``blocked_item_local`` (``pr-not-ready``)
+3. Head SHA moved between reads -> ``blocked_item_local`` (``head-sha-changed``);
+   stale evidence must never proceed.
+4. A check is failing -> ``blocked_item_local`` (``checks-failing``)
+5. Aggregate failed -> ``blocked_item_local`` (``aggregate-failed``)
+6. Aggregate state unknown -> ``blocked_item_local`` (``aggregate-state-unknown``)
+7. Aggregate in_progress and poll budget remains -> ``wait_reacquire_validation``
+   (``validation-in-progress``); poll budget exhausted -> ``ceiling_exceeded``
+   (``validation-poll-budget-exhausted``)
+8. Aggregate success:
+   - mergeable=true -> ``proceed`` (``all-evidence-green``)
+   - mergeable=false and re-read budget remains -> ``reread_mergeability``
+     (``mergeability-false-transient``); budget exhausted -> ``blocked_item_local``
+     (``mergeability-false-persistent``): re-reads proved the false, so the
+     item is blocked locally, not the loop.
+   - mergeable=None (not yet computed) and re-read budget remains ->
+     ``reread_mergeability`` (``mergeability-state-unknown``); budget
+     exhausted -> ``ceiling_exceeded`` (``mergeability-reacquire-budget-
+     exhausted``): the bounded loop produced no verdict, so the loop stops
+     fail-closed with precise evidence.
+
+Closed vocabularies: ``DISPOSITIONS`` and ``REASON_CODES``.
 """
 
 from __future__ import annotations
@@ -15,6 +53,7 @@ from typing import Literal
 
 class MergeCandidateDisposition(str, Enum):
     PROCEED = "proceed"
+    WAIT_REACQUIRE_VALIDATION = "wait_reacquire_validation"
     REREAD_MERGEABILITY = "reread_mergeability"
     BLOCKED_ITEM_LOCAL = "blocked_item_local"
     CEILING_EXCEEDED = "ceiling_exceeded"
@@ -30,7 +69,8 @@ REASON_CODES = frozenset(
         "checks-failing",
         "aggregate-failed",
         "aggregate-state-unknown",
-        "aggregate-not-terminal",
+        "validation-in-progress",
+        "validation-poll-budget-exhausted",
         "mergeability-false-transient",
         "mergeability-false-persistent",
         "mergeability-state-unknown",
@@ -48,8 +88,7 @@ class MergeCandidateEvidence:
     """Normalized pre-merge evidence for one batch-canary candidate.
 
     ``reacquires_remaining`` bounds mergeability re-reads (#3402);
-    ``polls_remaining`` is an unused input reserved for follow-on validation.
-    ``mergeable``
+    ``polls_remaining`` bounds validation-run polls (#3431). ``mergeable``
     is None when the provider has not computed it yet. ``head_sha_stable``
     is False when a later read observed a different head SHA, making this
     evidence stale.
@@ -136,7 +175,17 @@ def classify_merge_candidate_evidence(
     if evidence.aggregate == "unknown":
         return _blocked(evidence, "aggregate-state-unknown")
     if evidence.aggregate == "in_progress":
-        return _blocked(evidence, "aggregate-not-terminal")
+        if evidence.polls_remaining > 0:
+            return _classified(
+                evidence,
+                MergeCandidateDisposition.WAIT_REACQUIRE_VALIDATION,
+                "validation-in-progress",
+            )
+        return _classified(
+            evidence,
+            MergeCandidateDisposition.CEILING_EXCEEDED,
+            "validation-poll-budget-exhausted",
+        )
 
     # aggregate == "success" from here on.
     if evidence.mergeable is True:
