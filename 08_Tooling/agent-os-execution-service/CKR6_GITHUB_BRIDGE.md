@@ -81,3 +81,13 @@ No workflow change, Notion write, store or authority is added.
   selected-without-receipt, candidates, recurrences, refinement proposals and
   signals, and CKR12 accountability (matched by lesson number because the CKR12
   snapshot uses `lesson-N` while live IDs are `LL-N`). No causality is inferred.
+
+Live follow-up (2026-10-09, #3418): a malformed `lesson-candidate` or
+`lesson-refinement` detail now returns the same bounded `status: rejected`
+receipt with a finite `envelope-rejected:<code>` (for example
+`refinement-receipt-refs-invalid`) and zero reads, instead of crashing into the
+generic `ckr6-result-unavailable` fallback (run 37927552170). Receipt references
+may use the anchor-free API form
+`https://api.github.com/repos/Blummer92/agent-os/issues/comments/<id>`, because
+a host write route was observed rewriting `#issuecomment-` anchors in comment
+bodies (comment 6080494403); the `#issuecomment` form remains valid.

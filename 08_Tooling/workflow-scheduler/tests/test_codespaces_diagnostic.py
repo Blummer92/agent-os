@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 import json
 import subprocess
 from pathlib import Path
@@ -23,6 +25,22 @@ from workflow_scheduler.governance.dev_validation_codespaces import (
 from workflow_scheduler.governance.github_issue_comment_ingress import (
     IssueCommentIngressResult,
 )
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _mock_transport_auth_for_existing_diagnostic_cases(monkeypatch, request):
+    # Only legacy SSH/remote-health tests bypass API auth. Auth-specific and
+    # integrated tests exercise the real preflight without a global stub.
+    if request.node.name.startswith((
+        "test_3345_transport_authentication_",
+        "test_3345_integrated_auth_",
+    )):
+        return
+    from workflow_scheduler.governance import codespaces_diagnostic
+    monkeypatch.setattr(codespaces_diagnostic, "_check_transport_authentication", lambda *args, **kwargs: None)
 
 
 REQUEST_ID = "canva-cdp-1"
@@ -456,7 +474,7 @@ def test_3094_adobe_and_existing_canva_diagnostics_select_distinct_fixed_runners
     evidence = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert evidence["disposition"] == "CODESPACES_ADOBE_MINIMUM_PROBE_PASS"
     ssh_argv = calls[-1]
-    assert ssh_argv[8] == _ADOBE_REMOTE_RUNNER_SOURCE
+    assert ssh_argv[8] == shlex.quote(_ADOBE_REMOTE_RUNNER_SOURCE)
     assert ADOBE_EXPRESS_URL in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "p.goto(process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
@@ -698,3 +716,474 @@ def test_3094_existing_canva_behavioral_payload_still_round_trips() -> None:
         ),
     )
     assert evidence == payload
+
+
+def _qualification_ingress() -> IssueCommentIngressResult:
+    from workflow_scheduler.governance.codespaces_diagnostic import QUALIFICATION_DIAGNOSTIC_ID
+    base = _ingress()
+    return IssueCommentIngressResult(
+        schema_version=base.schema_version,
+        status="accepted",
+        reason="accepted-codespaces-diagnostic-envelope",
+        repository=REPOSITORY,
+        issue_number=3463,
+        comment_id=base.comment_id,
+        actor="Blummer92",
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none=base.logical_trigger_id_or_none,
+        run_attempt=1,
+        diagnostic_id_or_none=QUALIFICATION_DIAGNOSTIC_ID,
+        diagnostic_request_id_or_none="qualify-3463-1",
+    )
+
+
+def _qualification_payload() -> dict[str, object]:
+    from workflow_scheduler.governance.codespaces_diagnostic import QUALIFICATION_DIAGNOSTIC_ID
+    return {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["codespaces-environment-qualified"],
+        "repository": REPOSITORY,
+        "issue_number": 3463,
+        "diagnostic_id": QUALIFICATION_DIAGNOSTIC_ID,
+        "request_id": "qualify-3463-1",
+        "codespace_name": APPROVED_CODESPACE_NAME,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": APPROVED_CODESPACE_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + "a" * 64,
+        "workspace_head": "b" * 40,
+        "workspace_branch": None,
+        "cleanup_complete": True,
+        "workspace_side_effects_performed": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+    }
+
+
+def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        QUALIFICATION_DIAGNOSTIC_ID, _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    import os
+    old = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = "fixture-not-a-real-token"
+    try:
+        route, request = select_codespaces_diagnostic(
+            _qualification_ingress(),
+            run=lambda argv, timeout: subprocess.CompletedProcess(
+                argv, 0, stdout=_codespace_payload(), stderr=""
+            ),
+        )
+    finally:
+        if old is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = old
+    assert route["selected"] is True
+    assert request is not None
+    assert route["codespace_name"] == APPROVED_CODESPACE_NAME
+    payload = _qualification_payload()
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "success"
+    assert result["environment_health_evidence_id"].startswith("sha256:")
+    assert calls[2][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
+    assert shlex.split('python3 -c ' + calls[2][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert calls[2][-3] == QUALIFICATION_DIAGNOSTIC_ID
+    assert "scripts/agent-os-environment-health.py" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "CODESPACE_NAME" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "rm -rf" not in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "pip install" not in _QUALIFICATION_REMOTE_RUNNER_SOURCE
+
+
+def test_3463_qualification_rejects_mismatched_surface_and_bad_health_receipt() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY,
+        issue_number=3463,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID,
+        request_id="qualify-3463-1",
+    )
+    for field, value, reason in (
+        ("codespace_name", "old-deleted-codespace", "codespaces-diagnostic-evidence-identity-mismatch"),
+        ("environment_health_evidence_id", "not-a-hash", "codespaces-environment-health-evidence-invalid"),
+    ):
+        payload = _qualification_payload()
+        payload[field] = value
+        calls = []
+        def run(argv, *, timeout):
+            calls.append(argv)
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            if len(calls) == 2:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="Python 3.11.13\n", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=_diagnostic_stdout(payload), stderr=""
+            )
+        result = run_codespaces_diagnostic(
+            request,
+            codespace_name=APPROVED_CODESPACE_NAME,
+            run=run,
+        )
+        assert result["status"] == "needs-decision"
+        assert result["reason_codes"] == [reason]
+
+
+def test_3463_qualification_runner_is_read_only_and_does_not_embed_target_name() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    source = _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert "animated-computing-machine-pgjg5796p96h69q5" not in source
+    assert "gh codespace start" not in source
+    assert "gh codespace stop" not in source
+    assert 'remote_codespace_name=os.environ.get("CODESPACE_NAME")' in source
+    assert "remote_codespace_name is not None and remote_codespace_name!=codespace_name" in source
+    assert 'result["reason_codes"]=["codespaces-surface-identity-mismatch"]' in source
+    assert 'hp.get("profile_id")!=PROFILE_ID' in source
+    assert 'hp.get("execution_surface_id")!=f"codespace:{codespace_name}"' in source
+
+
+def test_3345_ssh_stage_timeout_is_not_reported_as_health_failure() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _SSH_STAGE_TIMEOUT_SECONDS,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-1",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append((argv, timeout))
+        raise subprocess.TimeoutExpired(argv, timeout)
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["reason_codes"] == ["codespaces-ssh-probe-timeout"]
+    assert result["failed_stage"] == "ssh"
+    assert calls[0][0] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "true")
+    assert calls[0][1] == _SSH_STAGE_TIMEOUT_SECONDS
+    assert len(calls) == 1
+
+
+def test_3345_python_start_probe_failure_is_distinct() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-2",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+    assert result["failed_stage"] == "python"
+    assert len(calls) == 2
+    assert calls[1][-3:] == ("--", "python3", "-V")
+
+
+def test_3345_stage_probes_precede_existing_health_runner() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-3",
+    )
+    payload = _qualification_payload()
+    payload["issue_number"] = 3345
+    payload["request_id"] = "ssh-stage-3"
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "success"
+    assert len(calls) == 3
+    assert calls[2][8].find("scripts/agent-os-environment-health.py") >= 0
+
+
+def test_3345_python_probe_wrong_marker_with_exit_zero_fails_closed() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-wrong-marker",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="unexpected-marker\n", stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+    assert result["failed_stage"] == "python"
+    assert result["probe_exit_code"] == 0
+    assert len(calls) == 2
+
+
+def test_3345_python_probe_timeout_fails_before_health_runner() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _SSH_STAGE_TIMEOUT_SECONDS,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-python-timeout",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append((argv, timeout))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise subprocess.TimeoutExpired(argv, timeout)
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["codespaces-python-probe-timeout"]
+    assert result["failed_stage"] == "python"
+    assert result["stage_timeout_seconds"] == _SSH_STAGE_TIMEOUT_SECONDS
+    assert len(calls) == 2
+    assert calls[1][0][-3:] == ("--", "python3", "-V")
+    assert calls[1][1] == _SSH_STAGE_TIMEOUT_SECONDS
+
+
+def test_3345_transport_authentication_preflight_fail_closed() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _AUTH_PREFLIGHT_TIMEOUT_SECONDS, _check_transport_authentication,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="auth-3345",
+    )
+    cases = (
+        (subprocess.CompletedProcess([], 0, stdout="Blummer92\n", stderr=""), None),
+        (subprocess.CompletedProcess([], 1, stdout="", stderr="private token text"), "codespaces-transport-auth-failed"),
+        (subprocess.CompletedProcess([], 0, stdout="", stderr=""), "codespaces-transport-auth-failed"),
+    )
+    for completed, expected in cases:
+        calls = []
+        def run(argv, *, timeout):
+            calls.append((argv, timeout))
+            return completed
+        result = _check_transport_authentication(
+            request, codespace_name=APPROVED_CODESPACE_NAME, run=run
+        )
+        assert calls == [(("gh", "api", "--method", "GET", "/user", "--jq", ".login"), _AUTH_PREFLIGHT_TIMEOUT_SECONDS)]
+        if expected is None:
+            assert result is None
+        else:
+            assert result["reason_codes"] == [expected]
+            assert "private token text" not in json.dumps(result)
+
+
+def test_3345_transport_authentication_timeout_is_distinct() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _check_transport_authentication,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="auth-timeout",
+    )
+    def run(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout, stderr=b"secret-not-for-receipt")
+    result = _check_transport_authentication(
+        request, codespace_name=APPROVED_CODESPACE_NAME, run=run
+    )
+    assert result["reason_codes"] == ["codespaces-transport-auth-timeout"]
+    assert result["failed_stage"] == "api-authentication"
+    assert "secret-not-for-receipt" not in json.dumps(result)
+
+
+def test_3345_integrated_auth_ssh_python_health_and_fail_closed(monkeypatch) -> None:
+    """Exercise the real auth preflight without the module-wide isolation stub."""
+    from workflow_scheduler.governance import codespaces_diagnostic as diagnostic
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _check_transport_authentication,
+    )
+    monkeypatch.setattr(
+        diagnostic, "_check_transport_authentication", _check_transport_authentication
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="integrated-auth-ssh",
+    )
+    payload = _qualification_payload()
+    payload["issue_number"] = 3345
+    payload["request_id"] = "integrated-auth-ssh"
+
+    def execute(*, auth_exit=0, auth_output="Blummer92\n", ssh_exit=0,
+                python_marker="Python 3.11.13\n",
+                health_payload=None):
+        calls = []
+        def run(argv, *, timeout):
+            calls.append((argv, timeout))
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(argv, auth_exit, stdout=auth_output, stderr="private credential")
+            if len(calls) == 2:
+                return subprocess.CompletedProcess(argv, ssh_exit, stdout="", stderr="")
+            if len(calls) == 3:
+                return subprocess.CompletedProcess(argv, 0, stdout=python_marker, stderr="")
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=_diagnostic_stdout(health_payload if health_payload is not None else payload),
+                stderr=""
+            )
+        return diagnostic.run_codespaces_diagnostic(
+            request, codespace_name=APPROVED_CODESPACE_NAME, run=run
+        ), calls
+
+    good, calls = execute()
+    assert good["status"] == "success"
+    assert len(calls) == 4
+    assert calls[0][0] == ("gh", "api", "--method", "GET", "/user", "--jq", ".login")
+    assert calls[1][0] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "true")
+    assert calls[2][0][-3:] == ("--", "python3", "-V")
+    assert "scripts/agent-os-environment-health.py" in calls[3][0][8]
+    assert "private credential" not in json.dumps(good)
+
+    failed_auth, calls = execute(auth_exit=1, auth_output="")
+    assert failed_auth["reason_codes"] == ["codespaces-transport-auth-failed"]
+    assert len(calls) == 1
+    assert "private credential" not in json.dumps(failed_auth)
+
+    failed_ssh, calls = execute(ssh_exit=1)
+    assert failed_ssh["reason_codes"] == ["codespaces-ssh-probe-failed"]
+    assert len(calls) == 2
+
+    failed_python, calls = execute(python_marker="wrong marker\n")
+    assert failed_python["reason_codes"] == ["codespaces-python-probe-failed"]
+    assert len(calls) == 3
+
+    invalid_health = dict(payload)
+    invalid_health["environment_health_evidence_id"] = "invalid"
+    failed_health, calls = execute(health_payload=invalid_health)
+    assert failed_health["reason_codes"] == ["codespaces-environment-health-evidence-invalid"]
+    assert len(calls) == 4
+
+
+def test_3463_ssh_timeout_records_bounded_duration_without_raw_output() -> None:
+    from workflow_scheduler.governance import codespaces_diagnostic
+    request = codespaces_diagnostic.CodespacesDiagnosticRequest(
+        repository="Blummer92/agent-os", issue_number=3463,
+        diagnostic_id="codespaces-environment-qualification-readonly", request_id="timing-test",
+    )
+    def timeout(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout, output="private-token", stderr="secret-ssh-debug")
+    result = codespaces_diagnostic._qualify_ssh_stages(
+        request, codespace_name="animated-computing-machine-pgjg5796p96h69q5", run=timeout,
+    )
+    assert result["reason_codes"] == ["codespaces-ssh-probe-timeout"]
+    assert result["failure_detail"] == "undetermined"
+    assert isinstance(result["probe_elapsed_ms"], int)
+    assert result["probe_elapsed_ms"] >= 0
+    assert "private-token" not in str(result)
+    assert "secret-ssh-debug" not in str(result)
+
+
+def test_3534_python_probe_is_shell_safe_and_version_bounded(monkeypatch) -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _qualify_ssh_stages,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3534,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="python-shell-safe",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="Python 3.11.13\n", stderr="")
+    assert _qualify_ssh_stages(request, codespace_name=APPROVED_CODESPACE_NAME, run=run) is None
+    assert calls[1] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "python3", "-V")
+    assert not any("(" in arg or "'" in arg for arg in calls[1])
+
+    for bad in ("Python 2.7.18\n", "Python 3.11.13 extra\n", "not-python\n"):
+        def bad_run(argv, *, timeout):
+            if argv[-1] == "true":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=bad, stderr="secret=redacted-test-token")
+        result = _qualify_ssh_stages(request, codespace_name=APPROVED_CODESPACE_NAME, run=bad_run)
+        assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+        assert "redacted-test-token" not in json.dumps(result)
+
+
+def test_3536_fixed_multiline_runner_is_shell_quoted(monkeypatch) -> None:
+    import shlex
+    from workflow_scheduler.governance import codespaces_diagnostic as diagnostic
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3536,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="multiline-shell-quote",
+    )
+    monkeypatch.setattr(diagnostic, "_check_transport_authentication", lambda *args, **kwargs: None)
+    monkeypatch.setattr(diagnostic, "_qualify_ssh_stages", lambda *args, **kwargs: None)
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="private-token")
+    evidence = diagnostic.run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert evidence["reason_codes"] == ["codespaces-diagnostic-ssh-failed"]
+    assert calls[0][8] == shlex.quote(_QUALIFICATION_REMOTE_RUNNER_SOURCE)
+    assert shlex.split("python3 -c " + calls[0][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert calls[0][-4:] == ("3536", QUALIFICATION_DIAGNOSTIC_ID, "multiline-shell-quote", APPROVED_CODESPACE_NAME)
+    assert "private-token" not in str(evidence)
+
+
+def test_3536_noninteractive_codespace_identity_contract() -> None:
+    """Absent SSH environment identity is not itself a mismatch; conflicts fail closed."""
+    import os
+    import subprocess
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    base = os.environ.copy()
+    base.pop("CODESPACE_NAME", None)
+    argv = ("python3", "-c", _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+            "3536", "codespaces-environment-qualification-readonly",
+            "identity-probe", APPROVED_CODESPACE_NAME)
+    def check(env):
+        completed = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=15)
+        assert completed.returncode == 0
+        start = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-BEGIN==="
+        end = "===AGENT-OS-CODESPACES-DIAGNOSTIC-JSON-END==="
+        return json.loads(completed.stdout.split(start, 1)[1].split(end, 1)[0])
+    absent = check(base)
+    assert absent["reason_codes"] != ["codespaces-surface-identity-mismatch"]
+    conflict = check({**base, "CODESPACE_NAME": "wrong-codespace"})
+    assert conflict["reason_codes"] == ["codespaces-surface-identity-mismatch"]
+    assert conflict["environment_health_evidence_id"] is None
+    # A matching identity still requires normal workspace and health checks.
+    matching = check({**base, "CODESPACE_NAME": APPROVED_CODESPACE_NAME})
+    assert matching["reason_codes"] != ["codespaces-surface-identity-mismatch"]
+    assert matching["status"] != "success" or matching["environment_health_evidence_id"]
