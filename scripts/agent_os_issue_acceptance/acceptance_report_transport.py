@@ -25,15 +25,25 @@ ALLOWED_TRANSPORT_STATES = {
     "stale-pr-head",
     "unsupported-contract",
     "missing-provenance",
+    # #3506: the conflated missing-provenance state is split so diagnostics
+    # distinguish "readback attempted and failed" (missing-provenance) from
+    # "readback never attempted because linkage is non-authoritative"
+    # (no-authoritative-linkage) and "linkage deliberately declared
+    # non-closing" (non-closing-linkage-declared). All three remain
+    # fail-closed for execution: execution_authorized is always False.
+    "no-authoritative-linkage",
+    "non-closing-linkage-declared",
 }
 MAX_ENVELOPE_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 64 * 1024
 STATE_PRECEDENCE = {
     "unsupported-contract": 0,
     "missing-provenance": 1,
-    "stale-pr-head": 2,
-    "stale-issue": 3,
-    "snapshot-current": 4,
+    "no-authoritative-linkage": 2,
+    "non-closing-linkage-declared": 3,
+    "stale-pr-head": 4,
+    "stale-issue": 5,
+    "snapshot-current": 6,
 }
 
 
@@ -399,6 +409,28 @@ def acceptance_report_from_payload(payload: Mapping[str, Any]) -> AcceptanceRepo
     )
 
 
+def _is_non_authoritative_linkage(report: AcceptanceReport) -> bool:
+    """True when issue_number is None because the parse yielded only bare refs.
+
+    #3506: distinguishes "readback never attempted because the PR body's issue
+    linkage is non-authoritative" from "readback attempted and failed". Any
+    other provenance gap (or an absent parse result) stays missing-provenance.
+    """
+    result = report.linked_issue_result
+    return (
+        result is not None
+        and result.status == LinkedIssueParseStatus.MANUAL_REVIEW
+        and bool(result.bare_references)
+        and not result.explicit_candidates
+    )
+
+
+def _is_declared_non_closing(report: AcceptanceReport) -> bool:
+    """True when the PR body carries a qualifying `Non-closing:` directive."""
+    result = report.linked_issue_result
+    return result is not None and result.status == LinkedIssueParseStatus.INFORMATIONAL
+
+
 def build_acceptance_report_transport(
     *,
     report: AcceptanceReport,
@@ -425,8 +457,18 @@ def build_acceptance_report_transport(
     if contract_version not in SUPPORTED_CONTRACT_VERSIONS:
         reason_codes.append("unsupported-contract")
 
-    if issue_body_retrieval_failed or not repository or issue_number is None or not pr_head_sha or not evaluator_sha or not observed_at:
+    if issue_body_retrieval_failed or not repository or not pr_head_sha or not evaluator_sha or not observed_at:
         reason_codes.append("missing-provenance")
+    elif issue_number is None:
+        # #3506: split the conflated state. The fail-closed outcome is
+        # unchanged (no evidence_id, execution never authorized); only the
+        # diagnostic reason distinguishes the cause.
+        if _is_declared_non_closing(report):
+            reason_codes.append("non-closing-linkage-declared")
+        elif _is_non_authoritative_linkage(report):
+            reason_codes.append("no-authoritative-linkage")
+        else:
+            reason_codes.append("missing-provenance")
     elif fresh_issue_body is None or fresh_pr_head_sha is None:
         reason_codes.append("missing-provenance")
     elif issue_body is None:
@@ -458,6 +500,10 @@ def build_acceptance_report_transport(
         transport_state = "unsupported-contract"
     elif "missing-provenance" in reason_codes:
         transport_state = "missing-provenance"
+    elif "no-authoritative-linkage" in reason_codes:
+        transport_state = "no-authoritative-linkage"
+    elif "non-closing-linkage-declared" in reason_codes:
+        transport_state = "non-closing-linkage-declared"
     elif "stale-pr-head" in reason_codes:
         transport_state = "stale-pr-head"
     elif "stale-issue" in reason_codes:
@@ -498,7 +544,7 @@ def build_acceptance_report_transport(
         raise ValueError("unsupported transport state")
     if reason_codes:
         for code in reason_codes:
-            if code not in {"missing-provenance", "unsupported-contract", "stale-issue", "stale-pr-head"}:
+            if code not in {"missing-provenance", "unsupported-contract", "stale-issue", "stale-pr-head", "no-authoritative-linkage", "non-closing-linkage-declared"}:
                 raise ValueError("unsupported reason code")
     return AcceptanceReportTransport(
         contract_version=contract_version,
