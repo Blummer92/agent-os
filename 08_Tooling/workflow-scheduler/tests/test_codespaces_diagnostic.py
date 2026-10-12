@@ -799,7 +799,7 @@ def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
     assert result["status"] == "success"
     assert result["environment_health_evidence_id"].startswith("sha256:")
     assert calls[2][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
-    assert calls[2][8] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert shlex.split('python3 -c ' + calls[2][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert calls[2][-3] == QUALIFICATION_DIAGNOSTIC_ID
     assert "scripts/agent-os-environment-health.py" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert "CODESPACE_NAME" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
