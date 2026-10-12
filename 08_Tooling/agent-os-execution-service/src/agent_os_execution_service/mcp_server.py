@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import asdict
 
 from mcp.server import MCPServer
@@ -737,7 +739,42 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
     )
 
 
+# #3372: the ChatGPT publication profile is intentionally narrower than the
+# complete repository-local MCP registration. SDK tool removal affects both
+# tools/list and tools/call; UI-side tool toggles cannot enforce this boundary.
+_CHATGPT_PUBLICATION_PROFILE = "chatgpt-governance"
+_CHATGPT_PUBLICATION_TOOLS = frozenset(
+    {
+        "admit_agent_os_issue_comment_mutation_tool",
+        "project_agent_os_lane_post_pr_issue_reconciliation_tool",
+        "admit_agent_os_ready_for_review_tool",
+    }
+)
+
+
+def _apply_chatgpt_publication_profile(server: MCPServer) -> None:
+    """Fail closed unless this server can expose exactly the approved three tools.
+
+    Use the supported MCP SDK list_tools/remove_tool API, before listening.
+    Existing in-process contracts and the normal local registration are unchanged.
+    """
+    registered = {tool.name for tool in asyncio.run(server.list_tools())}
+    missing = _CHATGPT_PUBLICATION_TOOLS - registered
+    if missing:
+        raise RuntimeError("Agent OS publication missing approved tools: " + ", ".join(sorted(missing)))
+    for name in sorted(registered - _CHATGPT_PUBLICATION_TOOLS):
+        server.remove_tool(name)
+    exposed = {tool.name for tool in asyncio.run(server.list_tools())}
+    if exposed != _CHATGPT_PUBLICATION_TOOLS:
+        raise RuntimeError("Agent OS publication tool containment failed")
+
+
 def main() -> None:
+    profile = os.environ.get("AGENT_OS_MCP_TOOL_PROFILE")
+    if profile == _CHATGPT_PUBLICATION_PROFILE:
+        _apply_chatgpt_publication_profile(mcp)
+    elif profile is not None:
+        raise RuntimeError("Unrecognized AGENT_OS_MCP_TOOL_PROFILE; refusing MCP startup")
     mcp.run(transport="stdio")
 
 

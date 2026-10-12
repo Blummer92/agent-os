@@ -34,6 +34,8 @@ def render_report(report: AcceptanceReport) -> str:
         linked_issue = f"#{report.linked_issue}"
     elif status == LinkedIssueParseStatus.MANUAL_REVIEW:
         linked_issue = "unresolved"
+    elif status == LinkedIssueParseStatus.INFORMATIONAL:
+        linked_issue = "declared non-closing"
     else:
         linked_issue = "none detected"
 

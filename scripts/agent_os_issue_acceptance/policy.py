@@ -195,6 +195,13 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
         manual_review_items.extend(
             f"Linked issue: {reason}" for reason in linked_issue_result.reasons
         )
+    # INFORMATIONAL (#3506 declared non-closing linkage) deliberately adds no
+    # manual-review items and never forces overall MANUAL_REVIEW: the author
+    # explicitly declared every detected reference non-closing, no
+    # GitHub-effective closing reference exists, and no issue_number was
+    # resolved, so there is nothing for a reviewer to adjudicate and no
+    # closure authority to guard. Overall status is computed from the other
+    # checks alone.
     if not metadata.present:
         if ScanFinding.METADATA_MISSING in scan_result.findings:
             manual_review_items.append("Issue metadata block is missing.")
