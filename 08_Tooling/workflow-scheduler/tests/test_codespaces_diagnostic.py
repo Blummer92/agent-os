@@ -1081,3 +1081,21 @@ def test_3345_integrated_auth_ssh_python_health_and_fail_closed(monkeypatch) -> 
     failed_health, calls = execute(health_payload=invalid_health)
     assert failed_health["reason_codes"] == ["codespaces-environment-health-evidence-invalid"]
     assert len(calls) == 4
+
+
+def test_3463_ssh_timeout_records_bounded_duration_without_raw_output() -> None:
+    request = codespaces_diagnostic.CodespacesDiagnosticRequest(
+        repository="Blummer92/agent-os", issue_number=3463,
+        diagnostic_id="codespaces-environment-qualification-readonly", request_id="timing-test",
+    )
+    def timeout(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout, output="private-token", stderr="secret-ssh-debug")
+    result = codespaces_diagnostic._qualify_ssh_stages(
+        request, codespace_name="animated-computing-machine-pgjg5796p96h69q5", run=timeout,
+    )
+    assert result["reason_codes"] == ["codespaces-ssh-probe-timeout"]
+    assert result["failure_detail"] == "undetermined"
+    assert isinstance(result["probe_elapsed_ms"], int)
+    assert result["probe_elapsed_ms"] >= 0
+    assert "private-token" not in str(result)
+    assert "secret-ssh-debug" not in str(result)
