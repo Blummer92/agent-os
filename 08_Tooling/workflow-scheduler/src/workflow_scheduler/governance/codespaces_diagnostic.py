@@ -459,6 +459,58 @@ emit(result)
 '''
 
 
+_SSH_STAGE_TIMEOUT_SECONDS = 25
+_REMOTE_START_MARKER = "agent-os-qualification-python-ready"
+
+
+def _qualify_ssh_stages(
+    request: CodespacesDiagnosticRequest,
+    *,
+    codespace_name: str,
+    run: Run,
+) -> dict[str, object] | None:
+    """Classify SSH transport and Python startup without exposing remote output.
+
+    Both probes are fixed read-only commands. A timed-out SSH probe cannot
+    establish whether authentication or the remote shell stalled.
+    """
+    stages = (
+        (
+            "ssh",
+            ("gh", "codespace", "ssh", "-c", codespace_name, "--", "true"),
+            None,
+        ),
+        (
+            "python",
+            (
+                "gh", "codespace", "ssh", "-c", codespace_name,
+                "--", "python3", "-c", "print('agent-os-qualification-python-ready')",
+            ),
+            _REMOTE_START_MARKER,
+        ),
+    )
+    for stage, argv, marker in stages:
+        try:
+            completed = run(argv, timeout=_SSH_STAGE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            result = _failure(request, f"codespaces-{stage}-probe-timeout", codespace_name)
+            result["failed_stage"] = stage
+            result["stage_timeout_seconds"] = _SSH_STAGE_TIMEOUT_SECONDS
+            return result
+        except OSError:
+            result = _failure(request, f"codespaces-{stage}-probe-unavailable", codespace_name)
+            result["failed_stage"] = stage
+            return result
+        if completed.returncode != 0 or (
+            marker is not None and completed.stdout.strip() != marker
+        ):
+            result = _failure(request, f"codespaces-{stage}-probe-failed", codespace_name)
+            result["failed_stage"] = stage
+            result["probe_exit_code"] = completed.returncode
+            return result
+    return None
+
+
 def run_codespaces_diagnostic(
     request: CodespacesDiagnosticRequest,
     *,
@@ -467,6 +519,10 @@ def run_codespaces_diagnostic(
 ) -> dict[str, object]:
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+        stage_failure = _qualify_ssh_stages(request, codespace_name=codespace_name, run=run)
+        if stage_failure is not None:
+            return stage_failure
     try:
         completed = run(
             (
