@@ -388,3 +388,16 @@ No Codespace lifecycle mutation, token scope change, actor-allowlist change,
 GitHub Actions workflow edit, browser credential exposure, or production action
 is part of this stage-isolation increment. The live owner-reported replacement
 Codespace remains subject to independent QA and correlated artifact readback.
+
+
+### Fixed read-only CLI authentication preflight (#3345 follow-up)
+
+Before the two SSH/Python qualification stages, the fixed diagnostic now
+checks `gh api --method GET /user --jq .login` using the same transport
+credential. It returns only a bounded status/reason, never the user identity,
+token, stderr, or raw API response. The 12-second authentication timeout and
+fail-closed classifications distinguish CLI API authentication failure from
+subsequent SSH-stage timeout. A successful API authentication check **does not**
+establish SSH authorization, network connectivity, or environment health.
+The fixed `gh codespace ssh` commands and their existing timeouts remain
+unchanged. No lifecycle mutation, credential or workflow edits are included.
