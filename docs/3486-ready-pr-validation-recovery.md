@@ -46,15 +46,14 @@ Auxiliary green checks do not substitute for the authoritative aggregate.
 
 ## Current canary
 
-PR #3486, candidate head
-`868bd7e46a682adb9c31a215b829c25c0dc130f8`.
+No qualifying canary vehicle is currently identified (checked 2026-10-12):
+none of the open Ready PRs exhibits an `action_required` zero-job
+Validation Gate run. The live canary remains pending a qualifying Ready PR
+and the repository owner's explicit canary authorization; a canary must not
+be manufactured on an unsuitable PR.
 
-Source Validation Gate run: `38164744779`.
-
-The repair is implemented separately on
-`agent/3486-ready-validation-recovery`.
-
-The candidate PR must remain unchanged.
+The recovery mechanism itself is merged to main via PR #3523
+(commit `d3a9a1e2`); it no longer lives on a separate branch.
 
 ## Acceptance limitations
 
