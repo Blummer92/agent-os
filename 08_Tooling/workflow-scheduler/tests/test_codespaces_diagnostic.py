@@ -850,7 +850,9 @@ def test_3463_qualification_runner_is_read_only_and_does_not_embed_target_name()
     assert "animated-computing-machine-pgjg5796p96h69q5" not in source
     assert "gh codespace start" not in source
     assert "gh codespace stop" not in source
-    assert "os.environ.get(\"CODESPACE_NAME\")!=codespace_name" in source
+    assert 'remote_codespace_name=os.environ.get("CODESPACE_NAME")' in source
+    assert "remote_codespace_name is not None and remote_codespace_name!=codespace_name" in source
+    assert 'result["reason_codes"]=["codespaces-surface-identity-mismatch"]' in source
     assert 'hp.get("profile_id")!=PROFILE_ID' in source
     assert 'hp.get("execution_surface_id")!=f"codespace:{codespace_name}"' in source
 
