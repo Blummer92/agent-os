@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 import json
 import subprocess
 from pathlib import Path
@@ -472,7 +474,7 @@ def test_3094_adobe_and_existing_canva_diagnostics_select_distinct_fixed_runners
     evidence = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert evidence["disposition"] == "CODESPACES_ADOBE_MINIMUM_PROBE_PASS"
     ssh_argv = calls[-1]
-    assert ssh_argv[8] == _ADOBE_REMOTE_RUNNER_SOURCE
+    assert ssh_argv[8] == shlex.quote(_ADOBE_REMOTE_RUNNER_SOURCE)
     assert ADOBE_EXPRESS_URL in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "p.goto(process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
     assert "process.argv[2]" in _ADOBE_REMOTE_RUNNER_SOURCE
@@ -797,7 +799,7 @@ def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
     assert result["status"] == "success"
     assert result["environment_health_evidence_id"].startswith("sha256:")
     assert calls[2][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
-    assert calls[2][8] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert shlex.split('python3 -c ' + calls[2][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert calls[2][-3] == QUALIFICATION_DIAGNOSTIC_ID
     assert "scripts/agent-os-environment-health.py" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert "CODESPACE_NAME" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
@@ -1129,3 +1131,28 @@ def test_3534_python_probe_is_shell_safe_and_version_bounded(monkeypatch) -> Non
         result = _qualify_ssh_stages(request, codespace_name=APPROVED_CODESPACE_NAME, run=bad_run)
         assert result["reason_codes"] == ["codespaces-python-probe-failed"]
         assert "redacted-test-token" not in json.dumps(result)
+
+
+def test_3536_fixed_multiline_runner_is_shell_quoted(monkeypatch) -> None:
+    import shlex
+    from workflow_scheduler.governance import codespaces_diagnostic as diagnostic
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _QUALIFICATION_REMOTE_RUNNER_SOURCE,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3536,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="multiline-shell-quote",
+    )
+    monkeypatch.setattr(diagnostic, "_check_transport_authentication", lambda *args, **kwargs: None)
+    monkeypatch.setattr(diagnostic, "_qualify_ssh_stages", lambda *args, **kwargs: None)
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="private-token")
+    evidence = diagnostic.run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert evidence["reason_codes"] == ["codespaces-diagnostic-ssh-failed"]
+    assert calls[0][8] == shlex.quote(_QUALIFICATION_REMOTE_RUNNER_SOURCE)
+    assert shlex.split("python3 -c " + calls[0][8])[2] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert calls[0][-4:] == ("3536", QUALIFICATION_DIAGNOSTIC_ID, "multiline-shell-quote", APPROVED_CODESPACE_NAME)
+    assert "private-token" not in str(evidence)
