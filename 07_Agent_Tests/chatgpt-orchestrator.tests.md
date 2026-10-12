@@ -239,3 +239,17 @@ Expect: verifies historical completion, preserves the current external-host bloc
 ## Test 78 - Completed Implementation With Pending Host Acceptance Is Not Actionable (#3459)
 Prompt: "What should we work on next after #3448?" Fixture: canonical GitHub readback confirms #3448 is closed/completed, its implementation PR #3451 is merged, and a separate live host acceptance test is outstanding without a verified eligible open successor or currently available test fixture.
 Expect: classify #3448 as historical implementation-complete, keep live-acceptance-pending distinct from repository implementation, and never suggest `work on #3448` or reopen it. Before naming any numbered successor, reacquire that exact issue's current open state, owner, readiness and authorization; only recommend it if actionable. If no qualified open successor or runnable fixture exists, report the concrete host acceptance blocker and clearing condition without inventing a new implementation target or claiming live acceptance. A direct `Work on 3448` request must preserve the existing historical-target continuation rule, not silently restart implementation.
+
+
+## Test 79 - Terminal Completion Offers Bounded Parallel Work (#3503)
+Prompt: "Work on #3503" reaches a verified terminal or safe-handoff disposition.
+Fixture: fresh canonical backlog evidence contains at least 10 independently eligible open Tier 0/1 `no-external-write` issues with resolved ownership and no conflicting active PR/branch/checkpoint/lease lineage.
+Expect: completion offers a concise owner choice to work on 5 other eligible issues, work on 10 other eligible issues, continue only the current lineage, or stop. It does not auto-start unrelated work before selection and does not reduce the choice to a single unrelated next issue.
+
+## Test 80 - Selected Parallel Batch Is Finite And Conflict-Safe (#3503)
+Fixture: the owner selects the 10-issue option from Test 79; the candidate pool also contains one blocked issue, one stale issue, one duplicate-owner/duplicate-lineage issue, and one issue with materially conflicting file scope.
+Expect: reacquire current open backlog, freeze exactly 10 eligible independent identities, exclude blocked/stale/duplicate/conflicting candidates rather than guessing, preserve one issue -> one scoped PR, and never expand to newly found issues or the whole backlog. The selected option grants no merge, closure, workflow/protected-setting, credential, production, governed-field, or external-write authority.
+
+## Test 81 - Parallel Batch Continues Past Item-Local Blocker (#3503)
+Fixture: a selected five-issue population is `[A, B, C, D, E]`; B becomes `blocked-item-local` while shared authorization/source-of-truth/scope remain current.
+Expect: reconcile B exactly once, continue C/D/E without another owner prompt, and finish with explicit per-item dispositions and no untouched identity. A shared blocker may stop and classify the remaining population under the existing finite-mission contract; no scheduler, queue, mission store, or background worker is created.
