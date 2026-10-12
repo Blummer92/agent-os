@@ -48,6 +48,13 @@
       "data_source_id": null,
       "verification_state": "unverified",
       "content_class": "curriculum-metadata"
+    },
+    {
+      "logical_source": "icon-system",
+      "display_name": "Icon System",
+      "data_source_id": null,
+      "verification_state": "unverified",
+      "content_class": "visual-asset-metadata"
     }
   ],
   "requests": [
@@ -112,6 +119,18 @@
       "request_class": "visual-assets",
       "canonical_unit_key": "photography-foundations",
       "issue_number": 1941
+    },
+    {
+      "request_id": "visual-asset-library-schema",
+      "request_class": "source-schema",
+      "logical_source": "visual-asset-library",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "icon-system-schema",
+      "request_class": "source-schema",
+      "logical_source": "icon-system",
+      "issue_number": 2816
     }
   ]
 }
