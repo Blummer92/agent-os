@@ -584,6 +584,10 @@ def run_codespaces_diagnostic(
         evidence = _failure(request, "codespaces-diagnostic-transport-timeout", codespace_name)
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
+        if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+            # Qualification output is not a safe public diagnostic surface.
+            stdout_tail, stderr_tail = "", ""
+            stdout_truncated = stderr_truncated = False
         evidence.update(
             {
                 "ssh_exit_code": None,
@@ -599,6 +603,8 @@ def run_codespaces_diagnostic(
     if completed.returncode != 0:
         evidence = _failure(request, "codespaces-diagnostic-ssh-failed", codespace_name)
         stderr_tail, stderr_truncated = _bounded_text(completed.stderr)
+        if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+            stderr_tail, stderr_truncated = "", False
         evidence.update(
             {
                 "ssh_exit_code": completed.returncode,
