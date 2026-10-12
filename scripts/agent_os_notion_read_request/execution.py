@@ -205,4 +205,63 @@ def _resolve_live_unit_status(
     return "active"
 
 
-__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification"]
+def execute_source_schema(
+    admission: NotionReadAdmission,
+    *,
+    catalog: NotionReadCatalog,
+    scheduler_task_executor_factory: SchedulerTaskExecutorFactory,
+) -> dict[str, object]:
+    """Read one catalog-declared source schema through the bounded read surface.
+
+    The governed plan is exactly one ``get_data_source`` step against the
+    admission-bound logical source: no filter step exists, so the #3476
+    coursewide guard is bypassed by construction rather than relaxed. The
+    ``_bounded_read_task_executor`` still enforces the inherited #2282 action
+    allowlist around the dispatch.
+
+    The adapter output is returned unprojected; the projection module owns the
+    public surface and selects only property id/name/type triples from it.
+    """
+    if not isinstance(admission, NotionReadAdmission):
+        raise NotionReadRequestError("admission evidence is required")
+    if admission.status != "admitted" or admission.secret_dispatch_authorized is not True:
+        raise NotionReadRequestError("secret-bearing dispatch requires an admitted #2283 request")
+    if admission.request_class != "source-schema":
+        raise NotionReadRequestError("source-schema request class required")
+    if not callable(scheduler_task_executor_factory):
+        raise NotionReadRequestError("scheduler task executor factory must be callable")
+    if len(admission.required_logical_sources) != 1:
+        raise NotionReadRequestError(
+            "source-schema admission must bind exactly one logical source"
+        )
+
+    logical_source = admission.required_logical_sources[0]
+    binding = catalog.source(logical_source)
+    if binding is None or not binding.dispatchable:
+        raise NotionReadRequestError(
+            f"logical source is not an approved binding: {logical_source!r}"
+        )
+
+    execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
+    result = execute_task(
+        {"action": "get_data_source", "data_source_id": binding.data_source_id}
+    )
+    if not isinstance(result, Mapping):
+        raise NotionReadRequestError("Notion adapter returned malformed task evidence")
+    if str(result.get("status") or "").strip().lower() != "success":
+        raise NotionReadRequestError(
+            f"source schema read was not successful: {result.get('status')!r}"
+        )
+    output = result.get("output")
+    if not isinstance(output, Mapping):
+        raise NotionReadRequestError("source schema output is not a mapping")
+    properties = output.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("source schema output is missing properties")
+    return {
+        "logical_source": logical_source,
+        "properties": properties,
+    }
+
+
+__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification", "execute_source_schema"]

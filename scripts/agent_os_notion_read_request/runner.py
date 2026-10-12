@@ -23,10 +23,15 @@ from .execution import (
     SchedulerTaskExecutorFactory,
     execute_admitted_notion_read,
     execute_destination_verification,
+    execute_source_schema,
 )
 from .live_executor import build_live_notion_executor_factory
 from .models import SCHEMA_VERSION, NotionReadCatalog, NotionReadRequestError
-from .projection import reject_credential_keys, project_public_result
+from .projection import (
+    reject_credential_keys,
+    project_public_result,
+    project_source_schema_result,
+)
 
 MAX_TRANSPORT_BYTES = 262_144
 
@@ -88,7 +93,23 @@ def run_notion_read_request(
         reject_credential_keys(evidence, "evidence")
         return evidence
 
-    if admission.request_class == "destination-verification":
+    if admission.request_class == "source-schema":
+        # #2816: governed property-vocabulary read. The plan is exactly one
+        # get_data_source step; no filter step exists anywhere in this path.
+        execution = execute_source_schema(
+            admission,
+            catalog=resolved_catalog,
+            scheduler_task_executor_factory=scheduler_task_executor_factory,
+        )
+        evidence["dispatch_status"] = DISPATCH_COMPLETED
+        evidence["dispatch_reason"] = "bounded-source-schema-projected"
+        evidence["result"] = project_source_schema_result(
+            admission,
+            execution,
+            catalog=resolved_catalog,
+            generated_at=generated_at,
+        )
+    elif admission.request_class == "destination-verification":
         execution = execute_destination_verification(
             admission,
             scheduler_task_executor_factory=scheduler_task_executor_factory,
