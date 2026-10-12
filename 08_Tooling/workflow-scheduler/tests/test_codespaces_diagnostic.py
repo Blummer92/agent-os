@@ -902,3 +902,50 @@ def test_3345_stage_probes_precede_existing_health_runner() -> None:
     assert result["status"] == "success"
     assert len(calls) == 3
     assert calls[2][8].find("scripts/agent-os-environment-health.py") >= 0
+
+
+def test_3345_python_probe_wrong_marker_with_exit_zero_fails_closed() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-wrong-marker",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="unexpected-marker\n", stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+    assert result["failed_stage"] == "python"
+    assert result["probe_exit_code"] == 0
+    assert len(calls) == 2
+
+
+def test_3345_python_probe_timeout_fails_before_health_runner() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _SSH_STAGE_TIMEOUT_SECONDS,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-python-timeout",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append((argv, timeout))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise subprocess.TimeoutExpired(argv, timeout)
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["codespaces-python-probe-timeout"]
+    assert result["failed_stage"] == "python"
+    assert result["stage_timeout_seconds"] == _SSH_STAGE_TIMEOUT_SECONDS
+    assert len(calls) == 2
+    assert calls[1][0][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
+    assert calls[1][1] == _SSH_STAGE_TIMEOUT_SECONDS
