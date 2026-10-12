@@ -460,6 +460,32 @@ emit(result)
 
 
 _SSH_STAGE_TIMEOUT_SECONDS = 25
+_AUTH_PREFLIGHT_TIMEOUT_SECONDS = 12
+
+
+def _check_transport_authentication(
+    request: CodespacesDiagnosticRequest,
+    *,
+    codespace_name: str,
+    run: Run,
+) -> dict[str, object] | None:
+    """Read-only auth check; API authentication does not establish SSH permission."""
+    argv = ("gh", "api", "--method", "GET", "/user", "--jq", ".login")
+    try:
+        completed = run(argv, timeout=_AUTH_PREFLIGHT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        evidence = _failure(request, "codespaces-transport-auth-timeout", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    except OSError:
+        evidence = _failure(request, "codespaces-transport-auth-unavailable", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    if completed.returncode != 0 or not completed.stdout.strip():
+        evidence = _failure(request, "codespaces-transport-auth-failed", codespace_name)
+        evidence["failed_stage"] = "api-authentication"
+        return evidence
+    return None
 _REMOTE_START_MARKER = "agent-os-qualification-python-ready"
 
 
@@ -520,6 +546,9 @@ def run_codespaces_diagnostic(
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
     if request.diagnostic_id == QUALIFICATION_DIAGNOSTIC_ID:
+        auth_failure = _check_transport_authentication(request, codespace_name=codespace_name, run=run)
+        if auth_failure is not None:
+            return auth_failure
         stage_failure = _qualify_ssh_stages(request, codespace_name=codespace_name, run=run)
         if stage_failure is not None:
             return stage_failure
