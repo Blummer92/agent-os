@@ -28,7 +28,10 @@ from .curriculum_evidence_orchestrator import (
 # native-vs-fallback choice that originally gave the label its name.
 FALLBACK_ROUTE = "agent-os-notion-reader"
 
-READ_ONLY_ACTIONS = frozenset({"get_page", "query_data_source"})
+# #2816: the governed source-schema read class dispatches Notion's data-source
+# describe action through this same read-only seam. The adapter already
+# implements it; this only widens the allowlist, never the write surface.
+READ_ONLY_ACTIONS = frozenset({"get_page", "query_data_source", "get_data_source"})
 
 SchedulerTaskExecutor = Callable[[Mapping[str, object]], object]
 
