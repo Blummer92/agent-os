@@ -33,6 +33,32 @@ Routing is fixed:
 
 Free-form purpose text, subject metadata, filenames, notes, comments, prompts, and artifact type alone never create visual roles.
 
+## Role identity and slots (#3251)
+
+Each role carries a stable `role_id` derived ONLY from the governed
+semantic role key (`role_type`, `instructional_purpose`,
+`intended_placement`, `orientation`) under the
+`visual-role-semantic-key-v1` contract namespace. Requirement
+fingerprints, revisions, `requirement_state`, and unrelated record fields
+are deliberately excluded: editing a role's semantics changes only that
+role's identity, and irrelevant edits or revision bumps never do. Plan
+IDs still bind the source requirement fingerprint -- plan identity
+changes when the requirement changes; role identity does not.
+
+A role may declare an optional explicit `slots` list: one semantic role
+binds one placement per declared slot ID. Slots are placement bindings,
+never role identity -- they do not enter the semantic key or the
+`role_id`. A role with no declared slots fills the single implicit slot
+`"0"`. Every downstream binding keys on `(role_id, slot_id)`: candidate
+filtering evaluates each role individually (same-type roles never
+collapse), cohesive planning emits one assignment per `(role, slot)`,
+and placement markers address `{{visual:<role_id>}}` or
+`{{visual:<role_id>:<slot_id>}}`.
+
+A role may also carry an optional author-supplied `concept` reference
+(#3254), carried through onto the planned role for gap briefs and image
+intents; it never enters role identity either.
+
 ## Output evidence
 
 Every plan preserves:
@@ -47,13 +73,16 @@ Every plan preserves:
 - accessibility requirements, maximum visual count, and matching cognitive-load ceiling;
 - manual-review state, canonical reason codes, deterministic fingerprint, and an all-false authority block.
 
-The planner supports all validated material types except the explicit `unsupported-manual-review` sentinel. The source contract bounds visual roles and the maximum visual count to eight. Optional roles remain optional, and sentinel plans never authorize roles.
+The planner supports all validated material types except the explicit `unsupported-manual-review` sentinel. The source contract bounds visual roles to eight (`MAX_VISUAL_ROLES`), slots to sixteen per role (`MAX_SLOTS_PER_ROLE`), total role/slot bindings to sixty-four per requirement (`MAX_ROLE_SLOT_BINDINGS`), and the maximum visual count to eight. Optional roles remain optional, and sentinel plans never authorize roles.
 
 ## Determinism and bounds
 
 The planner reuses shared normalization, fingerprinting, immutable payload, validation-result, reason-code, and authority mechanics. The result must fit the shared 16 KiB validated-record limit.
 
-Stable role IDs bind the source requirement fingerprint and complete governed role evidence. Stable plan IDs bind source identity and fingerprint, outcome, decision, roles, accessibility evidence, reason codes, and the visual-count ceiling.
+Stable role IDs bind the governed semantic role key only (see "Role
+identity and slots" above) -- never the source requirement fingerprint.
+Stable plan IDs bind source identity and fingerprint, outcome, decision,
+roles, accessibility evidence, reason codes, and the visual-count ceiling.
 
 ## Authority and side effects
 

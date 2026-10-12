@@ -86,7 +86,9 @@ def test_no_module_reads_the_credential_from_the_environment() -> None:
 
 
 def test_result_is_not_a_durable_curriculum_store(verified_catalog) -> None:
-    evidence=runner_module.run_notion_read_request(transport(),expected_repository=REPOSITORY,expected_actor=ACTOR,generated_at=GENERATED_AT,catalog=verified_catalog,scheduler_task_executor_factory=RecordingExecutor().factory)
+    # #2816: the canonical-unit request carries no asset steps, so the
+    # coursewide schema-mismatch guard does not fire here.
+    evidence=runner_module.run_notion_read_request(transport(request_id="photography-foundations-canonical-unit"),expected_repository=REPOSITORY,expected_actor=ACTOR,generated_at=GENERATED_AT,catalog=verified_catalog,scheduler_task_executor_factory=RecordingExecutor().factory)
     provenance=evidence["result"]["provenance"]
     assert provenance["curriculum_source_of_truth"] == "notion-working-curriculum"
     assert provenance["governance_source_of_truth"] == "github-agent-os"
@@ -184,7 +186,9 @@ def test_cli_refuses_an_oversized_transport_file(tmp_path) -> None:
 
 
 def test_completed_result_is_json_serializable_for_artifact_surface(verified_catalog) -> None:
-    evidence=runner_module.run_notion_read_request(transport(),expected_repository=REPOSITORY,expected_actor=ACTOR,generated_at=GENERATED_AT,catalog=verified_catalog,scheduler_task_executor_factory=RecordingExecutor().factory)
+    # #2816: the canonical-unit request carries no asset steps, so the
+    # coursewide schema-mismatch guard does not fire here.
+    evidence=runner_module.run_notion_read_request(transport(request_id="photography-foundations-canonical-unit"),expected_repository=REPOSITORY,expected_actor=ACTOR,generated_at=GENERATED_AT,catalog=verified_catalog,scheduler_task_executor_factory=RecordingExecutor().factory)
     assert evidence["dispatch_status"] == DISPATCH_COMPLETED
     serialized=json.dumps(evidence,sort_keys=True)
     assert json.loads(serialized)["result"]["result_kind"] == RESULT_KIND

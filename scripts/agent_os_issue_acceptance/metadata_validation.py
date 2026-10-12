@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
 
 from .models import CheckResult, Status
 
@@ -102,11 +101,6 @@ def validate_metadata_evidence(field: str, input_evidence: str) -> MetadataValid
         Status.MANUAL_REVIEW,
         "Metadata field is outside the MD0 v1 validation contract.",
     )
-
-
-def validate_fixture_case(case: Mapping[str, object]) -> MetadataValidationResult:
-    """Evaluate a fixture case using only its observed field and input evidence."""
-    return validate_metadata_evidence(str(case["field"]), str(case["input_evidence"]))
 
 
 def _validate_issue_tier(field: str, value: str) -> MetadataValidationResult:

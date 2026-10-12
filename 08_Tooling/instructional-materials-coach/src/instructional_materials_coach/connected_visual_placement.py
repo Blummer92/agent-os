@@ -57,8 +57,7 @@ from .placement_transport import (
 from .visual_placement import (
     VisualPlacementError,
     build_placement_request,
-    marker_for_role,
-    parse_marker,
+    parse_marker_binding,
     resolve_exact_target,
     verify_placement_receipt,
     verify_request_content_identity,
@@ -197,11 +196,14 @@ def _paragraph_texts(paragraph: Mapping[str, Any]) -> str:
 
 
 def discover_docs_markers(*, docs_service: Any, document_id: str) -> list[dict[str, Any]]:
-    """Discover controlled ``{{visual:<role_id>}}`` markers in a live Google Doc.
+    """Discover controlled visual markers in a live Google Doc.
 
-    A marker is a paragraph whose full stripped text is exactly the
-    controlled marker. Returns pre-discovered matches for
-    ``resolve_exact_target``; discovery never mutates.
+    Markers are ``{{visual:<role_id>}}`` (implicit slot) or
+    ``{{visual:<role_id>:<slot_id>}}`` (explicit slot, #3251). A marker is
+    a paragraph whose full stripped text is exactly the controlled marker.
+    Returns pre-discovered matches for ``resolve_exact_target``; discovery
+    never mutates. Each match carries the artifact's own marker spelling so
+    slot bindings survive into placement targets and receipts.
     """
     response = docs_service.documents().get(documentId=document_id, fields="body/content").execute()
     body = response.get("body", {}) if isinstance(response, dict) else {}
@@ -217,12 +219,12 @@ def discover_docs_markers(*, docs_service: Any, document_id: str) -> list[dict[s
         if not text:
             continue
         try:
-            role_id = parse_marker(text)
+            parse_marker_binding(text)
         except VisualPlacementError:
             continue
         matches.append(
             {
-                "marker": marker_for_role(role_id),
+                "marker": text,
                 "container_id": "body",
                 "element_id": f"body-child-{index}",
                 "index": index,
@@ -248,10 +250,12 @@ def _shape_text(shape: Mapping[str, Any]) -> str:
 
 
 def discover_slides_markers(*, slides_service: Any, presentation_id: str) -> list[dict[str, Any]]:
-    """Discover controlled ``{{visual:<role_id>}}`` markers in a live Slides deck.
+    """Discover controlled visual markers in a live Slides deck.
 
-    A marker is a shape whose full stripped text is exactly the controlled
-    marker. Returns pre-discovered matches for ``resolve_exact_target``;
+    Markers are ``{{visual:<role_id>}}`` (implicit slot) or
+    ``{{visual:<role_id>:<slot_id>}}`` (explicit slot, #3251). A marker is
+    a shape whose full stripped text is exactly the controlled marker.
+    Returns pre-discovered matches for ``resolve_exact_target``;
     discovery never mutates.
     """
     response = slides_service.presentations().get(
@@ -274,7 +278,7 @@ def discover_slides_markers(*, slides_service: Any, presentation_id: str) -> lis
             if not text:
                 continue
             try:
-                role_id = parse_marker(text)
+                parse_marker_binding(text)
             except VisualPlacementError:
                 continue
             element_id = page_element.get("objectId")
@@ -282,7 +286,7 @@ def discover_slides_markers(*, slides_service: Any, presentation_id: str) -> lis
                 continue
             matches.append(
                 {
-                    "marker": marker_for_role(role_id),
+                    "marker": text,
                     "container_id": slide_id,
                     "element_id": element_id,
                 }
@@ -313,11 +317,15 @@ def _verify_insertion_against_artifact(
     """
     if artifact_type == "slides":
         matches = discover_slides_markers(slides_service=service, presentation_id=artifact_id)
-        remaining = [m for m in matches if parse_marker(m["marker"]) == binding.role_id]
+        remaining = [
+            m
+            for m in matches
+            if parse_marker_binding(m["marker"]) == (binding.role_id, binding.slot_id)
+        ]
         if remaining:
             raise PlacementExecutionError(
-                f"post-insertion-verification-failed: marker for role={binding.role_id} is still present "
-                f"in {artifact_id} after the transport reported placement"
+                f"post-insertion-verification-failed: marker for role={binding.role_id} slot={binding.slot_id} "
+                f"is still present in {artifact_id} after the transport reported placement"
             )
         response = service.presentations().get(
             presentationId=artifact_id, fields="slides(objectId,pageElements(objectId))"
@@ -336,11 +344,15 @@ def _verify_insertion_against_artifact(
             )
     else:
         matches = discover_docs_markers(docs_service=service, document_id=artifact_id)
-        remaining = [m for m in matches if parse_marker(m["marker"]) == binding.role_id]
+        remaining = [
+            m
+            for m in matches
+            if parse_marker_binding(m["marker"]) == (binding.role_id, binding.slot_id)
+        ]
         if remaining:
             raise PlacementExecutionError(
-                f"post-insertion-verification-failed: marker for role={binding.role_id} is still present "
-                f"in {artifact_id} after the transport reported placement"
+                f"post-insertion-verification-failed: marker for role={binding.role_id} slot={binding.slot_id} "
+                f"is still present in {artifact_id} after the transport reported placement"
             )
 
 
@@ -364,6 +376,7 @@ def _place_one_binding(
             artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id
         ),
         role_id=binding.role_id,
+        slot_id=binding.slot_id,
         matches=[match],
     )
     request = build_placement_request(
@@ -373,6 +386,7 @@ def _place_one_binding(
             "content_identity": dict(binding.content_identity),
         },
         role_id=binding.role_id,
+        slot_id=binding.slot_id,
         source_plan_id=binding.source_plan_id,
         target=target,
     )
@@ -430,6 +444,7 @@ def _place_one_binding(
         "asset_id": request.asset_id,
         "drive_file_id": request.drive_file_id,
         "role_id": request.role_id,
+        "slot_id": request.slot_id,
         "artifact_type": request.target.artifact_type,
         "artifact_id": request.target.artifact_id,
         "artifact_revision_id": request.target.artifact_revision_id,
@@ -522,9 +537,12 @@ def execute_artifact_visual_placements(
         discovered = discover_slides_markers(slides_service=artifact_service, presentation_id=artifact_id)
     else:
         discovered = discover_docs_markers(docs_service=artifact_service, document_id=artifact_id)
-    by_role: dict[str, list[dict[str, Any]]] = {}
+    # #3251: bindings key on (role_id, slot_id). One role may own several
+    # markers (one per slot); two markers for the SAME binding still fail
+    # closed as ambiguous.
+    by_binding: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for match in discovered:
-        by_role.setdefault(parse_marker(match["marker"]), []).append(match)
+        by_binding.setdefault(parse_marker_binding(match["marker"]), []).append(match)
     stored = load_placement_records(receipts_dir, idempotency_key) if receipts_dir else ()
     outcomes: list[BindingOutcome] = []
     for binding in bindings:
@@ -543,18 +561,18 @@ def execute_artifact_visual_placements(
         if recovered is not None:
             outcomes.append(BindingOutcome(binding, kind, artifact_id, "recovered", record=recovered))
             continue
-        matches = by_role.get(binding.role_id, [])
+        matches = by_binding.get((binding.role_id, binding.slot_id), [])
         if not matches:
             outcomes.append(
                 BindingOutcome(binding, kind, artifact_id, "skipped-no-marker",
-                               reason="no placement marker for this role in this artifact")
+                               reason="no placement marker for this role/slot in this artifact")
             )
             continue
         if len(matches) > 1:
             outcomes.append(
                 BindingOutcome(binding, kind, artifact_id, "failed",
                                reason=f"marker-ambiguous: {len(matches)} markers for role={binding.role_id} "
-                                      "in this artifact; failing closed instead of guessing the target")
+                                      f"slot={binding.slot_id} in this artifact; failing closed instead of guessing the target")
             )
             continue
         try:

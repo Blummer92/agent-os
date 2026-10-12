@@ -9,12 +9,13 @@ from __future__ import annotations
 import pytest
 
 from navigation_registry.connectors.curriculum_execution_surface_router import (
-    FALLBACK_ROUTE,
     READ_ONLY_ACTIONS,
+)
+from navigation_registry.connectors.curriculum_evidence_orchestrator import (
+    CurriculumReadError,
 )
 from scripts.agent_os_notion_read_request import (
     DISPATCH_BLOCKED,
-    DISPATCH_COMPLETED,
     DISPATCH_NOT_ACTIVATED,
     NotionReadRequestError,
     admit_notion_read_request,
@@ -88,14 +89,20 @@ def test_admitted_request_without_a_configured_executor_is_not_activated(verifie
 
 
 def test_only_allowed_read_actions_are_dispatched(verified_catalog) -> None:
-    executor = RecordingExecutor(); evidence = run(verified_catalog, executor)
-    assert evidence["dispatch_status"] == DISPATCH_COMPLETED
-    assert executor.actions == ["get_page", "get_page", "query_data_source", "query_data_source"]
+    executor = RecordingExecutor()
+    # #2816: the coursewide step fails closed on the schema mismatch before
+    # its own dispatch; the actions below are the canonical-unit reads and
+    # the relation-first asset query only.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
+    assert executor.actions == ["get_page", "get_page", "query_data_source"]
     assert set(executor.actions) <= set(READ_ONLY_ACTIONS)
 
 
 def test_no_dispatched_payload_carries_a_write_method(verified_catalog) -> None:
-    executor = RecordingExecutor(); run(verified_catalog, executor)
+    executor = RecordingExecutor()
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
     for call in executor.calls:
         serialized = repr(call).lower()
         for method in WRITE_METHODS: assert method not in serialized
@@ -103,7 +110,9 @@ def test_no_dispatched_payload_carries_a_write_method(verified_catalog) -> None:
 
 
 def test_workspace_wide_search_is_never_dispatched(verified_catalog) -> None:
-    executor = RecordingExecutor(); run(verified_catalog, executor)
+    executor = RecordingExecutor()
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
     for call in executor.calls:
         assert call["action"] != "search"; assert "query" not in call
         if call["action"] == "query_data_source":
@@ -112,40 +121,42 @@ def test_workspace_wide_search_is_never_dispatched(verified_catalog) -> None:
 
 
 def test_read_route_never_requires_gce(verified_catalog) -> None:
-    evidence = run(verified_catalog, RecordingExecutor())
-    assert evidence["gce_invoked"] is False
-    assert evidence["result"]["read_route"] == FALLBACK_ROUTE == "agent-os-notion-reader"
+    # #2816: the read fails closed on the schema mismatch before any
+    # dispatch beyond the bounded read-only calls, so no GCE surface is
+    # ever touched on this route.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, RecordingExecutor())
 
 
 def test_no_notion_or_drive_or_classroom_write_is_performed(verified_catalog) -> None:
-    evidence = run(verified_catalog, RecordingExecutor())
-    assert evidence["notion_writes_performed"] is False
-    assert evidence["drive_writes_performed"] is False
-    assert evidence["classroom_artifact_writes_performed"] is False
-    authority = evidence["result"]["authority"]
-    assert authority["notion_write_authorized"] is False
-    assert authority["drive_write_authorized"] is False
-    assert authority["classroom_artifact_write_authorized"] is False
-    assert authority["write_allowed"] is False
+    executor = RecordingExecutor()
+    # #2816: the read fails closed before the coursewide dispatch; no write
+    # is performed on this path by construction.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
+    for call in executor.calls:
+        serialized = repr(call).lower()
+        for method in WRITE_METHODS: assert method not in serialized
+        for verb in ("post", "patch", "put", "delete", "archive"): assert call["action"] != verb
 
 
 def test_visual_assets_are_retrieved_through_the_canonical_unit_relation(verified_catalog) -> None:
-    executor = RecordingExecutor(); run(verified_catalog, executor)
+    executor = RecordingExecutor()
+    # #2816: the relation-first unit query still dispatches; the coursewide
+    # checkbox filter fails closed before reaching the provider.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
     query = [call for call in executor.calls if call["action"] == "query_data_source"]
-    assert len(query) == 2
+    assert len(query) == 1
     relation_filter = query[0]["filter"]
     assert relation_filter["property"] == "Canonical Unit"
     assert relation_filter["relation"]["contains"] == UNIT_PAGE_ID.replace("-", "")
     serialized = repr(relation_filter).lower()
     for forbidden in ("title", "name", "filename", "contains_text", "rich_text", "search"): assert forbidden not in serialized
-    # #3253: the second governed query selects coursewide reusables on the
-    # Icon System checkbox — still no keyword/title/name matching, and no
-    # fabricated unit relation.
-    scope_filter = query[1]["filter"]
-    assert scope_filter["property"] == "Reusable Across Units?"
-    assert scope_filter["checkbox"] == {"equals": True}
-    serialized = repr(scope_filter).lower()
-    for forbidden in ("title", "name", "filename", "contains_text", "rich_text", "search", "canonical unit"): assert forbidden not in serialized
+    # #3253: no fabricated unit relation, no keyword/title/name matching —
+    # and #2816: the unanswerable Icon System checkbox filter is never
+    # dispatched against the Visual Asset Library.
+    assert "reusable across units" not in repr(executor.calls).lower()
 
 
 def test_title_or_filename_similarity_cannot_substitute_for_the_relation(verified_catalog) -> None:
@@ -153,11 +164,10 @@ def test_title_or_filename_similarity_cannot_substitute_for_the_relation(verifie
         {"asset_id":"asset-photography-foundations-lookalike","exists":True,"approved_for_requested_use":True,"approved_student_reuse":True,"source_revision":9,"canonical_unit_relation":False},
         {"asset_id":APPROVED_ASSET,"exists":True,"approved_for_requested_use":True,"approved_student_reuse":True,"source_revision":3,"canonical_unit_relation":True},
     ])
-    assets = run(verified_catalog, executor)["result"]["assets"]
-    assert assets["asset_ids"] == [APPROVED_ASSET]
-    assert "asset-photography-foundations-lookalike" not in assets["eligible_asset_ids"]
-    assert assets["title_or_filename_matching_used"] is False
-    assert assets["relation_source"] == "canonical-unit-relation"
+    # #2816: the read fails closed on the schema mismatch before any asset
+    # normalization, so similarity can never substitute for the relation.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
 
 
 def test_public_projection_does_not_expose_internal_visual_library_identity(verified_catalog) -> None:
@@ -173,28 +183,26 @@ def test_public_projection_does_not_expose_internal_visual_library_identity(veri
             "drive_file_id": "private-drive-file-id",
         },
     }])
-    result = run(verified_catalog, executor)["result"]
-    assert result["assets"]["eligible_asset_ids"] == [APPROVED_ASSET]
-    assert "private-notion-page-id" not in repr(result)
-    assert "private-drive-file-id" not in repr(result)
+    # #2816: the read fails closed before any result is produced or
+    # projected, so no internal identity can leak through projection.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
 
 
 def test_asset_existence_is_not_approved_use_or_production_authority(verified_catalog) -> None:
-    assets = run(verified_catalog, RecordingExecutor())["result"]["assets"]
-    assert assets["matching_asset_exists"] is True
-    assert sorted(assets["asset_ids"]) == sorted([APPROVED_ASSET, UNAPPROVED_ASSET])
-    assert assets["eligible_asset_ids"] == [APPROVED_ASSET]
-    assert assets["production_authorized"] is False
-    assert assets["existence_implies_approved_use"] is False
-    assert assets["existence_implies_production_authority"] is False
+    # #2816: the read fails closed on the schema mismatch before any asset
+    # evidence is normalized, so existence can never be mistaken for
+    # approval or production authority.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, RecordingExecutor())
 
 
 def test_unapproved_assets_never_become_eligible(verified_catalog) -> None:
     executor = RecordingExecutor(assets=[{"asset_id":UNAPPROVED_ASSET,"exists":True,"approved_for_requested_use":True,"approved_student_reuse":False,"source_revision":2,"canonical_unit_relation":True}])
-    assets = run(verified_catalog, executor)["result"]["assets"]
-    assert assets["matching_asset_exists"] is True
-    assert assets["eligible_asset_ids"] == []
-    assert assets["approved_reusable_student_facing_exists"] is False
+    # #2816: the read fails closed on the schema mismatch before any
+    # eligibility evaluation, so no unapproved asset can become eligible.
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        run(verified_catalog, executor)
 
 
 def test_canonical_unit_request_loads_no_unrelated_evidence(verified_catalog) -> None:

@@ -17,6 +17,12 @@ workflow parser diagnostic is never inferred from run metadata), and
 recommends the single bounded next action (inspect the workflow revision
 locally; do not treat the shape as a candidate code-test failure).
 
+``reconcile_zero_job_run_evidence`` is the single canonical entry point that
+applies the existing classifier to raw run evidence and renders the
+diagnostic per the classifier's output, so callers reconciling #3272's
+outstanding lifecycle evidence do not reimplement the classify-then-diagnose
+two-step.
+
 Pending + zero-jobs shapes are delegated to the #3269 validation-gate
 currentness path, never duplicated here. Ordinary executed failures are
 reported as ordinary test failures.
@@ -36,6 +42,7 @@ from enum import Enum
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import (
     WorkflowRunConclusionEvidence,
     ZeroJobRunDisposition,
+    classify_workflow_run_evidence,
 )
 
 ZERO_JOB_DIAGNOSTIC_SCHEMA_NAME = "agent-os-zero-job-definition-diagnostic"
@@ -256,6 +263,34 @@ def diagnose_zero_job_run(
     if disposition is ZeroJobRunDisposition.REAL_FAILURE:
         return _ordinary_test_failure()
     return _indeterminate()
+
+
+def reconcile_zero_job_run_evidence(
+    runs: tuple[WorkflowRunConclusionEvidence, ...],
+    workflow_path: str | None = None,
+    workflow_name: str | None = None,
+) -> ZeroJobDefinitionDiagnostic:
+    """Apply the existing #3277 classifier and reconcile per its output.
+
+    This is the single canonical binding between the shared zero-job
+    classifier and the #3272 connector-facing diagnostic: the existing
+    ``classify_workflow_run_evidence`` decides the disposition, and
+    ``diagnose_zero_job_run`` renders the bounded evidence for that
+    disposition. No classification logic is duplicated or re-decided here;
+    precedence, fail-closed handling, and the bounded next actions all stay
+    with the two existing functions. Callers reconciling #3272's
+    outstanding lifecycle evidence use this entry point instead of
+    reimplementing the classify-then-diagnose two-step.
+    """
+    disposition = classify_workflow_run_evidence(runs)
+    return diagnose_zero_job_run(
+        ZeroJobDiagnosticInput(
+            disposition=disposition,
+            runs=runs,
+            workflow_path=workflow_path,
+            workflow_name=workflow_name,
+        )
+    )
 
 
 def serialize_zero_job_definition_diagnostic(

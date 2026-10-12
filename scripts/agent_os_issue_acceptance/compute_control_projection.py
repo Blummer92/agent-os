@@ -43,7 +43,6 @@ from .issue_operational_state import (
 COMPUTE_CONTROL_PROJECTION_SCHEMA_NAME = "agent-os-compute-control-projection"
 COMPUTE_CONTROL_PROJECTION_SCHEMA_VERSION = "1.0"
 MAX_SERIALIZED_BYTES = 64 * 1024
-_UNAVAILABLE = "unavailable"
 
 # Mirrors the canonical validation-head disposition vocabulary owned by
 # ``agent_os_execution_service.validation_supersession``. That module is
@@ -434,28 +433,6 @@ def _reuse_proven(
         and head_reference.satisfies_current_head
         and head_reference.disposition == "passed"
     )
-
-
-def render_compute_control_projection(projection: ComputeControlProjection) -> str:
-    """Render #926-compatible operator ordering without adding new semantics."""
-    payload = serialize_compute_control_projection(projection)
-    lines = (
-        f"Current target: {payload['repository']}#{payload['issue_number']}",
-        f"Compute disposition: {payload['compute_disposition']}",
-        f"Recommended validation class: {payload['recommended_validation_or_execution_class'] or _UNAVAILABLE}",
-        f"Blocker evidence: {payload['primary_blocker'] or _UNAVAILABLE}",
-        f"Duplicate or stale risk: {'true' if payload['duplicate_or_stale_risk'] else 'false'}",
-        f"Active execution: {payload['active_execution_reference'] or _UNAVAILABLE}",
-        f"Base handoff projection: {payload['base_handoff_projection_reference']}",
-        f"Last applicable validation: {payload['last_applicable_validation_reference'] or _UNAVAILABLE}",
-        f"Measured compute metadata: {payload['measured_compute_metadata_reference'] or _UNAVAILABLE}",
-        f"Current head: {payload['current_head_sha'] or _UNAVAILABLE}",
-        f"Source revision: {payload['source_revision']}",
-        "authority_created: false",
-        "side_effects_performed: false",
-        "notion_write_performed: false",
-    )
-    return "\n".join(lines)
 
 
 def serialize_compute_control_projection(

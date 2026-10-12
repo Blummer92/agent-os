@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
@@ -71,11 +71,20 @@ jobs:
               # #2940: notion-read envelopes are GitHub-hosted reads; they must
               # never trigger the GCP authentication / gcloud setup steps below.
               output.write(f"is_notion_read={'true' if payload['reason'] == 'accepted-notion-read-envelope' else 'false'}\n")
+              output.write(f"is_codespace_implementation={'true' if payload['reason'] == 'accepted-codespace-implementation-envelope' else 'false'}\n")
           PY
+
+      - name: Evaluate fixed #3333 Codespaces operation admission
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.is_codespace_implementation == 'true' }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src:08_Tooling/agent-os-execution-service/src:. \
+            python -m scripts.agent_os_execution_interface.fixed_codespace_pilot \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
 
       - name: Resolve Codespaces-first transport route
         id: route
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
         run: |
           PYTHONPATH=08_Tooling/workflow-scheduler/src \
             python -m workflow_scheduler.governance.codespaces_first_route \
@@ -106,7 +115,7 @@ jobs:
           PY
 
       - name: Record non-accepted bounded transport evidence
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
         run: |
           python - <<'PY'
           import json
@@ -131,7 +140,7 @@ jobs:
 
       - name: Attempt bounded read-only Codespaces diagnostic
         id: codespaces_diagnostic
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -154,7 +163,7 @@ jobs:
 
       - name: Attempt read-only Codespaces developer validation
         id: codespaces
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -176,7 +185,7 @@ jobs:
 
       - name: Attempt Codespaces discovery
         id: codespaces_discovery
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -202,18 +211,18 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
-        if: ${{ steps.host_install.outputs.requested == 'true' }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' }}
         shell: bash
         env:
           HOST_RUNTIME_SOURCE_SHA: 36ccd1715b8b11e30f8d92196b8e7f0791c10547
@@ -387,7 +396,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -598,5 +607,75 @@ jobs:
         with:
           name: agent-os-refresh-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-refresh/result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  ready_admission:
+    name: Run finite Ready-for-Review admission
+    # Coarse prefilter only; the exact fixed grammar is owned solely by
+    # workflow_scheduler.governance.github_issue_comment_ingress (#3446). The
+    # job is read-only: it evaluates admission and publishes a non-authorizing
+    # receipt. It never marks a PR Ready; the host does that after verifying
+    # the receipt against a fresh PR readback.
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os ready-admit ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Install bounded admission runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
+
+      - name: Parse low-trust issue comment envelope
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-ready"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-ready/transport.json"
+
+      - name: Evaluate fixed Ready-for-Review admission
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.agent_os_issue_labels.ready_admission_actions \
+            --transport "$RUNNER_TEMP/agent-os-ready/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/agent-os-ready/receipt.json"
+
+      - name: Publish bounded admission summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ready" / "receipt.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS Ready-for-Review admission\n\n")
+              if not path.exists():
+                  summary.write("Receipt unavailable; manual review required.\n")
+              else:
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Admissible: `{receipt.get('transition_admissible')}`\n\n")
+                  summary.write(f"Provisional Ready: `{receipt.get('provisional_ready')}`\n\n")
+                  summary.write(f"Reasons: `{','.join(receipt.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Receipt: `{receipt.get('receipt_id')}`\n")
+          PY
+
+      - name: Publish bounded admission evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-ready-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-ready/*.json
           if-no-files-found: warn
           retention-days: 7

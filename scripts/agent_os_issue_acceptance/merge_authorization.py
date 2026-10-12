@@ -625,7 +625,6 @@ class MergeExecutionObservation:
     observed_at: str
     audit_location: str
     linked_issue_closure_observed: bool
-    authorization_consumed: Literal[True] = field(default=True, init=False)
     side_effects_performed: Literal[True] = field(default=True, init=False)
 
     def __post_init__(self) -> None:

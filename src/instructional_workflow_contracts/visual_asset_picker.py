@@ -25,6 +25,9 @@ class AssetPickerIntent:
     source_preference: SourcePreference | None = None
     generation_allowed: bool | None = None
     selection_authority: SelectionAuthority = "recommend"
+    # #3251: binds to the visual-needs plan's stable role_ids (never bare
+    # role_type strings); a role_id is the only identity the plan guarantees
+    # across revisions.
     visual_roles: tuple[str, ...] = ()
     target_context: str | None = None
     requested_asset_ids: tuple[str, ...] = ()
@@ -55,6 +58,11 @@ class AssetCandidate:
     same_unit_use: bool = False
     coursewide_reusable: bool = False
     recency_rank: int = 0
+    # #3251: the governed visual role (and slot) this candidate is offered
+    # for. Carried into the selection reference so a selection can never be
+    # silently re-attributed to a different role/slot downstream.
+    role_id: str | None = None
+    slot_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ids((self.asset_id,), "asset")
@@ -67,6 +75,7 @@ class AssetCandidate:
             raise AssetPickerError("unsupported review_status")
         if type(self.recency_rank) is not int:
             raise AssetPickerError("recency_rank must be an integer")
+        _validate_optional_binding(self.role_id, self.slot_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +83,55 @@ class SelectedAssetReference:
     asset_id: str
     source_reference: str
     review_status: ReviewStatus
+    # #3251: the governed (role_id, slot_id) binding this selection
+    # satisfies. Identity conflicts fail closed: presenting this reference
+    # for a different role/slot is rejected, never re-attributed.
+    role_id: str | None = None
+    slot_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_ids((self.asset_id,), "asset")
+        if not isinstance(self.source_reference, str) or not self.source_reference.strip():
+            raise AssetPickerError("source_reference must be non-empty text")
+        if self.review_status not in {"approved", "needs-review"}:
+            raise AssetPickerError("unsupported review_status")
+        _validate_optional_binding(self.role_id, self.slot_id)
+
+
+def _validate_optional_binding(role_id: object, slot_id: object) -> None:
+    if role_id is not None and (
+        not isinstance(role_id, str) or not role_id.strip() or len(role_id) > 256
+    ):
+        raise AssetPickerError("role_id must be non-empty text when supplied")
+    if slot_id is not None and (
+        not isinstance(slot_id, str) or not slot_id.strip() or len(slot_id) > 64
+    ):
+        raise AssetPickerError("slot_id must be non-empty text when supplied")
+
+
+def check_reference_role_binding(
+    reference: SelectedAssetReference,
+    *,
+    role_id: str,
+    slot_id: str | None = None,
+) -> None:
+    """Fail closed when a selected reference is presented for the wrong binding.
+
+    A reference bound to role R1 (slot S1) must never be silently
+    re-attributed to R2's slot (#3251 identity-conflict rule). An unbound
+    reference (no role_id) is rejected rather than guessed. A missing
+    slot_id normalizes to the implicit single slot ``"0"``.
+    """
+    if not isinstance(reference, SelectedAssetReference):
+        raise AssetPickerError("reference must be a SelectedAssetReference")
+    if not isinstance(role_id, str) or not role_id.strip():
+        raise AssetPickerError("role_id must be non-empty text")
+    expected_slot = "0" if slot_id is None else slot_id
+    actual_slot = "0" if reference.slot_id is None else reference.slot_id
+    if reference.role_id != role_id or actual_slot != expected_slot:
+        raise AssetPickerError(
+            "selected asset reference is not bound to the requested role/slot"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +220,16 @@ def resolve_visual_asset_picker(
         selected = tuple(by_id[asset_id] for asset_id in selected_ids)
         if any((not candidate.eligible) or candidate.review_status != "approved" for candidate in selected):
             return _invalidated(source_preference, generation_allowed)
+        # #3251: one asset may be selected for several roles/slots, but the
+        # same (role_id, slot_id) binding may not be claimed twice -- that is
+        # an identity conflict and fails closed.
+        seen_bindings: set[tuple[str | None, str | None]] = set()
+        for candidate in selected:
+            if candidate.role_id is not None:
+                binding = (candidate.role_id, candidate.slot_id)
+                if binding in seen_bindings:
+                    raise AssetPickerError("duplicate selection for the same role/slot binding")
+                seen_bindings.add(binding)
         return AssetPickerDecision(
             outcome="recommended",
             source_preference=source_preference,
@@ -258,7 +326,13 @@ def _rank(candidates: Sequence[AssetCandidate]) -> list[AssetCandidate]:
 
 
 def _reference(candidate: AssetCandidate) -> SelectedAssetReference:
-    return SelectedAssetReference(candidate.asset_id, candidate.source_reference, candidate.review_status)
+    return SelectedAssetReference(
+        candidate.asset_id,
+        candidate.source_reference,
+        candidate.review_status,
+        role_id=candidate.role_id,
+        slot_id=candidate.slot_id,
+    )
 
 
 def _invalidated(source_preference: SourcePreference, generation_allowed: bool) -> AssetPickerDecision:

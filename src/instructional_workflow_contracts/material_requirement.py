@@ -44,6 +44,11 @@ MAX_BLOCKERS = 32
 MAX_REASONS = 32
 MAX_DOMAIN_ITEMS = 32
 MAX_VISUAL_ROLES = 8
+# #3251: bounded slot capacity. One semantic role may declare up to 16
+# explicit placement slots; a requirement may carry at most 64 total
+# role/slot bindings. The 8-role bound is unchanged.
+MAX_SLOTS_PER_ROLE = 16
+MAX_ROLE_SLOT_BINDINGS = 64
 
 SUPPORTED_ARTIFACT_TYPES = frozenset(
     {
@@ -142,7 +147,24 @@ VISUAL_ROLE_FIELDS = frozenset(
 # #3254: optional concept/vocabulary binding carried from the role through
 # gap briefs to image intents and ingested library records. Never required,
 # never invented: only carried when the requirement author supplies it.
-VISUAL_ROLE_OPTIONAL_FIELDS = frozenset({"concept"})
+# #3251: optional explicit slot list. A role with no slots fills one implicit
+# slot ("0"); a role with slots binds one placement per declared slot id.
+# Downstream keys bindings on (role_id, slot_id).
+VISUAL_ROLE_OPTIONAL_FIELDS = frozenset({"concept", "slots"})
+
+# Slot ids must survive the controlled visual-marker syntax
+# ({{visual:<role_id>}} / {{visual:<role_id>:<slot_id>}}), so ':' and
+# whitespace are forbidden here. Checked manually (no `re` import: this
+# module's import surface is pinned by contract tests).
+def _is_slot_id(text: str) -> bool:
+    if not text or len(text) > 64:
+        return False
+    first, rest = text[0], text[1:]
+    if not (first.isascii() and first.isalnum()):
+        return False
+    return all(
+        char.isascii() and (char.isalnum() or char in "_-") for char in rest
+    )
 
 REF_FIELDS = frozenset(
     {"stable_id", "owner", "contract_version", "record_revision", "fingerprint"}
@@ -429,6 +451,39 @@ def _instructional(value: dict[str, Any]) -> None:
     _ordered_text_list(value["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
 
 
+def _visual_slot_ids(value: object) -> list[str]:
+    """Validate an author-declared explicit slot list for one visual role (#3251).
+
+    Slots are placement bindings, not role identity: they never enter the
+    role's semantic key. The list is canonicalized (sorted) so fingerprints
+    stay stable across slot-order churn.
+    """
+    slots = _list(value, "visual role slots")
+    if not slots:
+        raise ContractValidationError(
+            "handoff-invalid", "visual role slots cannot be empty"
+        )
+    if len(slots) > MAX_SLOTS_PER_ROLE:
+        raise ContractValidationError(
+            "handoff-oversized",
+            "visual role slots exceed the per-role bound",
+        )
+    checked: list[str] = []
+    for slot in slots:
+        text = _text(slot)
+        if not _is_slot_id(text):
+            raise ContractValidationError(
+                "material-invalid-visual-direction",
+                "visual role slot id is malformed",
+            )
+        checked.append(text)
+    if len(set(checked)) != len(checked):
+        raise ContractValidationError(
+            "handoff-duplicate", "visual role slots contain duplicates"
+        )
+    return sorted(checked)
+
+
 def _visual_role_sort_key(value: dict[str, Any]) -> tuple[object, ...]:
     return (
         0 if value["requirement_state"] == "required" else 1,
@@ -492,12 +547,19 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
 
     for raw in roles:
         role = _mapping(raw, "visual role")
-        _fields(role, VISUAL_ROLE_FIELDS, "visual role")
-        # #3254: optional concept/vocabulary binding. Unknown optional fields
-        # are still rejected; only the governed optional set is allowed.
+        # Required fields must all be present; the governed optional set
+        # (#3254 concept, #3251 slots) is allowed. Anything else fails
+        # closed here -- the previous exact-fields check rejected the
+        # governed optional fields before they could be read.
+        if VISUAL_ROLE_FIELDS - set(role):
+            raise ContractValidationError(
+                "material-missing-required-field", "visual role is incomplete"
+            )
         unknown_optional = set(role) - VISUAL_ROLE_FIELDS - VISUAL_ROLE_OPTIONAL_FIELDS
         if unknown_optional:
-            raise ContractValidationError("material-unknown-field", "visual role has unknown fields")
+            raise ContractValidationError(
+                "material-unknown-field", "visual role has unknown fields"
+            )
 
         role_type = validate_text(
             role["role_type"],
@@ -560,6 +622,11 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
         concept = role.get("concept")
         if concept is not None:
             normalized_role["concept"] = validate_text(concept, "visual role concept", max_length=256)
+        # #3251: optional explicit slot list. Slots are placement bindings,
+        # not role identity: they never enter the semantic key or role_id.
+        slots = role.get("slots")
+        if slots is not None:
+            normalized_role["slots"] = _visual_slot_ids(slots)
         semantic_key = _visual_role_semantic_key(normalized_role)
         if semantic_key in seen:
             raise ContractValidationError(
@@ -568,6 +635,15 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
             )
         seen.add(semantic_key)
         normalized.append(normalized_role)
+
+    # #3251: total role/slot bindings across the requirement are bounded.
+    # A role with no explicit slots fills one implicit slot.
+    total_bindings = sum(len(role.get("slots") or ("0",)) for role in normalized)
+    if total_bindings > MAX_ROLE_SLOT_BINDINGS:
+        raise ContractValidationError(
+            "handoff-oversized",
+            "visual role/slot bindings exceed the governed bound",
+        )
 
     if decision == "no-visuals":
         if maximum != 0 or normalized:

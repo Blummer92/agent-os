@@ -26,6 +26,7 @@ from instructional_materials_coach.visual_reuse import (
 from navigation_registry.connectors.curriculum_evidence_orchestrator import (
     CANONICAL_UNIT,
     VISUAL_ASSETS,
+    CurriculumReadError,
     CurriculumReadRequest,
     build_curriculum_read_plan,
     orchestrate_curriculum_evidence,
@@ -215,11 +216,17 @@ def identity(source: str) -> dict[str, object]:
     }
 
 
-def test_coursewide_step_uses_checkbox_filter_not_relation() -> None:
+def test_coursewide_step_fails_closed_instead_of_dispatching_checkbox_filter() -> None:
+    """#2816: the coursewide step is still planned (no fabricated relation),
+    but dispatching its Icon System checkbox filter against the Visual Asset
+    Library — which does not expose that property (live Notion 400,
+    run 37845400763) — fails closed with the bounded schema-mismatch reason
+    instead of reaching the provider."""
     plan = build_curriculum_read_plan(CurriculumReadRequest("images", "images"))
     coursewide = plan.steps[2]
     assert coursewide.logical_source == VISUAL_ASSETS
     assert coursewide.relation_first is False
+    assert coursewide.reuse_scope == "coursewide"
     calls: list[tuple[object, dict[str, object]]] = []
 
     def reader(step, payload):
@@ -228,28 +235,30 @@ def test_coursewide_step_uses_checkbox_filter_not_relation() -> None:
             return {"id": UNIT_PAGE}
         return {"results": []}
 
-    orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit={
-            "stable_id": "photography-foundations",
-            "status": "active",
-            "provider_page_id": UNIT_PAGE,
-        },
-        resolve_identity=identity,
-        execute_read=reader,
-    )
-    coursewide_call = next(
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit={
+                "stable_id": "photography-foundations",
+                "status": "active",
+                "provider_page_id": UNIT_PAGE,
+            },
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+    coursewide_calls = [
         payload for step, payload in calls
-        if step.logical_source == VISUAL_ASSETS and step.reuse_scope == "coursewide"
-    )
-    assert "relation_filter" not in coursewide_call
-    assert coursewide_call["property_filter"] == {
-        "property": "Reusable Across Units?",
-        "checkbox": {"equals": True},
-    }
+        if getattr(step, "reuse_scope", None) == "coursewide"
+    ]
+    assert coursewide_calls == []
+    assert "Reusable Across Units?" not in repr(calls)
 
 
-def test_raw_coursewide_page_becomes_coursewide_evidence_without_fabricated_relation() -> None:
+def test_raw_coursewide_page_never_reaches_provider_filter_2816() -> None:
+    """#2816: even when the provider would have returned Icon-System-shaped
+    pages, the coursewide checkbox filter is never dispatched against the
+    Visual Asset Library — the step fails closed on the schema mismatch
+    before any provider query."""
     def reader(step, payload):
         if step.logical_source == CANONICAL_UNIT:
             return {"id": UNIT_PAGE}
@@ -270,32 +279,17 @@ def test_raw_coursewide_page_becomes_coursewide_evidence_without_fabricated_rela
             }
         return {"results": []}
 
-    packet = orchestrate_curriculum_evidence(
-        request=CurriculumReadRequest("images", "images"),
-        canonical_unit={
-            "stable_id": "photography-foundations",
-            "status": "active",
-            "provider_page_id": UNIT_PAGE,
-        },
-        resolve_identity=identity,
-        execute_read=reader,
-    )
-    assert packet["asset_evidence"] == [{
-        "asset_id": "VA-20261002-0001",
-        "approved_for_requested_use": True,
-        "approved_student_reuse": None,
-        "exists": True,
-        "source_revision": 1,
-        "reuse_scope": "coursewide",
-        "reuse_status": "reusable",
-        "library_reference": {
-            "page_id": "icon-page-camera",
-            "drive_file_id": "drive-icon-camera",
-        },
-    }]
-    record = resolve_current_curriculum_state(packet).record
-    assert record is not None
-    assert record.to_dict()["assets"]["matching_asset_exists"] is True
+    with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit={
+                "stable_id": "photography-foundations",
+                "status": "active",
+                "provider_page_id": UNIT_PAGE,
+            },
+            resolve_identity=identity,
+            execute_read=reader,
+        )
 
 
 # --- IMC scoping --------------------------------------------------------------

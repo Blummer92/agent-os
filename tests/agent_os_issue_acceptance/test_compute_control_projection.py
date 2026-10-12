@@ -28,7 +28,6 @@ from scripts.agent_os_issue_acceptance.compute_control_projection import (
     ComputeDisposition,
     ValidationHeadReference,
     build_compute_control_projection,
-    render_compute_control_projection,
     serialize_compute_control_projection,
 )
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
@@ -273,10 +272,9 @@ def test_authorized_implementation_with_focused_plan_runs_focused_first():
 
 
 def test_focused_first_never_implies_final_validation_is_satisfied():
-    rendered = render_compute_control_projection(_projection(validation_plan=_plan()))
-    assert "focused-validation-first" in rendered
-    assert "final-cloud-validation-required" not in rendered
-    assert "satisfied" not in rendered
+    result = _projection(validation_plan=_plan())
+    assert result.compute_disposition is ComputeDisposition.FOCUSED_VALIDATION_FIRST
+    assert result.compute_disposition is not ComputeDisposition.FINAL_CLOUD_VALIDATION_REQUIRED
 
 
 def test_review_stage_aggregate_plan_requires_final_cloud_validation():
@@ -500,11 +498,11 @@ def test_missing_validation_plan_fabricates_no_status():
 
 
 def test_missing_optional_references_stay_explicitly_unavailable():
-    rendered = render_compute_control_projection(_projection())
-    assert "Recommended validation class: unavailable" in rendered
-    assert "Active execution: unavailable" in rendered
-    assert "Last applicable validation: unavailable" in rendered
-    assert "Measured compute metadata: unavailable" in rendered
+    payload = serialize_compute_control_projection(_projection())
+    assert payload["recommended_validation_or_execution_class"] is None
+    assert payload["active_execution_reference"] is None
+    assert payload["last_applicable_validation_reference"] is None
+    assert payload["measured_compute_metadata_reference"] is None
 
 
 def test_measured_compute_metadata_is_carried_only_as_a_reference():
@@ -518,7 +516,8 @@ def test_measured_compute_metadata_is_carried_only_as_a_reference():
 
 
 def test_no_percentage_progress_is_synthesized():
-    assert "%" not in render_compute_control_projection(_projection(validation_plan=_plan()))
+    payload = serialize_compute_control_projection(_projection(validation_plan=_plan()))
+    assert "%" not in repr(payload)
 
 
 # --- determinism, authority, bounds -----------------------------------------
@@ -530,7 +529,6 @@ def test_identical_input_produces_identical_output():
     assert first == second
     assert first.projection_id == second.projection_id
     assert serialize_compute_control_projection(first) == serialize_compute_control_projection(second)
-    assert render_compute_control_projection(first) == render_compute_control_projection(second)
 
 
 def test_different_input_produces_a_different_projection_identity():
@@ -571,16 +569,15 @@ def test_canonical_identity_and_schema_are_preserved():
     assert result.base_handoff_projection_reference == _handoff(_state()).handoff_id
 
 
-def test_render_and_serialization_stay_bounded():
+def test_serialization_stays_bounded():
     result = _projection(
         validation_plan=_plan(),
         evidence_applicability=_applicability(),
         validation_head_reference=_head_reference(),
         measured_compute_metadata_reference="compute-evidence-summary:" + "7" * 64,
     )
-    rendered = render_compute_control_projection(result)
-    assert len(rendered.encode("utf-8")) < 64 * 1024
-    assert len(rendered.splitlines()) == 14
+    payload = serialize_compute_control_projection(result)
+    assert len(repr(payload).encode("utf-8")) < 64 * 1024
 
 
 def test_serialization_rejects_a_foreign_object():

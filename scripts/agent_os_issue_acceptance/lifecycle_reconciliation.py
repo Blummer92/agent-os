@@ -32,7 +32,6 @@ class ActionCategory(str, Enum):
     OBSERVATION = "observation"
     PROJECTION_REPAIR = "projection-repair"
     GOVERNED_MUTATION = "governed-lifecycle-mutation"
-    MERGE = "merge"
     MANUAL_DECISION = "manual-decision"
 
 
@@ -53,7 +52,6 @@ class DependencyDisposition(str, Enum):
     INCOMPLETE = "incomplete"
     COMPLETED = "completed"
     NOT_PLANNED = "not-planned"
-    DUPLICATE = "duplicate"
     SUPERSEDED = "superseded"
 
 

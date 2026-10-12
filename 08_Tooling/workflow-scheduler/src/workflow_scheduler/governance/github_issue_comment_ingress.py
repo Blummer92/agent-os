@@ -50,7 +50,12 @@ _PPUX_PROJECTION_RE = re.compile(
 _NOTION_READ_RE = re.compile(
     r"/agent-os notion-read (?P<request_id>[a-z0-9][a-z0-9-]{0,62})", re.ASCII
 )
-_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe")
+_READY_ADMISSION_RE = re.compile(
+    r"/agent-os ready-admit (?P<pr_number>[1-9][0-9]{0,8}) "
+    r"(?P<head_sha>[0-9a-f]{40}) (?P<body_sha256>[0-9a-f]{64})",
+    re.ASCII,
+)
+_DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe", "codespaces-environment-qualification-readonly")
 _DIAGNOSTIC_RE = re.compile(
     r"/agent-os diagnose (?P<diagnostic_id>"
     + "|".join(re.escape(value) for value in _DIAGNOSTIC_IDS)
@@ -58,13 +63,20 @@ _DIAGNOSTIC_RE = re.compile(
     re.ASCII,
 )
 
+_CODESPACE_IMPLEMENTATION_RE = re.compile(
+    r"/agent-os codespace-implementation (?P<handoff>executor-handoff:[0-9a-f]{64}) "
+    r"(?P<sha>[0-9a-f]{40})", re.ASCII
+)
+CODESPACE_IMPLEMENTATION_ISSUE = 3333
+
 IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope", "accepted-discovery-envelope", "accepted-runtime-inspection-envelope",
     "accepted-dev-validation-envelope", "accepted-first-publication-activation-envelope",
     "accepted-first-run-validation-envelope", "accepted-notion-read-envelope",
     "accepted-codespaces-diagnostic-envelope", "accepted-ruleset-admin-envelope",
-    "accepted-ppux-projection-envelope",
+    "accepted-codespace-implementation-envelope", "codespace-implementation-issue-mismatch",
+    "accepted-ppux-projection-envelope", "accepted-ready-admission-envelope",
     "event-not-created", "pull-request-comment",
     "repository-mismatch", "workflow-rerun", "actor-not-allowed", "actor-evidence-mismatch",
     "ruleset-admin-issue-mismatch", "malformed-trigger", "invalid-event-envelope",
@@ -87,11 +99,16 @@ class IssueCommentIngressResult:
     diagnostic_id_or_none: str | None = None
     diagnostic_request_id_or_none: str | None = None
     ruleset_prestate_sha256_or_none: str | None = None
+    ready_admission_pr_number_or_none: int | None = None
+    ready_admission_head_sha_or_none: str | None = None
+    ready_admission_body_sha256_or_none: str | None = None
+    codespace_implementation_handoff_id_or_none: str | None = None
+    codespace_implementation_sha_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
     def to_dict(self) -> dict[str, object]:
-        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
+        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"codespace_implementation_handoff_id_or_none":self.codespace_implementation_handoff_id_or_none,"codespace_implementation_sha_or_none":self.codespace_implementation_sha_or_none,"ready_admission_pr_number_or_none":self.ready_admission_pr_number_or_none,"ready_admission_head_sha_or_none":self.ready_admission_head_sha_or_none,"ready_admission_body_sha256_or_none":self.ready_admission_body_sha256_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
@@ -117,6 +134,10 @@ def _diagnostic_trigger_id(repository:str,issue_number:int,diagnostic_id:str,req
     material=f"{repository}\0{issue_number}\0diagnose\0{diagnostic_id}\0{request_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
+def _codespace_implementation_trigger_id(repository: str, issue_number: int, handoff: str, sha: str) -> str:
+    material = f"{repository}\0{issue_number}\0codespace-implementation\0{handoff}\0{sha}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 def _ruleset_admin_trigger_id(repository:str,issue_number:int,prestate:str)->str:
     material=f"{repository}\0{issue_number}\0apply-required-validation-gate\0{prestate}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
@@ -128,18 +149,24 @@ def _ppux_projection_trigger_id(repository:str,issue_number:int,branch:str,sha:s
     material=f"{repository}\0{issue_number}\0project-ppux-prompts\0{branch}\0{sha}\0{input_ref}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None)->IssueCommentIngressResult:
+def _ready_admission_trigger_id(repository:str,issue_number:int,pr_number:int,head_sha:str,body_sha256:str)->str:
+    material=f"{repository}\0{issue_number}\0ready-admit\0{pr_number}\0{head_sha}\0{body_sha256}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
     elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
     elif first_run_candidate_sha is not None and issue_number is not None: logical_id=_first_run_validation_trigger_id(repository,issue_number,first_run_candidate_sha)
     elif notion_read_request_id is not None and issue_number is not None: logical_id=_notion_read_trigger_id(repository,issue_number,notion_read_request_id)
     elif diagnostic_id is not None and diagnostic_request_id is not None and issue_number is not None: logical_id=_diagnostic_trigger_id(repository,issue_number,diagnostic_id,diagnostic_request_id)
+    elif ready_admission_pr_number is not None and ready_admission_head_sha is not None and ready_admission_body_sha256 is not None and issue_number is not None: logical_id=_ready_admission_trigger_id(repository,issue_number,ready_admission_pr_number,ready_admission_head_sha,ready_admission_body_sha256)
+    elif codespace_implementation_handoff is not None and codespace_implementation_sha is not None and issue_number is not None: logical_id=_codespace_implementation_trigger_id(repository,issue_number,codespace_implementation_handoff,codespace_implementation_sha)
     elif ruleset_prestate_sha256 is not None and issue_number is not None: logical_id=_ruleset_admin_trigger_id(repository,issue_number,ruleset_prestate_sha256)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif ppux_projection_branch is not None and ppux_projection_sha is not None and ppux_projection_input_ref is not None and issue_number is not None: logical_id=_ppux_projection_trigger_id(repository,issue_number,ppux_projection_branch,ppux_projection_sha,ppux_projection_input_ref)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
@@ -189,6 +216,13 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
         request_id=notion_read.group("request_id")
         if not _valid_notion_read_request_id(request_id):return _result(status="ignored",reason="malformed-trigger",**common)
         return _result(status="accepted",reason="accepted-notion-read-envelope",notion_read_request_id=request_id,**common)
+    implementation = _CODESPACE_IMPLEMENTATION_RE.fullmatch(body)
+    if implementation is not None:
+        if issue_number != CODESPACE_IMPLEMENTATION_ISSUE:
+            return _result(status="blocked", reason="codespace-implementation-issue-mismatch", **common)
+        return _result(status="accepted", reason="accepted-codespace-implementation-envelope",
+                       codespace_implementation_handoff=implementation.group("handoff"),
+                       codespace_implementation_sha=implementation.group("sha"), **common)
     diagnostic=_DIAGNOSTIC_RE.fullmatch(body)
     if diagnostic is not None:
         return _result(status="accepted",reason="accepted-codespaces-diagnostic-envelope",diagnostic_id=diagnostic.group("diagnostic_id"),diagnostic_request_id=diagnostic.group("request_id"),**common)
@@ -197,6 +231,9 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
         branch=dev_match.group("branch")
         if not _valid_dev_branch(branch):return _result(status="ignored",reason="malformed-trigger",**common)
         return _result(status="accepted",reason="accepted-dev-validation-envelope",dev_validation_branch=branch,dev_validation_sha=dev_match.group("sha"),dev_validation_id=dev_match.group("validation_id"),**common)
+    ready_admission=_READY_ADMISSION_RE.fullmatch(body)
+    if ready_admission is not None:
+        return _result(status="accepted",reason="accepted-ready-admission-envelope",ready_admission_pr_number=int(ready_admission.group("pr_number")),ready_admission_head_sha=ready_admission.group("head_sha"),ready_admission_body_sha256=ready_admission.group("body_sha256"),**common)
     ppux_projection=_PPUX_PROJECTION_RE.fullmatch(body)
     if ppux_projection is not None:
         branch=ppux_projection.group("branch")

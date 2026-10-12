@@ -276,16 +276,20 @@ def test_full_evidence_envelope_never_carries_a_token(
 ) -> None:
     monkeypatch.setenv("NOTION_TOKEN", NOTION_TOKEN_VALUE)
 
-    evidence = run_notion_read_request(
-        transport(),
-        expected_repository=REPOSITORY,
-        expected_actor=ACTOR,
-        generated_at=GENERATED_AT,
-        catalog=verified_catalog,
-        scheduler_task_executor_factory=RecordingExecutor().factory,
-    )
+    # #2816: the visual-assets read now fails closed on the coursewide
+    # schema mismatch before any evidence is produced; the bounded failure
+    # itself must not carry the credential either.
+    with pytest.raises(Exception, match="filter-property-unavailable") as excinfo:
+        run_notion_read_request(
+            transport(),
+            expected_repository=REPOSITORY,
+            expected_actor=ACTOR,
+            generated_at=GENERATED_AT,
+            catalog=verified_catalog,
+            scheduler_task_executor_factory=RecordingExecutor().factory,
+        )
 
-    serialized = json.dumps(evidence)
+    serialized = str(excinfo.value)
     assert NOTION_TOKEN_VALUE not in serialized
     assert "ntn_" not in serialized
     assert "Bearer" not in serialized

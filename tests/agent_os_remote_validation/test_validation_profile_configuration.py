@@ -55,3 +55,46 @@ def test_requirements_dev_selects_aggregate_without_changing_aggregate_identity(
     assert plan.profile == "aggregate"
     assert plan.commands == ("python -m pytest",)
     assert plan.reason_codes == ("profile.aggregate-configuration",)
+
+
+def test_root_changelog_is_documentation_not_manual_review() -> None:
+    plan = select_validation_plan(_input("CHANGELOG.md"), RULES)
+    assert plan.profile == "static"
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_standards_registry_and_root_changelog_are_static() -> None:
+    subject = _input("CHANGELOG.md")
+    subject = SelectionInput(
+        repository=subject.repository,
+        pull_request=subject.pull_request,
+        base_sha=subject.base_sha,
+        head_sha=subject.head_sha,
+        changed_files=(
+            "01_Shared_Standards/github/issue-lifecycle-standard.md",
+            "04_Registry/responsibility-matrix.md",
+            "CHANGELOG.md",
+        ),
+    )
+    plan = select_validation_plan(subject, RULES)
+    assert plan.profile == "static"
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_root_changelog_does_not_weaken_code_or_unknown_path_handling() -> None:
+    subject = _input("CHANGELOG.md")
+    for paths, expected_profile in (
+        (("CHANGELOG.md", "scripts/agent_os_remote_validation/selector.py"), "focused"),
+        (("CHANGELOG.md", "tests/agent_os_remote_validation/test_selector.py"), "focused"),
+        (("CHANGELOG.md", "scripts/unmapped_example.py"), "aggregate"),
+        (("CHANGELOG.md", "unmapped-policy.txt"), "manual-review"),
+    ):
+        value = SelectionInput(
+            repository=subject.repository,
+            pull_request=subject.pull_request,
+            base_sha=subject.base_sha,
+            head_sha=subject.head_sha,
+            changed_files=paths,
+        )
+        plan = select_validation_plan(value, RULES)
+        assert plan.profile == expected_profile, (paths, plan.reason_codes)

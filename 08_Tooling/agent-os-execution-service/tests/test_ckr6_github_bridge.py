@@ -218,6 +218,74 @@ def test_explicit_failed_repair_opt_out_is_transported_not_reclassified():
     assert bridge.classify_envelope(envelope)["retrieval_required"] is False
 
 
+@pytest.mark.parametrize(
+    ("status", "retry_outcome", "lesson_disposition", "admissible", "needs_reader"),
+    [
+        ("sufficient", "consumed", "sufficient", True, True),
+        ("insufficient", "unavailable-or-failed", "insufficient", False, True),
+        ("manual-review", "unavailable-or-failed", "manual-review", False, True),
+        ("not-needed", "not-material", "not-needed", False, False),
+    ],
+)
+def test_2851_failed_repair_diagnostics_survive_bounded_result_postback(
+    monkeypatch, status, retry_outcome, lesson_disposition, admissible, needs_reader
+):
+    # The bridge is transport only: it must not infer either diagnostic
+    # or convert a retry disposition into GitHub/write/merge authority.
+    envelope = bridge.parse_envelope(
+        payload(
+            operation="failed-repair",
+            attempt_id="attempt-2851",
+            failed_hypothesis="prior repair returned only coarse reason codes",
+            result_summary="canonical retry diagnostic was lost at postback",
+            repair_context="failed-pr-repair",
+        )
+    )
+    canonical = {
+        "lesson_retrieval_status": status,
+        "retry_reentry_outcome": retry_outcome,
+        "lesson_disposition": lesson_disposition,
+        "reason_codes": ["canonical-retry-reason"],
+        "selected_lesson_ids": [],
+        "selected_lessons": [],
+        "canonical_github_refs": ["#2851"],
+        "mutation_admissible": admissible,
+        "blocking_attempt_id": None if admissible else "attempt-2851",
+    }
+    monkeypatch.setattr(bridge, "activate_agent_os_failed_repair", lambda **kwargs: canonical)
+    if needs_reader:
+        monkeypatch.setattr(
+            bridge,
+            "resolve_lesson_read_route",
+            lambda: type("Route", (), {"execute_read": lambda query: {"results": []}})(),
+        )
+    else:
+        monkeypatch.setattr(
+            bridge,
+            "resolve_lesson_read_route",
+            lambda: (_ for _ in ()).throw(AssertionError("zero-read path must not resolve")),
+        )
+    result = bridge.execute_envelope(envelope, retrieval_required=needs_reader)
+    assert result["status"] == status
+    assert result["retry_reentry_outcome"] == retry_outcome
+    assert result["lesson_disposition"] == lesson_disposition
+    assert result["mutation_admissible"] is admissible
+    assert result["reason_codes"] == ["canonical-retry-reason"]
+    body = bridge.serialize_ckr6_result_comment(result, request_comment_id=2851001)
+    parsed = bridge.parse_ckr6_result_comment(body)
+    assert parsed["retry_reentry_outcome"] == retry_outcome
+    assert parsed["lesson_disposition"] == lesson_disposition
+    assert parsed["status"] == status
+    assert parsed["mutation_admissible"] is admissible
+    assert parsed["request_comment_id"] == 2851001
+    assert not body.startswith(bridge.COMMAND_PREFIX)
+    for flag in (
+        "execution_authorized", "github_writes_authorized", "merge_authorized",
+        "closure_authorized", "side_effects_performed",
+    ):
+        assert parsed[flag] is False
+
+
 def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeypatch):
     class Route:
         execute_read = None

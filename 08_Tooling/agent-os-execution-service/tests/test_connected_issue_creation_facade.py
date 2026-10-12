@@ -143,13 +143,23 @@ def test_focused_successor_requires_explicit_distinct_seam() -> None:
     assert admitted["duplicate_review_disposition"] == "FOCUSED_SUCCESSOR"
 
 
-def test_missing_canonical_metadata_fails_closed() -> None:
-    with pytest.raises(ValueError, match="canonical tiered metadata"):
-        plan_connected_issue_creation_for_host(
-            repository="Blummer92/agent-os",
-            issue_body="Source of truth: GitHub",
-            **distinct_kwargs(),
-        )
+def test_missing_canonical_metadata_fails_closed_as_governed_denial() -> None:
+    # #3092: a body without canonical tiered metadata must fail closed as a
+    # governed manual-review denial the host can consume -- never as a raw
+    # tool error the host can route around via native create.
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body="Source of truth: GitHub",
+        **distinct_kwargs(),
+    )
+    assert result["create_allowed"] is False
+    assert result["duplicate_review_disposition"] == "MANUAL_REVIEW"
+    assert result["next_operation"] == "manual-review-duplicate-admission-required"
+    assert result["proposed_labels"] == []
+    assert result["required_managed_label_readback"] == []
+    assert result["post_create_readback_required"] is False
+    assert result["terminal_success_requires_label_convergence"] is False
+    assert result["side_effects_performed"] is False
 
 
 def test_repository_identity_is_bounded() -> None:
@@ -301,7 +311,7 @@ def test_3027_reconciliation_mismatch_cannot_terminalize():
 
 def test_3027_malformed_minimal_body_fails_before_native_create():
     provider = _FakeCreateProvider(())
-    with pytest.raises(ValueError, match="canonical tiered metadata"):
+    with pytest.raises(ValueError, match="not admitted"):
         create_connected_issue_for_host(
             provider,
             repository="Blummer92/agent-os",
@@ -350,3 +360,54 @@ def test_host_projection_plans_labels_for_realistic_bare_kv_body() -> None:
     assert result["terminal_success_requires_label_convergence"] is True
     assert result["post_create_readback_required"] is True
     assert result["side_effects_performed"] is False
+
+
+# #3092: duplicate admission passes but the body carries no canonical tiered
+# owner/readiness/type metadata (the #3088/#3412 free-form host shape). The
+# host-consumed plan must deny creation as governed manual review, not raise
+# a raw error the host can route around via native create.
+UNCLASSIFIABLE_ADMITTED_BODY = """### Prior scope, duplicate, and supersession review
+
+Reviewed current open bug owners and found one distinct repair seam.
+
+## Summary
+
+Free-form host prose with no canonical tiered owner/readiness/type metadata.
+"""
+
+
+def test_3092_admitted_but_unclassifiable_body_denies_without_raising() -> None:
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=UNCLASSIFIABLE_ADMITTED_BODY,
+        duplicate_review_disposition="NEW_DISTINCT_BUG",
+        candidate_evidence=(candidate(3099),),
+        candidate_enumeration_complete=True,
+    )
+    assert result["create_allowed"] is False
+    assert result["duplicate_review_disposition"] == "NEW_DISTINCT_BUG"
+    assert result["next_operation"] == "manual-review-classification-required"
+    assert "connected-create.managed-label-planning-failed" in result["duplicate_review_reason_codes"]
+    assert result["proposed_labels"] == []
+    assert result["required_managed_label_readback"] == []
+    assert result["post_create_readback_required"] is False
+    assert result["terminal_success_requires_label_convergence"] is False
+    assert result["classification_denial_detail"]
+    assert result["side_effects_performed"] is False
+
+
+def test_3092_unclassifiable_body_cannot_reach_native_create() -> None:
+    provider = _FakeCreateProvider(())
+    with pytest.raises(ValueError, match="not admitted"):
+        create_connected_issue_for_host(
+            provider,
+            repository="Blummer92/agent-os",
+            title="BUG - unclassifiable body",
+            issue_body=UNCLASSIFIABLE_ADMITTED_BODY,
+            duplicate_review_disposition="NEW_DISTINCT_BUG",
+            candidate_evidence=(candidate(3099),),
+            candidate_enumeration_complete=True,
+        )
+    assert provider.created_with == ()
+    assert provider.read_count == 0
+    assert provider.reconcile_count == 0

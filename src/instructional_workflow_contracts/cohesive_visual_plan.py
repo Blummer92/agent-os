@@ -1,4 +1,21 @@
-"""Pure deterministic cohesive visual-set planning from approved candidates."""
+"""Pure deterministic cohesive visual-set planning from approved candidates.
+
+Role/slot identity (#3251)
+---------------------------
+Every assignment, rejection, unfilled record, and gap brief keys on
+``(role_id, slot_id)``. A role declares zero or more explicit placement
+slots; a role with no declared slots fills the single implicit slot
+``"0"``. ``role_id`` is the stable semantic identity from the visual-needs
+plan; slots are placement bindings, never role identity.
+
+Shared-asset policy (#3251): one governed asset may satisfy multiple
+compatible roles/slots when it passes each binding's role-intrinsic
+compatibility independently. The duplicate-set rejection is waived only
+for the identical asset on an independently compatible binding;
+duplicates of other assets and cohesion conflicts against other assets
+are still rejected. An explicit policy rejection keeps the
+``policy-unassigned`` outcome -- never a visual gap.
+"""
 
 from __future__ import annotations
 
@@ -30,10 +47,15 @@ from .visual_asset_compatibility import (
     V2_CONTRACT_ID as V2_COMPATIBILITY_CONTRACT_ID,
 )
 from .visual_needs import CONTRACT_ID as VISUAL_NEEDS_CONTRACT_ID
+from .material_requirement import MAX_SLOTS_PER_ROLE
 
 CONTRACT_ID = "curriculum-cohesive-visual-plan-v1"
 MAX_SELECTED_ASSETS = 8
 MAX_GAP_BRIEFS = 8
+# Implicit slot for roles that declare no explicit slots (#3251). Every
+# assignment, rejection, and gap brief keys on (role_id, slot_id); the
+# implicit slot keeps single-slot roles backward compatible.
+IMPLICIT_SLOT_ID = "0"
 
 # Canonical visual outcome-code registry is owned by #3248
 # (~/workspace/wave1-campaign/outcome-code-registry.md). This module emits codes
@@ -134,11 +156,15 @@ def plan_cohesive_visual_set(
         rejected_assignments: list[dict[str, Any]] = []
         rejected_sets: list[dict[str, Any]] = []
         unfilled_required: list[dict[str, Any]] = []
-        unfilled_required_roles: list[dict[str, Any]] = []
+        unfilled_required_slots: list[tuple[dict[str, Any], str]] = []
         unfilled_optional: list[dict[str, Any]] = []
         manual_reasons: set[str] = set()
         total_cognitive_load = 0
         used_asset_keys: set[tuple[str, str, str]] = set()
+        # #3251: distinct governed assets bound so far. The governed visual
+        # count bounds distinct visuals; placement multiplicity (slots, shared
+        # assets) is bounded separately by the role/slot caps.
+        bound_asset_keys: set[tuple[str, str, str]] = set()
 
         if candidate_payload["manual_review"]:
             manual_reasons.add("manual-review-visual-candidates")
@@ -157,104 +183,128 @@ def plan_cohesive_visual_set(
         )
 
         for role in required_roles:
-            if len(selected) >= min(max_visuals, MAX_SELECTED_ASSETS):
-                raise ContractValidationError(
-                    "handoff-oversized",
-                    "required roles exceed the governed maximum visual count",
-                )
-            match = _select_for_role(
-                role,
-                eligible,
-                selected=selected,
-                used_asset_keys=used_asset_keys,
-                material_type=material_type,
-                current_cognitive_load=total_cognitive_load,
-                cognitive_ceiling=cognitive_ceiling,
-                rejected_assignments=rejected_assignments,
-                rejected_sets=rejected_sets,
-            )
-            if match["manual_review"]:
-                manual_reasons.update(match["manual_review"])
-            candidate = match["candidate"]
-            if candidate is None:
-                outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
+            # #3251: each role binds one placement per declared slot; roles
+            # without explicit slots fill the single implicit slot.
+            for slot_id in _role_slot_ids(role):
+                match = _select_for_role(
                     role,
-                    match,
-                    candidate_payload,
+                    eligible,
+                    selected=selected,
+                    used_asset_keys=used_asset_keys,
+                    material_type=material_type,
+                    rejected_assignments=rejected_assignments,
+                    rejected_sets=rejected_sets,
+                    slot_id=slot_id,
                 )
-                unfilled_required.append(
-                    _unfilled_role(
+                if match["manual_review"]:
+                    manual_reasons.update(match["manual_review"])
+                candidate = match["candidate"]
+                if candidate is None:
+                    outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
                         role,
-                        outcome_code=outcome_code,
-                        reason_codes=reason_codes,
-                        rejected_candidate_ids=rejected_ids,
+                        match,
+                        candidate_payload,
                     )
+                    unfilled_required.append(
+                        _unfilled_role(
+                            role,
+                            slot_id=slot_id,
+                            outcome_code=outcome_code,
+                            reason_codes=reason_codes,
+                            rejected_candidate_ids=rejected_ids,
+                        )
+                    )
+                    # A gap brief is emitted ONLY for proven absence: governed
+                    # evidence proves no eligible reusable asset exists for the role
+                    # under the stated scope and snapshot. Every other non-absence
+                    # state carries its own outcome code and never becomes a brief.
+                    if outcome_code == OUTCOME_PROVEN_ABSENCE:
+                        unfilled_required_slots.append((role, slot_id))
+                    continue
+                asset_key = _asset_key(candidate)
+                is_new_asset = asset_key not in used_asset_keys
+                if (
+                    is_new_asset
+                    and len(bound_asset_keys) >= min(max_visuals, MAX_SELECTED_ASSETS)
+                ):
+                    raise ContractValidationError(
+                        "handoff-oversized",
+                        "required roles exceed the governed maximum visual count",
+                    )
+                assignment = _assignment(
+                    role,
+                    candidate,
+                    requirement_state="required",
+                    slot_id=slot_id,
                 )
-                # A gap brief is emitted ONLY for proven absence: governed
-                # evidence proves no eligible reusable asset exists for the role
-                # under the stated scope and snapshot. Every other non-absence
-                # state carries its own outcome code and never becomes a brief.
-                if outcome_code == OUTCOME_PROVEN_ABSENCE:
-                    unfilled_required_roles.append(role)
-                continue
-            assignment = _assignment(
-                role,
-                candidate,
-                requirement_state="required",
-            )
-            required_assignments.append(assignment)
-            selected.append(candidate)
-            used_asset_keys.add(_asset_key(candidate))
-            total_cognitive_load += candidate["cohesion_profile"][
-                "cognitive_load_rating"
-            ]
+                required_assignments.append(assignment)
+                selected.append(candidate)
+                used_asset_keys.add(asset_key)
+                if is_new_asset:
+                    bound_asset_keys.add(asset_key)
+                total_cognitive_load += candidate["cohesion_profile"][
+                    "cognitive_load_rating"
+                ]
 
         for role in optional_roles:
-            if len(selected) >= min(max_visuals, MAX_SELECTED_ASSETS):
-                unfilled_optional.append(_unfilled_role(role))
-                continue
-            match = _select_for_role(
-                role,
-                eligible,
-                selected=selected,
-                used_asset_keys=used_asset_keys,
-                material_type=material_type,
-                current_cognitive_load=total_cognitive_load,
-                cognitive_ceiling=cognitive_ceiling,
-                rejected_assignments=rejected_assignments,
-                rejected_sets=rejected_sets,
-            )
-            if match["manual_review"]:
-                manual_reasons.update(match["manual_review"])
-            candidate = match["candidate"]
-            if candidate is None:
-                outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
-                    role,
-                    match,
-                    candidate_payload,
-                )
-                unfilled_optional.append(
-                    _unfilled_role(
-                        role,
-                        outcome_code=outcome_code,
-                        reason_codes=reason_codes,
-                        rejected_candidate_ids=rejected_ids,
+            for slot_id in _role_slot_ids(role):
+                if len(bound_asset_keys) >= min(max_visuals, MAX_SELECTED_ASSETS):
+                    unfilled_optional.append(
+                        _unfilled_role(
+                            role,
+                            slot_id=slot_id,
+                            outcome_code=OUTCOME_POLICY_UNASSIGNED,
+                            reason_codes=(OUTCOME_POLICY_UNASSIGNED,),
+                        )
                     )
+                    continue
+                match = _select_for_role(
+                    role,
+                    eligible,
+                    selected=selected,
+                    used_asset_keys=used_asset_keys,
+                    material_type=material_type,
+                    rejected_assignments=rejected_assignments,
+                    rejected_sets=rejected_sets,
+                    slot_id=slot_id,
                 )
-                continue
-            assignment = _assignment(
-                role,
-                candidate,
-                requirement_state="optional",
-            )
-            optional_assignments.append(assignment)
-            selected.append(candidate)
-            used_asset_keys.add(_asset_key(candidate))
-            total_cognitive_load += candidate["cohesion_profile"][
-                "cognitive_load_rating"
-            ]
+                if match["manual_review"]:
+                    manual_reasons.update(match["manual_review"])
+                candidate = match["candidate"]
+                if candidate is None:
+                    outcome_code, reason_codes, rejected_ids = _classify_unfilled_role(
+                        role,
+                        match,
+                        candidate_payload,
+                    )
+                    unfilled_optional.append(
+                        _unfilled_role(
+                            role,
+                            slot_id=slot_id,
+                            outcome_code=outcome_code,
+                            reason_codes=reason_codes,
+                            rejected_candidate_ids=rejected_ids,
+                        )
+                    )
+                    continue
+                asset_key = _asset_key(candidate)
+                is_new_asset = asset_key not in used_asset_keys
+                assignment = _assignment(
+                    role,
+                    candidate,
+                    requirement_state="optional",
+                    slot_id=slot_id,
+                )
+                optional_assignments.append(assignment)
+                selected.append(candidate)
+                used_asset_keys.add(asset_key)
+                if is_new_asset:
+                    bound_asset_keys.add(asset_key)
+                total_cognitive_load += candidate["cohesion_profile"][
+                    "cognitive_load_rating"
+                ]
 
-        if len(selected) > MAX_SELECTED_ASSETS:
+        if len(bound_asset_keys) > MAX_SELECTED_ASSETS:
             raise ContractValidationError(
                 "handoff-oversized",
                 "selected visual set exceeds the governed bound",
@@ -268,13 +318,14 @@ def plan_cohesive_visual_set(
             else [
                 _gap_brief(
                     role,
+                    slot_id=slot_id,
                     material_type=material_type,
                     selected=selected,
                     plan=plan,
                     candidates=candidates,
                     candidate_payload=candidate_payload,
                 )
-                for role in unfilled_required_roles
+                for role, slot_id in unfilled_required_slots
             ]
         )
         if len(gap_briefs) > MAX_GAP_BRIEFS:
@@ -321,6 +372,7 @@ def plan_cohesive_visual_set(
                 rejected_assignments,
                 key=lambda item: (
                     item["role_id"],
+                    item["slot_id"],
                     item["compatibility_id"],
                     tuple(item["reason_codes"]),
                 ),
@@ -329,6 +381,7 @@ def plan_cohesive_visual_set(
                 rejected_sets,
                 key=lambda item: (
                     item["role_id"],
+                    item["slot_id"],
                     item["compatibility_id"],
                     tuple(item["reason_codes"]),
                 ),
@@ -594,6 +647,43 @@ def _bind_candidate_result_to_plan(
         )
 
 
+def _role_slot_ids(role: dict[str, Any]) -> tuple[str, ...]:
+    """Return the placement slot ids one role binds (#3251).
+
+    Roles declare explicit slots through the MaterialRequirement contract;
+    a role with no declared slots fills the single implicit slot. Slot
+    counts are bounded by the requirement contract; the planner re-checks
+    the per-role bound defensively because it consumes plan evidence.
+    """
+    slots = role.get("slots")
+    if slots is None:
+        return (IMPLICIT_SLOT_ID,)
+    if type(slots) is not list or not slots:
+        raise ContractValidationError(
+            "asset-cohesive-plan-invalid",
+            "visual role slots are malformed",
+        )
+    checked: list[str] = []
+    for slot in slots:
+        if type(slot) is not str or not slot:
+            raise ContractValidationError(
+                "asset-cohesive-plan-invalid",
+                "visual role slot id is malformed",
+            )
+        checked.append(slot)
+    if len(checked) > MAX_SLOTS_PER_ROLE:
+        raise ContractValidationError(
+            "handoff-oversized",
+            "visual role slots exceed the per-role bound",
+        )
+    return tuple(checked)
+
+
+# #3250 owner decision (b): no governed cognitive-load budget exists. The
+# planner keeps the observed rating/total as advisory evidence, but never
+# rejects an otherwise eligible visual by comparing summed 1-5 ratings with
+# a visual-count ceiling. Reintroducing a load gate requires a separately
+# governed model with consistent units and a live rating source.
 def _select_for_role(
     role: dict[str, Any],
     candidates: list[dict[str, Any]],
@@ -601,10 +691,9 @@ def _select_for_role(
     selected: list[dict[str, Any]],
     used_asset_keys: set[tuple[str, str, str]],
     material_type: str,
-    current_cognitive_load: int,
-    cognitive_ceiling: int,
     rejected_assignments: list[dict[str, Any]],
     rejected_sets: list[dict[str, Any]],
+    slot_id: str,
 ) -> dict[str, Any]:
     viable: list[tuple[tuple[int, int, int, int], str, dict[str, Any]]] = []
     manual: set[str] = set()
@@ -620,19 +709,21 @@ def _select_for_role(
             material_type=material_type,
         )
         if reasons:
-            rejected_assignments.append(_rejection(role, candidate, reasons))
+            rejected_assignments.append(
+                _rejection(role, candidate, reasons, slot_id=slot_id)
+            )
             role_rejections.append((candidate, reasons))
             continue
         set_reasons = _set_rejection_reasons(
-            role,
             candidate,
             selected=selected,
             used_asset_keys=used_asset_keys,
-            current_cognitive_load=current_cognitive_load,
-            cognitive_ceiling=cognitive_ceiling,
+            role_reasons=reasons,
         )
         if set_reasons:
-            rejected_sets.append(_rejection(role, candidate, set_reasons))
+            rejected_sets.append(
+                _rejection(role, candidate, set_reasons, slot_id=slot_id)
+            )
             role_eligible.append((candidate, set_reasons))
             continue
         score = _score(role, candidate)
@@ -772,16 +863,28 @@ def _role_rejection_reasons(
 
 
 def _set_rejection_reasons(
-    role: dict[str, Any],
     candidate: dict[str, Any],
     *,
     selected: list[dict[str, Any]],
     used_asset_keys: set[tuple[str, str, str]],
-    current_cognitive_load: int,
-    cognitive_ceiling: int,
+    role_reasons: tuple[str, ...],
 ) -> tuple[str, ...]:
+    """Set-level rejection reasons for one role-compatible candidate.
+
+    #3251 shared-asset permit: when the candidate is the identical governed
+    asset already bound for another (role, slot) AND it passed this
+    binding's role-intrinsic compatibility independently (``role_reasons``
+    is empty), the duplicate-set rejection is waived for this binding --
+    one governed asset may satisfy multiple compatible roles/slots.
+    Duplicates of *other* selected assets, duplicate-group/canonical
+    collisions with other assets, and cohesion conflicts against other
+    assets are still rejected; an explicit policy rejection keeps the
+    ``policy-unassigned`` outcome (never a visual gap).
+    """
     reasons: list[str] = []
-    if _asset_key(candidate) in used_asset_keys:
+    asset_key = _asset_key(candidate)
+    shared_permit = asset_key in used_asset_keys and not role_reasons
+    if asset_key in used_asset_keys and not shared_permit:
         reasons.append("asset-duplicate-selected")
 
     candidate_asset = candidate["matched_asset"]
@@ -789,6 +892,10 @@ def _set_rejection_reasons(
     candidate_stable = candidate_asset["stable_ref"]
     candidate_canonical = candidate_asset["canonical_asset_ref"]
     for selected_candidate in selected:
+        if shared_permit and _asset_key(selected_candidate) == asset_key:
+            # Cohesion against the identical asset is vacuous; the permit
+            # already established independent compatibility for this binding.
+            continue
         selected_asset = selected_candidate["matched_asset"]
         if candidate_group is not None and candidate_group == selected_asset["duplicate_group_id"]:
             reasons.append("asset-duplicate-selected")
@@ -803,12 +910,6 @@ def _set_rejection_reasons(
         )
         reasons.extend(cohesion_reasons)
 
-    # #3250 owner decision (b): no governed cognitive-load budget exists.
-    # Keep the observed rating/total as advisory evidence, but do not reject an
-    # otherwise eligible visual by comparing the summed 1-5 ratings with the
-    # producer's visual-count ceiling. Reintroducing a load gate requires a
-    # separately governed model with consistent units and a live rating source.
-    del current_cognitive_load, cognitive_ceiling
     return tuple(sorted(set(reasons)))
 
 
@@ -859,10 +960,15 @@ def _assignment(
     candidate: dict[str, Any],
     *,
     requirement_state: str,
+    slot_id: str,
 ) -> dict[str, Any]:
     score = _score(role, candidate)
     return {
         "role_id": role["role_id"],
+        # #3251: each assignment is one (role_id, slot_id) binding. Two
+        # bindings may share the same governed asset when the shared-asset
+        # permit admitted each binding independently.
+        "slot_id": slot_id,
         "role_type": role["role_type"],
         "requirement_state": requirement_state,
         "instructional_purpose": role["instructional_purpose"],
@@ -904,9 +1010,12 @@ def _rejection(
     role: dict[str, Any],
     candidate: dict[str, Any],
     reasons: tuple[str, ...],
+    *,
+    slot_id: str,
 ) -> dict[str, Any]:
     return {
         "role_id": role["role_id"],
+        "slot_id": slot_id,
         "role_type": role["role_type"],
         "compatibility_id": candidate["compatibility_id"],
         "asset_reference": candidate["asset_reference"],
@@ -917,12 +1026,14 @@ def _rejection(
 def _unfilled_role(
     role: dict[str, Any],
     *,
+    slot_id: str,
     outcome_code: str,
     reason_codes: tuple[str, ...],
     rejected_candidate_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     return {
         "role_id": role["role_id"],
+        "slot_id": slot_id,
         "role_type": role["role_type"],
         "requirement_state": role["requirement_state"],
         "instructional_purpose": role["instructional_purpose"],
@@ -943,6 +1054,7 @@ def _unfilled_role(
 def _gap_brief(
     role: dict[str, Any],
     *,
+    slot_id: str,
     material_type: str,
     selected: list[dict[str, Any]],
     plan: ValidatedRecord,
@@ -960,10 +1072,18 @@ def _gap_brief(
     concept = role.get("concept") or role["role_type"]
     return {
         "brief_id": validate_stable_id(
-            "image-gap-" + sha256_hex({"role_id": role_id, "material_type": material_type})[:24],
+            "image-gap-"
+            + sha256_hex(
+                {
+                    "role_id": role_id,
+                    "slot_id": slot_id,
+                    "material_type": material_type,
+                }
+            )[:24],
             "image-gap brief_id",
         ),
         "missing_visual_role_id": role_id,
+        "missing_visual_role_slot_id": slot_id,
         "missing_visual_role_type": role["role_type"],
         "subject_or_concept": concept,
         "instructional_purpose": role["instructional_purpose"],

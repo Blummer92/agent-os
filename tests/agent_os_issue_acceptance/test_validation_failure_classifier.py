@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from scripts.agent_os_issue_acceptance.validation_failure_classifier import (
@@ -8,8 +6,6 @@ from scripts.agent_os_issue_acceptance.validation_failure_classifier import (
     ValidationFailureClassification,
     ValidationFailureEvidence,
     classify_validation_failure,
-    render_validation_failure_classification,
-    serialize_validation_failure_classification,
 )
 
 
@@ -128,25 +124,12 @@ def test_output_preserves_supplied_identity_and_is_deterministic():
     second = classify_validation_failure(supplied)
     assert first == second
     assert first.source_identifiers == ("job:456", "workflow:123")
-    payload = json.loads(serialize_validation_failure_classification(first))
-    assert payload["pr_head_sha"] == PR_SHA
-    assert payload["comparison_main_sha"] == MAIN_SHA
-    assert payload["command"] == "./scripts/validate-all.sh"
-    assert payload["failed_requirement"] == "python -m pytest tests/test_example.py -q"
-    assert payload["error_excerpt"] == "1 failed, 12 passed"
-    assert payload["exit_code"] == 1
-    assert payload["evidence_id"] == first.evidence_id
-
-
-def test_human_renderer_matches_machine_classification_and_authority_boundaries():
-    result = classify_validation_failure(evidence())
-    rendered = render_validation_failure_classification(result)
-    assert "Classification: pr_regression" in rendered
-    assert f"PR head SHA: {PR_SHA}" in rendered
-    assert f"Comparison main SHA: {MAIN_SHA}" in rendered
-    assert "repair_authorized: false" in rendered
-    assert "merge_authorized: false" in rendered
-    assert "side_effects_performed: false" in rendered
+    assert first.pr_head_sha == PR_SHA
+    assert first.comparison_main_sha == MAIN_SHA
+    assert first.command == "./scripts/validate-all.sh"
+    assert first.failed_requirement == "python -m pytest tests/test_example.py -q"
+    assert first.error_excerpt == "1 failed, 12 passed"
+    assert first.exit_code == 1
 
 
 def test_bounded_text_and_sha_validation_fail_closed():

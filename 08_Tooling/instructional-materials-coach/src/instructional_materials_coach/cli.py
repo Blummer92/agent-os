@@ -14,6 +14,8 @@ from .artifact_structure import PASS, validate_required_worksheet_sections
 from .artifact_content_qa import DEFAULT_QA_EVIDENCE_DIR, TerminalQAExpectations
 from .asset_slot_resolution import resolve_asset_slots
 from .build_resume import DEFAULT_BUILD_RESUME_DIR
+from .build_receipt import build_receipt_record, write_build_receipt_atomic
+from .build_request import compose_governed_build_request
 from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
@@ -42,6 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     build = subparsers.add_parser("build", help="Build a slide deck and worksheet from an approved template and lesson content.")
     build.add_argument("--content", required=True)
+    build.add_argument("--receipt-out", default="", help="Optional local JSON build evidence (not authorization).")
     build.add_argument("--slides-template", default="")
     build.add_argument("--doc-template", default="")
     build.add_argument("--template-candidates", default="")
@@ -183,7 +186,12 @@ def _template_revision(drive_service: Any, template_id: str) -> str:
 
 
 def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict[str, Any]]:
-    """Per-role selected visuals with Lane-D content identity for the key."""
+    """Per-(role, slot) selected visuals with Lane-D content identity for the key.
+
+    Bindings key on (role_id, slot_id) (#3251): one asset shared across
+    roles/slots appears once per binding, so the idempotency key
+    distinguishes the placements instead of collapsing them.
+    """
     from instructional_workflow_contracts.asset_content_identity import (
         content_identity_from_fingerprint,
     )
@@ -220,9 +228,11 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
                 )
             except (ValueError, TypeError):
                 identity = None
+            slot_id = assignment.get("slot_id", "0")
             visuals.append(
                 {
                     "role": assignment.get("role_id"),
+                    "slot": str(slot_id),
                     "asset_id": asset_id,
                     "content_identity": identity,
                 }
@@ -260,7 +270,14 @@ def _require_visual_placement_support(
 
 
 def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[str, str | None]:
-    """Map each selected asset ID to the candidate Drive file ID bound by the governed plan."""
+    """Map each selected asset ID to the candidate Drive file ID bound by the governed plan.
+
+    Deliberately keyed by asset ID, not (role_id, slot_id): slot resolution
+    proves each DISTINCT governed asset resolves to one live Drive file whose
+    bytes match the approved content identity. Placement multiplicity lives
+    in the per-(role, slot) bindings (connected_visual_placement) and the
+    idempotency key (_selected_visuals_for_key), not here.
+    """
     bound: dict[str, str | None] = {}
     result = visual_plan.cohesive_visual_plan_result
     payload = result.record.to_dict() if result is not None and result.record is not None else {}
@@ -375,6 +392,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     context = {"slides_template": args.slides_template, "doc_template": args.doc_template, "target_folder": args.target_folder, "content_path": args.content, "material_requirement_path": args.material_requirement, "current_curriculum_evidence_path": args.current_curriculum_evidence}
+    build_input = None
+    receipt = None
+    requirement_identity = {}
+    template_revisions = {}
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
@@ -525,32 +546,25 @@ def main(argv: list[str] | None = None) -> int:
         # these expectations; metadata-only success is "persisted", never
         # "final".
         slides_requests = tuple(build_slides_replace_requests(content))
-        qa_expectations = TerminalQAExpectations.build_from_requests(
-            idempotency_key=idempotency_key,
-            docs_requests=docs_requests,
-            slides_requests=slides_requests,
-            visual_placements=tuple(visual_placements),
-        )
-        receipt = build_live_materials(
-            LiveBuildInput(
-                slides_template_id=args.slides_template, doc_template_id=args.doc_template,
-                target_folder_id=args.target_folder, slides_name=f"{content.title} - Slides",
-                doc_name=f"{content.title} - Worksheet",
-                idempotency_key=idempotency_key,
-                input_fingerprint=idempotency_key,
-                slides_requests=slides_requests,
-                docs_requests=docs_requests,
-                visual_placements=tuple(visual_placements),
-                qa_expectations=qa_expectations,
-            ),
-            drive_service=drive_service,
-            slides_service=build_slides_service(credentials),
-            docs_service=build_docs_service(credentials),
-            resume_dir=args.resume_dir,
-            placement_transport=placement_transport,
+        composed = compose_governed_build_request(
+            slides_template_id=args.slides_template, doc_template_id=args.doc_template,
+            target_folder_id=args.target_folder, content_title=content.title,
+            idempotency_key=idempotency_key, slides_requests=slides_requests,
+            docs_requests=docs_requests, visual_placements=tuple(visual_placements),
+            resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
         )
+        build_input = composed.build_input
+        template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
+        receipt = build_live_materials(
+            build_input, drive_service=drive_service,
+            slides_service=build_slides_service(credentials),
+            docs_service=build_docs_service(credentials),
+            **composed.builder_options,
+        )
+        if args.receipt_out:
+            write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions))
         if not receipt.succeeded:
             qa_summary = _terminal_qa_summary(receipt)
             raise RuntimeError(
@@ -565,6 +579,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Worksheet final (native Google Docs, canonical editable): {receipt.worksheet.web_view_link}")
         return 0
     except Exception as exc:
+        if args.receipt_out:
+            try:
+                write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__))
+            except OSError as receipt_error:
+                print(f"Receipt persistence failed: {receipt_error}", file=sys.stderr)
         lesson_path = record_lesson(lesson_from_exception(exc, context), args.lessons_dir)
         print(f"Build failed: {exc}", file=sys.stderr)
         print(f"Lesson recorded: {lesson_path}", file=sys.stderr)

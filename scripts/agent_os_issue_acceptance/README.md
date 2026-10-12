@@ -41,7 +41,7 @@ Use `--format json` for stable machine-readable report fields.
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `lifecycle_stage_acquisition.py`, `live_compute_control_binding.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `lifecycle_stage_acquisition.py`, `live_compute_control_binding.py` |
 
 ## Live compute-control binding (#1460)
 
@@ -75,8 +75,6 @@ its docstring for the full reasoning, including why
 `08_Tooling/agent-os-execution-service`'s `HostGitHubReadTransport` cannot be
 imported here (the dependency direction runs the other way).
 
-`documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
-
 ## Permitted dependency direction
 ```text
 IssuePlan scanner -> acceptance/readiness and current-state evidence
@@ -104,8 +102,6 @@ Scanner validity, readiness, labels, and approvals never authorize execution.
 `coding_command_center_handoff.py` (#1097, AOS-NCC2) implements the pure, content-addressed `agent-os-coding-command-center-handoff/1.0` read-only projection for the existing Notion `Solo-Operator OS Coding` cockpit. It composes only caller-supplied canonical evidence: one `IssueOperationalState`, an optional `ExecutorRouteDecision`, an optional #988 `ValidationFailureClassificationResult`, an optional #914 `PostPrLanePlan`, plus a bounded validation-evidence reference and handoff target. It re-runs each supplied record's own invariant so tampered frozen objects fail closed, and it performs no GitHub, network, filesystem, subprocess, Scheduler, provider, or Notion I/O.
 
 The projection is composition only. It creates no task ledger, progress or session state, queue planner, executor selector, validation classifier, repair engine, authorization model, Notion client, sync system, or background worker. `authority_created`, `side_effects_performed`, and `notion_write_performed` are hard-coded `false` and cannot be set by a caller. Canonical blocker ordering, #988 recommended-next-action text, and #914 smallest-next-action semantics are carried through unchanged rather than reranked, and no percentage progress is synthesized. Missing optional evidence stays explicitly `unavailable`; stale, conflicting, or invalid operational state replaces the next action with a reacquire-evidence instruction and records `handoff.fail-closed-currentness`.
-
-`render_coding_command_center_handoff()` emits the #926 visible order — current target, smallest safe next action, route/escalation reason, validation or blocker evidence, handoff target, then compact canonical references — and repeats the three non-authority declarations. Text fields are bounded to 4 KiB, reason codes to 32 entries, and the serialized record to 64 KiB.
 
 It is not exported from `__init__.py` per the direct-import policy below, and `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`'s domain map classifies it in the existing `reporting` domain: reporting is the downstream output domain permitted to consume supplied immutable upstream evidence, and no upstream domain may import it. Because it consumes the #914 `PostPrLanePlan` contract, importing this module also initializes `scripts.agent_os_candidate_packet`; callers therefore need that package's declared runtime dependencies present.
 
