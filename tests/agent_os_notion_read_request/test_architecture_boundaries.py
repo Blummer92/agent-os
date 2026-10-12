@@ -147,10 +147,13 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
 
 
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
+    # #2816: the icon-system source is deliberately present but unverified
+    # (null id) so its schema request fails closed until verified.
     assert {source.logical_source for source in shipped_catalog.sources} == {
         "canonical-unit",
         "visual-asset-library",
         "teacher-modeling",
+        "icon-system",
     }
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
     request_issues = {record.request_id: record.issue_number for record in shipped_catalog.requests}
@@ -165,6 +168,8 @@ def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
         "motion-typography-canonical-unit": 2816,
         "motion-typography-current-curriculum": 2816,
         "gate1-visual-assets": 1941,
+        "visual-asset-library-schema": 2816,
+        "icon-system-schema": 2816,
     }
 
 
