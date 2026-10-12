@@ -30,6 +30,8 @@ from .models import (
 )
 
 RESULT_KIND = "agent-os-notion-read-result"
+#: #2816: the source-schema class publishes property vocabulary, not records.
+RESULT_KIND_SCHEMA = "agent-os-notion-source-schema-result"
 
 _OWNER_STATE_KEYS = (
     "evidence_id",
@@ -118,6 +120,83 @@ def project_public_result(
 
     reject_credential_keys(payload)
     return payload
+
+
+def project_source_schema_result(
+    admission: NotionReadAdmission,
+    execution: Mapping[str, object],
+    *,
+    catalog: NotionReadCatalog,
+    generated_at: str,
+) -> dict[str, Any]:
+    """Return the bounded sanitized source-schema result for the public surface.
+
+    Only property id/name/type triples are published. Every other adapter
+    field (url, parent, timestamps, request ids) is dropped by construction,
+    and the provider data-source id stays inside the execution seam, exactly
+    as it does for the record-read projection above.
+    """
+    if admission.status != "admitted":
+        raise NotionReadRequestError("only an admitted request may be projected")
+    if admission.request_class != "source-schema":
+        raise NotionReadRequestError(
+            "source-schema projection requires the source-schema request class"
+        )
+    if not isinstance(execution, Mapping):
+        raise NotionReadRequestError("execution evidence must be a mapping")
+    if not isinstance(generated_at, str) or not generated_at.strip():
+        raise NotionReadRequestError("generated_at must be supplied by the caller")
+    if len(admission.required_logical_sources) != 1:
+        raise NotionReadRequestError(
+            "source-schema admission must bind exactly one logical source"
+        )
+    binding = catalog.source(admission.required_logical_sources[0])
+    if binding is None:
+        raise NotionReadRequestError("admitted source vanished from the catalog")
+
+    properties = execution.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("execution evidence is missing source properties")
+
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "result_kind": RESULT_KIND_SCHEMA,
+        "repository": admission.repository,
+        "issue_number": admission.issue_number,
+        "request_id": admission.request_id,
+        "request_class": admission.request_class,
+        "source": {
+            "logical_source": binding.logical_source,
+            "display_name": binding.display_name,
+            "verification_state": binding.verification_state,
+            "access": "read-only",
+        },
+        "properties": _property_triples(properties),
+        "authority": _authority({}),
+        "generated_at": generated_at.strip(),
+    }
+
+    reject_credential_keys(payload)
+    return payload
+
+
+def _property_triples(properties: Mapping[str, object]) -> list[dict[str, Any]]:
+    """Project exactly id/name/type per property; drop everything else."""
+    if len(properties) > MAX_RESULTS:
+        raise NotionReadRequestError("source property count exceeds the read limit")
+    triples: list[dict[str, Any]] = []
+    for key, schema in properties.items():
+        if not isinstance(schema, Mapping):
+            raise NotionReadRequestError("source property schema must be a mapping")
+        triples.append(
+            {
+                "property_id": _text_or_none(schema.get("id")),
+                "property_name": _text_or_none(schema.get("name"))
+                or _text_or_none(key),
+                "property_type": _text_or_none(schema.get("type")),
+            }
+        )
+    return triples
 
 
 def _canonical_unit(state: Mapping[str, object], admission: NotionReadAdmission) -> dict[str, Any]:
@@ -272,4 +351,10 @@ def reject_credential_keys(value: object, path: str = "result") -> None:
             reject_credential_keys(item, f"{path}[{index}]")
 
 
-__all__ = ["RESULT_KIND", "project_public_result", "reject_credential_keys"]
+__all__ = [
+    "RESULT_KIND",
+    "RESULT_KIND_SCHEMA",
+    "project_public_result",
+    "project_source_schema_result",
+    "reject_credential_keys",
+]
