@@ -28,7 +28,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
-| GitHub Issue Lifecycle Standard | 0.7.0 |
+| GitHub Issue Lifecycle Standard | 0.8.0 |
 | Safe Implementation Lane | 0.7.0 |
 | Agent OS Execution Service | 0.6.0 |
 | Artifact-First Response Standard | 0.1.4 |
