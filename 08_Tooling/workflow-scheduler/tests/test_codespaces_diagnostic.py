@@ -821,3 +821,70 @@ def test_3463_qualification_runner_is_read_only_and_does_not_embed_target_name()
     assert "os.environ.get(\"CODESPACE_NAME\")!=codespace_name" in source
     assert 'hp.get("profile_id")!=PROFILE_ID' in source
     assert 'hp.get("execution_surface_id")!=f"codespace:{codespace_name}"' in source
+
+
+def test_3345_ssh_stage_timeout_is_not_reported_as_health_failure() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _SSH_STAGE_TIMEOUT_SECONDS,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-1",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append((argv, timeout))
+        raise subprocess.TimeoutExpired(argv, timeout)
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["reason_codes"] == ["codespaces-ssh-probe-timeout"]
+    assert result["failed_stage"] == "ssh"
+    assert calls[0][0] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME, "--", "true")
+    assert calls[0][1] == _SSH_STAGE_TIMEOUT_SECONDS
+    assert len(calls) == 1
+
+
+def test_3345_python_start_probe_failure_is_distinct() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-2",
+    )
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["reason_codes"] == ["codespaces-python-probe-failed"]
+    assert result["failed_stage"] == "python"
+    assert len(calls) == 2
+    assert calls[1][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
+
+
+def test_3345_stage_probes_precede_existing_health_runner() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="ssh-stage-3",
+    )
+    payload = _qualification_payload()
+    payload["issue_number"] = 3345
+    payload["request_id"] = "ssh-stage-3"
+    calls = []
+    def run(argv, *, timeout):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 0, stdout="agent-os-qualification-python-ready\\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
+    result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    assert result["status"] == "success"
+    assert len(calls) == 3
+    assert calls[2][8].find("scripts/agent-os-environment-health.py") >= 0
