@@ -367,3 +367,24 @@ successful workflow with its Codespaces step skipped is not acceptance.
 Changes to `.github/workflows/**`, actor admission, credentials, or
 Codespace lifecycle require separate exact authorization. Issue #3463 remains
 open for the broader host-routing and live-acceptance obligations.
+
+
+### Fixed read-only SSH stage isolation (#3345 follow-up)
+
+When the `codespaces-environment-qualification-readonly` operation selects one
+current `Available` Codespace, the existing diagnostic runner now performs
+two fixed read-only preflight commands before the full environment-health probe:
+`gh codespace ssh -c <resolved> -- true` and a Python startup marker.
+These are diagnostic operations, not general-purpose shell/argv authority.
+Each preflight has a bounded 25-second timeout and distinct
+`codespaces-ssh-probe-*` or `codespaces-python-probe-*` failure codes.
+The original 90-second bounded full diagnostic remains unchanged and runs
+only after both preflights succeed. A successful SSH preflight alone is not
+environment-health PASS; the full identity-bound health receipt is still required.
+An SSH preflight timeout cannot distinguish network establishment from
+authentication or remote shell readiness and must not be overclassified.
+
+No Codespace lifecycle mutation, token scope change, actor-allowlist change,
+GitHub Actions workflow edit, browser credential exposure, or production action
+is part of this stage-isolation increment. The live owner-reported replacement
+Codespace remains subject to independent QA and correlated artifact readback.
