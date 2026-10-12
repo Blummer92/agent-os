@@ -418,16 +418,85 @@ def validation_gate_currentness_result_id(result: ValidationGateCurrentnessResul
     return str(serialize_validation_gate_currentness(result)["result_id"])
 
 
+class MainHealthAdmission(str, Enum):
+    """Admission verdict after composing candidate evidence with main-health currentness (#2761).
+
+    The #2761 obligation decision (fail-closed): when reusable exact-head
+    candidate evidence says admissible but the newer required current-main-health
+    dependency is pending or failing, the admission result is ``blocked``.
+    This composition never upgrades a candidate verdict; it only downgrades to
+    ``blocked`` on unusable or failing health evidence. It grants no merge,
+    closure, workflow, protected-setting, production, or execution authority.
+    """
+
+    #: Main-health evidence is unusable (not current) or shows failing health.
+    #: Admission is blocked regardless of the candidate verdict.
+    BLOCKED = "blocked"
+    #: Main health is current and green. The candidate verdict stands unchanged;
+    #: this composition neither admits nor re-evaluates the candidate.
+    CANDIDATE_VERDICT_STANDS = "candidate-verdict-stands"
+
+
+def compose_admission_with_main_health_currentness(
+    *,
+    candidate_admissible: bool,
+    main_health_currentness: ValidationGateCurrentnessResult,
+    main_health_failed: bool,
+) -> MainHealthAdmission:
+    """Apply the #2761 decided obligation semantics at the admission boundary.
+
+    ``candidate_admissible`` is the reusable exact-head candidate evidence
+    verdict (True when the candidate would otherwise be admitted).
+    ``main_health_currentness`` must be a freshly classified
+    ``ValidationGateCurrentnessResult`` for the newer required main-health
+    gate evidence — never inherited from an earlier plan or cached read. Its
+    integrity is verified before use; a forged or tampered result is refused.
+    ``main_health_failed`` reports whether that same evidence shows failing
+    health (any failure conclusion among the canonical check runs or the
+    wrapper's terminal conclusion).
+
+    Decision table (fail-closed):
+    - currentness not CURRENT → BLOCKED. Pending, stale, or diverged health
+      evidence is never treated as green.
+    - currentness CURRENT but health failed → BLOCKED.
+    - currentness CURRENT and health green → CANDIDATE_VERDICT_STANDS.
+
+    The host (#2340's domain) must perform the fresh binding: reacquire the
+    main-health gate snapshots at the decision boundary, classify via
+    ``classify_validation_gate_currentness``, derive ``main_health_failed``
+    from the same evidence, and apply this composition before any mutation.
+    There is no repo merge path here; ``blocked`` is terminal.
+    """
+    if type(candidate_admissible) is not bool:
+        raise TypeError("candidate_admissible must be an exact bool")
+    if type(main_health_currentness) is not ValidationGateCurrentnessResult:
+        raise TypeError("main_health_currentness must be an exact ValidationGateCurrentnessResult")
+    try:
+        serialize_validation_gate_currentness(main_health_currentness)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("main_health_currentness failed integrity verification") from exc
+    if type(main_health_failed) is not bool:
+        raise TypeError("main_health_failed must be an exact bool")
+
+    if main_health_currentness.status is not GateCurrentness.CURRENT:
+        return MainHealthAdmission.BLOCKED
+    if main_health_failed:
+        return MainHealthAdmission.BLOCKED
+    return MainHealthAdmission.CANDIDATE_VERDICT_STANDS
+
+
 __all__ = [
     "CanonicalCheckRun",
     "GateCurrentness",
     "GateCurrentnessReason",
+    "MainHealthAdmission",
     "VALIDATION_GATE_CURRENTNESS_SCHEMA_NAME",
     "VALIDATION_GATE_CURRENTNESS_SCHEMA_VERSION",
     "ValidationGateCurrentnessResult",
     "WrapperRunSnapshot",
     "WrapperRunState",
     "classify_validation_gate_currentness",
+    "compose_admission_with_main_health_currentness",
     "serialize_validation_gate_currentness",
     "validation_gate_currentness_result_id",
 ]
