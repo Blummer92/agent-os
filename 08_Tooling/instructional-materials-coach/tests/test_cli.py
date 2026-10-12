@@ -394,3 +394,133 @@ def test_log_lesson_writes_record_without_building(tmp_path, capsys):
     lessons_dir = tmp_path / "lessons"
     assert cli.main(["log-lesson", "--title", "Template had a stale placeholder", "--what-happened", "QA caught {{objective_2}} left unreplaced in a delivered deck.", "--what-to-do-next-time", "Validate all tokens are replaced before sharing the link.", "--severity", "Medium", "--learning-type", "QA feedback", "--lessons-dir", str(lessons_dir)]) == 0
     assert len(list(lessons_dir.glob("*.yaml"))) == 1
+
+
+def _admission_build_input(key, visual_placements=()):
+    from instructional_materials_coach.live_build import LiveBuildInput
+    return LiveBuildInput(
+        slides_template_id="st", doc_template_id="dt", target_folder_id="folder",
+        slides_name="S", doc_name="W", idempotency_key=key,
+        slides_requests=(), docs_requests=(), visual_placements=tuple(visual_placements),
+    )
+
+
+def _admission_live_receipt(key):
+    from instructional_materials_coach.artifact_content_qa import ArtifactQAReport, TerminalQAReport
+    from instructional_materials_coach.drive_client import GOOGLE_DOCS_MIME, GOOGLE_SLIDES_MIME
+    from instructional_materials_coach.live_build import ArtifactReceipt, LiveBuildReceipt
+
+    def artifact(role, file_id, mime):
+        return ArtifactReceipt(
+            role=role, state="updated", file_id=file_id, mime_type=mime,
+            parents=("folder",), persistence_verified=True, canonical_editable=True,
+            delivery_kind="final", terminal_qa_state="verified",
+        )
+
+    qa = TerminalQAReport(
+        idempotency_key=key,
+        slides=ArtifactQAReport(
+            artifact_type="slides", artifact_id="sf", revision_id="sr",
+            idempotency_key=key, state="verified"),
+        worksheet=ArtifactQAReport(
+            artifact_type="worksheet", artifact_id="df", revision_id="dr",
+            idempotency_key=key, state="verified"),
+        state="verified",
+    )
+    return LiveBuildReceipt(
+        slides=artifact("slides", "sf", GOOGLE_SLIDES_MIME),
+        worksheet=artifact("worksheet", "df", GOOGLE_DOCS_MIME),
+        terminal_qa=qa,
+    )
+
+
+def test_admission_out_writes_non_authorizing_verdict(tmp_path, capsys):
+    """#3556: --admission-out surfaces the D8 verdict as evidence, never a claim."""
+    from instructional_materials_coach import cli
+    from instructional_materials_coach.build_receipt import build_receipt_record
+    from instructional_materials_coach.connected_visual_placement import VisualPlacementBinding
+    from instructional_materials_coach.placement_receipts import append_placement_record
+
+    key = "cli-admission-key"
+    requirement_identity = {
+        "requirement_id": "req-cli", "contract_version": "material-requirement-v1",
+        "record_revision": "r1", "source_fingerprint": "fp1",
+    }
+    template_revisions = {"slides": "ts1", "worksheet": "tw1"}
+    binding = VisualPlacementBinding(
+        role_id="inline-analysis-diagram", asset_id="asset-1", drive_file_id="drive-1",
+        content_identity={"asset_id": "asset-1", "revision": "v1"},
+        source_plan_id="plan-1", required=True, slot_id="0",
+    )
+    build_input = _admission_build_input(key, (binding,))
+    receipt = _admission_live_receipt(key)
+    record = build_receipt_record(
+        build_input, receipt, requirement_identity=requirement_identity,
+        template_revisions=template_revisions,
+    )
+    placement_dir = tmp_path / "placement-receipts"
+    append_placement_record(
+        placement_dir, key,
+        {
+            "asset_id": "asset-1", "drive_file_id": "drive-1",
+            "role_id": "inline-analysis-diagram", "slot_id": "0",
+            "artifact_type": "slides", "artifact_id": "sf",
+            "artifact_revision_id": "sr", "state": "verified",
+            "content_identity": {"asset_id": "asset-1", "revision": "v1"},
+            "source_plan_id": "plan-1", "required": True,
+            "eligibility_evidence": None, "transport": "test",
+            "post_insertion_revision_id": "sr",
+        },
+    )
+    args = SimpleNamespace(
+        admission_out=str(tmp_path / "verdict.json"),
+        placement_receipts_dir=str(placement_dir),
+    )
+    result = cli._write_classroom_admission_verdict(
+        args, build_input, receipt, requirement_identity, template_revisions, record)
+    assert result.status.value == "admitted"
+    verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict["status"] == "admitted"
+    assert verdict["reason_codes"] == ["classroom.evidence-complete"]
+    assert verdict["classroom_ready_granted"] is False
+    assert verdict["authoritative"] is False
+    assert verdict["execution_authorized"] is False
+    assert verdict["production_authorized"] is False
+    assert verdict["side_effects_performed"] is False
+    assert "non-authorizing" in capsys.readouterr().out
+
+
+def test_admission_out_fails_closed_without_placement_evidence(tmp_path, capsys):
+    """#3556: a required visual with no verified placement record is not admitted."""
+    from instructional_materials_coach import cli
+    from instructional_materials_coach.build_receipt import build_receipt_record
+    from instructional_materials_coach.connected_visual_placement import VisualPlacementBinding
+
+    key = "cli-admission-key-2"
+    requirement_identity = {
+        "requirement_id": "req-cli", "contract_version": "material-requirement-v1",
+        "record_revision": "r1", "source_fingerprint": "fp1",
+    }
+    template_revisions = {"slides": "ts1", "worksheet": "tw1"}
+    binding = VisualPlacementBinding(
+        role_id="inline-analysis-diagram", asset_id="asset-1", drive_file_id="drive-1",
+        content_identity={"asset_id": "asset-1", "revision": "v1"},
+        source_plan_id="plan-1", required=True, slot_id="0",
+    )
+    build_input = _admission_build_input(key, (binding,))
+    receipt = _admission_live_receipt(key)
+    record = build_receipt_record(
+        build_input, receipt, requirement_identity=requirement_identity,
+        template_revisions=template_revisions,
+    )
+    args = SimpleNamespace(
+        admission_out=str(tmp_path / "verdict.json"),
+        placement_receipts_dir=str(tmp_path / "empty-placement-receipts"),
+    )
+    result = cli._write_classroom_admission_verdict(
+        args, build_input, receipt, requirement_identity, template_revisions, record)
+    assert result.status.value == "not-admitted"
+    verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict["status"] == "not-admitted"
+    assert "classroom.placement-receipt-missing" in verdict["reason_codes"]
+    assert verdict["classroom_ready_granted"] is False
