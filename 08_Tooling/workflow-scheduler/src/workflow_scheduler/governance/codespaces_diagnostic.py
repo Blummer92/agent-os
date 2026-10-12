@@ -73,7 +73,10 @@ except ValueError: issue=0
 result=base("needs-decision","codespaces-diagnostic-failed",issue,request_id,codespace_name)
 if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
  result["reason_codes"]=["invalid-codespaces-diagnostic-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -321,7 +324,10 @@ except ValueError:issue=0
 result={"schema_version":"1.0","status":"needs-decision","reason_codes":["invalid-codespaces-diagnostic-identity"],"repository":"Blummer92/agent-os","issue_number":issue,"diagnostic_id":DIAGNOSTIC_ID,"request_id":request_id,"codespace_name":codespace_name,"codespaces_profile_id":PROFILE_ID,"execution_surface_id":f"codespace:{codespace_name}","environment_health_evidence_id":None,"workspace_head":None,"workspace_branch":None,"cleanup_complete":True,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
 if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
  emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -375,7 +381,10 @@ except ValueError: issue=0
 result=base("needs-decision","codespaces-diagnostic-failed",issue,request_id,codespace_name)
 if issue<1 or diagnostic_id!=DIAGNOSTIC_ID or REQ.fullmatch(request_id) is None:
  result["reason_codes"]=["invalid-codespaces-diagnostic-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub Codespaces selection and fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
