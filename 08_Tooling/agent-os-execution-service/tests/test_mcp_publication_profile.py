@@ -8,6 +8,7 @@ import pytest
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from agent_os_execution_service import mcp_server
 from agent_os_execution_service.mcp_server import (
     _CHATGPT_PUBLICATION_TOOLS,
     _apply_chatgpt_publication_profile,
@@ -49,3 +50,22 @@ def test_publication_fails_closed_if_approved_tool_is_missing() -> None:
 
     with pytest.raises(RuntimeError, match="missing approved tools"):
         _apply_chatgpt_publication_profile(server)
+
+
+def test_main_refuses_unknown_profile_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_OS_MCP_TOOL_PROFILE", "not-a-real-profile")
+    monkeypatch.setattr(
+        mcp_server.mcp,
+        "run",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("mcp.run must not start")),
+    )
+    with pytest.raises(RuntimeError, match="Unrecognized AGENT_OS_MCP_TOOL_PROFILE"):
+        mcp_server.main()
+
+
+def test_main_without_profile_starts_default_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENT_OS_MCP_TOOL_PROFILE", raising=False)
+    started: dict = {}
+    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kwargs: started.update(kwargs))
+    mcp_server.main()
+    assert started == {"transport": "stdio"}
