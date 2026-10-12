@@ -33,6 +33,17 @@ MAX_TRANSPORT_BYTES = 262_144
 DISPATCH_BLOCKED = "blocked"
 DISPATCH_NOT_ACTIVATED = "not-activated"
 DISPATCH_COMPLETED = "completed"
+DISPATCH_FAILED = "failed"
+
+# Bounded failure reason codes for the published exception receipt (#3501).
+# Closed vocabulary: classification uses only the phase and the exception
+# class, never the message, so raw provider text cannot leak into the code.
+RECEIPT_REASON_TRANSPORT_BYTE_BOUND = "transport-exceeds-byte-bound"
+RECEIPT_REASON_TRANSPORT_UNREADABLE = "transport-unreadable"
+RECEIPT_REASON_TRANSPORT_INVALID_JSON = "transport-invalid-json"
+RECEIPT_REASON_REQUEST_ERROR = "notion-read-request-error"
+RECEIPT_REASON_RECEIPT_WRITE_FAILED = "receipt-write-failed"
+RECEIPT_REASON_UNHANDLED = "unhandled-runner-exception"
 
 
 def run_notion_read_request(
@@ -112,6 +123,68 @@ def run_notion_read_request(
     return evidence
 
 
+def _classify_runner_exception(exc: BaseException, *, phase: str) -> str:
+    """Map an exception to a closed-vocabulary receipt reason code."""
+    if isinstance(exc, json.JSONDecodeError):
+        return RECEIPT_REASON_TRANSPORT_INVALID_JSON
+    if isinstance(exc, OSError):
+        if phase == "write":
+            return RECEIPT_REASON_RECEIPT_WRITE_FAILED
+        return RECEIPT_REASON_TRANSPORT_UNREADABLE
+    if isinstance(exc, NotionReadRequestError):
+        # In the transport phase the only NotionReadRequestError source is the
+        # byte-bound guard in _read_transport.
+        if phase == "transport":
+            return RECEIPT_REASON_TRANSPORT_BYTE_BOUND
+        return RECEIPT_REASON_REQUEST_ERROR
+    return RECEIPT_REASON_UNHANDLED
+
+
+def _publish_failure_receipt(
+    *,
+    output: Path,
+    generated_at: str,
+    exc: BaseException,
+    phase: str,
+) -> int:
+    """Write a bounded sanitized failure receipt; return the exit code.
+
+    The receipt reuses the evidence contract with a non-success disposition.
+    Only developer-authored domain messages are published in the detail
+    field; other exceptions contribute their class name only, so provider
+    responses, paths, and secrets cannot leak through it.
+    """
+    reason = _classify_runner_exception(exc, phase=phase)
+    detail = str(exc)[:500] if isinstance(exc, NotionReadRequestError) else None
+    receipt: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "admission": None,
+        "dispatch_status": DISPATCH_FAILED,
+        "dispatch_reason": reason,
+        "result": None,
+        "notion_writes_performed": False,
+        "drive_writes_performed": False,
+        "classroom_artifact_writes_performed": False,
+        "gce_invoked": False,
+        "generated_at": generated_at,
+        "failure": {
+            "reason_code": reason,
+            "error_class": type(exc).__name__,
+            "detail": detail,
+            "phase": phase,
+        },
+    }
+    reject_credential_keys(receipt, "evidence")
+    payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8")
+    except OSError:
+        pass  # best effort; the nonzero exit still signals the failure
+    print(payload)
+    return 1
+
+
 def _read_transport(path: Path) -> object:
     if path.stat().st_size > MAX_TRANSPORT_BYTES:
         raise NotionReadRequestError("transport evidence exceeds byte bound")
@@ -132,19 +205,46 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    executor_factory = build_live_notion_executor_factory() if args.live_notion else None
-    evidence = run_notion_read_request(
-        _read_transport(args.transport),
-        expected_repository=args.repository,
-        expected_actor=args.allowed_actor,
-        generated_at=args.generated_at,
-        scheduler_task_executor_factory=executor_factory,
-    )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        transport = _read_transport(args.transport)
+    except Exception as exc:
+        return _publish_failure_receipt(
+            output=args.output,
+            generated_at=args.generated_at,
+            exc=exc,
+            phase="transport",
+        )
+
+    try:
+        executor_factory = build_live_notion_executor_factory() if args.live_notion else None
+        evidence = run_notion_read_request(
+            transport,
+            expected_repository=args.repository,
+            expected_actor=args.allowed_actor,
+            generated_at=args.generated_at,
+            scheduler_task_executor_factory=executor_factory,
+        )
+    except Exception as exc:
+        return _publish_failure_receipt(
+            output=args.output,
+            generated_at=args.generated_at,
+            exc=exc,
+            phase="run",
+        )
+
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return _publish_failure_receipt(
+            output=args.output,
+            generated_at=args.generated_at,
+            exc=exc,
+            phase="write",
+        )
     print(json.dumps(evidence, sort_keys=True))
     return 0
 
