@@ -772,13 +772,17 @@ def test_3463_qualification_reuses_canonical_resolver_and_fixed_ssh() -> None:
     calls = []
     def run(argv, *, timeout):
         calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 0, stdout="agent-os-qualification-python-ready\\n", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout=_diagnostic_stdout(payload), stderr="")
     result = run_codespaces_diagnostic(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
     assert result["status"] == "success"
     assert result["environment_health_evidence_id"].startswith("sha256:")
-    assert calls[0][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
-    assert calls[0][8] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
-    assert calls[0][-3] == QUALIFICATION_DIAGNOSTIC_ID
+    assert calls[2][:5] == ("gh", "codespace", "ssh", "-c", APPROVED_CODESPACE_NAME)
+    assert calls[2][8] == _QUALIFICATION_REMOTE_RUNNER_SOURCE
+    assert calls[2][-3] == QUALIFICATION_DIAGNOSTIC_ID
     assert "scripts/agent-os-environment-health.py" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert "CODESPACE_NAME" in _QUALIFICATION_REMOTE_RUNNER_SOURCE
     assert "rm -rf" not in _QUALIFICATION_REMOTE_RUNNER_SOURCE
