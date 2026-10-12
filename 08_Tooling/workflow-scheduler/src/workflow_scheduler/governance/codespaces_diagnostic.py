@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -516,16 +517,21 @@ def _qualify_ssh_stages(
         ),
     )
     for stage, argv, marker in stages:
+        started = time.monotonic()
         try:
             completed = run(argv, timeout=_SSH_STAGE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             result = _failure(request, f"codespaces-{stage}-probe-timeout", codespace_name)
             result["failed_stage"] = stage
             result["stage_timeout_seconds"] = _SSH_STAGE_TIMEOUT_SECONDS
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
             return result
         except OSError:
             result = _failure(request, f"codespaces-{stage}-probe-unavailable", codespace_name)
             result["failed_stage"] = stage
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
             return result
         if completed.returncode != 0 or (
             marker is not None and completed.stdout.strip() != marker
@@ -533,6 +539,8 @@ def _qualify_ssh_stages(
             result = _failure(request, f"codespaces-{stage}-probe-failed", codespace_name)
             result["failed_stage"] = stage
             result["probe_exit_code"] = completed.returncode
+            result["probe_elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+            result["failure_detail"] = "undetermined"
             return result
     return None
 
