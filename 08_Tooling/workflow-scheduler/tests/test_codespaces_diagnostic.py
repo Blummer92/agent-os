@@ -25,6 +25,16 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 )
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _mock_transport_auth_for_existing_diagnostic_cases(monkeypatch):
+    # Existing tests cover SSH and remote health stages independently of API auth.
+    from workflow_scheduler.governance import codespaces_diagnostic
+    monkeypatch.setattr(codespaces_diagnostic, "_check_transport_authentication", lambda *args, **kwargs: None)
+
+
 REQUEST_ID = "canva-cdp-1"
 APPROVED_CODESPACE_NAME = "fluffy-current-agentos-7x9q"
 APPROVED_CODESPACE_SURFACE_ID = f"codespace:{APPROVED_CODESPACE_NAME}"
@@ -949,3 +959,52 @@ def test_3345_python_probe_timeout_fails_before_health_runner() -> None:
     assert len(calls) == 2
     assert calls[1][0][-3:] == ("python3", "-c", "print('agent-os-qualification-python-ready')")
     assert calls[1][1] == _SSH_STAGE_TIMEOUT_SECONDS
+
+
+def test_3345_transport_authentication_preflight_fail_closed() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _AUTH_PREFLIGHT_TIMEOUT_SECONDS, _check_transport_authentication,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="auth-3345",
+    )
+    cases = (
+        (subprocess.CompletedProcess([], 0, stdout="Blummer92\n", stderr=""), None),
+        (subprocess.CompletedProcess([], 1, stdout="", stderr="private token text"), "codespaces-transport-auth-failed"),
+        (subprocess.CompletedProcess([], 0, stdout="", stderr=""), "codespaces-transport-auth-failed"),
+    )
+    for completed, expected in cases:
+        calls = []
+        def run(argv, *, timeout):
+            calls.append((argv, timeout))
+            return completed
+        result = _check_transport_authentication(
+            request, codespace_name=APPROVED_CODESPACE_NAME, run=run
+        )
+        assert calls == [(("gh", "api", "--method", "GET", "/user", "--jq", ".login"), _AUTH_PREFLIGHT_TIMEOUT_SECONDS)]
+        if expected is None:
+            assert result is None
+        else:
+            assert result["reason_codes"] == [expected]
+            assert "private token text" not in json.dumps(result)
+
+
+def test_3345_transport_authentication_timeout_is_distinct() -> None:
+    from workflow_scheduler.governance.codespaces_diagnostic import (
+        CodespacesDiagnosticRequest, QUALIFICATION_DIAGNOSTIC_ID,
+        _check_transport_authentication,
+    )
+    request = CodespacesDiagnosticRequest(
+        repository=REPOSITORY, issue_number=3345,
+        diagnostic_id=QUALIFICATION_DIAGNOSTIC_ID, request_id="auth-timeout",
+    )
+    def run(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout, stderr=b"secret-not-for-receipt")
+    result = _check_transport_authentication(
+        request, codespace_name=APPROVED_CODESPACE_NAME, run=run
+    )
+    assert result["reason_codes"] == ["codespaces-transport-auth-timeout"]
+    assert result["failed_stage"] == "api-authentication"
+    assert "secret-not-for-receipt" not in json.dumps(result)
