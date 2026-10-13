@@ -29,6 +29,8 @@ from navigation_registry.connectors.curriculum_execution_surface_router import (
     FALLBACK_ROUTE,
     MAX_RESULTS,
     READ_ONLY_ACTIONS,
+    CurriculumSurfaceError,
+    _relation_filter,
     build_scheduler_fallback_read_executor,
     retrieve_curriculum_evidence,
 )
@@ -43,6 +45,7 @@ from .models import (
     NotionReadCatalog,
     NotionReadRequestError,
 )
+from .projection import LESSON_UNIT_RELATION_PROPERTY, validate_lesson_unit_identity
 
 SchedulerTaskExecutorFactory = Callable[[], Callable[[Mapping[str, object]], object]]
 
@@ -265,19 +268,72 @@ def execute_source_schema(
     }
 
 
+#: #3580: lesson reads use the existing #936 adapter's own bounded pagination
+#: (``max_pages``/``max_results``/``next_cursor``); no second pagination loop
+#: exists here. At most ``MAX_RESULTS`` lessons are published. The adapter is
+#: asked for one record more than that, so reaching its bound always means the
+#: unit holds more lessons than may be published: completeness is proven only
+#: when the adapter stops below its bound with ``has_more`` false.
+_LESSON_PAGE_SIZE = MAX_RESULTS
+_LESSON_MAX_PAGES = 5
+_LESSON_ADAPTER_MAX_RESULTS = MAX_RESULTS + 1
+
+
+def resolve_lesson_unit_page_id(catalog: NotionReadCatalog, canonical_unit_key: object) -> str:
+    """Return the verified dashed page id of the admitted canonical unit.
+
+    This is the existing catalog lookup applied strictly, not a new resolver:
+    exactly one catalog unit must carry the key, it must be verified, its
+    provider page id must be a Notion UUID, and no other catalog unit may bind
+    the same page. Any failure raises before a lesson query can be built.
+    """
+    if not isinstance(canonical_unit_key, str) or not canonical_unit_key:
+        raise NotionReadRequestError("lesson-content admission names no canonical unit")
+    matches = [
+        unit for unit in catalog.canonical_units
+        if unit.canonical_unit_key == canonical_unit_key
+    ]
+    if len(matches) != 1:
+        raise NotionReadRequestError("canonical unit identity is missing or ambiguous")
+    unit = matches[0]
+    if not unit.dispatchable:
+        raise NotionReadRequestError("canonical unit binding is not dispatchable")
+    page_key = _notion_identity_key(str(unit.provider_page_id))
+    if not _NOTION_UUID_HEX_RE.fullmatch(page_key):
+        raise NotionReadRequestError("canonical unit page id is not a Notion id")
+    sharing = [
+        other for other in catalog.canonical_units
+        if other.provider_page_id is not None
+        and _notion_identity_key(other.provider_page_id) == page_key
+    ]
+    if len(sharing) != 1:
+        raise NotionReadRequestError("canonical unit page id is bound more than once")
+    return (
+        f"{page_key[0:8]}-{page_key[8:12]}-{page_key[12:16]}"
+        f"-{page_key[16:20]}-{page_key[20:32]}"
+    )
+
+
 def execute_lesson_content(
     admission: NotionReadAdmission,
     *,
     catalog: NotionReadCatalog,
     scheduler_task_executor_factory: SchedulerTaskExecutorFactory,
 ) -> dict[str, object]:
-    """Read lesson records from one catalog-declared source.
+    """Read one canonical unit's lesson records from one catalog-declared source.
 
     The governed plan is exactly one ``query_data_source`` step against the
-    admission-bound logical source: no filter step exists, so the #3476
-    coursewide guard is bypassed by construction rather than relaxed. The
-    ``_bounded_read_task_executor`` still enforces the inherited #2822 action
-    allowlist around the dispatch.
+    admission-bound logical source, scoped by the existing #2282 relation
+    filter shape (``Canonical Unit`` contains the verified unit page id). The
+    #3476 coursewide checkbox filter is untouched: this path never builds a
+    property filter. The ``_bounded_read_task_executor`` still enforces the
+    inherited #2822 action allowlist around the dispatch.
+
+    The query filter is not proof of record identity: every returned record's
+    ``Canonical Unit`` relation is validated independently, and any foreign,
+    unit-less, ambiguous, malformed or duplicate record rejects the whole
+    read. Incomplete retrieval (more results remain, inconsistent termination
+    metadata, or the adapter bound reached) is rejected, never published.
 
     The adapter output is returned unprojected; the projection module owns the
     public surface and selects only the 7 governed lesson fields from it.
@@ -301,15 +357,26 @@ def execute_lesson_content(
         raise NotionReadRequestError(
             f"logical source is not an approved binding: {logical_source!r}"
         )
+    unit_page_id = resolve_lesson_unit_page_id(catalog, admission.canonical_unit_key)
+    try:
+        unit_filter = _relation_filter(
+            {
+                "property": LESSON_UNIT_RELATION_PROPERTY,
+                "contains_page_id": unit_page_id,
+            }
+        )
+    except CurriculumSurfaceError as exc:
+        raise NotionReadRequestError("lesson unit filter is unsupported") from exc
 
     execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
     result = execute_task(
         {
             "action": "query_data_source",
             "data_source_id": binding.data_source_id,
-            "page_size": MAX_RESULTS,
-            "max_pages": 1,
-            "max_results": MAX_RESULTS,
+            "page_size": _LESSON_PAGE_SIZE,
+            "max_pages": _LESSON_MAX_PAGES,
+            "max_results": _LESSON_ADAPTER_MAX_RESULTS,
+            "filter": unit_filter,
         }
     )
     if not isinstance(result, Mapping):
@@ -321,15 +388,54 @@ def execute_lesson_content(
     output = result.get("output")
     if not isinstance(output, Mapping):
         raise NotionReadRequestError("lesson content output is not a mapping")
-    records = output.get("results")
-    if not isinstance(records, list):
-        raise NotionReadRequestError("lesson content output is missing results")
-    if len(records) > MAX_RESULTS:
-        raise NotionReadRequestError("lesson record count exceeds the read limit")
+    records = _complete_lesson_records(output)
+    seen: set[str] = set()
+    for record in records:
+        record_id = record.get("id")
+        if not isinstance(record_id, str) or not _NOTION_UUID_HEX_RE.fullmatch(
+            _notion_identity_key(record_id)
+        ):
+            raise NotionReadRequestError("lesson record has no valid Notion id")
+        key = _notion_identity_key(record_id)
+        if key in seen:
+            # A replayed page or cursor surfaces as a repeated record.
+            raise NotionReadRequestError("lesson retrieval returned a duplicate record")
+        seen.add(key)
+        validate_lesson_unit_identity(record, unit_page_id)
     return {
         "logical_source": logical_source,
+        "canonical_unit_page_id": unit_page_id,
         "records": records,
     }
 
 
-__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification", "execute_source_schema", "execute_lesson_content"]
+def _complete_lesson_records(output: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Accept the adapter's lesson records only with proof that none remain.
+
+    Consumes the existing adapter's termination evidence (``has_more`` and
+    ``next_cursor`` of its final page) rather than paginating again.
+    """
+    records = output.get("results")
+    if not isinstance(records, list) or any(
+        not isinstance(record, Mapping) for record in records
+    ):
+        raise NotionReadRequestError("lesson content output is missing results")
+    has_more = output.get("has_more")
+    if type(has_more) is not bool:
+        raise NotionReadRequestError("lesson retrieval termination metadata is malformed")
+    if has_more:
+        raise NotionReadRequestError(
+            "lesson retrieval is incomplete: more results remain beyond the read bound"
+        )
+    if output.get("next_cursor") is not None:
+        raise NotionReadRequestError(
+            "lesson retrieval termination metadata is inconsistent"
+        )
+    if len(records) >= _LESSON_ADAPTER_MAX_RESULTS:
+        raise NotionReadRequestError(
+            "lesson retrieval reached its read bound; completeness is unproven"
+        )
+    return records
+
+
+__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification", "execute_source_schema", "execute_lesson_content", "resolve_lesson_unit_page_id"]

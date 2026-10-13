@@ -144,9 +144,19 @@ class LessonExecutor:
         self.calls.append(copy.deepcopy(dict(payload)))
         assert payload["action"] == "query_data_source"
         assert payload["data_source_id"] == DATA_SOURCE_ID
+        assert payload["filter"] == {
+            "property": "Canonical Unit",
+            "relation": {"contains": UNIT_PAGE_ID},
+        }
+        # Mirrors the #936 adapter's terminal query output shape.
         return {
             "status": "success",
-            "output": {"results": copy.deepcopy(self._records)},
+            "output": {
+                "results": copy.deepcopy(self._records),
+                "has_more": False,
+                "next_cursor": None,
+                "request_id": None,
+            },
         }
 
 

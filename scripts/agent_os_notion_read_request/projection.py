@@ -196,6 +196,10 @@ def project_source_schema_result(
 #: below are projected per lesson; every other property on the record is
 #: dropped by construction. "Key Vocabulary" is emitted as absent (None) when
 #: the property is missing or empty — it is never invented.
+#: #3580: the relation property that binds a lesson to its canonical unit. The
+#: execution seam scopes the query by it; this module validates it per record.
+LESSON_UNIT_RELATION_PROPERTY = "Canonical Unit"
+
 _LESSON_RESULT_KEYS = (
     "daily_learning_target",
     "daily_focus",
@@ -240,6 +244,14 @@ def project_lesson_content_result(
     binding = catalog.source(admission.required_logical_sources[0])
     if binding is None:
         raise NotionReadRequestError("admitted source vanished from the catalog")
+    # The expected unit is re-derived from the catalog here, independently of
+    # the execution seam, and must agree with the unit that scoped the query.
+    unit = catalog.canonical_unit(str(admission.canonical_unit_key))
+    if unit is None or not unit.dispatchable:
+        raise NotionReadRequestError("canonical unit binding is not dispatchable")
+    expected_unit_page_id = _dashed_uuid(str(unit.provider_page_id))
+    if execution.get("canonical_unit_page_id") != expected_unit_page_id:
+        raise NotionReadRequestError("lesson read was not scoped to the admitted unit")
 
     records = execution.get("records")
     if not isinstance(records, list):
@@ -260,7 +272,9 @@ def project_lesson_content_result(
             "verification_state": binding.verification_state,
             "access": "read-only",
         },
-        "lessons": [_project_lesson_record(record) for record in records],
+        "lessons": [
+            _project_lesson_record(record, expected_unit_page_id) for record in records
+        ],
         "authority": _authority({}),
         "generated_at": generated_at.strip(),
     }
@@ -269,22 +283,38 @@ def project_lesson_content_result(
     return payload
 
 
-def _project_lesson_record(record: object) -> dict[str, Any]:
-    """Project exactly the 7 governed fields from one lesson page record."""
+def validate_lesson_unit_identity(record: object, expected_unit_page_id: str) -> str:
+    """Prove one lesson record belongs to the expected canonical unit.
+
+    The record must carry exactly one well-formed ``Canonical Unit`` relation
+    whose Notion id (dashed or compact) equals ``expected_unit_page_id``.
+    Foreign, unit-less, multi-unit and malformed relations raise; a record is
+    never silently dropped. Returns the normalized dashed page id.
+    """
     if not isinstance(record, Mapping):
         raise NotionReadRequestError("lesson record must be a mapping")
     properties = record.get("properties")
     if not isinstance(properties, Mapping):
         raise NotionReadRequestError("lesson record is missing properties")
+    page_id = _lesson_relation_page_id(properties, LESSON_UNIT_RELATION_PROPERTY)
+    if page_id is None:
+        raise NotionReadRequestError("lesson record has no canonical unit relation")
+    if page_id != _dashed_uuid(expected_unit_page_id):
+        raise NotionReadRequestError("lesson record belongs to a different canonical unit")
+    return page_id
+
+
+def _project_lesson_record(record: object, expected_unit_page_id: str) -> dict[str, Any]:
+    """Project exactly the 7 governed fields from one lesson page record."""
+    unit_page_id = validate_lesson_unit_identity(record, expected_unit_page_id)
+    properties = record["properties"]
     lesson: dict[str, Any] = {
         "daily_learning_target": _lesson_text(properties, "Daily Learning Target"),
         "daily_focus": _lesson_text(properties, "Daily Focus"),
         # #3580: Key Vocabulary is empty on all sampled lessons. Absent is
         # emitted as None; a value is never synthesized.
         "key_vocabulary": _lesson_text(properties, "Key Vocabulary"),
-        "canonical_unit": {
-            "page_id": _lesson_relation_page_id(properties, "Canonical Unit"),
-        },
+        "canonical_unit": {"page_id": unit_page_id},
         "source_evidence": _lesson_text(properties, "Source Evidence"),
         "day_lesson_number": _lesson_text(properties, "Day / Lesson Number"),
         "record_url": _text_or_none(record.get("url")),
@@ -353,9 +383,10 @@ def _lesson_relation_page_id(
 ) -> str | None:
     """Return the single related page id, normalized to dashed UUID form.
 
-    Zero relations emit absent (None). More than one relation fails closed:
-    the governed contract names a single canonical unit and the projection
-    must not pick arbitrarily.
+    Zero relations emit absent (None); ``validate_lesson_unit_identity``
+    rejects that. More than one relation, or any malformed relation entry,
+    fails closed: the governed contract names a single canonical unit and the
+    projection must not pick arbitrarily or skip an entry.
     """
     prop = properties.get(name)
     if prop is None:
@@ -371,12 +402,14 @@ def _lesson_relation_page_id(
         raise NotionReadRequestError(
             f"lesson property {name!r} has malformed relations"
         )
-    ids = [
-        _text_or_none(item.get("id"))
-        for item in relations
-        if isinstance(item, Mapping)
-    ]
-    ids = [i for i in ids if i]
+    ids = []
+    for item in relations:
+        item_id = _text_or_none(item.get("id")) if isinstance(item, Mapping) else None
+        if not item_id:
+            raise NotionReadRequestError(
+                f"lesson property {name!r} has a malformed relation"
+            )
+        ids.append(item_id)
     if len(ids) > 1:
         raise NotionReadRequestError(
             f"lesson property {name!r} has ambiguous relations"
@@ -621,4 +654,6 @@ __all__ = [
     "project_source_schema_result",
     "project_lesson_content_result",
     "reject_credential_keys",
+    "LESSON_UNIT_RELATION_PROPERTY",
+    "validate_lesson_unit_identity",
 ]
