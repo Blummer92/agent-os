@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Governed lesson-content adapter (#3582): `lesson_content_result.py`
+  consumes one #3580 `lesson-content` result (or its #2283 runner envelope)
+  into the existing `LessonContent` via `with_context_tokens`, bound to an
+  exact request, canonical unit, lesson number, and run provenance. Foreign
+  unit, wrong lesson, malformed relation, unverified/stale source, run
+  mismatch, widened authority, extra or credential-bearing keys, missing
+  required fields, empty-string vocabulary, and authored-objective conflicts
+  fail closed with explicit reason codes. Authored slides, questions, and
+  title are preserved; absent Key Vocabulary stays absent; YAML-only
+  behavior is unchanged. `worksheet_preview.py` and `imc-build
+  preview-worksheet` add an enforceable offline no-write planned-worksheet
+  preview receipt (`imc-lesson-worksheet-preview-v1`) that never requests
+  credentials, builds Google clients, renders, or claims a native or
+  classroom-ready artifact. See `docs/lesson-content-result-adapter.md`.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
