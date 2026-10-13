@@ -36,6 +36,73 @@ tabs where row 1 is already the header row.
 (`Property Name`) and older fixture/docs terminology (`Field Name`) while keeping
 the public lookup shape as `lookup field <database> --field <name>`.
 
+## Pre-create preflight
+
+`precreate_preflight(index, PreCreateRequest(kind, name, database=None, information_type=None))`
+(CLI: `preflight KIND NAME [--database DB] [--information-type TYPE] [--max-age-hours N]`)
+is the advisory check to run **before proposing or creating** a new Notion-facing
+field, dashboard, database, workflow, or prompt. It composes the lookups this
+package already has (`list_names`, the keyed getters, `check_duplicate_risk`, and
+`get_refresh_log` when the index offers it); there is no second registry, cache,
+client, or deduplication system, and it performs no I/O of its own.
+
+It answers four questions about the **cached** index: is there an exact or safely
+normalized existing match; does the Duplicate / Drift Watchlist flag a related
+duplicate-risk family; which owner or source-of-truth route should be verified live
+next; and is human review required. It never decides that two live Notion
+properties are duplicates and never authorizes a create, merge, rename, retirement,
+or schema change.
+
+Finite outcomes, in the order the first applicable rule wins:
+
+| Outcome | When | What the caller does |
+|---|---|---|
+| `manual-review` | The request is invalid, the identity is ambiguous (several stored names normalize alike, or the cache repeats a name), or a listed record cannot be read | Resolve with a human |
+| `duplicate-risk-review` | The Watchlist has a hit for the requested name or a matched stored name | Human review; never clean up automatically |
+| `existing-match` | Exactly one exact or normalized match | Reuse it; verify it live |
+| `stale-or-unverified` | No match, and the cache is not shown to be within the caller's freshness policy | Refresh or verify live; an absence proves nothing |
+| `no-cached-match` | No match in a cache shown to be within the freshness policy | Still verify live |
+
+Every result, whatever the outcome, carries `live_verification_required: true` and
+`authorizes_mutation: false`, the sheet's `navigation_warning`, the matched and
+Watchlist records exactly as the sheet holds them (including `Human Review Needed?`),
+a fixed `next_step` sentence, and `reason_codes` in a fixed order. The CLI exits `0`
+whenever the preflight ran: the exit status never carries the verdict, because no
+verdict means "safe". In particular, **`no-cached-match` is not proof that creating
+is safe.**
+
+Rules:
+
+- **Normalization is explicit and small.** A name matches exactly, or after Unicode
+  NFKC folding, case-folding, and collapsing whitespace runs. Punctuation, hyphens,
+  plurals, word order, abbreviations, and synonyms are not normalized, and there is no
+  fuzzy, semantic, or substring identity matching. A normalized match is reported with
+  `basis: "normalized"` and the stored name it matched.
+- **Duplicate-risk evidence is the existing `check_duplicate_risk`** (exact match on
+  the Suspect column, case-sensitive substring match on Similar To), asked for the
+  requested name and for each matched stored name. Every hit counts whatever its
+  `Status`. Because Similar To is matched by substring, a name that merely appears inside
+  a family description (for example a database name) is also reported.
+- **Review.** Only an explicit `No` in `Human Review Needed?` (or `Human Review Required?`
+  on prompts) clears a consulted record; `Yes...`, blank, missing, or any other value
+  requires review (`review.record-flagged` / `review.flag-unclear`).
+- **Routing is guidance only.** `routing.routes` lists where to verify live next: the
+  matched record, the parent database of a field, and the Source of Truth Matrix row for
+  an optional `information_type`, each with the sheet's raw routing columns. It grants
+  no write, readiness, or approval authority.
+- **Currentness comes from the Refresh Log (#3306), judged by the caller's policy.** The
+  module never reads a clock. The caller passes `now` (timezone-aware) and `max_age`
+  (`--max-age-hours` on the CLI; the repository defines no default policy). The cache
+  counts as `within-policy` only when the index offers `get_refresh_log`, every Refresh
+  Log row states its timezone, and the latest refresh is no older than `max_age`.
+  Otherwise currentness is `stale` or `unverified` with one reason code
+  (`currentness.refresh-log-unavailable`, `.no-refresh-records`, `.refresh-time-unresolved`,
+  `.no-freshness-policy`, `.refresh-time-in-future`, `.refresh-log-malformed`, `.stale`).
+  The raw latest Refresh Log row stays visible. A stale or unverified cache never hides a
+  finding: it only keeps "no match" from being read as meaningful.
+- **Boundaries.** GitHub bug-issue duplicate and root-cause admission (#2660) is a
+  different seam and is untouched. Nothing here writes to Sheets, Notion, or Drive.
+
 ## Installation
 
     pip install -e .
@@ -54,6 +121,8 @@ the public lookup shape as `lookup field <database> --field <name>`.
     python -m notion_navigation_client.cli lookup dashboard "Curriculum Source Control"
     python -m notion_navigation_client.cli lookup field "DM Units" --field "Generation Gate"
     python -m notion_navigation_client.cli lookup duplicate-risk "Readiness"
+    python -m notion_navigation_client.cli preflight dashboard "Brand New Dashboard" --max-age-hours 24
+    python -m notion_navigation_client.cli preflight field "Lesson Tag" --database "DM Units"
 
 Prints the matching record(s) as JSON, including the sheet's own
 `navigation_warning` and `Human Review Needed?` fields — never drop these
@@ -63,10 +132,13 @@ when relaying a result to a human or another agent.
 
     pytest tests/
 
-All tests run without live Google credentials: `records.py` and `index.py`
-are tested directly (`index.py` against fixture rows in
+All tests run without live Google credentials: `records.py`, `precreate.py`, and
+`index.py` are tested directly (`index.py` against fixture rows in
 `samples/sample_tabs.json`, transcribed from the real sheet's tabs), and
-`sheets_client.py`/`cli.py` are tested against a mocked Google client.
+`sheets_client.py`/`cli.py` are tested against a mocked Google client. The
+`precreate.py` tests also pin that the module is pure (no I/O or network imports)
+and that no outcome authorizes a mutation. Three tests that exercise the preflight
+against the real `NavigationIndex.get_refresh_log` are skipped until that method exists.
 
 ## Limitations
 
@@ -93,3 +165,8 @@ are tested directly (`index.py` against fixture rows in
   method's key fields may need updating.
 - `check_duplicate_risk` does simple exact/substring matching, not fuzzy
   matching — near-miss names won't surface automatically.
+- The pre-create preflight inherits `check_duplicate_risk`'s matching limits: it also reports
+  names that only appear inside a Watchlist family description, and it cannot see duplicates the Watchlist does not
+  list. It judges cache currentness only from the Refresh Log; against the live tab's
+  current shape (a UTC-stamped first row, zone-less later rows) that evidence is
+  unresolved, so a "no match" there is reported as `stale-or-unverified`.
