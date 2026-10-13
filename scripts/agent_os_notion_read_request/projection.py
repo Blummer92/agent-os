@@ -33,6 +33,16 @@ RESULT_KIND = "agent-os-notion-read-result"
 #: #2816: the source-schema class publishes property vocabulary, not records.
 RESULT_KIND_SCHEMA = "agent-os-notion-source-schema-result"
 
+#: #2816: verified Visual Asset Library "Reuse status" select property id.
+#: Recovered from governed source-schema runs 38322797691/38322852601.
+#: Select-option metadata is emitted only for this exact property id; every
+#: other property keeps the triple-only projection.
+REUSE_STATUS_PROPERTY_ID = "MR%3Do"
+
+#: Bound on select options emitted for the bound property. A larger option
+#: list is treated as malformed and fails closed.
+MAX_SELECT_OPTIONS = 50
+
 _OWNER_STATE_KEYS = (
     "evidence_id",
     "owner",
@@ -180,6 +190,49 @@ def project_source_schema_result(
     return payload
 
 
+def _bound_select_options(schema: Mapping[str, object]) -> list[dict[str, str]] | None:
+    """Return option id/name pairs for the verified Reuse status select.
+
+    Returns None for every other property (triple-only, unchanged). Raises
+    NotionReadRequestError when the bound property is present but malformed:
+    not a select, missing select schema, non-list or oversized options, or
+    an option without a stable id/name. Fails closed; nothing is guessed,
+    defaulted, or inferred.
+    """
+    if _text_or_none(schema.get("id")) != REUSE_STATUS_PROPERTY_ID:
+        return None
+    if _text_or_none(schema.get("type")) != "select":
+        raise NotionReadRequestError("bound Reuse status property is not a select")
+    select = schema.get("select")
+    if not isinstance(select, Mapping):
+        raise NotionReadRequestError(
+            "bound Reuse status property is missing select schema"
+        )
+    options = select.get("options")
+    if not isinstance(options, list):
+        raise NotionReadRequestError(
+            "bound Reuse status property has malformed options"
+        )
+    if len(options) > MAX_SELECT_OPTIONS:
+        raise NotionReadRequestError(
+            "bound Reuse status property exceeds the option bound"
+        )
+    projected: list[dict[str, str]] = []
+    for option in options:
+        if not isinstance(option, Mapping):
+            raise NotionReadRequestError("bound Reuse status option must be a mapping")
+        option_id = _text_or_none(option.get("id"))
+        option_name = _text_or_none(option.get("name"))
+        if not option_id or not option_name:
+            raise NotionReadRequestError(
+                "bound Reuse status option is missing id or name"
+            )
+        # Only the stable identifier and the display name are published;
+        # color and every other option field are dropped by construction.
+        projected.append({"option_id": option_id, "option_name": option_name})
+    return projected
+
+
 def _property_triples(properties: Mapping[str, object]) -> list[dict[str, Any]]:
     """Project exactly id/name/type per property; drop everything else."""
     if len(properties) > MAX_RESULTS:
@@ -188,14 +241,16 @@ def _property_triples(properties: Mapping[str, object]) -> list[dict[str, Any]]:
     for key, schema in properties.items():
         if not isinstance(schema, Mapping):
             raise NotionReadRequestError("source property schema must be a mapping")
-        triples.append(
-            {
-                "property_id": _text_or_none(schema.get("id")),
-                "property_name": _text_or_none(schema.get("name"))
-                or _text_or_none(key),
-                "property_type": _text_or_none(schema.get("type")),
-            }
-        )
+        triple: dict[str, Any] = {
+            "property_id": _text_or_none(schema.get("id")),
+            "property_name": _text_or_none(schema.get("name"))
+            or _text_or_none(key),
+            "property_type": _text_or_none(schema.get("type")),
+        }
+        options = _bound_select_options(schema)
+        if options is not None:
+            triple["select_options"] = options
+        triples.append(triple)
     return triples
 
 
