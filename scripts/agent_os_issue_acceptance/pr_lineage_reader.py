@@ -24,11 +24,13 @@ Completeness is proven here, not asserted by the caller
 ``PrLineageEnumeration(complete=True)`` is produced only when the enumerator
 itself observed: every page read succeeded; each ``next_page`` was the
 contiguous successor; the last page carried positive terminal proof; the
-explicit page bound was not exhausted; every record was well formed, belongs to
-this repository, and any repeated PR was byte-identical in the facts that
-matter. Anything else (bound exhausted, rate limit, malformed record,
-conflicting duplicate, moved default branch, list/detail disagreement) yields
-an *incomplete* enumeration, which the evaluator turns into a fail-closed
+explicit page bound was not exhausted; every record was well formed and belongs
+to this repository; and no pull request was listed twice. A repeat proves the
+population shifted while it was being listed (the listing is newest-first, so a
+pull request opened mid-listing pushes an older one onto the next page) and
+that the newly opened pull request was never observed. Anything else (bound
+exhausted, rate limit, malformed record, repeated or conflicting record, moved
+default branch, list/detail disagreement) yields an *incomplete* enumeration, which the evaluator turns into a fail-closed
 ``unavailable`` result. An exhausted bound is never negative evidence.
 
 Classification of a pull request against issue ``N``
@@ -37,14 +39,20 @@ Classification of a pull request against issue ``N``
 parse result                  treatment
 ============================  ====================================================
 RESOLVED to ``N``             claim -> passed to the evaluator (verified there)
-RESOLVED to another issue     unrelated
+RESOLVED to another issue,    ambiguous claim: resolving elsewhere says nothing
+also naming ``N``             about the other issues a pull request names
 MANUAL_REVIEW mentioning N    ambiguous claim -> passed to the evaluator, which
                               answers ``manual-review`` (never silently dropped)
 INFORMATIONAL naming ``N``    declared non-closing reference -> recorded as
                               evidence, not a claim (the author said so)
+GitHub would close ``N``      ambiguous claim unless it is the resolved claim
+                              (``detect_github_effective_closing_references``,
+                              which masks nothing: code spans, fences, negation)
 NONE / mentions only others   unrelated
 ============================  ====================================================
-A repository-qualified reference to a *different* repository is unrelated.
+One pull request has one role per issue: claim, then ambiguous, then declared
+non-closing. A repository-qualified reference to a *different* repository is
+unrelated.
 
 What this module never does
 ---------------------------
@@ -88,7 +96,11 @@ from .lifecycle_stage_acquisition import (
     acquire_lifecycle_stage,
 )
 from .models import LinkedIssueParseResult, LinkedIssueParseStatus
-from .parse_pr import parse_linked_issue_result
+from .parse_pr import (
+    _CANONICAL_REPOSITORY,
+    detect_github_effective_closing_references,
+    parse_linked_issue_result,
+)
 
 PR_LINEAGE_READER_CONTRACT_VERSION = "1.0"
 
@@ -104,6 +116,9 @@ _MAX_NOTE_CHARS = 480
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_CANONICAL_QUALIFIER_RE = re.compile(
+    rf"(?<![A-Za-z0-9_.-]){re.escape(_CANONICAL_REPOSITORY)}#", re.IGNORECASE
+)
 
 # --- bounded reason vocabulary ------------------------------------------------
 REASON_POPULATION_COMPLETE = "pr-lineage.population-complete"
@@ -112,6 +127,7 @@ REASON_PAGINATION_UNPROVEN = "pr-lineage.pagination-unproven"
 REASON_PAGE_READ_FAILED = "pr-lineage.page-read-failed"
 REASON_MALFORMED_PR_RECORD = "pr-lineage.malformed-pr-record"
 REASON_CONFLICTING_DUPLICATE = "pr-lineage.conflicting-duplicate-observation"
+REASON_POPULATION_SHIFTED = "pr-lineage.population-shifted-during-listing"
 REASON_CROSS_REPOSITORY_RECORD = "pr-lineage.cross-repository-record"
 REASON_DEFAULT_BRANCH_MOVED = "pr-lineage.default-branch-moved"
 REASON_DEFAULT_BRANCH_UNREADABLE = "pr-lineage.default-branch-unreadable"
@@ -127,6 +143,8 @@ REASON_LINEAGE_NOT_CONSULTED = "pr-lineage.closed-issue-lineage-not-consulted"
 ROLE_CLAIM = "claim"
 ROLE_AMBIGUOUS = "ambiguous"
 ROLE_DECLARED_NON_CLOSING = "declared-non-closing"
+#: One role per (issue, pull request): the strongest wins.
+_ROLE_PRIORITY = {ROLE_CLAIM: 0, ROLE_AMBIGUOUS: 1, ROLE_DECLARED_NON_CLOSING: 2}
 
 
 class PullRequestPageReader(Protocol):
@@ -381,30 +399,61 @@ def _incomplete_population(
 def _classify_references(
     number: int, title: str, body: str, repository: str
 ) -> list[PrReference]:
-    """Classify one pull request's references to issues with the ``parse_pr`` authority."""
+    """Classify one pull request's references to issues with the ``parse_pr`` authority.
+
+    ``parse_linked_issue_result`` decides the one claim. Every other
+    same-repository issue the pull request names, and every same-repository
+    issue GitHub would close on merge, stays visible as an ambiguous reference
+    instead of being dropped.
+    """
     parsed: LinkedIssueParseResult = parse_linked_issue_result(body, title)
     key = repository.casefold()
+    roles: dict[int, str] = {}
 
     def same_repository(candidate_repository: str | None) -> bool:
         return candidate_repository is None or candidate_repository.casefold() == key
 
-    if parsed.status is LinkedIssueParseStatus.RESOLVED:
-        if parsed.issue_number is None:
-            return []
-        return [PrReference(parsed.issue_number, number, ROLE_CLAIM)]
-    if parsed.status is LinkedIssueParseStatus.MANUAL_REVIEW:
-        role = ROLE_AMBIGUOUS
-        candidates = [*parsed.explicit_candidates, *parsed.bare_references]
+    def record(issue_number: int, role: str) -> None:
+        current = roles.get(issue_number)
+        if current is None or _ROLE_PRIORITY[role] < _ROLE_PRIORITY[current]:
+            roles[issue_number] = role
+
+    mentioned_role = ROLE_AMBIGUOUS
+    mentioned = [*parsed.explicit_candidates, *parsed.bare_references]
+    if parsed.status is LinkedIssueParseStatus.RESOLVED and parsed.issue_number is not None:
+        record(parsed.issue_number, ROLE_CLAIM)
     elif parsed.status is LinkedIssueParseStatus.INFORMATIONAL:
-        role = ROLE_DECLARED_NON_CLOSING
-        candidates = list(parsed.bare_references)
-    else:
-        return []
-    return [
-        PrReference(candidate.issue_number, number, role)
-        for candidate in candidates
-        if same_repository(candidate.repository)
-    ]
+        mentioned_role = ROLE_DECLARED_NON_CLOSING
+        mentioned = list(parsed.bare_references)
+    for candidate in mentioned:
+        if same_repository(candidate.repository):
+            record(candidate.issue_number, mentioned_role)
+    # GitHub closes on merge whatever parse_pr masks; such a target that is not
+    # the claim is a competing lineage reference. "#N" covers this repository
+    # (the detector folds the canonical repository into the short form).
+    for reference in _effective_closing_references(title, body):
+        target_repository, _, target_number = reference.target.rpartition("#")
+        if same_repository(target_repository or None):
+            record(int(target_number), ROLE_AMBIGUOUS)
+    return [PrReference(issue, number, role) for issue, role in sorted(roles.items())]
+
+
+def _effective_closing_references(title: str, body: str):
+    """``detect_github_effective_closing_references``, tolerating one known defect.
+
+    The detector builds a target qualified with the canonical repository
+    unfolded and then rejects it in the reference's own normalization check, so
+    ``Closes <canonical-repository>#N`` raises. On that error the qualifier is
+    folded to ``#`` exactly as ``normalize_issue_target`` folds it, and the same
+    detector is asked again. Any further error propagates and fails the
+    enumeration closed.
+    """
+    try:
+        return detect_github_effective_closing_references(body, title)
+    except ValueError:
+        return detect_github_effective_closing_references(
+            _CANONICAL_QUALIFIER_RE.sub("#", body), _CANONICAL_QUALIFIER_RE.sub("#", title)
+        )
 
 
 def enumerate_pull_request_population(
@@ -500,17 +549,28 @@ def enumerate_pull_request_population(
                 )
             earlier = facts.get(fact.number)
             if earlier is not None:
-                # New pull requests shift later pages, so a repeat is expected
-                # and harmless when identical; a repeat that differs is drift.
+                duplicates += 1
                 if earlier.comparable() != fact.comparable():
                     return incomplete(
                         REASON_CONFLICTING_DUPLICATE,
                         f"page {page}: pull request #{fact.number} changed while listing",
                     )
-                duplicates += 1
-                continue
+                # Even an identical repeat proves a pull request was opened
+                # mid-listing and shifted this one onto the next page: the new
+                # one was never observed, so the population is not complete.
+                return incomplete(
+                    REASON_POPULATION_SHIFTED,
+                    f"page {page}: pull request #{fact.number} listed twice; "
+                    "the population shifted while listing",
+                )
             facts[fact.number] = fact
-            references.extend(_classify_references(fact.number, title, body, repository))
+            try:
+                references.extend(_classify_references(fact.number, title, body, repository))
+            except ValueError as error:
+                return incomplete(
+                    REASON_MALFORMED_PR_RECORD,
+                    f"page {page}: pull request #{fact.number} references unreadable ({error})",
+                )
 
         if response.next_page is None:
             if not response.terminal_page_proven:

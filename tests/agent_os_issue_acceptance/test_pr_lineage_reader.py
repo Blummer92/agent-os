@@ -46,6 +46,7 @@ from scripts.agent_os_issue_acceptance.pr_lineage_reader import (
     REASON_PAGE_READ_FAILED,
     REASON_PAGINATION_UNPROVEN,
     REASON_POPULATION_COMPLETE,
+    REASON_POPULATION_SHIFTED,
     REASON_REPOSITORY_MISMATCH,
     PrLineageAcquirer,
     PrPopulation,
@@ -403,14 +404,17 @@ def test_repository_comparison_is_case_insensitive() -> None:
     assert population.complete is True
 
 
-def test_identical_duplicate_observation_from_a_shifted_page_is_tolerated() -> None:
+def test_identical_duplicate_observation_proves_an_unobserved_pull_request() -> None:
     first, second = pr_item(2), pr_item(1)
     reader = FakePageReader([first, second, pr_item(2)], per_page=2)
-    # page 1: [2, 1]; page 2: [2] (a newly opened PR shifted #2 onto page 2)
+    # page 1: [2, 1]; page 2: [2]. Newest-first listing: a PR opened mid-listing
+    # pushed #2 onto page 2, and that new PR was never observed.
     population, _ = enumerate_items([], reader=reader, per_page=2)
-    assert population.complete is True
+    assert population.complete is False
+    assert population.reason_codes == (REASON_POPULATION_SHIFTED,)
     assert population.duplicate_observations == 1
-    assert [fact.number for fact in population.facts] == [1, 2]
+    assert "#2 listed twice" in population.note
+    assert population.facts == () and population.references == ()
 
 
 @pytest.mark.parametrize(
@@ -428,6 +432,7 @@ def test_conflicting_duplicate_observation_makes_population_incomplete(changed) 
     population, _ = enumerate_items([], reader=reader, per_page=2)
     assert population.complete is False
     assert population.reason_codes == (REASON_CONFLICTING_DUPLICATE,)
+    assert population.duplicate_observations == 1
 
 
 def test_closed_draft_pull_request_is_not_a_draft() -> None:
@@ -505,10 +510,61 @@ def test_title_only_reference_is_ambiguous() -> None:
     assert roles_for([pr_item(10, title=f"Work for #{ISSUE}", body="")]) == [(10, "ambiguous")]
 
 
-def test_pull_request_resolved_to_another_issue_is_unrelated_even_if_it_mentions_this_one() -> None:
+def test_pull_request_resolved_to_another_issue_keeps_this_mention_ambiguous() -> None:
     body = f"Closes #4000\n\nBackground: see #{ISSUE}.\n"
-    assert roles_for([pr_item(10, body=body)]) == []
+    assert roles_for([pr_item(10, body=body)]) == [(10, "ambiguous")]
     assert roles_for([pr_item(10, body=body)], issue=4000) == [(10, "claim")]
+
+
+def test_pull_request_resolved_to_another_issue_keeps_a_title_mention_ambiguous() -> None:
+    items = [pr_item(10, title=f"Follow-up to #{ISSUE}", body="Closes #4000\n")]
+    assert roles_for(items) == [(10, "ambiguous")]
+    assert roles_for(items, issue=4000) == [(10, "claim")]
+
+
+@pytest.mark.parametrize(
+    "masked",
+    [
+        f"`Fixes #{ISSUE}`",
+        f"```\nresolves #{ISSUE}\n```",
+        f"<!-- closes #{ISSUE} -->",
+    ],
+)
+def test_a_target_github_would_close_is_ambiguous_even_where_parse_pr_masks_it(masked) -> None:
+    items = [pr_item(10, body=f"Closes #4000\n\n{masked}\n")]
+    assert roles_for(items) == [(10, "ambiguous")]
+    assert roles_for(items, issue=4000) == [(10, "claim")]
+
+
+def test_a_canonical_qualified_closing_target_survives_the_detector_defect() -> None:
+    # detect_github_effective_closing_references raises on "Closes <canonical>#N";
+    # the reader folds the qualifier the way normalize_issue_target does and asks again.
+    items = [pr_item(10, body=f"Closes #4000\n\n`closes BLUMMER92/agent-os#{ISSUE}`\n")]
+    assert roles_for(items) == [(10, "ambiguous")]
+    assert roles_for(items, issue=4000) == [(10, "claim")]
+
+
+def test_unreadable_closing_references_make_the_population_incomplete(monkeypatch) -> None:
+    import scripts.agent_os_issue_acceptance.pr_lineage_reader as reader_module
+
+    def broken(body, title=""):
+        raise ValueError("detector failure")
+
+    monkeypatch.setattr(reader_module, "detect_github_effective_closing_references", broken)
+    population, _ = enumerate_items([pr_item(1), pr_item(10, body=closes())])
+    assert population.complete is False
+    assert population.reason_codes == (REASON_MALFORMED_PR_RECORD,)
+    assert "references unreadable" in population.note
+
+
+def test_the_claim_outranks_other_mentions_of_the_same_issue() -> None:
+    body = f"Closes #{ISSUE}\n\nSee #{ISSUE} and `fixes #{ISSUE}`.\n"
+    assert roles_for([pr_item(10, body=body)]) == [(10, "claim")]
+
+
+def test_a_closing_target_in_another_repository_stays_unrelated() -> None:
+    body = f"Closes #4000\n\n`Fixes other/repo#{ISSUE}`\n"
+    assert roles_for([pr_item(10, body=body)]) == []
 
 
 def test_declared_non_closing_reference_is_recorded_but_not_a_claim() -> None:
@@ -537,8 +593,15 @@ def test_pull_request_without_references_is_unrelated() -> None:
     assert roles_for([pr_item(10, body="no links here")]) == []
 
 
-def test_references_inside_code_fences_are_not_authoritative() -> None:
+def test_a_fenced_closing_keyword_is_not_a_claim_but_stays_visible() -> None:
+    # parse_pr masks the fence; GitHub's own closing semantics do not, so the
+    # reference is ambiguous (manual review), never a claim and never dropped.
     body = f"Example only:\n\n```\nCloses #{ISSUE}\n```\n"
+    assert roles_for([pr_item(10, body=body)]) == [(10, "ambiguous")]
+
+
+def test_a_fenced_plain_mention_is_not_a_reference() -> None:
+    body = f"Example only:\n\n```\nsee #{ISSUE}\n```\n"
     assert roles_for([pr_item(10, body=body)]) == []
 
 

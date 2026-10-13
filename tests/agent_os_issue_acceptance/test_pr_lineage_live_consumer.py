@@ -426,7 +426,7 @@ class ScenarioClient:
                     f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all'
                     f'&per_page={self.page_size}&page=1>; rel="first"'
                 )
-            if self.link_override is not None:
+            if self.link_override is not None and page == 1:
                 links = [self.link_override]
             if links:
                 headers["link"] = ", ".join(links)
@@ -568,25 +568,76 @@ def test_cli_rate_limited_page_fails_closed(monkeypatch, tmp_path) -> None:
     assert_read_only_and_non_selecting(client, record)
 
 
+_TRUSTED_NEXT = (
+    f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=2>; rel="next"'
+)
+
+
+def test_cli_trusted_continuation_link_on_page_one_is_accepted(monkeypatch, tmp_path) -> None:
+    # Control for the rejections below: the same page-1 override, well formed,
+    # is followed to an empty terminal page 2 and proves the population.
+    client = ScenarioClient(prs=[pr_rest(20, draft=True)], link_override=_TRUSTED_NEXT)
+    _, record = run_cli(monkeypatch, tmp_path, client)
+    population = lifecycle(record)["population"]
+    assert population["complete"] is True and population["page_count"] == 2
+    assert lifecycle(record)["candidates"][0]["lifecycle_stage"] == "draft-pr"
+
+
 @pytest.mark.parametrize(
-    "link",
+    "link, kind",
     [
-        # continuation that changes the endpoint, repository, or page arithmetic
-        f'<https://api.github.com/repositories/{REPO_ID}/issues?state=all&per_page=100&page=2>; rel="next"',
-        f'<https://api.github.com/repositories/999/pulls?state=all&per_page=100&page=2>; rel="next"',
-        f'<https://evil.example/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=2>; rel="next"',
-        f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=5>; rel="next"',
+        # continuation that changes the endpoint, repository, host, or page arithmetic
+        (_TRUSTED_NEXT.replace("/pulls?", "/issues?"), "pagination:next-path"),
+        (_TRUSTED_NEXT.replace(f"/repositories/{REPO_ID}/", "/repositories/999/"), "pagination:next-path"),
+        (_TRUSTED_NEXT.replace("https://api.github.com", "https://evil.example"), "pagination:next-host"),
+        (_TRUSTED_NEXT.replace("&page=2>", "&page=5>"), "pagination:next-page-non-contiguous"),
     ],
     ids=["wrong-endpoint", "other-repository-id", "other-host", "non-contiguous"],
 )
-def test_cli_untrusted_continuation_link_fails_closed(monkeypatch, tmp_path, link) -> None:
+def test_cli_untrusted_continuation_link_fails_closed(monkeypatch, tmp_path, link, kind) -> None:
     client = ScenarioClient(prs=[pr_rest(20)], link_override=link)
     _, record = run_cli(monkeypatch, tmp_path, client)
     population = lifecycle(record)["population"]
     assert population["complete"] is False
     assert population["reason_codes"] == ["pr-lineage.page-read-failed"]
+    assert population["note"] == f"page 1: malformed-response (pull-request page 1: {kind})"
     assert lifecycle(record)["candidates"][0]["lifecycle_stage"] is None
     assert_read_only_and_non_selecting(client, record)
+
+
+@pytest.mark.parametrize(
+    "link, proven",
+    [
+        (f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=5>; rel="last"', False),
+        (f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=x>; rel="last"', False),
+        (f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100>; rel="last"', False),
+        (f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=1>; rel="last"', True),
+        (f'<https://api.github.com/repositories/{REPO_ID}/pulls?state=all&per_page=100&page=1>; rel="first"', True),
+    ],
+    ids=["last-beyond", "last-unreadable", "last-without-page", "last-is-this-page", "no-last"],
+)
+def test_cli_a_last_relation_naming_another_page_is_not_terminal_proof(
+    monkeypatch, tmp_path, link, proven
+) -> None:
+    client = ScenarioClient(prs=[pr_rest(20, draft=True)], link_override=link)
+    _, record = run_cli(monkeypatch, tmp_path, client)
+    population = lifecycle(record)["population"]
+    assert population["pages"][0]["terminal_page_proven"] is proven
+    assert population["complete"] is proven
+    if not proven:
+        assert population["reason_codes"] == ["pr-lineage.pagination-unproven"]
+        assert lifecycle(record)["candidates"][0]["lifecycle_stage"] is None
+    assert_read_only_and_non_selecting(client, record)
+
+
+def test_cli_record_says_the_consumer_boundary_revalidation_was_not_reached(
+    monkeypatch, tmp_path
+) -> None:
+    _, record = run_cli(monkeypatch, tmp_path, ScenarioClient(prs=[pr_rest(20, draft=True)]))
+    assert lifecycle(record)["consumer_boundary_revalidation"].startswith("not-reached:")
+    assert record["stale_or_ambiguous_evidence"] == [
+        "candidate-evidence-unavailable:candidate-evidence.no-canonical-primary-claims"
+    ]
 
 
 def test_cli_default_branch_moving_during_the_run_fails_closed(monkeypatch, tmp_path) -> None:

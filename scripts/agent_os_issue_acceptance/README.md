@@ -315,16 +315,25 @@ Flow for one open issue:
    the contiguous successor, the last page carries positive terminal proof (from
    the provider's canonical `validated_next_page`, endpoint `pulls`), the
    explicit page bound (`DEFAULT_MAX_PAGES = 40`) was not exhausted, every record
-   is well formed and belongs to this repository, and any repeated PR was
-   identical. Anything else is an *incomplete* enumeration, which the evaluator
-   answers with `unavailable` -- an exhausted bound is never negative evidence;
+   is well formed and belongs to this repository, and no PR was listed twice (a
+   repeat, even an identical one, proves a PR was opened mid-listing and never
+   observed: `pr-lineage.population-shifted-during-listing`). The shadow CLI's
+   page reader also refuses a page with no `next` whose `last` relation names
+   another page as terminal proof. Anything else is an *incomplete* enumeration,
+   which the evaluator answers with `unavailable` -- an exhausted bound is never
+   negative evidence;
 3. classify every pull request against the issue with the existing
    `parse_pr.parse_linked_issue_result`: a resolved closing directive to this
    issue is a **claim**; a non-authoritative or ambiguous reference (`Part of`,
    `Refs`, qualified or multi-target references, title-only mentions) is an
    **ambiguous claim** that is *passed to the evaluator* (which answers
-   `manual-review`) rather than dropped; a declared `Non-closing:` reference is
-   recorded as evidence but is not a claim; everything else is unrelated;
+   `manual-review`) rather than dropped. That includes an issue named by a PR
+   whose claim resolves to a different issue, and any same-repository issue
+   GitHub would close on merge (`detect_github_effective_closing_references`,
+   which masks nothing) that is not the claim. A declared `Non-closing:`
+   reference is recorded as evidence but is not a claim; everything else is
+   unrelated. One PR has one role per issue (claim, then ambiguous, then
+   declared non-closing);
 4. re-read each claim or ambiguous pull request by number and require it to
    agree with the listing (state, draft, merged, head SHA, base repository,
    title/body digest); disagreement is drift and makes the enumeration
@@ -337,9 +346,12 @@ Flow for one open issue:
 Consumer: `LiveCandidateEvidence` accepts a `lifecycle_stage_acquirer`
 (mutually exclusive with the static `lifecycle_stage`).
 `LiveCandidateEvidenceReader` consults it at the lifecycle input's canonical
-position, and after its own fresh issue snapshot it re-checks the result with
-`acquisition_bindings_current`; a changed issue revision or repository SHA fails
-closed as `candidate-evidence.lifecycle-stage-stale`. The production caller is
+position, and when it composes, after its own fresh issue snapshot, it re-checks
+the result with `acquisition_bindings_current`; a changed issue revision or
+repository SHA fails closed as `candidate-evidence.lifecycle-stage-stale`. The
+shadow CLI never reaches that composition (its `primary_claims` input is
+`None`, so the reader fails closed first), and its record says
+`consumer_boundary_revalidation: not-reached`. The production caller is
 `scripts/agent-os-shadow-run.py`, whose `LivePullRequestPageReader` /
 `LivePullRequestDetailReader` are GET-only and whose experiment record carries a
 `lifecycle_stage_acquisition` section (population proof and per-candidate

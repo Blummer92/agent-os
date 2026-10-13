@@ -30,9 +30,11 @@ evidence the shadow-run context can legitimately supply:
 ``PrLineageAcquirer`` (``scripts/agent_os_issue_acceptance/pr_lineage_reader.py``)
 enumerates the all-state pull-request population over this CLI's GET-only
 client, proves it complete itself, classifies each pull request with the
-existing ``parse_pr`` authority, and feeds the unchanged #3433 evaluator; the
-reader re-checks the result against its own fresh issue revision and
-repository SHA. A stage exists only where exactly one verified closing claim
+existing ``parse_pr`` authority, and feeds the unchanged #3433 evaluator. The
+evidence reader's consumer-boundary re-check (``acquisition_bindings_current``)
+runs only when it composes, which this CLI never reaches: with
+``primary_claims`` unresolved it fails closed first, and the record says so
+(``consumer_boundary_revalidation: not-reached``). A stage exists only where exactly one verified closing claim
 (or GitHub's own closed state) establishes it; everything else stays
 ``unavailable`` / ``manual-review`` and fails closed.
 It still fails closed with a named ``candidate-evidence.*`` reason wherever
@@ -79,6 +81,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Mapping
@@ -114,6 +117,7 @@ from scripts.agent_os_github_issue_provider.models import (  # noqa: E402
 )
 from scripts.agent_os_github_issue_provider.pagination import (  # noqa: E402
     PaginationDiagnosticError,
+    parse_link_header,
     validated_next_page,
 )
 from scripts.agent_os_issue_acceptance.github_issue_source import (  # noqa: E402
@@ -433,6 +437,11 @@ class LivePullRequestPageReader:
     unchanged page size and state, pinned host and repository path -- not from
     a local regex. A diagnostic from that validator is a malformed response:
     the enumeration then fails closed instead of guessing a next page.
+
+    One stricter rule is local to this reader: a page with no ``next`` whose
+    ``last`` relation names any other page contradicts itself, so it is never
+    accepted as terminal proof (the shared validator's issues contract, which
+    pins that case as terminal, is unchanged).
     """
 
     def __init__(
@@ -492,12 +501,27 @@ class LivePullRequestPageReader:
             )
         except PaginationDiagnosticError as exc:
             raise ValueError(f"pull-request page {page}: {exc.kind}") from exc
+        if next_page is None and terminal_page_proven:
+            terminal_page_proven = _last_relation_names_page(link_header, page)
         return _respond(
             items=tuple(items),
             next_page=next_page,
             complete=True,
             terminal_page_proven=terminal_page_proven,
         )
+
+
+def _last_relation_names_page(link_header: str | None, page: int) -> bool:
+    """True unless a ``last`` relation names a page other than ``page``.
+
+    Called only after ``validated_next_page`` parsed the same header, so the
+    header itself is well formed; an unreadable ``last`` page is not proof.
+    """
+    last_url = parse_link_header(link_header).get("last")
+    if last_url is None:
+        return True
+    values = urllib.parse.parse_qs(urllib.parse.urlsplit(last_url).query).get("page", [])
+    return len(values) == 1 and values[0].isascii() and values[0].isdigit() and int(values[0]) == page
 
 
 class LivePullRequestDetailReader:
@@ -1006,6 +1030,14 @@ def main(argv: list[str] | None = None) -> int:
             "candidates": list(lifecycle_observations),
             "primary_claims": "unresolved: no canonical owner; reader input stays None",
             "approval_applicability": "unresolved: no canonical owner; reader input stays None",
+            # The reader fails closed on the missing primary claims before it
+            # composes, so its acquisition_bindings_current re-check never runs
+            # here; say so rather than imply the stages were revalidated.
+            "consumer_boundary_revalidation": (
+                "not-reached: primary_claims and approval_applicability are None, so the "
+                "evidence reader fails closed before composition; each stage is bound only "
+                "to the acquirer's own issue read and default-branch checks"
+            ),
             "execution_authorized": False,
             "side_effects_performed": False,
         },
