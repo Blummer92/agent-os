@@ -27,6 +27,7 @@ from instructional_workflow_contracts.current_curriculum_state import (
 from navigation_registry.connectors.base import ConnectorError
 from navigation_registry.connectors.curriculum_execution_surface_router import (
     FALLBACK_ROUTE,
+    MAX_RESULTS,
     READ_ONLY_ACTIONS,
     build_scheduler_fallback_read_executor,
     retrieve_curriculum_evidence,
@@ -264,4 +265,71 @@ def execute_source_schema(
     }
 
 
-__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification", "execute_source_schema"]
+def execute_lesson_content(
+    admission: NotionReadAdmission,
+    *,
+    catalog: NotionReadCatalog,
+    scheduler_task_executor_factory: SchedulerTaskExecutorFactory,
+) -> dict[str, object]:
+    """Read lesson records from one catalog-declared source.
+
+    The governed plan is exactly one ``query_data_source`` step against the
+    admission-bound logical source: no filter step exists, so the #3476
+    coursewide guard is bypassed by construction rather than relaxed. The
+    ``_bounded_read_task_executor`` still enforces the inherited #2822 action
+    allowlist around the dispatch.
+
+    The adapter output is returned unprojected; the projection module owns the
+    public surface and selects only the 7 governed lesson fields from it.
+    """
+    if not isinstance(admission, NotionReadAdmission):
+        raise NotionReadRequestError("admission evidence is required")
+    if admission.status != "admitted" or admission.secret_dispatch_authorized is not True:
+        raise NotionReadRequestError("secret-bearing dispatch requires an admitted #2283 request")
+    if admission.request_class != "lesson-content":
+        raise NotionReadRequestError("lesson-content request class required")
+    if not callable(scheduler_task_executor_factory):
+        raise NotionReadRequestError("scheduler task executor factory must be callable")
+    if len(admission.required_logical_sources) != 1:
+        raise NotionReadRequestError(
+            "lesson-content admission must bind exactly one logical source"
+        )
+
+    logical_source = admission.required_logical_sources[0]
+    binding = catalog.source(logical_source)
+    if binding is None or not binding.dispatchable:
+        raise NotionReadRequestError(
+            f"logical source is not an approved binding: {logical_source!r}"
+        )
+
+    execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
+    result = execute_task(
+        {
+            "action": "query_data_source",
+            "data_source_id": binding.data_source_id,
+            "page_size": MAX_RESULTS,
+            "max_pages": 1,
+            "max_results": MAX_RESULTS,
+        }
+    )
+    if not isinstance(result, Mapping):
+        raise NotionReadRequestError("Notion adapter returned malformed task evidence")
+    if str(result.get("status") or "").strip().lower() != "success":
+        raise NotionReadRequestError(
+            f"lesson content read was not successful: {result.get('status')!r}"
+        )
+    output = result.get("output")
+    if not isinstance(output, Mapping):
+        raise NotionReadRequestError("lesson content output is not a mapping")
+    records = output.get("results")
+    if not isinstance(records, list):
+        raise NotionReadRequestError("lesson content output is missing results")
+    if len(records) > MAX_RESULTS:
+        raise NotionReadRequestError("lesson record count exceeds the read limit")
+    return {
+        "logical_source": logical_source,
+        "records": records,
+    }
+
+
+__all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read", "execute_destination_verification", "execute_source_schema", "execute_lesson_content"]

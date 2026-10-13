@@ -92,6 +92,18 @@ def parse_catalog(payload: object) -> NotionReadCatalog:
                 raise NotionReadRequestError(
                     f"request {record.request_id!r} names an unknown logical source"
                 )
+        elif record.request_class == "lesson-content":
+            # #3580: the lesson-content read's target source and canonical
+            # unit must both be catalog-declared. Dispatchability itself is
+            # decided at admission.
+            if record.logical_source not in known_sources:
+                raise NotionReadRequestError(
+                    f"request {record.request_id!r} names an unknown logical source"
+                )
+            if record.canonical_unit_key not in known_units:
+                raise NotionReadRequestError(
+                    f"request {record.request_id!r} names an unknown canonical unit"
+                )
         elif record.canonical_unit_key not in known_units:
             raise NotionReadRequestError(
                 f"request {record.request_id!r} names an unknown canonical unit"
@@ -169,6 +181,7 @@ def _request(value: object) -> NotionReadRequestRecord:
         raise NotionReadRequestError("request issue_number must be a positive integer")
     destination = request_class == "destination-verification"
     schema_read = request_class == "source-schema"
+    lesson_content = request_class == "lesson-content"
     canonical_unit_value = item.get("canonical_unit_key")
     fixed_page_value = item.get("fixed_page_id")
     expected_title_value = item.get("expected_title")
@@ -191,6 +204,20 @@ def _request(value: object) -> NotionReadRequestRecord:
         if fixed_page_value is not None or expected_title_value is not None:
             raise NotionReadRequestError("source-schema requests must not carry destination fields")
         canonical_unit_key = None
+        logical_source = _slug(logical_source_value, "logical_source")
+        fixed_page_id = None
+        expected_title = None
+    elif lesson_content:
+        # #3580: a lesson-content read names its catalog-declared logical
+        # source directly AND the canonical unit its lessons belong to. Both
+        # bindings are validated here; dispatchability is decided at
+        # admission, so an unverified source stays fail-closed rather than
+        # unbound.
+        if fixed_page_value is not None or expected_title_value is not None:
+            raise NotionReadRequestError(
+                "lesson-content requests must not carry destination fields"
+            )
+        canonical_unit_key = _slug(canonical_unit_value, "canonical_unit_key")
         logical_source = _slug(logical_source_value, "logical_source")
         fixed_page_id = None
         expected_title = None
