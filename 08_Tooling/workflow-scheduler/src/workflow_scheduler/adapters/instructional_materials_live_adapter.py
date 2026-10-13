@@ -52,6 +52,26 @@ def _utc_seconds() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _classroom_admission_verdict(build_input, receipt, record, placement_receipts_dir):
+    """D8 classroom-admission verdict as non-authorizing evidence (#3556).
+
+    INCOMPLETE enforcement: the verdict is surfaced for the host to consume;
+    the adapter makes no classroom-ready claim. The scheduler path does not
+    thread the governed requirement identity or template revisions, so the
+    canonical evidence bundle cannot be assembled here: classify with no
+    evidence bundle, which is fail-closed (NOT_ADMITTED /
+    ``classroom.evidence-missing``). The unused parameters document the
+    seam for threading the governed identity later.
+    """
+    from instructional_materials_coach.classroom_admission import (
+        classify_classroom_admission,
+        serialize_classroom_admission,
+    )
+
+    result = classify_classroom_admission(record, None)
+    return serialize_classroom_admission(result)
+
+
 class InstructionalMaterialsLiveAdapter(TaskAdapter):
     """Bind one exact Scheduler request to current approval/auth and #1195."""
 
@@ -196,6 +216,9 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
             docs_service=self._docs_service,
             **composed_options,
         )
+        typed_build_input = build_input if isinstance(build_input, LiveBuildInput) else None
+        typed_receipt = receipt if isinstance(receipt, LiveBuildReceipt) else None
+        record = build_receipt_record(typed_build_input, typed_receipt)
         return {
             "success": bool(getattr(receipt, "succeeded", False)),
             "status": "pass" if bool(getattr(receipt, "succeeded", False)) else "fail",
@@ -215,9 +238,15 @@ class InstructionalMaterialsLiveAdapter(TaskAdapter):
                 # Only the real typed build input / receipt can supply governed
                 # identities; any other injected value is reported as unavailable
                 # (unknown, never inferred) rather than guessed at (#3454).
-                "build_receipt_record": build_receipt_record(
-                    build_input if isinstance(build_input, LiveBuildInput) else None,
-                    receipt if isinstance(receipt, LiveBuildReceipt) else None,
+                "build_receipt_record": record,
+                # #3556: D8 classroom-admission verdict as non-authorizing
+                # evidence for the host to consume. INCOMPLETE enforcement:
+                # the adapter makes no classroom-ready claim; the scheduler
+                # path does not thread the governed requirement identity, so
+                # the verdict is fail-closed (evidence-missing) until it does.
+                "classroom_admission": _classroom_admission_verdict(
+                    typed_build_input, typed_receipt, record,
+                    composed_options.get("placement_receipts_dir"),
                 ),
             },
         }

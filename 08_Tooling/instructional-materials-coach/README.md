@@ -198,3 +198,7 @@ The CLI uses `compose_governed_build_request` for its final `LiveBuildInput`, te
 ## Opt-in build receipt (#3454)
 
 `imc-build build --receipt-out PATH` writes an atomic local JSON record after a successful or failed attempt. Without the flag no build-receipt file is written. `imc-build-receipt-v1` records governed requirement identity, template identifiers/revisions, artifact identifiers and QA revision/state, idempotency, expected-format completeness, placement role/slot references, and installed renderer version when available. Missing evidence remains null, never guessed. The record grants no execution, production or classroom-readiness authority; it contains no lesson copy or credentials.
+
+## Opt-in classroom-admission verdict (#3556)
+
+`imc-build build --admission-out PATH` additionally writes the D8 classroom-admission verdict as an atomic local JSON file. The CLI assembles the canonical evidence bundle from the governed build input, terminal-QA report, and verified placement-receipt store, then evaluates it with the pure `classroom_admission` predicate; the receipt is treated as untrusted input and every claim is re-derived. The verdict is labeled non-authorizing evidence for the host to consume — it grants no execution, production, publication, or classroom authority, and it is not a classroom-ready claim (INCOMPLETE enforcement: the claim happens host-side). Without the flag no verdict file is written.
