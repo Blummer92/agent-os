@@ -32,6 +32,8 @@ from .models import (
 RESULT_KIND = "agent-os-notion-read-result"
 #: #2816: the source-schema class publishes property vocabulary, not records.
 RESULT_KIND_SCHEMA = "agent-os-notion-source-schema-result"
+#: #3580: the lesson-content class publishes bounded lesson field records.
+RESULT_KIND_LESSON_CONTENT = "agent-os-notion-lesson-content-result"
 
 #: #2816: verified Visual Asset Library "Reuse status" select property id.
 #: Recovered from governed source-schema runs 38322797691/38322852601.
@@ -188,6 +190,244 @@ def project_source_schema_result(
 
     reject_credential_keys(payload)
     return payload
+
+
+#: #3580: the governed lesson-content field contract. Exactly the 7 result keys
+#: below are projected per lesson; every other property on the record is
+#: dropped by construction. "Key Vocabulary" is emitted as absent (None) when
+#: the property is missing or empty — it is never invented.
+#: #3580: the relation property that binds a lesson to its canonical unit. The
+#: execution seam scopes the query by it; this module validates it per record.
+LESSON_UNIT_RELATION_PROPERTY = "Canonical Unit"
+
+_LESSON_RESULT_KEYS = (
+    "daily_learning_target",
+    "daily_focus",
+    "key_vocabulary",
+    "canonical_unit",
+    "source_evidence",
+    "day_lesson_number",
+    "record_url",
+)
+
+
+def project_lesson_content_result(
+    admission: NotionReadAdmission,
+    execution: Mapping[str, object],
+    *,
+    catalog: NotionReadCatalog,
+    generated_at: str,
+) -> dict[str, Any]:
+    """Return the bounded sanitized lesson-content result for the public surface.
+
+    Only the 7 governed lesson fields are published per record. Every other
+    adapter field (page ids beyond the canonical-unit relation, timestamps,
+    parent references, unlisted properties) is dropped by construction, and
+    the provider data-source id stays inside the execution seam, exactly as
+    it does for the source-schema projection above. Empty or missing fields
+    are emitted as absent (None); nothing is invented, defaulted, or inferred.
+    """
+    if admission.status != "admitted":
+        raise NotionReadRequestError("only an admitted request may be projected")
+    if admission.request_class != "lesson-content":
+        raise NotionReadRequestError(
+            "lesson-content projection requires the lesson-content request class"
+        )
+    if not isinstance(execution, Mapping):
+        raise NotionReadRequestError("execution evidence must be a mapping")
+    if not isinstance(generated_at, str) or not generated_at.strip():
+        raise NotionReadRequestError("generated_at must be supplied by the caller")
+    if len(admission.required_logical_sources) != 1:
+        raise NotionReadRequestError(
+            "lesson-content admission must bind exactly one logical source"
+        )
+    binding = catalog.source(admission.required_logical_sources[0])
+    if binding is None:
+        raise NotionReadRequestError("admitted source vanished from the catalog")
+    # The expected unit is re-derived from the catalog here, independently of
+    # the execution seam, and must agree with the unit that scoped the query.
+    unit = catalog.canonical_unit(str(admission.canonical_unit_key))
+    if unit is None or not unit.dispatchable:
+        raise NotionReadRequestError("canonical unit binding is not dispatchable")
+    expected_unit_page_id = _dashed_uuid(str(unit.provider_page_id))
+    if execution.get("canonical_unit_page_id") != expected_unit_page_id:
+        raise NotionReadRequestError("lesson read was not scoped to the admitted unit")
+
+    records = execution.get("records")
+    if not isinstance(records, list):
+        raise NotionReadRequestError("execution evidence is missing lesson records")
+    if len(records) > MAX_RESULTS:
+        raise NotionReadRequestError("lesson record count exceeds the read limit")
+
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "result_kind": RESULT_KIND_LESSON_CONTENT,
+        "repository": admission.repository,
+        "issue_number": admission.issue_number,
+        "request_id": admission.request_id,
+        "request_class": admission.request_class,
+        "source": {
+            "logical_source": binding.logical_source,
+            "display_name": binding.display_name,
+            "verification_state": binding.verification_state,
+            "access": "read-only",
+        },
+        "lessons": [
+            _project_lesson_record(record, expected_unit_page_id) for record in records
+        ],
+        "authority": _authority({}),
+        "generated_at": generated_at.strip(),
+    }
+
+    reject_credential_keys(payload)
+    return payload
+
+
+def validate_lesson_unit_identity(record: object, expected_unit_page_id: str) -> str:
+    """Prove one lesson record belongs to the expected canonical unit.
+
+    The record must carry exactly one well-formed ``Canonical Unit`` relation
+    whose Notion id (dashed or compact) equals ``expected_unit_page_id``.
+    Foreign, unit-less, multi-unit and malformed relations raise; a record is
+    never silently dropped. Returns the normalized dashed page id.
+    """
+    if not isinstance(record, Mapping):
+        raise NotionReadRequestError("lesson record must be a mapping")
+    properties = record.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("lesson record is missing properties")
+    page_id = _lesson_relation_page_id(properties, LESSON_UNIT_RELATION_PROPERTY)
+    if page_id is None:
+        raise NotionReadRequestError("lesson record has no canonical unit relation")
+    if page_id != _dashed_uuid(expected_unit_page_id):
+        raise NotionReadRequestError("lesson record belongs to a different canonical unit")
+    return page_id
+
+
+def _project_lesson_record(record: object, expected_unit_page_id: str) -> dict[str, Any]:
+    """Project exactly the 7 governed fields from one lesson page record."""
+    unit_page_id = validate_lesson_unit_identity(record, expected_unit_page_id)
+    properties = record["properties"]
+    lesson: dict[str, Any] = {
+        "daily_learning_target": _lesson_text(properties, "Daily Learning Target"),
+        "daily_focus": _lesson_text(properties, "Daily Focus"),
+        # #3580: Key Vocabulary is empty on all sampled lessons. Absent is
+        # emitted as None; a value is never synthesized.
+        "key_vocabulary": _lesson_text(properties, "Key Vocabulary"),
+        "canonical_unit": {"page_id": unit_page_id},
+        "source_evidence": _lesson_text(properties, "Source Evidence"),
+        "day_lesson_number": _lesson_text(properties, "Day / Lesson Number"),
+        "record_url": _text_or_none(record.get("url")),
+    }
+    if set(lesson.keys()) != set(_LESSON_RESULT_KEYS):
+        raise NotionReadRequestError("lesson projection key contract drift")
+    return lesson
+
+
+def _lesson_text(properties: Mapping[str, object], name: str) -> str | None:
+    """Extract plain text for one governed field, or None when absent/empty.
+
+    Handles the text-shaped Notion property types (title, rich_text, select,
+    status, multi_select). An unrecognized property type fails closed rather
+    than guessing a rendering.
+    """
+    prop = properties.get(name)
+    if prop is None:
+        return None
+    if not isinstance(prop, Mapping):
+        raise NotionReadRequestError(f"lesson property {name!r} must be a mapping")
+    prop_type = prop.get("type")
+    if prop_type in ("title", "rich_text"):
+        return _plain_text_segments(prop.get(prop_type))
+    if prop_type in ("select", "status"):
+        option = prop.get(prop_type)
+        if option is None:
+            return None
+        if not isinstance(option, Mapping):
+            raise NotionReadRequestError(f"lesson property {name!r} has malformed option")
+        return _text_or_none(option.get("name"))
+    if prop_type == "multi_select":
+        options = prop.get("multi_select")
+        if not isinstance(options, list):
+            raise NotionReadRequestError(
+                f"lesson property {name!r} has malformed options"
+            )
+        names = [
+            _text_or_none(option.get("name"))
+            for option in options
+            if isinstance(option, Mapping)
+        ]
+        names = [n for n in names if n]
+        return ", ".join(names) if names else None
+    raise NotionReadRequestError(
+        f"lesson property {name!r} has unrecognized type {prop_type!r}"
+    )
+
+
+def _plain_text_segments(segments: object) -> str | None:
+    if segments is None:
+        return None
+    if not isinstance(segments, list):
+        raise NotionReadRequestError("lesson text property has malformed segments")
+    texts = [
+        _text_or_none(segment.get("plain_text"))
+        for segment in segments
+        if isinstance(segment, Mapping)
+    ]
+    texts = [t for t in texts if t]
+    return "".join(texts) if texts else None
+
+
+def _lesson_relation_page_id(
+    properties: Mapping[str, object], name: str
+) -> str | None:
+    """Return the single related page id, normalized to dashed UUID form.
+
+    Zero relations emit absent (None); ``validate_lesson_unit_identity``
+    rejects that. More than one relation, or any malformed relation entry,
+    fails closed: the governed contract names a single canonical unit and the
+    projection must not pick arbitrarily or skip an entry.
+    """
+    prop = properties.get(name)
+    if prop is None:
+        return None
+    if not isinstance(prop, Mapping):
+        raise NotionReadRequestError(f"lesson property {name!r} must be a mapping")
+    if prop.get("type") != "relation":
+        raise NotionReadRequestError(
+            f"lesson property {name!r} is not a relation"
+        )
+    relations = prop.get("relation")
+    if not isinstance(relations, list):
+        raise NotionReadRequestError(
+            f"lesson property {name!r} has malformed relations"
+        )
+    ids = []
+    for item in relations:
+        item_id = _text_or_none(item.get("id")) if isinstance(item, Mapping) else None
+        if not item_id:
+            raise NotionReadRequestError(
+                f"lesson property {name!r} has a malformed relation"
+            )
+        ids.append(item_id)
+    if len(ids) > 1:
+        raise NotionReadRequestError(
+            f"lesson property {name!r} has ambiguous relations"
+        )
+    if not ids:
+        return None
+    return _dashed_uuid(ids[0])
+
+
+def _dashed_uuid(value: str) -> str:
+    """Normalize a Notion id to dashed lowercase UUID form."""
+    compact = value.replace("-", "").lower()
+    if len(compact) != 32 or any(c not in "0123456789abcdef" for c in compact):
+        raise NotionReadRequestError("lesson relation id is not a Notion id")
+    return (
+        f"{compact[0:8]}-{compact[8:12]}-{compact[12:16]}"
+        f"-{compact[16:20]}-{compact[20:32]}"
+    )
 
 
 def _bound_select_options(schema: Mapping[str, object]) -> list[dict[str, str]] | None:
@@ -409,7 +649,11 @@ def reject_credential_keys(value: object, path: str = "result") -> None:
 __all__ = [
     "RESULT_KIND",
     "RESULT_KIND_SCHEMA",
+    "RESULT_KIND_LESSON_CONTENT",
     "project_public_result",
     "project_source_schema_result",
+    "project_lesson_content_result",
     "reject_credential_keys",
+    "LESSON_UNIT_RELATION_PROPERTY",
+    "validate_lesson_unit_identity",
 ]
