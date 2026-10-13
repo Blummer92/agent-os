@@ -45,6 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build = subparsers.add_parser("build", help="Build a slide deck and worksheet from an approved template and lesson content.")
     build.add_argument("--content", required=True)
     build.add_argument("--receipt-out", default="", help="Optional local JSON build evidence (not authorization).")
+    build.add_argument("--admission-out", default="", help="Optional local JSON classroom-admission verdict (evidence only; non-authorizing).")
     build.add_argument("--slides-template", default="")
     build.add_argument("--doc-template", default="")
     build.add_argument("--template-candidates", default="")
@@ -381,6 +382,88 @@ def _terminal_qa_summary(receipt: object) -> str:
     return "; ".join(parts)
 
 
+def _classroom_admission_evidence(build_input, receipt, requirement_identity, template_revisions, placement_records):
+    """Assemble canonical D8 admission evidence from live build objects (#3556).
+
+    Pure extraction: no I/O. The caller loads placement records from the
+    verified store; everything else comes from the governed build input and
+    the live build receipt. Raises on malformed input — callers fall back to
+    a fail-closed verdict with no evidence bundle.
+    """
+    from .classroom_admission import RequiredVisual, assemble_admission_evidence
+
+    if build_input is None or receipt is None:
+        raise ValueError("classroom admission evidence requires a build input and receipt")
+    idempotency_key = getattr(build_input, "idempotency_key", "") or ""
+    revisions = template_revisions or {}
+    template_identities = (
+        ("slides", getattr(build_input, "slides_template_id", "") or "", revisions.get("slides") or ""),
+        ("worksheet", getattr(build_input, "doc_template_id", "") or "", revisions.get("worksheet") or ""),
+    )
+    qa_report = getattr(receipt, "terminal_qa", None)
+    artifact_identities = []
+    qa_states = []
+    for role in ("slides", "worksheet"):
+        artifact = getattr(receipt, role, None)
+        artifact_report = getattr(qa_report, role, None) if qa_report is not None else None
+        artifact_identities.append(
+            (role, getattr(artifact, "file_id", "") or "", getattr(artifact_report, "revision_id", "") or "")
+        )
+        qa_states.append((role, getattr(artifact, "terminal_qa_state", "") or ""))
+    required_visuals = [
+        RequiredVisual(
+            role_id=getattr(binding, "role_id", "") or "",
+            slot_id=getattr(binding, "slot_id", "0") or "0",
+            asset_id=getattr(binding, "asset_id", "") or "",
+            content_identity_json=_canonical_json(getattr(binding, "content_identity", None)),
+            required=bool(getattr(binding, "required", True)),
+        )
+        for binding in (getattr(build_input, "visual_placements", None) or ())
+    ]
+    return assemble_admission_evidence(
+        idempotency_key=idempotency_key,
+        requirement_identity=requirement_identity or {},
+        template_identities=template_identities,
+        artifact_identities=artifact_identities,
+        requested_artifact_roles=("slides", "worksheet"),
+        terminal_qa_states=qa_states,
+        build_succeeded=bool(getattr(receipt, "succeeded", False)),
+        placement_records=placement_records or (),
+        required_visuals=required_visuals,
+    )
+
+
+def _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record):
+    """Write the D8 admission verdict as labeled non-authorizing evidence (#3556).
+
+    INCOMPLETE enforcement: the verdict is evidence for the host to consume;
+    neither the CLI nor this file makes a classroom-ready claim.
+    """
+    from .classroom_admission import classify_classroom_admission, serialize_classroom_admission
+    from .placement_receipts import load_placement_records
+
+    try:
+        placement_records = load_placement_records(
+            args.placement_receipts_dir, getattr(build_input, "idempotency_key", "") or ""
+        )
+    except (OSError, ValueError):
+        placement_records = ()
+    try:
+        evidence = _classroom_admission_evidence(
+            build_input, receipt, requirement_identity, template_revisions, placement_records
+        )
+    except (TypeError, ValueError, AttributeError):
+        evidence = None
+    result = classify_classroom_admission(record, evidence)
+    write_build_receipt_atomic(args.admission_out, serialize_classroom_admission(result))
+    print(
+        f"Classroom admission verdict: {result.status.value} "
+        f"({', '.join(reason.value for reason in result.reason_codes)}) — "
+        "evidence only, non-authorizing."
+    )
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "log-lesson":
@@ -563,8 +646,13 @@ def main(argv: list[str] | None = None) -> int:
             docs_service=build_docs_service(credentials),
             **composed.builder_options,
         )
+        record = None
+        if args.receipt_out or args.admission_out:
+            record = build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions)
         if args.receipt_out:
-            write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions))
+            write_build_receipt_atomic(args.receipt_out, record)
+        if args.admission_out:
+            _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record)
         if not receipt.succeeded:
             qa_summary = _terminal_qa_summary(receipt)
             raise RuntimeError(
@@ -584,6 +672,12 @@ def main(argv: list[str] | None = None) -> int:
                 write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__))
             except OSError as receipt_error:
                 print(f"Receipt persistence failed: {receipt_error}", file=sys.stderr)
+        if args.admission_out:
+            try:
+                record = build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__)
+                _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record)
+            except OSError as verdict_error:
+                print(f"Admission verdict persistence failed: {verdict_error}", file=sys.stderr)
         lesson_path = record_lesson(lesson_from_exception(exc, context), args.lessons_dir)
         print(f"Build failed: {exc}", file=sys.stderr)
         print(f"Lesson recorded: {lesson_path}", file=sys.stderr)
