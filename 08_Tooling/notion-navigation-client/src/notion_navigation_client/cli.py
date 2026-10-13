@@ -1,4 +1,4 @@
-"""CLI: read-only lookups against the navigation-index sheet.
+"""CLI: read-only lookups and Refresh Log chronology evidence from the navigation-index sheet.
 
 No ALLOW_WRITE gate -- nothing in this package can write to the sheet or
 to Notion, so there is no write path to guard.
@@ -12,6 +12,7 @@ import os
 import sys
 
 from .index import NavigationIndex
+from .refresh_log import DEFAULT_LIMIT, MAX_LIMIT, validate_limit
 from .sheets_client import build_sheets_service, fetch_tab_values, get_credentials
 
 LOOKUPS = {
@@ -25,6 +26,12 @@ LOOKUPS = {
 }
 
 
+def _add_sheet_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--sheet-id", default=os.environ.get("NOTION_NAV_SHEET_ID", ""))
+    parser.add_argument("--client-secret", default=os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_PATH", ""))
+    parser.add_argument("--token-path", default=os.environ.get("GOOGLE_OAUTH_TOKEN_PATH", ""))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only lookups against the Notion navigation-index sheet.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -33,9 +40,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     lookup.add_argument("kind", choices=sorted(LOOKUPS), help="Which tab to look up.")
     lookup.add_argument("key", help="Dashboard/Database/Information Type/Workflow/Prompt name (or Database Name for kind=field).")
     lookup.add_argument("--field", default=None, help="Field name; required for kind=field.")
-    lookup.add_argument("--sheet-id", default=os.environ.get("NOTION_NAV_SHEET_ID", ""))
-    lookup.add_argument("--client-secret", default=os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_PATH", ""))
-    lookup.add_argument("--token-path", default=os.environ.get("GOOGLE_OAUTH_TOKEN_PATH", ""))
+    _add_sheet_arguments(lookup)
+
+    refresh_log = sub.add_parser(
+        "refresh-log",
+        help=(
+            "Bounded Refresh Log chronology evidence. Navigation-cache refreshes only: "
+            "not a complete history of work, and never a substitute for live verification."
+        ),
+    )
+    refresh_log.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        help=f"Number of most recent populated rows to return, 1-{MAX_LIMIT} (default: {DEFAULT_LIMIT}).",
+    )
+    _add_sheet_arguments(refresh_log)
 
     return parser.parse_args(argv)
 
@@ -46,13 +66,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.sheet_id:
         print("Refusing to run: --sheet-id or NOTION_NAV_SHEET_ID is required.", file=sys.stderr)
         return 1
-    if args.kind == "field" and not args.field:
+    if args.command == "lookup" and args.kind == "field" and not args.field:
         print("Refusing to run: --field is required for kind=field.", file=sys.stderr)
         return 1
+    if args.command == "refresh-log":
+        try:
+            validate_limit(args.limit)
+        except ValueError:
+            print(f"Refusing to run: --limit must be an integer between 1 and {MAX_LIMIT}.", file=sys.stderr)
+            return 1
 
     credentials = get_credentials(args.client_secret, args.token_path)
     service = build_sheets_service(credentials)
     index = NavigationIndex(functools.partial(fetch_tab_values, service, args.sheet_id))
+
+    if args.command == "refresh-log":
+        # An empty log is still a successful read: the envelope reports it.
+        print(json.dumps(index.get_refresh_log(args.limit), indent=2))
+        return 0
 
     result = LOOKUPS[args.kind](index, args.key, args.field)
     print(json.dumps(result, indent=2))
