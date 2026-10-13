@@ -224,6 +224,22 @@ def test_non_modeling_request_routes_elsewhere_unchanged() -> None:
     assert is_modeling_guide_request("Revise the teacher modeling guide with survey evidence.")
 
 
+def test_teacher_modeling_without_guide_does_not_match() -> None:
+    # QA F1: "teacher modeling" alone (no guide requested) must not route.
+    assert not is_modeling_guide_request("What are teacher modeling agency rates?")
+    assert resolve_modeling_guide_owner("What are teacher modeling agency rates?") == ("", "")
+
+
+def test_audit_verb_does_not_flip_view() -> None:
+    # QA F2: a bare verb use of "audit" must not select the audit view.
+    assert (
+        default_modeling_guide_view(
+            "Create a teacher modeling guide; we will audit the worksheet later."
+        )
+        == "rehearsal"
+    )
+
+
 def test_default_view_is_rehearsal() -> None:
     assert default_modeling_guide_view("Create a teacher modeling guide.") == "rehearsal"
     assert default_modeling_guide_view("teacher modeling guide, materials extract") == "materials-extract"

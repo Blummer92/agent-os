@@ -232,19 +232,27 @@ def is_modeling_guide_request(request_text: str | None) -> bool:
     Bound to the #3562 Modeling Guide Request Rule: an explicit modeling
     guide request belongs to the Teacher Modeling Coach, not to the
     Instructional Materials Coach ``teacher-guide`` document path.
+
+    ``teacher modeling`` alone is not a guide request (e.g. "teacher
+    modeling agency rates"); it only counts when a guide is requested.
     """
     if not isinstance(request_text, str):
         return False
-    return bool(re.search(r"modeling\s+guide|teacher\s+modeling", request_text, re.IGNORECASE))
+    lowered = request_text.lower()
+    if re.search(r"modeling\s+guide", lowered):
+        return True
+    return bool(re.search(r"teacher\s+modeling", lowered)) and "guide" in lowered
 
 
 def default_modeling_guide_view(request_text: str | None) -> str:
     """Default presentation view for an explicit modeling-guide request.
 
-    ``rehearsal`` unless the teacher requests another supported view.
+    ``rehearsal`` unless the teacher requests another supported view. A
+    bare verb use of "audit" (e.g. "we will audit the worksheet later")
+    does not select the audit view.
     """
     lowered = (request_text or "").lower()
-    if "audit" in lowered:
+    if re.search(r"\baudit\b", lowered) and "view" in lowered:
         return "audit"
     if "materials-extract" in lowered or "materials extract" in lowered:
         return "materials-extract"
