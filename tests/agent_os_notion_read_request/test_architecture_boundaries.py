@@ -103,10 +103,15 @@ def test_shipped_catalog_preserves_verified_sources_and_fail_closed_unit_binding
         for source in shipped_catalog.sources
         if source.verification_state == "verified-current"
     }
-    assert set(verified_sources) == {"canonical-unit", "visual-asset-library"}
+    assert set(verified_sources) == {"canonical-unit", "visual-asset-library", "daily-generation-packet"}
     for source in verified_sources.values():
         assert source.data_source_id is not None
         assert source.dispatchable is True
+    # #3580: the Daily Generation Packet Dashboard source is formally admitted
+    # (verified-current) with its live-verified data source id.
+    packet = verified_sources["daily-generation-packet"]
+    assert packet.data_source_id == "64ec8493-ece7-41d4-b130-c48cc01742c0"
+    assert packet.content_class == "lesson-content"
     teacher_modeling = next(
         source for source in shipped_catalog.sources
         if source.logical_source == "teacher-modeling"
@@ -149,11 +154,14 @@ def test_shipped_catalog_contains_only_authorized_verified_identities() -> None:
 def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
     # #2816: the icon-system source is deliberately present but unverified
     # (null id) so its schema request fails closed until verified.
+    # #3580: the daily-generation-packet source is formally admitted
+    # (verified-current) for the lesson-content class.
     assert {source.logical_source for source in shipped_catalog.sources} == {
         "canonical-unit",
         "visual-asset-library",
         "teacher-modeling",
         "icon-system",
+        "daily-generation-packet",
     }
     assert {record.request_class for record in shipped_catalog.requests} <= set(REQUEST_CLASSES)
     request_issues = {record.request_id: record.issue_number for record in shipped_catalog.requests}
@@ -170,6 +178,7 @@ def test_shipped_catalog_first_path_is_minimal(shipped_catalog) -> None:
         "gate1-visual-assets": 1941,
         "visual-asset-library-schema": 2816,
         "icon-system-schema": 2816,
+        "candy-branding-lesson-content": 3580,
     }
 
 
