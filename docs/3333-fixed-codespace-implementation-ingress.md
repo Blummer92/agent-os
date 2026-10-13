@@ -1,5 +1,46 @@
 # #3333 — Fixed Codespaces implementation ingress (non-authorizing phase)
 
+## Bounded transport repair (2026-10-12)
+
+The existing transport now admits a finite grammar rather than trusting every
+executable except `git push`/`gh`/`hub`. Commands are limited to:
+
+- Git status/diff/show/log/rev-parse/ls-files, plus worktree list and bounded
+  worktree add (detach or a non-main local branch);
+- ripgrep repository search/file listing without executable preprocessors;
+- pytest, directly or `python[3] -m pytest`, with bounded test paths/options.
+
+Unknown executables, executable paths, shells/wrappers, inline Python, arbitrary
+scripts/modules, Git global configuration/aliases, executable diff helpers,
+pytest plugin/config overrides, and GitHub clients are refused before Codespace
+discovery. Argv has token/count/total-size bounds and excludes control characters.
+The policy is part of this same transport; it defines no executor route, command
+ingress, authorization model, agent, Scheduler or persistence mechanism.
+
+SSH interprets remote commands through the remote shell. The transport quotes
+each admitted argument for that boundary; it does not accept caller shell text.
+Local subprocess execution remains argv-based. Pattern/path text stays data.
+
+Result evidence includes fixed repository/execution surface, canonical runner
+profile/health references when supplied, UTC local transport-attempt start/end,
+and monotonic duration. Timeout/error results retain attempt timestamps; refusal
+before execution reports null timestamps. Caller-owned workdir/base/currentness
+remain recorded bindings, not claims that a remote checkout or working directory
+was independently observed. New supplied runner evidence binds the request ID;
+legacy requests without it retain their existing content-derived identities.
+
+These operations require a qualified environment and trusted admitted repository
+and test code. The argv grammar does not sandbox arbitrary repository code or
+grant GitHub/publication/merge authority. Workflow/credential/lifecycle changes
+remain separately gated, and this repair does not expose multi-file editing or
+replace WSC5/CodingWorker's caller-owned implementation plan.
+
+Focused regressions: `test_codespace_transport_contract.py` is stdlib unittest
+compatible and also collected by the existing pytest CI. The existing transport,
+dispatcher and fixed-probe pytest suites remain exact-head validation obligations.
+The fixed `git rev-parse HEAD` canary below is still the only production payload;
+the live general engineering pilot is separate acceptance.
+
 This is a bounded integration increment for #3333. It is **not** proof of
 live ChatGPT-to-Codespaces acceptance, and it does not expose a generic shell.
 
@@ -91,3 +132,4 @@ lease observations, or a second persistence store to make the adapter runnable.
 The consumer now also rejects a partial host binding with
 `canonical-host-binding-incomplete`. This is a repository-side safety check,
 not a claim that the live host provider is connected.
+
