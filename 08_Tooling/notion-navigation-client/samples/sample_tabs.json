@@ -44,7 +44,7 @@
     ["Navigation aid only. Verify live state in Notion before updating readiness, status, ownership, or curriculum decisions."],
     ["Refresh Date", "Script Version", "Refreshed By", "Data Sources Scanned", "Dashboards Scanned", "Properties Scanned", "Relations Found", "Errors", "Unresolved Questions", "Notes"],
     ["2026-07-04 16:04 UTC", "v0.1.0", "Navigation Governance Agent", "3", "1", "18", "9", "", "Several owner dashboards and relation targets need live verification.", "Initial scaffold created from live Notion search and fetch."],
-    ["2026-08-09 16:10:03.654", "v0.1.2", "Operator A", "1", "0", "12", "0", "", "", "Notion remains the source of truth; sheet refreshed as a navigation aid only."],
-    ["2026-08-09 16:37:20.339", "v0.1.2", "Operator A", "22", "5", "615", "42", "", "", "Notion remains the source of truth; sheet refreshed as a navigation aid only."]
+    ["8/9/2026 16:10:03", "v0.1.2", "Operator A", "1", "0", "12", "0", "", "", "Notion remains the source of truth; sheet refreshed as a navigation aid only."],
+    ["8/9/2026 16:37:20", "v0.1.2", "Operator A", "22", "5", "615", "42", "", "", "Notion remains the source of truth; sheet refreshed as a navigation aid only."]
   ]
 }

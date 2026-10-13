@@ -70,14 +70,15 @@ Abridged result (values are illustrative):
       "total_populated_rows": 3,
       "returned_rows": 3,
       "truncated": false,
+      "rows_with_cells_outside_header": 0,
       "timestamp_column": "Refresh Date",
       "timestamp_column_present": true,
-      "timestamp_status_counts": {"explicit-utc": 1, "explicit-offset": 0, "ambiguous-timezone": 2,
-                                  "unrecognized-format": 0, "missing": 0},
+      "timestamp_status_counts": {"explicit-utc": 1, "explicit-offset": 0, "ambiguous-timezone": 0,
+                                  "unrecognized-format": 2, "missing": 0},
       "source_order_matches_timestamp_order": null,
       "latest_observed_refresh": {
-        "by_source_row": {"source_row": 5, "timestamp": {"raw": "2026-08-09 16:37:20.339",
-                          "status": "ambiguous-timezone", "utc": null}, "record": {...}, "navigation_warning": "..."},
+        "by_source_row": {"source_row": 5, "timestamp": {"raw": "8/9/2026 16:37:20",
+                          "status": "unrecognized-format", "utc": null}, "record": {...}, "navigation_warning": "..."},
         "by_timestamp": null,
         "by_timestamp_unavailable_reason": "timestamps-not-all-explicit",
         "agree": null
@@ -97,12 +98,15 @@ Rules:
 - **Source order and raw values.** Entries are never re-sorted. `source_row` is the
   1-based row on the sheet (row 1 is the warning banner and row 2 the header on
   the live tab, so the first data row is 3); blank rows are skipped but keep the
-  numbering. `record` holds every cell exactly as read, keyed by the live header
-  names (`Refresh Date`, `Script Version`, `Refreshed By`, `Data Sources Scanned`,
-  `Dashboards Scanned`, `Properties Scanned`, `Relations Found`, `Errors`,
-  `Unresolved Questions`, `Notes`), so the human-review and currentness columns
-  (`Errors`, `Unresolved Questions`, `Notes`) pass through untouched. Short rows
-  are padded with `""` like every other tab.
+  numbering. `record` holds the cells under the header's columns exactly as read,
+  keyed by the live header names (`Refresh Date`, `Script Version`, `Refreshed By`,
+  `Data Sources Scanned`, `Dashboards Scanned`, `Properties Scanned`,
+  `Relations Found`, `Errors`, `Unresolved Questions`, `Notes`), so the
+  human-review and currentness columns (`Errors`, `Unresolved Questions`, `Notes`)
+  pass through untouched. As on every other tab, short rows are padded with `""`
+  and a repeated header name keeps only its last column. Only the header's columns
+  decide whether a row is populated; rows with content past the last header column
+  are counted in `rows_with_cells_outside_header` (that content is not kept).
 - **No timezone guessing.** `timestamp.raw` is the cell text, preserved
   byte-for-byte. `timestamp.utc` is set only when that text states its own zone:
   `UTC`, `Z`, or a numeric offset within +/-14:00. `timestamp.status` is one of
@@ -119,14 +123,18 @@ Rules:
   `timestamp-column-missing`, `timestamps-not-all-explicit`). `agree` reports
   whether both name the same row, and `source_order_matches_timestamp_order`
   reports whether the sheet is oldest-first when that is provable (`null`
-  otherwise). Callers that need ordering between two entries compare
-  `timestamp.utc` when both are present and otherwise fall back to `source_row`
-  while treating the order as unverified.
+  otherwise). Callers that need ordering between two entries parse and compare
+  `timestamp.utc` when both are present (it is ISO-8601 whose fractional-second
+  precision varies, so do not compare the strings) and otherwise fall back to
+  `source_row` while treating the order as unverified.
 
 Observed shape of the live tab (an export read on 2026-10-13): row 1 is the
 warning banner, row 2 is the header above, the first data row's `Refresh Date` is
-a string that states `UTC`, and later rows are zone-less datetime cells. Against
-that shape `by_timestamp` is unavailable and `by_source_row` is the answer.
+a string that states `UTC`, and later rows are datetime cells formatted
+`m/d/yyyy h:mm:ss` with no zone (displayed like `8/9/2026 16:10:03`). Those are
+reported as `unrecognized-format`: day/month order is locale-dependent and no zone
+is stated, so nothing is guessed. Against that shape `by_timestamp` is unavailable
+and `by_source_row` is the answer.
 
 ## Installation
 
@@ -163,11 +171,12 @@ Keep its `navigation_warning` and `completeness_notice` when relaying it.
 All tests run without live Google credentials: `records.py`, `refresh_log.py`,
 and `index.py` are tested directly (`index.py` against fixture rows in
 `samples/sample_tabs.json`, transcribed from the real sheet's tabs; the
-`Refresh Log` fixture keeps the live banner row, header names, and timestamp
-formats but uses sanitized values), and `sheets_client.py`/`cli.py` are tested
-against a mocked Google client. `tests/test_refresh_log.py` also pins the
-read-only surface: the OAuth scope stays `spreadsheets.readonly` and no Sheets
-write call exists in the package.
+`Refresh Log` fixture keeps the live banner row, header names, and the cells'
+displayed timestamp formats but uses sanitized values), and
+`sheets_client.py`/`cli.py` are tested against a mocked Google client.
+`tests/test_refresh_log.py` also pins the read-only surface: the OAuth scope stays
+`spreadsheets.readonly`, no known Sheets write method appears in the package's
+code, and the Sheets `values()` resource is only ever read with `.get(...)`.
 
 ## Limitations
 
@@ -194,11 +203,12 @@ write call exists in the package.
   method's key fields may need updating.
 - `check_duplicate_risk` does simple exact/substring matching, not fuzzy
   matching — near-miss names won't surface automatically.
-- Refresh Log timestamps that carry no zone (the live tab's later rows) stay
-  `ambiguous-timezone`. The sheet's own timezone setting is not read and no zone
-  is assumed, so `by_timestamp` stays unavailable until every row states its zone.
-  The exact text the Sheets API returns for the zone-less datetime cells has not
-  been observed live; the fixture's strings for them are representative, and any
-  other format is reported as `unrecognized-format` rather than interpreted.
+- Refresh Log timestamps that carry no zone stay unresolved (`ambiguous-timezone`
+  for ISO-like text, `unrecognized-format` for the live tab's `m/d/yyyy h:mm:ss`
+  display). The sheet's own timezone setting is not read and no zone or day/month
+  order is assumed, so `by_timestamp` stays unavailable until every row states its
+  zone in an ISO-like form. The fixture's strings for those cells follow the
+  sheet's number format; the exact text the Sheets API returns for them has not
+  been observed live.
 - The Refresh Log is read as a whole tab (one cached read, like every other tab);
   `limit` bounds what is returned, not what is fetched.

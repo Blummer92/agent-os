@@ -127,8 +127,8 @@ def test_fixture_parses_live_warning_row_plus_header_row_layout():
     assert list(result["entries"][0]["record"]) == LIVE_HEADER
     assert [entry["record"]["Refresh Date"] for entry in result["entries"]] == [
         "2026-07-04 16:04 UTC",
-        "2026-08-09 16:10:03.654",
-        "2026-08-09 16:37:20.339",
+        "8/9/2026 16:10:03",
+        "8/9/2026 16:37:20",
     ]
     assert result["total_populated_rows"] == 3
     assert result["truncated"] is False
@@ -229,11 +229,12 @@ def test_latest_by_source_row_is_always_the_last_populated_row():
     index = NavigationIndex(lambda tab_name: SAMPLE_TABS[tab_name])
     latest = index.get_refresh_log()["latest_observed_refresh"]
     assert latest["by_source_row"]["source_row"] == 5
-    assert latest["by_source_row"]["timestamp"]["raw"] == "2026-08-09 16:37:20.339"
+    assert latest["by_source_row"]["timestamp"]["raw"] == "8/9/2026 16:37:20"
 
 
 def test_mixed_timestamp_evidence_withholds_timestamp_based_latest():
-    # The shape of the current live tab: one explicit-UTC row, later rows with no zone.
+    # The shape of the current live tab: one explicit-UTC string, then datetime cells that the
+    # sheet displays as m/d/yyyy h:mm:ss (locale order, no zone): left unrecognized, never guessed.
     index = NavigationIndex(lambda tab_name: SAMPLE_TABS[tab_name])
     result = index.get_refresh_log()
     latest = result["latest_observed_refresh"]
@@ -244,8 +245,8 @@ def test_mixed_timestamp_evidence_withholds_timestamp_based_latest():
     assert result["timestamp_status_counts"] == {
         "explicit-utc": 1,
         "explicit-offset": 0,
-        "ambiguous-timezone": 2,
-        "unrecognized-format": 0,
+        "ambiguous-timezone": 0,
+        "unrecognized-format": 2,
         "missing": 0,
     }
 
@@ -519,9 +520,25 @@ VALUES_WRITE_ATTRS = {"update", "append", "clear"}
 
 
 def sheet_write_references(source):
-    """Return Sheets write-API references in executable code (docstrings/prose ignored)."""
+    """Return Sheets write-API references in executable code (docstrings/prose ignored).
+
+    Besides known write method names, any Sheets `values()` resource that is not
+    immediately read with `.get(...)` counts: binding it to a name first (for
+    example `v = service.spreadsheets().values(); v.update(...)`) is how a write
+    would otherwise slip past a chained-call check.
+    """
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     hits = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "values"
+            and not node.args
+            and not (isinstance(parents.get(node), ast.Attribute) and parents[node].attr == "get")
+        ):
+            hits.append("values() not read with get")
         if isinstance(node, ast.Attribute):
             if node.attr in SHEETS_WRITE_ATTRS:
                 hits.append(node.attr)
@@ -538,10 +555,12 @@ def sheet_write_references(source):
 
 
 def test_write_detector_flags_known_sheet_write_chains():
-    assert sheet_write_references("service.spreadsheets().values().update(a=1)") == ["values().update"]
-    assert sheet_write_references("service.spreadsheets().values().append(a=1)") == ["values().append"]
+    assert "values().update" in sheet_write_references("service.spreadsheets().values().update(a=1)")
+    assert "values().append" in sheet_write_references("service.spreadsheets().values().append(a=1)")
     assert sheet_write_references("service.spreadsheets().batchUpdate(a=1)") == ["batchUpdate"]
     assert sheet_write_references("getattr(service, 'batchClear')") == ["batchClear"]
+    bound = "v = service.spreadsheets().values()\nv.update(spreadsheetId=1, range='t', body={})"
+    assert sheet_write_references(bound) == ["values() not read with get"]
     # Reads, list appends and prose are not write references.
     assert sheet_write_references("service.spreadsheets().values().get(a=1)") == []
     assert sheet_write_references("matches.append(1)") == []
@@ -579,3 +598,51 @@ def test_navigation_index_public_surface_has_no_write_verbs():
     assert [name for name in public if write_verbs_in(name)] == []
     assert [name for name in dir(refresh_log) if not name.startswith("_") and write_verbs_in(name)] == []
     assert write_verbs_in("update_record") == {"update"}  # the check can actually fail
+
+
+# --- regressions from independent review ---------------------------------------------
+
+
+def test_cells_past_the_header_neither_create_nor_hide_a_refresh_row():
+    # A stray cell past the last header column must not turn a blank row into the
+    # "latest" refresh; it is counted so the anomaly stays visible.
+    stray = [""] * len(LIVE_HEADER) + ["stray"]
+    rows = tab(log_row("2026-07-04 16:04 UTC", notes="real"), stray)
+    result = build_refresh_log_evidence(rows)
+    assert result["total_populated_rows"] == 1
+    assert result["latest_observed_refresh"]["by_source_row"]["record"]["Notes"] == "real"
+    assert result["rows_with_cells_outside_header"] == 1
+
+
+def test_a_populated_row_with_extra_cells_is_kept_and_counted():
+    rows = tab(log_row("2026-07-04 16:04 UTC") + ["extra"], log_row("2026-07-05 16:04 UTC"))
+    result = build_refresh_log_evidence(rows)
+    assert result["total_populated_rows"] == 2
+    assert result["rows_with_cells_outside_header"] == 1
+    assert "extra" not in result["entries"][0]["record"].values()
+
+
+def test_no_cells_outside_the_header_reports_zero():
+    assert build_refresh_log_evidence(tab(log_row("2026-07-04 16:04 UTC")))["rows_with_cells_outside_header"] == 0
+
+
+@pytest.mark.parametrize("raw", ["0001-01-01 00:00 +01:00", "9999-12-31 23:59 -12:00"])
+def test_offsets_that_leave_the_representable_range_are_unrecognized_not_a_crash(raw):
+    assert classify_timestamp(raw) == {"raw": raw, "status": "unrecognized-format", "utc": None}
+    result = build_refresh_log_evidence(tab(log_row(raw)))
+    assert result["entries"][0]["timestamp"]["status"] == "unrecognized-format"
+
+
+def test_the_live_sheet_display_format_is_unrecognized_and_never_guessed():
+    # The live cells are datetimes formatted m/d/yyyy h:mm:ss; day/month order is locale-dependent.
+    assert classify_timestamp("8/9/2026 16:10:03") == {
+        "raw": "8/9/2026 16:10:03",
+        "status": "unrecognized-format",
+        "utc": None,
+    }
+
+
+def test_equal_instants_in_source_order_still_count_as_chronological():
+    rows = tab(log_row("2026-08-10 04:00 UTC"), log_row("2026-08-09 23:00-05:00"), log_row("2026-08-10 05:00 UTC"))
+    assert build_refresh_log_evidence(rows)["source_order_matches_timestamp_order"] is True
+

@@ -53,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--limit",
         type=int,
         default=DEFAULT_LIMIT,
-        help=f"Number of most recent populated rows to return, 1-{MAX_LIMIT} (default: {DEFAULT_LIMIT}).",
+        help=f"Number of populated rows to return, counted back from the bottom of the sheet, 1-{MAX_LIMIT} (default: {DEFAULT_LIMIT}).",
     )
     _add_sheet_arguments(refresh_log)
 

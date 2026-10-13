@@ -121,7 +121,11 @@ def _parse_instant(text: str) -> tuple[str, datetime | None]:
         return STATUS_UNRECOGNIZED, None
     sign = -1 if zone[0] == "-" else 1
     offset = timezone(sign * timedelta(minutes=offset_minutes))
-    return STATUS_EXPLICIT_OFFSET, naive.replace(tzinfo=offset).astimezone(timezone.utc)
+    try:
+        instant = naive.replace(tzinfo=offset).astimezone(timezone.utc)
+    except OverflowError:  # e.g. 0001-01-01 00:00 +01:00 has no representable UTC instant
+        return STATUS_UNRECOGNIZED, None
+    return STATUS_EXPLICIT_OFFSET, instant
 
 
 def _classify(raw: object) -> tuple[dict, datetime | None]:
@@ -169,10 +173,16 @@ def build_refresh_log_evidence(rows: list[list[str]], *, limit: int = DEFAULT_LI
     column_present = TIMESTAMP_COLUMN in header
 
     parsed: list[tuple[dict, datetime | None]] = []
+    rows_outside_header = 0
     for offset, row in enumerate(data_rows):
-        if _is_blank_row(row):
+        cells = list(row)
+        # Only the header's columns form a record, so only they decide whether a
+        # row is populated; content past the last header column is counted, not kept.
+        if not _is_blank_row(cells[len(header) :]):
+            rows_outside_header += 1
+        if _is_blank_row(cells[: len(header)]):
             continue
-        record = rows_to_records(header, [list(row)])[0]
+        record = rows_to_records(header, [cells])[0]
         timestamp, instant = _classify(record.get(TIMESTAMP_COLUMN, ""))
         entry = with_warning(
             {"source_row": first_data_row + offset, "timestamp": timestamp, "record": record}
@@ -214,6 +224,7 @@ def build_refresh_log_evidence(rows: list[list[str]], *, limit: int = DEFAULT_LI
         "total_populated_rows": len(parsed),
         "returned_rows": len(window),
         "truncated": len(parsed) > len(window),
+        "rows_with_cells_outside_header": rows_outside_header,
         "timestamp_column": TIMESTAMP_COLUMN,
         "timestamp_column_present": column_present,
         "timestamp_status_counts": status_counts,
