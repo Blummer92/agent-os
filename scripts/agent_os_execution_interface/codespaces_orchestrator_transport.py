@@ -13,12 +13,13 @@ Trust domains, stated plainly:
 - The *caller* is the already lane-authorized ChatGPT Orchestrator. The
   orchestrator composes the bounded command argv; the transport never invents
   commands.
-- The *payload argv* is structured data (a tuple of strings), never a shell
-  string. No shell is invoked at any point.
-- GitHub-mutating commands are unreachable through this lane: ``git push`` and
-  ``gh`` payload invocations are rejected with explicit reason-coded evidence
-  before any transport occurs. Publication stays owned by the GitHub Service
-  Agent through its existing governed paths.
+- The *payload argv* is bounded structured data admitted by a finite command
+  grammar. Local execution never invokes a shell; each admitted argument is
+  quoted for SSH's remote command interpretation.
+- Shells, arbitrary interpreters, executable paths, GitHub clients and unknown
+  command families are rejected before discovery or transport. Admitted tests
+  remain trusted repository code, not a hostile-code sandbox. Publication stays
+  owned by the GitHub Service Agent through its existing governed paths.
 - Codespaces remains a repository execution venue, not an Agent OS agent. This
   module performs no agent registration and creates no second #918 vocabulary.
 
@@ -32,11 +33,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Literal
+
+from .codespace_command_policy import admitted_repository_argv, valid_argv_data
 
 REPOSITORY = "Blummer92/agent-os"
 APPROVED_OWNER = "Blummer92"
@@ -120,6 +125,8 @@ class TransportRequest:
     codespace_name_or_none: str | None = None
     base_sha_or_none: str | None = None
     workdir_or_none: str | None = None
+    execution_profile_or_none: str | None = None
+    environment_health_evidence_or_none: str | None = None
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     request_id: str = ""
 
@@ -128,11 +135,8 @@ class TransportRequest:
             raise ValueError(f"repository must be {REPOSITORY}")
         _bounded_text(self.issue_identity)
         _bounded_text(self.admission_id)
-        if type(self.argv) is not tuple or not self.argv:
-            raise ValueError("argv must be a non-empty tuple of strings")
-        for part in self.argv:
-            if type(part) is not str or not part or "\x00" in part:
-                raise ValueError("argv parts must be non-empty strings without NUL")
+        if not valid_argv_data(self.argv):
+            raise ValueError("argv must contain bounded non-empty strings without controls")
         name = self.codespace_name_or_none
         if name is not None and (
             type(name) is not str or CODESPACE_NAME_RE.fullmatch(name) is None
@@ -142,6 +146,8 @@ class TransportRequest:
         if sha is not None and (type(sha) is not str or SHA40_RE.fullmatch(sha) is None):
             raise ValueError("base_sha_or_none must be a 40-hex SHA or none")
         _text_or_none("workdir_or_none", self.workdir_or_none, limit=512)
+        _text_or_none("execution_profile_or_none", self.execution_profile_or_none)
+        _text_or_none("environment_health_evidence_or_none", self.environment_health_evidence_or_none)
         if (
             type(self.timeout_seconds) is not int
             or self.timeout_seconds < 1
@@ -162,23 +168,34 @@ class TransportRequest:
             "codespace_name_or_none": self.codespace_name_or_none,
             "base_sha_or_none": self.base_sha_or_none,
             "workdir_or_none": self.workdir_or_none,
+            "execution_profile_or_none": self.execution_profile_or_none,
+            "environment_health_evidence_or_none": self.environment_health_evidence_or_none,
             "timeout_seconds": self.timeout_seconds,
             "request_id": self.request_id,
         }
 
 
 def transport_request_id(request: TransportRequest) -> str:
+    fields = [
+        request.repository,
+        request.issue_identity,
+        request.admission_id,
+        list(request.argv),
+        request.codespace_name_or_none,
+        request.base_sha_or_none,
+        request.workdir_or_none,
+        request.timeout_seconds,
+    ]
+    # Preserve existing no-profile identities; bind newly supplied canonical
+    # runner evidence without rewriting earlier admitted request identities.
+    if (request.execution_profile_or_none is not None
+            or request.environment_health_evidence_or_none is not None):
+        fields.extend([
+            "runner-evidence", request.execution_profile_or_none,
+            request.environment_health_evidence_or_none,
+        ])
     material = json.dumps(
-        [
-            request.repository,
-            request.issue_identity,
-            request.admission_id,
-            list(request.argv),
-            request.codespace_name_or_none,
-            request.base_sha_or_none,
-            request.workdir_or_none,
-            request.timeout_seconds,
-        ],
+        fields,
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode("ascii")
@@ -204,6 +221,12 @@ class TransportResult:
     issue_identity: str
     base_sha_or_none: str | None
     side_effect_classification: str = SIDE_EFFECT_CLASSIFICATION
+    repository: str = REPOSITORY
+    execution_surface: str = "codespaces"
+    execution_profile_or_none: str | None = None
+    environment_health_evidence_or_none: str | None = None
+    started_at_or_none: str | None = None
+    ended_at_or_none: str | None = None
     github_writes_authorized: Literal[False] = field(default=False, init=False)
     execution_authorized: Literal[False] = field(default=False, init=False)
     publication_authorized: Literal[False] = field(default=False, init=False)
@@ -246,6 +269,18 @@ class TransportResult:
             raise ValueError("base_sha_or_none must be a 40-hex SHA or none")
         if self.side_effect_classification != SIDE_EFFECT_CLASSIFICATION:
             raise ValueError("side_effect_classification is fixed")
+        if self.repository != REPOSITORY or self.execution_surface != "codespaces":
+            raise ValueError("repository and execution_surface are fixed")
+        _text_or_none("execution_profile_or_none", self.execution_profile_or_none)
+        _text_or_none("environment_health_evidence_or_none", self.environment_health_evidence_or_none)
+        if (self.started_at_or_none is None) != (self.ended_at_or_none is None):
+            raise ValueError("start/end evidence must be paired")
+        for value in (self.started_at_or_none, self.ended_at_or_none):
+            if value is not None:
+                _text_or_none("execution timestamp", value, limit=40)
+                stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if stamp.tzinfo is None or stamp.utcoffset().total_seconds() != 0:
+                    raise ValueError("execution timestamps must be UTC")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -255,12 +290,18 @@ class TransportResult:
             "codespace_name_or_none": self.codespace_name_or_none,
             "argv": list(self.argv),
             "workdir_or_none": self.workdir_or_none,
+            "repository": self.repository,
+            "execution_surface": self.execution_surface,
+            "execution_profile_or_none": self.execution_profile_or_none,
+            "environment_health_evidence_or_none": self.environment_health_evidence_or_none,
             "exit_status_or_none": self.exit_status_or_none,
             "stdout_tail": self.stdout_tail,
             "stderr_tail": self.stderr_tail,
             "stdout_truncated": self.stdout_truncated,
             "stderr_truncated": self.stderr_truncated,
             "duration_ms": self.duration_ms,
+            "started_at_or_none": self.started_at_or_none,
+            "ended_at_or_none": self.ended_at_or_none,
             "issue_identity": self.issue_identity,
             "base_sha_or_none": self.base_sha_or_none,
             "side_effect_classification": self.side_effect_classification,
@@ -293,51 +334,23 @@ def resolve_current_codespace(
     return qualified[0], TransportReason.OK
 
 
-_FORBIDDEN_GH_SUBCOMMANDS = frozenset({
-    "api",
-    "auth",
-    "cache",
-    "codespace",
-    "copilot",
-    "extension",
-    "gist",
-    "issue",
-    "pr",
-    "project",
-    "release",
-    "repo",
-    "run",
-    "secret",
-    "ssh-key",
-    "variable",
-    "workflow",
-})
-
-
 def validate_argv(argv: tuple[str, ...]) -> TransportReason | None:
-    """Reject payload argv that could mutate GitHub or the Codespace fleet.
-
-    Returns None when the argv is acceptable, else the rejecting reason.
-    The transport never invokes a shell, so this is a tripwire over the
-    structured argv — not a shell-escaping filter.
-    """
-    if type(argv) is not tuple or not argv:
+    """Admit only finite repository command families before any external call."""
+    if not valid_argv_data(argv):
         return TransportReason.INVALID_REQUEST
-    if any(type(part) is not str or not part or "\x00" in part for part in argv):
-        return TransportReason.INVALID_REQUEST
-    head = argv[0]
-    rest = argv[1:]
-    if head == "git" and "push" in rest:
-        return TransportReason.FORBIDDEN_COMMAND
-    if head == "gh":
-        # No gh payload invocations inside the Codespace: the lane performs
-        # repository execution only. Even read-only gh subcommands are rejected
-        # here because the gh surface is one flag away from mutation and the
-        # orchestrator has no read need it cannot satisfy another way.
-        return TransportReason.FORBIDDEN_COMMAND
-    if head == "hub":
+    if not admitted_repository_argv(argv):
         return TransportReason.FORBIDDEN_COMMAND
     return None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_text(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset().total_seconds() != 0:
+        raise ValueError("execution clock must return UTC evidence")
+    return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _failure(
@@ -346,6 +359,8 @@ def _failure(
     reason: TransportReason,
     codespace_name_or_none: str | None,
     duration_ms: int = 0,
+    started_at_or_none: str | None = None,
+    ended_at_or_none: str | None = None,
 ) -> TransportResult:
     return TransportResult(
         request_id=request.request_id,
@@ -362,6 +377,10 @@ def _failure(
         duration_ms=duration_ms,
         issue_identity=request.issue_identity,
         base_sha_or_none=request.base_sha_or_none,
+        execution_profile_or_none=request.execution_profile_or_none,
+        environment_health_evidence_or_none=request.environment_health_evidence_or_none,
+        started_at_or_none=started_at_or_none,
+        ended_at_or_none=ended_at_or_none,
     )
 
 
@@ -416,10 +435,11 @@ def run_codespace_transport(
     *,
     list_candidates: Callable[[], tuple[CodespaceCandidate, ...]] = default_list_candidates,
     run: Callable[..., tuple[int, str, str]] = default_run,
+    utc_now: Callable[[], datetime] = _utc_now,
 ) -> TransportResult:
     """Execute one bounded request on the current qualified Codespace.
 
-    The payload argv is executed via ``gh codespace ssh`` with no shell. All
+    Admitted argv is quoted for SSH; no caller shell string is accepted. All
     external effects flow through the injected ``list_candidates`` and ``run``
     callables, which the test suite replaces with fakes.
     """
@@ -457,8 +477,9 @@ def run_codespace_transport(
         "-c",
         codespace.name,
         "--",
-        *request.argv,
+        *(shlex.quote(part) for part in request.argv),
     )
+    started_at_or_none = _utc_text(utc_now())
     started = time.monotonic()
     try:
         exit_status, stdout, stderr = run(ssh_argv, timeout_seconds=request.timeout_seconds)
@@ -470,6 +491,8 @@ def run_codespace_transport(
             TransportReason.TRANSPORT_TIMEOUT,
             codespace.name,
             duration_ms,
+            started_at_or_none,
+            _utc_text(utc_now()),
         )
     except Exception:
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -479,8 +502,11 @@ def run_codespace_transport(
             TransportReason.TRANSPORT_ERROR,
             codespace.name,
             duration_ms,
+            started_at_or_none,
+            _utc_text(utc_now()),
         )
     duration_ms = int((time.monotonic() - started) * 1000)
+    ended_at_or_none = _utc_text(utc_now())
     stdout_tail, stdout_truncated = _tail(stdout or "")
     stderr_tail, stderr_truncated = _tail(stderr or "")
     return TransportResult(
@@ -498,4 +524,8 @@ def run_codespace_transport(
         duration_ms=duration_ms,
         issue_identity=request.issue_identity,
         base_sha_or_none=request.base_sha_or_none,
+        execution_profile_or_none=request.execution_profile_or_none,
+        environment_health_evidence_or_none=request.environment_health_evidence_or_none,
+        started_at_or_none=started_at_or_none,
+        ended_at_or_none=ended_at_or_none,
     )
