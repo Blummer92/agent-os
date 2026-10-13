@@ -62,7 +62,7 @@ def test_preflight_refuses_a_field_without_a_database_before_any_credentials(cap
     build_service.assert_not_called()
 
 
-@pytest.mark.parametrize("hours", ["0", "-1", "nan", "inf", str(MAX_AGE_HOURS_LIMIT + 1), "1e308"])
+@pytest.mark.parametrize("hours", ["0", "-1", "nan", "inf", str(MAX_AGE_HOURS_LIMIT + 1), "1e308", "1e-10"])
 def test_preflight_refuses_a_nonsensical_freshness_policy(hours, capsys):
     exit_code, _, _, get_credentials, _ = run(
         ["preflight", "dashboard", "X", "--sheet-id", "sheet-id", "--max-age-hours", hours]
@@ -70,6 +70,30 @@ def test_preflight_refuses_a_nonsensical_freshness_policy(hours, capsys):
     assert exit_code == 1
     assert "--max-age-hours must be greater than 0" in capsys.readouterr().err
     get_credentials.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "extra, code",
+    [
+        (["dashboard", "  "], "request.empty-name"),
+        (["dashboard", "X", "--database", "DM Units"], "request.database-not-applicable"),
+        (["dashboard", "X", "--information-type", " "], "request.empty-information-type"),
+        (["field", "Lesson Tag", "--database", "  "], "request.database-required"),
+    ],
+)
+def test_preflight_refuses_an_invalid_request_before_any_credentials(extra, code, capsys):
+    exit_code, _, _, get_credentials, build_service = run(["preflight", *extra, "--sheet-id", "sheet-id"])
+    assert exit_code == 1
+    assert code in capsys.readouterr().err
+    get_credentials.assert_not_called()
+    build_service.assert_not_called()
+
+
+def test_preflight_accepts_the_smallest_representable_policy():
+    with patch("notion_navigation_client.cli.precreate_preflight", return_value={}) as preflight:
+        exit_code, *_ = run(["preflight", "dashboard", "X", "--sheet-id", "sheet-id", "--max-age-hours", "1e-9"])
+    assert exit_code == 0
+    assert preflight.call_args.kwargs["max_age"] > timedelta(0)
 
 
 def test_preflight_rejects_an_unknown_kind():

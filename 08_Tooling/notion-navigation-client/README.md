@@ -57,7 +57,7 @@ Finite outcomes, in the order the first applicable rule wins:
 
 | Outcome | When | What the caller does |
 |---|---|---|
-| `manual-review` | The request is invalid, the identity is ambiguous (several stored names normalize alike, or the cache repeats a name), or a listed record cannot be read | Resolve with a human |
+| `manual-review` | The request is invalid; the identity is ambiguous (several stored names normalize alike, or the cache repeats a name); a field's parent database is ambiguous or not in the cached Database Registry, so the field cannot be scoped; the `information_type` is ambiguous; or a listed record cannot be read | Resolve with a human |
 | `duplicate-risk-review` | The Watchlist has a hit for the requested name or a matched stored name | Human review; never clean up automatically |
 | `existing-match` | Exactly one exact or normalized match | Reuse it; verify it live |
 | `stale-or-unverified` | No match, and the cache is not shown to be within the caller's freshness policy | Refresh or verify live; an absence proves nothing |
@@ -77,10 +77,17 @@ Rules:
   NFKC folding, case-folding, and collapsing whitespace runs. Punctuation, hyphens,
   plurals, word order, abbreviations, and synonyms are not normalized, and there is no
   fuzzy, semantic, or substring identity matching. A normalized match is reported with
-  `basis: "normalized"` and the stored name it matched.
+  `basis: "normalized"` and the stored name it matched. The same rule resolves a
+  field's parent database against the Database Registry (`identity.parent_database`),
+  the optional `information_type` against the Source of Truth Matrix, and Watchlist
+  Suspect names; a normalized resolution is reported with its own reason code, and an
+  ambiguous one is `manual-review`. A field whose parent database is not in the cached
+  Database Registry cannot be scoped, so its identity is `scope-unresolved` and the
+  outcome is `manual-review` (`identity.parent-database-not-cached`).
 - **Duplicate-risk evidence is the existing `check_duplicate_risk`** (exact match on
   the Suspect column, case-sensitive substring match on Similar To), asked for the
-  requested name and for each matched stored name. Every hit counts whatever its
+  requested name, each matched stored name, and each Watchlist Suspect name that
+  normalizes like one of them. Every hit counts whatever its
   `Status`. Because Similar To is matched by substring, a name that merely appears inside
   a family description (for example a database name) is also reported.
 - **Review.** Only an explicit `No` in `Human Review Needed?` (or `Human Review Required?`
@@ -88,7 +95,8 @@ Rules:
   requires review (`review.record-flagged` / `review.flag-unclear`).
 - **Routing is guidance only.** `routing.routes` lists where to verify live next: the
   matched record, the parent database of a field, and the Source of Truth Matrix row for
-  an optional `information_type`, each with the sheet's raw routing columns. It grants
+  an optional `information_type`, each with the sheet's raw routing columns and its
+  `Human Review Needed?` value (a flagged route requires review too). It grants
   no write, readiness, or approval authority.
 - **Currentness comes from the Refresh Log (#3306), judged by the caller's policy.** The
   module never reads a clock. The caller passes `now` (timezone-aware) and `max_age`
@@ -168,5 +176,6 @@ against the real `NavigationIndex.get_refresh_log` are skipped until that method
 - The pre-create preflight inherits `check_duplicate_risk`'s matching limits: it also reports
   names that only appear inside a Watchlist family description, and it cannot see duplicates the Watchlist does not
   list. It judges cache currentness only from the Refresh Log; against the live tab's
-  current shape (a UTC-stamped first row, zone-less later rows) that evidence is
+  current shape (a UTC-stamped first row, later datetime cells formatted as
+  `m/d/yyyy h:mm:ss` with no zone) that evidence is
   unresolved, so a "no match" there is reported as `stale-or-unverified`.

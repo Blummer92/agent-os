@@ -84,7 +84,7 @@ def test_list_names_requires_a_database_for_fields_and_rejects_unknown_kinds():
     with pytest.raises(ValueError, match="database is required"):
         index.list_names("field", database="")
     with pytest.raises(ValueError, match="unsupported kind"):
-        index.list_names("source-of-truth")
+        index.list_names("watchlist")
     with pytest.raises(ValueError, match="unsupported kind"):
         index.list_names("")
     assert calls == []
@@ -105,3 +105,10 @@ def test_list_names_returns_a_new_list_each_time():
     first = index.list_names("dashboard")
     first.append("tampered")
     assert index.list_names("dashboard") == ["Curriculum Source Control", "Unit Alignment & Readiness Dashboard"]
+
+
+
+def test_list_names_enumerates_information_types_and_watchlist_suspects():
+    index, _ = make_index()
+    assert index.list_names("source-of-truth")[:1] == ["Curriculum readiness"]
+    assert index.list_names("duplicate-risk") == ["Readiness", "Generation Gate"]

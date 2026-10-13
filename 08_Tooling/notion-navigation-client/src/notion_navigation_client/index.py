@@ -20,12 +20,14 @@ TAB_DUPLICATE_DRIFT_WATCHLIST = "Duplicate / Drift Watchlist"
 _PROPERTY_DATABASE_FIELD = "Database Name"
 _PROPERTY_NAME_FIELDS = ("Field Name", "Property Name")
 
-# Keyed-lookup kinds that list_names can enumerate: kind -> (tab, key column).
+# Kinds that list_names can enumerate: kind -> (tab, key column).
 _NAME_COLUMNS = {
     "dashboard": (TAB_DASHBOARD_REGISTRY, "Dashboard Name"),
     "database": (TAB_DATABASE_REGISTRY, "Database Name"),
     "workflow": (TAB_WORKFLOW_MAP, "Workflow Name"),
     "prompt": (TAB_AGENT_PROMPT_LIBRARY, "Prompt Name"),
+    "source-of-truth": (TAB_SOURCE_OF_TRUTH_MATRIX, "Information Type"),
+    "duplicate-risk": (TAB_DUPLICATE_DRIFT_WATCHLIST, "Suspect Field, Database, or Dashboard"),
 }
 
 
@@ -85,7 +87,8 @@ class NavigationIndex:
     def list_names(self, kind: str, database: str | None = None) -> list[str]:
         """Stored names for one lookup kind, in sheet order, duplicates preserved.
 
-        `kind` is one of dashboard, database, workflow, prompt, or field (which
+        `kind` is one of dashboard, database, workflow, prompt, source-of-truth
+        (Information Type), duplicate-risk (Watchlist Suspect), or field (which
         requires `database`). Rows with a blank name are skipped, exactly as the
         keyed getters skip them. Repeated names are returned repeatedly, because
         the keyed getters silently keep only one row for a repeated name.

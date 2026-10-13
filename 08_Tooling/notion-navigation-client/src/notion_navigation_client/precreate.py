@@ -19,7 +19,7 @@ clock reading and freshness policy.
 from __future__ import annotations
 
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -53,6 +53,7 @@ IDENTITY_NORMALIZED = "normalized-match"
 IDENTITY_AMBIGUOUS = "ambiguous"
 IDENTITY_UNREADABLE = "unreadable"
 IDENTITY_NONE = "no-match"
+IDENTITY_SCOPE_UNRESOLVED = "scope-unresolved"
 IDENTITY_NOT_EVALUATED = "not-evaluated"
 
 CURRENTNESS_WITHIN_POLICY = "within-policy"
@@ -72,6 +73,9 @@ R_IDENTITY_AMBIGUOUS = "identity.ambiguous"
 R_IDENTITY_DUPLICATE_ROWS = "identity.duplicate-cache-rows"
 R_IDENTITY_UNREADABLE = "identity.record-unreadable"
 R_IDENTITY_NONE = "identity.no-match"
+R_PARENT_NORMALIZED = "identity.parent-database-normalized"
+R_PARENT_AMBIGUOUS = "identity.parent-database-ambiguous"
+R_PARENT_NOT_CACHED = "identity.parent-database-not-cached"
 R_DUPLICATE_HIT = "duplicate-risk.watchlist-hit"
 R_DUPLICATE_NONE = "duplicate-risk.no-hit"
 R_REVIEW_FLAGGED = "review.record-flagged"
@@ -89,6 +93,8 @@ R_ROUTE_PARENT = "routing.parent-database"
 R_ROUTE_PARENT_MISSING = "routing.parent-database-not-cached"
 R_ROUTE_MATRIX = "routing.source-of-truth-matrix"
 R_ROUTE_MATRIX_MISSING = "routing.information-type-not-cached"
+R_ROUTE_MATRIX_NORMALIZED = "routing.information-type-normalized"
+R_ROUTE_MATRIX_AMBIGUOUS = "routing.information-type-ambiguous"
 R_ROUTE_NONE = "routing.none"
 
 NEXT_STEP = {
@@ -147,6 +153,11 @@ _REVIEW_COLUMNS = ("Human Review Needed?", "Human Review Required?")
 class NavigationLookup(Protocol):
     """The cached lookups the preflight composes; `NavigationIndex` satisfies this.
 
+    `list_names` must also enumerate the kinds `database`, `source-of-truth`
+    (Information Type) and `duplicate-risk` (Watchlist Suspect names), so parent
+    databases, information types and Watchlist suspects are matched with the same
+    normalization as the proposed name.
+
     An index may additionally offer `get_refresh_log(limit=...)` (#3306). When it
     does, the preflight reads it as currentness evidence; when it does not, the
     cache's currentness is reported as unverified.
@@ -197,11 +208,16 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _echo(value: object) -> object:
     return value if value is None or isinstance(value, str) else f"<{type(value).__name__}>"
 
 
-def _request_problems(request: PreCreateRequest) -> list[str]:
+def request_problems(request: PreCreateRequest) -> list[str]:
+    """Reason codes that make `request` invalid (empty when it is valid); no lookups."""
     problems: list[str] = []
     if request.kind not in PREFLIGHT_KINDS:
         problems.append(R_UNSUPPORTED_KIND)
@@ -216,13 +232,32 @@ def _request_problems(request: PreCreateRequest) -> list[str]:
     return problems
 
 
+def _resolve_stored_name(names: list[str], wanted: str) -> tuple[str, str | None]:
+    """Resolve `wanted` against stored names: (status, stored name).
+
+    status is `exact`, `normalized`, `ambiguous` (several stored names normalize
+    alike, or the cache repeats the name) or `none`.
+    """
+    stored = [name for name in names if _text(name) is not None]
+    if wanted in stored:
+        twins = {name for name in stored if name != wanted and normalize_name(name) == normalize_name(wanted)}
+        return ("ambiguous", None) if twins or stored.count(wanted) > 1 else ("exact", wanted)
+    target = normalize_name(wanted)
+    candidates = [name for name in stored if normalize_name(name) == target]
+    if not candidates:
+        return "none", None
+    if len(candidates) > 1:
+        return "ambiguous", None
+    return "normalized", candidates[0]
+
+
 def _fetch_record(index: NavigationLookup, request: PreCreateRequest, stored_name: str) -> dict | None:
     if request.kind == KIND_DASHBOARD:
         record = index.get_dashboard(stored_name)
     elif request.kind == KIND_DATABASE:
         record = index.get_database(stored_name)
     elif request.kind == KIND_FIELD:
-        record = index.get_field(request.database or "", stored_name)
+        record = index.get_field(request.database, stored_name)
     elif request.kind == KIND_WORKFLOW:
         record = index.get_workflow(stored_name)
     else:
@@ -231,6 +266,7 @@ def _fetch_record(index: NavigationLookup, request: PreCreateRequest, stored_nam
 
 
 def _resolve_identity(index: NavigationLookup, request: PreCreateRequest) -> dict:
+    """Match the proposed name; for fields `request.database` is the stored database name."""
     occurrences: dict[str, int] = {}
     for stored in index.list_names(request.kind, database=request.database):
         if _text(stored) is not None:
@@ -278,6 +314,12 @@ def _resolve_identity(index: NavigationLookup, request: PreCreateRequest) -> dic
 def _duplicate_risk(index: NavigationLookup, request: PreCreateRequest, identity: dict) -> dict:
     queries = [request.name]
     queries.extend(match["name"] for match in identity["matches"] if match["name"] not in queries)
+    # check_duplicate_risk matches Suspect exactly, so also ask for every Watchlist
+    # suspect that normalizes like a checked name ("readiness" finds "Readiness").
+    targets = {normalize_name(query) for query in queries}
+    for suspect in index.list_names("duplicate-risk"):
+        if _text(suspect) is not None and normalize_name(suspect) in targets and suspect not in queries:
+            queries.append(suspect)
 
     hits: list[dict] = []
     seen: set[str] = set()
@@ -313,7 +355,8 @@ def _review_state(record: dict) -> str:
 
 
 def _route(source: str, kind: str, key: str, record: dict) -> dict:
-    fields = {column: record[column] for column in _ROUTE_FIELDS[kind] if column in record}
+    columns = (*_ROUTE_FIELDS[kind], *_REVIEW_COLUMNS)
+    fields = {column: record[column] for column in columns if column in record}
     return {"source": source, "kind": kind, "key": key, "fields": fields}
 
 
@@ -329,20 +372,25 @@ def _routing(index: NavigationLookup, request: PreCreateRequest, identity: dict)
         codes.append(R_ROUTE_MATCHED)
 
     if request.kind == KIND_FIELD:
-        parent = index.get_database(request.database or "")
+        parent = index.get_database(request.database) if request.database is not None else None
         if isinstance(parent, dict):
             records.append(dict(parent))
-            routes.append(_route("parent-database", KIND_DATABASE, request.database or "", parent))
+            routes.append(_route("parent-database", KIND_DATABASE, request.database, parent))
             codes.append(R_ROUTE_PARENT)
         else:
             codes.append(R_ROUTE_PARENT_MISSING)
 
     if request.information_type is not None:
-        matrix = index.get_source_of_truth(request.information_type)
-        if isinstance(matrix, dict):
+        status, stored = _resolve_stored_name(index.list_names("source-of-truth"), request.information_type)
+        matrix = index.get_source_of_truth(stored) if stored is not None else None
+        if status == "ambiguous":
+            codes.append(R_ROUTE_MATRIX_AMBIGUOUS)
+        elif isinstance(matrix, dict):
             records.append(dict(matrix))
-            routes.append(_route("source-of-truth-matrix", "source-of-truth", request.information_type, matrix))
+            routes.append(_route("source-of-truth-matrix", "source-of-truth", stored, matrix))
             codes.append(R_ROUTE_MATRIX)
+            if status == "normalized":
+                codes.append(R_ROUTE_MATRIX_NORMALIZED)
         else:
             codes.append(R_ROUTE_MATRIX_MISSING)
 
@@ -392,7 +440,7 @@ def _currentness(
 
     latest = evidence.get("latest_observed_refresh") if isinstance(evidence, dict) else None
     total = evidence.get("total_populated_rows") if isinstance(evidence, dict) else None
-    if not isinstance(latest, dict) or isinstance(total, bool) or not isinstance(total, int):
+    if not isinstance(latest, dict) or isinstance(total, bool) or not isinstance(total, int) or total < 0:
         return verdict(CURRENTNESS_UNVERIFIED, R_CURRENT_MALFORMED)
     if total == 0:
         return verdict(CURRENTNESS_UNVERIFIED, R_CURRENT_NO_RECORDS)
@@ -400,10 +448,11 @@ def _currentness(
     positional = latest.get("by_source_row")
     summary = None
     if isinstance(positional, dict) and isinstance(positional.get("timestamp"), dict):
+        source_row = positional.get("source_row")
         summary = {
-            "source_row": positional.get("source_row"),
-            "raw": positional["timestamp"].get("raw"),
-            "status": positional["timestamp"].get("status"),
+            "source_row": source_row if isinstance(source_row, int) and not isinstance(source_row, bool) else None,
+            "raw": _text_or_none(positional["timestamp"].get("raw")),
+            "status": _text_or_none(positional["timestamp"].get("status")),
         }
 
     by_timestamp = latest.get("by_timestamp")
@@ -412,13 +461,16 @@ def _currentness(
             CURRENTNESS_UNVERIFIED,
             R_CURRENT_UNRESOLVED,
             latest_refresh_by_source_row=summary,
-            detail=latest.get("by_timestamp_unavailable_reason"),
+            detail=_text_or_none(latest.get("by_timestamp_unavailable_reason")),
         )
-    instant = _parse_utc(by_timestamp.get("timestamp", {}).get("utc") if isinstance(by_timestamp, dict) else None)
+    # Only a timestamp that #3306 classified as explicit may count; anything else is malformed.
+    timestamp = by_timestamp.get("timestamp") if isinstance(by_timestamp, dict) else None
+    explicit = isinstance(timestamp, dict) and timestamp.get("status") in ("explicit-utc", "explicit-offset")
+    instant = _parse_utc(timestamp.get("utc")) if explicit else None
     if instant is None:
         return verdict(CURRENTNESS_UNVERIFIED, R_CURRENT_MALFORMED, latest_refresh_by_source_row=summary)
 
-    base = {"latest_refresh_by_source_row": summary, "latest_refresh_utc": by_timestamp["timestamp"]["utc"]}
+    base = {"latest_refresh_by_source_row": summary, "latest_refresh_utc": timestamp["utc"]}
     if now is None or max_age is None:
         return verdict(CURRENTNESS_UNVERIFIED, R_CURRENT_NO_POLICY, **base)
     age = now - instant
@@ -444,9 +496,11 @@ def precreate_preflight(
     Outcome precedence, first rule that applies:
 
     1. `manual-review`: invalid request, ambiguous identity (several stored names
-       normalize alike, or the cache repeats a name), or an unreadable cached record.
+       normalize alike, or the cache repeats a name), an unreadable cached record,
+       a field whose database is not (or not unambiguously) in the cache, or an
+       ambiguous information type.
     2. `duplicate-risk-review`: the Duplicate / Drift Watchlist has a hit for the
-       requested name or a matched stored name.
+       requested name, a matched stored name, or a Suspect that normalizes like either.
     3. `existing-match`: exactly one exact or normalized cached match.
     4. `stale-or-unverified`: nothing matched, but the cache is not shown to be
        within the caller's freshness policy, so absence proves nothing.
@@ -468,10 +522,12 @@ def precreate_preflight(
     if max_age is not None and (not isinstance(max_age, timedelta) or max_age <= timedelta(0)):
         raise ValueError("max_age must be a positive timedelta")
 
-    problems = _request_problems(request)
+    problems = request_problems(request)
+    original = request
     if problems:
         # Nothing is looked up for an invalid request, so no section claims evidence.
         identity = {"status": IDENTITY_NOT_EVALUATED, "matches": [], "reason_codes": []}
+        scope = None
         duplicate = {"checked_names": [], "hit_count": 0, "hits": [], "reason_codes": []}
         routing = {"routes": [], "reason_codes": []}
         currentness = _currentness_verdict(CURRENTNESS_NOT_EVALUATED, None, max_age)
@@ -479,7 +535,25 @@ def precreate_preflight(
         reason_codes = list(problems)
         flagged = False
     else:
-        identity = _resolve_identity(index, request)
+        scope = None
+        scope_codes: list[str] = []
+        if request.kind == KIND_FIELD:
+            # A field is identified within its database, so resolve that first with
+            # the same normalization; an unresolvable database leaves nothing to scope.
+            status, stored = _resolve_stored_name(index.list_names(KIND_DATABASE), request.database)
+            scope = {"status": status, "requested": request.database, "name": stored}
+            scope_codes = {
+                "normalized": [R_PARENT_NORMALIZED],
+                "ambiguous": [R_PARENT_AMBIGUOUS],
+                "none": [R_PARENT_NOT_CACHED],
+            }.get(status, [])
+            request = replace(request, database=stored)
+
+        if scope is not None and scope["name"] is None:
+            identity = {"status": IDENTITY_SCOPE_UNRESOLVED, "matches": [], "reason_codes": scope_codes}
+        else:
+            identity = _resolve_identity(index, request)
+            identity["reason_codes"] = [*scope_codes, *identity["reason_codes"]]
         duplicate = _duplicate_risk(index, request, identity)
         currentness = _currentness(index, now, max_age)
         routing, route_records = _routing(index, request, identity)
@@ -494,7 +568,8 @@ def precreate_preflight(
         ]
         flagged = bool(review_codes)
 
-        if identity["status"] in (IDENTITY_AMBIGUOUS, IDENTITY_UNREADABLE):
+        unresolved = (IDENTITY_AMBIGUOUS, IDENTITY_UNREADABLE, IDENTITY_SCOPE_UNRESOLVED)
+        if identity["status"] in unresolved or R_ROUTE_MATRIX_AMBIGUOUS in routing["reason_codes"]:
             outcome = OUTCOME_MANUAL_REVIEW
         elif duplicate["hit_count"]:
             outcome = OUTCOME_DUPLICATE_RISK_REVIEW
@@ -518,10 +593,10 @@ def precreate_preflight(
         "outcome": outcome,
         "reason_codes": reason_codes,
         "request": {
-            "kind": _echo(request.kind),
-            "name": _echo(request.name),
-            "database": _echo(request.database),
-            "information_type": _echo(request.information_type),
+            "kind": _echo(original.kind),
+            "name": _echo(original.name),
+            "database": _echo(original.database),
+            "information_type": _echo(original.information_type),
         },
         "live_verification_required": True,
         "authorizes_mutation": False,
@@ -529,7 +604,7 @@ def precreate_preflight(
         or outcome in (OUTCOME_DUPLICATE_RISK_REVIEW, OUTCOME_MANUAL_REVIEW),
         "next_step": NEXT_STEP[outcome],
         "navigation_warning": NAVIGATION_WARNING,
-        "identity": {"status": identity["status"], "matches": identity["matches"]},
+        "identity": {"status": identity["status"], "matches": identity["matches"], "parent_database": scope},
         "duplicate_risk": {
             "checked_names": duplicate["checked_names"],
             "hit_count": duplicate["hit_count"],

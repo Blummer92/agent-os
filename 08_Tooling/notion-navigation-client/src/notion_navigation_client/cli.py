@@ -13,7 +13,13 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from .index import NavigationIndex
-from .precreate import PREFLIGHT_KINDS, PreCreateRequest, precreate_preflight
+from .precreate import (
+    PREFLIGHT_KINDS,
+    R_DATABASE_REQUIRED,
+    PreCreateRequest,
+    precreate_preflight,
+    request_problems,
+)
 from .sheets_client import build_sheets_service, fetch_tab_values, get_credentials
 
 MAX_AGE_HOURS_LIMIT = 87600  # ten years; keeps the freshness policy a sane, finite timedelta
@@ -72,6 +78,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _preflight_request(args: argparse.Namespace) -> PreCreateRequest:
+    return PreCreateRequest(args.kind, args.name, database=args.database, information_type=args.information_type)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
@@ -82,11 +92,16 @@ def main(argv: list[str] | None = None) -> int:
         print("Refusing to run: --field is required for kind=field.", file=sys.stderr)
         return 1
     if args.command == "preflight":
-        if args.kind == "field" and not args.database:
-            print("Refusing to run: --database is required for kind=field.", file=sys.stderr)
+        problems = request_problems(_preflight_request(args))
+        if problems:
+            hint = " --database is required for kind=field." if R_DATABASE_REQUIRED in problems else ""
+            print(f"Refusing to run: invalid preflight request: {', '.join(problems)}.{hint}", file=sys.stderr)
             return 1
-        # nan and inf fail the bounds comparison too.
-        if args.max_age_hours is not None and not 0 < args.max_age_hours <= MAX_AGE_HOURS_LIMIT:
+        # nan and inf fail the bounds comparison too; a positive value below
+        # timedelta's microsecond resolution would become a zero-length policy.
+        if args.max_age_hours is not None and not (
+            0 < args.max_age_hours <= MAX_AGE_HOURS_LIMIT and timedelta(hours=args.max_age_hours) > timedelta(0)
+        ):
             print(f"Refusing to run: --max-age-hours must be greater than 0 and at most {MAX_AGE_HOURS_LIMIT}.", file=sys.stderr)
             return 1
 
@@ -98,9 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         policy = {}
         if args.max_age_hours is not None:
             policy = {"now": datetime.now(timezone.utc), "max_age": timedelta(hours=args.max_age_hours)}
-        request = PreCreateRequest(args.kind, args.name, database=args.database, information_type=args.information_type)
         # The exit status never carries the verdict: every outcome still needs live verification.
-        print(json.dumps(precreate_preflight(index, request, **policy), indent=2))
+        print(json.dumps(precreate_preflight(index, _preflight_request(args), **policy), indent=2))
         return 0
 
     result = LOOKUPS[args.kind](index, args.key, args.field)

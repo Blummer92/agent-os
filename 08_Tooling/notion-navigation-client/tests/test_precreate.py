@@ -200,8 +200,8 @@ def test_exact_field_match_is_scoped_to_its_database():
     assert hit["outcome"] == "existing-match"
     assert hit["identity"]["matches"][0]["record"]["Recommended Owner"] == "Curriculum Agent"
 
-    wrong_database = run(PreCreateRequest("field", "Lesson Tag", database="DM Source Library"), current_index(tabs), **POLICY)
-    assert wrong_database["identity"]["status"] == "no-match"
+    other_database = run(PreCreateRequest("field", "Lesson Tag", database="DM Curriculum Elements"), current_index(tabs), **POLICY)
+    assert other_database["identity"]["status"] == "no-match"
 
 
 def test_normalized_match_is_reported_as_normalized_with_the_stored_name():
@@ -516,7 +516,8 @@ def test_matched_record_route_copies_only_the_routing_columns():
     assert route["kind"] == "dashboard"
     assert route["key"] == "Curriculum Source Control"
     assert route["fields"]["Owner / Source of Truth?"] == "Yes - curriculum/source authority"
-    assert set(route["fields"]) <= set(precreate._ROUTE_FIELDS["dashboard"])
+    assert set(route["fields"]) <= {*precreate._ROUTE_FIELDS["dashboard"], *precreate._REVIEW_COLUMNS}
+    assert route["fields"]["Human Review Needed?"] == "No"
     assert "Safe Agent Actions" not in route["fields"]
     assert "routing.matched-record" in result["reason_codes"]
 
@@ -531,9 +532,13 @@ def test_a_field_request_also_routes_to_its_parent_database():
     assert "routing.parent-database" in result["reason_codes"]
 
 
-def test_an_uncached_parent_database_is_reported_as_an_evidence_gap():
+def test_a_field_whose_database_is_not_cached_cannot_be_scoped_and_is_manual_review():
     result = run(PreCreateRequest("field", "Brand New Field", database="Unknown DB"), **POLICY)
+    assert result["outcome"] == "manual-review"
+    assert result["identity"]["status"] == "scope-unresolved"
+    assert result["identity"]["parent_database"] == {"status": "none", "requested": "Unknown DB", "name": None}
     assert result["routing"]["routes"] == []
+    assert result["reason_codes"][0] == "identity.parent-database-not-cached"
     assert "routing.parent-database-not-cached" in result["reason_codes"]
 
 
@@ -668,7 +673,7 @@ def test_invalid_requests_are_manual_review_and_look_nothing_up(request_, codes)
     assert result["outcome"] == "manual-review"
     assert result["reason_codes"] == codes
     assert result["human_review_required"] is True
-    assert result["identity"] == {"status": "not-evaluated", "matches": []}
+    assert result["identity"] == {"status": "not-evaluated", "matches": [], "parent_database": None}
     assert result["duplicate_risk"]["hits"] == []
     assert result["routing"] == {"routes": []}
     assert result["currentness"]["status"] == "not-evaluated"
@@ -865,14 +870,15 @@ def test_real_refresh_log_with_explicit_recent_timestamps_makes_the_cache_curren
 
 @needs_refresh_log
 def test_real_refresh_log_in_the_current_live_shape_leaves_currentness_unverified():
-    # One explicit-UTC row followed by zone-less rows: the latest refresh time is not provable.
+    # One explicit-UTC row followed by datetime cells the API formats as m/d/yyyy h:mm:ss,
+    # with no zone: the latest refresh time is not provable.
     index = real_index_with_log(
-        log_row("2026-07-04 16:04 UTC"), log_row("2026-08-09 16:10:03.654"), log_row("2026-08-09 16:37:20.339")
+        log_row("2026-07-04 16:04 UTC"), log_row("8/9/2026 16:10:03"), log_row("8/9/2026 16:37:20")
     )
     result = run(PreCreateRequest("dashboard", "Brand New Dashboard"), index, **POLICY)
     assert result["currentness"]["reason_code"] == "currentness.refresh-time-unresolved"
     assert result["currentness"]["detail"] == "timestamps-not-all-explicit"
-    assert result["currentness"]["latest_refresh_by_source_row"]["raw"] == "2026-08-09 16:37:20.339"
+    assert result["currentness"]["latest_refresh_by_source_row"]["raw"] == "8/9/2026 16:37:20"
     assert result["outcome"] == "stale-or-unverified"
 
 
@@ -881,3 +887,109 @@ def test_real_empty_refresh_log_maps_missing_chronology_to_unverified():
     result = run(PreCreateRequest("dashboard", "Brand New Dashboard"), real_index_with_log(), **POLICY)
     assert result["currentness"]["reason_code"] == "currentness.no-refresh-records"
     assert result["outcome"] == "stale-or-unverified"
+
+
+
+# --- regressions from independent review ---------------------------------------------
+
+
+@pytest.mark.parametrize("variant", ["readiness", "READINESS", "Readiness ", " readiness"])
+def test_watchlist_suspects_are_matched_with_the_same_normalization(variant):
+    result = run(PreCreateRequest("dashboard", variant), **POLICY)
+    assert result["identity"]["status"] == "no-match"
+    assert result["outcome"] == "duplicate-risk-review"
+    assert result["human_review_required"] is True
+    assert "Readiness" in result["duplicate_risk"]["checked_names"]
+    assert result["duplicate_risk"]["hits"][0]["record"]["Suspect Field, Database, or Dashboard"] == "Readiness"
+
+
+def test_a_field_suspect_is_found_whatever_database_is_named():
+    result = run(PreCreateRequest("field", "generation gate", database="DM Curriculum Elements"), **POLICY)
+    assert result["outcome"] == "duplicate-risk-review"
+
+
+@pytest.mark.parametrize("database", ["dm units", "DM Units ", "DM  Units"])
+def test_the_parent_database_is_resolved_with_the_same_normalization(database):
+    tabs = {**SAMPLE_TABS, "Property Dictionary": tab(FIELD_HEADER, ["DM Units", "Lesson Tag", "Curriculum Agent", "", "No"])}
+    result = run(PreCreateRequest("field", "Lesson Tag", database=database), current_index(tabs), **POLICY)
+    assert result["outcome"] == "existing-match"
+    assert result["identity"]["parent_database"] == {"status": "normalized", "requested": database, "name": "DM Units"}
+    assert result["reason_codes"][:2] == ["identity.parent-database-normalized", "identity.exact-match"]
+    assert result["request"]["database"] == database
+    assert [route["key"] for route in result["routing"]["routes"]] == ["Lesson Tag", "DM Units"]
+
+
+def test_an_ambiguous_parent_database_is_manual_review():
+    tabs = {
+        **SAMPLE_TABS,
+        "Database Registry": tab(["Database Name", "Human Review Needed?"], ["DM Units", "No"], ["dm units", "No"]),
+    }
+    result = run(PreCreateRequest("field", "Lesson Tag", database="DM UNITS"), current_index(tabs), **POLICY)
+    assert result["outcome"] == "manual-review"
+    assert result["identity"]["status"] == "scope-unresolved"
+    assert result["reason_codes"][0] == "identity.parent-database-ambiguous"
+
+
+def test_the_information_type_is_resolved_with_the_same_normalization():
+    result = run(PreCreateRequest("dashboard", "Brand New", information_type="curriculum  READINESS"), **POLICY)
+    (route,) = result["routing"]["routes"]
+    assert route["key"] == "Curriculum readiness"
+    assert "routing.information-type-normalized" in result["reason_codes"]
+    assert "Human Review Needed?" in route["fields"]
+
+
+def test_an_ambiguous_information_type_is_manual_review():
+    header = ["Information Type", "Source-of-Truth Database", "Human Review Needed?"]
+    tabs = {**SAMPLE_TABS, "Source of Truth Matrix": tab(header, ["Course status", "A", "No"], ["course status", "B", "No"])}
+    result = run(PreCreateRequest("dashboard", "Brand New", information_type="COURSE STATUS"), current_index(tabs), **POLICY)
+    assert result["outcome"] == "manual-review"
+    assert "routing.information-type-ambiguous" in result["reason_codes"]
+
+
+def test_a_flagged_source_of_truth_matrix_row_requires_review_and_shows_why():
+    header = ["Information Type", "Source-of-Truth Database", "Human Review Needed?"]
+    tabs = {**SAMPLE_TABS, "Source of Truth Matrix": tab(header, ["Lesson tags", "DM Units", "Yes"])}
+    result = run(PreCreateRequest("dashboard", "Brand New", information_type="Lesson tags"), current_index(tabs), **POLICY)
+    assert result["outcome"] == "no-cached-match"
+    assert result["human_review_required"] is True
+    assert "review.record-flagged" in result["reason_codes"]
+    assert result["routing"]["routes"][0]["fields"]["Human Review Needed?"] == "Yes"
+
+
+def test_the_parent_database_route_carries_its_review_flag():
+    result = run(PreCreateRequest("field", "Brand New Field", database="DM Units"), **POLICY)
+    assert result["routing"]["routes"][0]["fields"]["Human Review Needed?"] == "No"
+
+
+@pytest.mark.parametrize(
+    "by_timestamp",
+    [
+        {"timestamp": None},
+        {"timestamp": "2026-10-13T06:00:00Z"},
+        {"timestamp": ["2026-10-13T06:00:00Z"]},
+        {"timestamp": {"utc": "2026-10-13T06:00:00Z", "status": "ambiguous-timezone"}},
+        {"timestamp": {"utc": "2026-10-13T06:00:00Z"}},
+    ],
+)
+def test_a_by_timestamp_entry_must_carry_an_explicit_timestamp(by_timestamp):
+    evidence = {"total_populated_rows": 1, "latest_observed_refresh": {"by_source_row": None, "by_timestamp": by_timestamp}}
+    result = run(PreCreateRequest("dashboard", "X"), WithLog(sample_index(), evidence), **POLICY)
+    assert result["currentness"]["reason_code"] == "currentness.refresh-log-malformed"
+    assert result["outcome"] == "stale-or-unverified"
+
+
+def test_a_negative_row_count_is_malformed():
+    evidence = explicit_log()
+    evidence["total_populated_rows"] = -7
+    result = run(PreCreateRequest("dashboard", "X"), WithLog(sample_index(), evidence), **POLICY)
+    assert result["currentness"]["reason_code"] == "currentness.refresh-log-malformed"
+
+
+def test_non_text_evidence_values_are_never_echoed():
+    evidence = unresolved_log()
+    evidence["latest_observed_refresh"]["by_timestamp_unavailable_reason"] = object()
+    evidence["latest_observed_refresh"]["by_source_row"]["timestamp"]["raw"] = object()
+    result = run(PreCreateRequest("dashboard", "X"), WithLog(sample_index(), evidence), **POLICY)
+    assert result["currentness"]["detail"] is None
+    assert result["currentness"]["latest_refresh_by_source_row"]["raw"] is None
+    json.dumps(result)
