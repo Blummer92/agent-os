@@ -25,16 +25,26 @@ evidence the shadow-run context can legitimately supply:
 - explicit request-supplied context (``--requested-mode``,
   ``--dependency-depth``, ``--substitutable``/``--no-substitutable``),
   absent stays absent, never defaulted.
+
+#3441: ``lifecycle_stage`` is now acquired per candidate from live PR lineage.
+``PrLineageAcquirer`` (``scripts/agent_os_issue_acceptance/pr_lineage_reader.py``)
+enumerates the all-state pull-request population over this CLI's GET-only
+client, proves it complete itself, classifies each pull request with the
+existing ``parse_pr`` authority, and feeds the unchanged #3433 evaluator; the
+reader re-checks the result against its own fresh issue revision and
+repository SHA. A stage exists only where exactly one verified closing claim
+(or GitHub's own closed state) establishes it; everything else stays
+``unavailable`` / ``manual-review`` and fails closed.
 It still fails closed with a named ``candidate-evidence.*`` reason wherever
-no canonical live owner exists: ``lifecycle_stage`` (no lifecycle
-authority; #1460 forbids inventing one), ``primary_claims`` (no live
-PR-linkage reader; #1460 forbids inventing claim authority), and
-``approval_applicability`` (the approval evidence graph is not
-reconstructible for arbitrary backlog issues). Those three are #3329's
-bounded blockers -- surfaced, not manufactured. The seam therefore still
-fail-closes with ``candidate-evidence-incomplete`` for the real backlog,
-and the experiment record names the exact missing owner instead of filling
-the gap. #3328: ``--request-interpretation`` supplies the canonical
+no canonical live owner exists: ``primary_claims`` (no canonical claim owner;
+#1460 forbids inventing one) and ``approval_applicability`` (the approval
+evidence graph is not reconstructible for arbitrary backlog issues) remain
+``None`` here -- surfaced, not manufactured -- and a lifecycle stage alone
+never selects an issue. The seam therefore still fail-closes with
+``candidate-evidence-incomplete`` for the real backlog, and the experiment
+record names the exact missing owner and carries the per-candidate lifecycle
+acquisition evidence under ``lifecycle_stage_acquisition``.
+#3328: ``--request-interpretation`` supplies the canonical
 request-interpretation-v1 record from which the existing cohort admission
 (``cohort_admission.py``) derives the bounded candidate cohort, or fails
 closed, before any candidate evidence is read; manual ``--candidates`` stays
@@ -99,8 +109,21 @@ from agent_os_execution_service.evidence_ledger import (  # noqa: E402
     NavigationDecisionType,
     hash_decision_inputs,
 )
+from scripts.agent_os_github_issue_provider.models import (  # noqa: E402
+    TrustedRepositoryIdentity,
+)
+from scripts.agent_os_github_issue_provider.pagination import (  # noqa: E402
+    PaginationDiagnosticError,
+    validated_next_page,
+)
 from scripts.agent_os_issue_acceptance.github_issue_source import (  # noqa: E402
     GitHubIssuePageResponse,
+)
+from scripts.agent_os_issue_acceptance.pr_lineage_reader import (  # noqa: E402
+    PR_LINEAGE_READER_CONTRACT_VERSION,
+    PrLineageAcquirer,
+    PullRequestDetailOutcome,
+    PullRequestDetailResult,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter  # noqa: E402
 from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  # noqa: E402
@@ -129,11 +152,10 @@ _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # canonical owner per candidate instead of this generic gap.
 EVIDENCE_GAP = (
     "no canonical candidate-evidence inputs available in this shadow-run "
-    "context: repository source revision, lifecycle stage, primary claims, "
-    "approval applicability, freshness, requested mode, environment "
-    "capability, dependency depth, and substitutable have no canonical live "
-    "owners for arbitrary backlog issues; #1460 forbids inventing PR-linkage "
-    "or lifecycle-stage authority inside a reader"
+    "context: primary claims and approval applicability have no canonical "
+    "live owners for arbitrary backlog issues (#1460 forbids inventing "
+    "PR-linkage claim authority inside a reader), and a lifecycle stage is "
+    "acquired only where exactly one verified PR claim establishes it"
 )
 
 
@@ -167,6 +189,32 @@ class GitHubReadClient:
             raise RuntimeError(f"github api unreachable: {exc}") from exc
 
 
+def _read_repository(
+    client: GitHubReadClient, repository: str
+) -> tuple[int | None, str]:
+    """Read ``(repository id, default branch)``; the id is ``None`` when absent."""
+    status, _, body = client.get(f"/repos/{repository}")
+    if status != 200:
+        raise RuntimeError(
+            f"github api: repository read failed for {repository} (http {status})"
+        )
+    try:
+        payload = json.loads(body)
+        default_branch = payload["default_branch"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"github api: repository payload malformed for {repository}"
+        ) from exc
+    if not isinstance(default_branch, str) or not default_branch:
+        raise RuntimeError(
+            f"github api: default branch missing for {repository}"
+        )
+    repository_id = payload.get("id") if isinstance(payload, dict) else None
+    if type(repository_id) is not int or repository_id < 1:
+        repository_id = None
+    return repository_id, default_branch
+
+
 def _fetch_repository_head_sha(client: GitHubReadClient, repository: str) -> str:
     """Fetch the repository's default-branch HEAD SHA via the GitHub API.
 
@@ -179,21 +227,14 @@ def _fetch_repository_head_sha(client: GitHubReadClient, repository: str) -> str
     Fail-closed: raises RuntimeError when the ref cannot be read or the
     payload is malformed, which the CLI reports as a transport failure.
     """
-    status, _, body = client.get(f"/repos/{repository}")
-    if status != 200:
-        raise RuntimeError(
-            f"github api: repository read failed for {repository} (http {status})"
-        )
-    try:
-        default_branch = json.loads(body)["default_branch"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise RuntimeError(
-            f"github api: repository payload malformed for {repository}"
-        ) from exc
-    if not isinstance(default_branch, str) or not default_branch:
-        raise RuntimeError(
-            f"github api: default branch missing for {repository}"
-        )
+    _, default_branch = _read_repository(client, repository)
+    return _fetch_branch_head_sha(client, repository, default_branch)
+
+
+def _fetch_branch_head_sha(
+    client: GitHubReadClient, repository: str, default_branch: str
+) -> str:
+    """Fetch one branch's HEAD SHA (the second half of the head read)."""
     status, _, body = client.get(
         f"/repos/{repository}/branches/{default_branch}"
     )
@@ -352,6 +393,149 @@ class LiveIssueTransport:
         return SingleIssueTransportResult(outcome=SingleIssueTransportOutcome.OK, item=item)
 
 
+class _RepositoryHeadReader:
+    """Default-branch SHA and repository identity over the shared GET-only client.
+
+    The repository payload (numeric id, default branch name) is read once per
+    run; each later head read is a single branch GET. The numeric id is what
+    lets the canonical continuation validator accept GitHub's
+    ``/repositories/{id}/...`` next links without trusting an unverified path.
+    """
+
+    def __init__(self, client: GitHubReadClient, repository: str) -> None:
+        self._client = client
+        self._repository = repository
+        self._identity: tuple[int | None, str] | None = None
+
+    def _repository_payload(self) -> tuple[int | None, str]:
+        if self._identity is None:
+            self._identity = _read_repository(self._client, self._repository)
+        return self._identity
+
+    def head_sha(self) -> str:
+        _, default_branch = self._repository_payload()
+        return _fetch_branch_head_sha(self._client, self._repository, default_branch)
+
+    def trusted_identity(self) -> TrustedRepositoryIdentity | None:
+        repository_id, _ = self._repository_payload()
+        if repository_id is None:
+            return None
+        return TrustedRepositoryIdentity(
+            repository=self._repository, repository_id=repository_id
+        )
+
+
+class LivePullRequestPageReader:
+    """PullRequestPageReader over the live pulls endpoint (GET only).
+
+    Continuation and terminal proof come from the provider's canonical
+    ``validated_next_page`` (``pulls`` endpoint) -- contiguous successor,
+    unchanged page size and state, pinned host and repository path -- not from
+    a local regex. A diagnostic from that validator is a malformed response:
+    the enumeration then fails closed instead of guessing a next page.
+    """
+
+    def __init__(
+        self,
+        client: GitHubReadClient,
+        trusted_identity=lambda: None,
+    ) -> None:
+        self._client = client
+        self._trusted_identity = trusted_identity
+
+    def read_pull_request_page(
+        self, repository: str, *, page: int, per_page: int, state: str
+    ) -> GitHubIssuePageResponse:
+        query_string = f"state={state}&per_page={per_page}&page={page}"
+        status, headers, body = self._client.get(
+            f"/repos/{repository}/pulls?{query_string}"
+        )
+        rate_limit_remaining = headers.get("x-ratelimit-remaining")
+        link_header = headers.get("link")
+        link_match = _LINK_NEXT_RE.search(link_header or "")
+        link_next_url = link_match.group(1) if link_match else None
+
+        def _respond(**kwargs) -> GitHubIssuePageResponse:
+            return GitHubIssuePageResponse(
+                page=page,
+                source_query_string=query_string,
+                link_next_url=link_next_url,
+                rate_limit_remaining=rate_limit_remaining,
+                **kwargs,
+            )
+
+        if status == 403 and rate_limit_remaining == "0":
+            return _respond(
+                items=(), next_page=None, complete=False, error_kind="rate-limited"
+            )
+        if status == 404:
+            raise LookupError(f"repository not found: {repository}")
+        if status in (401, 403):
+            raise PermissionError(f"github api denied pull-request page {page}: http {status}")
+        if status != 200:
+            raise RuntimeError(f"github api pull-request page {page} failed: http {status}")
+        try:
+            items = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError(f"pull-request page {page} returned malformed json") from exc
+        if not isinstance(items, list):
+            raise ValueError(f"pull-request page {page} returned a non-list payload")
+        try:
+            next_page, terminal_page_proven = validated_next_page(
+                link_header,
+                repository=repository,
+                current_page=page,
+                per_page=per_page,
+                state=state,
+                trusted_repository_identity=self._trusted_identity(),
+                endpoint="pulls",
+            )
+        except PaginationDiagnosticError as exc:
+            raise ValueError(f"pull-request page {page}: {exc.kind}") from exc
+        return _respond(
+            items=tuple(items),
+            next_page=next_page,
+            complete=True,
+            terminal_page_proven=terminal_page_proven,
+        )
+
+
+class LivePullRequestDetailReader:
+    """PullRequestDetailReader over the live single-pull-request endpoint (GET only)."""
+
+    def __init__(self, client: GitHubReadClient) -> None:
+        self._client = client
+
+    def read_pull_request(
+        self, repository: str, pull_request_number: int
+    ) -> PullRequestDetailResult:
+        try:
+            status, _, body = self._client.get(
+                f"/repos/{repository}/pulls/{pull_request_number}"
+            )
+        except RuntimeError:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.API_ERROR)
+        if status == 404:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.NOT_FOUND)
+        if status in (401, 403):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.PERMISSION_DENIED
+            )
+        if status != 200:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.API_ERROR)
+        try:
+            item = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.MALFORMED_RESPONSE
+            )
+        if not isinstance(item, dict):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.MALFORMED_RESPONSE
+            )
+        return PullRequestDetailResult(outcome=PullRequestDetailOutcome.OK, item=item)
+
+
 class _RecordingCandidateEvidenceReader:
     """Adapt the production reader to the shadow seam, recording the named gap.
 
@@ -397,6 +581,7 @@ def _build_experiment_record(
     client: GitHubReadClient,
     ledger_entries: tuple[dict[str, object], ...] = (),
     evidence_gap_reason: str | None = None,
+    lifecycle_acquisition: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     # The selector result is the single source for the narrowing actually
     # applied: the operator-declared criterion on the manual path, or the
@@ -522,6 +707,12 @@ def _build_experiment_record(
         # hash-chained navigation decision entries bound to one mission_id.
         # Additive: the 11 Phase-0 fields above are unchanged.
         "evidence_ledger": list(ledger_entries),
+        # 13. lifecycle-stage acquisition evidence (#3441): what the read-only
+        # PR-lineage reader observed per candidate. Additive and non-authorizing;
+        # None when the run configured no acquirer.
+        "lifecycle_stage_acquisition": (
+            None if lifecycle_acquisition is None else dict(lifecycle_acquisition)
+        ),
     }
 
 
@@ -672,11 +863,22 @@ def main(argv: list[str] | None = None) -> int:
     # - requested_mode / dependency_depth / substitutable: explicit
     #   request-supplied context via CLI flags (absent stays absent, never
     #   defaulted).
-    # lifecycle_stage, primary_claims, and approval_applicability have no
-    # canonical live owner for arbitrary backlog issues (#1460 forbids
-    # inventing PR-linkage, lifecycle, claim, or freshness authorities), so
-    # the reader still fail-closes with their named reasons -- the bounded
-    # blockers #3329 surfaces instead of manufacturing evidence.
+    # - lifecycle_stage: acquired per candidate from live PR lineage (#3441)
+    #   through the unchanged #3433 evaluator; absent or ambiguous lineage
+    #   stays fail-closed.
+    # primary_claims and approval_applicability have no canonical live owner
+    # for arbitrary backlog issues (#1460 forbids inventing claim or freshness
+    # authorities), so the reader still fail-closes with their named reasons
+    # -- the bounded blockers #3329 surfaces instead of manufacturing evidence.
+    head_reader = _RepositoryHeadReader(client, args.repository)
+    pr_lineage_acquirer = PrLineageAcquirer(
+        repository=args.repository,
+        issue_transport=issue_transport,
+        page_reader=LivePullRequestPageReader(client, head_reader.trusted_identity),
+        detail_reader=LivePullRequestDetailReader(client),
+        source_revision_reader=head_reader.head_sha,
+        observed_at=retrieved_at,
+    )
     evidence_reader = _RecordingCandidateEvidenceReader(
         LiveCandidateEvidenceReader(
             LiveCandidateEvidence(
@@ -685,6 +887,7 @@ def main(argv: list[str] | None = None) -> int:
                 observed_at=retrieved_at,
                 source_revision=source_revision,
                 lifecycle_stage=None,
+                lifecycle_stage_acquirer=pr_lineage_acquirer,
                 primary_claims=None,
                 approval_applicability=None,
                 freshness_state=FreshnessState.CURRENT,
@@ -719,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
     recorded_at = _datetime.datetime.now(_datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+    lifecycle_observations = pr_lineage_acquirer.observations
     inputs_digest = hash_decision_inputs(
         {
             "repository": args.repository,
@@ -753,6 +957,15 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "selection_status": result.status.value,
             "reason_codes": list(result.reason_codes),
+            "lifecycle_acquisitions": [
+                {
+                    "issue_number": observation["issue_number"],
+                    "outcome": observation["outcome"],
+                    "result_id": observation.get("result_id"),
+                    "reason_codes": observation["reason_codes"],
+                }
+                for observation in lifecycle_observations
+            ],
         }
     )
     ledger = EvidenceLedger().append(
@@ -770,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"population-issues:{len(result.population_issue_numbers)}",
                     "experiment-record:population_receipt",
                     "experiment-record:deterministic_selector_result",
+                    "experiment-record:lifecycle_stage_acquisition",
                 }
             )
         ),
@@ -785,6 +999,16 @@ def main(argv: list[str] | None = None) -> int:
         client=client,
         ledger_entries=tuple(entry.to_dict() for entry in ledger.entries),
         evidence_gap_reason=evidence_reader.first_failure_reason,
+        lifecycle_acquisition={
+            "contract_version": PR_LINEAGE_READER_CONTRACT_VERSION,
+            "source": "scripts/agent_os_issue_acceptance/pr_lineage_reader.py",
+            "population": pr_lineage_acquirer.population_summary,
+            "candidates": list(lifecycle_observations),
+            "primary_claims": "unresolved: no canonical owner; reader input stays None",
+            "approval_applicability": "unresolved: no canonical owner; reader input stays None",
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        },
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"
