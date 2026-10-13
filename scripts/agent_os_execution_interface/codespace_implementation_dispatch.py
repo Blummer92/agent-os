@@ -276,6 +276,8 @@ def dispatch_admitted_operation_to_codespace(
         base_sha_or_none=base_sha_or_none,
         workdir_or_none=workdir_or_none,
         timeout_seconds=timeout_seconds,
+        execution_profile_or_none=selected.environment_profile_id,
+        environment_health_evidence_or_none=selected.environment_health_evidence_id,
     )
     result = run_codespace_transport(
         request, list_candidates=list_candidates, run=run
