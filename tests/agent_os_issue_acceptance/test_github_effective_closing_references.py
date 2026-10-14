@@ -200,6 +200,9 @@ def test_linked_issue_check_pass_case_reports_closing_evidence():
         ("Fixes x.Blummer92/agent-os#12", [("fix", "x.blummer92/agent-os#12", "body")]),
         # A path-prefixed lookalike is not a GitHub closing target at all.
         ("Fixes evil/Blummer92/agent-os#12", []),
+        # A Kelvin sign matched by the case-insensitive pattern lowercases to
+        # ASCII "k", exactly as before #3590 (QA finding F1).
+        ("Closes \u212ax/y#5", [("close", "kx/y#5", "body")]),
         # Canonical issue URLs in any case still fold, as before.
         ("Fixes https://github.com/blummer92/AGENT-OS/issues/12", [("fix", "#12", "body")]),
         # Non-closing qualified references stay undetected.

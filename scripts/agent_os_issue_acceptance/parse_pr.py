@@ -339,11 +339,12 @@ def detect_github_effective_closing_references(
         for match in _GITHUB_EFFECTIVE_CLOSING_RE.finditer(text or ""):
             keyword = _CANONICAL_CLOSING_KEYWORD[match.group("keyword").lower()]
             repository, issue_number = _target_identity(match)
-            # normalize_issue_target folds the canonical repository to "#N" for
-            # short "owner/repo#N" targets too (#3590), so the reference built
-            # here always passes its own normalization check.
+            # Lowercase first (the case-insensitive pattern also matches
+            # non-ASCII case variants such as the Kelvin sign, which lowercase
+            # to ASCII), then normalize_issue_target folds the canonical
+            # repository to "#N" for short "owner/repo#N" targets too (#3590).
             target = normalize_issue_target(
-                f"{repository}#{issue_number}" if repository else f"#{issue_number}"
+                f"{repository.lower()}#{issue_number}" if repository else f"#{issue_number}"
             )
             found.append(
                 GitHubEffectiveClosingReference(keyword=keyword, target=target, source=source)
