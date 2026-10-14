@@ -249,7 +249,7 @@ class _Pilot:
 def _current(descriptor: GovernedInvocationDescriptor) -> CurrentInvocationEvidence:
     route = SimpleNamespace(
         decision_id=descriptor.route_decision_id,
-        requested_operation="bounded-implementation",
+        requested_operation="pre-pr-developer-loop",
         selected_route=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
         governed_runner_available=True,
         environment_health_evidence_id_or_none=descriptor.environment_health_evidence_id,
@@ -406,6 +406,41 @@ def test_fixed_operation_identity_is_pinned_to_literals():
     assert FIXED_ARGV == ("git", "rev-parse", "HEAD")
 
 
+def test_probe_route_operation_is_the_one_every_production_publisher_binds():
+    # Literal on one side: a change to either operation must not move the guard.
+    from agent_os_execution_service.production_handoff_publication import (
+        PRE_PR_DEVELOPER_LOOP_OPERATION,
+    )
+
+    assert pilot_module.ROUTE_OPERATION == "pre-pr-developer-loop"
+    assert pilot_module.ROUTE_OPERATION == PRE_PR_DEVELOPER_LOOP_OPERATION
+
+
+def test_route_operation_and_reserved_envelope_identity_stay_distinct(canonical):
+    """The route operation admits the mission; the envelope identity names the reserved probe."""
+    seen = {}
+
+    def dispatcher(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(status=DispatchStatus.NOT_DISPATCHED, transport_result_or_none=None)
+
+    descriptor = _descriptor()
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=dispatcher,
+    )
+    assert seen["requested_operation"] == "pre-pr-developer-loop"
+    assert seen["argv"] == ("git", "rev-parse", "HEAD")
+    assert receipt["operation_id"] == "codespace-implementation-pilot-v1"
+    assert receipt["operation_id"] != seen["requested_operation"]
+    _assert_no_authority(receipt)
+
+
 def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canonical):
     receipt, run = _consume()
     assert receipt["status"] == "completed"
@@ -520,6 +555,13 @@ def _mutated(path, value):
         ("pilot_input.tested_sha", "c" * 40),
         ("pilot_input.repository", "Blummer92/other-repository"),
         ("route_decision.requested_operation", "arbitrary-shell"),
+        # The retired probe operation and the lifecycle-only validation operation
+        # are both different operations from the one the probe is admitted under.
+        ("route_decision.requested_operation", "bounded-implementation"),
+        ("route_decision.requested_operation", "validation-only"),
+        # The comparison is exact: no case folding and no prefix matching.
+        ("route_decision.requested_operation", "PRE-PR-DEVELOPER-LOOP"),
+        ("route_decision.requested_operation", "pre-pr-developer-loop-x"),
         ("route_decision.selected_route", ExecutorRoute.HUMAN_DECISION_REQUIRED),
         ("route_decision.governed_runner_available", False),
         ("route_decision.environment_health_evidence_id_or_none", None),
@@ -534,6 +576,10 @@ def _mutated(path, value):
         "stale-pilot-tested-sha",
         "mismatched-pilot-repository",
         "unauthorized-operation",
+        "retired-bounded-implementation-operation",
+        "validation-only-operation",
+        "operation-case-variant",
+        "operation-suffix-variant",
         "route-not-governed-runner",
         "governed-runner-unavailable",
         "missing-environment-health",
