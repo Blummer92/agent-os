@@ -196,8 +196,9 @@ def test_identical_evidence_gives_identical_results_and_digest():
 
 def test_issue_and_capability_identities_stay_distinct():
     result = classify(lineage=(closed_issue(3024),), capabilities=(CapabilityMatch("3024", "active"),))
-    assert result.disposition == rec.HISTORICAL_REGRESSION_EVIDENCE
-    assert result.capability_id is None and result.owner_issue_number is None
+    assert result.disposition == rec.EXTEND_EXISTING_CAPABILITY
+    assert result.capability_id == "3024" and result.owner_issue_number is None
+    assert result.evidence_issue_numbers == (3024,)
 
 
 @pytest.mark.parametrize(
@@ -213,6 +214,8 @@ def test_issue_and_capability_identities_stay_distinct():
         {"issue_number": 1, "state": "closed", "match": "exact", "state_reason": "completed", "successor_issue_number": 1, "successor_state": "open"},
         {"issue_number": 1, "state": "closed", "match": "exact", "state_reason": "completed", "successor_state": "open"},
         {"issue_number": 1, "state": "open", "match": "exact", "lifecycle_stage": "shipped"},
+        {"issue_number": 1, "state": "open", "match": "exact", "lifecycle_stage": "closed"},
+        {"issue_number": 1, "state": "closed", "match": "exact", "state_reason": "completed", "successor_issue_number": 2, "successor_state": "closed", "successor_lifecycle_stage": "review"},
     ],
 )
 def test_malformed_lineage_is_rejected(kwargs):
@@ -249,3 +252,81 @@ def test_module_is_pure_no_io_or_external_imports():
     source = MODULE.read_text(encoding="utf-8")
     for forbidden in ("open(", "requests", "urllib", "subprocess", "socket"):
         assert forbidden not in source
+
+
+# --- independent QA findings (contradictory or ambiguous successor evidence) ---
+
+def test_conflicting_facts_for_one_successor_are_manual_review_not_seed_dependent():
+    lineage = (
+        closed_issue(1, successor=9, successor_state="open", successor_stage="draft-pr"),
+        closed_issue(2, successor=9, successor_state="open", successor_stage="planning"),
+    )
+    result = classify(lineage=lineage)
+    assert result.disposition == rec.MANUAL_REVIEW
+    assert "github.successor-facts-conflict" in result.reason_codes
+
+
+def test_successor_contradicting_its_own_lineage_entry_is_manual_review():
+    result = classify(lineage=(closed_issue(1, successor=2, successor_state="open"), closed_issue(2)))
+    assert result.disposition == rec.MANUAL_REVIEW
+    assert result.owner_issue_number is None
+
+
+def test_successor_reported_open_and_closed_is_manual_review():
+    lineage = (
+        closed_issue(1, successor=9, successor_state="open"),
+        closed_issue(2, successor=9, successor_state="closed"),
+    )
+    assert classify(lineage=lineage).disposition == rec.MANUAL_REVIEW
+
+
+def test_any_closed_successor_chain_is_manual_review_even_beside_an_open_one():
+    lineage = (
+        closed_issue(1, successor=8, successor_state="open"),
+        closed_issue(2, successor=9, successor_state="closed"),
+    )
+    assert classify(lineage=lineage).disposition == rec.MANUAL_REVIEW
+
+
+def test_open_owner_and_a_different_open_successor_are_manual_review():
+    lineage = (open_issue(5), closed_issue(1, successor=6, successor_state="open"))
+    result = classify(lineage=lineage)
+    assert result.disposition == rec.MANUAL_REVIEW
+    assert "github.multiple-open-owners" in result.reason_codes
+
+
+def test_successor_that_is_the_open_owner_is_one_owner():
+    lineage = (open_issue(6, stage="review"), closed_issue(1, successor=6, successor_state="open",
+                                                          successor_stage="review"))
+    result = classify(lineage=lineage)
+    assert (result.disposition, result.owner_issue_number) == (rec.CONTINUE_CURRENT_WORK, 6)
+
+
+def test_related_history_with_a_successor_is_manual_review():
+    lineage = (closed_issue(1, match="related", successor=2, successor_state="open"),)
+    assert classify(lineage=lineage).disposition == rec.MANUAL_REVIEW
+
+
+def test_related_closed_history_is_named_in_a_candidate():
+    result = classify(lineage=(closed_issue(1563, match="related"),))
+    assert result.disposition == rec.CANDIDATE_NEW_WORK
+    assert "github.related-history" in result.reason_codes
+
+
+def test_capability_outranks_completed_history_of_the_same_objective():
+    result = classify(lineage=(closed_issue(2087),), capabilities=(CapabilityMatch("visual-placement", "active"),))
+    assert result.disposition == rec.EXTEND_EXISTING_CAPABILITY
+    assert result.reason_codes == ("github.completed-history", "capability.registered")
+
+
+def test_results_are_identical_across_input_orderings():
+    lineage = (
+        closed_issue(1, successor=9, successor_state="open", successor_stage="review"),
+        closed_issue(2, successor=9, successor_state="open", successor_stage="review"),
+        closed_issue(3, match="related"),
+    )
+    forward = classify(lineage=lineage)
+    backward = classify(lineage=tuple(reversed(lineage)))
+    assert (forward.disposition, forward.owner_issue_number, forward.reason_codes) == (
+        backward.disposition, backward.owner_issue_number, backward.reason_codes)
+    assert forward.disposition == rec.CONTINUE_CURRENT_WORK

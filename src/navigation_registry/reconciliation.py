@@ -89,7 +89,7 @@ class LineageCandidate:
         if self.state == "open":
             if self.state_reason is not None or self.successor_issue_number is not None:
                 raise ValueError("an open issue carries no closed reason or successor")
-            _optional_member(self.lifecycle_stage, _STAGES, "lifecycle_stage")
+            _optional_member(self.lifecycle_stage, _STAGES - {"closed"}, "lifecycle_stage")
         else:
             _member(self.state_reason, _CLOSED_REASONS, "state_reason")
             if self.lifecycle_stage is not None:
@@ -102,7 +102,11 @@ class LineageCandidate:
             if self.successor_issue_number == self.issue_number:
                 raise ValueError("an issue cannot succeed itself")
             _member(self.successor_state, _STATES, "successor_state")
-            _optional_member(self.successor_lifecycle_stage, _STAGES, "successor_lifecycle_stage")
+            if self.successor_state == "closed" and self.successor_lifecycle_stage is not None:
+                raise ValueError("a closed successor carries no lifecycle stage")
+            _optional_member(
+                self.successor_lifecycle_stage, _STAGES - {"closed"}, "successor_lifecycle_stage"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,58 +200,82 @@ def classify_proposed_work(evidence: ReconciliationInput) -> ReconciliationResul
         reasons.append("github.lineage-incomplete")
         return result(MANUAL_REVIEW)
 
-    # 1. GitHub is authoritative: a current open owner of the same objective wins.
-    open_exact = [c for c in evidence.lineage if c.match == MATCH_EXACT and c.state == "open"]
-    if len(open_exact) > 1:
-        reasons.append("github.multiple-open-owners")
-        return result(MANUAL_REVIEW)
-    if open_exact:
-        return _owner(open_exact[0].issue_number, open_exact[0].lifecycle_stage, reasons, result, "github.current-open-owner")
-
-    # 2. Closed history of the same objective: route to a current successor,
-    #    otherwise keep it as evidence only. It is never actionable itself.
+    # Contradictory successor facts are never resolved by guessing: the same
+    # successor must be described identically everywhere, and a successor that
+    # is itself in the lineage must match that lineage entry.
+    by_number = {c.issue_number: c for c in evidence.lineage}
     closed_exact = [c for c in evidence.lineage if c.match == MATCH_EXACT and c.state == "closed"]
-    successors = {
-        (c.successor_issue_number, c.successor_state, c.successor_lifecycle_stage)
-        for c in closed_exact
-        if c.successor_issue_number is not None
-    }
-    open_successors = {s for s in successors if s[1] == "open"}
-    if len({s[0] for s in open_successors}) > 1:
-        reasons.append("github.multiple-successors")
-        return result(MANUAL_REVIEW)
-    if open_successors:
-        number, _, stage = next(iter(open_successors))
-        return _owner(number, stage, reasons, result, "github.current-successor-owner")
-    if any(s[1] == "closed" for s in successors):
+    successor_facts: dict[int, set[tuple[str | None, str | None]]] = {}
+    for c in evidence.lineage:
+        if c.successor_issue_number is not None:
+            successor_facts.setdefault(c.successor_issue_number, set()).add(
+                (c.successor_state, c.successor_lifecycle_stage)
+            )
+    for number, facts in successor_facts.items():
+        listed = by_number.get(number)
+        if len(facts) > 1 or (
+            listed is not None and facts != {(listed.state, listed.lifecycle_stage)}
+        ):
+            reasons.append("github.successor-facts-conflict")
+            return result(MANUAL_REVIEW)
+
+    # 1. GitHub is authoritative: a current open owner of the same objective
+    #    wins, then the current successor of closed same-objective history.
+    open_owners = {c.issue_number: c.lifecycle_stage for c in evidence.lineage
+                   if c.match == MATCH_EXACT and c.state == "open"}
+    exact_successors = {c.successor_issue_number for c in closed_exact if c.successor_issue_number is not None}
+    # Each successor has exactly one fact set here (conflicts returned above).
+    if any(next(iter(successor_facts[n]))[0] == "closed" for n in exact_successors):
         # A closed successor chain must be followed by the caller, not guessed.
         reasons.append("github.successor-closed")
         return result(MANUAL_REVIEW)
+    open_successors = {n: next(iter(successor_facts[n]))[1] for n in exact_successors}
+    candidates = {**open_successors, **open_owners}
+    if len(candidates) > 1:
+        reasons.append("github.multiple-open-owners")
+        return result(MANUAL_REVIEW)
+    if candidates:
+        (number, stage), = candidates.items()
+        reason = "github.current-open-owner" if number in open_owners else "github.current-successor-owner"
+        return _owner(number, stage, reasons, result, reason)
 
-    # 3. Work that is only related (causal match unproven) is ambiguous while open.
-    if any(c.match == MATCH_RELATED and c.state == "open" for c in evidence.lineage):
+    # 2. Related work (causal match unproven) is ambiguous while it, or a
+    #    successor of related history, is open.
+    related_successor = any(
+        c.match == MATCH_RELATED and c.successor_issue_number is not None for c in evidence.lineage
+    )
+    if related_successor or any(
+        c.match == MATCH_RELATED and c.state == "open" for c in evidence.lineage
+    ):
         reasons.append("github.related-open-work")
         return result(MANUAL_REVIEW)
 
-    if closed_exact:
-        if all(c.state_reason in {"not_planned", "duplicate"} for c in closed_exact):
-            reasons.append("github.closed-not-planned-or-duplicate")
-            return result(SUPERSEDED_OR_RETIRED)
-        reasons.append("github.completed-history")
-        return result(HISTORICAL_REGRESSION_EVIDENCE)
-
-    # 4. A registered capability is extended, never re-implemented.
+    # 3. A registered capability is extended, never re-implemented; this
+    #    outranks closed history of the same objective.
     live = sorted(c.capability_id for c in evidence.capabilities if c.status in _LIVE_CAPABILITY)
     retired = sorted(c.capability_id for c in evidence.capabilities if c.status in _RETIRED_CAPABILITY)
     if len(live) > 1:
         reasons.append("capability.multiple-live-matches")
         return result(MANUAL_REVIEW)
     if live:
+        if closed_exact:
+            reasons.append("github.completed-history")
         reasons.append("capability.registered")
         return result(EXTEND_EXISTING_CAPABILITY, capability=live[0])
+
+    # 4. Closed same-objective history is evidence only, never actionable.
+    if closed_exact:
+        if all(c.state_reason in {"not_planned", "duplicate"} for c in closed_exact):
+            reasons.append("github.closed-not-planned-or-duplicate")
+            return result(SUPERSEDED_OR_RETIRED)
+        reasons.append("github.completed-history")
+        return result(HISTORICAL_REGRESSION_EVIDENCE)
     if retired:
         reasons.append("capability.retired-or-replaced")
         return result(SUPERSEDED_OR_RETIRED, capability=retired[0])
+    if any(c.match == MATCH_RELATED for c in evidence.lineage):
+        # Related closed history does not block a candidate, but is named.
+        reasons.append("github.related-history")
 
     # 5. Only now may advisory navigation evidence gate new work.
     if evidence.navigation_applicable and evidence.navigation_outcome != "no-cached-match":

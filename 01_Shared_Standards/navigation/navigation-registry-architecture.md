@@ -142,13 +142,17 @@ It returns exactly one disposition: `reuse-current-owner`, `continue-current-wor
 The rules apply in this order:
 
 1. GitHub lineage is authoritative and decides first. A current open owner of the same
-   objective wins, then a current successor of closed history. Closed issues are
-   evidence only and are never returned as actionable owners.
-2. A registered capability is extended rather than reimplemented.
-3. Navigation evidence is advisory and only gates new work. Anything other than a fresh
-   `no-cached-match` becomes `manual-review`.
-4. An incomplete search, several open owners, an open match that is only related, or a
-   closed successor also become `manual-review`, never a no-match.
+   objective wins, or the current successor of closed same-objective history.
+   Contradictory successor facts, a closed successor, or more than one open owner or
+   successor become `manual-review`.
+2. Open work that is only related, or related history with a successor, becomes
+   `manual-review`.
+3. A registered capability is extended rather than reimplemented, even where closed
+   history of the same objective exists.
+4. Closed issues are evidence only and are never returned as actionable owners.
+5. Navigation evidence is advisory and only gates new work. Anything other than a fresh
+   `no-cached-match` becomes `manual-review`, and so does an incomplete search; neither
+   is ever treated as a no-match.
 
 `candidate-new-work` grants no creation authority. Issue creation still passes its
 existing admission (bugs: the duplicate and root-cause admission). Continuation,
