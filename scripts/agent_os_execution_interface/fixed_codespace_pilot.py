@@ -25,6 +25,11 @@ ISSUE_NUMBER = 3333
 OPERATION_ID = "codespace-implementation-pilot-v1"
 ACCEPTED_REASON = "accepted-codespace-implementation-envelope"
 FIXED_ARGV = ("git", "rev-parse", "HEAD")
+# The admitted route operation the probe runs under. The probe is a read-only
+# sub-operation of an admitted pre-PR developer-loop mission; this is the operation
+# every production publisher binds (production_handoff_publication), distinct from
+# OPERATION_ID, which names this fixed envelope and its reserved probe authorization.
+ROUTE_OPERATION = "pre-pr-developer-loop"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _HANDOFF = re.compile(r"^executor-handoff:[0-9a-f]{64}$", re.ASCII)
 
@@ -179,7 +184,7 @@ def consume_fixed_codespace_pilot(
             authorization.authorization_id == descriptor.authorization_id,
             authorization.expected_sha == sha,
             route.decision_id == descriptor.route_decision_id,
-            route.requested_operation == "bounded-implementation",
+            route.requested_operation == ROUTE_OPERATION,
             route.selected_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
             route.governed_runner_available is True,
             route.environment_health_evidence_id_or_none == descriptor.environment_health_evidence_id,
