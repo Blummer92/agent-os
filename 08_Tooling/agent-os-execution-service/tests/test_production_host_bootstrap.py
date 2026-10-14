@@ -15,6 +15,7 @@ those suites already cover.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 from types import SimpleNamespace
 
@@ -678,6 +679,21 @@ def test_admission_providers_bind_the_same_sources_without_dispatch(
     assert captured["authorization_transport"] is bootstrap.authorization_transport
     assert "cancelled" not in captured
     assert "runtime_configuration_provider" not in captured
+
+
+def test_admission_providers_forward_the_runtime_request(monkeypatch, host_environment):
+    bootstrap, _ = _build(monkeypatch, host_environment)
+    marker = object()
+    bootstrap = dataclasses.replace(bootstrap, runtime_request=marker)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        bootstrap_module,
+        "build_production_admission_providers",
+        lambda **kwargs: captured.update(kwargs) or "providers",
+    )
+
+    assert bootstrap.admission_providers() == "providers"
+    assert captured["runtime_request"] is marker
 
 
 def test_admission_providers_refuse_a_diverging_checkpoint_store_root(

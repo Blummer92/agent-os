@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -586,6 +586,8 @@ def test_admission_providers_are_the_canonical_host_bound_objects(store_root, le
     assert isinstance(providers.current_resolver, CanonicalCurrentInvocationResolver)
     assert isinstance(providers.lease_reader, HostLocalLeaseAdapter)
     assert providers.evaluated_at == "2026-08-19T00:00:00Z"
+    with pytest.raises(FrozenInstanceError):
+        providers.lease_reader = object()
     with patch(
         "agent_os_execution_service.production_host_composition.load_invocation_descriptor"
     ) as mock_load:

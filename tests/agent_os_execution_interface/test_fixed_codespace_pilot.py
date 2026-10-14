@@ -1,6 +1,7 @@
 """#3333 fixed host-ingress consumer: safe defaults and bounded identity."""
 from __future__ import annotations
 
+import dataclasses
 import functools
 import hashlib
 import json
@@ -11,6 +12,7 @@ import pytest
 
 import agent_os_execution_service.current_invocation_resolver as resolver_module
 import agent_os_execution_service.invocation_reconstruction as reconstruction
+import scripts.agent_os_execution_interface.fixed_codespace_pilot as pilot_module
 from agent_os_execution_service.executor_routing import (
     ExecutorCapability,
     ExecutorRoute,
@@ -21,6 +23,7 @@ from agent_os_execution_service.invocation_reconstruction import (
 )
 from agent_os_execution_service.production_host_composition import (
     CHECKPOINT_STORE_ROOT_ENV_VAR,
+    ProductionAdmissionProviders,
     build_production_admission_providers,
 )
 from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
@@ -30,6 +33,7 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
     InvocationDescriptorNotFound,
 )
 from scripts.agent_os_execution_interface.codespace_implementation_dispatch import (
+    DispatchStatus,
     dispatch_admitted_operation_to_codespace,
 )
 from scripts.agent_os_execution_interface.codespaces_orchestrator_transport import (
@@ -393,6 +397,14 @@ def _assert_no_authority(receipt):
         assert receipt[flag] is False
 
 
+def test_fixed_operation_identity_is_pinned_to_literals():
+    # Literals, not the module constants on both sides: a change to the fixed
+    # operation must not be able to move the assertion that guards it.
+    assert OPERATION_ID == "codespace-implementation-pilot-v1"
+    assert ISSUE_NUMBER == 3333
+    assert FIXED_ARGV == ("git", "rev-parse", "HEAD")
+
+
 def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canonical):
     receipt, run = _consume()
     assert receipt["status"] == "completed"
@@ -400,7 +412,9 @@ def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canon
     assert receipt["codespace_name"] == CODESPACE
     assert receipt["exit_status"] == 0
     assert receipt["request_id"]
-    assert run.calls == [("gh", "codespace", "ssh", "-c", CODESPACE, "--", *FIXED_ARGV)]
+    assert run.calls == [
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+    ]
     _assert_no_authority(receipt)
 
 
@@ -472,8 +486,12 @@ def _mutated(path, value):
         ("handoff.source_sha_or_none", "c" * 40),
         ("pilot_input.issue_numbers", (3334,)),
         ("pilot_input.source_head_sha", "c" * 40),
+        # SingleIssuePilotInput requirements: repository, issue, source and tested SHA.
+        ("pilot_input.tested_sha", "c" * 40),
+        ("pilot_input.repository", "Blummer92/other-repository"),
         ("route_decision.requested_operation", "arbitrary-shell"),
         ("route_decision.selected_route", ExecutorRoute.HUMAN_DECISION_REQUIRED),
+        ("route_decision.governed_runner_available", False),
         ("route_decision.environment_health_evidence_id_or_none", None),
     ],
     ids=[
@@ -483,8 +501,11 @@ def _mutated(path, value):
         "stale-source-sha",
         "mismatched-issue",
         "stale-pilot-head",
+        "stale-pilot-tested-sha",
+        "mismatched-pilot-repository",
         "unauthorized-operation",
         "route-not-governed-runner",
+        "governed-runner-unavailable",
         "missing-environment-health",
     ],
 )
@@ -516,8 +537,16 @@ def test_mismatched_handoff_or_issue_descriptor_never_dispatches(canonical):
         CodespaceSelection(True, "selected", CODESPACE, "Shutdown"),
         CodespaceSelection(False, "codespaces-not-available"),
         CodespaceSelection(False, "multiple-qualified-codespaces"),
+        # Not selected must refuse even when a surface name and state are attached.
+        CodespaceSelection(False, "multiple-qualified-codespaces", CODESPACE, "Available"),
     ],
-    ids=["changed-codespace", "not-available", "none-selected", "ambiguous"],
+    ids=[
+        "changed-codespace",
+        "not-available",
+        "none-selected",
+        "ambiguous",
+        "ambiguous-with-named-surface",
+    ],
 )
 def test_changed_or_unqualified_codespace_selection_never_dispatches(canonical, selection):
     receipt, run = _consume(selection=selection)
@@ -538,6 +567,10 @@ def test_unsupported_capability_never_dispatches(canonical):
     receipt, run = _consume(descriptor, current)
     assert receipt["reason_codes"] == ["runner-capabilities-unverified"]
     assert run.calls == []
+    descriptor, current = _mutated("route_decision.required_capabilities", ())
+    receipt, run = _consume(descriptor, current)
+    assert receipt["reason_codes"] == ["runner-capabilities-unverified"]
+    assert run.calls == []
     descriptor, current = _mutated(
         "route_decision.governed_runner_capabilities", (ExecutorCapability.CHECKOUT,)
     )
@@ -547,16 +580,72 @@ def test_unsupported_capability_never_dispatches(canonical):
 
 
 @pytest.mark.parametrize(
+    "field",
+    [
+        "operating_mode_decision_id_or_none",
+        "executable_lane_selection_id_or_none",
+        "execution_service_request_fingerprint_or_none",
+    ],
+)
+def test_missing_route_binding_identity_never_dispatches(canonical, field):
+    descriptor, current = _mutated(f"route_decision.{field}", None)
+    receipt, run = _consume(descriptor, current)
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["canonical-route-binding-unavailable"]
+    assert run.calls == []
+
+
+class _FlakyLoader:
+    """Serves the descriptor to reconstruction, then fails the currentness re-read."""
+
+    def __init__(self, descriptor, failure):
+        self.descriptor = descriptor
+        self.failure = failure
+        self.calls = 0
+
+    def __call__(self, _handoff):
+        self.calls += 1
+        if self.calls > 1:
+            raise self.failure
+        return self.descriptor
+
+
+@pytest.mark.parametrize("failure", ["store-unreadable", "evidence-field-missing"])
+def test_evidence_that_becomes_unavailable_after_admission_never_dispatches(canonical, failure):
+    descriptor = _descriptor()
+    current = _current(descriptor)
+    loader = _Loader(descriptor)
+    if failure == "store-unreadable":
+        loader = _FlakyLoader(descriptor, OSError("store unreadable"))
+    else:
+        del current.route_decision.requested_operation
+    receipt, run = _consume(descriptor, current, loader=loader)
+    assert receipt["status"] == "needs-decision"
+    assert receipt["reason_codes"] == ["current-evidence-unavailable"]
+    assert receipt["side_effects_performed"] is False
+    assert run.calls == []
+
+
+@pytest.mark.parametrize(
     "result",
     [
         (0, "not-a-sha\n", ""),
         (0, "c" * 40 + "\n", ""),
         (128, "", "fatal: not a git repository"),
+        # Matching stdout must not turn a failed command into a completed probe.
+        (1, SHA + "\n", ""),
         # The kept tail strips to exactly the SHA; only truncation rejects it.
         (0, "x" * 10 + " " * (MAX_EVIDENCE_CHARS - 40) + SHA, ""),
         (0, SHA, "y" * (MAX_EVIDENCE_CHARS + 1)),
     ],
-    ids=["malformed", "stale-remote-head", "nonzero-exit", "truncated-stdout", "truncated-stderr"],
+    ids=[
+        "malformed",
+        "stale-remote-head",
+        "nonzero-exit",
+        "nonzero-exit-with-matching-stdout",
+        "truncated-stdout",
+        "truncated-stderr",
+    ],
 )
 def test_malformed_or_truncated_receipt_is_not_completed(canonical, result):
     receipt, run = _consume(run=_Run(result))
@@ -572,6 +661,34 @@ def test_ssh_timeout_is_not_completed(canonical):
     assert receipt["status"] == "blocked"
     assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
     assert receipt["exit_status"] is None
+
+
+def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(canonical):
+    """The consumer re-checks receipt identity itself, independent of the transport."""
+    descriptor = _descriptor()
+    transport_result = SimpleNamespace(
+        request_id="request-3333-probe",
+        codespace_name_or_none="other-codespace",
+        exit_status_or_none=0,
+        stdout_tail=SHA + "\n",
+        stderr_tail="",
+        stdout_truncated=False,
+        stderr_truncated=False,
+    )
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=lambda **_kwargs: SimpleNamespace(
+            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+        ),
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    _assert_no_authority(receipt)
 
 
 def test_unauthorized_envelope_operation_never_reaches_providers(canonical):
@@ -665,6 +782,92 @@ def test_host_entry_checks_the_envelope_before_any_host_read(tmp_path, monkeypat
         resolve_selection=lambda: pytest.fail("selection must not be read"),
     )
     assert receipt["reason_codes"] == ["invalid-fixed-operation-envelope"]
+
+
+def test_host_entry_hands_each_provider_to_the_matching_consumer_input(monkeypatch):
+    providers = ProductionAdmissionProviders(
+        descriptor_loader=_Loader(_descriptor()),
+        current_resolver=_Resolver(None),
+        lease_reader=_Lease(),
+        evaluated_at="2026-10-14T12:34:56Z",
+    )
+    selection = CodespaceSelection(True, "selected", CODESPACE, "Available")
+    transport = admit(event()).to_dict()
+    dispatcher = object()
+    delegated: dict[str, object] = {}
+    sentinel = {"status": "delegated"}
+
+    def delegate(received, **kwargs):
+        delegated["transport"] = received
+        delegated.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(pilot_module, "consume_fixed_codespace_pilot", delegate)
+
+    result = consume_fixed_codespace_pilot_on_host(
+        transport,
+        providers=providers,
+        resolve_selection=lambda: selection,
+        dispatcher=dispatcher,
+    )
+
+    assert result is sentinel
+    assert delegated["transport"] is transport
+    assert delegated["descriptor_loader"] is providers.descriptor_loader
+    assert delegated["current_resolver"] is providers.current_resolver
+    assert delegated["lease_reader"] is providers.lease_reader
+    assert delegated["evaluated_at"] == "2026-10-14T12:34:56Z"
+    assert delegated["codespace_selection"] is selection
+    assert delegated["dispatcher"] is dispatcher
+    # Nothing beyond the reviewed inputs reaches the existing consumer.
+    assert set(delegated) == {
+        "transport",
+        "descriptor_loader",
+        "current_resolver",
+        "lease_reader",
+        "evaluated_at",
+        "codespace_selection",
+        "dispatcher",
+    }
+
+
+def test_host_entry_admits_the_fixed_probe_through_directly_bound_providers(canonical):
+    descriptor = _descriptor()
+    resolver = _Resolver(_current(descriptor))
+    run = _Run()
+    providers = ProductionAdmissionProviders(
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=resolver,
+        lease_reader=_Lease(),
+        evaluated_at=EVALUATED_AT,
+    )
+    dispatcher = functools.partial(
+        dispatch_admitted_operation_to_codespace, list_candidates=_listed(), run=run
+    )
+
+    def probe(bound):
+        return consume_fixed_codespace_pilot_on_host(
+            admit(event()).to_dict(),
+            providers=bound,
+            resolve_selection=lambda: CodespaceSelection(True, "selected", CODESPACE, "Available"),
+            dispatcher=dispatcher,
+        )
+
+    receipt = probe(providers)
+    assert receipt["status"] == "completed"
+    assert receipt["reason_codes"] == ["fixed-head-probe-passed"]
+    assert resolver.calls >= 1
+    assert run.calls == [
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+    ]
+    _assert_no_authority(receipt)
+
+    # The lease observed is the bundle's own: a conflicting one blocks the same entry.
+    conflicting = dataclasses.replace(providers, lease_reader=_Lease(active=True))
+    blocked = probe(conflicting)
+    assert blocked["status"] == "blocked"
+    assert blocked["reason_codes"] == ["canonical-invocation-not-admitted"]
+    assert len(run.calls) == 1
 
 
 def test_actions_entry_still_fails_closed_without_a_host(tmp_path):
