@@ -73,7 +73,6 @@ from workflow_scheduler.execution.single_issue_pilot import (
     pilot_workspace_identity,
 )
 
-from .authorized_validation import AUTHORIZED_VALIDATION_PERMITTED_OPERATION
 from .execution_authorization_source import (
     ExecutionAuthorizationSourceStatus,
     reacquire_execution_authorization,
@@ -335,7 +334,7 @@ def activate_first_publication_from_host(
             issue_number=packet.issue_number,
             expected_candidate_packet_id=packet.packet_id,
             expected_invocation_id=packet.invocation_id,
-            expected_operation=AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
+            expected_operation=_PRE_PR_OPERATION,
             expected_request_fingerprint=preauth_stage.request_fingerprint,
             expected_command_plan_id=preauth_stage.command_plan_id,
             expected_sha=packet.candidate_sha,
