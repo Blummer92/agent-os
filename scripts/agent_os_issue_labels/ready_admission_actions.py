@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from ..agent_os_aggregate_gate import latest_authoritative_state
 from .ready_for_review_admission import (
     DRAFT_FOCUSED_MODE,
     FINAL_CANDIDATE_MODE,
@@ -315,27 +316,68 @@ class PyGithubReadyAdmissionProvider:
             raise RuntimeError("review thread evidence incomplete")
         unresolved = sum(1 for node in threads["nodes"] if not node["isResolved"] and not node["isOutdated"])
         commit = repo.get_commit(head)
-        focused = "missing"
-        aggregate_job = "missing"
+        check_runs = []
         for index, run in enumerate(commit.get_check_runs()):
             if index >= _MAX_ITEMS:
                 raise RuntimeError("check evidence incomplete")
-            if run.name == FOCUSED_CHECK_NAME:
-                focused = _check_status(run.status, run.conclusion)
-            elif run.name == AGGREGATE_JOB_NAME:
-                aggregate_job = _check_status(run.status, run.conclusion)
-        aggregate = aggregate_job
-        for index, status in enumerate(commit.get_statuses()):  # newest first
+            check_runs.append(run)
+        statuses = []
+        for index, status in enumerate(commit.get_statuses()):
             if index >= _MAX_ITEMS:
-                break
-            if status.context == AGGREGATE_CONTEXT:
-                aggregate = {"success": "success", "pending": "pending"}.get(status.state, "failure")
-                break
+                raise RuntimeError("status evidence incomplete")
+            statuses.append({"id": status.id, "context": status.context, "state": status.state})
+        focused, aggregate = resolve_validation_evidence(check_runs, statuses)
         return PullRequestReadySnapshot(
             repository=repository, pr_number=pr_number, state=pr.state, draft=bool(pr.draft),
             merged=bool(pr.merged), head_sha=head, title=pr.title or "", body=pr.body or "",
             requested_changes="CHANGES_REQUESTED" in latest.values(), blocking_unresolved=unresolved,
             focused_status=focused, aggregate_status=aggregate, validation_head_sha=head)
+
+
+def resolve_validation_evidence(
+    check_runs: Iterable[object], statuses: Iterable[Mapping[str, object]]
+) -> tuple[str, str]:
+    """Map exact-head check runs and commit statuses to ``(focused, aggregate)``.
+
+    Aggregate success comes only from the newest
+    ``agent-os/authoritative-aggregate`` commit status, read through the
+    aggregate gate's own ``latest_authoritative_state`` (#2761). A
+    ``Run aggregate validation`` check run is never success evidence: a
+    diagnostic dispatch runs that job without publishing the authoritative
+    status (#3587). With no status, a non-success job state (pending, failure,
+    skipped) is still reported so the evaluator fails closed or stays
+    provisional, and a job success is reported as ``missing``.
+
+    Duplicate same-name check runs on one head resolve by newest check-run id,
+    so the result does not depend on API listing order. A skipped
+    ``Run validation plan`` is never evidence: the plan job only runs on
+    ``pull_request`` events, so a skipped copy comes from a dispatch run.
+    """
+    focused = _newest_check_state(check_runs, FOCUSED_CHECK_NAME, ignore_skipped=True)
+    authoritative = latest_authoritative_state(statuses)
+    if authoritative == "missing":
+        job = _newest_check_state(check_runs, AGGREGATE_JOB_NAME, ignore_skipped=False)
+        aggregate = "missing" if job == "success" else job
+    else:
+        aggregate = {"success": "success", "pending": "pending"}.get(authoritative, "failure")
+    return focused, aggregate
+
+
+def _newest_check_state(check_runs: Iterable[object], name: str, *, ignore_skipped: bool) -> str:
+    newest_id = -1
+    state = "missing"
+    for run in check_runs:
+        if getattr(run, "name", None) != name:
+            continue
+        run_id = getattr(run, "id", None)
+        if type(run_id) is not int or run_id < 0:
+            return "failure"  # unidentifiable evidence cannot be ordered: fail closed
+        run_state = _check_status(getattr(run, "status", None), getattr(run, "conclusion", None))
+        if ignore_skipped and run_state == "skipped":
+            continue
+        if run_id > newest_id:
+            newest_id, state = run_id, run_state
+    return state
 
 
 def _check_status(status: str | None, conclusion: str | None) -> str:
