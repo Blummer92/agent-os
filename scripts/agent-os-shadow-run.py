@@ -621,16 +621,20 @@ def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> 
     for issue_number in remaining[:RECORD_ONLY_LINEAGE_LIMIT]:
         try:
             acquirer.acquire_lifecycle_stage(repository, issue_number)
-        except (TypeError, ValueError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - selection already returned; never crash the record
             errors.append(
                 {
                     "issue_number": issue_number,
+                    "contract_version": PR_LINEAGE_READER_CONTRACT_VERSION,
                     "outcome": "not-acquired",
                     "reason_codes": ["record-only.acquisition-error"],
                     "failure_detail": f"{type(exc).__name__}: {exc}"[:240],
                 }
             )
     candidates = [*map(dict, acquirer.observations[start:]), *errors]
+    for entry in candidates:
+        # Marked per entry so a merged list can never be read as selector input.
+        entry["selection_input"] = False
     candidates.sort(key=lambda entry: entry["issue_number"])
     return {"candidates": candidates, "truncated": len(remaining) > RECORD_ONLY_LINEAGE_LIMIT}
 

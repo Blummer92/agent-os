@@ -744,6 +744,8 @@ def test_cli_records_lineage_for_candidates_after_the_selector_stopped(monkeypat
     (later,) = lifecycle(record)["record_only_candidates"]
     assert later["issue_number"] == OTHER
     assert later["outcome"] == "acquired" and later["lifecycle_stage"] == "review"
+    assert later["selection_input"] is False
+    assert "selection_input" not in first
     assert lifecycle(record)["record_only_truncated"] is False
     # The selector result is unchanged: the later stage never reached it.
     assert record["deterministic_selector_result"]["selected_issue_number"] is None
@@ -774,6 +776,8 @@ def test_record_only_lineage_is_bounded_and_survives_acquirer_errors() -> None:
             self.calls.append(issue_number)
             if issue_number == 3:
                 raise RuntimeError("transport failure")
+            if issue_number == 4:
+                raise KeyError("unexpected")
             self.observations = (*self.observations, {"issue_number": issue_number, "outcome": "unavailable"})
 
     acquirer = Acquirer()
@@ -788,5 +792,8 @@ def test_record_only_lineage_is_bounded_and_survives_acquirer_errors() -> None:
     by_number = {entry["issue_number"]: entry for entry in outcome["candidates"]}
     assert by_number[3]["reason_codes"] == ["record-only.acquisition-error"]
     assert "RuntimeError" in by_number[3]["failure_detail"]
+    assert "KeyError" in by_number[4]["failure_detail"]
+    assert by_number[3]["contract_version"] == cli.PR_LINEAGE_READER_CONTRACT_VERSION
+    assert all(entry["selection_input"] is False for entry in outcome["candidates"])
     assert len(outcome["candidates"]) == cli.RECORD_ONLY_LINEAGE_LIMIT
     assert [entry["issue_number"] for entry in outcome["candidates"]] == sorted(by_number)
