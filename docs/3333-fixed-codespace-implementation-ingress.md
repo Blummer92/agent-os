@@ -211,3 +211,30 @@ fail closed:
 - an unauthorized operation or envelope.
 
 None of this is live acceptance.
+
+## Codespaces runtime installation and host bindings (Gate 4)
+
+`.devcontainer/post-create.sh` installs the existing `agent-os-execution-service`
+distribution editable, once, after `requirements-dev.txt`. That order matters:
+its `workflow-scheduler`, `agent-memory-context-manager` and
+`instructional-workflow-contracts` requirements are local distributions that
+`requirements-dev.txt` already supplies, and none is on a package index.
+`requirements-dev.txt` does not list the execution service, so no second
+bootstrap path installs it. A Codespace built from the profile can therefore
+import `production_host_bootstrap` without a repository-root `PYTHONPATH`.
+
+The trusted host reads four required absolute paths from its process
+environment: `AGENT_OS_CHECKPOINT_STORE_ROOT`, `AGENT_OS_REPOSITORY_ROOT`,
+`AGENT_OS_WORKSPACE_PARENT` and `AGENT_OS_LEASE_DIRECTORY`. The profile
+deliberately **sets none of them**: `devcontainer.json` and `post-create.sh`
+carry no value or placeholder. Choosing the real locations is a separately
+authorized host-qualification step. Until then
+`load_production_host_configuration` keeps refusing to run and names the first
+missing variable. The loader also refuses blank values, and configuration
+validation refuses relative paths.
+
+This increment installs a package. It does not qualify the Codespace as a
+trusted host, bind a host path, provision a credential, start or stop a
+Codespace, or change the lease, lifecycle, transport, receipt or authorization
+contracts. Gate 2 (lifecycle topology), the remaining Gate 4 identity and token
+items, and Gate 5 R-2 (receipt return path) keep their owners.

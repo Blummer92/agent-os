@@ -596,6 +596,22 @@ def test_a_blocked_reconstruction_still_performs_zero_dispatch(
 # --------------------------------------------------------------------------
 
 
+def test_required_host_path_contract_is_the_four_documented_variables():
+    # Literals, not the module constants: the Codespaces profile documents these
+    # four names (docs/3333-fixed-codespace-implementation-ingress.md) and sets none.
+    assert REQUIRED_PATH_ENV_VARS == (
+        "AGENT_OS_CHECKPOINT_STORE_ROOT",
+        "AGENT_OS_REPOSITORY_ROOT",
+        "AGENT_OS_WORKSPACE_PARENT",
+        "AGENT_OS_LEASE_DIRECTORY",
+    )
+
+
+def test_empty_process_environment_fails_closed_naming_the_first_variable():
+    with pytest.raises(ProductionHostBootstrapError, match="AGENT_OS_CHECKPOINT_STORE_ROOT"):
+        load_production_host_configuration({})
+
+
 @pytest.mark.parametrize("missing", REQUIRED_PATH_ENV_VARS)
 def test_missing_required_host_path_fails_closed(tmp_path, monkeypatch, missing):
     values = _host_paths(tmp_path)

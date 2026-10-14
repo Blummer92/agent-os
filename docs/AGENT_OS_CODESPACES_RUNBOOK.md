@@ -17,8 +17,8 @@ feature as current capability evidence.
 
 `postCreateCommand` runs `.devcontainer/post-create.sh` once. It verifies the
 repository before installing `requirements-dev.txt` and the same editable
-`08_Tooling` packages used by validation. A failing step stops fail closed;
-the Codespace remains available for inspection.
+`08_Tooling` packages used by validation plus the execution service (#3333).
+A failing step stops fail closed; the Codespace stays available for inspection.
 
 ## Bounded CLI SSH access (#2307)
 
