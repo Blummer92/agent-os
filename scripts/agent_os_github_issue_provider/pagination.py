@@ -27,6 +27,11 @@ PAGINATION_DIAGNOSTIC_KINDS = frozenset(
     }
 )
 
+#: Endpoints whose ``Link`` continuation this validator can prove. ``issues`` is
+#: the original contract; ``pulls`` (#3441) applies the identical rule set to the
+#: repository pull-request listing. Anything else is refused, not guessed.
+SUPPORTED_ENDPOINTS = frozenset({"issues", "pulls"})
+
 _MAX_REPOSITORY_ID_DIGITS = 20
 _MAX_QUERY_FIELDS = 3
 _MAX_QUERY_INTEGER_DIGITS = 10
@@ -254,13 +259,14 @@ def _validate_repository_path(
     *,
     repository: str,
     trusted_repository_identity: TrustedRepositoryIdentity | None,
+    endpoint: str = "issues",
 ) -> None:
-    named_path = f"/repos/{repository}/issues"
+    named_path = f"/repos/{repository}/{endpoint}"
     if path == named_path:
         return
 
     numeric_match = re.fullmatch(
-        rf"/repositories/([1-9][0-9]{{0,{_MAX_REPOSITORY_ID_DIGITS - 1}}})/issues",
+        rf"/repositories/([1-9][0-9]{{0,{_MAX_REPOSITORY_ID_DIGITS - 1}}})/{endpoint}",
         path,
     )
     if numeric_match is None:
@@ -282,7 +288,10 @@ def validated_next_page(
     per_page: int,
     state: str,
     trusted_repository_identity: TrustedRepositoryIdentity | None = None,
+    endpoint: str = "issues",
 ) -> tuple[int | None, bool]:
+    if endpoint not in SUPPORTED_ENDPOINTS:
+        raise ValueError("unsupported pagination endpoint")
     relations = parse_link_header(link_header)
     next_url = relations.get("next")
     if next_url is None:
@@ -301,6 +310,7 @@ def validated_next_page(
         parsed.path,
         repository=repository,
         trusted_repository_identity=trusted_repository_identity,
+        endpoint=endpoint,
     )
 
     query, raw_query = _query_values(parsed.query)
