@@ -536,9 +536,9 @@ def test_a_target_github_would_close_is_ambiguous_even_where_parse_pr_masks_it(m
     assert roles_for(items, issue=4000) == [(10, "claim")]
 
 
-def test_a_canonical_qualified_closing_target_survives_the_detector_defect() -> None:
-    # detect_github_effective_closing_references raises on "Closes <canonical>#N";
-    # the reader folds the qualifier the way normalize_issue_target does and asks again.
+def test_a_canonical_qualified_closing_target_is_ambiguous() -> None:
+    # The shared detector folds "<canonical>#N" to "#N" (#3590); the reader
+    # needs no local workaround.
     items = [pr_item(10, body=f"Closes #4000\n\n`closes BLUMMER92/agent-os#{ISSUE}`\n")]
     assert roles_for(items) == [(10, "ambiguous")]
     assert roles_for(items, issue=4000) == [(10, "claim")]

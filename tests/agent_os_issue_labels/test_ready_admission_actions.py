@@ -102,11 +102,14 @@ def test_unauthorized_closing_reference_refused(body):
     assert "unauthorized-closing-reference" in receipt["reason_codes"]
 
 
-def test_unnormalizable_closing_reference_fails_closed():
+def test_canonical_qualified_closing_reference_fails_closed_as_unauthorized():
+    # Before #3590 the detector raised on this body and the action reported
+    # pr-evidence-invalid; it now parses it and refuses on the contract reason.
     body = "Resolves Blummer92/agent-os#7"
     receipt = run(t=transport(ready_admission_body_sha256_or_none=ra.body_revision(body)), snap=snapshot(body=body))
     assert receipt["transition_admissible"] is False
-    assert receipt["reason_codes"] == ["pr-evidence-invalid"]
+    assert "unauthorized-closing-reference" in receipt["reason_codes"]
+    assert "pr-evidence-invalid" not in receipt["reason_codes"]
 
 
 def test_review_blockers_refused():
