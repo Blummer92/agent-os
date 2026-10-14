@@ -330,3 +330,10 @@ def test_results_are_identical_across_input_orderings():
     assert (forward.disposition, forward.owner_issue_number, forward.reason_codes) == (
         backward.disposition, backward.owner_issue_number, backward.reason_codes)
     assert forward.disposition == rec.CONTINUE_CURRENT_WORK
+
+
+def test_capability_beside_not_planned_history_names_that_history_correctly():
+    result = classify(lineage=(closed_issue(97, reason="not_planned"),),
+                      capabilities=(CapabilityMatch("navigation-index-reader", "active"),))
+    assert result.disposition == rec.EXTEND_EXISTING_CAPABILITY
+    assert result.reason_codes == ("github.closed-not-planned-or-duplicate", "capability.registered")

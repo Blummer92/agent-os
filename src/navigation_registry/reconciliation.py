@@ -259,16 +259,16 @@ def classify_proposed_work(evidence: ReconciliationInput) -> ReconciliationResul
         return result(MANUAL_REVIEW)
     if live:
         if closed_exact:
-            reasons.append("github.completed-history")
+            reasons.append(_closed_history_reason(closed_exact))
         reasons.append("capability.registered")
         return result(EXTEND_EXISTING_CAPABILITY, capability=live[0])
 
     # 4. Closed same-objective history is evidence only, never actionable.
     if closed_exact:
-        if all(c.state_reason in {"not_planned", "duplicate"} for c in closed_exact):
-            reasons.append("github.closed-not-planned-or-duplicate")
+        reason = _closed_history_reason(closed_exact)
+        reasons.append(reason)
+        if reason == "github.closed-not-planned-or-duplicate":
             return result(SUPERSEDED_OR_RETIRED)
-        reasons.append("github.completed-history")
         return result(HISTORICAL_REGRESSION_EVIDENCE)
     if retired:
         reasons.append("capability.retired-or-replaced")
@@ -284,6 +284,12 @@ def classify_proposed_work(evidence: ReconciliationInput) -> ReconciliationResul
         return result(MANUAL_REVIEW)
     reasons.append("new-work.requires-creation-admission")
     return result(CANDIDATE_NEW_WORK)
+
+
+def _closed_history_reason(closed_exact):
+    if all(c.state_reason in {"not_planned", "duplicate"} for c in closed_exact):
+        return "github.closed-not-planned-or-duplicate"
+    return "github.completed-history"
 
 
 def _owner(number, stage, reasons, result, reason):
