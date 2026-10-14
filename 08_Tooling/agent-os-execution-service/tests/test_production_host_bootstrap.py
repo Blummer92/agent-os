@@ -647,7 +647,6 @@ def test_a_diverging_checkpoint_store_root_fails_closed_before_binding(
     assert CHECKPOINT_STORE_ROOT_ENV_VAR in str(error.value)
 
 
-
 def test_admission_providers_bind_the_same_sources_without_dispatch(
     monkeypatch, host_environment, tmp_path
 ):
@@ -690,6 +689,7 @@ def test_admission_providers_refuse_a_diverging_checkpoint_store_root(
     with pytest.raises(ProductionHostBootstrapError) as error:
         bootstrap.admission_providers()
     assert CHECKPOINT_STORE_ROOT_ENV_VAR in str(error.value)
+
 
 def test_a_naive_host_clock_fails_closed():
     import datetime as datetime_module

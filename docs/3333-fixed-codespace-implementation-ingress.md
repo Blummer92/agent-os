@@ -179,9 +179,13 @@ Unchanged: the Actions CLI `main()` has no host and still returns
 No workflow, credential, host configuration, Codespace lifecycle, executor,
 transport or store changed.
 
-Regression coverage in `test_fixed_codespace_pilot.py` drives the real
-reconstruction, the currentness re-check, the dispatcher and the transport.
-Each case below must fail closed:
+Regression coverage in `test_fixed_codespace_pilot.py` calls the real
+`reconstruct_governed_invocation` sequence, the currentness re-check entry, the
+dispatcher and the transport. As in the #1218 suite, the cross-check results,
+`SingleIssuePilotInput` and the lease request are patched. So the stale and
+authorization cases inject canonical reason codes rather than reading stale
+store data. Only the missing-descriptor case also runs over real providers and
+an empty store. Each case below must fail closed:
 
 - missing descriptor, including real providers over an empty store;
 - stale checkpoint or ResumePlan;
