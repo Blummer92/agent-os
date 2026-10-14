@@ -3,8 +3,10 @@
 An issue comment is low-trust transport evidence only. This module can dispatch
 a *read-only* exact-HEAD probe only when the canonical #1218 reconstruction,
 current authorization and the existing current Codespace selection are supplied
-by a qualified host. The GitHub Actions CLI fails closed until such a host-side
-source is connected: it never synthesizes execution admission or runner health.
+by a qualified host. ``consume_fixed_codespace_pilot_on_host`` is that host
+connection: it takes the #1287 ``ProductionAdmissionProviders`` and reads the
+canonical Codespace selection. The GitHub Actions CLI has no host and still
+fails closed: it never synthesizes execution admission or runner health.
 
 The real bounded engineering command plan/live synchronous pilot require a
 separately admitted plan and host configuration. This probe does not grant that.
@@ -265,6 +267,53 @@ def consume_fixed_codespace_pilot(
         return receipt
     except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
         return _receipt("needs-decision", "current-evidence-unavailable", envelope)
+
+
+def consume_fixed_codespace_pilot_on_host(
+    transport: object,
+    *,
+    providers: object,
+    resolve_selection: Callable[[], object] | None = None,
+    dispatcher: Callable[..., object] | None = None,
+) -> dict[str, object]:
+    """Trusted-host entry: bind #1287 admission providers to the fixed probe.
+
+    ``providers`` must be the exact ``ProductionAdmissionProviders`` from
+    ``ProductionHostBootstrap.admission_providers()``. The current Codespace
+    selection is read at probe time, after the envelope and host binding are
+    checked. It comes from the canonical shared resolver; ``resolve_selection``
+    exists only so tests can inject a fake, and it is never fed from issue
+    text. Every admission decision stays in ``consume_fixed_codespace_pilot``.
+    """
+    envelope = transport if type(transport) is dict else {}
+    if not _valid_transport(transport):
+        return _receipt("blocked", "invalid-fixed-operation-envelope", envelope)
+
+    from agent_os_execution_service.production_host_composition import (
+        ProductionAdmissionProviders,
+    )
+    from workflow_scheduler.governance.dev_validation_codespaces import (
+        CodespaceSelection,
+        resolve_current_codespace,
+    )
+
+    if type(providers) is not ProductionAdmissionProviders:
+        return _receipt("needs-decision", "canonical-admission-provider-unavailable", envelope)
+    try:
+        selection = (resolve_selection or resolve_current_codespace)()
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
+    if type(selection) is not CodespaceSelection:
+        return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
+    return consume_fixed_codespace_pilot(
+        transport,
+        descriptor_loader=providers.descriptor_loader,
+        current_resolver=providers.current_resolver,
+        lease_reader=providers.lease_reader,
+        codespace_selection=selection,
+        evaluated_at=providers.evaluated_at,
+        dispatcher=dispatcher,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

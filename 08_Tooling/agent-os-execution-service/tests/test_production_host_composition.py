@@ -39,7 +39,9 @@ from agent_os_execution_service.invocation_reconstruction import (
 )
 from agent_os_execution_service.production_host_composition import (
     CHECKPOINT_STORE_ROOT_ENV_VAR,
+    ProductionAdmissionProviders,
     ProductionHostCompositionError,
+    build_production_admission_providers,
     build_production_governed_resume_bindings,
 )
 from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
@@ -570,6 +572,54 @@ def test_composed_reconstruct_is_a_partial_of_the_canonical_function(store_root,
     ) as mock_load:
         descriptor_loader(H)
         mock_load.assert_called_once_with(str(store_root), H)
+
+
+def _admission_kwargs(lease_directory: str) -> dict:
+    kwargs = _base_kwargs(lease_directory, runtime_configuration_provider=lambda _pilot: None)
+    del kwargs["runtime_configuration_provider"], kwargs["cancelled"]
+    return kwargs
+
+
+def test_admission_providers_are_the_canonical_host_bound_objects(store_root, lease_directory):
+    providers = build_production_admission_providers(**_admission_kwargs(lease_directory))
+    assert type(providers) is ProductionAdmissionProviders
+    assert isinstance(providers.current_resolver, CanonicalCurrentInvocationResolver)
+    assert isinstance(providers.lease_reader, HostLocalLeaseAdapter)
+    assert providers.evaluated_at == "2026-08-19T00:00:00Z"
+    with patch(
+        "agent_os_execution_service.production_host_composition.load_invocation_descriptor"
+    ) as mock_load:
+        providers.descriptor_loader(H)
+        mock_load.assert_called_once_with(str(store_root), H)
+
+
+def test_admission_providers_refuse_missing_store_root_or_lease(monkeypatch, lease_directory, tmp_path):
+    monkeypatch.delenv(CHECKPOINT_STORE_ROOT_ENV_VAR, raising=False)
+    with pytest.raises(ProductionHostCompositionError):
+        build_production_admission_providers(**_admission_kwargs(lease_directory))
+    monkeypatch.setenv(CHECKPOINT_STORE_ROOT_ENV_VAR, str(tmp_path))
+    with pytest.raises(ProductionHostCompositionError):
+        build_production_admission_providers(**_admission_kwargs("  "))
+
+
+def test_resume_bindings_reconstruct_with_the_same_admission_providers(
+    monkeypatch, store_root, lease_directory
+):
+    built: list[ProductionAdmissionProviders] = []
+    real = phc.build_production_admission_providers
+
+    def spy(**kwargs):
+        built.append(real(**kwargs))
+        return built[-1]
+
+    monkeypatch.setattr(phc, "build_production_admission_providers", spy)
+    kwargs = _base_kwargs(lease_directory, runtime_configuration_provider=lambda _pilot: None)
+    bindings = build_production_governed_resume_bindings(**kwargs)
+    assert len(built) == 1
+    keywords = bindings.reconstruct.keywords
+    assert keywords["descriptor_loader"] is built[0].descriptor_loader
+    assert keywords["resolver"] is built[0].current_resolver
+    assert keywords["lease_reader"] is built[0].lease_reader
 
 
 # ---------------------------------------------------------------------------

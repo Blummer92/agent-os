@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import functools
 import os
+from dataclasses import dataclass
 from typing import Callable
 
 from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
@@ -120,6 +121,74 @@ def _host_local_lease_adapter(lease_directory: str) -> HostLocalLeaseAdapter:
 
 from .runtime_execution_request import RuntimeExecutionRequest
 
+
+@dataclass(frozen=True, slots=True)
+class ProductionAdmissionProviders:
+    """The four trusted #1218 admission inputs one production host binds.
+
+    These are exactly the objects ``build_production_governed_resume_bindings``
+    hands to ``reconstruct_governed_invocation``. Exposing them lets another
+    existing admitted consumer (the fixed #3333 HEAD probe) reuse the *same*
+    descriptor store, current-evidence resolver, host-local lease observation
+    and host clock instead of constructing a second set.
+    """
+
+    descriptor_loader: Callable[[str], GovernedInvocationDescriptor]
+    current_resolver: CanonicalCurrentInvocationResolver
+    lease_reader: HostLocalLeaseAdapter
+    evaluated_at: str
+
+
+def build_production_admission_providers(
+    *,
+    lease_directory: str,
+    route_decision_reader: DescriptorReader,
+    handoff_reader: HandoffReader,
+    checkpoint_reader: DescriptorReader,
+    resume_plan_reader: ResumePlanReader,
+    candidate_packet_rebuilder: DescriptorReader,
+    runtime_configuration_builder: RuntimeConfigurationBuilder,
+    pilot_input_builder: PilotInputBuilder,
+    authorization_transport: ExecutionAuthorizationSourceTransport,
+    evaluated_at: str,
+    runtime_request: RuntimeExecutionRequest | None = None,
+) -> ProductionAdmissionProviders:
+    """Bind the canonical descriptor/resolver/lease/clock providers.
+
+    Uses only ``AGENT_OS_CHECKPOINT_STORE_ROOT`` and one non-empty host-local
+    lease directory, exactly as governed resume does. No lease is acquired.
+    """
+    lease_adapter = _host_local_lease_adapter(lease_directory)
+    checkpoint_store_root = _checkpoint_store_root()
+
+    def descriptor_loader(handoff_id: str) -> GovernedInvocationDescriptor:
+        if runtime_request is not None and runtime_request.handoff_id == handoff_id:
+            return runtime_request.invocation_descriptor
+        return load_invocation_descriptor(checkpoint_store_root, handoff_id)
+
+    sources = HostCurrentInvocationSources(
+        checkpoint_store_root=checkpoint_store_root,
+        route_decision_reader=route_decision_reader,
+        handoff_reader=handoff_reader,
+        checkpoint_reader=checkpoint_reader,
+        resume_plan_reader=resume_plan_reader,
+        candidate_packet_rebuilder=candidate_packet_rebuilder,
+        runtime_configuration_builder=runtime_configuration_builder,
+        pilot_input_builder=pilot_input_builder,
+    )
+    resolver = CanonicalCurrentInvocationResolver(
+        sources=sources,
+        authorization_transport=authorization_transport,
+        evaluated_at=evaluated_at,
+    )
+    return ProductionAdmissionProviders(
+        descriptor_loader=descriptor_loader,
+        current_resolver=resolver,
+        lease_reader=lease_adapter,
+        evaluated_at=evaluated_at,
+    )
+
+
 def build_production_governed_resume_bindings(
     *,
     lease_directory: str,
@@ -161,17 +230,8 @@ def build_production_governed_resume_bindings(
     """
     if not callable(runtime_configuration_provider):
         raise TypeError("runtime_configuration_provider must be callable")
-    lease_adapter = _host_local_lease_adapter(lease_directory)
-
-    checkpoint_store_root = _checkpoint_store_root()
-
-    def descriptor_loader(handoff_id: str) -> GovernedInvocationDescriptor:
-        if runtime_request is not None and runtime_request.handoff_id == handoff_id:
-            return runtime_request.invocation_descriptor
-        return load_invocation_descriptor(checkpoint_store_root, handoff_id)
-
-    sources = HostCurrentInvocationSources(
-        checkpoint_store_root=checkpoint_store_root,
+    providers = build_production_admission_providers(
+        lease_directory=lease_directory,
         route_decision_reader=route_decision_reader,
         handoff_reader=handoff_reader,
         checkpoint_reader=checkpoint_reader,
@@ -179,11 +239,9 @@ def build_production_governed_resume_bindings(
         candidate_packet_rebuilder=candidate_packet_rebuilder,
         runtime_configuration_builder=runtime_configuration_builder,
         pilot_input_builder=pilot_input_builder,
-    )
-    resolver = CanonicalCurrentInvocationResolver(
-        sources=sources,
         authorization_transport=authorization_transport,
         evaluated_at=evaluated_at,
+        runtime_request=runtime_request,
     )
 
     # The lease is only ever *observed* here (never acquired/released):
@@ -193,9 +251,9 @@ def build_production_governed_resume_bindings(
     # semantics are introduced.
     reconstruct = functools.partial(
         reconstruct_governed_invocation,
-        descriptor_loader=descriptor_loader,
-        resolver=resolver,
-        lease_reader=lease_adapter,
+        descriptor_loader=providers.descriptor_loader,
+        resolver=providers.current_resolver,
+        lease_reader=providers.lease_reader,
         evaluated_at=evaluated_at,
     )
 
