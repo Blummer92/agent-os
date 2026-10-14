@@ -284,6 +284,21 @@ def test_cross_repository_closure_admission_does_not_authorize():
     assert "unauthorized-closing-reference" in result.reason_codes
 
 
+def test_3590_canonical_qualified_closing_reference_blocks_without_raising():
+    result = admission(pr_body="Closes Blummer92/agent-os#2772")
+    assert result.transition_admissible is False
+    assert "unauthorized-closing-reference" in result.reason_codes
+
+
+def test_3590_canonical_qualified_closing_reference_matches_its_admission():
+    result = admission(
+        pr_body="Closes Blummer92/agent-os#2772",
+        closure_admissions=(closure_admission(2772),),
+    )
+    assert result.transition_admissible is True
+    assert "unauthorized-closing-reference" not in result.reason_codes
+
+
 def test_negated_closing_prose_still_blocks_ready_transition():
     result = admission(pr_body="This does not close #2772")
     assert result.transition_admissible is False

@@ -97,7 +97,6 @@ from .lifecycle_stage_acquisition import (
 )
 from .models import LinkedIssueParseResult, LinkedIssueParseStatus
 from .parse_pr import (
-    _CANONICAL_REPOSITORY,
     detect_github_effective_closing_references,
     parse_linked_issue_result,
 )
@@ -116,9 +115,6 @@ _MAX_NOTE_CHARS = 480
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_CANONICAL_QUALIFIER_RE = re.compile(
-    rf"(?<![A-Za-z0-9_.-]){re.escape(_CANONICAL_REPOSITORY)}#", re.IGNORECASE
-)
 
 # --- bounded reason vocabulary ------------------------------------------------
 REASON_POPULATION_COMPLETE = "pr-lineage.population-complete"
@@ -431,29 +427,11 @@ def _classify_references(
     # GitHub closes on merge whatever parse_pr masks; such a target that is not
     # the claim is a competing lineage reference. "#N" covers this repository
     # (the detector folds the canonical repository into the short form).
-    for reference in _effective_closing_references(title, body):
+    for reference in detect_github_effective_closing_references(body, title):
         target_repository, _, target_number = reference.target.rpartition("#")
         if same_repository(target_repository or None):
             record(int(target_number), ROLE_AMBIGUOUS)
     return [PrReference(issue, number, role) for issue, role in sorted(roles.items())]
-
-
-def _effective_closing_references(title: str, body: str):
-    """``detect_github_effective_closing_references``, tolerating one known defect.
-
-    The detector builds a target qualified with the canonical repository
-    unfolded and then rejects it in the reference's own normalization check, so
-    ``Closes <canonical-repository>#N`` raises. On that error the qualifier is
-    folded to ``#`` exactly as ``normalize_issue_target`` folds it, and the same
-    detector is asked again. Any further error propagates and fails the
-    enumeration closed.
-    """
-    try:
-        return detect_github_effective_closing_references(body, title)
-    except ValueError:
-        return detect_github_effective_closing_references(
-            _CANONICAL_QUALIFIER_RE.sub("#", body), _CANONICAL_QUALIFIER_RE.sub("#", title)
-        )
 
 
 def enumerate_pull_request_population(

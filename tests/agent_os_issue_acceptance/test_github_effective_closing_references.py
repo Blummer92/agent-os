@@ -179,3 +179,69 @@ def test_linked_issue_check_pass_case_reports_closing_evidence():
         "github_effective_closing keyword=fix target=#123 source=body"
         in result.evidence
     )
+
+
+# --- #3590: canonical-repository-qualified short targets ----------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The canonical repository folds to "#N" in every case spelling.
+        ("Closes Blummer92/agent-os#12", [("close", "#12", "body")]),
+        ("fixes BLUMMER92/AGENT-OS#12", [("fix", "#12", "body")]),
+        ("Resolves: blummer92/agent-os#12", [("resolve", "#12", "body")]),
+        # Shorthand and canonical-qualified forms of one issue collapse.
+        ("Closes #12\nCloses Blummer92/agent-os#12", [("close", "#12", "body")]),
+        # Other repositories keep their lowercase qualifier and never fold.
+        ("Fixes Other/Repo#12", [("fix", "other/repo#12", "body")]),
+        ("Fixes Blummer92/agent-os-fork#12", [("fix", "blummer92/agent-os-fork#12", "body")]),
+        # Lookalike owners stay distinct repositories, never folded to "#12".
+        ("Fixes x.Blummer92/agent-os#12", [("fix", "x.blummer92/agent-os#12", "body")]),
+        # A path-prefixed lookalike is not a GitHub closing target at all.
+        ("Fixes evil/Blummer92/agent-os#12", []),
+        # Canonical issue URLs in any case still fold, as before.
+        ("Fixes https://github.com/blummer92/AGENT-OS/issues/12", [("fix", "#12", "body")]),
+        # Non-closing qualified references stay undetected.
+        ("Part of Blummer92/agent-os#12", []),
+        ("Refs Blummer92/agent-os#12", []),
+        # Fail closed: code spans and negation are still detected.
+        ("`closes Blummer92/agent-os#12`", [("close", "#12", "body")]),
+        ("does not fix Blummer92/agent-os#12", [("fix", "#12", "body")]),
+    ],
+)
+def test_3590_canonical_qualified_targets_normalize_without_raising(text, expected):
+    references = _refs(text)
+    assert references == expected
+    for _, target, _ in references:
+        assert normalize_issue_target(target) == target
+
+
+def test_3590_canonical_qualified_title_reference_is_detected():
+    assert _refs("", title="Closes Blummer92/agent-os#12") == [("close", "#12", "title")]
+
+
+def test_3590_canonical_qualified_target_is_unauthorized_without_admission():
+    detected = detect_github_effective_closing_references("Closes Blummer92/agent-os#12")
+    assert unauthorized_closing_targets(detected, ()) == ("#12",)
+    assert unauthorized_closing_targets(detected, ("#12",)) == ()
+    assert unauthorized_closing_targets(detected, ("Blummer92/agent-os#12",)) == ()
+    # Authorization for another repository's #12 never covers this one.
+    assert unauthorized_closing_targets(detected, ("other/repo#12",)) == ("#12",)
+
+
+def test_3590_routing_parser_keeps_qualified_links_in_manual_review():
+    # #2160 routing is unchanged: a repository-qualified explicit link is not
+    # resolved to an issue even when it names the canonical repository.
+    result = parse_linked_issue_result("Closes Blummer92/agent-os#12")
+    assert result.status == LinkedIssueParseStatus.MANUAL_REVIEW
+    assert result.issue_number is None
+
+
+def test_3590_linked_issue_check_reports_folded_closing_evidence():
+    result = linked_issue.check("Closes Blummer92/agent-os#12")
+    assert result.status == Status.MANUAL_REVIEW
+    assert (
+        "github_effective_closing keyword=close target=#12 source=body"
+        in result.evidence
+    )
