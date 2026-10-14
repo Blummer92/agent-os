@@ -307,6 +307,14 @@ def _status(status_id, state, context=ra.AGGREGATE_CONTEXT):
         ([_job(1, None, status="in_progress")], [], "pending"),
         ([_job(1, "skipped")], [], "skipped"),
         ([], [], "missing"),
+        # QA findings: unknown newest state and unorderable ids fail closed.
+        ([], [_status(2, "weird"), _status(1, "success")], "failure"),
+        ([], [{"id": None, "context": ra.AGGREGATE_CONTEXT, "state": "success"}], "failure"),
+        ([], [{"id": True, "context": ra.AGGREGATE_CONTEXT, "state": "success"}], "failure"),
+        ([], [_status(3, "success"), _status(3, "failure")], "failure"),
+        ([], [_status(3, "failure"), _status(3, "success")], "failure"),
+        # Ids of other contexts never affect the authoritative read.
+        ([], [_status(5, "success"), {"id": None, "context": "ci/other", "state": "failure"}], "success"),
     ],
 )
 def test_aggregate_comes_only_from_the_authoritative_status(runs, statuses, expected_aggregate):

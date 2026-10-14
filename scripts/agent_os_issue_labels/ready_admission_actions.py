@@ -354,7 +354,18 @@ def resolve_validation_evidence(
     ``pull_request`` events, so a skipped copy comes from a dispatch run.
     """
     focused = _newest_check_state(check_runs, FOCUSED_CHECK_NAME, ignore_skipped=True)
-    authoritative = latest_authoritative_state(statuses)
+    authoritative_entries = [
+        entry for entry in statuses if entry.get("context") == AGGREGATE_CONTEXT
+    ]
+    ids = [entry.get("id") for entry in authoritative_entries]
+    if any(type(value) is not int or value < 0 for value in ids) or len(set(ids)) != len(ids):
+        # Unorderable authoritative evidence (missing, non-integer or repeated
+        # ids) cannot name the newest status: fail closed.
+        return focused, "failure"
+    authoritative = latest_authoritative_state(authoritative_entries)
+    if authoritative == "missing" and authoritative_entries:
+        # A status exists but its newest state is not one GitHub emits.
+        authoritative = "failure"
     if authoritative == "missing":
         job = _newest_check_state(check_runs, AGGREGATE_JOB_NAME, ignore_skipped=False)
         aggregate = "missing" if job == "success" else job
