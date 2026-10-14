@@ -129,6 +129,10 @@ from scripts.agent_os_issue_acceptance.pr_lineage_reader import (  # noqa: E402
     PullRequestDetailOutcome,
     PullRequestDetailResult,
 )
+from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (  # noqa: E402
+    ASSOCIATION_POLICIES,
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+)
 from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter  # noqa: E402
 from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  # noqa: E402
     LiveCandidateEvidence,
@@ -791,6 +795,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--repository", default="Blummer92/agent-os")
     parser.add_argument("--campaign-id", required=True)
     parser.add_argument(
+        "--association-policy",
+        choices=sorted(ASSOCIATION_POLICIES),
+        default=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+        help="PR association policy (default: closing-directive-v1)",
+    )
+    parser.add_argument(
         "--candidates",
         default=None,
         help="comma-separated explicit narrowing set (requires --narrowing-criterion)",
@@ -945,6 +955,7 @@ def main(argv: list[str] | None = None) -> int:
         detail_reader=LivePullRequestDetailReader(client),
         source_revision_reader=head_reader.head_sha,
         observed_at=retrieved_at,
+        association_policy=args.association_policy,
     )
     evidence_reader = _RecordingCandidateEvidenceReader(
         LiveCandidateEvidenceReader(
