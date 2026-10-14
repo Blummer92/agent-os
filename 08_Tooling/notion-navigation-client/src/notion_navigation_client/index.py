@@ -1,13 +1,17 @@
 """In-memory, per-session cache over the navigation-index tabs.
 
 Each tab is fetched at most once per NavigationIndex instance (one Sheets
-API read per tab per agent session), then parsed and looked up locally.
+API read per tab per agent session), then parsed and looked up locally. The
+raw rows are what is cached, so keyed lookups and the Refresh Log chronology
+read share a single fetch of a tab.
 """
 from __future__ import annotations
 
 from typing import Callable
 
 from .records import index_by, rows_to_records, split_header_and_data, with_warning
+from .refresh_log import DEFAULT_LIMIT as DEFAULT_REFRESH_LOG_LIMIT
+from .refresh_log import TAB_REFRESH_LOG, build_refresh_log_evidence
 
 TAB_DASHBOARD_REGISTRY = "Dashboard Registry"
 TAB_DATABASE_REGISTRY = "Database Registry"
@@ -38,12 +42,17 @@ class NavigationIndex:
 
     def __init__(self, fetch_tab: Callable[[str], list[list[str]]]):
         self._fetch_tab = fetch_tab
+        self._row_cache: dict[str, list[list[str]]] = {}
         self._tab_cache: dict[str, list[dict]] = {}
+
+    def _rows(self, tab_name: str) -> list[list[str]]:
+        if tab_name not in self._row_cache:
+            self._row_cache[tab_name] = self._fetch_tab(tab_name)
+        return self._row_cache[tab_name]
 
     def _records(self, tab_name: str) -> list[dict]:
         if tab_name not in self._tab_cache:
-            rows = self._fetch_tab(tab_name)
-            header, data = split_header_and_data(rows)
+            header, data = split_header_and_data(self._rows(tab_name))
             self._tab_cache[tab_name] = rows_to_records(header, data)
         return self._tab_cache[tab_name]
 
@@ -83,3 +92,18 @@ class NavigationIndex:
             if name == suspect or name in similar_to:
                 matches.append(with_warning(record))
         return matches
+
+    def get_refresh_log(self, limit: int = DEFAULT_REFRESH_LOG_LIMIT) -> dict:
+        """Bounded, read-only Refresh Log chronology evidence.
+
+        Returns the last `limit` populated rows in source-row order with raw
+        timestamps preserved, plus the latest observed refresh by source row
+        (and by timestamp only when every row states its timezone). Always
+        returns an envelope, even for an empty or headerless tab; raises
+        ValueError for an out-of-range `limit`.
+
+        Refresh Log rows are navigation-cache evidence only: not a complete
+        history of any work, and never a substitute for live Notion or GitHub
+        verification. See `refresh_log.py` for the exact semantics.
+        """
+        return build_refresh_log_evidence(self._rows(TAB_REFRESH_LOG), limit=limit)
