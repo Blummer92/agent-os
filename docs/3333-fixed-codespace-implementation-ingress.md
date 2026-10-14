@@ -133,3 +133,70 @@ The consumer now also rejects a partial host binding with
 `canonical-host-binding-incomplete`. This is a repository-side safety check,
 not a claim that the live host provider is connected.
 
+## Trusted-host provider connection (2026-10-14)
+
+The #1287 composition now exposes the admission providers it already built:
+`build_production_admission_providers(...)` returns `ProductionAdmissionProviders`.
+The bundle holds the descriptor loader, the `CanonicalCurrentInvocationResolver`,
+the `HostLocalLeaseAdapter` and the host clock (`evaluated_at`).
+`build_production_governed_resume_bindings(...)` reconstructs with this same
+bundle, so governed resume and the fixed probe cannot bind different stores,
+leases or clocks.
+
+`ProductionHostBootstrap.admission_providers()` returns that bundle for one host
+process. It uses the same `AGENT_OS_CHECKPOINT_STORE_ROOT` check, sources and
+lease directory as `governed_resume_bindings(...)`. It has no dispatch closure,
+so the Scheduler cannot be reached from it.
+
+A trusted host invokes the fixed probe like this:
+
+```text
+bootstrap = build_production_host_bootstrap(...)   # host state only
+consume_fixed_codespace_pilot_on_host(
+    transport,                                     # accepted #3333 envelope
+    providers=bootstrap.admission_providers(),
+)
+```
+
+`consume_fixed_codespace_pilot_on_host` checks the envelope first. It then
+requires the exact `ProductionAdmissionProviders` type. Finally, it reads the
+current Codespace through `read_canonical_codespace_selection`, which calls the
+canonical shared `workflow_scheduler.governance.dev_validation_codespaces.resolve_current_codespace`.
+The read lives in the execution service because `scripts/**` may not import
+`workflow_scheduler` (the packaging guard in `tests/test_workflow_scheduler_packaging.py`).
+A failed or non-canonical read blocks. The `resolve_selection` hook exists for
+test fakes only. No issue-comment operand reaches it. Every admission, identity,
+Codespace and receipt decision stays in `consume_fixed_codespace_pilot`.
+
+Compatibility boundary: the probe still needs a *real* admitted #3333
+`SingleIssuePilotInput`. That input exists only after the existing
+`handoff_publication` producer has persisted a descriptor, checkpoint,
+ResumePlan, authorization and lease identity for an actual bounded-implementation
+handoff. The HEAD probe is a read-only sub-operation of that admitted mission.
+It never creates or substitutes that mission.
+
+Unchanged: the Actions CLI `main()` has no host and still returns
+`canonical-admission-provider-unavailable`. The operation stays
+`codespace-implementation-pilot-v1` with argv `("git", "rev-parse", "HEAD")`.
+No workflow, credential, host configuration, Codespace lifecycle, executor,
+transport or store changed.
+
+Regression coverage in `test_fixed_codespace_pilot.py` runs the real
+`reconstruct_governed_invocation`, the currentness re-check, the dispatcher and
+the transport. As in the #1218 suite, the cross-check results,
+`SingleIssuePilotInput` and the lease request are patched, so stale and
+authorization cases inject canonical reason codes. Only the missing-descriptor
+case also runs over real providers and an empty store. Each case below must
+fail closed:
+
+- missing descriptor, including real providers over an empty store;
+- stale checkpoint or ResumePlan, or invalid, replaced or expired authorization;
+- conflicting, ambiguous or foreign lease;
+- mismatched issue, handoff, source or remote SHA, or pilot tested SHA or repository;
+- changed or unqualified Codespace selection, or a silent transport switch;
+- missing environment-health evidence, unavailable runner, unsupported or empty capabilities;
+- evidence that becomes unavailable after admission;
+- malformed, non-zero, truncated or wrong-Codespace receipt, or an SSH timeout;
+- an unauthorized operation or envelope.
+
+None of this is live acceptance.
