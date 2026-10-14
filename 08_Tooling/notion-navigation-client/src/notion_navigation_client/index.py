@@ -24,6 +24,16 @@ TAB_DUPLICATE_DRIFT_WATCHLIST = "Duplicate / Drift Watchlist"
 _PROPERTY_DATABASE_FIELD = "Database Name"
 _PROPERTY_NAME_FIELDS = ("Field Name", "Property Name")
 
+# Kinds that list_names can enumerate: kind -> (tab, key column).
+_NAME_COLUMNS = {
+    "dashboard": (TAB_DASHBOARD_REGISTRY, "Dashboard Name"),
+    "database": (TAB_DATABASE_REGISTRY, "Database Name"),
+    "workflow": (TAB_WORKFLOW_MAP, "Workflow Name"),
+    "prompt": (TAB_AGENT_PROMPT_LIBRARY, "Prompt Name"),
+    "source-of-truth": (TAB_SOURCE_OF_TRUTH_MATRIX, "Information Type"),
+    "duplicate-risk": (TAB_DUPLICATE_DRIFT_WATCHLIST, "Suspect Field, Database, or Dashboard"),
+}
+
 
 def _property_name(record: dict) -> str:
     """Return the field/property display name from supported header variants."""
@@ -82,6 +92,29 @@ class NavigationIndex:
     def get_prompt(self, prompt_name: str) -> dict | None:
         index = index_by(self._records(TAB_AGENT_PROMPT_LIBRARY), "Prompt Name")
         return with_warning(index.get(prompt_name))
+
+    def list_names(self, kind: str, database: str | None = None) -> list[str]:
+        """Stored names for one lookup kind, in sheet order, duplicates preserved.
+
+        `kind` is one of dashboard, database, workflow, prompt, source-of-truth
+        (Information Type), duplicate-risk (Watchlist Suspect), or field (which
+        requires `database`). Rows with a blank name are skipped, exactly as the
+        keyed getters skip them. Repeated names are returned repeatedly, because
+        the keyed getters silently keep only one row for a repeated name.
+        """
+        if kind == "field":
+            if not database:
+                raise ValueError("database is required for kind=field")
+            names = (
+                _property_name(record)
+                for record in self._records(TAB_PROPERTY_DICTIONARY)
+                if record.get(_PROPERTY_DATABASE_FIELD) == database
+            )
+            return [name for name in names if name]
+        if kind not in _NAME_COLUMNS:
+            raise ValueError(f"unsupported kind: {kind!r}")
+        tab_name, column = _NAME_COLUMNS[kind]
+        return [record[column] for record in self._records(tab_name) if record.get(column)]
 
     def check_duplicate_risk(self, name: str) -> list[dict]:
         """Exact or substring match against Suspect and Similar To columns."""

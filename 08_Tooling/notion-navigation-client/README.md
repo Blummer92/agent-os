@@ -136,6 +136,81 @@ reported as `unrecognized-format`: day/month order is locale-dependent and no zo
 is stated, so nothing is guessed. Against that shape `by_timestamp` is unavailable
 and `by_source_row` is the answer.
 
+## Pre-create preflight
+
+`precreate_preflight(index, PreCreateRequest(kind, name, database=None, information_type=None))`
+(CLI: `preflight KIND NAME [--database DB] [--information-type TYPE] [--max-age-hours N]`)
+is the advisory check to run **before proposing or creating** a new Notion-facing
+field, dashboard, database, workflow, or prompt. It composes the lookups this
+package already has (`list_names`, the keyed getters, `check_duplicate_risk`, and
+`get_refresh_log` when the index offers it); there is no second registry, cache,
+client, or deduplication system, and it performs no I/O of its own.
+
+It answers four questions about the **cached** index: is there an exact or safely
+normalized existing match; does the Duplicate / Drift Watchlist flag a related
+duplicate-risk family; which owner or source-of-truth route should be verified live
+next; and is human review required. It never decides that two live Notion
+properties are duplicates and never authorizes a create, merge, rename, retirement,
+or schema change.
+
+Finite outcomes, in the order the first applicable rule wins:
+
+| Outcome | When | What the caller does |
+|---|---|---|
+| `manual-review` | The request is invalid; the identity is ambiguous (several stored names normalize alike, or the cache repeats a name); a field's parent database is ambiguous or not in the cached Database Registry, so the field cannot be scoped; the `information_type` is ambiguous; or a listed record cannot be read | Resolve with a human |
+| `duplicate-risk-review` | The Watchlist has a hit for the requested name or a matched stored name | Human review; never clean up automatically |
+| `existing-match` | Exactly one exact or normalized match | Reuse it; verify it live |
+| `stale-or-unverified` | No match, and the cache is not shown to be within the caller's freshness policy | Refresh or verify live; an absence proves nothing |
+| `no-cached-match` | No match in a cache shown to be within the freshness policy | Still verify live |
+
+Every result, whatever the outcome, carries `live_verification_required: true` and
+`authorizes_mutation: false`, the sheet's `navigation_warning`, the matched and
+Watchlist records exactly as the sheet holds them (including `Human Review Needed?`),
+a fixed `next_step` sentence, and `reason_codes` in a fixed order. The CLI exits `0`
+whenever the preflight ran: the exit status never carries the verdict, because no
+verdict means "safe". In particular, **`no-cached-match` is not proof that creating
+is safe.**
+
+Rules:
+
+- **Normalization is explicit and small.** A name matches exactly, or after Unicode
+  NFKC folding, case-folding, and collapsing whitespace runs. Punctuation, hyphens,
+  plurals, word order, abbreviations, and synonyms are not normalized, and there is no
+  fuzzy, semantic, or substring identity matching. A normalized match is reported with
+  `basis: "normalized"` and the stored name it matched. The same rule resolves a
+  field's parent database against the Database Registry (`identity.parent_database`),
+  the optional `information_type` against the Source of Truth Matrix, and Watchlist
+  Suspect names; a normalized resolution is reported with its own reason code, and an
+  ambiguous one is `manual-review`. A field whose parent database is not in the cached
+  Database Registry cannot be scoped, so its identity is `scope-unresolved` and the
+  outcome is `manual-review` (`identity.parent-database-not-cached`).
+- **Duplicate-risk evidence is the existing `check_duplicate_risk`** (exact match on
+  the Suspect column, case-sensitive substring match on Similar To), asked for the
+  requested name, each matched stored name, and each Watchlist Suspect name that
+  normalizes like one of them. Every hit counts whatever its
+  `Status`. Because Similar To is matched by substring, a name that merely appears inside
+  a family description (for example a database name) is also reported.
+- **Review.** Only an explicit `No` in `Human Review Needed?` (or `Human Review Required?`
+  on prompts) clears a consulted record; `Yes...`, blank, missing, or any other value
+  requires review (`review.record-flagged` / `review.flag-unclear`).
+- **Routing is guidance only.** `routing.routes` lists where to verify live next: the
+  matched record, the parent database of a field, and the Source of Truth Matrix row for
+  an optional `information_type`, each with the sheet's raw routing columns and its
+  `Human Review Needed?` value (a flagged route requires review too). It grants
+  no write, readiness, or approval authority.
+- **Currentness comes from the Refresh Log (#3306), judged by the caller's policy.** The
+  module never reads a clock. The caller passes `now` (timezone-aware) and `max_age`
+  (`--max-age-hours` on the CLI; the repository defines no default policy). The cache
+  counts as `within-policy` only when the index offers `get_refresh_log`, every Refresh
+  Log row states its timezone, and the latest refresh is no older than `max_age`.
+  Otherwise currentness is `stale` or `unverified` with one reason code
+  (`currentness.refresh-log-unavailable`, `.no-refresh-records`, `.refresh-time-unresolved`,
+  `.no-freshness-policy`, `.refresh-time-in-future`, `.refresh-log-malformed`, `.stale`).
+  The raw latest Refresh Log row stays visible. A stale or unverified cache never hides a
+  finding: it only keeps "no match" from being read as meaningful.
+- **Boundaries.** GitHub bug-issue duplicate and root-cause admission (#2660) is a
+  different seam and is untouched. Nothing here writes to Sheets, Notion, or Drive.
+
 ## Installation
 
     pip install -e .
@@ -154,6 +229,8 @@ and `by_source_row` is the answer.
     python -m notion_navigation_client.cli lookup dashboard "Curriculum Source Control"
     python -m notion_navigation_client.cli lookup field "DM Units" --field "Generation Gate"
     python -m notion_navigation_client.cli lookup duplicate-risk "Readiness"
+    python -m notion_navigation_client.cli preflight dashboard "Brand New Dashboard" --max-age-hours 24
+    python -m notion_navigation_client.cli preflight field "Lesson Tag" --database "DM Units"
     python -m notion_navigation_client.cli refresh-log --limit 5
 
 Prints the matching record(s) as JSON, including the sheet's own
@@ -177,6 +254,10 @@ displayed timestamp formats but uses sanitized values), and
 `tests/test_refresh_log.py` also pins the read-only surface: the OAuth scope stays
 `spreadsheets.readonly`, no known Sheets write method appears in the package's
 code, and the Sheets `values()` resource is only ever read with `.get(...)`.
+`precreate.py` is tested directly as well; its tests also pin that the module is
+pure (no I/O or network imports) and that no outcome authorizes a mutation, and
+three of them exercise the preflight against the real
+`NavigationIndex.get_refresh_log` in the live display shape.
 
 ## Limitations
 
@@ -212,3 +293,9 @@ code, and the Sheets `values()` resource is only ever read with `.get(...)`.
   been observed live.
 - The Refresh Log is read as a whole tab (one cached read, like every other tab);
   `limit` bounds what is returned, not what is fetched.
+- The pre-create preflight inherits `check_duplicate_risk`'s matching limits: it also reports
+  names that only appear inside a Watchlist family description, and it cannot see duplicates the Watchlist does not
+  list. It judges cache currentness only from the Refresh Log; against the live tab's
+  current shape (a UTC-stamped first row, later datetime cells formatted as
+  `m/d/yyyy h:mm:ss` with no zone) that evidence is
+  unresolved, so a "no match" there is reported as `stale-or-unverified`.

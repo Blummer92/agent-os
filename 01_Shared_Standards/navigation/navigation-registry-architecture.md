@@ -106,6 +106,24 @@ owner. Deleted resource: mark inactive after verification. Offline system: defer
 live action and produce handoff. Duplicate resource: require human review before
 write or relationship repair.
 
+## Pre-Create Preflight
+
+Before an agent proposes or creates a new Notion-facing field, dashboard,
+database, workflow, or prompt, it consults the cached Notion navigation index
+through the advisory preflight in `08_Tooling/notion-navigation-client/` (see its
+README for the interface). The preflight checks, in order, for an exact or
+deterministically normalized existing match, then for Duplicate / Drift Watchlist
+evidence, then returns the owner and source-of-truth route to verify live next.
+Its finite outcomes are `existing-match`, `duplicate-risk-review`,
+`no-cached-match`, `stale-or-unverified`, and `manual-review`.
+
+The preflight is cached evidence, not authority. `no-cached-match` is not proof that
+creating is safe, a duplicate-risk finding routes to human review and never triggers
+automatic merge, rename, retirement, or cleanup, and every outcome requires live
+verification of the owning system before any write or governed-field decision. It
+adds no registry, cache, or deduplication system, and it does not replace the GitHub
+bug-issue duplicate admission owned elsewhere.
+
 ## Roadmap
 
 1. Approve architecture and tests.
