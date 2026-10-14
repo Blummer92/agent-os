@@ -43,9 +43,15 @@ def _receipt(status: str, reason: str, transport: dict[str, Any]) -> dict[str, o
         "expected_sha": transport.get("codespace_implementation_sha_or_none"),
         "request_id": None,
         "codespace_name": None,
+        "argv": list(FIXED_ARGV),
         "exit_status": None,
         "stdout_tail": "",
         "stderr_tail": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "started_at": None,
+        "ended_at": None,
+        "duration_ms": None,
         "execution_authorized": False,
         "github_writes_authorized": False,
         "external_writes_authorized": False,
@@ -250,12 +256,20 @@ def consume_fixed_codespace_pilot(
         receipt["exit_status"] = result.exit_status_or_none
         receipt["stdout_tail"] = result.stdout_tail
         receipt["stderr_tail"] = result.stderr_tail
+        # Keep the transport's own evidence; the completion check below uses it too.
+        receipt["argv"] = list(result.argv)
+        receipt["stdout_truncated"] = result.stdout_truncated
+        receipt["stderr_truncated"] = result.stderr_truncated
+        receipt["started_at"] = result.started_at_or_none
+        receipt["ended_at"] = result.ended_at_or_none
+        receipt["duration_ms"] = result.duration_ms
         if (
             result.exit_status_or_none == 0
             and result.stdout_tail.strip() == sha
             and not result.stdout_truncated
             and not result.stderr_truncated
             and result.codespace_name_or_none == selection.codespace_name
+            and tuple(result.argv) == FIXED_ARGV
         ):
             receipt.update(status="completed", reason_codes=["fixed-head-probe-passed"])
         else:
