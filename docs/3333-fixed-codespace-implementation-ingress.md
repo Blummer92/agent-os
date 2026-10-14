@@ -182,7 +182,7 @@ Codespace and receipt decision stays in `consume_fixed_codespace_pilot`.
 Compatibility boundary: the probe still needs a *real* admitted #3333
 `SingleIssuePilotInput`. That input exists only after the existing
 `handoff_publication` producer has persisted a descriptor, checkpoint,
-ResumePlan, authorization and lease identity for an actual bounded-implementation
+ResumePlan, authorization and lease identity for an actual pre-PR developer-loop
 handoff. The HEAD probe is a read-only sub-operation of that admitted mission.
 It never creates or substitutes that mission.
 
@@ -238,3 +238,19 @@ trusted host, bind a host path, provision a credential, start or stop a
 Codespace, or change the lease, lifecycle, transport, receipt or authorization
 contracts. Gate 2 (lifecycle topology), the remaining Gate 4 identity and token
 items, and Gate 5 R-2 (receipt return path) keep their owners.
+
+## Admitted route operation (#3333 D3)
+
+The probe is admitted only under a route whose `requested_operation` is
+`pre-pr-developer-loop`, the operation every production publisher already binds
+(`production_handoff_publication.PRE_PR_DEVELOPER_LOOP_OPERATION`). It previously
+required `bounded-implementation`, which nothing outside tests produced, so no
+real handoff could reach it. The retired `bounded-implementation` and the
+lifecycle-only `validation-only` are both refused with
+`canonical-identity-or-authorization-mismatch`.
+
+Two identities stay separate. The route operation names the admitted mission. The
+envelope operation `codespace-implementation-pilot-v1` and its reserved one-probe
+authorization (comment 6176889694) are unchanged and still unconsumed. The fixed
+argv is still `("git", "rev-parse", "HEAD")`, and the Actions entry still fails
+closed with `canonical-admission-provider-unavailable`.
