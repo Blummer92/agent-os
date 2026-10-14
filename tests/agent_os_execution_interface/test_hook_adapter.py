@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -264,3 +268,216 @@ def test_stop_evaluator_error_fails_open(governed_checkout):
     assert hook_adapter.run_stop_hook(
         json.dumps({"cwd": str(governed_checkout), "agent_os_continuation": {"action": 123}})
     ) == ""
+
+
+# --- #3588: hook startup must not depend on PyYAML ---------------------------
+#
+# The locator import chain reaches PyYAML-backed issue-acceptance modules. A host
+# hook interpreter without PyYAML (a Copilot CLI Codespace) crashed before any
+# governed handling. These tests run the real hook entrypoint under an import
+# blocker for ``yaml`` so the guarantee is proven end to end, not mocked.
+
+_ENTRYPOINT = (
+    Path(__file__).resolve().parents[2] / "scripts" / "agent-os-execution-interface-preflight.py"
+)
+_DISCOVERY_MODULE = "scripts.agent_os_execution_checkpoint.handoff_discovery"
+
+_NO_YAML_RUNNER = """
+import json, runpy, sys
+
+class _BlockYaml:
+    attempts = []
+
+    def find_spec(self, name, path=None, target=None):
+        if name == "yaml" or name.startswith("yaml.") or name == "_yaml":
+            _BlockYaml.attempts.append(name)
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return None
+
+sys.meta_path.insert(0, _BlockYaml())
+entrypoint, report, *argv = sys.argv[1:]
+sys.argv = [entrypoint, *argv]
+code = 0
+try:
+    runpy.run_path(entrypoint, run_name="__main__")
+except SystemExit as exc:
+    code = exc.code or 0
+with open(report, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "exit": code,
+            "yaml_attempts": _BlockYaml.attempts,
+            "discovery_imported": %r in sys.modules,
+        },
+        handle,
+    )
+""" % _DISCOVERY_MODULE
+
+
+def _run_without_pyyaml(tmp_path, args, stdin="", *, extra_env=None):
+    """Run the real hook entrypoint with ``yaml`` unimportable; return (proc, report)."""
+    report = tmp_path / "no-yaml-report.json"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (hook_adapter.STORE_ROOT_ENV, hook_adapter.REPOSITORY_ENV)
+    }
+    env.update(extra_env or {})
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", _NO_YAML_RUNNER, str(_ENTRYPOINT), str(report), *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    if not report.exists():
+        pytest.fail(f"hook entrypoint crashed before completing (exit {proc.returncode}):\n{proc.stderr}")
+    return proc, json.loads(report.read_text(encoding="utf-8"))
+
+
+def _assert_started_cleanly(proc, report):
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr
+    assert report["exit"] == 0
+
+
+@pytest.mark.parametrize(
+    "hook,payload_for,expected_stdout",
+    [
+        ("user-prompt-submit", lambda cwd: {"prompt": "summarize the README", "cwd": cwd}, ""),
+        (
+            "pre-tool-use",
+            lambda cwd: {"tool_name": "Bash", "tool_input": {"command": "git status --short"}, "cwd": cwd},
+            "",
+        ),
+        (
+            "pre-tool-use",
+            lambda cwd: {"toolName": "bash", "toolArgs": json.dumps({"command": "git rev-parse HEAD"}), "cwd": cwd},
+            "",
+        ),
+        (
+            "pre-tool-use",
+            lambda cwd: {"tool_name": "Bash", "tool_input": {"command": "python3 --version"}, "cwd": cwd},
+            "",
+        ),
+        ("stop", lambda cwd: {"cwd": cwd, "stop_hook_active": False}, ""),
+    ],
+    ids=("prompt", "claude-read-only", "copilot-read-only", "claude-python-version", "stop"),
+)
+def test_hook_entrypoint_starts_without_pyyaml_when_no_discovery_is_needed(
+    tmp_path, governed_checkout, hook, payload_for, expected_stdout
+):
+    proc, report = _run_without_pyyaml(
+        tmp_path,
+        ["--hook", hook],
+        json.dumps(payload_for(str(governed_checkout))),
+    )
+
+    _assert_started_cleanly(proc, report)
+    assert proc.stdout.strip() == expected_stdout
+    assert report["yaml_attempts"] == []
+    assert report["discovery_imported"] is False
+
+
+def test_pre_tool_guard_still_restates_invariant_without_pyyaml(tmp_path, governed_checkout):
+    proc, report = _run_without_pyyaml(
+        tmp_path,
+        ["--hook", "pre-tool-use"],
+        json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": "which gh"}, "cwd": str(governed_checkout)}
+        ),
+    )
+
+    _assert_started_cleanly(proc, report)
+    decoded = json.loads(proc.stdout)
+    assert "never evidence that Agent OS execution is" in decoded["hookSpecificOutput"]["additionalContext"]
+    assert "permissionDecision" not in proc.stdout
+    assert report["yaml_attempts"] == []
+    assert report["discovery_imported"] is False
+
+
+@pytest.mark.parametrize("hook", ("user-prompt-submit", "pre-tool-use", "stop"))
+@pytest.mark.parametrize("raw", ("", "{not-valid-json", "[]"))
+def test_malformed_hook_input_is_bounded_without_pyyaml(tmp_path, hook, raw):
+    proc, report = _run_without_pyyaml(tmp_path, ["--hook", hook], raw)
+
+    _assert_started_cleanly(proc, report)
+    assert proc.stdout.strip() == ""
+    assert report["yaml_attempts"] == []
+    assert report["discovery_imported"] is False
+
+
+def test_unconfigured_store_stays_needs_decision_without_importing_discovery(tmp_path, governed_checkout):
+    proc, report = _run_without_pyyaml(
+        tmp_path,
+        ["--hook", "user-prompt-submit"],
+        json.dumps({"prompt": "Work on #1259", "cwd": str(governed_checkout)}),
+    )
+
+    _assert_started_cleanly(proc, report)
+    assert "status=needs-decision" in proc.stdout
+    assert "descriptor-store-not-configured" in proc.stdout
+    assert "/agent-os resume" not in proc.stdout
+    assert report["yaml_attempts"] == []
+    assert report["discovery_imported"] is False
+
+
+def test_required_discovery_without_pyyaml_fails_closed_and_never_synthesizes_a_handoff(
+    tmp_path, governed_checkout, configured_env
+):
+    # A valid descriptor exists, so a success here would prove a synthetic or
+    # stale answer: with the locator unimportable the only honest result is the
+    # bounded needs-decision.
+    append_invocation_descriptor(configured_env, _descriptor())
+
+    proc, report = _run_without_pyyaml(
+        tmp_path,
+        [
+            "--checkout-root", str(governed_checkout),
+            "--repository", REPOSITORY,
+            "--issue", "1259",
+            "--store-root", str(configured_env),
+        ],
+    )
+
+    _assert_started_cleanly(proc, report)
+    decoded = json.loads(proc.stdout.splitlines()[0])
+    assert decoded["status"] == "needs-decision"
+    assert decoded["reason_codes"] == ["discovery-dependency-unavailable"]
+    assert decoded["handoff_id"] is None
+    assert decoded["resume_command"] is None
+    for flag in (
+        "repository_implementation_authorized",
+        "execution_authorized",
+        "github_writes_authorized",
+        "merge_authorized",
+        "issue_closure_authorized",
+        "external_writes_authorized",
+        "scheduler_invoked",
+        "handoff_persisted",
+        "side_effects_performed",
+        "local_gh_absence_is_execution_blocker",
+    ):
+        assert decoded[flag] is False
+    assert "executor-handoff:" not in proc.stdout
+    assert report["discovery_imported"] is False
+
+
+def test_prompt_hook_reports_unavailable_discovery_dependency_as_needs_decision(
+    governed_checkout, configured_env, monkeypatch
+):
+    append_invocation_descriptor(configured_env, _descriptor())
+    # ``None`` in sys.modules makes the lazy locator import raise ImportError.
+    monkeypatch.setitem(sys.modules, _DISCOVERY_MODULE, None)
+
+    notice = hook_adapter.run_user_prompt_submit_hook(
+        json.dumps({"prompt": "Work on #1259", "cwd": str(governed_checkout)})
+    )
+
+    assert "status=needs-decision" in notice
+    assert "discovery-dependency-unavailable" in notice
+    assert "Fail closed." in notice
+    assert "/agent-os resume" not in notice
+    assert "executor-handoff:" not in notice
