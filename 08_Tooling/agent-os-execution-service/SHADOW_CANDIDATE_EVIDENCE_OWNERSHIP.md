@@ -61,7 +61,13 @@ exists only where GitHub's own closed state or exactly one verified closing
 claim establishes it, so for most open backlog issues the reader still
 fail-closes on it (`candidate-evidence.no-canonical-lifecycle-stage`, with the
 `lifecycle-acquisition.*` reason in the record's `lifecycle_stage_acquisition`
-section). `primary_claims` and `approval_applicability` have no canonical live
+section). The selector stops at the first candidate with incomplete
+evidence; once it has read at least one candidate, the CLI acquires the
+remaining candidates' lineage (at most 25, reusing the same cached
+pull-request population) into `record_only_candidates`. Each entry carries
+`selection_input: false`; the list is evidence for the record only, never
+reaches the selector, and is not part of the evidence-ledger inputs digest.
+`primary_claims` and `approval_applicability` have no canonical live
 owner for arbitrary backlog issues and remain `None`, so the reader
 fail-closes on them next (`candidate-evidence.no-canonical-primary-claims`)
 even when a lifecycle stage was acquired. These are #3329's bounded blockers:

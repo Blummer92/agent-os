@@ -596,6 +596,49 @@ def _parse_issue_list(raw: str | None, name: str) -> tuple[int, ...] | None:
     return tuple(sorted(numbers))
 
 
+#: Upper bound on candidates evaluated for the record after selection stopped.
+RECORD_ONLY_LINEAGE_LIMIT = 25
+
+
+def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> dict[str, object]:
+    """Acquire lineage for candidates the selector never reached (#3441).
+
+    ``select_shadow_issue`` stops at the first candidate with incomplete
+    evidence, so one ambiguous candidate hides every later one. This reads
+    the remaining candidates through the same GET-only acquirer, reusing its
+    one cached pull-request population, purely for the experiment record. The
+    selector has already returned; nothing here feeds it, so a later
+    candidate's stage can never bypass the earlier candidate's conflict.
+    """
+    if not acquirer.observations:
+        # The selector returned before reading any candidate evidence (for
+        # example an over-capacity or invalid request); read nothing either.
+        return {"candidates": [], "truncated": False}
+    observed = {entry["issue_number"] for entry in acquirer.observations}
+    remaining = [number for number in candidate_issue_numbers if number not in observed]
+    start = len(acquirer.observations)
+    errors: list[dict[str, object]] = []
+    for issue_number in remaining[:RECORD_ONLY_LINEAGE_LIMIT]:
+        try:
+            acquirer.acquire_lifecycle_stage(repository, issue_number)
+        except Exception as exc:  # noqa: BLE001 - selection already returned; never crash the record
+            errors.append(
+                {
+                    "issue_number": issue_number,
+                    "contract_version": PR_LINEAGE_READER_CONTRACT_VERSION,
+                    "outcome": "not-acquired",
+                    "reason_codes": ["record-only.acquisition-error"],
+                    "failure_detail": f"{type(exc).__name__}: {exc}"[:240],
+                }
+            )
+    candidates = [*map(dict, acquirer.observations[start:]), *errors]
+    for entry in candidates:
+        # Marked per entry so a merged list can never be read as selector input.
+        entry["selection_input"] = False
+    candidates.sort(key=lambda entry: entry["issue_number"])
+    return {"candidates": candidates, "truncated": len(remaining) > RECORD_ONLY_LINEAGE_LIMIT}
+
+
 def _build_experiment_record(
     *,
     repository: str,
@@ -947,6 +990,9 @@ def main(argv: list[str] | None = None) -> int:
         "%Y-%m-%dT%H:%M:%SZ"
     )
     lifecycle_observations = pr_lineage_acquirer.observations
+    record_only_observations = _record_only_lineage(
+        pr_lineage_acquirer, args.repository, result.candidate_issue_numbers
+    )
     inputs_digest = hash_decision_inputs(
         {
             "repository": args.repository,
@@ -1028,6 +1074,11 @@ def main(argv: list[str] | None = None) -> int:
             "source": "scripts/agent_os_issue_acceptance/pr_lineage_reader.py",
             "population": pr_lineage_acquirer.population_summary,
             "candidates": list(lifecycle_observations),
+            # The selector stops at the first candidate with incomplete evidence;
+            # the remaining candidates' lineage is evaluated afterwards for this
+            # record only and never reaches the selector.
+            "record_only_candidates": record_only_observations["candidates"],
+            "record_only_truncated": record_only_observations["truncated"],
             "primary_claims": "unresolved: no canonical owner; reader input stays None",
             "approval_applicability": "unresolved: no canonical owner; reader input stays None",
             # The reader fails closed on the missing primary claims before it

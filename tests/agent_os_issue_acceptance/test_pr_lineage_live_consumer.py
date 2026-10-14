@@ -706,3 +706,94 @@ def test_cli_pull_request_readers_expose_no_write_method() -> None:
                    cli.LivePullRequestDetailReader(ScenarioClient())):
         for name in ("post", "put", "patch", "delete", "request", "write"):
             assert not hasattr(reader, name)
+
+
+# --------------------------------------------------------------------------
+# Record-only lineage for candidates the selector never reached (#3441)
+# --------------------------------------------------------------------------
+OTHER = 4000
+
+
+def run_two_candidates(monkeypatch, tmp_path, client):
+    monkeypatch.setattr(cli, "GitHubReadClient", lambda: client)
+    output = tmp_path / "record.json"
+    code = cli.main(
+        [
+            "--repository", REPO,
+            "--campaign-id", "campaign-3441",
+            "--retrieved-at", OBSERVED,
+            "--candidates", f"{OTHER},{ISSUE}",
+            "--narrowing-criterion", "explicit-request:test-3441",
+            "--output", str(output),
+        ]
+    )
+    return code, json.loads(output.read_text())
+
+
+def test_cli_records_lineage_for_candidates_after_the_selector_stopped(monkeypatch, tmp_path) -> None:
+    # ISSUE has conflicting claims, so the selector stops there; OTHER has one
+    # clean claim and is evaluated afterwards for the record only.
+    client = ScenarioClient(
+        prs=[pr_rest(20), pr_rest(21), pr_rest(22, body=f"Closes #{OTHER}\n")],
+        open_issues=(ISSUE, OTHER),
+    )
+    code, record = run_two_candidates(monkeypatch, tmp_path, client)
+    assert code == 0
+    (first,) = lifecycle(record)["candidates"]
+    assert first["issue_number"] == ISSUE and first["outcome"] == "manual-review"
+    (later,) = lifecycle(record)["record_only_candidates"]
+    assert later["issue_number"] == OTHER
+    assert later["outcome"] == "acquired" and later["lifecycle_stage"] == "review"
+    assert later["selection_input"] is False
+    assert "selection_input" not in first
+    assert lifecycle(record)["record_only_truncated"] is False
+    # The selector result is unchanged: the later stage never reached it.
+    assert record["deterministic_selector_result"]["selected_issue_number"] is None
+    assert "shadow-selection.candidate-evidence-incomplete" in (
+        record["deterministic_selector_result"]["reason_codes"]
+    )
+    # One population listing serves both candidates.
+    assert [p for p in client.paths if "/pulls?" in p] == [
+        f"/repos/{REPO}/pulls?state=all&per_page=100&page=1"
+    ]
+    assert_read_only_and_non_selecting(client, record)
+
+
+def test_cli_record_only_list_is_empty_when_every_candidate_was_read(monkeypatch, tmp_path) -> None:
+    client = ScenarioClient(prs=[pr_rest(20, draft=True)])
+    _, record = run_cli(monkeypatch, tmp_path, client)
+    assert lifecycle(record)["record_only_candidates"] == []
+    assert lifecycle(record)["record_only_truncated"] is False
+
+
+def test_record_only_lineage_is_bounded_and_survives_acquirer_errors() -> None:
+    class Acquirer:
+        def __init__(self):
+            self.observations = ()
+            self.calls = []
+
+        def acquire_lifecycle_stage(self, repository, issue_number):
+            self.calls.append(issue_number)
+            if issue_number == 3:
+                raise RuntimeError("transport failure")
+            if issue_number == 4:
+                raise KeyError("unexpected")
+            self.observations = (*self.observations, {"issue_number": issue_number, "outcome": "unavailable"})
+
+    acquirer = Acquirer()
+    # Nothing is read when the selector itself read no candidate.
+    assert cli._record_only_lineage(acquirer, REPO, (1, 2)) == {"candidates": [], "truncated": False}
+    assert acquirer.calls == []
+    acquirer.observations = ({"issue_number": 0, "outcome": "unavailable"},)
+    numbers = tuple(range(1, cli.RECORD_ONLY_LINEAGE_LIMIT + 5))
+    outcome = cli._record_only_lineage(acquirer, REPO, numbers)
+    assert acquirer.calls == list(numbers[: cli.RECORD_ONLY_LINEAGE_LIMIT])
+    assert outcome["truncated"] is True
+    by_number = {entry["issue_number"]: entry for entry in outcome["candidates"]}
+    assert by_number[3]["reason_codes"] == ["record-only.acquisition-error"]
+    assert "RuntimeError" in by_number[3]["failure_detail"]
+    assert "KeyError" in by_number[4]["failure_detail"]
+    assert by_number[3]["contract_version"] == cli.PR_LINEAGE_READER_CONTRACT_VERSION
+    assert all(entry["selection_input"] is False for entry in outcome["candidates"])
+    assert len(outcome["candidates"]) == cli.RECORD_ONLY_LINEAGE_LIMIT
+    assert [entry["issue_number"] for entry in outcome["candidates"]] == sorted(by_number)
