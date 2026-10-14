@@ -89,6 +89,9 @@ from scripts.agent_os_github_issue_provider.revision import issue_source_revisio
 from .github_issue_source import GitHubIssuePageResponse
 from .issue_operational_state import MAX_PRIMARY_CLAIMS, IssueState
 from .lifecycle_stage_acquisition import (
+    ASSOCIATION_POLICIES,
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+    ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
     LifecycleStageAcquisitionRequest,
     LifecycleStageAcquisitionResult,
     PrLineageEnumeration,
@@ -649,6 +652,7 @@ class PrLineageAcquirer:
     observed_at: str
     per_page: int = DEFAULT_PAGE_SIZE
     max_pages: int = DEFAULT_MAX_PAGES
+    association_policy: str = ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
     _population: PrPopulation | None = field(default=None, init=False, repr=False)
     _index: dict[int, list[PrReference]] | None = field(default=None, init=False, repr=False)
     _observations: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
@@ -667,6 +671,8 @@ class PrLineageAcquirer:
             raise ValueError("per_page must be an integer from 1 to 100")
         if type(self.max_pages) is not int or self.max_pages < 1:
             raise ValueError("max_pages must be a positive integer")
+        if type(self.association_policy) is not str or self.association_policy not in ASSOCIATION_POLICIES:
+            raise ValueError("association_policy must be a supported exact policy")
 
     # -- observability ---------------------------------------------------------
     @property
@@ -745,6 +751,7 @@ class PrLineageAcquirer:
                     observed_at=self.observed_at,
                     pr_lineage=lineage,
                     lineage_enumeration=enumeration,
+                    association_policy=self.association_policy,
                 )
             )
             return LifecycleStageAcquisitionAttempt(
@@ -804,7 +811,15 @@ class PrLineageAcquirer:
             "ambiguous_references": ambiguous,
             "declared_non_closing_references": non_closing,
         }
-        relevant = sorted({*claims, *ambiguous})
+        relevant = sorted(
+            {*claims, *ambiguous, *(
+                non_closing
+                if self.association_policy == ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1
+                else ()
+            )}
+        )
+        if self.association_policy == ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1:
+            classification["association_policy"] = self.association_policy
         if len(relevant) > MAX_PRIMARY_CLAIMS:
             enumeration = PrLineageEnumeration(
                 False,
@@ -922,6 +937,8 @@ class PrLineageAcquirer:
             record["failure_detail"] = attempt.failure_detail
         if attempt.evidence is not None:
             record["lineage"] = dict(attempt.evidence)
+        if self.association_policy == ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1:
+            record["association_policy"] = self.association_policy
         return record
 
 
