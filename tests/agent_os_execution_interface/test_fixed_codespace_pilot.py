@@ -419,6 +419,35 @@ def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canon
     _assert_no_authority(receipt)
 
 
+def test_completed_receipt_keeps_the_transport_timing_and_truncation_evidence(canonical):
+    """#3333 Gate 5 R-1: the receipt must not drop the TransportResult evidence."""
+    receipt, _run = _consume()
+    assert receipt["status"] == "completed"
+    assert receipt["argv"] == ["git", "rev-parse", "HEAD"]
+    assert receipt["stdout_truncated"] is False
+    assert receipt["stderr_truncated"] is False
+    assert type(receipt["duration_ms"]) is int and receipt["duration_ms"] >= 0
+    for key in ("started_at", "ended_at"):
+        assert type(receipt[key]) is str and receipt[key].endswith("Z")
+    assert receipt["started_at"] <= receipt["ended_at"]
+    json.dumps(receipt)
+
+
+def test_truncated_receipt_records_which_stream_was_truncated(canonical):
+    receipt, _run = _consume(run=_Run((0, SHA, "y" * (MAX_EVIDENCE_CHARS + 1))))
+    assert receipt["status"] == "blocked"
+    assert receipt["stdout_truncated"] is False
+    assert receipt["stderr_truncated"] is True
+
+
+def test_preflight_refusal_claims_no_execution_timing(canonical):
+    receipt, run = _consume(loader=_Loader(InvocationDescriptorNotFound(HANDOFF)))
+    assert run.calls == []
+    assert receipt["argv"] == ["git", "rev-parse", "HEAD"]
+    assert (receipt["started_at"], receipt["ended_at"], receipt["duration_ms"]) == (None, None, None)
+    assert receipt["stdout_truncated"] is False and receipt["stderr_truncated"] is False
+
+
 @pytest.mark.parametrize(
     "lease,status",
     [
@@ -662,6 +691,9 @@ def test_ssh_timeout_is_not_completed(canonical):
     assert receipt["status"] == "blocked"
     assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
     assert receipt["exit_status"] is None
+    # A dispatched-but-failed transport still keeps its attempt timing.
+    assert type(receipt["started_at"]) is str and type(receipt["ended_at"]) is str
+    assert type(receipt["duration_ms"]) is int
 
 
 def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(canonical):
@@ -675,6 +707,10 @@ def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(can
         stderr_tail="",
         stdout_truncated=False,
         stderr_truncated=False,
+        argv=FIXED_ARGV,
+        started_at_or_none="2026-10-14T00:00:00Z",
+        ended_at_or_none="2026-10-14T00:00:01Z",
+        duration_ms=1000,
     )
     receipt = consume_fixed_codespace_pilot(
         admit(event()).to_dict(),
@@ -689,6 +725,39 @@ def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(can
     )
     assert receipt["status"] == "blocked"
     assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    _assert_no_authority(receipt)
+
+
+def test_receipt_reporting_a_different_argv_than_the_fixed_one_is_blocked(canonical):
+    """A dispatcher that ran anything but the fixed argv cannot yield a completed probe."""
+    descriptor = _descriptor()
+    transport_result = SimpleNamespace(
+        request_id="request-3333-probe",
+        codespace_name_or_none=CODESPACE,
+        exit_status_or_none=0,
+        stdout_tail=SHA + "\n",
+        stderr_tail="",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        argv=("git", "log", "-1", "--format=%H"),
+        started_at_or_none="2026-10-14T00:00:00Z",
+        ended_at_or_none="2026-10-14T00:00:01Z",
+        duration_ms=1000,
+    )
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=lambda **_kwargs: SimpleNamespace(
+            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+        ),
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    assert receipt["argv"] == ["git", "log", "-1", "--format=%H"]
     _assert_no_authority(receipt)
 
 

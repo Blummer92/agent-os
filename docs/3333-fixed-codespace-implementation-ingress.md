@@ -97,6 +97,17 @@ status/reasons, request ID (only after dispatch), Codespace name, bounded
 output, exit status, and explicit false GitHub/publication/merge authority.
 A blocked preflight must not claim a Codespaces execution receipt.
 
+The receipt also keeps the `TransportResult` evidence it previously dropped
+(#3333 qualification Gate 5, repair R-1): `argv`, `stdout_truncated`,
+`stderr_truncated`, `started_at`, `ended_at` and `duration_ms`. Before
+dispatch `argv` is the fixed operation argv, both truncation flags are
+`false`, and the three timing fields are `null`, so a refusal never claims
+execution timing. After dispatch every field is copied from the transport
+result. A result whose `argv` is not exactly `("git", "rev-parse", "HEAD")`
+cannot complete. The additions are additive and keep `schema_version` `1.0`.
+Host identity, lease disposition, QA correlation, an execution nonce and the
+return path are not part of this repair; they keep their Gate 2/4/5 owners.
+
 ## Verification and next acceptance
 
 Focused tests: `tests/agent_os_execution_interface/test_fixed_codespace_pilot.py`
