@@ -12,6 +12,7 @@ import pytest
 
 import agent_os_execution_service.current_invocation_resolver as resolver_module
 import agent_os_execution_service.invocation_reconstruction as reconstruction
+import agent_os_execution_service.production_host_composition as composition_module
 import scripts.agent_os_execution_interface.fixed_codespace_pilot as pilot_module
 from agent_os_execution_service.executor_routing import (
     ExecutorCapability,
@@ -829,6 +830,54 @@ def test_host_entry_hands_each_provider_to_the_matching_consumer_input(monkeypat
         "codespace_selection",
         "dispatcher",
     }
+
+
+def _direct_providers(descriptor):
+    return ProductionAdmissionProviders(
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        evaluated_at=EVALUATED_AT,
+    )
+
+
+def test_host_entry_default_selection_is_the_shared_resolver_through_the_execution_service(
+    canonical, monkeypatch
+):
+    selection = CodespaceSelection(True, "selected", CODESPACE, "Available")
+    monkeypatch.setattr(composition_module, "resolve_current_codespace", lambda: selection)
+    run = _Run()
+    receipt = consume_fixed_codespace_pilot_on_host(
+        admit(event()).to_dict(),
+        providers=_direct_providers(_descriptor()),
+        dispatcher=functools.partial(
+            dispatch_admitted_operation_to_codespace, list_candidates=_listed(), run=run
+        ),
+    )
+    assert receipt["status"] == "completed"
+    assert run.calls == [
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+    ]
+
+
+def test_host_entry_with_the_real_resolver_and_no_credential_never_dispatches(
+    canonical, monkeypatch
+):
+    # Without GH_TOKEN the shared resolver answers "not selected" before any
+    # network call, so this exercises the real default read with no effects.
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    run = _Run()
+    receipt = consume_fixed_codespace_pilot_on_host(
+        admit(event()).to_dict(),
+        providers=_direct_providers(_descriptor()),
+        dispatcher=functools.partial(
+            dispatch_admitted_operation_to_codespace, list_candidates=_listed(), run=run
+        ),
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["codespace-currentness-or-health-unverified"]
+    assert run.calls == []
+    _assert_no_authority(receipt)
 
 
 def test_host_entry_admits_the_fixed_probe_through_directly_bound_providers(canonical):

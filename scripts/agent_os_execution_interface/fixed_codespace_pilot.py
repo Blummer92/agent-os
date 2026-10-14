@@ -281,9 +281,11 @@ def consume_fixed_codespace_pilot_on_host(
     ``providers`` must be the exact ``ProductionAdmissionProviders`` from
     ``ProductionHostBootstrap.admission_providers()``. The current Codespace
     selection is read at probe time, after the envelope and host binding are
-    checked. It comes from the canonical shared resolver; ``resolve_selection``
-    exists only so tests can inject a fake, and it is never fed from issue
-    text. Every admission decision stays in ``consume_fixed_codespace_pilot``.
+    checked. It comes from the canonical shared resolver through the execution
+    service, because ``scripts/**`` may not import ``workflow_scheduler``.
+    ``resolve_selection`` exists only so tests can inject a fake, and it is
+    never fed from issue text. Every admission decision stays in
+    ``consume_fixed_codespace_pilot``.
     """
     envelope = transport if type(transport) is dict else {}
     if not _valid_transport(transport):
@@ -291,19 +293,13 @@ def consume_fixed_codespace_pilot_on_host(
 
     from agent_os_execution_service.production_host_composition import (
         ProductionAdmissionProviders,
-    )
-    from workflow_scheduler.governance.dev_validation_codespaces import (
-        CodespaceSelection,
-        resolve_current_codespace,
+        read_canonical_codespace_selection,
     )
 
     if type(providers) is not ProductionAdmissionProviders:
         return _receipt("needs-decision", "canonical-admission-provider-unavailable", envelope)
-    try:
-        selection = (resolve_selection or resolve_current_codespace)()
-    except (TypeError, ValueError, RuntimeError, OSError):
-        return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
-    if type(selection) is not CodespaceSelection:
+    selection = read_canonical_codespace_selection(resolve_selection)
+    if selection is None:
         return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
     return consume_fixed_codespace_pilot(
         transport,

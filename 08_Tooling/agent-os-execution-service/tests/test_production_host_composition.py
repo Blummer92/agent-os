@@ -63,6 +63,7 @@ from workflow_scheduler.execution.single_issue_pilot import (
     SingleIssuePilotInput,
     run_single_issue_pilot,
 )
+from workflow_scheduler.governance.dev_validation_codespaces import CodespaceSelection
 
 H = "executor-handoff:" + "a" * 64
 
@@ -622,6 +623,37 @@ def test_resume_bindings_reconstruct_with_the_same_admission_providers(
     assert keywords["descriptor_loader"] is built[0].descriptor_loader
     assert keywords["resolver"] is built[0].current_resolver
     assert keywords["lease_reader"] is built[0].lease_reader
+
+
+# ---------------------------------------------------------------------------
+# 9b. canonical Codespace selection read for the fixed #3333 HEAD probe
+#     (scripts/** may not import workflow_scheduler, so the read lives here)
+# ---------------------------------------------------------------------------
+
+
+def test_codespace_selection_defaults_to_the_shared_read_only_resolver():
+    selection = CodespaceSelection(True, "selected", "happy-codespace", "Available")
+    with patch.object(phc, "resolve_current_codespace", return_value=selection) as resolver:
+        assert phc.read_canonical_codespace_selection() is selection
+    resolver.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure", [TypeError, ValueError, RuntimeError, OSError])
+def test_codespace_selection_read_failure_fails_closed(failure):
+    with patch.object(phc, "resolve_current_codespace", side_effect=failure("read failed")):
+        assert phc.read_canonical_codespace_selection() is None
+
+
+def test_codespace_selection_rejects_anything_but_an_exact_selection():
+    lookalike = SimpleNamespace(selected=True, state="Available", codespace_name="happy-codespace")
+    assert phc.read_canonical_codespace_selection(lambda: lookalike) is None
+    assert phc.read_canonical_codespace_selection(lambda: None) is None
+
+
+def test_an_injected_resolver_replaces_the_default_and_the_default_is_not_called():
+    selection = CodespaceSelection(True, "selected", "happy-codespace", "Available")
+    with patch.object(phc, "resolve_current_codespace", side_effect=AssertionError("default read")):
+        assert phc.read_canonical_codespace_selection(lambda: selection) is selection
 
 
 # ---------------------------------------------------------------------------

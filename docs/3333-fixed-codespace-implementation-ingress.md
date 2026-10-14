@@ -160,11 +160,13 @@ consume_fixed_codespace_pilot_on_host(
 
 `consume_fixed_codespace_pilot_on_host` checks the envelope first. It then
 requires the exact `ProductionAdmissionProviders` type. Finally, it reads the
-current Codespace through the canonical shared
-`workflow_scheduler.governance.dev_validation_codespaces.resolve_current_codespace`.
-The `resolve_selection` hook exists for test fakes only. No issue-comment operand
-reaches it. Every admission, identity, Codespace and receipt decision stays in
-`consume_fixed_codespace_pilot`.
+current Codespace through `read_canonical_codespace_selection`, which calls the
+canonical shared `workflow_scheduler.governance.dev_validation_codespaces.resolve_current_codespace`.
+The read lives in the execution service because `scripts/**` may not import
+`workflow_scheduler` (the packaging guard in `tests/test_workflow_scheduler_packaging.py`).
+A failed or non-canonical read blocks. The `resolve_selection` hook exists for
+test fakes only. No issue-comment operand reaches it. Every admission, identity,
+Codespace and receipt decision stays in `consume_fixed_codespace_pilot`.
 
 Compatibility boundary: the probe still needs a *real* admitted #3333
 `SingleIssuePilotInput`. That input exists only after the existing
@@ -179,25 +181,22 @@ Unchanged: the Actions CLI `main()` has no host and still returns
 No workflow, credential, host configuration, Codespace lifecycle, executor,
 transport or store changed.
 
-Regression coverage in `test_fixed_codespace_pilot.py` calls the real
-`reconstruct_governed_invocation` sequence, the currentness re-check entry, the
-dispatcher and the transport. As in the #1218 suite, the cross-check results,
-`SingleIssuePilotInput` and the lease request are patched. So the stale and
-authorization cases inject canonical reason codes rather than reading stale
-store data. Only the missing-descriptor case also runs over real providers and
-an empty store. Each case below must fail closed:
+Regression coverage in `test_fixed_codespace_pilot.py` runs the real
+`reconstruct_governed_invocation`, the currentness re-check, the dispatcher and
+the transport. As in the #1218 suite, the cross-check results,
+`SingleIssuePilotInput` and the lease request are patched, so stale and
+authorization cases inject canonical reason codes. Only the missing-descriptor
+case also runs over real providers and an empty store. Each case below must
+fail closed:
 
 - missing descriptor, including real providers over an empty store;
-- stale checkpoint or ResumePlan;
-- invalid, replaced or expired authorization;
+- stale checkpoint or ResumePlan, or invalid, replaced or expired authorization;
 - conflicting, ambiguous or foreign lease;
-- mismatched issue or handoff;
-- stale source or remote SHA;
+- mismatched issue, handoff, source or remote SHA, or pilot tested SHA or repository;
 - changed or unqualified Codespace selection, or a silent transport switch;
-- missing environment-health evidence;
-- unsupported capability;
-- malformed, non-zero or truncated receipt;
-- SSH timeout;
+- missing environment-health evidence, unavailable runner, unsupported or empty capabilities;
+- evidence that becomes unavailable after admission;
+- malformed, non-zero, truncated or wrong-Codespace receipt, or an SSH timeout;
 - an unauthorized operation or envelope.
 
 None of this is live acceptance.

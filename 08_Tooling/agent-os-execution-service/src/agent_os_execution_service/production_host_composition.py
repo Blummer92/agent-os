@@ -68,6 +68,10 @@ from workflow_scheduler.execution.single_issue_pilot import (
     SingleIssuePilotInput,
     run_single_issue_pilot,
 )
+from workflow_scheduler.governance.dev_validation_codespaces import (
+    CodespaceSelection,
+    resolve_current_codespace,
+)
 
 from .current_invocation_resolver import CanonicalCurrentInvocationResolver
 from .execution_authorization_source import ExecutionAuthorizationSourceTransport
@@ -187,6 +191,28 @@ def build_production_admission_providers(
         lease_reader=lease_adapter,
         evaluated_at=evaluated_at,
     )
+
+
+def read_canonical_codespace_selection(
+    resolve_selection: Callable[[], object] | None = None,
+) -> CodespaceSelection | None:
+    """Read the one current-Codespace selection a trusted host may bind, or ``None``.
+
+    This is the shared read-only ``resolve_current_codespace`` decision: exactly
+    one owner/repository-qualified Available Codespace, and it never starts,
+    stops, creates or deletes one. It lives here because ``scripts/**`` may not
+    import ``workflow_scheduler``; the fixed #3333 HEAD probe reaches it through
+    the execution service like the rest of the host composition.
+
+    ``resolve_selection`` replaces the default for offline tests only and is
+    never fed from issue text. A failed read or anything that is not an exact
+    ``CodespaceSelection`` returns ``None`` so the caller fails closed.
+    """
+    try:
+        selection = (resolve_selection or resolve_current_codespace)()
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return None
+    return selection if type(selection) is CodespaceSelection else None
 
 
 def build_production_governed_resume_bindings(
