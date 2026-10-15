@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from workflow_scheduler.governance import discovery_codespaces as live_discovery
 from workflow_scheduler.governance.dev_validation import REPOSITORY
 from workflow_scheduler.governance.discovery_codespaces import (
     DiscoveryRequest,
@@ -124,11 +126,17 @@ def test_run_returns_bound_discovery_evidence() -> None:
         assert argv[0:4] == ("gh", "codespace", "ssh", "-c")
         assert argv[4] == APPROVED_CODESPACE_NAME
         assert argv[5] == "--"
-        assert argv[6] == "python3"
-        assert argv[7] == "-c"
-        assert argv[8] == _REMOTE_DISCOVERY_SOURCE
-        assert argv[9] == REPOSITORY
-        assert argv[10] == "2931"
+        assert len(argv) == 7
+        # #3617: the remote program crosses the SSH shell boundary as one
+        # safely quoted command; shlex.split must recover the exact argv.
+        assert shlex.split(argv[6]) == [
+            "python3",
+            "-c",
+            _REMOTE_DISCOVERY_SOURCE,
+            REPOSITORY,
+            "2931",
+            APPROVED_CODESPACE_NAME,
+        ]
         return subprocess.CompletedProcess(argv, 0, stdout=_framed(_discovery_payload()), stderr="")
 
     result = run_discovery_over_codespaces(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
@@ -247,3 +255,52 @@ def test_remote_source_rejects_non_canonical_identity() -> None:
     end = completed.stdout.find(FRAME_END)
     payload = json.loads(completed.stdout[start + len(FRAME_START) : end])
     assert payload["reason_codes"] == ["codespaces-discovery-identity-rejected"]
+
+
+def test_ssh_remote_command_is_single_shell_word() -> None:
+    # #3617: the multiline discovery program must arrive at the remote shell
+    # as one quoted word, so newlines cannot split it into shell commands.
+    request = DiscoveryRequest(repository=REPOSITORY, issue_number=2931)
+    captured: dict[str, tuple] = {}
+
+    def run(argv, *, timeout):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout=_framed(_discovery_payload()), stderr="")
+
+    run_discovery_over_codespaces(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    argv = captured["argv"]
+    assert argv[5] == "--"
+    assert len(argv) == 7
+    remote_command = argv[6]
+    assert "\n" in remote_command  # the source is multiline, yet one shell word
+    assert shlex.split(remote_command) == [
+        "python3",
+        "-c",
+        _REMOTE_DISCOVERY_SOURCE,
+        REPOSITORY,
+        "2931",
+        APPROVED_CODESPACE_NAME,
+    ]
+
+
+def test_ssh_remote_command_executes_through_posix_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #3617: exercise the implementation's exact quoting through a real
+    # POSIX shell. A sentinel program proves the shell delivers the -c
+    # program intact instead of parsing its lines as shell commands.
+    sentinel = "import sys; sys.stdout.write('SSH_BOUNDARY_OK')"
+    monkeypatch.setattr(live_discovery, "_REMOTE_DISCOVERY_SOURCE", sentinel)
+    captured: dict[str, str] = {}
+
+    def run(argv, *, timeout):
+        captured["command"] = argv[6]
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    request = DiscoveryRequest(repository=REPOSITORY, issue_number=2931)
+    run_discovery_over_codespaces(request, codespace_name=APPROVED_CODESPACE_NAME, run=run)
+    completed = subprocess.run(
+        ("sh", "-c", captured["command"]), capture_output=True, text=True, timeout=30
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "SSH_BOUNDARY_OK" in completed.stdout
+    assert "command not found" not in completed.stderr
+    assert "SyntaxError" not in completed.stderr

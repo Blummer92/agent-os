@@ -367,3 +367,43 @@ def test_discovery_envelope_rejects_missing_issue_identity() -> None:
         live.execute_transport(
             _discovery_ingress(issue_number=None), claims=claims(), adapter=adapter
         )
+
+
+def test_discovery_noncanonical_repository_cannot_produce_accepted_evidence() -> None:
+    # #3617 boundary A: even with a malformed repository identity, the GCE
+    # discovery branch can only return needs-decision/unavailable evidence —
+    # never accepted discovery evidence.
+    adapter = FakeAdapter()
+    result = live.execute_transport(
+        _discovery_ingress(repository="not-a-canonical-repo"),
+        claims=claims(),
+        adapter=adapter,
+    )
+    discovery = result["discovery"]
+    assert discovery["status"] == "needs-decision"
+    assert discovery["status"] != "not-found"
+    assert discovery["reason_codes"] == ["discovery-gce-unavailable"]
+    assert discovery["repository"] == "not-a-canonical-repo"
+    assert discovery["handoff_id"] is None
+    assert adapter.calls == []
+
+
+def test_discovery_unavailable_zero_count_is_not_a_descriptor_claim() -> None:
+    # #3617 boundary B: needs-decision with matching_descriptor_count=0 must
+    # not be interpretable as proof of zero descriptors, a released lease,
+    # or implementation authorization.
+    adapter = FakeAdapter()
+    result = live.execute_transport(_discovery_ingress(), claims=claims(), adapter=adapter)
+    discovery = result["discovery"]
+    assert discovery["status"] == "needs-decision"
+    assert discovery["reason_codes"] == ["discovery-gce-unavailable"]
+    assert discovery["matching_descriptor_count"] == 0
+    # No lease semantics anywhere in the evidence:
+    assert not any("lease" in key for key in discovery)
+    assert "lease_released" not in discovery
+    # No authorization of any kind:
+    assert discovery["execution_authorized"] is False
+    assert discovery["scheduler_invoked"] is False
+    assert discovery["side_effects_performed"] is False
+    assert discovery["handoff_id"] is None
+    assert discovery["result_id"] is None
