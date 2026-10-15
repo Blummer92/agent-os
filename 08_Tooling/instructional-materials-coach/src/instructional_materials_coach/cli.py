@@ -492,10 +492,13 @@ def _preview_worksheet(args: argparse.Namespace) -> int:
     try:
         content = load_lesson_content(args.content)
         result_path = Path(args.lesson_content_result)
-        if result_path.stat().st_size > MAX_LESSON_CONTENT_RESULT_BYTES:
+        # Enforce the bound on the bytes actually read, not on a stat() taken
+        # before the read: the limit must apply to the parsed input.
+        raw = result_path.read_bytes()
+        if len(raw) > MAX_LESSON_CONTENT_RESULT_BYTES:
             raise ValueError("lesson-content result exceeds the byte bound")
-        evidence = json.loads(result_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError) as exc:
+        evidence = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError) as exc:
         print(f"Worksheet preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
         return 1
     selection = LessonContentSelection(

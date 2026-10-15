@@ -100,6 +100,7 @@ def _authored():
         {
             "title": "Fixture lesson title",
             "objectives": [],
+            "lesson_identity": {"day_lesson_number": "Day 1"},
             "slides": [{"index": 1, "heading": "Fixture heading", "bullets": ["Fixture bullet"]}],
             "worksheet_questions": ["Fixture question?"],
         }
@@ -121,6 +122,18 @@ def test_adapter_contract_constants_match_the_producer() -> None:
         if source.content_class == "lesson-content"
     }
     assert adapter.ADMITTED_LOGICAL_SOURCES == lesson_sources
+    # The admitted display names are pinned to the catalog, and the
+    # admission shape to the producer's own admission record.
+    assert adapter.ADMITTED_SOURCE_DISPLAY_NAMES == {
+        source.logical_source: source.display_name
+        for source in load_catalog().sources
+        if source.content_class == "lesson-content"
+    }
+    assert set(models.NotionReadAdmission(
+        status="admitted",
+        reason_codes=("admitted",),
+        repository=REPOSITORY,
+    ).to_dict()) == adapter.ADMISSION_KEYS
 
 
 def test_real_runner_output_reaches_the_coach() -> None:
@@ -136,6 +149,7 @@ def test_real_runner_output_reaches_the_coach() -> None:
     assert set(evidence["result"]) == adapter.RESULT_KEYS
     assert set(evidence["result"]["authority"]) == adapter.AUTHORITY_KEYS
     assert set(evidence["result"]["source"]) == adapter.SOURCE_KEYS
+    assert set(evidence["admission"]) == adapter.ADMISSION_KEYS
 
     composed = compose_lesson_content_result(_authored(), evidence, SELECTION)
     tokens = composed.placeholder_tokens()
