@@ -194,6 +194,13 @@ jobs:
               --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
               --route-output "$RUNNER_TEMP/agent-os-ingress/codespaces-discovery-route.json" \
               --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
+          # Preserve the Codespaces discovery payload independently: the GCE
+          # fallback step below overwrites result.json by design, which would
+          # destroy the SSH transport evidence (exit codes, framed response,
+          # reason codes). This copy keeps it recoverable from the published
+          # artifact without changing any routing or fallback behavior.
+          cp "$RUNNER_TEMP/agent-os-ingress/result.json" \
+             "$RUNNER_TEMP/agent-os-ingress/codespaces-discovery-result.json"
           python - <<'PY'
           import json
           import os
@@ -424,6 +431,7 @@ jobs:
           diagnostic_route_path = root / "codespaces-diagnostic-route.json"
           route_path = root / "route.json"
           discovery_route_path = root / "codespaces-discovery-route.json"
+          discovery_result_path = root / "codespaces-discovery-result.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Agent OS governed invocation\n\n")
               if route_path.exists():
@@ -443,6 +451,21 @@ jobs:
                           summary.write(f"Codespaces discovery capable: `{capable_result.get('codespaces_capable')}`\n\n")
                   except json.JSONDecodeError:
                       pass
+              # The preserved Codespaces discovery payload survives the GCE
+              # fallback overwrite of result.json; surface it so the SSH
+              # transport evidence is visible without opening the artifact.
+              if discovery_result_path.exists():
+                  try:
+                      preserved = json.loads(discovery_result_path.read_text(encoding="utf-8"))
+                      preserved_discovery = preserved.get("discovery")
+                      summary.write(f"Codespaces discovery payload preserved: `True`\n\n")
+                      summary.write(f"Preserved capable: `{preserved.get('codespaces_capable')}`\n\n")
+                      if isinstance(preserved_discovery, dict):
+                          summary.write(f"Preserved discovery status: `{preserved_discovery.get('status')}`\n\n")
+                          summary.write(f"Preserved discovery reasons: `{','.join(preserved_discovery.get('reason_codes', []))}`\n\n")
+                  except json.JSONDecodeError:
+                      summary.write("Codespaces discovery payload preserved: `True`\n\n")
+                      summary.write("Preserved payload: `unparseable`\n\n")
               if diagnostic_route_path.exists():
                   diagnostic_route = json.loads(diagnostic_route_path.read_text(encoding="utf-8"))
                   summary.write(f"Codespaces diagnostic handled: `{diagnostic_route.get('handled')}`\n\n")
