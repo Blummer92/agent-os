@@ -34,6 +34,7 @@ from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
     REASON_CLOSED_UNMERGED_PR,
     REASON_CONFLICTING_PR_CLAIMS,
     REASON_INCOMPLETE_ENUMERATION,
+    REASON_NON_CLOSING_PR_MERGED,
     REASON_NO_VERIFIED_PR_LINEAGE,
     REASON_PR_LINKAGE_UNVERIFIABLE,
     REASON_PR_REPOSITORY_MISMATCH,
@@ -442,6 +443,7 @@ def test_reason_codes_are_bounded_and_documented() -> None:
             REASON_PR_LINKAGE_UNVERIFIABLE,
             REASON_PR_REPOSITORY_MISMATCH,
             REASON_CLOSED_UNMERGED_PR,
+            REASON_NON_CLOSING_PR_MERGED,
         }
     )
 
