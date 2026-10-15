@@ -256,7 +256,10 @@ def project_validation_head_disposition(
             ),
         )
 
-    status = prior.lifecycle_result.status
+    lifecycle_result = prior.lifecycle_result
+    if lifecycle_result is None:
+        raise TypeError("terminal run evidence requires a non-null lifecycle_result")
+    status = lifecycle_result.status
     if status is ValidationLifecycleTerminalStatus.CANCELLED:
         if (
             prior.head_sha != evidence.current_head_sha
