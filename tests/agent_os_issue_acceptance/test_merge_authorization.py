@@ -933,6 +933,24 @@ def test_3157_closing_reference_added_after_authorization_blocks():
     assert "pull-request.unauthorized-closing-reference" in result.reason_codes
 
 
+def test_3590_canonical_qualified_closing_reference_blocks_candidate():
+    """``Closes <canonical>#N`` is detected (not raised) and still blocks merge."""
+    bundle = _bundle()
+    pr = _closing_pr(bundle, body="Closes Blummer92/agent-os#2772")
+    with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
+        _candidate(bundle, pr=pr)
+
+
+def test_3590_canonical_qualified_closing_reference_matches_its_admission():
+    bundle = _bundle()
+    admission_2772 = _closure_admission(2772)
+    pr = _closing_pr(
+        bundle, body="Closes Blummer92/agent-os#2772", admissions=(admission_2772,)
+    )
+    record = _candidate(bundle, pr=pr)
+    assert record.binding.closure_admission_ids == (admission_2772.admission.result_id,)
+
+
 def test_3157_clean_body_edit_after_authorization_is_stale_not_blocked():
     """A clean body edit still invalidates the binding via the metadata fingerprint."""
     authorized, bundle = _authorized()

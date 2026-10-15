@@ -405,7 +405,7 @@ unchanged. No lifecycle mutation, credential or workflow edits are included.
 
 ## Teacher OS frontend validation (proposed, not yet runtime-qualified)
 
-The existing affected-package selector recognizes `08_Tooling/teacher-os-web/**` and selects these exact commands, bound to that directory and in this order:
+The existing affected-package selector recognizes the Teacher OS web executable surface (`08_Tooling/teacher-os-web/src/`, `08_Tooling/teacher-os-web/tests/`, plus `package.json`, `package-lock.json`, `tsconfig.json`, `index.html`, `playwright.config.ts`) and selects these exact commands, bound to that directory and in this order. Documentation-only changes (e.g. `README.md`) remain static:
 
 1. `npm ci`
 2. `npm run build`

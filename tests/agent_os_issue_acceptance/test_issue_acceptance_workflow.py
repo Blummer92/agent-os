@@ -201,3 +201,19 @@ def test_report_only_acceptance_workflow_enables_documentation_advisory_before_t
     transport = content.index('"${transport_args[@]}"')
     assert advisory < transport
     assert content.count("--documentation-advisory") == 1
+
+
+def test_report_only_acceptance_workflow_binds_token_for_every_gh_step():
+    """Each report step that calls gh must receive the existing scoped token."""
+    import yaml
+
+    workflow = yaml.safe_load(_content())
+    steps = workflow["jobs"]["report"]["steps"]
+    gh_steps = [step for step in steps if "gh " in step.get("run", "")]
+
+    assert {step["name"] for step in gh_steps} == {
+        "Build local acceptance fixtures from PR data",
+        "Run report-only issue acceptance checker",
+    }
+    for step in gh_steps:
+        assert step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"

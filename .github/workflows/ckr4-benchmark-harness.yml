@@ -1,0 +1,66 @@
+name: CKR4 GPT-6 benchmark (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tasks:
+        description: "Comma-separated frozen task IDs (maximum 3 per dispatch)"
+        required: true
+        default: "T1"
+        type: string
+      confirm_paid_api:
+        description: "Type I_AUTHORIZE_API_COST to acknowledge paid OpenAI calls"
+        required: true
+        type: string
+      notion_data_source_id:
+        description: "Bounded read-only Lessons Learned Notion data-source ID"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ckr4-benchmark-manual
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline harness tests
+        run: python -m unittest discover -s tests/ckr4_harness -p 'test_*.py' -v
+      - name: Validate manual and secret prerequisites
+        env:
+          CONFIRM: ${{ inputs.confirm_paid_api }}
+          CKR4_MODEL_API_KEY: ${{ secrets.CKR4_MODEL_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_SOURCE: ${{ inputs.notion_data_source_id }}
+        run: |
+          test "$CONFIRM" = "I_AUTHORIZE_API_COST" || { echo "Paid API confirmation missing"; exit 1; }
+          test -n "$CKR4_MODEL_API_KEY" || { echo "CKR4_MODEL_API_KEY not configured"; exit 1; }
+          test -n "$NOTION_TOKEN" || { echo "NOTION_TOKEN not configured"; exit 1; }
+          test -n "$NOTION_SOURCE" || { echo "Notion data source required"; exit 1; }
+      - name: Measure frozen conditions
+        env:
+          CKR4_MODEL_API_KEY: ${{ secrets.CKR4_MODEL_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_SOURCE: ${{ inputs.notion_data_source_id }}
+          CKR4_TASKS: ${{ inputs.tasks }}
+          PYTHONPATH: 08_Tooling/agent-memory-context-manager/src
+        run: |
+          python 08_Tooling/ckr4-benchmark-harness/harness.py --tasks "$CKR4_TASKS" --out ckr4-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ckr4-bounded-evidence
+          path: ckr4-evidence.json
+          if-no-files-found: ignore
+          retention-days: 14

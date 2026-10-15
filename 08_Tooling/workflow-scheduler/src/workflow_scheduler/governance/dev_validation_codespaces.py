@@ -257,17 +257,29 @@ def resolve_current_codespace(run: Run = _run) -> CodespaceSelection:
     """
     if not os.environ.get("GH_TOKEN"):
         return CodespaceSelection(False, "codespaces-credential-unavailable")
-    completed = run(
-        (
-            "gh",
-            "api",
-            "-H",
-            "Accept: application/vnd.github+json",
-            f"/repos/{REPOSITORY}/codespaces?per_page={MAX_LISTED_CODESPACES}",
-        ),
-        timeout=30,
-    )
+    try:
+        completed = run(
+            (
+                "gh",
+                "api",
+                "-H",
+                "Accept: application/vnd.github+json",
+                f"/repos/{REPOSITORY}/codespaces?per_page={MAX_LISTED_CODESPACES}",
+            ),
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return CodespaceSelection(False, "codespaces-read-timeout")
+    except OSError:
+        return CodespaceSelection(False, "codespaces-read-transport-error")
     if completed.returncode != 0:
+        # Match only GitHub CLI HTTP status syntax. Never surface raw stderr,
+        # which can contain credential-bearing provider diagnostics.
+        error = completed.stderr or ""
+        if re.search(r"(?i)\bHTTP\s+403\b", error):
+            return CodespaceSelection(False, "codespaces-read-permission-denied")
+        if re.search(r"(?i)\bHTTP\s+429\b", error):
+            return CodespaceSelection(False, "codespaces-read-rate-limited")
         return CodespaceSelection(False, "codespaces-read-unavailable")
     try:
         payload = json.loads(completed.stdout)

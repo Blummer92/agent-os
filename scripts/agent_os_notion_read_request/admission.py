@@ -123,6 +123,87 @@ def admit_notion_read_request(
             secret_dispatch_authorized=True,
         )
 
+    if record.request_class == "source-schema":
+        # #2816: the schema read's plan is exactly one get_data_source step
+        # against the record's catalog-declared logical source. No canonical
+        # unit is involved and no filter step exists, so the #3476 coursewide
+        # filter guard is bypassed by construction rather than relaxed.
+        # Dispatchability is decided here, so an unverified source (for
+        # example icon-system today) fails closed instead of dispatching.
+        logical_source = record.logical_source
+        if not logical_source:
+            return _reject(
+                expected_repository,
+                "source-schema-binding-invalid",
+                request_id=request_id,
+            )
+        binding = catalog.source(logical_source)
+        if binding is None:
+            return _reject(
+                expected_repository, "source-not-allowlisted", request_id=request_id
+            )
+        if not binding.dispatchable:
+            return _reject(
+                expected_repository, "source-unverified", request_id=request_id
+            )
+        return NotionReadAdmission(
+            status="admitted",
+            reason_codes=("admitted",),
+            repository=expected_repository,
+            issue_number=issue_number,
+            request_id=record.request_id,
+            request_class=record.request_class,
+            required_logical_sources=(logical_source,),
+            secret_dispatch_authorized=True,
+        )
+
+    if record.request_class == "lesson-content":
+        # #3580: the lesson-content read's plan is exactly one
+        # query_data_source step against the record's catalog-declared logical
+        # source. No #980 plan exists, so the #3476 coursewide filter guard is
+        # bypassed by construction rather than relaxed. Dispatchability is
+        # decided here, so an unverified source fails closed instead of
+        # dispatching. The record's canonical unit scopes the read: it must be
+        # a known, verified catalog unit before admission, exactly as on the
+        # curriculum path; execution then resolves its verified page id
+        # strictly before any lesson query is built.
+        logical_source = record.logical_source
+        if not logical_source:
+            return _reject(
+                expected_repository,
+                "lesson-content-binding-invalid",
+                request_id=request_id,
+            )
+        binding = catalog.source(logical_source)
+        if binding is None:
+            return _reject(
+                expected_repository, "source-not-allowlisted", request_id=request_id
+            )
+        if not binding.dispatchable:
+            return _reject(
+                expected_repository, "source-unverified", request_id=request_id
+            )
+        unit = catalog.canonical_unit(str(record.canonical_unit_key))
+        if unit is None:
+            return _reject(
+                expected_repository, "canonical-unit-unknown", request_id=request_id
+            )
+        if not unit.dispatchable:
+            return _reject(
+                expected_repository, "canonical-unit-unverified", request_id=request_id
+            )
+        return NotionReadAdmission(
+            status="admitted",
+            reason_codes=("admitted",),
+            repository=expected_repository,
+            issue_number=issue_number,
+            request_id=record.request_id,
+            request_class=record.request_class,
+            canonical_unit_key=record.canonical_unit_key,
+            required_logical_sources=(logical_source,),
+            secret_dispatch_authorized=True,
+        )
+
     unit = catalog.canonical_unit(str(record.canonical_unit_key))
     if unit is None:
         return _reject(

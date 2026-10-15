@@ -252,3 +252,25 @@ def test_typed_build_input_and_receipt_populate_governed_build_receipt_record(_v
     unknown = _adapter().execute(_request())["output"]["build_receipt_record"]
     assert unknown["idempotency_key"] is None
     assert unknown["succeeded"] is False
+
+
+@patch(
+    "workflow_scheduler.adapters.instructional_materials_live_adapter.validate_typed_subject_reference",
+    return_value=_subject_ref(),
+)
+def test_output_carries_non_authorizing_classroom_admission_verdict(_validate):
+    """#3556: the adapter surfaces the D8 verdict as fail-closed evidence.
+
+    INCOMPLETE enforcement: the scheduler path does not thread the governed
+    requirement identity, so the verdict is not-admitted / evidence-missing.
+    The adapter makes no classroom-ready claim.
+    """
+    verdict = _adapter().execute(_request())["output"]["classroom_admission"]
+    assert verdict["schema_name"] == "agent-os-classroom-admission"
+    assert verdict["status"] == "not-admitted"
+    assert verdict["reason_codes"] == ["classroom.evidence-missing"]
+    assert verdict["classroom_ready_granted"] is False
+    assert verdict["authoritative"] is False
+    assert verdict["execution_authorized"] is False
+    assert verdict["production_authorized"] is False
+    assert verdict["side_effects_performed"] is False

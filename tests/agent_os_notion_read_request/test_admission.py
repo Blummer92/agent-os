@@ -273,6 +273,14 @@ def test_missing_source_binding_blocks_dispatch(catalog_payload) -> None:
         for source in payload["sources"]
         if source["logical_source"] != "visual-asset-library"
     ]
+    # The schema requests are bound to their sources; drop the ones that
+    # referenced the removed source so the fixture still loads and the test
+    # keeps its original intent (admission-level rejection).
+    payload["requests"] = [
+        record
+        for record in payload["requests"]
+        if record.get("logical_source") != "visual-asset-library"
+    ]
 
     decision = admit(transport(), parse_catalog(payload))
 
@@ -365,7 +373,12 @@ def test_request_sensitive_planning_is_preserved_per_class() -> None:
 
 def test_every_curriculum_request_class_has_a_read_plan() -> None:
     for request_class in REQUEST_CLASSES:
-        if request_class == "destination-verification":
+        if request_class in {"destination-verification", "source-schema", "lesson-content"}:
+            # Record-driven classes carry their own binding and have no #980
+            # plan: destination-verification names a fixed page, source-schema
+            # names a catalog-declared logical source for one schema step,
+            # lesson-content names a catalog-declared logical source for one
+            # query step.
             continue
         sources = required_logical_sources(request_class)
         assert sources

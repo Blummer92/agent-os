@@ -246,6 +246,36 @@ After the content exists, evaluate visuals against the actual student tasks and 
 
 This sequencing does not change classroom artifact destinations or authorize Drive, Notion, publication, or other external writes.
 
+## Canonical Provenance for Classroom-Ready Claims
+
+A classroom-ready claim — any statement that an artifact is ready for
+classroom use or distribution — requires a positive D8 admission decision
+computed from complete canonical build evidence (#3259 D8, #3556). The
+admission predicate re-derives every check from canonical sources: the
+`imc-build-receipt-v1` build record, the governed requirement identity,
+template and artifact revisions, requested-format completeness, verified
+terminal QA for each artifact, and verified visual-placement receipts with
+semantic role fulfillment. Missing, stale, mismatched, incomplete,
+tampered, or semantically invalid evidence is fail-closed: the artifact is
+not admitted.
+
+The following outputs are non-authoritative for classroom-ready and must be
+labeled preview or draft, never classroom-ready:
+
+- direct ChatGPT/DOCX/PDF output produced outside the governed Notion →
+  Agent OS → Drive production path (#3385);
+- frozen local-engine output that bypasses canonical terminal QA and
+  placement verification.
+
+The repository admission predicate evaluates evidence; it does not prove
+enforcement on the native ChatGPT/DOCX/PDF route, which remains host-side
+and is tracked by #3385. Teacher-review (Q2) previews are a separate lane
+and are never labeled classroom-ready.
+
+This section creates no external-write authority and grants no production,
+publication, or classroom authority. The admission verdict is evidence
+only; downstream governors still own authorization.
+
 ## Blocked-Production Behavior
 
 When production is blocked, show a clearly labeled preview or content
@@ -278,10 +308,11 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.9
+0.2.0
 
 ## Changelog
 
+- 0.2.0 adds the canonical-provenance rule for classroom-ready claims: a positive D8 admission on complete canonical evidence is required; direct ChatGPT/DOCX/PDF and frozen local-engine output are non-authoritative and labeled preview/draft (#3556).
 - 0.1.9 states the visual-gap definition identically to instructional-materials-workflows.md (#3248): a gap exists only on proven absence under a stated scope and snapshot; all other unresolved states carry their own outcome codes and never authorize image creation.
 - 0.1.8 combines the 0.1.7 additions: required visual placement and
   companion-file boundary (#2888) plus revision-bound required visual roles

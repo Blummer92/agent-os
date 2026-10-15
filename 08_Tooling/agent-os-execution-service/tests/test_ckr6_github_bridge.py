@@ -218,6 +218,74 @@ def test_explicit_failed_repair_opt_out_is_transported_not_reclassified():
     assert bridge.classify_envelope(envelope)["retrieval_required"] is False
 
 
+@pytest.mark.parametrize(
+    ("status", "retry_outcome", "lesson_disposition", "admissible", "needs_reader"),
+    [
+        ("sufficient", "consumed", "sufficient", True, True),
+        ("insufficient", "unavailable-or-failed", "insufficient", False, True),
+        ("manual-review", "unavailable-or-failed", "manual-review", False, True),
+        ("not-needed", "not-material", "not-needed", False, False),
+    ],
+)
+def test_2851_failed_repair_diagnostics_survive_bounded_result_postback(
+    monkeypatch, status, retry_outcome, lesson_disposition, admissible, needs_reader
+):
+    # The bridge is transport only: it must not infer either diagnostic
+    # or convert a retry disposition into GitHub/write/merge authority.
+    envelope = bridge.parse_envelope(
+        payload(
+            operation="failed-repair",
+            attempt_id="attempt-2851",
+            failed_hypothesis="prior repair returned only coarse reason codes",
+            result_summary="canonical retry diagnostic was lost at postback",
+            repair_context="failed-pr-repair",
+        )
+    )
+    canonical = {
+        "lesson_retrieval_status": status,
+        "retry_reentry_outcome": retry_outcome,
+        "lesson_disposition": lesson_disposition,
+        "reason_codes": ["canonical-retry-reason"],
+        "selected_lesson_ids": [],
+        "selected_lessons": [],
+        "canonical_github_refs": ["#2851"],
+        "mutation_admissible": admissible,
+        "blocking_attempt_id": None if admissible else "attempt-2851",
+    }
+    monkeypatch.setattr(bridge, "activate_agent_os_failed_repair", lambda **kwargs: canonical)
+    if needs_reader:
+        monkeypatch.setattr(
+            bridge,
+            "resolve_lesson_read_route",
+            lambda: type("Route", (), {"execute_read": lambda query: {"results": []}})(),
+        )
+    else:
+        monkeypatch.setattr(
+            bridge,
+            "resolve_lesson_read_route",
+            lambda: (_ for _ in ()).throw(AssertionError("zero-read path must not resolve")),
+        )
+    result = bridge.execute_envelope(envelope, retrieval_required=needs_reader)
+    assert result["status"] == status
+    assert result["retry_reentry_outcome"] == retry_outcome
+    assert result["lesson_disposition"] == lesson_disposition
+    assert result["mutation_admissible"] is admissible
+    assert result["reason_codes"] == ["canonical-retry-reason"]
+    body = bridge.serialize_ckr6_result_comment(result, request_comment_id=2851001)
+    parsed = bridge.parse_ckr6_result_comment(body)
+    assert parsed["retry_reentry_outcome"] == retry_outcome
+    assert parsed["lesson_disposition"] == lesson_disposition
+    assert parsed["status"] == status
+    assert parsed["mutation_admissible"] is admissible
+    assert parsed["request_comment_id"] == 2851001
+    assert not body.startswith(bridge.COMMAND_PREFIX)
+    for flag in (
+        "execution_authorized", "github_writes_authorized", "merge_authorized",
+        "closure_authorized", "side_effects_performed",
+    ):
+        assert parsed[flag] is False
+
+
 def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeypatch):
     class Route:
         execute_read = None
@@ -563,6 +631,13 @@ def _run_main(monkeypatch, tmp_path, body, phase, *extra):
         (bridge.COMMAND_PREFIX + json.dumps(payload(operation="write-notion")), "operation-unsupported"),
         (bridge.COMMAND_PREFIX + json.dumps(payload(issue_number=1)), "issue-number-mismatch"),
         (bridge.COMMAND_PREFIX + json.dumps(payload(specialized_knowledge_required="maybe")), "materiality-invalid"),
+        # #3598: type narrowing must keep these existing rejection codes.
+        (bridge.COMMAND_PREFIX + json.dumps(payload(operation=1)), "operation-unsupported"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(operation=["issue-start"])), "invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(issue_number="2851")), "issue-number-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(language_hints="python")), "field-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(capability_keywords=["x"] * 21)), "field-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(target_path_hints=[1])), "field-invalid"),
     ],
 )
 def test_2851_malformed_request_produces_bounded_rejection_receipt(monkeypatch, tmp_path, body, code):
@@ -626,3 +701,61 @@ def test_2851_postback_lookup_failure_still_returns_a_receipt(monkeypatch):
     )
     assert calls == ["GET", "POST"]
     assert posted["posted_comment_id"] == 992
+
+
+def test_3598_hint_validation_still_precedes_task_reference_validation():
+    with pytest.raises(ValueError, match="^language_hints must be a bounded list$"):
+        bridge.parse_envelope(payload(language_hints="python", task_reference=""))
+
+
+def _failed_repair_envelope(**changes):
+    value = {
+        "operation": "failed-repair",
+        "repository": "Blummer92/agent-os",
+        "issue_number": 3598,
+        "task_reference": "issue:#3598",
+        "attempt_id": "attempt-1",
+        "failed_hypothesis": "hypothesis",
+        "result_summary": "summary",
+    }
+    value.update(changes)
+    return bridge.Ckr6Envelope(**value)
+
+
+@pytest.mark.parametrize(
+    ("field", "error", "message"),
+    [
+        ("attempt_id", ValueError, "attempt_id must be non-empty exact text"),
+        ("failed_hypothesis", TypeError, "failed_hypothesis must be a string"),
+        ("result_summary", TypeError, "result_summary must be a string"),
+    ],
+)
+def test_3598_directly_built_failed_repair_without_detail_fails_closed(field, error, message):
+    # parse_envelope always sets these; a hand-built envelope keeps the
+    # rejection the downstream failed-repair owner raises.
+    envelope = _failed_repair_envelope(**{field: None})
+    with pytest.raises(error, match=f"^{message}$"):
+        bridge.execute_envelope(envelope, retrieval_required=False)
+
+
+@pytest.mark.parametrize(
+    ("operation", "code"),
+    [
+        ("lesson-candidate", "candidate-detail-invalid"),
+        ("lesson-refinement", "refinement-detail-invalid"),
+    ],
+)
+def test_3598_learning_envelope_without_detail_is_a_bounded_rejection(operation, code):
+    envelope = bridge.Ckr6Envelope(
+        operation=operation,
+        repository="Blummer92/agent-os",
+        issue_number=3598,
+        task_reference="issue:#3598",
+    )
+    result = bridge._execute_learning(envelope, None)
+    assert result["status"] == "rejected"
+    assert result["reason_codes"] == ["envelope-rejected:" + code]
+    assert result["notion_read_performed"] is False
+    assert not any(result[key] for key in (
+        "execution_authorized", "github_writes_authorized", "merge_authorized",
+        "closure_authorized", "side_effects_performed", "mutation_admissible"))

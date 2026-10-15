@@ -21,20 +21,114 @@ ISSUE_REFERENCE_RE = re.compile(rf"(?<![A-Za-z0-9_.-]){_TARGET}\b")
 _AUTHORITATIVE_PREFIX_RE = re.compile(rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS}|address(?:es|ed)?)\b[^#\n]{{0,80}}$", re.IGNORECASE)
 _INLINE_CODE_RE = re.compile(r"`+[^`\n]*?`+")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# Explicit non-closing linkage declaration (#3506). A standalone body line such as
+# `Non-closing: #3372, #3281` declares that every bare issue reference in the PR is
+# intentionally non-closing. It is only honored when no closing reference exists
+# anywhere (the #3157 GitHub-effective detector still runs); it never resolves an
+# issue_number and therefore cannot grant closure authority.
+_NON_CLOSING_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*non-closing[ \t]*:[ \t]*(?P<targets>#?\d+(?:[ \t]*,[ \t]*#?\d+)*)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NON_CLOSING_TARGET_RE = re.compile(r"#?(\d+)")
 
 REQUIRED_PR_FIELDS = ["linked issue", "summary", "files changed", "tests run", "docs updated", "unresolved blockers", "handoff recommendations", "remaining risks"]
+
+
+def _extract_non_closing_directive(
+    pr_body: str,
+) -> tuple[str, list[int]]:
+    """Find standalone `Non-closing:` directive lines and mask them.
+
+    Detection runs on the markdown-masked body so a directive shown inside a
+    code fence, quote, or HTML comment is not honored. Returns the masked body
+    (directive lines blanked, positions otherwise stable) and the declared
+    issue numbers in declaration order.
+    """
+    declared: list[int] = []
+
+    def _blank(match: re.Match[str]) -> str:
+        declared.extend(int(number) for number in _NON_CLOSING_TARGET_RE.findall(match.group("targets")))
+        return " " * len(match.group(0))
+
+    masked = _NON_CLOSING_DIRECTIVE_RE.sub(_blank, _mask_non_authoritative_markdown(pr_body or ""))
+    return masked, declared
+
+
+def _evaluate_non_closing_directive(
+    pr_body: str,
+    pr_title: str,
+    declared_targets: list[int],
+    bare: list[LinkedIssueCandidate],
+) -> tuple[LinkedIssueParseResult | None, str | None]:
+    """Decide whether a `Non-closing:` directive qualifies as INFORMATIONAL.
+
+    Returns (informational_result, None) on success, or (None, rejection_reason)
+    when the directive is present but invalid. Callers must treat any rejection
+    as MANUAL_REVIEW (fail-closed): a directive that fails validation is a
+    linkage claim, not silence.
+    """
+    declared = set(declared_targets)
+    bare_numbers = {candidate.issue_number for candidate in bare}
+    if declared - bare_numbers:
+        dangling = ", ".join(f"#{number}" for number in sorted(declared - bare_numbers))
+        return None, (
+            f"Non-closing directive names issues with no detected reference: {dangling}."
+        )
+    if bare_numbers - declared:
+        uncovered = ", ".join(f"#{number}" for number in sorted(bare_numbers - declared))
+        return None, (
+            f"Non-closing directive does not cover every detected reference: {uncovered}."
+        )
+    closing = detect_github_effective_closing_references(pr_body, pr_title)
+    if closing:
+        names = ", ".join(f"{reference.keyword} {reference.target}" for reference in closing)
+        return None, (
+            f"Non-closing directive contradicted by GitHub-effective closing references: {names}."
+        )
+    targets = ", ".join(f"#{number}" for number in sorted(declared))
+    return (
+        LinkedIssueParseResult(
+            status=LinkedIssueParseStatus.INFORMATIONAL,
+            bare_references=bare,
+            reasons=[
+                f"Declared non-closing linkage covers every detected reference: {targets}. "
+                "No GitHub-effective closing reference detected; no closure authority granted."
+            ],
+        ),
+        None,
+    )
 
 
 def parse_linked_issue_result(pr_body: str, pr_title: str = "") -> LinkedIssueParseResult:
     """Parse GitHub-authoritative body linkage while retaining title evidence."""
     explicit: list[LinkedIssueCandidate] = []
     bare: list[LinkedIssueCandidate] = []
-    for source, text in (("title", pr_title or ""), ("body", pr_body or "")):
+    masked_body, declared_targets = _extract_non_closing_directive(pr_body or "")
+    for source, text in (("title", pr_title or ""), ("body", masked_body)):
         source_explicit, source_bare = _extract_candidates(text, source)
         explicit.extend(source_explicit)
         bare.extend(source_bare)
     explicit = _deduplicate_candidates(explicit)
     bare = _deduplicate_candidates(bare)
+    if declared_targets:
+        # A directive that names an issue which also carries an explicit
+        # closing directive is a contradiction: GitHub will close that issue
+        # on merge regardless of the directive, so the author's intent is
+        # ambiguous and must fail closed to human review.
+        contradicted = sorted(
+            {candidate.issue_number for candidate in explicit} & set(declared_targets)
+        )
+        if contradicted:
+            names = ", ".join(f"#{number}" for number in contradicted)
+            return LinkedIssueParseResult(
+                status=LinkedIssueParseStatus.MANUAL_REVIEW,
+                explicit_candidates=explicit,
+                bare_references=bare,
+                reasons=[
+                    f"Non-closing directive contradicts explicit closing directives for: {names}."
+                ],
+            )
     unique_explicit = {(candidate.repository.lower() if candidate.repository else None, candidate.issue_number) for candidate in explicit}
     if len(unique_explicit) == 1:
         repository, issue_number = next(iter(unique_explicit))
@@ -44,6 +138,22 @@ def parse_linked_issue_result(pr_body: str, pr_title: str = "") -> LinkedIssuePa
     if len(unique_explicit) > 1:
         targets = ", ".join(_format_target(repository, number) for repository, number in sorted(unique_explicit, key=_target_sort_key))
         return LinkedIssueParseResult(status=LinkedIssueParseStatus.MANUAL_REVIEW, explicit_candidates=explicit, bare_references=bare, reasons=[f"Multiple unique explicit closing targets were detected: {targets}."])
+    if not unique_explicit and declared_targets:
+        # No explicit closing references, but the author declared non-closing
+        # linkage. A qualifying directive yields INFORMATIONAL; any invalid
+        # directive fails closed to MANUAL_REVIEW (it is a linkage claim, not
+        # silence). With explicit closing references present, the existing
+        # branches above already govern and the directive is ignored.
+        informational, rejection = _evaluate_non_closing_directive(
+            pr_body or "", pr_title or "", declared_targets, bare
+        )
+        if informational is not None:
+            return informational
+        return LinkedIssueParseResult(
+            status=LinkedIssueParseStatus.MANUAL_REVIEW,
+            bare_references=bare,
+            reasons=[rejection or "Non-closing directive did not qualify."],
+        )
     if bare:
         authoritative_looking = [candidate for candidate in bare if candidate.keyword]
         if authoritative_looking:
@@ -229,7 +339,13 @@ def detect_github_effective_closing_references(
         for match in _GITHUB_EFFECTIVE_CLOSING_RE.finditer(text or ""):
             keyword = _CANONICAL_CLOSING_KEYWORD[match.group("keyword").lower()]
             repository, issue_number = _target_identity(match)
-            target = f"{repository.lower()}#{issue_number}" if repository else f"#{issue_number}"
+            # Lowercase first (the case-insensitive pattern also matches
+            # non-ASCII case variants such as the Kelvin sign, which lowercase
+            # to ASCII), then normalize_issue_target folds the canonical
+            # repository to "#N" for short "owner/repo#N" targets too (#3590).
+            target = normalize_issue_target(
+                f"{repository.lower()}#{issue_number}" if repository else f"#{issue_number}"
+            )
             found.append(
                 GitHubEffectiveClosingReference(keyword=keyword, target=target, source=source)
             )

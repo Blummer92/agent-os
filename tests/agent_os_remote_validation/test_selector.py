@@ -1563,3 +1563,23 @@ def test_teacher_os_mixed_readme_and_source_selects_focused():
     ]))
     assert plan.profile == "focused"
     assert plan.commands == TEACHER_OS_COMMANDS
+# --- #3567: root docs/ must be classified without bypassing focused owners ---
+
+
+def test_3567_root_docs_only_is_static() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md"]))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_3567_root_docs_plus_unmapped_executable_is_aggregate() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md", "scripts/unmapped_3567.py"]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == (RULES["aggregate_command"],)
+
+
+def test_3567_root_docs_plus_focused_owner_stays_focused() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md", "scripts/agent_os_remote_validation/selector.py"]))
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest tests/agent_os_remote_validation",)

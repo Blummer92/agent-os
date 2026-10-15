@@ -1,13 +1,17 @@
 """In-memory, per-session cache over the navigation-index tabs.
 
 Each tab is fetched at most once per NavigationIndex instance (one Sheets
-API read per tab per agent session), then parsed and looked up locally.
+API read per tab per agent session), then parsed and looked up locally. The
+raw rows are what is cached, so keyed lookups and the Refresh Log chronology
+read share a single fetch of a tab.
 """
 from __future__ import annotations
 
 from typing import Callable
 
 from .records import index_by, rows_to_records, split_header_and_data, with_warning
+from .refresh_log import DEFAULT_LIMIT as DEFAULT_REFRESH_LOG_LIMIT
+from .refresh_log import TAB_REFRESH_LOG, build_refresh_log_evidence
 
 TAB_DASHBOARD_REGISTRY = "Dashboard Registry"
 TAB_DATABASE_REGISTRY = "Database Registry"
@@ -19,6 +23,16 @@ TAB_DUPLICATE_DRIFT_WATCHLIST = "Duplicate / Drift Watchlist"
 
 _PROPERTY_DATABASE_FIELD = "Database Name"
 _PROPERTY_NAME_FIELDS = ("Field Name", "Property Name")
+
+# Kinds that list_names can enumerate: kind -> (tab, key column).
+_NAME_COLUMNS = {
+    "dashboard": (TAB_DASHBOARD_REGISTRY, "Dashboard Name"),
+    "database": (TAB_DATABASE_REGISTRY, "Database Name"),
+    "workflow": (TAB_WORKFLOW_MAP, "Workflow Name"),
+    "prompt": (TAB_AGENT_PROMPT_LIBRARY, "Prompt Name"),
+    "source-of-truth": (TAB_SOURCE_OF_TRUTH_MATRIX, "Information Type"),
+    "duplicate-risk": (TAB_DUPLICATE_DRIFT_WATCHLIST, "Suspect Field, Database, or Dashboard"),
+}
 
 
 def _property_name(record: dict) -> str:
@@ -38,12 +52,17 @@ class NavigationIndex:
 
     def __init__(self, fetch_tab: Callable[[str], list[list[str]]]):
         self._fetch_tab = fetch_tab
+        self._row_cache: dict[str, list[list[str]]] = {}
         self._tab_cache: dict[str, list[dict]] = {}
+
+    def _rows(self, tab_name: str) -> list[list[str]]:
+        if tab_name not in self._row_cache:
+            self._row_cache[tab_name] = self._fetch_tab(tab_name)
+        return self._row_cache[tab_name]
 
     def _records(self, tab_name: str) -> list[dict]:
         if tab_name not in self._tab_cache:
-            rows = self._fetch_tab(tab_name)
-            header, data = split_header_and_data(rows)
+            header, data = split_header_and_data(self._rows(tab_name))
             self._tab_cache[tab_name] = rows_to_records(header, data)
         return self._tab_cache[tab_name]
 
@@ -74,6 +93,29 @@ class NavigationIndex:
         index = index_by(self._records(TAB_AGENT_PROMPT_LIBRARY), "Prompt Name")
         return with_warning(index.get(prompt_name))
 
+    def list_names(self, kind: str, database: str | None = None) -> list[str]:
+        """Stored names for one lookup kind, in sheet order, duplicates preserved.
+
+        `kind` is one of dashboard, database, workflow, prompt, source-of-truth
+        (Information Type), duplicate-risk (Watchlist Suspect), or field (which
+        requires `database`). Rows with a blank name are skipped, exactly as the
+        keyed getters skip them. Repeated names are returned repeatedly, because
+        the keyed getters silently keep only one row for a repeated name.
+        """
+        if kind == "field":
+            if not database:
+                raise ValueError("database is required for kind=field")
+            names = (
+                _property_name(record)
+                for record in self._records(TAB_PROPERTY_DICTIONARY)
+                if record.get(_PROPERTY_DATABASE_FIELD) == database
+            )
+            return [name for name in names if name]
+        if kind not in _NAME_COLUMNS:
+            raise ValueError(f"unsupported kind: {kind!r}")
+        tab_name, column = _NAME_COLUMNS[kind]
+        return [record[column] for record in self._records(tab_name) if record.get(column)]
+
     def check_duplicate_risk(self, name: str) -> list[dict]:
         """Exact or substring match against Suspect and Similar To columns."""
         matches = []
@@ -83,3 +125,18 @@ class NavigationIndex:
             if name == suspect or name in similar_to:
                 matches.append(with_warning(record))
         return matches
+
+    def get_refresh_log(self, limit: int = DEFAULT_REFRESH_LOG_LIMIT) -> dict:
+        """Bounded, read-only Refresh Log chronology evidence.
+
+        Returns the last `limit` populated rows in source-row order with raw
+        timestamps preserved, plus the latest observed refresh by source row
+        (and by timestamp only when every row states its timezone). Always
+        returns an envelope, even for an empty or headerless tab; raises
+        ValueError for an out-of-range `limit`.
+
+        Refresh Log rows are navigation-cache evidence only: not a complete
+        history of any work, and never a substitute for live Notion or GitHub
+        verification. See `refresh_log.py` for the exact semantics.
+        """
+        return build_refresh_log_evidence(self._rows(TAB_REFRESH_LOG), limit=limit)

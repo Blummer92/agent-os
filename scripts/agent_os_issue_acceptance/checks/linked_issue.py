@@ -37,6 +37,14 @@ def check(
                 "merge admission rejects any closing reference whose target is not authorized."
             )
         return CheckResult("linked issue", Status.MANUAL_REVIEW, message, evidence)
+    if result.status == LinkedIssueParseStatus.INFORMATIONAL:
+        # Declared non-closing linkage (#3506): the author explicitly declared
+        # every detected reference non-closing and no GitHub-effective closing
+        # reference exists. This is informational only — it never resolves an
+        # issue_number and grants no closure authority — so it must not force
+        # manual review or fail acceptance.
+        message = result.reasons[0] if result.reasons else "Linked issue linkage declared non-closing."
+        return CheckResult("linked issue", Status.PASS, message, evidence)
     return CheckResult(
         "linked issue",
         Status.PASS,

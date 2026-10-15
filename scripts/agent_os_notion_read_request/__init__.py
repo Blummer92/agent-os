@@ -25,7 +25,7 @@ from .admission import (
     required_logical_sources,
 )
 from .catalog import CATALOG_PATH, load_catalog, parse_catalog
-from .execution import execute_admitted_notion_read
+from .execution import execute_admitted_notion_read, execute_source_schema, execute_lesson_content
 from .live_executor import build_live_notion_executor_factory
 from .models import (
     CREDENTIAL_ENV_VAR,
@@ -42,7 +42,15 @@ from .models import (
     NotionReadRequestRecord,
     NotionReadSource,
 )
-from .projection import RESULT_KIND, project_public_result, reject_credential_keys
+from .projection import (
+    RESULT_KIND,
+    RESULT_KIND_SCHEMA,
+    RESULT_KIND_LESSON_CONTENT,
+    project_public_result,
+    project_source_schema_result,
+    project_lesson_content_result,
+    reject_credential_keys,
+)
 from .runner import (
     DISPATCH_BLOCKED,
     DISPATCH_COMPLETED,
@@ -61,6 +69,8 @@ __all__ = [
     "REQUEST_CLASSES",
     "REQUEST_CLASS_INTENT",
     "RESULT_KIND",
+    "RESULT_KIND_SCHEMA",
+    "RESULT_KIND_LESSON_CONTENT",
     "SCHEMA_VERSION",
     "VERIFIED_STATE",
     "CanonicalUnitBinding",
@@ -73,9 +83,13 @@ __all__ = [
     "build_curriculum_read_request",
     "build_live_notion_executor_factory",
     "execute_admitted_notion_read",
+    "execute_source_schema",
+    "execute_lesson_content",
     "load_catalog",
     "parse_catalog",
     "project_public_result",
+    "project_source_schema_result",
+    "project_lesson_content_result",
     "reject_credential_keys",
     "required_logical_sources",
     "run_notion_read_request",

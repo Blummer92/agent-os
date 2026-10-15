@@ -24,6 +24,12 @@ python -m pip install -r requirements-dev.txt
 python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
 python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
+# Execution-service runtime (#3333 Gate 4). Its workflow-scheduler,
+# agent-memory-context-manager and instructional-workflow-contracts requirements
+# are already satisfied by the editable installs in requirements-dev.txt, which
+# must run first because none of them is on a package index. This installs the
+# package only; it binds no AGENT_OS_* host path and does not qualify a host.
+python -m pip install -e "./08_Tooling/agent-os-execution-service"
 
 end_epoch=$(date +%s)
 echo "Dependency install duration: $((end_epoch - start_epoch))s"

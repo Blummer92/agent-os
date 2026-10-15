@@ -275,7 +275,13 @@ def test_missing_exact_main_evidence_uses_existing_validation_authority_for_reco
         "      - name: Recover missing exact-current main aggregate evidence\n", 1
     )[1].split("\n      - name: ", 1)[0]
 
-    assert 'select(.name == "Run aggregate validation")' in recovery
+    # The evidence-existence count applies the #3461 provenance filter: a bare
+    # name/SHA match would treat wrong-ref dispatch checks as evidence and
+    # skip a needed recovery dispatch. The old inline jq was that defect's
+    # vector, so it must be gone from the recovery step.
+    assert "main_health_check_selector.py --count" in recovery
+    assert 'MAIN_HEALTH_SHA="$current_main_sha"' in recovery
+    assert 'select(.name == "Run aggregate validation")' not in recovery
     assert 'gh workflow run agent-os-validation.yml --ref "$current_main_sha"' in recovery
     assert 'echo "recovery_required=true"' in recovery
     assert "workflow_dispatch:" in text
