@@ -43,6 +43,12 @@ _REMOTE_MAX_BOUNDED_SECONDS = 120
 _TRANSPORT_OVERHEAD_SECONDS = 60
 _RUN_TIMEOUT_SECONDS = _REMOTE_MAX_BOUNDED_SECONDS + _TRANSPORT_OVERHEAD_SECONDS
 
+# #3333: sshd does not pass devcontainer containerEnv/remoteEnv to a
+# noninteractive `gh codespace ssh -- <cmd>` session, so the remote program
+# binds the approved Codespaces store root itself when the variable is unset.
+# The value must match .devcontainer/devcontainer.json containerEnv.
+APPROVED_CODESPACES_STORE_ROOT = "/workspaces/agent-os-state/checkpoints"
+
 # The remote runner locates the repository checkout on the Codespace from a
 # fixed candidate list and verifies the discovery implementation exists before
 # importing it. No caller-provided path is accepted.
@@ -99,7 +105,7 @@ def main():
         base["reason_codes"]=["codespaces-discovery-import-failed"]
         _emit(base)
         return
-    store_root=os.environ.get("AGENT_OS_CHECKPOINT_STORE_ROOT","/var/lib/agent-os/checkpoints")
+    store_root=os.environ.get("AGENT_OS_CHECKPOINT_STORE_ROOT","/workspaces/agent-os-state/checkpoints")
     if not (Path(store_root)/"invocations").is_dir():
         base["reason_codes"]=["codespaces-discovery-store-unavailable"]
         _emit(base)
