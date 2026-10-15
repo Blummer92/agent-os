@@ -540,8 +540,11 @@ jobs:
             exit 1
           fi
 
+          # Count only authoritative main-health evidence (#3461): a bare
+          # name/SHA match would treat wrong-ref dispatch checks as evidence
+          # and skip a needed recovery dispatch.
           check_count="$(
-            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               --jq '[.check_runs[] | select(.name == "Run aggregate validation")] | length'
+            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               | MAIN_HEALTH_SHA="$current_main_sha" python3 scripts/agent_os_remote_validation/main_health_check_selector.py --count
           )"
           if [ "$check_count" != "0" ]; then
             echo "recovery_required=false" >> "$GITHUB_OUTPUT"
@@ -598,12 +601,12 @@ jobs:
           main_health_elapsed_seconds=0
 
           while true; do
+            # Evidence-provenance filter (#3461): select only checks whose
+            # workflow run is a push to main or a sanctioned diagnostic
+            # dispatch by the validation workflow itself. Wrong-ref
+            # final-candidate dispatch checks are never main-health evidence.
             check_json="$(
-              gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               --jq '[.check_runs[]
-                  | select(.name == "Run aggregate validation")
-                  | {status, conclusion, details_url, started_at, completed_at}]
-                  | sort_by(.started_at // "")
-                  | last // {}'
+              gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               | MAIN_HEALTH_SHA="$current_main_sha" python3 scripts/agent_os_remote_validation/main_health_check_selector.py
             )"
 
             check_status="$(jq -r '.status // "missing"' <<<"$check_json")"
