@@ -34,7 +34,15 @@ draft, head SHA, title/body, latest reviews, review threads, `Run validation pla
 check, `agent-os/authoritative-aggregate` status), binds head SHA and body
 revision, and calls the single canonical evaluator
 `evaluate_ready_for_review_admission`. The owner actor's fixed comment is the
-explicit Ready request. No canonical close-issue authorization is reacquirable
+explicit Ready request.
+
+Validation evidence (`resolve_validation_evidence`, #3587):
+- Aggregate success comes only from the newest `agent-os/authoritative-aggregate` status, read with the aggregate gate's `latest_authoritative_state`.
+- A `Run aggregate validation` check run never counts as success; with no status, its non-success states still block or keep Ready provisional.
+- Duplicate same-name check runs resolve by newest check-run id. A skipped `Run validation plan` copy, which comes from a dispatch run, is ignored.
+- Whether a Draft aggregate-profile plan check (which ran no command) may count as focused validation is an open owner policy decision under #3587; it is not decided here.
+
+No canonical close-issue authorization is reacquirable
 here, so any GitHub-effective closing reference refuses
 (`unauthorized-closing-reference`).
 

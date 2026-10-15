@@ -252,8 +252,8 @@ def test_pygithub_provider_maps_evidence_read_only():
             self.__dict__.update(kw)
 
     commit = Obj(
-        get_check_runs=lambda: [Obj(name=ra.FOCUSED_CHECK_NAME, status="completed", conclusion="success"),
-                                Obj(name=ra.AGGREGATE_JOB_NAME, status="completed", conclusion="skipped")],
+        get_check_runs=lambda: [Obj(id=11, name=ra.FOCUSED_CHECK_NAME, status="completed", conclusion="success"),
+                                Obj(id=12, name=ra.AGGREGATE_JOB_NAME, status="completed", conclusion="skipped")],
         get_statuses=lambda: [])
     pr = Obj(head=Obj(sha=HEAD), draft=True, state="open", merged=False, title="t", body=BODY,
              get_reviews=lambda: [Obj(state="CHANGES_REQUESTED", user=Obj(login="r"))])
@@ -271,3 +271,133 @@ def test_pygithub_provider_maps_evidence_read_only():
     assert (snap.focused_status, snap.aggregate_status) == ("success", "skipped")
     assert snap.requested_changes is True and snap.blocking_unresolved == 1
     assert snap.validation_head_sha == HEAD
+
+
+# --- #3446 / #3587: aggregate evidence is the authoritative status only --------
+
+
+class _Run:
+    def __init__(self, run_id, name, conclusion, status="completed"):
+        self.id, self.name, self.conclusion, self.status = run_id, name, conclusion, status
+
+
+def _plan(run_id, conclusion, status="completed"):
+    return _Run(run_id, ra.FOCUSED_CHECK_NAME, conclusion, status)
+
+
+def _job(run_id, conclusion, status="completed"):
+    return _Run(run_id, ra.AGGREGATE_JOB_NAME, conclusion, status)
+
+
+def _status(status_id, state, context=ra.AGGREGATE_CONTEXT):
+    return {"id": status_id, "context": context, "state": state}
+
+
+@pytest.mark.parametrize(
+    ("runs", "statuses", "expected_aggregate"),
+    [
+        # Authoritative status governs; the newest status wins (#2761).
+        ([_job(1, "skipped")], [_status(5, "success")], "success"),
+        ([_job(1, "success")], [_status(5, "success"), _status(6, "failure")], "failure"),
+        ([], [_status(6, "success"), _status(5, "pending")], "success"),
+        ([], [_status(5, "pending")], "pending"),
+        ([], [_status(5, "error")], "failure"),
+        # A non-authoritative aggregate job success is never success evidence.
+        ([_job(1, "success")], [], "missing"),
+        ([_job(1, "success")], [_status(5, "success", context="other/context")], "missing"),
+        # Non-success job states still surface so the evaluator fails closed.
+        ([_job(1, "failure")], [], "failure"),
+        ([_job(1, None, status="in_progress")], [], "pending"),
+        ([_job(1, "skipped")], [], "skipped"),
+        ([], [], "missing"),
+        # QA findings: unknown newest state and unorderable ids fail closed.
+        ([], [_status(2, "weird"), _status(1, "success")], "failure"),
+        ([], [{"id": None, "context": ra.AGGREGATE_CONTEXT, "state": "success"}], "failure"),
+        ([], [{"id": True, "context": ra.AGGREGATE_CONTEXT, "state": "success"}], "failure"),
+        ([], [_status(3, "success"), _status(3, "failure")], "failure"),
+        ([], [_status(3, "failure"), _status(3, "success")], "failure"),
+        # Ids of other contexts never affect the authoritative read.
+        ([], [_status(5, "success"), {"id": None, "context": "ci/other", "state": "failure"}], "success"),
+    ],
+)
+def test_aggregate_comes_only_from_the_authoritative_status(runs, statuses, expected_aggregate):
+    assert ra.resolve_validation_evidence(runs, statuses)[1] == expected_aggregate
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected_focused"),
+    [
+        ([_plan(1, "success")], "success"),
+        ([_plan(1, "failure")], "failure"),
+        ([_plan(1, None, status="queued")], "pending"),
+        ([], "missing"),
+        # A skipped plan check (dispatch run) is never evidence.
+        ([_plan(1, "skipped")], "missing"),
+        ([_plan(1, "failure"), _plan(2, "skipped")], "failure"),
+        ([_plan(2, "skipped"), _plan(1, "success")], "success"),
+        # Duplicates resolve by newest check-run id, independent of order.
+        ([_plan(1, "failure"), _plan(2, "success")], "success"),
+        ([_plan(2, "success"), _plan(1, "failure")], "success"),
+        ([_plan(1, "success"), _plan(2, "failure")], "failure"),
+        ([_plan(2, "failure"), _plan(1, "success")], "failure"),
+    ],
+)
+def test_focused_resolution_is_order_independent_and_ignores_skipped(runs, expected_focused):
+    assert ra.resolve_validation_evidence(runs, [])[0] == expected_focused
+    assert ra.resolve_validation_evidence(list(reversed(runs)), [])[0] == expected_focused
+
+
+@pytest.mark.parametrize("bad_id", [None, "7", -1, True])
+def test_unidentifiable_check_run_fails_closed(bad_id):
+    focused, aggregate = ra.resolve_validation_evidence(
+        [_Run(bad_id, ra.FOCUSED_CHECK_NAME, "success"), _Run(bad_id, ra.AGGREGATE_JOB_NAME, "success")], [])
+    assert (focused, aggregate) == ("failure", "failure")
+
+
+def test_non_authoritative_aggregate_success_never_yields_final_ready():
+    # A diagnostic dispatch's aggregate job success without the authoritative
+    # status previously took final-candidate mode and admitted non-provisional
+    # Ready. It now yields at most the reversible provisional trigger.
+    focused, aggregate = ra.resolve_validation_evidence([_plan(1, "success"), _job(2, "success")], [])
+    receipt = run(snap=snapshot(focused_status=focused, aggregate_status=aggregate))
+    assert receipt["provisional_ready"] is True
+    assert receipt["rollback_to_draft_required"] is True
+    assert "draft-final-candidate-ready-converged" not in receipt["reason_codes"]
+
+
+def test_authoritative_success_still_converges():
+    focused, aggregate = ra.resolve_validation_evidence(
+        [_plan(1, "success"), _job(2, "skipped")], [_status(9, "success")])
+    receipt = run(snap=snapshot(focused_status=focused, aggregate_status=aggregate))
+    assert receipt["transition_admissible"] is True
+    assert receipt["provisional_ready"] is False
+    assert "draft-final-candidate-ready-converged" in receipt["reason_codes"]
+
+
+def test_skipped_plan_and_no_status_admit_nothing():
+    focused, aggregate = ra.resolve_validation_evidence([_plan(1, "skipped"), _job(2, "skipped")], [])
+    receipt = run(snap=snapshot(focused_status=focused, aggregate_status=aggregate))
+    assert receipt["transition_admissible"] is False
+    assert "focused-validation-not-green" in receipt["reason_codes"]
+
+
+def test_pygithub_provider_ignores_non_authoritative_aggregate_job_success():
+    class Obj:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    commit = Obj(
+        get_check_runs=lambda: [Obj(id=1, name=ra.FOCUSED_CHECK_NAME, status="completed", conclusion="success"),
+                                Obj(id=2, name=ra.AGGREGATE_JOB_NAME, status="completed", conclusion="success")],
+        get_statuses=lambda: [Obj(id=3, context="ci/other", state="success")])
+    pr = Obj(head=Obj(sha=HEAD), draft=True, state="open", merged=False, title="t", body=BODY,
+             get_reviews=lambda: [])
+    repo = Obj(get_pull=lambda n: pr, get_commit=lambda sha: commit)
+
+    class Requester:
+        def graphql_query(self, query, variables):
+            return {}, {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": False}, "nodes": []}}}}}
+
+    snap = ra.PyGithubReadyAdmissionProvider(Obj(get_repo=lambda name: repo, requester=Requester())).read_pull_request(REPO, PR)
+    assert (snap.focused_status, snap.aggregate_status) == ("success", "missing")
