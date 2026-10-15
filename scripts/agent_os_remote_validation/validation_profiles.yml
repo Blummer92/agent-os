@@ -162,7 +162,15 @@
     {
       "name": "teacher-os-web",
       "prefixes": [
-        "08_Tooling/teacher-os-web/"
+        "08_Tooling/teacher-os-web/src/",
+        "08_Tooling/teacher-os-web/tests/"
+      ],
+      "exact_paths": [
+        "08_Tooling/teacher-os-web/package.json",
+        "08_Tooling/teacher-os-web/package-lock.json",
+        "08_Tooling/teacher-os-web/tsconfig.json",
+        "08_Tooling/teacher-os-web/index.html",
+        "08_Tooling/teacher-os-web/playwright.config.ts"
       ],
       "commands": [
         "cd 08_Tooling/teacher-os-web && npm ci",
