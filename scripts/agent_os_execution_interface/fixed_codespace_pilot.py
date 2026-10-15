@@ -3,8 +3,10 @@
 An issue comment is low-trust transport evidence only. This module can dispatch
 a *read-only* exact-HEAD probe only when the canonical #1218 reconstruction,
 current authorization and the existing current Codespace selection are supplied
-by a qualified host. The GitHub Actions CLI fails closed until such a host-side
-source is connected: it never synthesizes execution admission or runner health.
+by a qualified host. ``consume_fixed_codespace_pilot_on_host`` is that host
+connection: it takes the #1287 ``ProductionAdmissionProviders`` and reads the
+canonical Codespace selection. The GitHub Actions CLI has no host and still
+fails closed: it never synthesizes execution admission or runner health.
 
 The real bounded engineering command plan/live synchronous pilot require a
 separately admitted plan and host configuration. This probe does not grant that.
@@ -23,6 +25,11 @@ ISSUE_NUMBER = 3333
 OPERATION_ID = "codespace-implementation-pilot-v1"
 ACCEPTED_REASON = "accepted-codespace-implementation-envelope"
 FIXED_ARGV = ("git", "rev-parse", "HEAD")
+# The admitted route operation the probe runs under. The probe is a read-only
+# sub-operation of an admitted pre-PR developer-loop mission; this is the operation
+# every production publisher binds (production_handoff_publication), distinct from
+# OPERATION_ID, which names this fixed envelope and its reserved probe authorization.
+ROUTE_OPERATION = "pre-pr-developer-loop"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _HANDOFF = re.compile(r"^executor-handoff:[0-9a-f]{64}$", re.ASCII)
 
@@ -41,9 +48,15 @@ def _receipt(status: str, reason: str, transport: dict[str, Any]) -> dict[str, o
         "expected_sha": transport.get("codespace_implementation_sha_or_none"),
         "request_id": None,
         "codespace_name": None,
+        "argv": list(FIXED_ARGV),
         "exit_status": None,
         "stdout_tail": "",
         "stderr_tail": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "started_at": None,
+        "ended_at": None,
+        "duration_ms": None,
         "execution_authorized": False,
         "github_writes_authorized": False,
         "external_writes_authorized": False,
@@ -171,7 +184,7 @@ def consume_fixed_codespace_pilot(
             authorization.authorization_id == descriptor.authorization_id,
             authorization.expected_sha == sha,
             route.decision_id == descriptor.route_decision_id,
-            route.requested_operation == "bounded-implementation",
+            route.requested_operation == ROUTE_OPERATION,
             route.selected_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
             route.governed_runner_available is True,
             route.environment_health_evidence_id_or_none == descriptor.environment_health_evidence_id,
@@ -248,12 +261,20 @@ def consume_fixed_codespace_pilot(
         receipt["exit_status"] = result.exit_status_or_none
         receipt["stdout_tail"] = result.stdout_tail
         receipt["stderr_tail"] = result.stderr_tail
+        # Keep the transport's own evidence; the completion check below uses it too.
+        receipt["argv"] = list(result.argv)
+        receipt["stdout_truncated"] = result.stdout_truncated
+        receipt["stderr_truncated"] = result.stderr_truncated
+        receipt["started_at"] = result.started_at_or_none
+        receipt["ended_at"] = result.ended_at_or_none
+        receipt["duration_ms"] = result.duration_ms
         if (
             result.exit_status_or_none == 0
             and result.stdout_tail.strip() == sha
             and not result.stdout_truncated
             and not result.stderr_truncated
             and result.codespace_name_or_none == selection.codespace_name
+            and tuple(result.argv) == FIXED_ARGV
         ):
             receipt.update(status="completed", reason_codes=["fixed-head-probe-passed"])
         else:
@@ -265,6 +286,49 @@ def consume_fixed_codespace_pilot(
         return receipt
     except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
         return _receipt("needs-decision", "current-evidence-unavailable", envelope)
+
+
+def consume_fixed_codespace_pilot_on_host(
+    transport: object,
+    *,
+    providers: object,
+    resolve_selection: Callable[[], object] | None = None,
+    dispatcher: Callable[..., object] | None = None,
+) -> dict[str, object]:
+    """Trusted-host entry: bind #1287 admission providers to the fixed probe.
+
+    ``providers`` must be the exact ``ProductionAdmissionProviders`` from
+    ``ProductionHostBootstrap.admission_providers()``. The current Codespace
+    selection is read at probe time, after the envelope and host binding are
+    checked. It comes from the canonical shared resolver through the execution
+    service, because ``scripts/**`` may not import ``workflow_scheduler``.
+    ``resolve_selection`` exists only so tests can inject a fake, and it is
+    never fed from issue text. Every admission decision stays in
+    ``consume_fixed_codespace_pilot``.
+    """
+    envelope = transport if type(transport) is dict else {}
+    if not _valid_transport(transport):
+        return _receipt("blocked", "invalid-fixed-operation-envelope", envelope)
+
+    from agent_os_execution_service.production_host_composition import (
+        ProductionAdmissionProviders,
+        read_canonical_codespace_selection,
+    )
+
+    if type(providers) is not ProductionAdmissionProviders:
+        return _receipt("needs-decision", "canonical-admission-provider-unavailable", envelope)
+    selection = read_canonical_codespace_selection(resolve_selection)
+    if selection is None:
+        return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
+    return consume_fixed_codespace_pilot(
+        transport,
+        descriptor_loader=providers.descriptor_loader,
+        current_resolver=providers.current_resolver,
+        lease_reader=providers.lease_reader,
+        codespace_selection=selection,
+        evaluated_at=providers.evaluated_at,
+        dispatcher=dispatcher,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

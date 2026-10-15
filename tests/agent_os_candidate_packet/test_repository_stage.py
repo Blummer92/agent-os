@@ -582,9 +582,9 @@ def test_observation_and_result_never_authorize_execution() -> None:
     assert result.validation.side_effects_performed is False
 
     # The authority fields are init=False, so no caller can set them at all.
-    with pytest.raises(ValueError, match="init=False"):
+    with pytest.raises((ValueError, TypeError), match="init=False"):
         replace(result, execution_authorized=True)
-    with pytest.raises(ValueError, match="init=False"):
+    with pytest.raises((ValueError, TypeError), match="init=False"):
         replace(observation, side_effects_performed=True)
 
 

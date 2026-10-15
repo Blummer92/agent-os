@@ -60,7 +60,6 @@ from scripts.agent_os_remote_validation import (
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
 
 from .authorized_validation import (
-    AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
     AuthorizedValidationLifecyclePolicy,
     build_authorized_validation_lifecycle_request,
 )
@@ -257,12 +256,12 @@ def publish_production_handoff(
             raise ProductionHandoffPublicationError("execution-packet-incomplete")
 
         authorization = reacquire_execution_authorization(
-            github,
+            transport=github,
             repository=packet.repository,
             issue_number=packet.issue_number,
             expected_candidate_packet_id=packet.packet_id,
             expected_invocation_id=packet.invocation_id,
-            expected_operation=AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
+            expected_operation=PRE_PR_DEVELOPER_LOOP_OPERATION,
             expected_request_fingerprint=preauth_stage.request_fingerprint,
             expected_command_plan_id=preauth_stage.command_plan_id,
             expected_sha=packet.candidate_sha,
