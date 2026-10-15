@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -30,7 +31,7 @@ def _make_repo(tmp_path: Path, *, structure_exit: int = 0) -> Path:
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PYTHON_BIN"] = shutil.which("python") or shutil.which("python3") or "python3"
+    env["PYTHON_BIN"] = sys.executable
     return subprocess.run(
         ["bash", "scripts/validate-all.sh", *args],
         cwd=repo,
@@ -63,7 +64,9 @@ def test_validate_all_timing_does_not_change_failure_exit_semantics(tmp_path: Pa
     result = _run(repo)
 
     assert result.returncode == 1
-    command = f"PYTHON_BIN={os.environ.get('PYTHON_BIN', shutil.which('python') or shutil.which('python3') or 'python3')} bash 07_Agent_Tests/validate-repo-structure.sh"
+    command = (
+        f"PYTHON_BIN={sys.executable} bash 07_Agent_Tests/validate-repo-structure.sh"
+    )
     assert f"- FAIL | structural validation | exit 7 | {command}" in result.stdout
     assert f"- structural validation | exit 7 | {command}" in result.stdout
     assert re.search(r"^- structural validation \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
