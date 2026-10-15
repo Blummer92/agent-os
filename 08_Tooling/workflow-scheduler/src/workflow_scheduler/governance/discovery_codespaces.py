@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -228,6 +229,21 @@ def run_discovery_over_codespaces(
     """Run bounded read-only discovery on the selected Codespace."""
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    # #3617: the remote program must cross the SSH shell boundary as one
+    # safely quoted command. Passing the multiline source as separate argv
+    # elements lets the remote shell split it at newlines (Python
+    # SyntaxError, then bash parsing Python lines). shlex.join preserves the
+    # source as the single -c argument through the remote shell.
+    remote_command = shlex.join(
+        (
+            "python3",
+            "-c",
+            _REMOTE_DISCOVERY_SOURCE,
+            request.repository,
+            str(request.issue_number),
+            codespace_name,
+        )
+    )
     try:
         completed = run(
             (
@@ -237,12 +253,7 @@ def run_discovery_over_codespaces(
                 "-c",
                 codespace_name,
                 "--",
-                "python3",
-                "-c",
-                _REMOTE_DISCOVERY_SOURCE,
-                request.repository,
-                str(request.issue_number),
-                codespace_name,
+                remote_command,
             ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )

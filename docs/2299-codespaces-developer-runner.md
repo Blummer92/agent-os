@@ -138,7 +138,16 @@ present before importing the discovery implementation: a Codespace without the
 store reports `codespaces_capable=False` so the workflow falls back through the
 existing GCE path instead of returning a misleading `not-found`. If the current
 Codespace is unavailable, the repository checkout is missing, or the store is
-absent, the run fails closed and the existing GCE path is preserved. First-run
+absent, the run fails closed and the existing GCE path is preserved. The GCE
+fallback recognizes the accepted discovery envelope with its own bounded
+branch (`gce_gcloud_adapter.execute_transport`): the envelope is validated
+strictly (accepted status, canonical issue identity, no handoff identity,
+single run attempt) and answered with non-authorizing `needs-decision`
+discovery evidence (`discovery-gce-unavailable`) instead of reaching the
+resume-only binder, which correctly continues to reject non-resume envelopes.
+The GCE transport performs no discovery operation and invokes no adapter
+method for discovery; the retired GCE host is never observed, started, or
+probed on this path. First-run
 validation, Scheduler/control, #759 containment, fixed-service-identity, host
 maintenance, and other VM-specific operations remain GCE-owned under #2300.
 

@@ -168,6 +168,8 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
 def _non_authorizing(status:str,reason:str)->dict[str,object]:return {"schema_version":"1.0","status":status,"reason_codes":[reason],"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
+def _discovery_unavailable(reason:str,ingress:IssueCommentIngressResult)->dict[str,object]:
+ return {"schema_version":"1.0","status":"needs-decision","reason_codes":[reason],"repository":ingress.repository,"issue_number":ingress.issue_number,"matching_descriptor_count":0,"handoff_id":None,"result_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 def _bounded_diagnostic_text(text:str)->tuple[str,bool]:
  if type(text) is not str:text=""
  if len(text)>MAX_DIAGNOSTIC_STDERR:return text[-MAX_DIAGNOSTIC_STDERR:],True
@@ -243,6 +245,18 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if state is not VmState.RUNNING:return {"first_publication_activation":_non_authorizing("needs-decision","host-not-running")}
   if not adapter.probe_activation_ready(RESOURCE):return {"first_publication_activation":_non_authorizing("needs-decision","activation-entrypoint-unavailable")}
   return {"first_publication_activation":adapter.activate_first_publication(RESOURCE,source_capsule_id=ingress.source_capsule_id_or_none)}
+ # #3617: an accepted discovery envelope must reach a bounded discovery
+ # result, never the resume-only binder below. The GCE transport has no
+ # discovery operation (descriptor discovery runs on the Codespaces surface);
+ # the retired GCE host cannot perform it. Validate the envelope strictly and
+ # return non-authorizing unavailable evidence instead of a ValueError
+ # traceback. The resume binder's strict accepted-envelope grammar is
+ # unchanged, and no adapter method is invoked.
+ if ingress.reason=="accepted-discovery-envelope":
+  if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
+  if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")
+  if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform discovery")
+  return {"discovery":_discovery_unavailable("discovery-gce-unavailable",ingress)}
  binding=bind_ingress_to_gce(ingress,resource=RESOURCE);result=run_gce_control_path(request_id=binding.control_request_id,claims=claims,trust_policy=_policy(),resource=binding.resource,expected_resource=RESOURCE,handoff_id=binding.handoff_id,adapter=adapter,allow_shutdown=bool(getattr(adapter,"shutdown_enabled",False)))
  return {"binding":binding.to_dict(),"control":{"result_id":result.result_id,"status":result.status.value,"reason_codes":[item.value for item in result.reason_codes],"request_id":result.request_id,"handoff_id":result.handoff_id,"start_issued":result.start_issued,"host_ready":result.host_ready,"host_invoked":result.host_invoked,"host_accepted":result.host_accepted,"scheduler_invocation_id":result.scheduler_invocation_id,"execution_id":result.execution_id,"terminal_status":result.terminal_status,"shutdown_eligible":result.shutdown_eligible,"shutdown_issued":result.shutdown_issued,"retry_attempted":False,"github_writes_authorized":False,"merge_authorized":False}}
 
