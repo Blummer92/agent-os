@@ -34,6 +34,9 @@ SELECTION = LessonContentSelection(
 AUTHORED = {
     "title": "Fixture lesson title",
     "objectives": [],
+    # Independent authored lesson-identity binding required for the
+    # empty-objectives fill; the title is never the matching rule.
+    "lesson_identity": {"day_lesson_number": "Day 1"},
     "slides": [{"index": 1, "heading": "Fixture slide heading", "bullets": ["Fixture bullet"]}],
     "worksheet_questions": ["Fixture question one?", "Fixture question two?"],
 }
@@ -195,3 +198,108 @@ def test_cli_preview_rejects_unreadable_and_oversized_input(tmp_path, monkeypatc
     with _no_client_boundary():
         assert cli.main(args) == 1
     assert not (tmp_path / "preview.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# #3584 repair regressions: CLI input boundary (byte bound, YAML, deep JSON)
+# ---------------------------------------------------------------------------
+
+
+def _write_result(tmp_path: Path, payload: object) -> Path:
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _base_args(tmp_path: Path, content_text: str, result_path: Path) -> list[str]:
+    content = tmp_path / "lesson.yaml"
+    content.write_text(content_text, encoding="utf-8")
+    return [
+        "preview-worksheet",
+        "--content", str(content),
+        "--lesson-content-result", str(result_path),
+        "--request-id", "candy-branding-lesson-content",
+        "--canonical-unit-page-id", UNIT_PAGE_ID,
+        "--lesson", "Day 1",
+        "--generated-at", "38462963519:1",
+        "--preview-out", str(tmp_path / "preview.json"),
+    ]
+
+
+def _nested_list(depth: int) -> list:
+    root: list = []
+    current = root
+    for _ in range(depth):
+        child: list = []
+        current.append(child)
+        current = child
+    return root
+
+
+def test_cli_byte_bound_enforced_on_actual_bytes(tmp_path, monkeypatch) -> None:
+    """The bound applies to the bytes read, not a pre-read stat()."""
+    import instructional_materials_coach.cli as cli_module
+
+    payload = json.dumps(_evidence()["result"])
+    assert len(payload.encode("utf-8")) > 64
+    args = _cli_args(tmp_path)
+    result = Path(args[args.index("--lesson-content-result") + 1])
+    result.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(cli_module, "MAX_LESSON_CONTENT_RESULT_BYTES", len(payload.encode("utf-8")))
+    with _no_client_boundary():
+        assert cli.main(args) == 0
+    monkeypatch.setattr(cli_module, "MAX_LESSON_CONTENT_RESULT_BYTES", len(payload.encode("utf-8")) - 1)
+    with _no_client_boundary():
+        assert cli.main(args) == 1
+
+
+@pytest.mark.parametrize(
+    "content_text",
+    [
+        "title: [unclosed\nobjectives: [",
+        "",
+        "just a scalar string",
+        "42",
+        "- a\n- list\n",
+        "title: T\nobjectives: []\nslides:\n  - index: 1\nworksheet_questions: Why?\n",
+    ],
+)
+def test_cli_malformed_yaml_fails_controlled(tmp_path, content_text) -> None:
+    """Malformed/null/scalar YAML is blocked (input-unreadable), not a traceback."""
+    args = _base_args(tmp_path, content_text, _write_result(tmp_path, _evidence()["result"]))
+    with _no_client_boundary():
+        assert cli.main(args) == 1
+    assert not (tmp_path / "preview.json").exists()
+
+
+def test_cli_deeply_nested_result_json_fails_controlled(tmp_path) -> None:
+    """Deep JSON nesting is blocked, never an uncaught RecursionError."""
+    args = _base_args(tmp_path, yaml.safe_dump(AUTHORED), _write_result(tmp_path, _nested_list(5000)))
+    with _no_client_boundary():
+        assert cli.main(args) == 1
+
+
+def test_cli_scalar_questions_never_produce_a_mangled_preview(tmp_path) -> None:
+    authored = dict(AUTHORED)
+    authored["worksheet_questions"] = "Why?"
+    args = _base_args(tmp_path, yaml.safe_dump(authored), _write_result(tmp_path, _evidence()["result"]))
+    with _no_client_boundary():
+        assert cli.main(args) == 1
+    assert not (tmp_path / "preview.json").exists()
+
+
+def test_blocked_receipt_never_claims_readiness_or_side_effects(tmp_path) -> None:
+    """Failure receipts stay non-authorizing: defect-8 block carries no grant."""
+    authored = {k: v for k, v in AUTHORED.items() if k != "lesson_identity"}
+    args = _cli_args(tmp_path, authored=authored)
+    with _no_client_boundary():
+        assert cli.main(args) == 1
+    receipt = json.loads((tmp_path / "preview.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_code"] == "authored-identity-missing"
+    assert receipt["worksheet"] is None
+    assert receipt["rendered"] is False
+    assert receipt["native_artifact"] is None
+    assert receipt["classroom_ready"] is False
+    assert set(receipt["side_effects"].values()) == {False}
+    assert set(receipt["authority"].values()) == {False}

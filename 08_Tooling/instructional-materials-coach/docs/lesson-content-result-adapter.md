@@ -25,36 +25,65 @@ Each rejection raises `LessonContentResultError` with a closed reason code:
 
 | Condition | Reason code |
 |---|---|
-| Not a result/envelope, missing keys, bad types | `result-malformed` |
-| Extra key anywhere in result, source, authority, lesson | `result-unexpected-key` |
+| Not a result/envelope, missing keys, bad types, evidence nested too deep | `result-malformed` |
+| Extra key anywhere in result, source, authority, lesson, envelope, or admission | `result-unexpected-key` |
 | Credential-class key carrying a non-boolean | `credential-key-present` |
-| Wrong `result_kind`, `request_class`, or schema | `result-class-mismatch` |
-| Blocked/failed runner envelope | `dispatch-not-completed` |
-| Any widened authority or performed-write flag | `authority-not-fail-closed` |
-| Source not admitted for lesson content | `source-unknown` |
+| Wrong `result_kind`, `request_class`, or schema; envelope or admission schema drift; admission not an admitted lesson-content read | `result-class-mismatch` |
+| Blocked/failed runner envelope, or wrong dispatch reason | `dispatch-not-completed` |
+| Any widened authority or performed-write flag (result, envelope, or admission, including `gce_required`) | `authority-not-fail-closed` |
+| Admission and result provenance (`request_id`, `repository`, `issue_number`, `generated_at`) disagree | `provenance-mismatch` |
+| Source not admitted (unknown or unhashable `logical_source`, wrong catalog display name) | `source-unknown` |
 | Source not `verified-current` (unverified, stale) | `source-unverified` |
-| Request id or run provenance differs from the binding | `request-mismatch` / `provenance-mismatch` |
+| Source access is not `read-only` | `source-not-read-only` |
+| Result repository is not the canonical repository | `repository-mismatch` |
+| Request id differs from the binding | `request-mismatch` |
 | Any lesson on a different canonical unit | `unit-mismatch` |
-| Malformed relation, URL, or empty-string field | `lesson-malformed` |
-| Bound lesson absent / duplicated identity | `lesson-not-found` / `lesson-identity-ambiguous` |
+| Malformed relation, URL, or empty-string field; invisible (zero-width) required text; unresolved `{{placeholder}}` in governed lesson text | `lesson-malformed` |
+| Whitespace-only optional fields (`daily_focus`, `key_vocabulary`) are producer-absent, not malformed | (normalized to absent) |
+| Bound lesson absent / duplicated or case/whitespace-variant identity | `lesson-not-found` / `lesson-identity-ambiguous` |
 | Required target, evidence, URL, or number absent | `lesson-field-missing` |
+| Selection is not a trimmed, well-formed `LessonContentSelection` | `selection-malformed` |
 | Authored objectives conflict with the verified lesson | `objective-conflict` |
-| Authored slides or worksheet questions absent | `authored-content-missing` |
+| Authored objectives, slides, worksheet questions, or slide structures absent or malformed | `authored-content-missing` |
+| Empty authored objectives without an independent authored lesson-identity binding matching the selected lesson | `authored-identity-missing` |
 | Context token collides with existing evidence | `context-token-conflict` |
+
+## Authored lesson-identity binding
+Authored content may declare an independent lesson identity:
+
+```yaml
+lesson_identity:
+  day_lesson_number: "Day 1"
+```
+
+The key is optional and, when present, must carry exactly `day_lesson_number`.
+When the authored objectives are explicitly empty, the adapter fills them from
+the verified target/focus only if this binding exactly matches the selected
+lesson. The title is not canonical identity and is never the matching rule:
+authored material whose title names the lesson but carries no binding is
+refused with `authored-identity-missing` rather than silently adopting
+another lesson's objectives.
 
 ## Composition
 - Authored title, slides, and worksheet questions are preserved exactly.
-  Notion supplies none, so composition requires them to be authored.
+  Notion supplies none, so composition requires them to be authored. Scalar
+  (non-list) authored fields are malformed input, never character lists;
+  malformed slide structures fail closed instead of raising mid-build.
 - Authored objectives must contain the verified Daily Learning Target
   (whitespace-folded exact match) and must not contain another lesson's
-  target or focus. Only an explicitly empty authored list (`objectives: []`)
-  is filled, and only with the verified target and focus.
+  target or focus. An explicitly empty authored list is filled from the
+  verified target and focus only under an independent authored
+  lesson-identity binding that exactly matches the selected lesson (see
+  above); without the binding the composition is refused.
+- Governed lesson text carrying an unresolved `{{placeholder}}` is refused
+  at the adapter, not just at preview time.
 - Verified values are added through `LessonContent.with_context_tokens` as
   `context_lesson_*` tokens (target, focus, day, unit, source evidence,
   record URL, request id, run provenance, source verification state,
   objective source) plus the fixed-false authority tokens already used by
   `compose_generation_context`.
-- Absent Key Vocabulary produces no token. Nothing is defaulted or inferred.
+- Absent Key Vocabulary produces no token. A whitespace-only optional field
+  is absent, not malformed. Nothing is defaulted or inferred.
 - Without a lesson-content result, YAML-only behavior is unchanged.
 
 ## Offline no-write worksheet preview

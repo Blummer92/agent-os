@@ -81,6 +81,9 @@ def _authored(objectives=None, **overrides):
     data = {
         "title": "Fixture lesson title",
         "objectives": [] if objectives is None else objectives,
+        # Independent authored lesson-identity binding: the fill of empty
+        # authored objectives requires it to exactly match the selection.
+        "lesson_identity": {"day_lesson_number": "Day 1"},
         "slides": [
             {"index": 1, "heading": "Fixture slide heading", "bullets": ["Fixture bullet A", "Fixture bullet B"]},
         ],
@@ -307,7 +310,20 @@ def test_absent_required_selected_value_rejects(field) -> None:
     _reject("lesson-field-missing", evidence=evidence)
 
 
-@pytest.mark.parametrize("value", ["", "   ", 7, ["hue"]])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_whitespace_only_vocabulary_is_absent_not_malformed(value) -> None:
+    """Defect 9: a whitespace-only optional field is producer-absent (#3582).
+
+    It must not reject an otherwise valid record; no vocabulary token is
+    planned. Invisible (zero-width) text stays malformed, never absent.
+    """
+    evidence = _evidence()
+    _lesson(evidence["result"], "Day 1")["key_vocabulary"] = value
+    tokens = compose_lesson_content_result(_authored(), evidence, SELECTION).placeholder_tokens()
+    assert TOKEN_VOCABULARY not in tokens
+
+
+@pytest.mark.parametrize("value", [7, ["hue"], "​"])
 def test_fabricated_or_malformed_vocabulary_rejects(value) -> None:
     evidence = _evidence()
     _lesson(evidence["result"], "Day 1")["key_vocabulary"] = value
@@ -445,3 +461,340 @@ def test_preview_transitive_import_closure_has_no_provider_or_write_module() -> 
         "instructional_materials_coach.cli",
     )
     assert not [name for name in loaded if name.startswith(forbidden_prefixes)]
+
+
+# ---------------------------------------------------------------------------
+# #3584 repair regressions: the 12 QA defects fail closed, invariants hold
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_worksheet_questions_are_malformed_input_not_characters() -> None:
+    """Defect 1: ``worksheet_questions: "Why?"`` must not preview as W/h/y/?."""
+    with pytest.raises(ValueError, match="worksheet_questions"):
+        _authored(worksheet_questions="Why?")
+    with pytest.raises(ValueError, match="objectives"):
+        _authored(objectives="Why?")
+    with pytest.raises(ValueError, match="slides"):
+        _authored(slides="Why?")
+
+
+def test_scalar_authored_fields_reject_at_the_adapter() -> None:
+    """Scalar fields built outside the YAML parser still fail closed."""
+    from instructional_materials_coach.content_spec import LessonContent
+
+    content = LessonContent(
+        title="T",
+        objectives=[],
+        slides=[{"index": 1, "heading": "H"}],
+        worksheet_questions="Why?",  # type: ignore[arg-type]
+        lesson_identity={"day_lesson_number": "Day 1"},
+    )
+    _reject("authored-content-missing", content=content)
+
+
+@pytest.mark.parametrize("logical_source", [{"source": "x"}, ["daily-generation-packet"], 7, None])
+def test_unhashable_or_nonstr_logical_source_fails_closed(logical_source) -> None:
+    """Defect 2: no uncaught TypeError from the admitted-source membership test."""
+    evidence = _evidence()
+    evidence["result"]["source"]["logical_source"] = logical_source
+    _reject("source-unknown", evidence=evidence)
+
+
+@pytest.mark.parametrize("target", ["​", "‌‍﻿", "  ​  "])
+def test_invisible_zero_width_learning_target_rejects(target) -> None:
+    """Defect 3: zero-width/format-only text is not a learning target."""
+    evidence = _evidence()
+    _lesson(evidence["result"], "Day 1")["daily_learning_target"] = target
+    _reject("lesson-malformed", evidence=evidence)
+
+
+def test_zero_width_selection_values_reject() -> None:
+    evidence = _evidence()
+    with pytest.raises(LessonContentResultError) as caught:
+        verify_lesson_content_result(
+            _result(), dataclasses.replace(SELECTION, day_lesson_number="​")
+        )
+    assert caught.value.reason_code == "selection-malformed"
+
+
+def test_extra_admission_key_rejects() -> None:
+    """Defect 4: the admission object is exact-keyed; drift is refused."""
+    evidence = _evidence()
+    evidence["admission"]["unexpected_key"] = "drift"
+    _reject("result-unexpected-key", evidence=evidence)
+
+
+def test_missing_admission_key_rejects() -> None:
+    evidence = _evidence()
+    del evidence["admission"]["status"]
+    _reject("result-malformed", evidence=evidence)
+
+
+def test_gce_required_true_in_admission_rejects() -> None:
+    """Defect 4: ``gce_required=True`` is not an admitted lesson-content read."""
+    evidence = _evidence()
+    evidence["admission"]["gce_required"] = True
+    _reject("authority-not-fail-closed", evidence=evidence)
+
+
+@pytest.mark.parametrize("flag", ["write_allowed", "production_authorized", "notion_write_reachable"])
+def test_true_admission_flag_rejects(flag) -> None:
+    evidence = _evidence()
+    evidence["admission"][flag] = True
+    _reject("authority-not-fail-closed", evidence=evidence)
+
+
+def test_admission_for_another_request_class_rejects() -> None:
+    evidence = _evidence()
+    evidence["admission"]["request_class"] = "source-schema"
+    _reject("result-class-mismatch", evidence=evidence)
+
+
+@pytest.mark.parametrize("version", ["2.0", "0.9", None])
+def test_envelope_schema_drift_rejects(version) -> None:
+    """Defect 5: the runner envelope's schema_version is pinned to 1.0."""
+    evidence = _evidence()
+    evidence["schema_version"] = version
+    _reject("result-class-mismatch", evidence=evidence)
+
+
+def test_envelope_admission_schema_drift_rejects() -> None:
+    evidence = _evidence()
+    evidence["admission"]["schema_version"] = "2.0"
+    _reject("result-class-mismatch", evidence=evidence)
+
+
+@pytest.mark.parametrize("key", ["dispatch_status", "dispatch_reason", "result", "generated_at"])
+def test_envelope_missing_key_rejects(key) -> None:
+    evidence = _evidence()
+    del evidence[key]
+    _reject("result-malformed", evidence=evidence)
+
+
+def test_envelope_extra_key_rejects() -> None:
+    evidence = _evidence()
+    evidence["extra_envelope_key"] = "drift"
+    _reject("result-unexpected-key", evidence=evidence)
+
+
+@pytest.mark.parametrize("flag", ["notion_writes_performed", "drive_writes_performed",
+                                  "classroom_artifact_writes_performed", "gce_invoked"])
+def test_true_envelope_write_flag_rejects(flag) -> None:
+    evidence = _evidence()
+    evidence[flag] = True
+    _reject("authority-not-fail-closed", evidence=evidence)
+
+
+def test_wrong_dispatch_reason_rejects() -> None:
+    evidence = _evidence()
+    evidence["dispatch_reason"] = "bounded-read-projected"
+    _reject("dispatch-not-completed", evidence=evidence)
+
+
+@pytest.mark.parametrize("display_name", ["Evil Source", "", "   ", None, 7, "daily generation packet"])
+def test_invalid_source_display_name_rejects(display_name) -> None:
+    """Defect 6: the display name is pinned to the catalog's admitted source."""
+    evidence = _evidence()
+    evidence["result"]["source"]["display_name"] = display_name
+    _reject("source-unknown", evidence=evidence)
+
+
+def test_source_extra_key_rejects() -> None:
+    evidence = _evidence()
+    evidence["result"]["source"]["data_source_id"] = "64ec8493-ece7-41d4-b130-c48cc01742c0"
+    _reject("result-unexpected-key", evidence=evidence)
+
+
+@pytest.mark.parametrize("variant", ["day 1", "Day  1", "DAY 1", " Day 1 "])
+def test_case_or_whitespace_variant_lesson_identity_is_ambiguous(variant) -> None:
+    """Defect 7: near-duplicate lesson identities never silently resolve."""
+    evidence = _evidence()
+    duplicate = copy.deepcopy(_lesson(evidence["result"], "Day 1"))
+    duplicate["day_lesson_number"] = variant
+    duplicate["record_url"] = DAY1_URL + "?variant=1"
+    evidence["result"]["lessons"].append(duplicate)
+    _reject("lesson-identity-ambiguous", evidence=evidence)
+
+
+def test_empty_objectives_without_identity_binding_reject() -> None:
+    """Defect 8: no silent Notion-target adoption without an authored binding."""
+    content = content_from_dict(
+        {
+            "title": "Fixture lesson title",
+            "objectives": [],
+            "slides": [{"index": 1, "heading": "H"}],
+            "worksheet_questions": ["Q?"],
+        }
+    )
+    _reject("authored-identity-missing", content=content)
+
+
+def test_empty_objectives_with_mismatched_identity_binding_reject() -> None:
+    _reject(
+        "authored-identity-missing",
+        content=_authored(lesson_identity={"day_lesson_number": "Day 2"}),
+    )
+
+
+def test_title_naming_the_lesson_is_not_an_identity_binding() -> None:
+    """The title is not canonical identity and never satisfies the binding."""
+    content = content_from_dict(
+        {
+            "title": "Day 1 candy branding lesson",
+            "objectives": [],
+            "slides": [{"index": 1, "heading": "H"}],
+            "worksheet_questions": ["Q?"],
+        }
+    )
+    _reject("authored-identity-missing", content=content)
+
+
+def test_empty_objectives_with_matching_identity_binding_fill() -> None:
+    """The bound fill still adopts the verified target and focus."""
+    composed = compose_lesson_content_result(_authored(), _evidence(), SELECTION)
+    assert composed.objectives == [DAY1_TARGET, DAY1_FOCUS]
+    assert composed.placeholder_tokens()[TOKEN_OBJECTIVE_SOURCE] == "governed-lesson-content"
+
+
+def test_malformed_lesson_identity_yaml_rejects() -> None:
+    with pytest.raises(ValueError, match="lesson_identity"):
+        _authored(lesson_identity={"day_lesson_number": "Day 1", "extra": "x"})
+    with pytest.raises(ValueError, match="lesson_identity"):
+        _authored(lesson_identity={"day_lesson_number": "   "})
+    with pytest.raises(ValueError, match="lesson_identity"):
+        _authored(lesson_identity="Day 1")
+
+
+def test_whitespace_only_optional_source_fields_are_absent() -> None:
+    """Defect 9: whitespace-only optional fields no longer reject the record."""
+    evidence = _evidence()
+    _lesson(evidence["result"], "Day 1")["daily_focus"] = "   "
+    composed = compose_lesson_content_result(_authored(), evidence, SELECTION)
+    tokens = composed.placeholder_tokens()
+    assert TOKEN_FOCUS not in tokens
+    assert composed.objectives == [DAY1_TARGET]
+
+
+@pytest.mark.parametrize(
+    "slides",
+    [
+        ["not-a-mapping"],
+        [{"heading": "missing index"}],
+        [{"index": None, "heading": "H"}],
+        [{"index": True, "heading": "H"}],
+        [{"index": 1, "heading": "H", "bullets": "not-a-list"}],
+        [{"index": 1, "heading": "H", "bullets": ["ok", 7]}],
+        [{"index": 1, "heading": 7}],
+    ],
+)
+def test_malformed_authored_slide_structures_fail_closed(slides) -> None:
+    """Defect 10: malformed slides raise a closed reason, never TypeError."""
+    from instructional_materials_coach.content_spec import LessonContent
+
+    content = LessonContent(
+        title="T",
+        objectives=[],
+        slides=slides,
+        worksheet_questions=["Q?"],
+        lesson_identity={"day_lesson_number": "Day 1"},
+    )
+    _reject("authored-content-missing", content=content)
+
+
+@pytest.mark.parametrize(
+    "slides",
+    [
+        ["not-a-mapping"],
+        [{"heading": "missing index"}],
+        [{"index": 1, "bullets": "not-a-list"}],
+    ],
+)
+def test_malformed_slide_yaml_is_malformed_input(slides) -> None:
+    with pytest.raises(ValueError, match="slide"):
+        _authored(slides=slides)
+
+
+def _nested(depth: int) -> dict:
+    root: dict = {}
+    current = root
+    for _ in range(depth):
+        child: dict = {}
+        current["k"] = child
+        current = child
+    return root
+
+
+def test_deeply_nested_evidence_fails_closed() -> None:
+    """Defect 11: deep nesting is refused as malformed, not RecursionError."""
+    evidence = _evidence()
+    evidence["result"]["lessons"][0]["daily_focus"] = _nested(5000)
+    _reject("result-malformed", evidence=evidence)
+
+
+def test_deeply_nested_credential_branch_fails_closed() -> None:
+    evidence = _evidence()
+    evidence["admission"]["reason_codes"] = [_nested(5000)]
+    _reject("result-malformed", evidence=evidence)
+
+
+@pytest.mark.parametrize("field", ["daily_learning_target", "daily_focus", "source_evidence"])
+def test_unresolved_placeholder_in_governed_text_rejects_at_adapter(field) -> None:
+    """Defect 12: ``{{placeholder}}`` in governed text fails at the adapter."""
+    evidence = _evidence()
+    _lesson(evidence["result"], "Day 1")[field] = "Governed {{unresolved}} text."
+    _reject("lesson-malformed", content=_authored(objectives=[DAY1_TARGET]), evidence=evidence)
+
+
+def test_unresolved_placeholder_in_day_lesson_number_rejects() -> None:
+    evidence = _evidence()
+    _lesson(evidence["result"], "Day 1")["day_lesson_number"] = "Day {{1}}"
+    selection = dataclasses.replace(SELECTION, day_lesson_number="Day {{1}}")
+    _reject(
+        "lesson-malformed",
+        content=_authored(objectives=[DAY1_TARGET]),
+        evidence=evidence,
+        selection=selection,
+    )
+
+
+def test_repository_mismatch_rejects() -> None:
+    evidence = _evidence()
+    evidence["result"]["repository"] = "Blummer92/other-repo"
+    evidence["admission"]["repository"] = "Blummer92/other-repo"
+    _reject("repository-mismatch", evidence=evidence)
+
+
+def test_authority_extra_key_rejects() -> None:
+    evidence = _evidence()
+    evidence["result"]["authority"]["superuser_authorized"] = False
+    _reject("result-unexpected-key", evidence=evidence)
+
+
+def test_non_boolean_authority_value_rejects() -> None:
+    evidence = _evidence()
+    evidence["result"]["authority"]["write_allowed"] = "false"
+    _reject("authority-not-fail-closed", evidence=evidence)
+
+
+def test_result_missing_key_rejects() -> None:
+    evidence = _evidence()
+    del evidence["result"]["authority"]
+    _reject("result-malformed", evidence=evidence)
+
+
+def test_malformed_issue_number_rejects() -> None:
+    evidence = _evidence()
+    evidence["result"]["issue_number"] = "3580"
+    evidence["admission"]["issue_number"] = "3580"
+    _reject("result-malformed", evidence=evidence)
+    evidence = _evidence()
+    evidence["result"]["issue_number"] = 0
+    evidence["admission"]["issue_number"] = 0
+    _reject("result-malformed", evidence=evidence)
+
+
+def test_admission_result_provenance_triple_must_agree() -> None:
+    for key in ("request_id", "repository", "issue_number"):
+        evidence = _evidence()
+        evidence["admission"][key] = "tampered"
+        _reject("provenance-mismatch", evidence=evidence)
