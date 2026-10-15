@@ -1,0 +1,295 @@
+# Merge-candidate evidence fixture corpus (#3402 / #3431).
+#
+# These cases are fixture evidence only. They do not implement retrieval,
+# validation, merging, scheduling, or any external mutation. They
+# soft-absorb the bounded-behavior evidence behind #3402 (bounded
+# mergeability re-read) and #3431 (bounded validation polling) for the
+# pure-local classifier in
+# scripts/agent_os_issue_acceptance/merge_candidate_evidence.py.
+# Both issues stay OPEN; the fixture ids name them only.
+#
+# Each case is a sequence of classification steps. A step carries the
+# evidence for one classification and the expected disposition plus the
+# expected closed-vocabulary reason codes. Sequential steps model one
+# candidate re-reading fresh evidence between classifications.
+
+cases:
+  - id: 3402-transient-mergeability
+    note: >-
+      mergeable=false on the first read with re-read budget remaining is not
+      terminal (#3402): bounded re-read, then mergeable=true on the unchanged
+      head proceeds.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 36f8ebd0df4b7ae5d674c1acf0125f18193d44e7
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 36f8ebd0df4b7ae5d674c1acf0125f18193d44e7
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: proceed
+        expected_reason_codes: [all-evidence-green]
+
+  - id: 3402-persistent-mergeability-false
+    note: >-
+      mergeable=false on every re-read is persistent evidence about the item
+      (#3402): once the re-read budget is spent, the item is blocked locally.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-false-transient]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: false
+          aggregate: success
+          head_sha: 4938999c80f6917101a8dcd701953e685a5b5c2e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 0
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [mergeability-false-persistent]
+
+  - id: 3431-validation-in-progress-then-success
+    note: >-
+      Aggregate in_progress with poll budget is a bounded wait, not a merge
+      and not a terminal stop (#3431); the later success on the unchanged head
+      proceeds.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: in_progress
+          head_sha: 0aa8c6ac42b7e6e1f2efb49a2140777354b7572e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 3
+        expected_disposition: wait_reacquire_validation
+        expected_reason_codes: [validation-in-progress]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 0aa8c6ac42b7e6e1f2efb49a2140777354b7572e
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 2
+        expected_disposition: proceed
+        expected_reason_codes: [all-evidence-green]
+
+  - id: 3431-validation-in-progress-then-failure
+    note: >-
+      Aggregate in_progress resolves to failed: the item is blocked locally
+      (#3431). One candidate's failure never stops the batch.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: in_progress
+          head_sha: e702fa0053c082538015207fe041024a6d9a3abb
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 3
+        expected_disposition: wait_reacquire_validation
+        expected_reason_codes: [validation-in-progress]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: failed
+          head_sha: e702fa0053c082538015207fe041024a6d9a3abb
+          head_sha_stable: true
+          checks_failing: true
+          reacquires_remaining: 2
+          polls_remaining: 2
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [checks-failing]
+
+  - id: 3431-validation-poll-ceiling
+    note: >-
+      Aggregate still in_progress with no poll budget left: the bounded loop
+      stops fail-closed with precise evidence (#3431), not a verdict on the
+      item.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: in_progress
+          head_sha: 350413f845bc79c195eaaea97fde2ba323d5f8ae
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 0
+        expected_disposition: ceiling_exceeded
+        expected_reason_codes: [validation-poll-budget-exhausted]
+
+  - id: head-changed-during-wait
+    note: >-
+      The head moved while waiting on validation: the earlier evidence is
+      stale and must never proceed on it.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: in_progress
+          head_sha: 9ac04732ec616daa72d9424d0bf350bd1c4cfbb6
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 3
+        expected_disposition: wait_reacquire_validation
+        expected_reason_codes: [validation-in-progress]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 9ac04732ec616daa72d9424d0bf350bd1c4cfbb6
+          head_sha_stable: false
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 2
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [head-sha-changed]
+
+  - id: item-local-checks-failing
+    note: >-
+      A failing check blocks this item only, even with otherwise green
+      evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: 7a9a677c7229350f499dc1daf3ab814341526fc5
+          head_sha_stable: true
+          checks_failing: true
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [checks-failing]
+
+  - id: all-green-exact-head
+    note: Positive control -- open, non-draft, mergeable, aggregate success on a stable head.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: f3a927aeeeb4756c2d90ad89f23b919522b20078
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: proceed
+        expected_reason_codes: [all-evidence-green]
+
+  - id: draft-pr
+    note: Guard rail -- a draft PR never proceeds regardless of green evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: true
+          mergeable: true
+          aggregate: success
+          head_sha: 0e7766b460fd2a39a2fd81d4a3a636b033b52be4
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [pr-not-ready]
+
+  - id: closed-pr
+    note: Guard rail -- a closed PR never proceeds regardless of green evidence.
+    steps:
+      - evidence:
+          pr_open: false
+          is_draft: false
+          mergeable: true
+          aggregate: success
+          head_sha: ea88fbaa99b73225752e2ef67593f775848160ad
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 2
+          polls_remaining: 5
+        expected_disposition: blocked_item_local
+        expected_reason_codes: [pr-closed]
+
+  - id: mergeability-unknown-then-ceiling
+    note: >-
+      mergeable not yet computed by the provider (observed live as
+      mergeable=None) is re-read boundedly; an exhausted re-read budget with
+      still no verdict stops the loop fail-closed with precise evidence.
+    steps:
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: null
+          aggregate: success
+          head_sha: 010ef65dd2ef0b61c529c485b0df936a1b73c1ab
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 1
+          polls_remaining: 5
+        expected_disposition: reread_mergeability
+        expected_reason_codes: [mergeability-state-unknown]
+      - evidence:
+          pr_open: true
+          is_draft: false
+          mergeable: null
+          aggregate: success
+          head_sha: 010ef65dd2ef0b61c529c485b0df936a1b73c1ab
+          head_sha_stable: true
+          checks_failing: false
+          reacquires_remaining: 0
+          polls_remaining: 5
+        expected_disposition: ceiling_exceeded
+        expected_reason_codes: [mergeability-reacquire-budget-exhausted]

@@ -227,6 +227,7 @@ def test_runtime_publication_imports_from_a_different_unprivileged_identity() ->
         wheel = _build_probe_wheel(base)
         runtime = base / "runtime"
         runtime.mkdir(mode=0o755)
+        runtime.chmod(0o755)  # mkdir mode is umask-filtered; 0755 must hold under any umask
         _pip_install_with_umask(wheel, runtime, "077")
 
         package = runtime / "agent_os_permission_probe"

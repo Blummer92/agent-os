@@ -16,6 +16,12 @@ class LinkedIssueParseStatus(str, Enum):
     RESOLVED = "resolved"
     NONE = "none"
     MANUAL_REVIEW = "manual-review"
+    # Declared non-closing linkage (#3506): the PR body carries an explicit
+    # standalone `Non-closing: #a, #b` directive covering every bare issue
+    # reference, with zero GitHub-effective closing references detected.
+    # INFORMATIONAL never resolves an issue_number, so no closure path can
+    # consume it; it only lets deliberately non-closing PRs pass acceptance.
+    INFORMATIONAL = "informational"
 
 
 _STATUS_RANK = {

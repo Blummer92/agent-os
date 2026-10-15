@@ -22,7 +22,7 @@ Contains: one objective, dependencies, a bounded scope envelope or exact allowed
 
 ### Level 3 — Pull request
 
-Owns implementation evidence: files changed, exact source head, tested SHA or synthetic-merge SHA, tests and results, required checks, review findings, unresolved blockers, rollback, and remaining risks. The PR does not repeat the issue specification. Exactly one open primary PR may claim an implementation issue; a superseded PR is closed with a pointer comment. Two active PRs claiming the same issue is a `needs-decision` stop.
+Owns implementation evidence: files changed, exact source head, tested SHA or synthetic-merge SHA, tests and results, required checks, review findings, unresolved blockers, rollback, and remaining risks. The PR does not repeat the issue specification. Exactly one open primary PR may claim an implementation issue; a superseded PR is closed with a pointer comment. Two active PRs claiming the same issue is a `needs-decision` stop. Conversely, one primary PR claims exactly one primary implementation issue; a PR body naming two issues as primary — shared-file overlap is not an exception — is a `needs-decision` stop.
 
 ## Safe Implementation Lane
 
@@ -125,9 +125,11 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.7.0
+0.8.0
 
 ## Changelog
+
+- 0.8.0 closes the #3407 converse gap in the one-issue-one-PR invariant: one primary PR claims exactly one primary implementation issue, and a PR body naming two issues as primary is a `needs-decision` stop (shared-file overlap is not an exception, per the #3392 repair-and-split). No new registry, scheduler, lineage store, or orchestration framework is added.
 
 - 0.7.0 adds the #3350 canonical Ready-for-Review validation consumption rule: an exact-head successful Draft final-candidate aggregate satisfies the Ready prerequisite and is reused without a duplicate same-head aggregate; `validation_admission_mode` is a closed vocabulary (`draft-final-candidate`, `pull-request-draft-focused`) with server-side derivation from the authoritative aggregate evidence, and unknown modes fail closed with `unknown-validation-admission-mode`. No new validation state, aggregate trigger, or execution authority is added.
 

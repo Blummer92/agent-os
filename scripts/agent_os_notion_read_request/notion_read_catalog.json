@@ -48,6 +48,20 @@
       "data_source_id": null,
       "verification_state": "unverified",
       "content_class": "curriculum-metadata"
+    },
+    {
+      "logical_source": "icon-system",
+      "display_name": "Icon System",
+      "data_source_id": null,
+      "verification_state": "unverified",
+      "content_class": "visual-asset-metadata"
+    },
+    {
+      "logical_source": "daily-generation-packet",
+      "display_name": "Daily Generation Packet Dashboard",
+      "data_source_id": "64ec8493-ece7-41d4-b130-c48cc01742c0",
+      "verification_state": "verified-current",
+      "content_class": "lesson-content"
     }
   ],
   "requests": [
@@ -112,6 +126,25 @@
       "request_class": "visual-assets",
       "canonical_unit_key": "photography-foundations",
       "issue_number": 1941
+    },
+    {
+      "request_id": "visual-asset-library-schema",
+      "request_class": "source-schema",
+      "logical_source": "visual-asset-library",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "icon-system-schema",
+      "request_class": "source-schema",
+      "logical_source": "icon-system",
+      "issue_number": 2816
+    },
+    {
+      "request_id": "candy-branding-lesson-content",
+      "request_class": "lesson-content",
+      "logical_source": "daily-generation-packet",
+      "canonical_unit_key": "candy-branding",
+      "issue_number": 3580
     }
   ]
 }

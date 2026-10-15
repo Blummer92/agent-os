@@ -41,7 +41,7 @@ Use `--format json` for stable machine-readable report fields.
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `lifecycle_stage_acquisition.py`, `live_compute_control_binding.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `lifecycle_stage_acquisition.py`, `pr_lineage_reader.py`, `live_compute_control_binding.py` |
 
 ## Live compute-control binding (#1460)
 
@@ -55,7 +55,7 @@ input:
 
 | #1451 input | Canonical owner |
 |---|---|
-| `CurrentIssueSnapshot` | `LiveCurrentIssueSnapshotReader`, composing `agent_os_candidate_packet_live_input.LiveIssueReader` (one live issue read over a caller-injected `SingleIssueTransport`) with `agent_os_github_issue_provider.revision.issue_source_revision`. `source_revision` and `lifecycle_stage` remain caller-supplied (no canonical PR-linkage/lifecycle-stage classifier exists yet). |
+| `CurrentIssueSnapshot` | `LiveCurrentIssueSnapshotReader`, composing `agent_os_candidate_packet_live_input.LiveIssueReader` (one live issue read over a caller-injected `SingleIssueTransport`) with `agent_os_github_issue_provider.revision.issue_source_revision`. `source_revision` is caller-supplied; `lifecycle_stage` is caller-supplied or, in the shadow path, acquired per issue by the #3441 PR-lineage reader through the #3433 evaluator (`LifecycleStageAcquirer`). |
 | Approval applicability | Caller-supplied, from the existing `approval_records.evaluate_approval_applicability`. |
 | `DependencyState` / `ValidationState` | `dependency_state_from_evidence` / `validation_state_from_evidence`, translating the existing `DependencyEvidence`/`ValidationEvidence` produced by a caller-injected `agent_os_candidate_packet_live_input.LiveRepositoryEvidenceReader` (or any other conforming `RepositoryEvidenceReader`). |
 | `PrimaryIssueClaim` tuple | Caller-supplied. No canonical live PR-linkage reader exists. |
@@ -292,4 +292,77 @@ to the `LifecycleStage | None` input of `LiveCandidateEvidence` /
 `LiveCurrentIssueSnapshotReader`, preserving the existing
 `candidate-evidence.no-canonical-lifecycle-stage` fail-closed behavior when no
 stage is acquirable. `primary_claims` and `approval_applicability` remain
-separately governed boundaries.
+separately governed boundaries. The live source of that evidence is the #3441
+reader below.
+
+## Read-only PR-lineage evidence acquisition (#3441)
+
+`pr_lineage_reader.py` is the production-reachable, read-only *source* of the
+facts the #3433 evaluator consumes. It owns no GitHub client, selector,
+scheduler, store, lifecycle evaluator, linkage parser, or authority: it works
+over three injected read ports (a pull-request page reader, an exact
+pull-request reader, and a default-branch SHA reader) plus the caller's existing
+`SingleIssueTransport`, and hands the unchanged `acquire_lifecycle_stage`
+exactly its input types.
+
+Flow for one open issue:
+
+1. read the exact issue (structured state + content-addressed
+   `github-issue-v1` revision, via the existing `LiveIssueReader`) and the
+   current default-branch SHA;
+2. enumerate the **all-state** pull-request population once per run and prove
+   it complete *inside the reader*: every page succeeded, each `next_page` is
+   the contiguous successor, the last page carries positive terminal proof (from
+   the provider's canonical `validated_next_page`, endpoint `pulls`), the
+   explicit page bound (`DEFAULT_MAX_PAGES = 40`) was not exhausted, every record
+   is well formed and belongs to this repository, and no PR was listed twice (a
+   repeat, even an identical one, proves a PR was opened mid-listing and never
+   observed: `pr-lineage.population-shifted-during-listing`). The shadow CLI's
+   page reader also refuses a page with no `next` whose `last` relation names
+   another page as terminal proof. Anything else is an *incomplete* enumeration,
+   which the evaluator answers with `unavailable` -- an exhausted bound is never
+   negative evidence;
+3. classify every pull request against the issue with the existing
+   `parse_pr.parse_linked_issue_result`: a resolved closing directive to this
+   issue is a **claim**; a non-authoritative or ambiguous reference (`Part of`,
+   `Refs`, qualified or multi-target references, title-only mentions) is an
+   **ambiguous claim** that is *passed to the evaluator* (which answers
+   `manual-review`) rather than dropped. That includes an issue named by a PR
+   whose claim resolves to a different issue, and any same-repository issue
+   GitHub would close on merge (`detect_github_effective_closing_references`,
+   which masks nothing) that is not the claim. A declared `Non-closing:`
+   reference is recorded as evidence but is not a claim; everything else is
+   unrelated. One PR has one role per issue (claim, then ambiguous, then
+   declared non-closing);
+4. re-read each claim or ambiguous pull request by number and require it to
+   agree with the listing (state, draft, merged, head SHA, base repository,
+   title/body digest); disagreement is drift and makes the enumeration
+   incomplete;
+5. require the default branch not to have moved while the listing was read or
+   since (`pr-lineage.default-branch-moved`);
+6. call the unchanged evaluator. A closed issue is `closed` from GitHub's own
+   state and the lineage is not consulted.
+
+Consumer: `LiveCandidateEvidence` accepts a `lifecycle_stage_acquirer`
+(mutually exclusive with the static `lifecycle_stage`).
+`LiveCandidateEvidenceReader` consults it at the lifecycle input's canonical
+position, and when it composes, after its own fresh issue snapshot, it re-checks
+the result with `acquisition_bindings_current`; a changed issue revision or
+repository SHA fails closed as `candidate-evidence.lifecycle-stage-stale`. The
+shadow CLI never reaches that composition (its `primary_claims` input is
+`None`, so the reader fails closed first), and its record says
+`consumer_boundary_revalidation: not-reached`. The production caller is
+`scripts/agent-os-shadow-run.py`, whose `LivePullRequestPageReader` /
+`LivePullRequestDetailReader` are GET-only and whose experiment record carries a
+`lifecycle_stage_acquisition` section (population proof and per-candidate
+outcome). `primary_claims` and `approval_applicability` stay `None` there: a
+lifecycle stage alone never selects an issue.
+
+Known limits: the evaluator emits only `closed` / `draft-pr` / `review` /
+`merged`, so most open backlog issues remain `unavailable` (no verified claim);
+this repository's frequent non-closing linkage (`Part of #N`) is an ambiguous
+claim and therefore `manual-review`; one population snapshot serves a whole run,
+so a pull request opened after it and before the run ends is not seen (the
+default-branch check and the exact re-read bound, but do not close, that
+window). Fixture and offline tests prove the contract; live behavior is
+observed separately through the shadow CLI.

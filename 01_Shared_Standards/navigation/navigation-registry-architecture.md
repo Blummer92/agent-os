@@ -106,6 +106,59 @@ owner. Deleted resource: mark inactive after verification. Offline system: defer
 live action and produce handoff. Duplicate resource: require human review before
 write or relationship repair.
 
+## Pre-Create Preflight
+
+Before an agent proposes or creates a new Notion-facing field, dashboard,
+database, workflow, or prompt, it consults the cached Notion navigation index
+through the advisory preflight in `08_Tooling/notion-navigation-client/` (see its
+README for the interface). The preflight checks, in order, for an exact or
+deterministically normalized existing match, then for Duplicate / Drift Watchlist
+evidence, then returns the owner and source-of-truth route to verify live next.
+Its finite outcomes are `existing-match`, `duplicate-risk-review`,
+`no-cached-match`, `stale-or-unverified`, and `manual-review`.
+
+The preflight is cached evidence, not authority. `no-cached-match` is not proof that
+creating is safe, a duplicate-risk finding routes to human review and never triggers
+automatic merge, rename, retirement, or cleanup, and every outcome requires live
+verification of the owning system before any write or governed-field decision. It
+adds no registry, cache, or deduplication system, and it does not replace the GitHub
+bug-issue duplicate admission owned elsewhere.
+
+## Pre-Create Reconciliation
+
+Before proposing new Agent OS work, a caller classifies it with
+`navigation_registry.reconciliation.classify_proposed_work` (#3308). This is a pure,
+deterministic function. Callers acquire all evidence and pass it in:
+
+- the preflight outcome above, when the work touches Notion-facing structures;
+- a complete, bounded GitHub issue search, with each open issue's lifecycle stage
+  taken from the PR-lineage acquisition where one exists;
+- matching reusable-capability registry rows.
+
+It returns exactly one disposition: `reuse-current-owner`, `continue-current-work`,
+`extend-existing-capability`, `historical-regression-evidence`,
+`superseded-or-retired`, `candidate-new-work`, or `manual-review`.
+
+The rules apply in this order:
+
+1. GitHub lineage is authoritative and decides first. A current open owner of the same
+   objective wins, or the current successor of closed same-objective history.
+   Contradictory successor facts, a closed successor, or more than one open owner or
+   successor become `manual-review`.
+2. Open work that is only related, or related history with a successor, becomes
+   `manual-review`.
+3. A registered capability is extended rather than reimplemented, even where closed
+   history of the same objective exists.
+4. Closed issues are evidence only and are never returned as actionable owners.
+5. Navigation evidence is advisory and only gates new work. Anything other than a fresh
+   `no-cached-match` becomes `manual-review`, and so does an incomplete search; neither
+   is ever treated as a no-match.
+
+`candidate-new-work` grants no creation authority. Issue creation still passes its
+existing admission (bugs: the duplicate and root-cause admission). Continuation,
+Codespaces and GCE routing, CKR6 consumption and backlog selection stay with their
+existing owners.
+
 ## Roadmap
 
 1. Approve architecture and tests.

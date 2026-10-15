@@ -351,9 +351,12 @@ class _FakeLiveClient:
         self.get_requests += 1
         self.paths.append(path)
         if path == f"/repos/{_REPO}":
-            return 200, {}, json.dumps({"default_branch": "main"}).encode()
+            return 200, {}, json.dumps({"default_branch": "main", "id": 4242}).encode()
         if path == f"/repos/{_REPO}/branches/main":
             return 200, {}, json.dumps({"commit": {"sha": _SHA}}).encode()
+        if path == f"/repos/{_REPO}/pulls?state=all&per_page=100&page=1":
+            # #3441: an empty, single-page all-state pull-request listing.
+            return 200, {}, json.dumps([]).encode()
         if path == f"/repos/{_REPO}/issues?state=open&per_page=100&page=1":
             items = [_raw_issue(n) for n in range(1, 101)]
             link = f'<https://api.github.com/repos/{_REPO}/issues?page=2>; rel="next"'
@@ -439,7 +442,8 @@ def test_cli_consumes_canonical_cohort_admission_end_to_end(monkeypatch, tmp_pat
         n for n in range(1, 102) if n != 90
     ]
     # The existing selector seam is reached; candidate evidence for the one
-    # admitted issue then fails closed on #3329's named lifecycle gap.
+    # admitted issue then fails closed on the named lifecycle gap: the #3441
+    # acquirer found no verified PR lineage, so no stage is established.
     selector = record["deterministic_selector_result"]
     assert selector["status"] == "no-selection"
     assert "shadow-selection.candidate-evidence-incomplete" in selector["reason_codes"]
@@ -449,11 +453,19 @@ def test_cli_consumes_canonical_cohort_admission_end_to_end(monkeypatch, tmp_pat
     assert zero["github_mutations"] == 0
     (client,) = _FakeLiveClient.instances
     assert client.write_requests == 0
-    # #3329's lifecycle fail-closed precedes any per-issue read.
-    assert not [p for p in client.paths if "/issues/" in p]
+    # #3441: the lifecycle acquirer is the only per-issue reader on this path.
+    # It reads the single admitted candidate and the all-state PR listing.
+    assert [p for p in client.paths if "/issues/" in p] == [f"/repos/{_REPO}/issues/90"]
+    assert [p for p in client.paths if "/pulls" in p] == [
+        f"/repos/{_REPO}/pulls?state=all&per_page=100&page=1"
+    ]
     assert record["stale_or_ambiguous_evidence"] == [
         "candidate-evidence-unavailable:candidate-evidence.no-canonical-lifecycle-stage"
     ]
+    (acquisition,) = record["lifecycle_stage_acquisition"]["candidates"]
+    assert acquisition["issue_number"] == 90
+    assert acquisition["reason_codes"] == ["lifecycle-acquisition.no-verified-pr-lineage"]
+    assert record["lifecycle_stage_acquisition"]["population"]["complete"] is True
 
 
 def test_cli_repository_request_over_capacity_fails_closed(monkeypatch, tmp_path) -> None:
@@ -528,6 +540,9 @@ def test_cli_has_one_scan_path_and_one_selection_authority() -> None:
     assert calls.count("select_shadow_issue") == 1
     assert calls.count("LivePageReader") == 1
     assert calls.count("GitHubReadClient") == 1
+    # #3441: one lifecycle source, one pull-request listing reader.
+    assert calls.count("PrLineageAcquirer") == 1
+    assert calls.count("LivePullRequestPageReader") == 1
     # Scanning, cohort admission, and lane selection stay inside the
     # select_shadow_issue seam; the CLI never calls them a second time.
     for forbidden in (
@@ -538,3 +553,18 @@ def test_cli_has_one_scan_path_and_one_selection_authority() -> None:
         "scan_open_issues",
     ):
         assert forbidden not in calls
+
+
+# #3441 D-A1: CLI default unchanged absent explicit opt-in.
+def test_association_policy_cli_is_opt_in_only() -> None:
+    default = cli._parse_args(["--campaign-id", "default-policy"])
+    assert default.association_policy == "closing-directive-v1"
+    opted = cli._parse_args([
+        "--campaign-id", "opted",
+        "--association-policy", "declared-non-closing-v1",
+    ])
+    assert opted.association_policy == "declared-non-closing-v1"
+    with pytest.raises(SystemExit):
+        cli._parse_args([
+            "--campaign-id", "invalid", "--association-policy", "automatic",
+        ])

@@ -230,6 +230,66 @@ def test_teacher_modeling_verification_is_finite_and_read_only() -> None:
     assert decision["notion_write_reachable"] is False
 
 
+def test_teacher_modeling_verifier_target_migration_rejects_historical_and_unrelated_issues() -> None:
+    """Only the newly approved open issue can admit this finite verifier."""
+    assert TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER == 2816
+    for issue_number in (2756, 9999):
+        decision = admit_binding_verification_request(
+            transport(
+                request_id=TEACHER_MODELING_VERIFICATION_REQUEST_ID,
+                issue_number=issue_number,
+            ),
+            expected_repository=REPOSITORY,
+            expected_actor=ACTOR,
+        )
+        assert decision["status"] == "rejected"
+        assert decision["reason_codes"] == ["issue-target-mismatch"]
+        assert decision["secret_dispatch_authorized"] is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_reason"),
+    [
+        ({"actor": "someone-else"}, "actor-not-allowed"),
+        ({"run_attempt": 2}, "run-attempt-replay"),
+        ({"status": "blocked"}, "transport-not-accepted"),
+        ({"reason": "wrong-reason"}, "transport-reason-mismatch"),
+        ({"repository": "someone/else"}, "repository-mismatch"),
+        ({"execution_authorized": True}, "transport-claims-authority"),
+        ({"scheduler_invoked": True}, "transport-claims-authority"),
+        ({"side_effects_performed": True}, "transport-claims-authority"),
+    ],
+)
+def test_teacher_modeling_verifier_migration_preserves_admission_guards(
+    overrides: dict[str, object], expected_reason: str
+) -> None:
+    decision = admit_binding_verification_request(
+        transport(
+            request_id=TEACHER_MODELING_VERIFICATION_REQUEST_ID,
+            issue_number=2816,
+            **overrides,
+        ),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "rejected"
+    assert decision["reason_codes"] == [expected_reason]
+    assert decision["secret_dispatch_authorized"] is False
+    assert decision["write_allowed"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+def test_teacher_modeling_verifier_migration_rejects_unknown_request() -> None:
+    decision = admit_binding_verification_request(
+        transport(request_id="verify-unknown-binding", issue_number=2816),
+        expected_repository=REPOSITORY,
+        expected_actor=ACTOR,
+    )
+    assert decision["status"] == "rejected"
+    assert decision["reason_codes"] == ["verification-request-mismatch"]
+    assert decision["secret_dispatch_authorized"] is False
+
+
 def test_teacher_modeling_binding_verifies_only_fixed_candidate() -> None:
     adapter = TeacherModelingVerificationAdapter()
     evidence = verify_teacher_modeling_binding(adapter, generated_at="run:2756")

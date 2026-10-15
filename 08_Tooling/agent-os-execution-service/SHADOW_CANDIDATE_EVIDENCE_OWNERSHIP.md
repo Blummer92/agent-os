@@ -23,7 +23,8 @@ issue number, or AI judgment.
 | issue/repository identity | existing scanner/live issue contracts (`LiveIssueReader` over injected `SingleIssueTransport`) | live single-issue read per admitted candidate; #1451 enforces `snapshot.repository`/`snapshot.issue_number` identity joins | fail closed: `candidate-evidence.issue-read-failed:<outcome>` on transport failure; `candidate-evidence.repository-identity-mismatch` on repository mismatch |
 | issue revision | existing `issue_source_revision` contract (`scripts/agent_os_github_issue_provider/revision.py`) | content-addressed `github-issue-v1:<sha256>` derived inside the reused #1464 `LiveCurrentIssueSnapshotReader`; carried in `evidence_ids`; the seam joins it against the scanned revision (`candidate-revision-mismatch`) | fail closed: `candidate-evidence.composition-contract-violation` when the payload cannot yield a revision |
 | repository source revision | GitHub API: the repository's default-branch HEAD SHA, read live by `scripts/agent-os-shadow-run.py` (`_fetch_repository_head_sha`: `GET /repos/{repo}` -> `default_branch`, then `GET /repos/{repo}/branches/{branch}` -> `commit.sha`) | the API-based equivalent of the "current checkout SHA" the snapshot-reader contract expects the caller to know; fail-closed (`RuntimeError` -> CLI transport failure) when the ref cannot be read | fail closed: `candidate-evidence.no-canonical-repository-source-revision` (unreachable only when the API ref read fails) |
-| lifecycle / operational state | `IssueOperationalState` owner via unchanged #1451 `acquire_issue_operational_state` | live snapshot + caller-supplied lifecycle stage + approval/dependency/claim/validation/freshness acquirers | fail closed: any missing acquirer input fails closed with its own named reason; conflicting composition raises into `candidate-evidence.composition-contract-violation` |
+| lifecycle / operational state | `IssueOperationalState` owner via unchanged #1451 `acquire_issue_operational_state` | live snapshot + lifecycle stage + approval/dependency/claim/validation/freshness acquirers | fail closed: any missing acquirer input fails closed with its own named reason; conflicting composition raises into `candidate-evidence.composition-contract-violation` |
+| lifecycle stage (#3441) | unchanged #3433 `acquire_lifecycle_stage`, fed by the read-only `PrLineageAcquirer` (`scripts/agent_os_issue_acceptance/pr_lineage_reader.py`) | per candidate: exact issue read + default-branch SHA, the run's self-proven all-state PR population, `parse_pr` classification, exact re-read of each referencing PR; revalidated against the reader's fresh snapshot with `acquisition_bindings_current` when the reader composes (the shadow CLI never reaches composition while `primary_claims` is `None`; its record says `consumer_boundary_revalidation: not-reached`) | fail closed: `candidate-evidence.no-canonical-lifecycle-stage` (acquisition reason codes in `failure_detail`: `lifecycle-acquisition.*`, `pr-lineage.*`); `candidate-evidence.lifecycle-stage-stale` when the issue revision or repository SHA moved |
 | primary PR claim | existing claim owner — no canonical live PR-linkage reader exists; #1460 forbids inventing one | caller-supplied `tuple[PrimaryIssueClaim, ...]` only | fail closed: `candidate-evidence.no-canonical-primary-claims` |
 | dependency state/depth | #1185/#1197 `DependencyReadinessEvidence` authority via the canonical `RepositoryEvidenceReader` (`LiveRepositoryEvidenceReader`; the #1155 truthful always-`UNAVAILABLE` reader when the caller supplies none) | reused #1464 `dependency_state_from_evidence` projection; `dependency_depth` is explicit request context (`--dependency-depth`, non-negative int; absent stays absent) | fail closed: no reader → `DependencyState.UNKNOWN` (in-value); missing `dependency_depth` → `candidate-evidence.no-canonical-dependency-depth` |
 | validation state | `scripts.agent_os_remote_validation` advisory pre-PR evidence authority via the canonical `RepositoryEvidenceReader` | reused #1464 `validation_state_from_evidence` projection | fail closed: no reader → `ValidationState.NOT_RUN` (in-value); unmappable `UNAVAILABLE` evidence → `candidate-evidence.composition-contract-violation` |
@@ -54,12 +55,24 @@ that has an actual source in the shadow-run context:
 - explicit request context (`--requested-mode`, `--dependency-depth`,
   `--substitutable` / `--no-substitutable`; absent stays absent).
 
-`lifecycle_stage`, `primary_claims`, and `approval_applicability` have no
-canonical live owner for arbitrary backlog issues, so the reader fail-closes
-on the first of these (`candidate-evidence.no-canonical-lifecycle-stage`)
-and the experiment record carries that exact named reason. These three are
-#3329's bounded blockers: surfaced with named reasons per the issue's
-acceptance criteria, not manufactured. The real-backlog acceptance canary
+`lifecycle_stage` (#3441) is acquired per candidate from live PR lineage by the
+`PrLineageAcquirer` (see `scripts/agent_os_issue_acceptance/README.md`): a stage
+exists only where GitHub's own closed state or exactly one verified closing
+claim establishes it, so for most open backlog issues the reader still
+fail-closes on it (`candidate-evidence.no-canonical-lifecycle-stage`, with the
+`lifecycle-acquisition.*` reason in the record's `lifecycle_stage_acquisition`
+section). The selector stops at the first candidate with incomplete
+evidence; once it has read at least one candidate, the CLI acquires the
+remaining candidates' lineage (at most 25, reusing the same cached
+pull-request population) into `record_only_candidates`. Each entry carries
+`selection_input: false`; the list is evidence for the record only, never
+reaches the selector, and is not part of the evidence-ledger inputs digest.
+`primary_claims` and `approval_applicability` have no canonical live
+owner for arbitrary backlog issues and remain `None`, so the reader
+fail-closes on them next (`candidate-evidence.no-canonical-primary-claims`)
+even when a lifecycle stage was acquired. These are #3329's bounded blockers:
+surfaced with named reasons per the issue's acceptance criteria, not
+manufactured. A lifecycle stage alone never selects an issue. The real-backlog acceptance canary
 (Shadow Admission Test 2B) remains gated on #3328's legitimate cohort plus
 caller-supplied request context; it is not claimed complete by this wiring.
 
@@ -74,3 +87,30 @@ PYTHONPATH=08_Tooling/workflow-scheduler/src:08_Tooling/agent-os-execution-servi
 ```
 
 Ready-for-Review still requires the repository's current exact-head aggregate admission.
+
+
+## #3441 D-A1 — Opt-in non-closing association policy (2026-10-14)
+
+The read-only shadow CLI accepts optional `--association-policy declared-non-closing-v1`.
+Omitting this flag retains the previous `closing-directive-v1` default.
+No existing workflow or composite action default changes.
+The existing `parse_pr` parser remains the sole PR-linkage authority.
+
+On opt-in only, parser `INFORMATIONAL` qualifies as an association when its
+standalone `Non-closing: #N` directive covers exactly the requested issue
+in the same repository and there are zero GitHub-effective closing references.
+The reader includes these PRs in the same complete-population, exact-detail
+reread and currentness checks as closing claims. Bare `Part of #N`, competing
+PRs, cross-repository references, multiple targets, and closing conflicts
+retain fail-closed handling.
+
+An open Draft associated PR maps to `draft-pr`, and open Ready to `review`.
+A merged associated PR yields `manual-review` with reason
+`lifecycle-acquisition.non-closing-pr-merged`, never `merged` or completion.
+Closed-unmerged behavior is unchanged. The policy is recorded in opt-in
+acquisition evidence; the default result shape remains unchanged.
+`primary_claims` and `approval_applicability` remain unset by the CLI,
+so an acquired lifecycle stage cannot independently select or execute.
+
+Rollback: revert the D-A1 PR. Activation beyond an explicit CLI option,
+Ready, merge, and issue closure require separate owner decisions.
