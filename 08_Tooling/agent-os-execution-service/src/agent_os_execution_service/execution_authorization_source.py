@@ -29,6 +29,7 @@ _AUTHORIZATION_ID_RE = re.compile(
     r"^execution-authorization:[0-9a-f]{64}$", re.ASCII
 )
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$", re.ASCII)
+_GITHUB_APP_BOT_SUFFIX = "[bot]"
 _TIMESTAMP_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", re.ASCII
 )
@@ -101,6 +102,20 @@ def _identifier(value: object, name: str) -> str:
     return text
 
 
+def _comment_author_login(value: object) -> str:
+    """Validate a comment author, admitting GitHub App logins ``<slug>[bot]``.
+
+    A bot login only ever names an untrusted non-owner comment: ``owner_login``
+    keeps strict identifier validation and ``owner_type`` must be ``User``, so
+    a ``[bot]`` author can never equal the trusted owner or authorize (#3618).
+    """
+    text = _text(value, "author_login")
+    base = text.removesuffix(_GITHUB_APP_BOT_SUFFIX)
+    if not _IDENTIFIER_RE.fullmatch(base):
+        raise ValueError("author_login is malformed")
+    return text
+
+
 def _repository(value: object) -> str:
     text = _text(value, "repository")
     if not _REPOSITORY_RE.fullmatch(text):
@@ -135,7 +150,7 @@ class ExecutionAuthorizationCommentSnapshot:
 
     def __post_init__(self) -> None:
         _positive_int(self.comment_id, "comment_id")
-        _identifier(self.author_login, "author_login")
+        _comment_author_login(self.author_login)
         _timestamp(self.created_at, "created_at")
         if type(self.body) is not str or len(self.body.encode("utf-8")) > MAX_COMMENT_BYTES:
             raise ValueError("comment body is outside bounds")
