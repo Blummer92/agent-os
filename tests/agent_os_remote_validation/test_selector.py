@@ -1538,10 +1538,12 @@ TEACHER_OS_COMMANDS = tuple(sorted(
     "08_Tooling/teacher-os-web/src/fixtures.ts",
     "08_Tooling/teacher-os-web/tests/teacher.spec.ts",
     "08_Tooling/teacher-os-web/package.json",
-    "08_Tooling/teacher-os-web/package-lock.json",
     "08_Tooling/teacher-os-web/tsconfig.json",
     "08_Tooling/teacher-os-web/index.html",
     "08_Tooling/teacher-os-web/playwright.config.ts",
+    # NOTE: package-lock.json is intentionally absent — the lockfile does not
+    # exist in the repository yet (see PR body blockers). Re-add it here and to
+    # the rule's exact_paths when the lockfile lands.
 ])
 def test_teacher_os_executable_paths_select_focused_commands(path):
     plan = _select(_input([path]))
