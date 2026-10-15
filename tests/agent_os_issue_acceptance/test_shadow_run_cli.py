@@ -553,3 +553,18 @@ def test_cli_has_one_scan_path_and_one_selection_authority() -> None:
         "scan_open_issues",
     ):
         assert forbidden not in calls
+
+
+# #3441 D-A1: CLI default unchanged absent explicit opt-in.
+def test_association_policy_cli_is_opt_in_only() -> None:
+    default = cli._parse_args(["--campaign-id", "default-policy"])
+    assert default.association_policy == "closing-directive-v1"
+    opted = cli._parse_args([
+        "--campaign-id", "opted",
+        "--association-policy", "declared-non-closing-v1",
+    ])
+    assert opted.association_policy == "declared-non-closing-v1"
+    with pytest.raises(SystemExit):
+        cli._parse_args([
+            "--campaign-id", "invalid", "--association-policy", "automatic",
+        ])

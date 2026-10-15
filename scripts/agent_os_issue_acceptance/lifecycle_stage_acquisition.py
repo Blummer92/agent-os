@@ -53,10 +53,19 @@ from .issue_operational_state import (
     LifecycleStage,
 )
 from .models import LinkedIssueParseStatus
-from .parse_pr import parse_linked_issue_result
+from .parse_pr import (
+    detect_github_effective_closing_references,
+    parse_linked_issue_result,
+)
 
 LIFECYCLE_STAGE_ACQUISITION_SCHEMA_NAME = "agent-os-lifecycle-stage-acquisition"
 LIFECYCLE_STAGE_ACQUISITION_SCHEMA_VERSION = "1.0"
+
+ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1 = "closing-directive-v1"
+ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1 = "declared-non-closing-v1"
+ASSOCIATION_POLICIES = frozenset(
+    {ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1, ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1}
+)
 
 MAX_ENUMERATION_NOTE_CHARS = 512
 MAX_PR_TITLE_CHARS = 4096
@@ -85,6 +94,7 @@ REASON_CONFLICTING_PR_CLAIMS = "lifecycle-acquisition.conflicting-pr-claims"
 REASON_PR_LINKAGE_UNVERIFIABLE = "lifecycle-acquisition.pr-linkage-unverifiable"
 REASON_PR_REPOSITORY_MISMATCH = "lifecycle-acquisition.pr-repository-mismatch"
 REASON_CLOSED_UNMERGED_PR = "lifecycle-acquisition.closed-unmerged-pr"
+REASON_NON_CLOSING_PR_MERGED = "lifecycle-acquisition.non-closing-pr-merged"
 
 LIFECYCLE_ACQUISITION_REASON_CODES = frozenset(
     {
@@ -95,6 +105,7 @@ LIFECYCLE_ACQUISITION_REASON_CODES = frozenset(
         REASON_PR_LINKAGE_UNVERIFIABLE,
         REASON_PR_REPOSITORY_MISMATCH,
         REASON_CLOSED_UNMERGED_PR,
+        REASON_NON_CLOSING_PR_MERGED,
     }
 )
 
@@ -216,6 +227,7 @@ class LifecycleStageAcquisitionRequest:
     observed_at: str
     pr_lineage: tuple[VerifiedPrLineage, ...]
     lineage_enumeration: PrLineageEnumeration
+    association_policy: str = ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
 
     def __post_init__(self) -> None:
         _repository(self.repository)
@@ -241,6 +253,8 @@ class LifecycleStageAcquisitionRequest:
             raise ValueError("pr_lineage contains duplicate pull request numbers")
         if type(self.lineage_enumeration) is not PrLineageEnumeration:
             raise TypeError("lineage_enumeration must be exact PrLineageEnumeration")
+        if type(self.association_policy) is not str or self.association_policy not in ASSOCIATION_POLICIES:
+            raise ValueError("association_policy must be a supported exact policy")
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,24 +371,34 @@ def _acquired(
 
 def _verify_linkage(
     request: LifecycleStageAcquisitionRequest, claim: VerifiedPrLineage
-) -> str | None:
-    """Re-verify one PR claim against canonical evidence.
-
-    Returns ``None`` when the claim is verified, else the fail-closed reason.
-    Linkage uses the existing GitHub-authoritative ``parse_pr`` parser: only
-    a RESOLVED parse whose target is exactly this issue counts as verified
-    authoritative linkage. Repository identity is joined independently.
-    """
+) -> tuple[str | None, bool]:
+    """Re-verify lineage with the existing parser, marking non-closing association."""
     if claim.repository.casefold() != request.repository.casefold():
-        return REASON_PR_REPOSITORY_MISMATCH
+        return REASON_PR_REPOSITORY_MISMATCH, False
     parsed = parse_linked_issue_result(claim.pr_body, claim.pr_title)
     if (
-        parsed.status is not LinkedIssueParseStatus.RESOLVED
-        or parsed.issue_number != request.issue_number
+        parsed.status is LinkedIssueParseStatus.RESOLVED
+        and parsed.issue_number == request.issue_number
     ):
-        return REASON_PR_LINKAGE_UNVERIFIABLE
-    return None
-
+        return None, False
+    if (
+        request.association_policy == ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1
+        and parsed.status is LinkedIssueParseStatus.INFORMATIONAL
+        and parsed.bare_references
+        and all(
+            candidate.issue_number == request.issue_number
+            and (
+                candidate.repository is None
+                or candidate.repository.casefold() == request.repository.casefold()
+            )
+            for candidate in parsed.bare_references
+        )
+        and not detect_github_effective_closing_references(claim.pr_body, claim.pr_title)
+    ):
+        # INFORMATIONAL is produced only when parse_pr verified a standalone
+        # Non-closing: directive covering the exact referenced target set.
+        return None, True
+    return REASON_PR_LINKAGE_UNVERIFIABLE, False
 
 def acquire_lifecycle_stage(
     request: LifecycleStageAcquisitionRequest,
@@ -399,16 +423,16 @@ def acquire_lifecycle_stage(
             request, LifecycleAcquisitionOutcome.UNAVAILABLE, REASON_INCOMPLETE_ENUMERATION
         )
 
-    verified: list[VerifiedPrLineage] = []
+    verified: list[tuple[VerifiedPrLineage, bool]] = []
     for claim in request.pr_lineage:
-        reason = _verify_linkage(request, claim)
+        reason, non_closing = _verify_linkage(request, claim)
         if reason is not None:
             # Never silently drop or reinterpret an unverifiable claim: a
             # competing or misdirected PR claim is a manual-review stop.
             return _fail(
                 request, LifecycleAcquisitionOutcome.MANUAL_REVIEW, reason
             )
-        verified.append(claim)
+        verified.append((claim, non_closing))
 
     if not verified:
         # A complete enumeration with zero verified claims proves nothing
@@ -421,12 +445,19 @@ def acquire_lifecycle_stage(
             request,
             LifecycleAcquisitionOutcome.MANUAL_REVIEW,
             REASON_CONFLICTING_PR_CLAIMS,
-            verified_claims=tuple(claim.pull_request_number for claim in verified),
+            verified_claims=tuple(claim.pull_request_number for claim, _ in verified),
         )
 
-    claim = verified[0]
+    claim, non_closing = verified[0]
     verified_number = claim.pull_request_number
     if claim.is_merged:
+        if non_closing:
+            return _fail(
+                request,
+                LifecycleAcquisitionOutcome.MANUAL_REVIEW,
+                REASON_NON_CLOSING_PR_MERGED,
+                verified_claims=(verified_number,),
+            )
         return _acquired(request, LifecycleStage.MERGED, verified_claims=(verified_number,))
     if claim.is_open and claim.is_draft:
         return _acquired(

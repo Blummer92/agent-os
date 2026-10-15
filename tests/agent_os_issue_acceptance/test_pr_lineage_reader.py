@@ -198,7 +198,7 @@ class MainSha:
 
 
 def make_acquirer(items, *, issue=None, main=None, per_page=100, max_pages=40,
-                  pages=None, details=None) -> tuple[PrLineageAcquirer, FakePageReader,
+                  pages=None, details=None, association_policy="closing-directive-v1") -> tuple[PrLineageAcquirer, FakePageReader,
                                                       FakeDetailReader, FakeIssueTransport]:
     page_reader = pages or FakePageReader(items, per_page=per_page)
     detail_reader = details or FakeDetailReader(items)
@@ -212,6 +212,7 @@ def make_acquirer(items, *, issue=None, main=None, per_page=100, max_pages=40,
         observed_at=OBSERVED_AT,
         per_page=per_page,
         max_pages=max_pages,
+        association_policy=association_policy,
     )
     return acquirer, page_reader, detail_reader, transport
 
@@ -943,3 +944,71 @@ def test_module_defines_no_parallel_parser_selector_or_write_surface() -> None:
                       "create_comment", "merge", "close_issue"):
         assert forbidden not in names
     assert not [n for n in names if n.startswith(("write", "create", "update", "delete"))]
+
+
+# #3441 D-A1 reader integration: non-closing references are opt-in.
+def test_declared_non_closing_reader_is_opt_in_and_rereads_exact_pr() -> None:
+    item = pr_item(9001, draft=True, body="Part of #3441\nNon-closing: #3441")
+    default, _, default_detail, _ = make_acquirer([item])
+    default_attempt = default.acquire_lifecycle_stage(REPO, ISSUE)
+    assert default_attempt.result.outcome is LifecycleAcquisitionOutcome.UNAVAILABLE
+    assert default_detail.calls == []
+    opted, pages, detail, transport = make_acquirer(
+        [item], association_policy="declared-non-closing-v1",
+    )
+    attempt = opted.acquire_lifecycle_stage(REPO, ISSUE)
+    assert attempt.result.outcome is LifecycleAcquisitionOutcome.ACQUIRED
+    assert attempt.result.lifecycle_stage is LifecycleStage.DRAFT_PR
+    assert detail.calls == [9001]
+    assert pages.calls == [1]
+    assert transport.calls == 1
+    assert opted.observations[0]["association_policy"] == "declared-non-closing-v1"
+
+
+def test_declared_non_closing_merged_and_multiple_remain_manual_review() -> None:
+    from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+        REASON_NON_CLOSING_PR_MERGED,
+        REASON_CONFLICTING_PR_CLAIMS,
+    )
+    merged = pr_item(
+        9001, state="closed", merged=True, body="Part of #3441\nNon-closing: #3441",
+    )
+    acquired, _, detail, _ = make_acquirer(
+        [merged], association_policy="declared-non-closing-v1",
+    )
+    result = acquired.acquire_lifecycle_stage(REPO, ISSUE).result
+    assert result.outcome is LifecycleAcquisitionOutcome.MANUAL_REVIEW
+    assert result.reason_codes == (REASON_NON_CLOSING_PR_MERGED,)
+    assert result.lifecycle_stage is None
+    other = pr_item(9002, body="Part of #3441\nNon-closing: #3441")
+    competing, _, detail, _ = make_acquirer(
+        [merged, other], association_policy="declared-non-closing-v1",
+    )
+    result = competing.acquire_lifecycle_stage(REPO, ISSUE).result
+    assert result.outcome is LifecycleAcquisitionOutcome.MANUAL_REVIEW
+    assert result.reason_codes == (REASON_CONFLICTING_PR_CLAIMS,)
+    assert detail.calls == [9001, 9002]
+
+
+def test_declared_non_closing_incomplete_pages_and_detail_drift_fail_closed() -> None:
+    item = pr_item(9001, body="Part of #3441\nNon-closing: #3441")
+    incomplete, _, _, _ = make_acquirer(
+        [item], per_page=1, max_pages=1,
+        pages=FakePageReader([item, pr_item(9000)], per_page=1),
+        association_policy="declared-non-closing-v1",
+    )
+    result = incomplete.acquire_lifecycle_stage(REPO, ISSUE).result
+    assert result.outcome is LifecycleAcquisitionOutcome.UNAVAILABLE
+    assert result.lifecycle_stage is None
+    drifted = FakeDetailReader([item], overrides={
+        9001: PullRequestDetailResult(
+            PullRequestDetailOutcome.OK,
+            pr_item(9001, sha=head(123), body="Part of #3441\nNon-closing: #3441"),
+        ),
+    })
+    acquirer, _, _, _ = make_acquirer(
+        [item], details=drifted, association_policy="declared-non-closing-v1",
+    )
+    result = acquirer.acquire_lifecycle_stage(REPO, ISSUE).result
+    assert result.outcome is LifecycleAcquisitionOutcome.UNAVAILABLE
+    assert result.lifecycle_stage is None
