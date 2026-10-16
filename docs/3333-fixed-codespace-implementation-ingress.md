@@ -34,8 +34,12 @@ Codespaces path no longer depends on the incidental non-interactive SSH working
 directory. The transport honors a validated working directory, and the only
 admissible value is the repository root `/workspaces/agent-os`; any other value
 is rejected before any Codespace is contacted, and the remote command is pinned
-under `cd /workspaces/agent-os &&` (a missing directory fails closed there,
-before the fixed command runs). The fixed argv itself is unchanged.
+under `cd '/workspaces/agent-os' &&` (a missing directory fails closed there,
+before the fixed command runs). Repository identity -- not merely the directory
+path -- is asserted on the remote side before execution: `git rev-parse
+--show-toplevel` (already-admitted grammar, no allowlist widening) must report
+exactly the validated root, otherwise the `&&` chain fails closed before the
+fixed argv runs. The fixed argv itself is unchanged.
 
 These operations require a qualified environment and trusted admitted repository
 and test code. The argv grammar does not sandbox arbitrary repository code or
