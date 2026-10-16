@@ -521,3 +521,40 @@ def test_main_cli_success_contract(
     assert out["status"] == "completed"
     assert out["consumer"] == "github-service-agent-governed-publication-path"
     assert Path(out["receipt_path"]).is_file()
+
+
+@pytest.mark.parametrize(
+    "reason_fields",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"reason_codes": None}, id="null"),
+        pytest.param({"reason_codes": []}, id="empty-list"),
+        pytest.param({"reason_codes": "not-a-list"}, id="scalar-string"),
+        pytest.param({"reason_codes": 17}, id="scalar-integer"),
+        pytest.param({"reason_codes": ["valid", 17]}, id="mixed-list"),
+        pytest.param({"reason_codes": [""]}, id="empty-string"),
+        pytest.param({"reason_codes": ["valid", ""]}, id="mixed-empty-string"),
+    ],
+)
+def test_malformed_driver_reason_codes_fail_before_persistence(
+    tmp_path: Path, host: dict, reason_fields: dict
+) -> None:
+    """Bad driver evidence must never become a durable or successful receipt."""
+    receipt = _completed_receipt()
+    del receipt["reason_codes"]
+    receipt.update(reason_fields)
+    path = _write_event(tmp_path, _event())
+
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        run_gate2_fixed_pilot_controller(
+            event_path=path,
+            environ=host,
+            drive=lambda envelope, bootstrap: receipt,
+            resolve_selection=lambda: _selection(),
+            build_transports=_transports,
+        )
+
+    assert excinfo.value.reason == "receipt-reason-codes-invalid"
+    receipts_dir = host["store"] / "invocations" / "receipts"
+    assert receipts_dir.is_dir()
+    assert list(receipts_dir.iterdir()) == []
