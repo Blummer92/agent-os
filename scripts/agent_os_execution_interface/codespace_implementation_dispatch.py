@@ -40,8 +40,9 @@ into the deterministic request id and the returned TransportResult; it does not
 re-verify lane-admission staleness and does not prove the remote Codespace HEAD
 against ``base_sha_or_none`` before execution. Stale admission/scope/base
 evidence is the Safe Implementation Lane currentness gate's canonical owner;
-the transport's recorded-only base-SHA/workdir semantics are #3335's merged
-contract. A future scoped change may compose a remote-HEAD preflight out of
+the transport's recorded-only base-SHA semantics and deterministic
+validated-workdir contract (#3333, Option B) build on #3335's merged contract.
+A future scoped change may compose a remote-HEAD preflight out of
 this same transport without changing the seam.
 
 All external effects are injected (``list_candidates`` / ``run`` are passed

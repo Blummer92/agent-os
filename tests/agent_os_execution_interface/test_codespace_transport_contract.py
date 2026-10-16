@@ -95,10 +95,14 @@ class CodespaceTransportContractTests(unittest.TestCase):
                   run=lambda args, **k: (calls.append(args) or (0, "ok", "")))
         self.assertEqual(result.status, TransportStatus.COMPLETED)
         # Deterministic workdir contract (#3333 Option B): the remote command
-        # is pinned under `cd <validated root> &&`; the admitted argv still
-        # round-trips as quoted data, never as shell commands.
+        # is pinned under `cd '<validated root>' &&` with a remote-side
+        # repository-identity gate; the admitted argv still round-trips as
+        # quoted data, never as shell commands. shlex re-parses the joined
+        # command, proving the quoting is semantically transparent.
         self.assertEqual(shlex.split(" ".join(calls[0][6:])),
-                         ["cd", "/workspaces/agent-os", "&&", *argv])
+                         ["cd", "/workspaces/agent-os", "&&",
+                          "[", "$(git rev-parse --show-toplevel)", "=",
+                          "/workspaces/agent-os", "]", "&&", *argv])
         self.assertEqual(result.argv, argv)
         self.assertEqual(len(calls), 1)
 

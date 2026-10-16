@@ -368,6 +368,35 @@ def _validate_workdir(workdir: object) -> TransportReason | None:
     return None
 
 
+def _sh_single_quote(value: str) -> str:
+    """POSIX-shell single-quote a fixed transport constant.
+
+    Defense in depth for the deterministic working-directory contract: even
+    though ``_validate_workdir`` admits only the exact validated constant, the
+    value is always quoted at the splice point, so a future refactor that
+    separates validation from use cannot open a shell-injection channel.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+#: Remote-side repository-identity gate, as fixed ssh argv words. The driver
+#: cannot see the remote filesystem, so identity is asserted where the fixed
+#: command runs: ``git rev-parse --show-toplevel`` (already-admitted grammar;
+#: no allowlist widening) must report exactly the validated root. Any
+#: mismatch -- wrong repository, subdirectory of another repository, or not a
+#: git work tree at all -- fails the ``&&`` chain with a non-zero exit before
+#: the fixed argv executes. Both sides of the comparison are validated
+#: constants, never caller shell text.
+def _identity_gate_words(quoted_root: str) -> tuple[str, ...]:
+    return (
+        "[",
+        '"$(git rev-parse --show-toplevel)"',
+        "=",
+        quoted_root,
+        "]",
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -502,15 +531,23 @@ def run_codespace_transport(
     ssh_prefix = ("gh", "codespace", "ssh", "-c", codespace.name, "--")
     if request.workdir_or_none is not None:
         # Deterministic working-directory contract (#3333 Option B): the only
-        # admissible workdir is the validated repository root, so the remote
-        # command is pinned under `cd <root> &&`. The value is a validated
-        # constant, never caller shell text; the admitted argv is unchanged.
-        # A missing directory fails closed here: `cd` exits non-zero before
-        # the fixed command runs.
+        # admissible workdir is the validated repository root. The remote
+        # command is pinned under `cd '<root>' &&`, and repository identity
+        # (not merely the directory path) is asserted on the remote side
+        # before the fixed command runs: the identity gate requires
+        # `git rev-parse --show-toplevel` to report exactly the validated
+        # root. A missing directory, a non-git directory, or a different
+        # repository fails the `&&` chain with a non-zero exit before the
+        # fixed argv executes. Every word here is a validated constant or
+        # fixed gate text, never caller shell text; the admitted argv is
+        # unchanged and the command grammar is not widened.
+        quoted_root = _sh_single_quote(request.workdir_or_none)
         ssh_argv = (
             *ssh_prefix,
             "cd",
-            request.workdir_or_none,
+            quoted_root,
+            "&&",
+            *_identity_gate_words(quoted_root),
             "&&",
             *(shlex.quote(part) for part in request.argv),
         )

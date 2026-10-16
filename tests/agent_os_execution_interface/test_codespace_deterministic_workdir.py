@@ -24,6 +24,7 @@ from scripts.agent_os_execution_interface.codespaces_orchestrator_transport impo
     TransportReason,
     TransportRequest,
     TransportStatus,
+    _sh_single_quote,
     run_codespace_transport,
     validate_argv,
 )
@@ -85,16 +86,69 @@ def test_transport_pins_remote_command_under_validated_root():
         "happy-codespace",
         "--",
         "cd",
-        "/workspaces/agent-os",
+        "'/workspaces/agent-os'",
+        "&&",
+        "[",
+        '"$(git rev-parse --show-toplevel)"',
+        "=",
+        "'/workspaces/agent-os'",
+        "]",
         "&&",
         "git",
         "rev-parse",
         "HEAD",
     )
-    # Recorded evidence keeps the fixed argv; the cd prefix is transport mechanics.
+    # Recorded evidence keeps the fixed argv; the cd prefix and identity gate
+    # are transport mechanics.
     assert result.argv == FIXED_ARGV
     assert tuple(result.argv) == ("git", "rev-parse", "HEAD")
     assert result.workdir_or_none == VALIDATED_ROOT
+
+
+def test_identity_gate_runs_before_fixed_command():
+    seen = []
+    run_codespace_transport(
+        _request(workdir_or_none=VALIDATED_ROOT),
+        list_candidates=lambda: (_candidate(),),
+        run=_ok_run(seen),
+    )
+    argv = seen[0]
+    gate_start = argv.index("[")
+    gate_end = argv.index("]")
+    fixed_start = argv.index("git")
+    # The gate is a single `[ ... ]` test positioned strictly between the
+    # `cd` chain and the fixed argv: identity is asserted before execution.
+    assert argv[gate_start + 1] == '"$(git rev-parse --show-toplevel)"'
+    assert argv[gate_start + 2] == "="
+    assert argv[gate_start + 3] == "'/workspaces/agent-os'"
+    assert gate_end < fixed_start
+    assert argv[argv.index("cd") + 1] == "'/workspaces/agent-os'"
+
+
+def test_workdir_single_quoted_at_splice():
+    # Defense in depth: the validated constant is quoted at the splice point,
+    # so a future refactor separating validation from use cannot inject shell.
+    assert _sh_single_quote("/workspaces/agent-os") == "'/workspaces/agent-os'"
+    assert _sh_single_quote("a'b") == "'a'\\''b'"
+    assert _sh_single_quote("") == "''"
+
+
+def test_identity_gate_failure_propagates_nonzero_exit():
+    # A remote identity mismatch (wrong repo, non-repo dir) fails the `&&`
+    # chain: the transport surfaces the non-zero exit and the fixed command
+    # never runs. The pilot layer turns this into a blocked receipt.
+    def _gate_fails(argv, timeout_seconds):
+        assert "[" in argv  # the gate was attempted
+        return 1, "", "fatal: not a git repository"
+
+    result = run_codespace_transport(
+        _request(workdir_or_none=VALIDATED_ROOT),
+        list_candidates=lambda: (_candidate(),),
+        run=_gate_fails,
+    )
+    assert result.status is TransportStatus.COMPLETED
+    assert result.exit_status_or_none == 1
+    assert result.stdout_tail.strip() != HEAD_SHA
 
 
 def test_workdir_none_preserves_historical_command_shape():
