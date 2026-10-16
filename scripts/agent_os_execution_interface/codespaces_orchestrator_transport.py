@@ -290,7 +290,8 @@ class TransportResult:
             if value is not None:
                 _text_or_none("execution timestamp", value, limit=40)
                 stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if stamp.tzinfo is None or stamp.utcoffset().total_seconds() != 0:
+                offset = stamp.utcoffset()
+                if stamp.tzinfo is None or offset is None or offset.total_seconds() != 0:
                     raise ValueError("execution timestamps must be UTC")
 
     def to_dict(self) -> dict[str, object]:
@@ -402,7 +403,8 @@ def _utc_now() -> datetime:
 
 
 def _utc_text(value: datetime) -> str:
-    if value.tzinfo is None or value.utcoffset().total_seconds() != 0:
+    offset = value.utcoffset()
+    if value.tzinfo is None or offset is None or offset.total_seconds() != 0:
         raise ValueError("execution clock must return UTC evidence")
     return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
