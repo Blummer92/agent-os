@@ -23,7 +23,25 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_os_execution_service.invocation_reconstruction import (
+        CurrentInvocationResolver,
+        InvocationDescriptorLoader,
+        InvocationReconstructionResult,
+        LeaseObservationReader,
+    )
+    from agent_os_execution_service.production_host_bootstrap import (
+        ProductionHostBootstrap,
+    )
+    from agent_os_execution_service.production_host_composition import (
+        CodespaceSelection,
+        ProductionAdmissionProviders,
+    )
+    from scripts.agent_os_execution_interface.codespace_implementation_dispatch import (
+        CodespaceDispatchOutcome,
+    )
 
 REPOSITORY = "Blummer92/agent-os"
 ISSUE_NUMBER = 3333
@@ -96,13 +114,13 @@ def _valid_transport(transport: object) -> bool:
 def consume_fixed_codespace_pilot(
     transport: object,
     *,
-    descriptor_loader: Callable[..., object] | None = None,
-    current_resolver: object = None,
-    lease_reader: object = None,
-    codespace_selection: object = None,
+    descriptor_loader: InvocationDescriptorLoader | None = None,
+    current_resolver: CurrentInvocationResolver | None = None,
+    lease_reader: LeaseObservationReader | None = None,
+    codespace_selection: CodespaceSelection | None = None,
     evaluated_at: str | None = None,
-    dispatcher: Callable[..., object] | None = None,
-    reconstruct: Callable[..., object] | None = None,
+    dispatcher: Callable[..., CodespaceDispatchOutcome] | None = None,
+    reconstruct: Callable[..., InvocationReconstructionResult] | None = None,
 ) -> dict[str, object]:
     """Compose existing admission + #3333 dispatcher for a fixed safe preflight.
 
@@ -114,9 +132,13 @@ def consume_fixed_codespace_pilot(
     if not _valid_transport(transport):
         return _receipt("blocked", "invalid-fixed-operation-envelope", envelope)
     receipt = _receipt("needs-decision", "canonical-admission-provider-unavailable", envelope)
-    if any(item is None for item in (
-        descriptor_loader, current_resolver, lease_reader, codespace_selection, evaluated_at
-    )):
+    if (
+        descriptor_loader is None
+        or current_resolver is None
+        or lease_reader is None
+        or codespace_selection is None
+        or evaluated_at is None
+    ):
         return receipt
     # The existing #1287 production composition owns these exact providers.
     # An Actions job with only a parsed comment cannot reconstruct them.
@@ -201,11 +223,14 @@ def consume_fixed_codespace_pilot(
         )):
             return _receipt("blocked", "canonical-identity-or-authorization-mismatch", envelope)
         selection = codespace_selection
+        selection_selected = getattr(selection, "selected", None)
+        selection_state = getattr(selection, "state", None)
+        selection_name = getattr(selection, "codespace_name", None)
         if (
-            getattr(selection, "selected", None) is not True
-            or getattr(selection, "state", None) != "Available"
-            or type(getattr(selection, "codespace_name", None)) is not str
-            or descriptor.execution_surface_id != "codespace:" + selection.codespace_name
+            selection_selected is not True
+            or selection_state != "Available"
+            or type(selection_name) is not str
+            or descriptor.execution_surface_id != "codespace:" + selection_name
             or current.dependency_readiness.execution_surface_id != descriptor.execution_surface_id
         ):
             return _receipt("blocked", "codespace-currentness-or-health-unverified", envelope)
@@ -303,9 +328,9 @@ def consume_fixed_codespace_pilot(
 def consume_fixed_codespace_pilot_on_host(
     transport: object,
     *,
-    providers: object,
-    resolve_selection: Callable[[], object] | None = None,
-    dispatcher: Callable[..., object] | None = None,
+    providers: ProductionAdmissionProviders,
+    resolve_selection: Callable[[], CodespaceSelection | None] | None = None,
+    dispatcher: Callable[..., CodespaceDispatchOutcome] | None = None,
 ) -> dict[str, object]:
     """Trusted-host entry: bind #1287 admission providers to the fixed probe.
 
@@ -346,7 +371,7 @@ def consume_fixed_codespace_pilot_on_host(
 def drive_fixed_codespace_pilot_on_host(
     transport: object,
     *,
-    bootstrap: object = None,
+    bootstrap: ProductionHostBootstrap | None = None,
 ) -> dict[str, object]:
     """Production host driver: bind the host bootstrap to the fixed probe.
 
