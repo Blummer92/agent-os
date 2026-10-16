@@ -10,6 +10,11 @@ fails closed: it never synthesizes execution admission or runner health.
 
 The real bounded engineering command plan/live synchronous pilot require a
 separately admitted plan and host configuration. This probe does not grant that.
+
+The probe runs under a deterministic working-directory contract (#3333 Option B,
+owner-approved): the Codespaces path pins execution to the validated repository
+root ``/workspaces/agent-os`` instead of relying on the incidental non-interactive
+SSH session directory. The fixed command itself is unchanged.
 """
 
 from __future__ import annotations
@@ -139,6 +144,9 @@ def consume_fixed_codespace_pilot(
         dispatch_admitted_operation_to_codespace,
         DispatchStatus,
     )
+    from scripts.agent_os_execution_interface.codespaces_orchestrator_transport import (
+        VALIDATED_CODESPACE_REPOSITORY_ROOT,
+    )
     from scripts.agent_os_execution_interface.governed_runner_preference import (
         GovernedRunnerCandidate,
         GovernedRunnerKind,
@@ -251,6 +259,10 @@ def consume_fixed_codespace_pilot(
             codespace_name_or_none=selection.codespace_name,
             base_sha_or_none=sha,
             timeout_seconds=90,
+            # Deterministic working-directory contract (#3333 Option B): the
+            # fixed probe always runs under the validated repository root
+            # rather than the incidental SSH session directory.
+            workdir_or_none=VALIDATED_CODESPACE_REPOSITORY_ROOT,
         )
         result = outcome.transport_result_or_none
         receipt = _receipt("blocked", "codespace-dispatch-not-completed", envelope)
@@ -329,6 +341,38 @@ def consume_fixed_codespace_pilot_on_host(
         evaluated_at=providers.evaluated_at,
         dispatcher=dispatcher,
     )
+
+
+def drive_fixed_codespace_pilot_on_host(
+    transport: object,
+    *,
+    bootstrap: object = None,
+) -> dict[str, object]:
+    """Production host driver: bind the host bootstrap to the fixed probe.
+
+    The trusted host process builds its ``ProductionHostBootstrap`` from its
+    own environment and calls this driver with it. The driver takes
+    ``admission_providers()`` and invokes ``consume_fixed_codespace_pilot_on_host``
+    with the accepted envelope. Anything but the exact production bootstrap
+    type fails closed; no host state is synthesized here and no new authority
+    is granted. Every admission decision stays in ``consume_fixed_codespace_pilot``.
+    """
+    from agent_os_execution_service.production_host_bootstrap import (
+        ProductionHostBootstrap,
+    )
+
+    envelope = transport if type(transport) is dict else {}
+    if type(bootstrap) is not ProductionHostBootstrap:
+        return _receipt(
+            "needs-decision", "canonical-admission-provider-unavailable", envelope
+        )
+    try:
+        providers = bootstrap.admission_providers()
+    except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
+        return _receipt(
+            "needs-decision", "canonical-admission-provider-unavailable", envelope
+        )
+    return consume_fixed_codespace_pilot_on_host(transport, providers=providers)
 
 
 def main(argv: list[str] | None = None) -> int:

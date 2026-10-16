@@ -441,6 +441,29 @@ def test_route_operation_and_reserved_envelope_identity_stay_distinct(canonical)
     _assert_no_authority(receipt)
 
 
+def test_fixed_probe_passes_validated_workdir_to_dispatcher(canonical):
+    """Option B: the fixed probe pins the validated repository root."""
+    seen = {}
+
+    def dispatcher(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(status=DispatchStatus.NOT_DISPATCHED,
+                               transport_result_or_none=None)
+
+    descriptor = _descriptor()
+    consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=dispatcher,
+    )
+    assert seen["workdir_or_none"] == "/workspaces/agent-os"
+    assert seen["argv"] == ("git", "rev-parse", "HEAD")
+
+
 def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canonical):
     receipt, run = _consume()
     assert receipt["status"] == "completed"
@@ -449,7 +472,7 @@ def test_admitted_probe_runs_only_the_fixed_argv_on_the_selected_codespace(canon
     assert receipt["exit_status"] == 0
     assert receipt["request_id"]
     assert run.calls == [
-        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "cd", "/workspaces/agent-os", "&&", "git", "rev-parse", "HEAD")
     ]
     _assert_no_authority(receipt)
 
@@ -971,7 +994,7 @@ def test_host_entry_default_selection_is_the_shared_resolver_through_the_executi
     )
     assert receipt["status"] == "completed"
     assert run.calls == [
-        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "cd", "/workspaces/agent-os", "&&", "git", "rev-parse", "HEAD")
     ]
 
 
@@ -1022,7 +1045,7 @@ def test_host_entry_admits_the_fixed_probe_through_directly_bound_providers(cano
     assert receipt["reason_codes"] == ["fixed-head-probe-passed"]
     assert resolver.calls >= 1
     assert run.calls == [
-        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "git", "rev-parse", "HEAD")
+        ("gh", "codespace", "ssh", "-c", CODESPACE, "--", "cd", "/workspaces/agent-os", "&&", "git", "rev-parse", "HEAD")
     ]
     _assert_no_authority(receipt)
 

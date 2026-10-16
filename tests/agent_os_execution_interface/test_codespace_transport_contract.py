@@ -94,7 +94,11 @@ class CodespaceTransportContractTests(unittest.TestCase):
                   list_candidates=lambda: (self.candidate(),),
                   run=lambda args, **k: (calls.append(args) or (0, "ok", "")))
         self.assertEqual(result.status, TransportStatus.COMPLETED)
-        self.assertEqual(shlex.split(" ".join(calls[0][6:])), list(argv))
+        # Deterministic workdir contract (#3333 Option B): the remote command
+        # is pinned under `cd <validated root> &&`; the admitted argv still
+        # round-trips as quoted data, never as shell commands.
+        self.assertEqual(shlex.split(" ".join(calls[0][6:])),
+                         ["cd", "/workspaces/agent-os", "&&", *argv])
         self.assertEqual(result.argv, argv)
         self.assertEqual(len(calls), 1)
 
