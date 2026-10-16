@@ -458,6 +458,26 @@ def test_handoff_discovery_unaffected_by_receipts(tmp_path: Path, host: dict) ->
     assert outcome.status is InvocationHandoffDiscoveryStatus.NOT_FOUND
 
 
+def test_receipts_dir_failure_precedes_drive(tmp_path: Path, host: dict) -> None:
+    # The receipts home must exist before the pilot drives: a post-drive
+    # failure would lose the receipt of an already-consumed probe.
+    target = tmp_path / "target"
+    target.mkdir()
+    (host["store"] / "invocations" / "receipts").symlink_to(target)
+    calls: list = []
+    path = _write_event(tmp_path, _event())
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        run_gate2_fixed_pilot_controller(
+            event_path=path,
+            environ=host,
+            drive=lambda envelope, bootstrap: calls.append(envelope),
+            resolve_selection=lambda: _selection(),
+            build_transports=_transports,
+        )
+    assert excinfo.value.reason == "receipts-dir-is-symlink"
+    assert calls == []
+
+
 def test_main_cli_failure_contract(tmp_path: Path, capsys) -> None:
     code = main(["--event", str(tmp_path / "missing.json")])
     assert code == 1

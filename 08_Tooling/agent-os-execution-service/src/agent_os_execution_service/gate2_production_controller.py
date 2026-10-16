@@ -457,12 +457,16 @@ def run_gate2_fixed_pilot_controller(
         )
         _fail_on_active_leases(configuration.lease_directory)
         bootstrap = _build_bootstrap(make_transports(), configuration)
+        # The receipts directory is ensured BEFORE the pilot drives: the fixed
+        # probe consumes a governed invocation, so its receipt must have a
+        # durable home before any execution occurs. A post-drive failure here
+        # would lose the receipt of an already-consumed probe.
+        receipts_dir = _ensure_receipts_dir(invocations_dir)
 
         receipt = invoke(envelope, bootstrap=bootstrap)
         if type(receipt) is not dict:
             raise Gate2ControllerError("driver-returned-non-mapping")
         name = _receipt_file_name(envelope, bootstrap.evaluated_at)
-        receipts_dir = _ensure_receipts_dir(invocations_dir)
         receipt_path = _persist_receipt_atomically(receipts_dir, name, receipt)
     except Gate2ControllerError:
         raise
