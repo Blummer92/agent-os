@@ -1,0 +1,77 @@
+# #3577 — Marketing Foundations Day 1 lesson-revision identity + coverage matrix.
+#
+# Governed metadata only: lesson objectives, exact slide/worksheet revision
+# identities, and the concept-to-slide-to-worksheet coverage matrix. This file
+# carries NO student-facing worksheet copy and NO classroom artifact; it is
+# the machine-checkable record the cross-artifact alignment validator
+# (worksheet_revision_qa.validate_lesson_revision_alignment) consumes.
+#
+# Slide mapping source: issue #3577 body (2026-10-13 teacher report of the
+# 11-slide convenience revision). Exact slide-number mapping is pending a live
+# read of Marketing_Foundations_Day1_Convenience_Revised.pdf (screenshot
+# evidence remains in chat, not GitHub) — slide indices below are approximate
+# and marked as such. Per #3575, the deck's own disposable/reusable comparison
+# is incomplete: the worksheet must treat it as a student analysis task, not
+# as an accepted source.
+lesson_id: marketing-foundations-day1
+lesson_title: Marketing Foundations — Day 1 (metadata record)
+
+objectives:
+  - Compare disposable and reusable water bottles using evidence.
+  - Distinguish Place convenience (where a product is found) from Product convenience (what it is).
+  - Analyze in-store positioning: store aisle versus checkout.
+  - Evaluate Price willingness-to-pay and the convenience premium.
+  - Make an evidence-supported price/tradeoff recommendation.
+
+deck:
+  revision_id: deck-rev-convenience-2026-10-13
+  filename: Marketing_Foundations_Day1_Convenience_Revised.pdf
+  slide_count: 11
+  slide_mapping_source: "issue-3577-body (2026-10-13); exact slide read pending"
+  topics:
+    - disposable versus reusable water bottles
+    - in-store positioning (aisle versus checkout)
+    - convenience premiums
+    - Place versus Price
+
+worksheet:
+  lesson_id: marketing-foundations-day1
+  synced_deck_revision_id: deck-rev-convenience-2026-10-13
+  revision_id: worksheet-rev-convenience-sync-1
+  artifact_family: Day 1 Marketing Detectives
+  stale_prior_revision: Day1_Marketing_Detectives_Print_Ready_Review.docx
+
+learning_targets:
+  - id: product-disposable-vs-reusable
+    concept: Product reuse versus disposal
+  - id: place-shelf-placement
+    concept: Place channels and shelf placement
+  - id: price-convenience-premium
+    concept: Price willingness-to-pay and the convenience premium
+  - id: place-vs-price-vs-product
+    concept: Place versus Price versus Product convenience distinction
+  - id: evidence-based-tradeoff
+    concept: Evidence-supported price/tradeoff recommendation
+
+coverage_matrix:
+  # concept -> approximate deck slides -> covering worksheet tasks
+  - concept: product-disposable-vs-reusable
+    deck_slides_approx: [6, 7]
+    deck_slide_note: proposed disposable/reusable comparison (incomplete per #3575; worksheet treats as analysis task, not accepted source)
+    worksheet_tasks: [mission-1]
+  - concept: place-shelf-placement
+    deck_slides_approx: [8]
+    deck_slide_note: store aisle versus checkout positioning
+    worksheet_tasks: [mission-2]
+  - concept: price-convenience-premium
+    deck_slides_approx: [5, 9]
+    deck_slide_note: convenience-price tradeoffs
+    worksheet_tasks: [mission-3]
+  - concept: place-vs-price-vs-product
+    deck_slides_approx: [9]
+    deck_slide_note: Place versus Price convenience tradeoffs
+    worksheet_tasks: [mission-2, exit-ticket]
+  - concept: evidence-based-tradeoff
+    deck_slides_approx: [10, 11]
+    deck_slide_note: comparison proposal and closing
+    worksheet_tasks: [mission-3, exit-ticket]
