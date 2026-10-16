@@ -23,6 +23,10 @@ from instructional_workflow_contracts.material_requirement import (
 )
 
 from .content_spec import LessonContent
+from .worksheet_visual_examples import (
+    VisualExampleCoverageError,
+    require_visual_example_plan_coverage,
+)
 
 
 class GenerationContextError(ValueError):
@@ -119,6 +123,14 @@ def compose_generation_context(
     plan_asset_ids = tuple(sorted(asset_id for _, _, asset_id in visual_bindings))
     if supplied_asset_ids and not _multiset_covered(supplied_asset_ids, plan_asset_ids):
         raise GenerationContextError("Selected visual identity does not match governed visual plan")
+
+    # #3212: lesson-declared visual examples must be covered by the governed
+    # visual plan. A text-only build can never satisfy a worksheet whose
+    # unit requires worked examples.
+    try:
+        require_visual_example_plan_coverage(content, visual_bindings)
+    except VisualExampleCoverageError as exc:
+        raise GenerationContextError(str(exc)) from exc
 
     requirement = requirement_result.record.to_dict()
     assessment_dependency = _assessment_dependency_fingerprint(requirement, state)

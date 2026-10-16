@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Visual-example requirements for worksheets (#3212): lesson content specs
+  may declare `visual_examples` (section, role_id, slot_id, caption) — the
+  unit's per-section image needs (worked examples, before/after frames,
+  clear-vs-confusing comparisons) as build-time obligations. Every declared
+  example must be covered by the governed #944 visual plan before
+  generation (`compose_generation_context` fails closed), so a worksheet
+  whose unit requires visual examples can never be generated text-only.
+  Declared captions project as `visual_example_{i}_caption` placeholder
+  tokens for figure labels; coverage evaluation reuses the
+  `visual_completeness` contract via `worksheet_visual_examples.py`.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
