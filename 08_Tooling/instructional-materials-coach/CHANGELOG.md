@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Student-voice filtering for student-facing worksheets (#3213):
+  `student_voice.py` screens student copy for teacher-guide modeling voice
+  (rigor-ramp stage labels, cognitive-load jargon, teacher-phrased
+  gate/recovery rules, teacher modeling scripts) with whitespace-normalized
+  case-insensitive substring matching; the student-material PDF preview
+  fails closed on leaked teacher voice unless the caller explicitly
+  declares a known phrase via
+  `explicit_student_copy_teacher_voice_phrases`. Teacher guidance belongs
+  in the teacher guide and slide deck, never on the student sheet.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
