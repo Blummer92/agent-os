@@ -24,10 +24,22 @@ Local subprocess execution remains argv-based. Pattern/path text stays data.
 Result evidence includes fixed repository/execution surface, canonical runner
 profile/health references when supplied, UTC local transport-attempt start/end,
 and monotonic duration. Timeout/error results retain attempt timestamps; refusal
-before execution reports null timestamps. Caller-owned workdir/base/currentness
-remain recorded bindings, not claims that a remote checkout or working directory
-was independently observed. New supplied runner evidence binds the request ID;
-legacy requests without it retain their existing content-derived identities.
+before execution reports null timestamps. Base-SHA and currentness remain recorded
+bindings, not claims that a remote checkout was independently observed. New supplied
+runner evidence binds the request ID; legacy requests without it retain their
+existing content-derived identities.
+
+Working-directory contract (#3333 Option B, owner-approved): the fixed-probe
+Codespaces path no longer depends on the incidental non-interactive SSH working
+directory. The transport honors a validated working directory, and the only
+admissible value is the repository root `/workspaces/agent-os`; any other value
+is rejected before any Codespace is contacted, and the remote command is pinned
+under `cd '/workspaces/agent-os' &&` (a missing directory fails closed there,
+before the fixed command runs). Repository identity -- not merely the directory
+path -- is asserted on the remote side before execution: `git rev-parse
+--show-toplevel` (already-admitted grammar, no allowlist widening) must report
+exactly the validated root, otherwise the `&&` chain fails closed before the
+fixed argv runs. The fixed argv itself is unchanged.
 
 These operations require a qualified environment and trusted admitted repository
 and test code. The argv grammar does not sandbox arbitrary repository code or
@@ -57,7 +69,8 @@ repository and exact grammar, are accepted by the existing
 The fixed operation identity is `codespace-implementation-pilot-v1`.
 The only transport argv in this increment is `("git", "rev-parse", "HEAD")`.
 No caller-supplied command, workdir, host, token, arbitrary arguments or paths
-are permitted. This is a non-mutating HEAD verification canary, not the
+are permitted. The working directory is contract-supplied (the validated
+repository root), never caller-supplied. This is a non-mutating HEAD verification canary, not the
 multi-file implementation pilot.
 
 ## Host admission and currentness

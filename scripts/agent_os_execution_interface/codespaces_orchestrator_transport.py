@@ -16,6 +16,11 @@ Trust domains, stated plainly:
 - The *payload argv* is bounded structured data admitted by a finite command
   grammar. Local execution never invokes a shell; each admitted argument is
   quoted for SSH's remote command interpretation.
+- The *working directory* is a deterministic contract, not a measurement
+  (#3333 Option B): when bound, it must be exactly the validated repository
+  root (``/workspaces/agent-os``); the transport pins the remote command under
+  it and rejects any other value before any Codespace contact. ``None``
+  preserves the historical recorded-only behavior.
 - Shells, arbitrary interpreters, executable paths, GitHub clients and unknown
   command families are rejected before discovery or transport. Admitted tests
   remain trusted repository code, not a hostile-code sandbox. Publication stays
@@ -46,6 +51,12 @@ from .codespace_command_policy import admitted_repository_argv, valid_argv_data
 REPOSITORY = "Blummer92/agent-os"
 APPROVED_OWNER = "Blummer92"
 REQUIRED_CODESPACE_STATE = "Available"
+#: Deterministic repository working directory for the Codespaces execution
+#: path (#3333, Option B, owner-approved). The incidental non-interactive SSH
+#: session directory is not measured; instead the transport pins execution
+#: under this validated constant. It is the only admissible workdir value:
+#: anything else is rejected before any Codespace is contacted.
+VALIDATED_CODESPACE_REPOSITORY_ROOT = "/workspaces/agent-os"
 CODESPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$", re.ASCII)
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 
@@ -343,6 +354,49 @@ def validate_argv(argv: tuple[str, ...]) -> TransportReason | None:
     return None
 
 
+def _validate_workdir(workdir: object) -> TransportReason | None:
+    """Enforce the deterministic working-directory contract (#3333 Option B).
+
+    ``None`` preserves the historical recorded-only behavior for callers that
+    bind no working directory. Any other value must be exactly the validated
+    repository root; everything else is rejected before any Codespace contact.
+    """
+    if workdir is None:
+        return None
+    if type(workdir) is not str or workdir != VALIDATED_CODESPACE_REPOSITORY_ROOT:
+        return TransportReason.INVALID_REQUEST
+    return None
+
+
+def _sh_single_quote(value: str) -> str:
+    """POSIX-shell single-quote a fixed transport constant.
+
+    Defense in depth for the deterministic working-directory contract: even
+    though ``_validate_workdir`` admits only the exact validated constant, the
+    value is always quoted at the splice point, so a future refactor that
+    separates validation from use cannot open a shell-injection channel.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+#: Remote-side repository-identity gate, as fixed ssh argv words. The driver
+#: cannot see the remote filesystem, so identity is asserted where the fixed
+#: command runs: ``git rev-parse --show-toplevel`` (already-admitted grammar;
+#: no allowlist widening) must report exactly the validated root. Any
+#: mismatch -- wrong repository, subdirectory of another repository, or not a
+#: git work tree at all -- fails the ``&&`` chain with a non-zero exit before
+#: the fixed argv executes. Both sides of the comparison are validated
+#: constants, never caller shell text.
+def _identity_gate_words(quoted_root: str) -> tuple[str, ...]:
+    return (
+        "[",
+        '"$(git rev-parse --show-toplevel)"',
+        "=",
+        quoted_root,
+        "]",
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -449,6 +503,10 @@ def run_codespace_transport(
     forbidden = validate_argv(request.argv)
     if forbidden is not None:
         return _failure(request, TransportStatus.REJECTED, forbidden, None)
+    if _validate_workdir(request.workdir_or_none) is not None:
+        return _failure(
+            request, TransportStatus.REJECTED, TransportReason.INVALID_REQUEST, None
+        )
 
     try:
         candidates = list_candidates()
@@ -470,15 +528,34 @@ def run_codespace_transport(
             codespace.name,
         )
 
-    ssh_argv = (
-        "gh",
-        "codespace",
-        "ssh",
-        "-c",
-        codespace.name,
-        "--",
-        *(shlex.quote(part) for part in request.argv),
-    )
+    ssh_prefix = ("gh", "codespace", "ssh", "-c", codespace.name, "--")
+    if request.workdir_or_none is not None:
+        # Deterministic working-directory contract (#3333 Option B): the only
+        # admissible workdir is the validated repository root. The remote
+        # command is pinned under `cd '<root>' &&`, and repository identity
+        # (not merely the directory path) is asserted on the remote side
+        # before the fixed command runs: the identity gate requires
+        # `git rev-parse --show-toplevel` to report exactly the validated
+        # root. A missing directory, a non-git directory, or a different
+        # repository fails the `&&` chain with a non-zero exit before the
+        # fixed argv executes. Every word here is a validated constant or
+        # fixed gate text, never caller shell text; the admitted argv is
+        # unchanged and the command grammar is not widened.
+        quoted_root = _sh_single_quote(request.workdir_or_none)
+        ssh_argv = (
+            *ssh_prefix,
+            "cd",
+            quoted_root,
+            "&&",
+            *_identity_gate_words(quoted_root),
+            "&&",
+            *(shlex.quote(part) for part in request.argv),
+        )
+    else:
+        ssh_argv = (
+            *ssh_prefix,
+            *(shlex.quote(part) for part in request.argv),
+        )
     started_at_or_none = _utc_text(utc_now())
     started = time.monotonic()
     try:
