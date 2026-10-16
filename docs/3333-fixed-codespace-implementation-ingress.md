@@ -254,3 +254,16 @@ envelope operation `codespace-implementation-pilot-v1` and its reserved one-prob
 authorization (comment 6176889694) are unchanged and still unconsumed. The fixed
 argv is still `("git", "rev-parse", "HEAD")`, and the Actions entry still fails
 closed with `canonical-admission-provider-unavailable`.
+
+## Approved Codespaces checkpoint-store root (#3333)
+
+The owner approved `/workspaces/agent-os-state/checkpoints` as the Codespaces
+checkpoint-store root. `devcontainer.json` `containerEnv` binds
+`AGENT_OS_CHECKPOINT_STORE_ROOT` to it for container processes, and
+`post-create.sh` idempotently creates `invocations/` (mode 0700). sshd does not
+pass `containerEnv`/`remoteEnv` to a noninteractive `gh codespace ssh -- <cmd>`
+session, so the Codespaces discovery program also defaults to this root when the
+variable is unset. The existing `handoff_publication` producer is authorized to
+publish genuine pre-PR developer-loop descriptors there; a producer invoked over
+SSH must use the same root. No descriptor is synthesized or copied from the
+retired GCE host. This is not live acceptance.

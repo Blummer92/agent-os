@@ -304,3 +304,41 @@ def test_ssh_remote_command_executes_through_posix_shell(monkeypatch: pytest.Mon
     assert "SSH_BOUNDARY_OK" in completed.stdout
     assert "command not found" not in completed.stderr
     assert "SyntaxError" not in completed.stderr
+
+
+# --- #3333: approved Codespaces store binding over the real remote program ----
+
+def _run_remote_program(env: dict, cwd: Path) -> dict:
+    import os
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _REMOTE_DISCOVERY_SOURCE, REPOSITORY, "3333", APPROVED_CODESPACE_NAME],
+        capture_output=True, text=True, cwd=cwd, env={"PATH": os.environ["PATH"], **env},
+    )
+    out = proc.stdout
+    return json.loads(out.split(FRAME_START, 1)[1].split(FRAME_END, 1)[0])
+
+
+def test_unset_env_binds_approved_codespaces_store_root() -> None:
+    # sshd noninteractive sessions do not receive containerEnv/remoteEnv.
+    assert live_discovery.APPROVED_CODESPACES_STORE_ROOT == "/workspaces/agent-os-state/checkpoints"
+    assert f'"{live_discovery.APPROVED_CODESPACES_STORE_ROOT}"' in _REMOTE_DISCOVERY_SOURCE
+    assert "/var/lib/agent-os" not in _REMOTE_DISCOVERY_SOURCE
+
+
+def test_remote_program_missing_store_fails_closed_and_falls_back(tmp_path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    payload = _run_remote_program({"AGENT_OS_CHECKPOINT_STORE_ROOT": str(tmp_path / "absent")}, repo)
+    assert payload["reason_codes"] == ["codespaces-discovery-store-unavailable"]
+
+
+def test_remote_program_reads_configured_store_and_malformed_descriptor_fails_closed(tmp_path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    env = {"AGENT_OS_CHECKPOINT_STORE_ROOT": str(tmp_path)}
+    (tmp_path / "invocations").mkdir()
+    assert _run_remote_program(env, repo)["reason_codes"] == ["no-matching-descriptor"]
+    (tmp_path / "invocations" / ("0" * 64 + ".json")).write_text("{not json", encoding="utf-8")
+    payload = _run_remote_program(env, repo)
+    assert payload["status"] == "needs-decision"
+    assert payload["handoff_id"] is None
