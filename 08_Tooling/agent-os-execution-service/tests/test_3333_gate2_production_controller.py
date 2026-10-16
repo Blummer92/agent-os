@@ -10,7 +10,15 @@ so the production composition seam itself is exercised.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+EXECUTION_SERVICE_SRC = REPOSITORY_ROOT / "08_Tooling/agent-os-execution-service/src"
+SCHEDULER_SRC = REPOSITORY_ROOT / "08_Tooling/workflow-scheduler/src"
+for _path in (REPOSITORY_ROOT, EXECUTION_SERVICE_SRC, SCHEDULER_SRC):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 import pytest
 
