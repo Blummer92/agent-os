@@ -167,6 +167,10 @@ def build_placement_record(
     eligibility_evidence: Mapping[str, Any] | None,
     transport_name: str,
     post_insertion_revision: str,
+    # #3386: the representation class the asset's governed compatibility
+    # evidence assigns it (None = unknown; terminal QA routes such roles
+    # to manual review when a kind constraint was declared).
+    observed_representation_class: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the persisted record envelope around a verified receipt."""
     return {
@@ -185,6 +189,9 @@ def build_placement_record(
         "source_plan_id": source_plan_id,
         "required": bool(required),
         "eligibility_evidence": dict(eligibility_evidence) if isinstance(eligibility_evidence, Mapping) else None,
+        # #3386: semantic visual-kind evidence for terminal QA role
+        # fulfillment checks (never re-derived downstream).
+        "observed_representation_class": observed_representation_class,
         "transport": transport_name,
         "post_insertion_revision_id": post_insertion_revision,
         "placed_at": _utc_now(),

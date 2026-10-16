@@ -62,6 +62,11 @@ from .visual_placement import (
     verify_placement_receipt,
     verify_request_content_identity,
 )
+from .visual_role_fulfillment import (
+    VisualRoleFulfillmentError,
+    observed_representation_class_from_compatibility,
+    validate_representation_class,
+)
 from .workspace_clients import get_docs_revision_id, get_slides_revision_id
 
 
@@ -91,6 +96,14 @@ class VisualPlacementBinding:
     required: bool = True
     slot_id: str = "0"
     eligibility_evidence: Mapping[str, Any] | None = None
+    # #3386: the representation class the governed plan declared for this
+    # role ("unspecified" = no kind constraint was declared). The check
+    # never invents a constraint the plan did not declare.
+    expected_representation_class: str = "unspecified"
+    # #3386: the representation class the asset's governed compatibility
+    # evidence assigns it (None = unknown; terminal QA routes the role to
+    # manual review rather than passing it).
+    observed_representation_class: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,21 @@ def plan_visual_placement_bindings(visual_plan: Any) -> tuple[VisualPlacementBin
                     f"placement-eligibility-evidence-missing: role={role_id} asset={asset_id}; "
                     "placement consumes explicit eligibility evidence and never infers it (#3253/#3254)"
                 )
+            # #3386: required visual kind comes only from the governed plan's
+            # explicit declaration; an absent declaration means no kind
+            # constraint (never invented here). The observed kind is read
+            # from the asset's governed compatibility evidence.
+            try:
+                expected_kind = validate_representation_class(
+                    assignment.get("required_representation_class", "unspecified"),
+                    name="required representation_class",
+                )
+                observed_kind = observed_representation_class_from_compatibility(evidence)
+            except VisualRoleFulfillmentError as exc:
+                raise PlacementExecutionError(
+                    f"placement-visual-kind-evidence-invalid: role={role_id} asset={asset_id}: {exc}; "
+                    "failing closed instead of guessing the visual kind"
+                ) from exc
             raw_slot = assignment.get("slot_id", 0)
             bindings.append(
                 VisualPlacementBinding(
@@ -168,6 +196,8 @@ def plan_visual_placement_bindings(visual_plan: Any) -> tuple[VisualPlacementBin
                     required=required,
                     slot_id=str(raw_slot),
                     eligibility_evidence=dict(evidence),
+                    expected_representation_class=expected_kind,
+                    observed_representation_class=observed_kind,
                 )
             )
     seen: dict[tuple[str, str], VisualPlacementBinding] = {}
@@ -485,6 +515,7 @@ def _place_one_binding(
             source_plan_id=binding.source_plan_id,
             required=binding.required,
             eligibility_evidence=binding.eligibility_evidence,
+            observed_representation_class=binding.observed_representation_class,
             transport_name=getattr(transport, "name", type(transport).__name__),
             post_insertion_revision=post_revision,
         ),
