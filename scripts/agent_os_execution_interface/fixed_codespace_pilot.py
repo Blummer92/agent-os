@@ -36,13 +36,11 @@ if TYPE_CHECKING:
         ProductionHostBootstrap,
     )
     from agent_os_execution_service.production_host_composition import (
+        CodespaceSelection,
         ProductionAdmissionProviders,
     )
     from scripts.agent_os_execution_interface.codespace_implementation_dispatch import (
         CodespaceDispatchOutcome,
-    )
-    from workflow_scheduler.governance.dev_validation_codespaces import (
-        CodespaceSelection,
     )
 
 REPOSITORY = "Blummer92/agent-os"
