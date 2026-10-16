@@ -43,6 +43,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .placement_receipts import load_placement_records
+from .image_provenance import (
+    ImageProvenance,
+    ImageProvenanceError,
+    image_provenance_from_mapping,
+    provenance_qa_outcome,
+    student_visible_caption,
+)
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -65,6 +72,11 @@ QA_STATE_CONTENT_MISMATCH = "content-mismatch"
 QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
+# #3389: a placed student-facing image carries unresolved provenance
+# (unknown origin, or a human photograph with no known creator). The
+# image cannot be presented as ordinary sourced photography; the role
+# routes to manual review.
+QA_STATE_PROVENANCE_UNRESOLVED = "provenance-unresolved"
 QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
@@ -88,6 +100,7 @@ _STATE_SEVERITY = {
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
+    QA_STATE_PROVENANCE_UNRESOLVED: 11,
     QA_STATE_ARTIFACT_STALE: 20,
     QA_STATE_ARTIFACT_CONFLICT: 20,
     QA_STATE_EVIDENCE_INCOMPLETE: 30,
@@ -160,6 +173,12 @@ class VisualExpectation:
     asset_id: str
     content_identity: Mapping[str, Any]
     required: bool = True
+    # #3389: student-visible provenance/AI-disclosure evidence carried from
+    # the placement binding (dict form of ImageProvenance). None = the
+    # upstream path carries no provenance evidence; terminal QA enforces
+    # carried evidence strictly and is silent about uncarried legacy
+    # evidence (documented boundary).
+    provenance: Mapping[str, Any] | None = None
 
     def marker(self) -> str:
         return "{{visual:" + self.role_id + "}}"
@@ -189,7 +208,36 @@ class TerminalQAExpectations:
         artifact and the ``replaceText`` must be present. Visual expectations
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
+        #3389: provenance evidence carried on a binding flows into the
+        # visual expectation; malformed carried evidence fails closed here.
         """
+        visuals: list[VisualExpectation] = []
+        for binding in visual_placements or ():
+            raw_provenance = getattr(binding, "image_provenance", None)
+            if raw_provenance is None:
+                provenance_dict: Mapping[str, Any] | None = None
+            else:
+                try:
+                    provenance_dict = image_provenance_from_mapping(
+                        raw_provenance.to_dict()
+                        if isinstance(raw_provenance, ImageProvenance)
+                        else raw_provenance
+                    ).to_dict()
+                except ImageProvenanceError as exc:
+                    raise ValueError(
+                        f"visual expectation for role {getattr(binding, 'role_id', '?')} "
+                        f"carries invalid image provenance: {exc}"
+                    ) from exc
+            visuals.append(
+                VisualExpectation(
+                    role_id=str(binding.role_id),
+                    slot_id=str(binding.slot_id),
+                    asset_id=str(binding.asset_id),
+                    content_identity=dict(binding.content_identity or {}),
+                    required=bool(binding.required),
+                    provenance=provenance_dict,
+                )
+            )
         return TerminalQAExpectations(
             idempotency_key=str(idempotency_key or ""),
             docs_content=tuple(
@@ -206,16 +254,7 @@ class TerminalQAExpectations:
                 )
                 if expectation is not None
             ),
-            visuals=tuple(
-                VisualExpectation(
-                    role_id=str(binding.role_id),
-                    slot_id=str(binding.slot_id),
-                    asset_id=str(binding.asset_id),
-                    content_identity=dict(binding.content_identity or {}),
-                    required=bool(binding.required),
-                )
-                for binding in visual_placements or ()
-            ),
+            visuals=tuple(visuals),
         )
 
     def expectations_hash(self) -> str:
@@ -234,7 +273,10 @@ class TerminalQAExpectations:
             ],
             "visuals": [
                 {"role_id": v.role_id, "slot_id": v.slot_id, "asset_id": v.asset_id,
-                 "content_identity": dict(v.content_identity), "required": v.required}
+                 "content_identity": dict(v.content_identity), "required": v.required,
+                 # #3389: carried provenance is part of the governed QA
+                 # identity; changing it changes the expectations hash.
+                 "provenance": dict(v.provenance) if v.provenance else None}
                 for v in self.visuals
             ],
         }
@@ -740,6 +782,44 @@ def _evaluate_visuals(
                 )
             )
             continue
+        # #3389: student-visible provenance/AI disclosure. Carried
+        # provenance evidence is enforced strictly: an AI-generated image
+        # and a human photograph with a known creator pass; an unknown
+        # origin (or a human photograph with no known creator) cannot be
+        # presented as ordinary sourced photography -- the role routes to
+        # manual review with an explicit unresolved-provenance finding, and
+        # terminal completion is refused. Image presence alone is never
+        # sufficient provenance evidence.
+        if visual.provenance is not None:
+            try:
+                carried = image_provenance_from_mapping(visual.provenance)
+            except ImageProvenanceError as exc:
+                findings.append(
+                    _fail(
+                        "qa-provenance-evidence-invalid", QA_STATE_EVIDENCE_INCOMPLETE,
+                        f"Carried provenance evidence for role {visual.role_id} "
+                        f"is malformed: {exc}; terminal success is refused.",
+                        role_id=visual.role_id, slot_id=visual.slot_id,
+                    )
+                )
+                continue
+            assert carried is not None
+            if provenance_qa_outcome(carried) != "verified":
+                caption = student_visible_caption(carried)
+                findings.append(
+                    _fail(
+                        "qa-provenance-unresolved", QA_STATE_PROVENANCE_UNRESOLVED,
+                        f"Placed image for role {visual.role_id} (slot "
+                        f"{visual.slot_id}) has unresolved provenance: the "
+                        f"student-visible disclosure would read "
+                        f"{caption!r}. The image cannot be presented as "
+                        "sourced photography; route to manual review.",
+                        role_id=visual.role_id, slot_id=visual.slot_id,
+                        provenance=carried.to_dict(),
+                        student_visible_caption=caption,
+                    )
+                )
+                continue
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build

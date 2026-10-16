@@ -167,6 +167,10 @@ def build_placement_record(
     eligibility_evidence: Mapping[str, Any] | None,
     transport_name: str,
     post_insertion_revision: str,
+    # #3389: student-visible provenance/AI-disclosure evidence for this
+    # placed image (None = no provenance evidence carried). Terminal QA
+    # enforces carried evidence; it never re-derives it here.
+    image_provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the persisted record envelope around a verified receipt."""
     return {
@@ -185,6 +189,9 @@ def build_placement_record(
         "source_plan_id": source_plan_id,
         "required": bool(required),
         "eligibility_evidence": dict(eligibility_evidence) if isinstance(eligibility_evidence, Mapping) else None,
+        # #3389: provenance evidence for terminal QA (dict form of
+        # ImageProvenance; None when no provenance was carried).
+        "image_provenance": dict(image_provenance) if isinstance(image_provenance, Mapping) else None,
         "transport": transport_name,
         "post_insertion_revision_id": post_insertion_revision,
         "placed_at": _utc_now(),

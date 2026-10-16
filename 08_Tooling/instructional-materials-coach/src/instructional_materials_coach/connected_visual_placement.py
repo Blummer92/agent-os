@@ -43,6 +43,11 @@ from instructional_workflow_contracts.asset_content_identity import (
 )
 
 from .drive_client import describe_drive_file_outcome
+from .image_provenance import (
+    ImageProvenance,
+    ImageProvenanceError,
+    image_provenance_from_mapping,
+)
 from .placement_receipts import (
     append_placement_record,
     build_placement_record,
@@ -91,6 +96,11 @@ class VisualPlacementBinding:
     required: bool = True
     slot_id: str = "0"
     eligibility_evidence: Mapping[str, Any] | None = None
+    # #3389: student-visible provenance/AI-disclosure evidence carried from
+    # the governed plan assignment (None = the upstream path carries no
+    # provenance evidence). Never invented here; terminal QA enforces
+    # carried evidence strictly.
+    image_provenance: ImageProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +167,17 @@ def plan_visual_placement_bindings(visual_plan: Any) -> tuple[VisualPlacementBin
                     f"placement-eligibility-evidence-missing: role={role_id} asset={asset_id}; "
                     "placement consumes explicit eligibility evidence and never infers it (#3253/#3254)"
                 )
+            # #3389: provenance is explicit governed input on the plan
+            # assignment. Absent -> None (upstream predates provenance
+            # tracking). Malformed -> fail closed, never guessed.
+            raw_provenance = assignment.get("image_provenance")
+            try:
+                provenance = image_provenance_from_mapping(raw_provenance)
+            except ImageProvenanceError as exc:
+                raise PlacementExecutionError(
+                    f"placement-provenance-evidence-invalid: role={role_id} asset={asset_id}: {exc}; "
+                    "failing closed instead of guessing image provenance"
+                ) from exc
             raw_slot = assignment.get("slot_id", 0)
             bindings.append(
                 VisualPlacementBinding(
@@ -168,6 +189,7 @@ def plan_visual_placement_bindings(visual_plan: Any) -> tuple[VisualPlacementBin
                     required=required,
                     slot_id=str(raw_slot),
                     eligibility_evidence=dict(evidence),
+                    image_provenance=provenance,
                 )
             )
     seen: dict[tuple[str, str], VisualPlacementBinding] = {}
@@ -485,6 +507,11 @@ def _place_one_binding(
             source_plan_id=binding.source_plan_id,
             required=binding.required,
             eligibility_evidence=binding.eligibility_evidence,
+            # #3389: provenance evidence travels with the placement into the
+            # durable receipt so terminal QA evaluates it (never re-derived).
+            image_provenance=(
+                binding.image_provenance.to_dict() if binding.image_provenance else None
+            ),
             transport_name=getattr(transport, "name", type(transport).__name__),
             post_insertion_revision=post_revision,
         ),
