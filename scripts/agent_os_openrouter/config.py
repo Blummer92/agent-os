@@ -5,6 +5,11 @@ The pilot is disabled by default. Enabling requires the explicit
 never stored on this object -- only the *name* of the environment variable
 that holds it. The key is read from ``os.environ`` at call time, and never
 appears in logs, errors, or ``repr`` output.
+
+Free-model benchmark surfaces (all optional, validated): ``OPENROUTER_MODELS_ENDPOINT``
+(the ``/models`` catalog feeding the pricing gate), ``OPENROUTER_GENERATION_ENDPOINT``
+(per-call cost verification), and ``OPENROUTER_SPEND_CEILING_USD`` (cumulative
+spend backstop, default 0.0 -- these models are free).
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ MODEL_B_ENV_VAR = "OPENROUTER_MODEL_B"
 LIVE_BENCHMARK_ENV_VAR = "OPENROUTER_BENCHMARK_LIVE_APPROVED"
 
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models"
+DEFAULT_GENERATION_ENDPOINT = "https://openrouter.ai/api/v1/generation"
 
 # Example model identities in OpenRouter ``vendor/model`` form. These are
 # defaults only: override via OPENROUTER_MODEL_A / OPENROUTER_MODEL_B.
@@ -54,6 +61,12 @@ class OpenRouterConfig:
     max_retries: int = 3
     retry_backoff_seconds: float = 2.0
     endpoint: str = DEFAULT_ENDPOINT
+    # Free-model benchmark surfaces: the /models catalog feeds the pricing
+    # gate, /generation verifies per-call cost, and the spend ceiling is a
+    # defense-in-depth backstop (default 0.0 -- these models are free).
+    models_endpoint: str = DEFAULT_MODELS_ENDPOINT
+    generation_endpoint: str = DEFAULT_GENERATION_ENDPOINT
+    spend_ceiling_usd: float = 0.0
 
     def __post_init__(self) -> None:
         self.validate()
@@ -99,6 +112,9 @@ class OpenRouterConfig:
             max_retries=_int("OPENROUTER_MAX_RETRIES", 3),
             retry_backoff_seconds=_float("OPENROUTER_RETRY_BACKOFF_SECONDS", 2.0),
             endpoint=env.get("OPENROUTER_ENDPOINT", DEFAULT_ENDPOINT),
+            models_endpoint=env.get("OPENROUTER_MODELS_ENDPOINT", DEFAULT_MODELS_ENDPOINT),
+            generation_endpoint=env.get("OPENROUTER_GENERATION_ENDPOINT", DEFAULT_GENERATION_ENDPOINT),
+            spend_ceiling_usd=_float("OPENROUTER_SPEND_CEILING_USD", 0.0),
         )
 
     def validate(self) -> None:
@@ -123,6 +139,11 @@ class OpenRouterConfig:
         _non_negative_number(self.retry_backoff_seconds, "retry_backoff_seconds")
         if not isinstance(self.endpoint, str) or not self.endpoint.startswith("https://"):
             raise ValueError("endpoint must be an https URL")
+        if not isinstance(self.models_endpoint, str) or not self.models_endpoint.startswith("https://"):
+            raise ValueError("models_endpoint must be an https URL")
+        if not isinstance(self.generation_endpoint, str) or not self.generation_endpoint.startswith("https://"):
+            raise ValueError("generation_endpoint must be an https URL")
+        _non_negative_number(self.spend_ceiling_usd, "spend_ceiling_usd")
 
     def is_configured(self) -> bool:
         """True only when the pilot is enabled AND a key is present.

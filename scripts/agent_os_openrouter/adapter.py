@@ -30,6 +30,11 @@ from functools import lru_cache
 from typing import Any, Callable
 
 from .config import OpenRouterConfig
+from .pricing import (
+    FreeModelPricingGate,
+    GenerationFetcher,
+    OpenRouterPricingGateError,
+)
 
 PROVIDER_IDENTITY = "openrouter"
 
@@ -138,6 +143,8 @@ class OpenRouterProposalAdapter:
         model_identity: str,
         transport: Transport | None = None,
         budget_tracker: OpenRouterBudgetTracker | None = None,
+        pricing_gate: FreeModelPricingGate | None = None,
+        generation_cost_fetcher: GenerationFetcher | None = None,
     ) -> None:
         if not isinstance(config, OpenRouterConfig):
             raise TypeError("config must be OpenRouterConfig")
@@ -146,11 +153,26 @@ class OpenRouterProposalAdapter:
             raise ValueError("model_identity must be a non-empty string")
         if transport is not None and not callable(transport):
             raise TypeError("transport must be callable")
+        if pricing_gate is not None and not isinstance(pricing_gate, FreeModelPricingGate):
+            raise TypeError("pricing_gate must be FreeModelPricingGate")
+        if generation_cost_fetcher is not None and not callable(generation_cost_fetcher):
+            raise TypeError("generation_cost_fetcher must be callable")
         self._config = config
         self._model_identity = model_identity
         self._transport: Transport = transport or self._default_transport()
         self._budget = budget_tracker or OpenRouterBudgetTracker(config.max_total_tokens)
+        self._pricing_gate = pricing_gate
+        self._generation_cost_fetcher = generation_cost_fetcher
         self._stats = AdapterStats()
+        # Latest zero-cost evidence, plus a count proving EVERY transport
+        # invocation was preceded by exactly one successful verification.
+        # _pricing_gate_defect records the gate's failure message when the
+        # gate raises: the kernel maps the exception to NEEDS_DECISION /
+        # provider.failure, so the flag is the runner-level defect signal.
+        self._pricing_evidence: dict[str, Any] | None = None
+        self._pricing_verifications = 0
+        self._generation_cost_evidence: dict[str, Any] | None = None
+        self._pricing_gate_defect: str | None = None
 
     @property
     def config(self) -> OpenRouterConfig:
@@ -167,6 +189,10 @@ class OpenRouterProposalAdapter:
             "tokens_used": self._stats.tokens_used,
             "retries": self._stats.retries,
             "latency_seconds": self._stats.latency_seconds,
+            "pricing_evidence": self._pricing_evidence,
+            "pricing_verifications": self._pricing_verifications,
+            "generation_cost_evidence": self._generation_cost_evidence,
+            "pricing_gate_defect": self._pricing_gate_defect,
         }
 
     def propose(self, request_payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -195,6 +221,22 @@ class OpenRouterProposalAdapter:
         if not isinstance(fingerprint, str) or not fingerprint:
             raise kernel.ProposalProviderUnavailable("request payload lacks a request fingerprint")
 
+        # Free-model pricing gate, IN THE INVOCATION PATH: no transport call
+        # happens unless zero-cost pricing was just verified for the exact
+        # model identity below. Raises OpenRouterPricingGateError (fail
+        # closed) on unknown/missing/nonzero pricing or a failed re-fetch.
+        # The defect message is recorded on the adapter because the kernel
+        # maps the raised exception to NEEDS_DECISION / provider.failure.
+        if self._pricing_gate is not None:
+            try:
+                self._pricing_evidence = self._pricing_gate.verify_model_is_free(
+                    self._model_identity
+                )
+            except OpenRouterPricingGateError as exc:
+                self._pricing_gate_defect = f"{type(exc).__name__}: {exc}"
+                raise
+            self._pricing_verifications += 1
+
         body = {
             "model": self._model_identity,
             "messages": [
@@ -213,6 +255,20 @@ class OpenRouterProposalAdapter:
             self._stats.latency_seconds += time.monotonic() - started
 
         self._record_usage(response)
+
+        # Post-call cost verification: the generation id from the response is
+        # looked up and its cost must verify zero. Nonzero or unknown cost is
+        # a fail-closed defect (these models are free). A gate without a
+        # cost lookup configured also fails closed -- unverifiable is unknown.
+        if self._pricing_gate is not None:
+            generation_id = response.get("id") if isinstance(response, Mapping) else None
+            try:
+                self._generation_cost_evidence = self._pricing_gate.verify_generation_cost_zero(
+                    generation_id, self._generation_cost_fetcher
+                )
+            except OpenRouterPricingGateError as exc:
+                self._pricing_gate_defect = f"{type(exc).__name__}: {exc}"
+                raise
 
         content = self._extract_content(response)
         if len(content.encode("utf-8")) > kernel.MAX_RESPONSE_BYTES:

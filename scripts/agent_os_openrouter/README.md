@@ -30,9 +30,39 @@ The pilot is **off** unless every condition holds:
 | `OPENROUTER_RETRY_BACKOFF_SECONDS` | Base backoff (default 2.0, exponential). |
 | `OPENROUTER_ENDPOINT` | Chat-completions endpoint (default `https://openrouter.ai/api/v1/chat/completions`). |
 | `OPENROUTER_API_KEY_ENV_VAR` | Override the key's env-var *name* (default `OPENROUTER_API_KEY`). |
+| `OPENROUTER_MODELS_ENDPOINT` | `/models` catalog feeding the pricing gate (default `https://openrouter.ai/api/v1/models`). |
+| `OPENROUTER_GENERATION_ENDPOINT` | Per-call cost verification (default `https://openrouter.ai/api/v1/generation`). |
+| `OPENROUTER_SPEND_CEILING_USD` | Cumulative spend backstop, default `0.0` (these models are free). |
 
 Only variable **names** appear above and in code. No key material is stored,
 logged, or embedded in errors, stats, or evidence payloads.
+
+## Free-model pricing gate
+
+The live benchmark runs **free models only**, enforced in the invocation
+path -- not as an advisory side check. `FreeModelPricingGate`
+(`pricing.py`) is checked inside `OpenRouterProposalAdapter.propose()` before
+every transport call:
+
+- The exact model identity sent to the API must end with `:free`. The gate
+  never strips `:free` and never substitutes a paid model; anything else is
+  rejected, even with zero pricing.
+- Zero-cost pricing is verified from a fresh `/models` catalog snapshot:
+  `pricing.prompt` and `pricing.completion` must both be zero (accepts `"0"`,
+  `0`, `0.0`). Unknown model ids, missing pricing, or nonzero values fail
+  closed with `OpenRouterPricingGateError`.
+- The catalog is fetched at runner start and **re-fetched before every
+  invocation**. A mid-run re-fetch failure fails closed: no invocation on
+  stale or unknown pricing.
+- After each response, the generation id is looked up at
+  `/api/v1/generation` and its cost must verify zero. Nonzero or unknown
+  cost is a fail-closed defect (the kernel maps it to NEEDS_DECISION /
+  `provider.failure` -- never a synthesized plan).
+
+A pricing-gate defect stops the whole live run: the free-model assumption is
+violated and further invocations would risk spend. The spend ceiling
+(`OPENROUTER_SPEND_CEILING_USD`, default `0.0`) is a defense-in-depth
+backstop checked after each bug.
 
 ## Budgets
 
@@ -77,23 +107,38 @@ run), and an illustrative per-model price table.
   cause, detection accuracy (predicted vs verified root-cause key), false
   positives, token usage, estimated cost, and the kernel verifier ACCEPTED
   rate.
+- `run_benchmark(corpus, live=True, config=...)` -- or `run_live_benchmark`
+  directly -- runs the real comparison: 10 bugs x 2 models = 20 investigations
+  through `run_dual_investigation` with the pricing gate wired into every
+  adapter. Per investigation it records the model id, the pricing evidence
+  verified pre-call, wall-clock time to verifier outcome, verifier
+  ACCEPTED/REJECTED + reason codes, token usage, and per-call cost
+  verification. The corpus's verified root cause and detection criteria are
+  never sent to the model; live detection accuracy is not manufactured (the
+  aggregate reports verifier outcomes with adjudication deferred to owner
+  review).
 - `python -m scripts.agent_os_openrouter.benchmark --corpus <path>
-  [--output report.json]` runs it. No network call is ever made in this mode.
+  [--output report.json]` runs the offline mode. Add `--live` for the gated
+  live comparison (refused without the approvals below). No network call is
+  ever made in offline mode or in tests.
 
 ## What remains gated on owner approval
 
-- **Paid API calls**: the `--live` path refuses to run unless
+- **Live benchmark execution**: the `--live` path refuses to run unless
   `OPENROUTER_BENCHMARK_LIVE_APPROVED` is exactly `"true"` **and** the pilot
-  config is enabled and keyed. Even then, the live two-model comparison is a
-  prepared-but-unexecuted plan: the harness raises instead of calling the
-  network. Live spend needs Zachary's explicit word.
+  config is enabled and keyed. The pricing gate additionally restricts live
+  calls to `:free` models with verified zero pricing -- paid-model calls are
+  prohibited by construction, not by policy text.
 - **Production activation** of the adapter and **sending private code to
   external providers** are not authorized by this pilot.
 
 ## Layout
 
 - `config.py` -- frozen `OpenRouterConfig`, `from_env()`, `validate()`.
-- `adapter.py` -- `OpenRouterProposalAdapter`, budget tracker, retry policy.
+- `adapter.py` -- `OpenRouterProposalAdapter`, budget tracker, retry policy,
+  pricing-gate wiring in `propose()`.
+- `pricing.py` -- `FreeModelPricingGate`, `/models` catalog fetch,
+  `/generation` cost verification, `OpenRouterPricingGateError`.
 - `investigation.py` -- `run_dual_investigation()` and frozen result records.
-- `benchmark.py` -- offline harness plus the refused-by-default live path.
+- `benchmark.py` -- offline harness plus the gated live free-model benchmark.
 - `benchmark_corpus.json` -- the 10-bug corpus.

@@ -25,6 +25,7 @@ from typing import Any
 
 from .adapter import OpenRouterBudgetExhausted, OpenRouterBudgetTracker, OpenRouterProposalAdapter, Transport
 from .config import OpenRouterConfig
+from .pricing import FreeModelPricingGate, GenerationFetcher
 
 
 @lru_cache(maxsize=1)
@@ -56,6 +57,15 @@ class ModelInvestigationOutcome:
     retries: int
     adapter_invoked: bool
     error: str | None  # short redacted note; None on a clean kernel run
+    # Zero-cost evidence from the pricing gate (None when no gate was wired).
+    # Per-run evidence, not identity: excluded from identity_core() like
+    # latency_seconds. pricing_gate_defect carries the gate's failure message
+    # when the gate raised: the kernel maps the exception to NEEDS_DECISION /
+    # provider.failure with error=None, so this flag is the runner-level
+    # signal that the free-model assumption was violated.
+    pricing_evidence: dict[str, Any] | None = None
+    generation_cost_evidence: dict[str, Any] | None = None
+    pricing_gate_defect: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -69,14 +79,21 @@ class ModelInvestigationOutcome:
             "retries": self.retries,
             "adapter_invoked": self.adapter_invoked,
             "error": self.error,
+            "pricing_evidence": self.pricing_evidence,
+            "generation_cost_evidence": self.generation_cost_evidence,
+            "pricing_gate_defect": self.pricing_gate_defect,
         }
 
     def identity_core(self) -> dict[str, Any]:
-        """Deterministic subset for content addressing. Wall-clock latency is
-        evidence, not identity: it is excluded so the investigation id is
-        stable across replays of the same logical investigation."""
+        """Deterministic subset for content addressing. Wall-clock latency and
+        pricing/cost evidence are evidence, not identity: they are excluded so
+        the investigation id is stable across replays of the same logical
+        investigation."""
         payload = self.to_payload()
         del payload["latency_seconds"]
+        del payload["pricing_evidence"]
+        del payload["generation_cost_evidence"]
+        del payload["pricing_gate_defect"]
         return payload
 
 
@@ -106,12 +123,17 @@ def run_dual_investigation(
     request: "object",
     config: OpenRouterConfig,
     transport: Transport | None = None,
+    pricing_gate: FreeModelPricingGate | None = None,
+    generation_cost_fetcher: GenerationFetcher | None = None,
 ) -> DualInvestigationResult:
     """Run both pilot models against the same request, independently.
 
     ``transport`` is injectable for offline tests; when omitted each adapter
     builds its own default urllib transport. One model's failure never poisons
     the other: each outcome is recorded separately, fail-closed per model.
+    When ``pricing_gate`` is provided it is enforced inside every adapter
+    invocation (zero-cost verification pre-call, cost verification post-call);
+    the resulting evidence is threaded into each model's outcome record.
     """
     kernel = _proposal_kernel()
     if not isinstance(request, kernel.ProposalRequest):
@@ -125,7 +147,12 @@ def run_dual_investigation(
 
     def _run_one(model_identity: str) -> ModelInvestigationOutcome:
         adapter = OpenRouterProposalAdapter(
-            config, model_identity, transport=transport, budget_tracker=tracker
+            config,
+            model_identity,
+            transport=transport,
+            budget_tracker=tracker,
+            pricing_gate=pricing_gate,
+            generation_cost_fetcher=generation_cost_fetcher,
         )
         try:
             result = kernel.propose_high_reasoning_plan(request, adapter)
@@ -142,6 +169,9 @@ def run_dual_investigation(
                 retries=stats["retries"],
                 adapter_invoked=False,
                 error=_redact_error(exc),
+                pricing_evidence=stats["pricing_evidence"],
+                generation_cost_evidence=stats["generation_cost_evidence"],
+                pricing_gate_defect=stats["pricing_gate_defect"],
             )
         stats = adapter.stats
         return ModelInvestigationOutcome(
@@ -155,6 +185,9 @@ def run_dual_investigation(
             retries=stats["retries"],
             adapter_invoked=result.adapter_invoked,
             error=None,
+            pricing_evidence=stats["pricing_evidence"],
+            generation_cost_evidence=stats["generation_cost_evidence"],
+            pricing_gate_defect=stats["pricing_gate_defect"],
         )
 
     outcome_a = _run_one(config.model_a)
