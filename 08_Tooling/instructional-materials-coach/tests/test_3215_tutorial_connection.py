@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from instructional_materials_coach.content_spec import content_from_dict
+from instructional_materials_coach.docs_requests import build_docs_replace_requests
 from instructional_materials_coach.generation_context import (
     GenerationContextError,
     compose_generation_context,
@@ -173,3 +174,42 @@ def test_no_prerequisites_means_no_tutorial_connection_token():
     tokens = composed.placeholder_tokens()
     assert "context_tutorial_connection" not in tokens
     assert "context_prerequisite_tutorials" not in tokens
+
+
+def test_tutorial_connection_token_reaches_actual_docs_replace_requests():
+    """#3215 production path: cli.py build feeds the composed content into
+    build_docs_replace_requests, whose replaceAllText requests are what
+    live_build.apply_docs_requests sends to docs.documents.batchUpdate. The
+    tutorial-connection evidence must materialize there as an actual
+    {{context_tutorial_connection}} replacement request, not only as an
+    in-memory context token."""
+    composed = compose_generation_context(
+        _content(prerequisite_tutorials=["tutorial-0"]),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_evidence(),
+    )
+    requests = build_docs_replace_requests(composed)
+    matches = [
+        request
+        for request in requests
+        if request.get("replaceAllText", {}).get("containsText", {}).get("text")
+        == "{{context_tutorial_connection}}"
+    ]
+    assert len(matches) == 1
+    replace_text = matches[0]["replaceAllText"]["replaceText"]
+    assert "text, recommended fonts, alignment and spacing, and export" in replace_text
+    assert "catch-up" in replace_text
+
+
+def test_no_prerequisites_means_no_tutorial_connection_replace_request():
+    composed = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_evidence(),
+    )
+    requests = build_docs_replace_requests(composed)
+    assert all(
+        request.get("replaceAllText", {}).get("containsText", {}).get("text")
+        != "{{context_tutorial_connection}}"
+        for request in requests
+    )
