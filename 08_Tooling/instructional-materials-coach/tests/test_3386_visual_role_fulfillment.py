@@ -528,13 +528,51 @@ def test_declared_required_class_matching_asset_completes_end_to_end():
     assert "qa-visual-role-kind-unverifiable" not in _codes(report)
 
 
-def test_invalid_declared_class_fails_closed_at_authoring():
-    """A declaration outside the governed vocabulary is rejected at the
-    material-requirement contract -- it can never reach placement."""
+def test_invalid_declared_class_fails_closed_before_placement():
+    """A declaration outside the governed vocabulary is rejected by the
+    visual-needs planner with the stable material-invalid-visual-direction
+    code -- the material-requirement contract cannot reference the
+    vocabulary (its import surface is pinned by contract test to
+    __future__/typing/common), so the membership check lives at the first
+    layer that may legally import it. The plan is blocked before any
+    placement can be produced."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    result = plan_visual_needs(_signed_requirement("photo"))
+    assert result.status is ValidationStatus.INVALID
+    assert "material-invalid-visual-direction" in result.reason_codes
+
+
+def test_invalid_declared_class_blocks_production_on_real_path():
+    """The invalid declaration never reaches placement on the real
+    producer path: plan_governed_visual_reuse reports production blocked."""
+    from instructional_materials_coach.visual_reuse import plan_governed_visual_reuse
+
+    plan = plan_governed_visual_reuse(
+        _signed_requirement("photo"),
+        visual_candidates=[],
+        source_revision="visual-library-snapshot-v2",
+        teacher_decisions=(),
+    )
+    assert plan.final_production_blocked is True
+
+
+def test_non_string_declared_class_fails_closed_at_authoring():
+    """The authoring contract still enforces the declaration shape (must be
+    a string) even though vocabulary membership is checked at planning."""
     from instructional_workflow_contracts import ValidationStatus
     from instructional_workflow_contracts.material_requirement import (
         validate_material_requirement,
     )
-    result = validate_material_requirement(_signed_requirement("photo"))
+
+    req = _signed_requirement(None)
+    for role in req["visual_direction"]["roles"]:
+        role["required_representation_class"] = {"not": "a-string"}
+    from instructional_workflow_contracts.material_requirement import (
+        material_requirement_source_fingerprint,
+    )
+    req["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(req)
+    result = validate_material_requirement(req)
     assert result.status is ValidationStatus.INVALID
     assert "material-invalid-visual-direction" in result.reason_codes

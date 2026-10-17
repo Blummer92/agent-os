@@ -30,6 +30,7 @@ from .material_requirement import (
     V2_CONTRACT_ID,
     validate_material_requirement,
 )
+from .visual_asset_compatibility import REPRESENTATION_CLASSES
 
 CONTRACT_ID = "curriculum-visual-needs-plan-v1"
 MAX_RESULT_BYTES = 16 * 1024
@@ -339,19 +340,28 @@ def _roles(value: object, *, source_fingerprint: str) -> list[dict[str, Any]]:
                     "visual role slots are malformed",
                 )
             normalized["slots"] = list(slots)
-        # #3386: optional required representation class. Carried through
-        # (already validated against the governed vocabulary by the
-        # Material Requirement contract) so the cohesive planner can emit
-        # it on the role assignment for placement/terminal-QA enforcement.
-        # Never invented: carried only when the requirement author
+        # #3386: optional required representation class. Validated here
+        # against the governed REPRESENTATION_CLASSES vocabulary
+        # (referenced, never redefined): the Material Requirement contract
+        # cannot perform this check because its import surface is pinned by
+        # contract test to __future__/typing/common. A declaration outside
+        # the vocabulary fails closed with the stable
+        # material-invalid-visual-direction code before any placement is
+        # planned. Never invented: carried only when the requirement author
         # supplied it; absent means no kind constraint was declared.
         required_class = role.get("required_representation_class")
         if required_class is not None:
-            normalized["required_representation_class"] = validate_text(
+            declared_class = validate_text(
                 required_class,
                 "visual role required representation class",
                 max_length=64,
             )
+            if declared_class not in REPRESENTATION_CLASSES:
+                raise ContractValidationError(
+                    "material-invalid-visual-direction",
+                    "unsupported visual role required representation class",
+                )
+            normalized["required_representation_class"] = declared_class
         normalized["role_id"] = _role_id(role=normalized)
         validate_stable_id(normalized["role_id"], "visual role_id")
         roles.append(normalized)
