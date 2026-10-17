@@ -969,6 +969,14 @@ def _assignment(
         # bindings may share the same governed asset when the shared-asset
         # permit admitted each binding independently.
         "slot_id": slot_id,
+        # #3386: the governed kind this role requires, declared by the
+        # requirement author and carried through the visual-needs plan.
+        # Absent means no kind constraint was declared (never invented
+        # here); the placement consumer reads this key and terminal QA
+        # enforces it against the placed asset's governed kind.
+        "required_representation_class": role.get(
+            "required_representation_class", "unspecified"
+        ),
         "role_type": role["role_type"],
         "requirement_state": requirement_state,
         "instructional_purpose": role["instructional_purpose"],

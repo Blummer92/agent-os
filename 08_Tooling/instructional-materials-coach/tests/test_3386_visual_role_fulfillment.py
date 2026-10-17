@@ -416,3 +416,125 @@ def test_binding_defaults_keep_legacy_callers_working():
     assert expectations.visuals[0].expected_representation_class == "unspecified"
     assert isinstance(expectations.visuals[0], VisualExpectation)
     assert QA_STATE_VISUAL_MISMATCH  # import sanity for the module surface
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: authored declaration -> governed plan -> placement -> terminal QA
+# ---------------------------------------------------------------------------
+# These tests close the #3647 supply gap: the requirement author's
+# ``required_representation_class`` declaration must survive the REAL
+# producer chain (material requirement -> visual needs -> cohesive plan ->
+# placement bindings -> placement receipt -> terminal QA) so the kind
+# constraint is actually enforced. Faked plan payloads do not substitute.
+
+def _signed_requirement(required_class: str | None) -> dict[str, Any]:
+    """Author a requirement the way a real producer would: declare the
+    role's required kind (or not), then re-sign the source fingerprint."""
+    from instructional_workflow_contracts.material_requirement import (
+        material_requirement_source_fingerprint,
+    )
+    req = _repo_fixture("valid_material_requirement_v2.json")
+    if required_class is not None:
+        for role in req["visual_direction"]["roles"]:
+            role["required_representation_class"] = required_class
+    req["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(req)
+    return req
+
+
+def _diagram_candidate() -> dict[str, Any]:
+    """A governed v2 candidate whose compatibility evidence assigns it the
+    ``diagram`` class (the Fix This Photo reproduction: schematic line
+    illustrations placed where photographs were required)."""
+    cand = _repo_fixture("valid_visual_asset_compatibility_v2.json")
+    cand["compatibility_evidence"]["cohesion_profile"]["representation_class"] = "diagram"
+    return cand
+
+
+def _plan_and_bind(requirement: dict[str, Any], candidates: list[dict[str, Any]]):
+    from instructional_materials_coach.visual_reuse import plan_governed_visual_reuse
+    plan = plan_governed_visual_reuse(
+        requirement,
+        visual_candidates=candidates,
+        source_revision="visual-library-snapshot-v2",
+        teacher_decisions=(),
+    )
+    assert plan.outcome == "visuals-ready"
+    return plan_visual_placement_bindings(plan)
+
+
+def _receipt_from_binding(binding: VisualPlacementBinding, image_id: str) -> dict[str, Any]:
+    """Build the durable receipt exactly the way _place_one_binding does:
+    the binding's observed class is carried, never re-derived."""
+    return build_placement_record(
+        receipt={
+            "asset_id": binding.asset_id, "drive_file_id": binding.drive_file_id,
+            "role_id": binding.role_id, "artifact_type": "docs",
+            "artifact_id": "doc-1", "artifact_revision_id": "r0",
+            "marker": "{{visual:%s}}" % binding.role_id, "container_id": "body",
+            "inserted_element_id": image_id, "state": "verified",
+        },
+        content_identity=dict(binding.content_identity),
+        slot_id=binding.slot_id, source_plan_id=binding.source_plan_id,
+        required=binding.required,
+        eligibility_evidence=binding.eligibility_evidence,
+        observed_representation_class=binding.observed_representation_class,
+        transport_name="test", post_insertion_revision="r1",
+    )
+
+
+def test_declared_required_class_is_enforced_end_to_end():
+    """The 2026-10-07 Fix This Photo regression on the real path: the
+    author declares ``photography``; the governed plan selects a
+    ``diagram`` asset; terminal QA must refuse completion with an explicit
+    kind-mismatch finding -- image count/placement alone cannot satisfy
+    the kind-constrained roles."""
+    bindings = _plan_and_bind(_signed_requirement("photography"), [_diagram_candidate()])
+    assert bindings
+    for binding in bindings:
+        assert binding.expected_representation_class == "photography"
+        assert binding.observed_representation_class == "diagram"
+    records = tuple(
+        _receipt_from_binding(binding, f"img-{i}") for i, binding in enumerate(bindings)
+    )
+    report = _evaluate(
+        bindings, records,
+        _observation(images=tuple(f"img-{i}" for i in range(len(bindings)))),
+    )
+    assert report.state == QA_STATE_VISUAL_ROLE_MISMATCH
+    mismatches = [f for f in report.findings if f.code == "qa-visual-role-kind-mismatch"]
+    assert len(mismatches) == len(bindings)
+    for finding in mismatches:
+        assert finding.detail["required_representation_class"] == "photography"
+        assert finding.detail["observed_representation_class"] == "diagram"
+
+
+def test_declared_required_class_matching_asset_completes_end_to_end():
+    """A declared ``diagram`` constraint with a governed ``diagram`` asset
+    on the real path is eligible to complete: no kind findings."""
+    cand = _diagram_candidate()
+    bindings = _plan_and_bind(_signed_requirement("diagram"), [cand])
+    assert bindings
+    for binding in bindings:
+        assert binding.expected_representation_class == "diagram"
+    records = tuple(
+        _receipt_from_binding(binding, f"img-{i}") for i, binding in enumerate(bindings)
+    )
+    report = _evaluate(
+        bindings, records,
+        _observation(images=tuple(f"img-{i}" for i in range(len(bindings)))),
+    )
+    assert report.state == QA_STATE_VERIFIED, [(f.code, f.message) for f in report.findings]
+    assert "qa-visual-role-kind-mismatch" not in _codes(report)
+    assert "qa-visual-role-kind-unverifiable" not in _codes(report)
+
+
+def test_invalid_declared_class_fails_closed_at_authoring():
+    """A declaration outside the governed vocabulary is rejected at the
+    material-requirement contract -- it can never reach placement."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.material_requirement import (
+        validate_material_requirement,
+    )
+    result = validate_material_requirement(_signed_requirement("photo"))
+    assert result.status is ValidationStatus.INVALID
+    assert "material-invalid-visual-direction" in result.reason_codes

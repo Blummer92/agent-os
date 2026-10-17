@@ -339,6 +339,19 @@ def _roles(value: object, *, source_fingerprint: str) -> list[dict[str, Any]]:
                     "visual role slots are malformed",
                 )
             normalized["slots"] = list(slots)
+        # #3386: optional required representation class. Carried through
+        # (already validated against the governed vocabulary by the
+        # Material Requirement contract) so the cohesive planner can emit
+        # it on the role assignment for placement/terminal-QA enforcement.
+        # Never invented: carried only when the requirement author
+        # supplied it; absent means no kind constraint was declared.
+        required_class = role.get("required_representation_class")
+        if required_class is not None:
+            normalized["required_representation_class"] = validate_text(
+                required_class,
+                "visual role required representation class",
+                max_length=64,
+            )
         normalized["role_id"] = _role_id(role=normalized)
         validate_stable_id(normalized["role_id"], "visual role_id")
         roles.append(normalized)
