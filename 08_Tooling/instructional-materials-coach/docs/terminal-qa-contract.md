@@ -176,9 +176,11 @@ Both artifact types share the contract. Capability differences:
   prior evidence is never required to be re-proven from scratch, stale
   evidence is never reused.
 - Changed expectations invalidate stored proof.
-- Evidence is versioned (`terminal-qa-evidence-v2` since #3416): evidence
-  recorded under an earlier version predates the heading-pagination check
-  and is never recovered.
+- Evidence is versioned (`terminal-qa-evidence-v3` since #3577): the
+  expectations hash now binds `lesson_revision_required` and the
+  independently injected source-evidence receipt fingerprint, so evidence
+  recorded under an earlier version is never recovered across the changed
+  hash composition.
 - Retries perform no external mutations (QA is read-only).
 
 ## What blocks terminal completion
@@ -189,6 +191,40 @@ expectations (`evidence-incomplete`); unreadable artifacts
 (`verification-runtime-unavailable`); stale/conflicting evidence. The CLI
 prints "final" only when `LiveBuildReceipt.succeeded` — i.e. both
 artifacts QA-`verified`.
+
+## Lesson-revision alignment gate (#3577)
+
+Evaluated on the persisted worksheet (Docs) artifact only, when armed. The
+governed lesson-revision spec YAML is an **assertion, never a self-certified
+read receipt**: a `deck_evidence` mapping in YAML is rejected outright, and
+terminal QA trusts the spec only through an independently injected
+`SourceContentReceipt` (canonical teacher-owned Drive ID, Drive revision,
+immutable byte digest, retrieved page/slide content, retrieval time,
+source provenance, plus a teacher ownership/endorsement assertion carried
+separately from the content hash). The CLI retrieves the receipt through the
+existing Drive metadata/fetch tools (`cli.retrieve_deck_source_receipt`);
+page/slide content comes from an injected host page reader — no PDF parser
+is built in the package.
+
+- Clean acceptance requires: bound receipt + teacher endorsement +
+  every exact slide reference validated against retrieved pages + zero
+  approximate evidence markers + the persisted worksheet carrying the
+  trusted lesson/revision anchors with every reviewed-mapping task
+  observed in the persisted text (coverage requires observed tasks, not
+  YAML-declared names).
+- A stale persisted worksheet or unobserved declared tasks FAIL
+  (`lesson-revision-mismatch`).
+- Missing/unverifiable evidence (no receipt, no teacher endorsement,
+  metadata-only receipt against exact slide refs, approximate markers)
+  routes to MANUAL REVIEW (`lesson-alignment-unverified`) — never a clean
+  acceptance.
+- The gate is armed when a spec is present, or when the governed
+  requirement declares the dependency (`lesson_revision_required`, set via
+  `--lesson-revision-required` or the scheduled consumer's governed inputs):
+  a required gate can never be disabled by missing optional inputs, and a
+  required-but-missing spec refuses composition fail-closed. Builds with no
+  spec and no declared dependency keep the gate unarmed (legacy lessons
+  unaffected).
 
 ## Live-acceptance boundary
 
