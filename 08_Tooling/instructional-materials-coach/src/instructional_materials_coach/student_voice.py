@@ -20,7 +20,7 @@ This module performs no I/O and grants no authority.
 """
 from __future__ import annotations
 
-from typing import Container, Iterable
+from typing import Any, Container, Iterable, Mapping
 
 #: Teacher-guide modeling voice that must not appear in student-facing
 #: worksheet copy by default. Each entry is ``(label, phrase)``; labels are
@@ -82,3 +82,73 @@ def scan_teacher_voice(
             if label not in found:
                 found.append(label)
     return tuple(found)
+
+
+class StudentVoiceError(ValueError):
+    """Fail-closed error for teacher-guide modeling voice in student-facing copy."""
+
+
+def docs_replace_student_texts(
+    docs_requests: Iterable[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Extract the student-facing replacement text from Docs ``replaceAllText`` requests.
+
+    Only ``replaceText`` values are student-facing; ``containsText`` is the
+    ``{{token}}`` placeholder being replaced. Non-``replaceAllText`` requests
+    (for example style updates) carry no student copy and are skipped.
+    """
+    texts: list[str] = []
+    for request in docs_requests:
+        replace = request.get("replaceAllText") if isinstance(request, Mapping) else None
+        if not isinstance(replace, Mapping):
+            continue
+        text = replace.get("replaceText", "")
+        texts.append(text if isinstance(text, str) else "")
+    return tuple(texts)
+
+
+def require_student_voice(
+    docs_requests: Iterable[Mapping[str, Any]],
+    *,
+    allowed: Iterable[str] = (),
+) -> None:
+    """Fail closed when planned worksheet copy carries teacher-guide modeling voice.
+
+    Production Docs-build seam: the replacement text of the governed
+    ``replaceAllText`` requests is exactly the student-facing copy written
+    into the worksheet Doc, so this runs in the build composition before any
+    Drive write. Reuses :func:`scan_teacher_voice` -- the single governed
+    vocabulary. A phrase in ``allowed`` is deliberately student-facing, but
+    only when it names a known vocabulary phrase: unknown declarations fail
+    closed so a typo cannot silently read as intent.
+    """
+    allowed_tuple = tuple(allowed)
+    if len(allowed_tuple) > 16:
+        raise StudentVoiceError(
+            "explicit student-copy teacher-voice phrases exceed the bounded build limit"
+        )
+    seen: set[str] = set()
+    known = known_teacher_voice_phrases()
+    for phrase in allowed_tuple:
+        if not isinstance(phrase, str) or not phrase.strip():
+            raise StudentVoiceError(
+                "explicit student-copy teacher-voice phrases must be non-empty text"
+            )
+        normalized = normalize_phrase(phrase)
+        if normalized not in known:
+            raise StudentVoiceError(
+                f"unknown student-copy teacher-voice phrase: {phrase}"
+            )
+        if normalized in seen:
+            raise StudentVoiceError(
+                "explicit student-copy teacher-voice phrases must be unique"
+            )
+        seen.add(normalized)
+    leaked = scan_teacher_voice(docs_replace_student_texts(docs_requests), allowed=allowed_tuple)
+    if leaked:
+        raise StudentVoiceError(
+            "worksheet copy contains teacher-guide modeling voice: " + ", ".join(leaked)
+            + ". Rewrite in student voice; teacher guidance belongs in the teacher guide and "
+            "slide deck, not on the student sheet. Declare deliberately student-facing "
+            "phrases via explicit_student_copy_teacher_voice_phrases."
+        )
