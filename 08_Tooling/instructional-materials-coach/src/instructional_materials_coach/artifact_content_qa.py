@@ -42,7 +42,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .placement_receipts import load_placement_records
+from .placement_receipts import (
+    BATCH_PROOF_CONTRACT,
+    batch_proof_fingerprint,
+    batch_proofs_fingerprint,
+    load_batch_proofs,
+    load_placement_records,
+    receipt_set_fingerprint,
+)
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -300,6 +307,11 @@ class ArtifactQAReport:
     findings: tuple[QAFinding, ...] = ()
     expectations_hash: str = ""
     recovered: bool = False
+    # #3258: recovery identity bindings. A cached verified QA result may be
+    # reused only while the receipt set AND the batch-proof set are
+    # unchanged; any membership or proof change forces fresh verification.
+    receipt_set_fingerprint: str = ""
+    batch_proof_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -311,6 +323,8 @@ class ArtifactQAReport:
             "state": self.state,
             "expectations_hash": self.expectations_hash,
             "recovered": self.recovered,
+            "receipt_set_fingerprint": self.receipt_set_fingerprint,
+            "batch_proof_fingerprint": self.batch_proof_fingerprint,
             "findings": [
                 {"code": f.code, "severity": f.severity, "state": f.state,
                  "message": f.message, "detail": dict(f.detail)}
@@ -607,6 +621,178 @@ def _evaluate_pagination(observation: ArtifactObservation) -> list[QAFinding]:
     ]
 
 
+def _verify_single_batch_proof(
+    *,
+    proof: Mapping[str, Any],
+    artifact_type: str,
+    artifact_id: str,
+    observation: ArtifactObservation,
+    placement_records: tuple[dict[str, Any], ...],
+) -> tuple[str, dict[tuple[str, str], Mapping[str, Any]], list[QAFinding]]:
+    """Verify one reconciled batch proof against the current observation.
+
+    Returns (status, members, findings) where status is "verified",
+    "invalid" (tampered/corrupt/conflicting), or "stale" (the artifact
+    moved after reconciliation). Members maps (role_id, slot_id) to the
+    proof's member entries. A missing or conflicting proof is never
+    verification: callers route those to manual review.
+    """
+    claimed: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for member in proof.get("ordered_members") or ():
+        if isinstance(member, Mapping):
+            claimed[(str(member.get("role_id")), str(member.get("slot_id")))] = member
+    stored_fingerprint = proof.get("proof_fingerprint")
+    if (
+        not isinstance(stored_fingerprint, str)
+        or not stored_fingerprint
+        or stored_fingerprint != batch_proof_fingerprint(proof)
+    ):
+        return (
+            "invalid",
+            claimed,
+            [
+                _fail(
+                    "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                    f"Batch placement proof for {artifact_type} {artifact_id} "
+                    "failed fingerprint verification; the proof was tampered "
+                    "with or corrupted. Manual review required; the batch is "
+                    "not verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                )
+            ],
+        )
+    if str(proof.get("final_revision_id")) != observation.revision_id:
+        return (
+            "stale",
+            claimed,
+            [
+                _fail(
+                    "qa-artifact-stale", QA_STATE_ARTIFACT_STALE,
+                    f"Artifact {artifact_id} revision {observation.revision_id} "
+                    "no longer matches the reconciled batch proof revision "
+                    f"{proof.get('final_revision_id')}; the artifact mutated "
+                    "after reconciliation and the batch must be re-verified. "
+                    "Manual review required.",
+                    proof_final_revision_id=str(proof.get("final_revision_id")),
+                    current_revision_id=observation.revision_id,
+                )
+            ],
+        )
+    members: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for key, member in claimed.items():
+        match: dict[str, Any] | None = None
+        for record in placement_records:
+            if (
+                record.get("state") == "verified"
+                and str(record.get("role_id")) == key[0]
+                and str(record.get("slot_id")) == key[1]
+                and record.get("artifact_type") == artifact_type
+                and str(record.get("artifact_id")) == artifact_id
+                and _canonical_json(record.get("content_identity"))
+                == _canonical_json(member.get("content_identity"))
+            ):
+                match = record
+                break
+        if match is None:
+            return (
+                "invalid",
+                claimed,
+                [
+                    _fail(
+                        "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                        f"Batch proof member role={key[0]} slot={key[1]} has no "
+                        "matching stored verified receipt; the proof's member "
+                        "set conflicts with the receipt store. Manual review "
+                        "required.",
+                        role_id=key[0], slot_id=key[1],
+                    )
+                ],
+            )
+        for field in ("asset_id", "inserted_element_id", "post_insertion_revision_id"):
+            if str(match.get(field)) != str(member.get(field)):
+                return (
+                    "invalid",
+                    claimed,
+                    [
+                        _fail(
+                            "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                            f"Batch proof member role={key[0]} slot={key[1]} "
+                            f"diverges from its stored receipt on {field}; "
+                            "conflicting evidence. Manual review required.",
+                            role_id=key[0], slot_id=key[1], field=field,
+                        )
+                    ],
+                )
+        element_id = str(member.get("inserted_element_id") or "")
+        if element_id not in observation.image_element_ids:
+            return (
+                "stale",
+                claimed,
+                [
+                    _fail(
+                        "qa-visual-element-mismatch", QA_STATE_VISUAL_MISMATCH,
+                        f"Batch proof member role={key[0]} slot={key[1]} names "
+                        f"inserted element {element_id}, but the persisted "
+                        f"{artifact_type} artifact contains no such element; "
+                        "the persisted visual cannot be observed.",
+                        role_id=key[0], slot_id=key[1],
+                        inserted_element_id=element_id,
+                    )
+                ],
+            )
+        members[key] = member
+    return ("verified", members, [])
+
+
+def _resolve_batch_proof(
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
+    *,
+    artifact_type: str,
+    artifact_id: str,
+    observation: ArtifactObservation,
+    placement_records: tuple[dict[str, Any], ...],
+) -> tuple[str, dict[tuple[str, str], Mapping[str, Any]], list[QAFinding]]:
+    """Select and verify the batch proof for one artifact.
+
+    Status "absent" keeps the pre-repair per-receipt revision semantics;
+    "conflict"/"invalid"/"stale" each carry their own fail-closed finding;
+    "verified" carries the revalidated member map terminal QA may consume.
+    """
+    candidates = [
+        proof for proof in batch_proofs or ()
+        if isinstance(proof, dict)
+        and proof.get("proof_contract") == BATCH_PROOF_CONTRACT
+        and proof.get("artifact_type") == artifact_type
+        and str(proof.get("artifact_id")) == artifact_id
+    ]
+    if not candidates:
+        return ("absent", {}, [])
+    if len(candidates) > 1:
+        return (
+            "conflict",
+            {},
+            [
+                _fail(
+                    "qa-batch-proof-conflict", QA_STATE_ARTIFACT_CONFLICT,
+                    f"{len(candidates)} batch placement proofs claim "
+                    f"{artifact_type} {artifact_id}; conflicting evidence. "
+                    "Manual review required; the batch is not verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    proof_count=len(candidates),
+                )
+            ],
+        )
+    return _verify_single_batch_proof(
+        proof=candidates[0],
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        observation=observation,
+        placement_records=placement_records,
+    )
+
+
 def _evaluate_visuals(
     *,
     artifact_type: str,
@@ -614,11 +800,26 @@ def _evaluate_visuals(
     observation: ArtifactObservation,
     visual_expectations: tuple[VisualExpectation, ...],
     placement_records: tuple[dict[str, Any], ...],
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> list[QAFinding]:
     findings: list[QAFinding] = []
     verified_roles: list[str] = []
     unresolved_roles: list[str] = []
     required_roles_here: list[str] = []
+
+    # #3258: a verified reconciled batch proof re-binds the ordered complete
+    # receipt set to the observed final revision, so members it revalidates
+    # are not rejected as stale for their original per-insertion revisions.
+    # Missing proofs keep the pre-repair per-receipt semantics; conflicting
+    # or invalid proofs fail closed with their own finding, never verify.
+    proof_status, proof_members, proof_findings = _resolve_batch_proof(
+        batch_proofs,
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        observation=observation,
+        placement_records=placement_records,
+    )
+    findings.extend(proof_findings)
 
     for visual in visual_expectations:
         records_here = [
@@ -655,6 +856,13 @@ def _evaluate_visuals(
             continue
         if visual.required:
             required_roles_here.append(visual.role_id)
+        proof_key = (visual.role_id, str(visual.slot_id))
+        if proof_status in ("stale", "invalid", "conflict") and (
+            proof_status == "conflict" or proof_key in proof_members
+        ):
+            # The batch proof already failed this visual with its own
+            # fail-closed finding; do not re-verify or double-report it.
+            continue
         if len(records_here) > 1:
             findings.append(
                 _fail(
@@ -697,7 +905,13 @@ def _evaluate_visuals(
             )
             continue
         post_revision = record.get("post_insertion_revision_id")
-        if post_revision and str(post_revision) != observation.revision_id:
+        # #3258: a member revalidated by a verified batch proof is bound to
+        # the proof's observed final revision, not to its original
+        # per-insertion revision. Without such a proof the pre-repair rule
+        # stands: any post-placement mutation invalidates the receipt.
+        # The original per-insertion revisions are never rewritten.
+        proof_covers = proof_status == "verified" and proof_key in proof_members
+        if post_revision and str(post_revision) != observation.revision_id and not proof_covers:
             # The artifact mutated after the verified placement: the receipt
             # no longer describes the current artifact state. Never reuse
             # stale placement evidence for terminal admission.
@@ -784,9 +998,17 @@ def evaluate_artifact_qa(
     observation: ArtifactObservation,
     placement_records: tuple[dict[str, Any], ...],
     idempotency_key: str,
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> ArtifactQAReport:
     """Evaluate one persisted artifact against its governed expectations."""
     findings: list[QAFinding] = []
+    # #3258: only this build's proofs are consumable here.
+    proofs_for_build = tuple(
+        proof for proof in batch_proofs or ()
+        if isinstance(proof, dict) and str(proof.get("idempotency_key") or "") == idempotency_key
+    )
+    receipt_fp = receipt_set_fingerprint(placement_records)
+    proof_fp = batch_proofs_fingerprint(proofs_for_build)
 
     def _report(state: str, extra: list[QAFinding] | None = None) -> ArtifactQAReport:
         all_findings = findings + list(extra or ())
@@ -802,6 +1024,8 @@ def evaluate_artifact_qa(
             state=worst,
             findings=tuple(all_findings),
             expectations_hash=expectations.expectations_hash() if expectations else "",
+            receipt_set_fingerprint=receipt_fp,
+            batch_proof_fingerprint=proof_fp,
         )
 
     if observation.artifact_id != artifact_id:
@@ -872,6 +1096,7 @@ def evaluate_artifact_qa(
             observation=observation,
             visual_expectations=expectations.visuals,
             placement_records=placement_records,
+            batch_proofs=proofs_for_build,
         )
     )
     return _report(QA_STATE_VERIFIED)
@@ -940,13 +1165,17 @@ def _try_recover_verified(
     artifact_type: str,
     artifact_id: str,
     observation: ArtifactObservation,
+    receipt_set_fingerprint: str = "",
+    batch_proof_fingerprint: str = "",
 ) -> ArtifactQAReport | None:
     """Recover a prior verified QA result when identity assumptions still hold.
 
     Reuse is allowed only when: the stored report verified this exact
     artifact, the expectations hash matches the current governed
-    expectations, and the artifact revision is unchanged. Anything else
-    requires fresh verification.
+    expectations, the artifact revision is unchanged, the receipt-set
+    fingerprint matches (no receipt was added, removed, or altered), and
+    the batch-proof fingerprint matches (no proof was added, removed, or
+    altered). Anything else requires fresh verification.
     """
     stored = load_qa_evidence(qa_evidence_dir, expectations.idempotency_key)
     if stored is None or stored.get("state") != QA_STATE_VERIFIED:
@@ -962,6 +1191,12 @@ def _try_recover_verified(
     if stored_artifact.get("revision_id") != observation.revision_id:
         return None
     if stored.get("expectations_hash") != expectations.expectations_hash():
+        return None
+    # #3258: an unchanged artifact/expectations pair must NOT reuse cached
+    # verified QA after receipt membership or proof changes.
+    if stored_artifact.get("receipt_set_fingerprint", "") != receipt_set_fingerprint:
+        return None
+    if stored_artifact.get("batch_proof_fingerprint", "") != batch_proof_fingerprint:
         return None
     findings = tuple(
         QAFinding(
@@ -983,6 +1218,8 @@ def _try_recover_verified(
         findings=findings,
         expectations_hash=expectations.expectations_hash(),
         recovered=True,
+        receipt_set_fingerprint=receipt_set_fingerprint,
+        batch_proof_fingerprint=batch_proof_fingerprint,
     )
 
 
@@ -994,6 +1231,7 @@ def _qa_one_artifact(
     expectations: TerminalQAExpectations,
     placement_records: tuple[dict[str, Any], ...],
     qa_evidence_dir: str | Path | None,
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> ArtifactQAReport:
     """Observe, evaluate (or recover), and persist QA for one artifact."""
     try:
@@ -1043,12 +1281,19 @@ def _qa_one_artifact(
             expectations_hash=expectations.expectations_hash(),
         )
     if qa_evidence_dir is not None:
+        proofs_for_build = tuple(
+            proof for proof in batch_proofs or ()
+            if isinstance(proof, dict)
+            and str(proof.get("idempotency_key") or "") == expectations.idempotency_key
+        )
         recovered = _try_recover_verified(
             qa_evidence_dir=qa_evidence_dir,
             expectations=expectations,
             artifact_type=artifact_type,
             artifact_id=artifact_id,
             observation=observation,
+            receipt_set_fingerprint=receipt_set_fingerprint(placement_records),
+            batch_proof_fingerprint=batch_proofs_fingerprint(proofs_for_build),
         )
         if recovered is not None:
             return recovered
@@ -1059,6 +1304,7 @@ def _qa_one_artifact(
         observation=observation,
         placement_records=placement_records,
         idempotency_key=expectations.idempotency_key,
+        batch_proofs=batch_proofs,
     )
 
 
@@ -1077,8 +1323,11 @@ def run_terminal_qa(
     Fail-closed: with no governed expectations, both artifacts report
     ``evidence-incomplete`` without touching the services. Otherwise each
     artifact is observed from its persisted state and evaluated; verified
-    prior evidence is recovered only while artifact revision and
-    expectations still match. The report is persisted to
+    prior evidence is recovered only while artifact revision, expectations,
+    receipt-set membership, and batch-proof identity still match. Terminal
+    visual evaluation consumes the reconciled batch proof (#3258) for
+    members it revalidates; a missing, conflicting, or tampered proof is
+    manual review, never verification. The report is persisted to
     ``qa_evidence_dir`` when one is supplied.
     """
     if expectations is None or not expectations.idempotency_key:
@@ -1107,8 +1356,12 @@ def run_terminal_qa(
         return report
 
     placement_records: tuple[dict[str, Any], ...] = ()
+    batch_proofs: tuple[dict[str, Any], ...] = ()
     if receipts_dir is not None and expectations.visuals:
         placement_records = load_placement_records(receipts_dir, expectations.idempotency_key)
+        # #3258: terminal QA consumes the reconciled batch proofs stored
+        # alongside the receipts.
+        batch_proofs = load_batch_proofs(receipts_dir, expectations.idempotency_key)
 
     slides_report = _qa_one_artifact(
         artifact_type="slides",
@@ -1117,6 +1370,7 @@ def run_terminal_qa(
         expectations=expectations,
         placement_records=placement_records,
         qa_evidence_dir=qa_evidence_dir,
+        batch_proofs=batch_proofs,
     )
     worksheet_report = _qa_one_artifact(
         artifact_type="docs",
@@ -1125,6 +1379,7 @@ def run_terminal_qa(
         expectations=expectations,
         placement_records=placement_records,
         qa_evidence_dir=qa_evidence_dir,
+        batch_proofs=batch_proofs,
     )
     overall = QA_STATE_VERIFIED
     for candidate in (slides_report.state, worksheet_report.state):

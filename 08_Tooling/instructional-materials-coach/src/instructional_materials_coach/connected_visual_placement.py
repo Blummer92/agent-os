@@ -34,6 +34,7 @@ credentials are acquired here.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -42,12 +43,21 @@ from instructional_workflow_contracts.asset_content_identity import (
     is_valid_content_identity,
 )
 
+from .artifact_content_qa import (
+    ArtifactInaccessibleError,
+    ArtifactObservation,
+    VerificationRuntimeUnavailableError,
+    normalize_text,
+    observe_artifact,
+)
 from .drive_client import describe_drive_file_outcome
 from .placement_receipts import (
     append_placement_record,
     build_placement_record,
     find_verified_record,
+    load_batch_proofs,
     load_placement_records,
+    reconcile_placement_batch,
 )
 from .placement_transport import (
     PlacementRuntimeUnavailable,
@@ -356,6 +366,111 @@ def _verify_insertion_against_artifact(
             )
 
 
+def _observe_artifact_state(
+    *,
+    artifact_type: str,
+    service: Any,
+    artifact_id: str,
+) -> ArtifactObservation:
+    """Read back the persisted artifact for insertion-continuity evidence.
+
+    Uses the exact same observation surface terminal QA consumes, so the
+    continuity evidence and the QA readback cannot disagree about what the
+    artifact contained.
+    """
+    try:
+        return observe_artifact(service, artifact_type, artifact_id)
+    except (VerificationRuntimeUnavailableError, ArtifactInaccessibleError) as exc:
+        raise PlacementExecutionError(
+            f"placement-continuity-unverifiable: cannot read back {artifact_type} "
+            f"{artifact_id} to verify insertion continuity: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise PlacementExecutionError(
+            f"placement-continuity-unverifiable: unexpected {type(exc).__name__} "
+            f"reading back {artifact_type} {artifact_id}: {exc}"
+        ) from exc
+
+
+def _check_insertion_continuity(
+    *,
+    pre: ArtifactObservation,
+    post: ArtifactObservation,
+    marker: str,
+    inserted_element_id: str,
+    binding: VisualPlacementBinding,
+) -> dict[str, Any]:
+    """Verify that one insertion mutated the artifact in exactly the expected way.
+
+    The only permitted changes between the pre- and post-insertion
+    snapshots are: the single placement marker's removal and the appearance
+    of exactly the reported inserted element. Any other element addition or
+    removal, any other text change, or a reused element id fails closed --
+    an external or intervening mutation (or a same-ID byte replacement the
+    transport cannot prove) must never be absorbed into a verified batch.
+    Returns the continuity evidence bound into the batch proof.
+    """
+    role_id = binding.role_id
+    slot_id = str(binding.slot_id)
+    element_id = str(inserted_element_id or "")
+    if not element_id:
+        raise PlacementExecutionError(
+            f"placement-element-id-missing: transport reported no inserted element "
+            f"id for role={role_id} slot={slot_id}; the insertion cannot be proven"
+        )
+    pre_ids = set(pre.image_element_ids)
+    post_ids = set(post.image_element_ids)
+    if element_id in pre_ids:
+        raise PlacementExecutionError(
+            f"placement-element-id-reused: inserted element {element_id} for "
+            f"role={role_id} slot={slot_id} was already present before this "
+            "insertion; the transport cannot prove these bytes are the new "
+            "insertion (same-ID byte replacement is rejected)"
+        )
+    added = post_ids - pre_ids
+    removed = pre_ids - post_ids
+    if added != {element_id} or removed:
+        raise PlacementExecutionError(
+            f"placement-continuity-broken: insertion for role={role_id} "
+            f"slot={slot_id} changed the artifact's element set beyond the "
+            f"single reported insertion (added={sorted(added)} "
+            f"removed={sorted(removed)}); external or intervening mutation "
+            "suspected"
+        )
+    if not marker or marker not in pre.full_text:
+        raise PlacementExecutionError(
+            f"placement-continuity-unverifiable: marker {marker!r} for "
+            f"role={role_id} slot={slot_id} was not observed before insertion"
+        )
+    # The only permitted text delta is the single marker's removal. Docs
+    # observations carry raw text (byte-exact check); Slides observations
+    # carry whitespace-normalized per-slide text, so both sides are
+    # normalized before comparison there.
+    if pre.artifact_type == "slides":
+        text_changed = normalize_text(
+            pre.full_text.replace(marker, "", 1)
+        ) != normalize_text(post.full_text)
+    else:
+        text_changed = post.full_text != pre.full_text.replace(marker, "", 1)
+    if text_changed:
+        raise PlacementExecutionError(
+            f"placement-continuity-broken: artifact text for role={role_id} "
+            f"slot={slot_id} changed beyond the single marker removal during "
+            "insertion; external or intervening mutation suspected"
+        )
+    return {
+        "role_id": role_id,
+        "slot_id": slot_id,
+        "inserted_element_id": element_id,
+        "pre_revision_id": pre.revision_id,
+        "post_revision_id": post.revision_id,
+        "pre_text_digest": hashlib.sha256(pre.full_text.encode("utf-8")).hexdigest(),
+        "post_text_digest": hashlib.sha256(post.full_text.encode("utf-8")).hexdigest(),
+        "pre_element_ids": sorted(pre_ids),
+        "post_element_ids": sorted(post_ids),
+    }
+
+
 def _place_one_binding(
     *,
     binding: VisualPlacementBinding,
@@ -367,8 +482,14 @@ def _place_one_binding(
     transport: PlacementTransport,
     receipts_dir: str | None,
     idempotency_key: str,
-) -> tuple[BindingOutcome, dict[str, Any] | None]:
-    """Run the full governed placement chain for one binding in one artifact."""
+) -> tuple[BindingOutcome, dict[str, Any] | None, dict[str, Any] | None]:
+    """Run the full governed placement chain for one binding in one artifact.
+
+    Returns (outcome, stored record, insertion-continuity evidence). The
+    artifact is observed immediately before and after the transport call;
+    the continuity evidence proves the insertion mutated the artifact in
+    exactly the expected way (single marker removal, single new element).
+    """
     target = resolve_exact_target(
         artifact_type=artifact_type,
         artifact_id=artifact_id,
@@ -418,6 +539,11 @@ def _place_one_binding(
             f"approved content identity for asset {binding.asset_id} (role={binding.role_id}); "
             "stale bytes are never placed silently and never reinterpret the selection"
         )
+    # Observe the artifact immediately before the transport acts: this is
+    # the pre-insertion anchor for continuity evidence (#3258).
+    pre_observation = _observe_artifact_state(
+        artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id
+    )
     try:
         raw = transport.insert_placement(request=request)
     except PlacementRuntimeUnavailable:
@@ -436,6 +562,19 @@ def _place_one_binding(
         artifact_id=artifact_id,
         binding=binding,
         inserted_element_id=str(raw.get("inserted_element_id") or ""),
+    )
+    # Observe again immediately after: the only permitted delta is the
+    # single marker removal plus the single reported inserted element.
+    # External/intervening mutations and same-ID byte replacement fail here.
+    post_observation = _observe_artifact_state(
+        artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id
+    )
+    continuity = _check_insertion_continuity(
+        pre=pre_observation,
+        post=post_observation,
+        marker=request.target.marker,
+        inserted_element_id=raw.get("inserted_element_id"),
+        binding=binding,
     )
     # Assemble the receipt candidate from request-known identity plus the
     # transport's completion claim; the verifier accepts only an exact
@@ -463,7 +602,7 @@ def _place_one_binding(
             "placement-receipt-store-unavailable: a verified placement without a durable "
             "receipt is a false success; refusing to report placement"
         )
-    post_revision = _revision_id(artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id)
+    post_revision = post_observation.revision_id
     record = append_placement_record(
         receipts_dir,
         idempotency_key,
@@ -496,7 +635,7 @@ def _place_one_binding(
         status="placed",
         record=record,
     )
-    return outcome_record, record
+    return outcome_record, record, continuity
 
 
 def execute_artifact_visual_placements(
@@ -519,7 +658,10 @@ def execute_artifact_visual_placements(
     again (#3252 retry idempotency). Any attempted binding that cannot be
     verified-placed fails the whole run closed via
     ``PlacementExecutionError`` -- placement failure is never absence and
-    never authorizes generation.
+    never authorizes generation. On success the run's ordered complete
+    receipt set is reconciled against the current artifact snapshot and an
+    atomic batch proof is persisted (#3258); original per-insertion
+    receipts are preserved untouched.
     """
     kind = str(artifact_type).strip().lower()
     if kind not in ("docs", "slides"):
@@ -537,6 +679,12 @@ def execute_artifact_visual_placements(
         discovered = discover_slides_markers(slides_service=artifact_service, presentation_id=artifact_id)
     else:
         discovered = discover_docs_markers(docs_service=artifact_service, document_id=artifact_id)
+    # #3258: the run's initial artifact state anchors the batch
+    # reconciliation chain (every insertion's pre/post revisions must link
+    # back to this observation).
+    initial_observation = _observe_artifact_state(
+        artifact_type=kind, service=artifact_service, artifact_id=artifact_id
+    )
     # #3251: bindings key on (role_id, slot_id). One role may own several
     # markers (one per slot); two markers for the SAME binding still fail
     # closed as ambiguous.
@@ -545,12 +693,14 @@ def execute_artifact_visual_placements(
         by_binding.setdefault(parse_marker_binding(match["marker"]), []).append(match)
     stored = load_placement_records(receipts_dir, idempotency_key) if receipts_dir else ()
     outcomes: list[BindingOutcome] = []
+    placed: list[tuple[VisualPlacementBinding, BindingOutcome, dict[str, Any]]] = []
+    recovered: list[VisualPlacementBinding] = []
     for binding in bindings:
         # Recovery first (#3252): a verified receipt for this exact binding
         # means the visual is already placed -- recover it instead of
         # inserting again. This check precedes marker discovery because a
         # successful placement removes the marker from the artifact.
-        recovered = find_verified_record(
+        recovered_record = find_verified_record(
             stored,
             role_id=binding.role_id,
             slot_id=binding.slot_id,
@@ -558,8 +708,9 @@ def execute_artifact_visual_placements(
             artifact_id=artifact_id,
             content_identity=binding.content_identity,
         )
-        if recovered is not None:
-            outcomes.append(BindingOutcome(binding, kind, artifact_id, "recovered", record=recovered))
+        if recovered_record is not None:
+            outcomes.append(BindingOutcome(binding, kind, artifact_id, "recovered", record=recovered_record))
+            recovered.append(binding)
             continue
         matches = by_binding.get((binding.role_id, binding.slot_id), [])
         if not matches:
@@ -576,7 +727,7 @@ def execute_artifact_visual_placements(
             )
             continue
         try:
-            binding_outcome, _ = _place_one_binding(
+            binding_outcome, _, continuity = _place_one_binding(
                 binding=binding,
                 artifact_type=kind,
                 artifact_id=artifact_id,
@@ -588,6 +739,7 @@ def execute_artifact_visual_placements(
                 idempotency_key=idempotency_key,
             )
             outcomes.append(binding_outcome)
+            placed.append((binding, binding_outcome, continuity))
         except PlacementRuntimeUnavailable:
             raise
         except (PlacementExecutionError, PlacementTransportError, VisualPlacementError) as exc:
@@ -605,7 +757,243 @@ def execute_artifact_visual_placements(
             "Placement failure is not visual absence and does not authorize new visual creation.",
             outcomes=tuple(outcomes),
         )
+    # #3258: reconcile the completed batch against the current artifact
+    # snapshot and persist the atomic batch proof. Original per-insertion
+    # receipts are preserved untouched; the proof binds the ordered complete
+    # receipt set to the observed final revision with verified mutation
+    # continuity. Any unexplained drift fails closed here -- no proof.
+    _reconcile_completed_batch(
+        receipts_dir=receipts_dir,
+        idempotency_key=idempotency_key,
+        artifact_type=kind,
+        artifact_id=artifact_id,
+        bindings=bindings,
+        placed=tuple(placed),
+        recovered=tuple(recovered),
+        initial_observation=initial_observation,
+        artifact_service=artifact_service,
+        pre_run_records=stored,
+    )
     return tuple(outcomes)
+
+
+def _reconcile_completed_batch(
+    *,
+    receipts_dir: str | None,
+    idempotency_key: str,
+    artifact_type: str,
+    artifact_id: str,
+    bindings: tuple[VisualPlacementBinding, ...],
+    placed: tuple[tuple[VisualPlacementBinding, BindingOutcome, dict[str, Any]], ...],
+    recovered: tuple[VisualPlacementBinding, ...],
+    initial_observation: ArtifactObservation,
+    artifact_service: Any,
+    pre_run_records: tuple[dict[str, Any], ...] = (),
+) -> dict[str, Any] | None:
+    """Reconcile this run's complete receipt set and persist the batch proof.
+
+    Every binding resolved in this run (placed or recovered) becomes a proof
+    member. Recovered members must already have been reconciled by a prior
+    batch proof (or predate batch proofs with the artifact unmoved since
+    their insertion); their inserted elements must still be observable.
+    Unexplained revision drift at any point fails closed without a proof.
+    """
+    if not placed and not recovered:
+        return None
+    if not receipts_dir:
+        raise PlacementExecutionError(
+            "placement-receipt-store-unavailable: cannot reconcile a placement "
+            "batch without the durable receipt store"
+        )
+    final_observation = _observe_artifact_state(
+        artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id
+    )
+    stored = load_placement_records(receipts_dir, idempotency_key)
+    prior_proofs = [
+        proof for proof in load_batch_proofs(receipts_dir, idempotency_key)
+        if proof.get("artifact_type") == artifact_type
+        and str(proof.get("artifact_id")) == artifact_id
+    ]
+    latest = prior_proofs[-1] if prior_proofs else None
+    initial_rev = initial_observation.revision_id
+    # All revisions ever explained by prior proofs for this artifact.
+    explained: set[str] = set()
+    proven_members: set[tuple[str, str]] = set()
+    if latest is not None:
+        if initial_rev != str(latest.get("final_revision_id")):
+            raise PlacementExecutionError(
+                "placement-batch-unreconciled: artifact revision moved since the "
+                f"latest reconciled batch proof (proof final={latest.get('final_revision_id')} "
+                f"current={initial_rev}); refusing to reconcile across unexplained drift"
+            )
+        for proof in prior_proofs:
+            explained.add(str(proof.get("initial_revision_id")))
+            explained.add(str(proof.get("final_revision_id")))
+            for entry in proof.get("insertion_continuity") or ():
+                if isinstance(entry, Mapping):
+                    explained.add(str(entry.get("pre_revision_id")))
+                    explained.add(str(entry.get("post_revision_id")))
+            for member in proof.get("ordered_members") or ():
+                if isinstance(member, Mapping):
+                    proven_members.add((str(member.get("role_id")), str(member.get("slot_id"))))
+    # The insertion chain of this run must link initial -> ... -> final.
+    continuity_entries = [continuity for _, _, continuity in placed]
+    if continuity_entries:
+        if str(continuity_entries[0].get("pre_revision_id")) != initial_rev:
+            raise PlacementExecutionError(
+                "placement-batch-unreconciled: the first insertion's pre-revision "
+                "does not match this run's initial artifact observation; "
+                "intervening mutation suspected"
+            )
+        for previous, current in zip(continuity_entries, continuity_entries[1:]):
+            if str(current.get("pre_revision_id")) != str(previous.get("post_revision_id")):
+                raise PlacementExecutionError(
+                    "placement-batch-unreconciled: the insertion chain is broken "
+                    "between two insertions of this run; an edit slipped in "
+                    "between placements and no batch proof is written"
+                )
+            # Defense in depth: the observable artifact state must also link
+            # across the chain, so even a revision-preserving content
+            # mutation between insertions fails closed.
+            if str(current.get("pre_text_digest")) != str(previous.get("post_text_digest")):
+                raise PlacementExecutionError(
+                    "placement-batch-unreconciled: artifact text diverged "
+                    "between two insertions of this run; an edit slipped in "
+                    "between placements and no batch proof is written"
+                )
+            if list(current.get("pre_element_ids") or []) != list(previous.get("post_element_ids") or []):
+                raise PlacementExecutionError(
+                    "placement-batch-unreconciled: artifact element set diverged "
+                    "between two insertions of this run; an edit slipped in "
+                    "between placements and no batch proof is written"
+                )
+        if final_observation.revision_id != str(continuity_entries[-1].get("post_revision_id")):
+            raise PlacementExecutionError(
+                "placement-batch-unreconciled: the artifact mutated between the "
+                "last insertion and reconciliation; no batch proof is written"
+            )
+    elif final_observation.revision_id != initial_rev:
+        raise PlacementExecutionError(
+            "placement-batch-unreconciled: the artifact mutated during a "
+            "recovery-only run; no batch proof is written"
+        )
+    placed_records = {
+        (binding.role_id, str(binding.slot_id)): outcome
+        for binding, outcome, _ in placed
+    }
+    resolved_keys = set(placed_records) | {
+        (binding.role_id, str(binding.slot_id)) for binding in recovered
+    }
+    final_element_ids = set(final_observation.image_element_ids)
+    members: list[dict[str, Any]] = []
+    for binding in bindings:
+        key = (binding.role_id, str(binding.slot_id))
+        if key not in resolved_keys:
+            # skipped-no-marker: not part of this artifact's receipt set.
+            continue
+        if key in placed_records:
+            record = placed_records[key].record or {}
+            members.append(
+                {
+                    "role_id": binding.role_id,
+                    "slot_id": str(binding.slot_id),
+                    "artifact_type": artifact_type,
+                    "artifact_id": artifact_id,
+                    "asset_id": binding.asset_id,
+                    "drive_file_id": binding.drive_file_id,
+                    "content_identity": dict(binding.content_identity),
+                    "inserted_element_id": str(record.get("inserted_element_id") or ""),
+                    "post_insertion_revision_id": str(record.get("post_insertion_revision_id") or ""),
+                    "member_source": "placed",
+                }
+            )
+            continue
+        record = find_verified_record(
+            stored,
+            role_id=binding.role_id,
+            slot_id=binding.slot_id,
+            artifact_type=artifact_type,
+            artifact_id=artifact_id,
+            content_identity=binding.content_identity,
+        )
+        if record is None:
+            raise PlacementExecutionError(
+                f"placement-batch-unreconciled: no verified receipt for recovered "
+                f"binding role={binding.role_id} slot={binding.slot_id}; refusing "
+                "to reconcile without receipt evidence"
+            )
+        member_revision = str(record.get("post_insertion_revision_id") or "")
+        if latest is not None:
+            if key not in proven_members:
+                raise PlacementExecutionError(
+                    f"placement-batch-unreconciled: recovered receipt for "
+                    f"role={binding.role_id} slot={binding.slot_id} was never "
+                    "reconciled by a batch proof; refusing to absorb "
+                    "unreconciled evidence"
+                )
+            if member_revision not in explained:
+                raise PlacementExecutionError(
+                    f"placement-batch-unreconciled: recovered receipt for "
+                    f"role={binding.role_id} slot={binding.slot_id} carries a "
+                    "post-insertion revision no batch proof explains; "
+                    "unexplained drift, manual review required"
+                )
+        element_id = str(record.get("inserted_element_id") or "")
+        if element_id not in final_element_ids:
+            raise PlacementExecutionError(
+                f"placement-batch-unreconciled: previously placed element "
+                f"{element_id} for role={binding.role_id} slot={binding.slot_id} "
+                "is no longer observable in the artifact; refusing to reconcile"
+            )
+        members.append(
+            {
+                "role_id": binding.role_id,
+                "slot_id": str(binding.slot_id),
+                "artifact_type": artifact_type,
+                "artifact_id": artifact_id,
+                "asset_id": str(record.get("asset_id") or ""),
+                "drive_file_id": str(record.get("drive_file_id") or ""),
+                "content_identity": dict(record.get("content_identity") or {}),
+                "inserted_element_id": element_id,
+                "post_insertion_revision_id": member_revision,
+                "member_source": "recovered",
+            }
+        )
+    if latest is None:
+        # No prior proof: the only honest anchor is that the artifact has
+        # not moved since the latest insertion recorded BEFORE this run.
+        # (Records placed by this run are excluded: this run's own
+        # continuity chain already explains them.)
+        pre_run_revisions = [
+            str(record.get("post_insertion_revision_id") or "")
+            for record in pre_run_records
+            if record.get("state") == "verified"
+            and record.get("artifact_type") == artifact_type
+            and str(record.get("artifact_id")) == artifact_id
+        ]
+        if pre_run_revisions and initial_rev != pre_run_revisions[-1]:
+            raise PlacementExecutionError(
+                "placement-batch-unreconciled: the artifact moved since the "
+                "latest recorded insertion and no batch proof explains the "
+                "drift; manual review required"
+            )
+    for member in members:
+        if member["inserted_element_id"] not in final_element_ids:
+            raise PlacementExecutionError(
+                f"placement-batch-unreconciled: member element "
+                f"{member['inserted_element_id']} for role={member['role_id']} "
+                "is not observable in the reconciled artifact snapshot"
+            )
+    return reconcile_placement_batch(
+        receipts_dir=receipts_dir,
+        idempotency_key=idempotency_key,
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        ordered_members=members,
+        insertion_continuity=continuity_entries,
+        initial_revision_id=initial_rev,
+        final_revision_id=final_observation.revision_id,
+    )
 
 
 def require_all_required_visuals_placed(
