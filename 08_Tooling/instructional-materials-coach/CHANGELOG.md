@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Student-voice repair (#3213/#3644 R5): `student_voice.py` matching is
+  now Unicode-normalized (NFKC) and casefolded with explicit zero-width
+  separator, dash-variant, and soft-hyphen handling followed by
+  word/token-boundary detection -- never bare substring matching.
+  "Translate stage directions into a storyboard." and "Investigate rules"
+  now pass; hyphen/Unicode-dash/zero-width/split-run evasions
+  (``Heavy-modeling``, ``teacher\u200b model``) are caught. Explicit
+  declarations are canonicalized exactly like scanned copy and stay
+  bounded (known vocabulary, unique, at most 16). The pre-write screen
+  (`require_student_voice`, via `compose_governed_build_request`'s new
+  `doc_template_tokens` projection) scans only replacement values for
+  tokens the worksheet Doc template actually carries -- an unused
+  slide-only token can no longer block a Docs build, and no intended
+  worksheet content is removed. Terminal QA rechecks the persisted
+  rendered Docs text with the same vocabulary and declared exemptions
+  (`qa-teacher-voice-in-worksheet`); the declarations are bound into the
+  expectations hash so recovery cannot reuse QA across declaration sets.
 - Production wiring for the student-voice screen (#3213/#3644):
   `build_request.compose_governed_build_request` now fails closed
   (`StudentVoiceError`) when the planned worksheet `replaceAllText` text
