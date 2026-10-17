@@ -54,7 +54,22 @@ governed visual requirement
 - `placement_transport.py`: the `PlacementTransport` protocol,
   `PlacementRuntimeUnavailable`, `PlacementTransportError`, and
   `AppsScriptPlacementTransport` (Execution API client for the deployed
-  reference script).
+  reference script). The adapter enforces revision identity end to end:
+  `_request_payload` refuses a request whose target carries no artifact
+  revision id; `insert_placement` rejects the pre-repair synthetic
+  `docs-child-<index>` element id (never a real persisted Docs inline
+  object id) and requires the hardened reference's read-back
+  post-placement revision evidence.
+- `apps-script/VisualPlacementTransport.gs`: the reference insertion
+  runtime preserves and enforces the request's `artifact_revision_id`
+  (rejected when absent) and `place` returns the ACTUAL persisted Docs
+  inline object id obtained from a before/after read-back diff -- never a
+  synthetic id -- plus `requested_revision_id` and the read-back
+  `post_placement_revision_id`. Reference only: this change does not
+  deploy the script, and Node conformance is not deployed-runtime
+  behavior. The script does not enforce live-revision equality against
+  the requested revision (sequential batch insertions legitimately
+  advance the revision); batch continuity is enforced repository-side.
 - `placement_receipts.py`: atomic, per-idempotency-key durable receipt store
   with duplicate-verified-receipt refusal and content-identity-aware recovery.
 - `live_build.py`: `LiveBuildInput.visual_placements`, per-artifact placement

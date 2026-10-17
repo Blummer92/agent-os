@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Placement transport revision identity (#3257, producer): the
+  `placement_transport.py` seam now enforces artifact revision identity
+  end to end. `_request_payload` refuses to build a request whose target
+  carries no artifact revision id; `AppsScriptPlacementTransport`
+  rejects the pre-repair synthetic `docs-child-<index>` element id (never
+  a real persisted Docs inline object id) and requires the hardened
+  reference's read-back post-placement revision evidence, failing closed
+  otherwise. The `apps-script/VisualPlacementTransport.gs` REFERENCE
+  (no deployment) now preserves/enforces `artifact_revision_id` in
+  `validateRequest_` and its `place` returns the actual persisted Docs
+  inline object id from a before/after read-back diff plus
+  `requested_revision_id` / `post_placement_revision_id`. Node
+  conformance suite
+  `apps-script/test/visual-placement-transport.conformance.test.mjs`
+  (7 checks: revision enforcement, real read-back id, revision evidence,
+  fail-closed without a read-back surface); Python adapter suite
+  `tests/test_3257_producer_revision_identity.py` (7 checks). The script
+  deliberately does not enforce live-revision equality (sequential batch
+  insertions legitimately advance the revision); batch continuity is
+  enforced repository-side (#3258). Contract:
+  `docs/visual-placement-contract.md`.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
