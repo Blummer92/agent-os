@@ -131,7 +131,14 @@ artifact observation → expected target → QA result.
 - A required visual with no verified receipt in ANY artifact →
   `placement-unverified`, with the role named for manual review.
 - A required visual verified-placed in another artifact (marker routing)
-  is not demanded in this artifact.
+  is not demanded in this artifact — **except** lesson-declared required
+  worksheet figures (#3212), which are docs-scoped obligations
+  (`VisualExpectation.artifact_type == "docs"`, bound into
+  `expectations_hash`). A Slides receipt must not satisfy a required Docs
+  figure: terminal QA fails closed with `qa-visual-wrong-artifact`
+  (`visual-mismatch`) when the inspected Docs artifact carries no verified
+  Docs receipt for it. Declarations require distinct `(role_id, slot_id)`
+  per section and a required (not optional) governed plan binding.
 - Receipt-to-artifact binding: artifact id, asset id, exact content
   identity, and post-insertion revision must all match the inspected
   state; mismatch → `artifact-conflict` / `visual-mismatch` /
