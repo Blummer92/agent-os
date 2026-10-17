@@ -296,3 +296,197 @@ def validate_lesson_revision_alignment(
         )
 
     return WorksheetRevisionVisualResult(tuple(findings))
+
+
+# --- Governed lesson-revision spec parsing (#3577 integration) ----------------
+#
+# The cross-artifact validator needs governed inputs: which deck revision the
+# worksheet must synchronize against, the deck's material learning targets,
+# and the worksheet's own declarations (its synced revision, its task
+# coverage). Those inputs arrive as a lesson-revision spec mapping (the
+# governed YAML record, e.g.
+# samples/marketing_foundations_day1_lesson.yaml), parsed fail-closed here.
+#
+# Evidence provenance is part of the parse. A spec carries VERIFIED deck
+# evidence ONLY when it declares an explicit teacher-owned-deck read record
+# for the declared deck filename. Self-authored slide mappings (approximate
+# slide indices, approximate mapping sources, approximate slide notes) are
+# NEVER verified teacher-owned deck evidence: they parse as unverified, and a
+# spec that claims a verified deck read while still carrying approximate
+# slide markers is contradictory evidence and is rejected outright. Downstream
+# (terminal QA), approximate slide numbers can never produce a clean
+# acceptance result — they route to manual review.
+
+
+_VERIFIED_DECK_EVIDENCE_KIND = "teacher-owned-deck-read"
+# Text markers meaning "not yet a verified exact deck read": approximate
+# slide numbers, a read still pending, or a proposed/unverified mapping.
+_UNVERIFIED_EVIDENCE_MARKERS = ("approximate", "pending", "proposed", "tbd", "unverified")
+
+
+@dataclass(frozen=True)
+class LessonRevisionSpec:
+    """Governed, parsed lesson-revision alignment inputs (#3577)."""
+
+    lesson_id: str
+    deck_revision_id: str
+    deck_filename: str
+    deck_learning_target_ids: tuple[str, ...]
+    worksheet_lesson_id: str
+    worksheet_synced_deck_revision_id: str
+    worksheet_task_coverage: tuple[tuple[str, tuple[str, ...]], ...] | None
+    deck_evidence_verified: bool
+    approximate_evidence_refs: tuple[str, ...]
+
+
+def _spec_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise WorksheetRevisionQAError(f"{name} must be non-empty text")
+    if value != value.strip() or any(char.isspace() for char in value):
+        raise WorksheetRevisionQAError(f"{name} is a malformed identity")
+    return value
+
+
+def _spec_mapping(value: object, name: str) -> dict:
+    if not isinstance(value, dict):
+        raise WorksheetRevisionQAError(f"{name} must be a mapping")
+    return value
+
+
+def _looks_approximate(text: object) -> bool:
+    return isinstance(text, str) and any(
+        marker in text.lower() for marker in _UNVERIFIED_EVIDENCE_MARKERS
+    )
+
+
+def _coverage_entry_is_approximate(entry: dict) -> bool:
+    if "deck_slides_approx" in entry:
+        return True
+    return any(
+        _looks_approximate(entry.get(key))
+        for key in ("deck_slide_note", "slide_note", "deck_mapping_note")
+    )
+
+
+def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
+    """Parse a lesson-revision spec mapping fail-closed (#3577).
+
+    The spec declares the deck revision identity, the deck's material
+    learning targets, and the worksheet's sync declaration (synced deck
+    revision + task coverage). ``deck_evidence_verified`` is True only for a
+    spec with an explicit teacher-owned-deck read record for the declared
+    deck filename and zero approximate slide markers; a spec claiming a
+    verified read while carrying approximate slide markers is rejected.
+    """
+    spec = _spec_mapping(value, "lesson_revision_spec")
+    lesson_id = _spec_text(spec.get("lesson_id"), "lesson_id")
+
+    deck = _spec_mapping(spec.get("deck"), "deck")
+    deck_revision_id = _spec_text(deck.get("revision_id"), "deck.revision_id")
+    deck_filename = _spec_text(deck.get("filename"), "deck.filename")
+    approximate_refs: list[str] = []
+    if _looks_approximate(deck.get("slide_mapping_source")):
+        approximate_refs.append("deck.slide_mapping_source")
+
+    targets = spec.get("learning_targets")
+    if not isinstance(targets, list) or not targets:
+        raise WorksheetRevisionQAError("learning_targets must be a non-empty list")
+    target_ids: list[str] = []
+    concept_to_id: dict[str, str] = {}
+    for entry in targets:
+        entry_map = _spec_mapping(entry, "learning_targets entry")
+        target_id = _spec_text(entry_map.get("id"), "learning_targets entry id")
+        if target_id in target_ids:
+            raise WorksheetRevisionQAError(
+                f"learning_targets contains a duplicate id: {target_id}"
+            )
+        target_ids.append(target_id)
+        concept = entry_map.get("concept")
+        if isinstance(concept, str) and concept.strip():
+            concept_to_id.setdefault(concept.strip(), target_id)
+
+    worksheet = _spec_mapping(spec.get("worksheet"), "worksheet")
+    worksheet_lesson_id = _spec_text(worksheet.get("lesson_id"), "worksheet.lesson_id")
+    worksheet_synced = _spec_text(
+        worksheet.get("synced_deck_revision_id"), "worksheet.synced_deck_revision_id"
+    )
+
+    coverage_matrix = spec.get("coverage_matrix")
+    task_targets: dict[str, set[str]] = {}
+    if coverage_matrix is not None:
+        if not isinstance(coverage_matrix, list):
+            raise WorksheetRevisionQAError("coverage_matrix must be a list")
+        for entry in coverage_matrix:
+            entry_map = _spec_mapping(entry, "coverage_matrix entry")
+            ref = entry_map.get("target_id") or entry_map.get("concept")
+            target_id = None
+            if isinstance(ref, str) and ref.strip():
+                ref = ref.strip()
+                if ref in target_ids:
+                    target_id = ref
+                elif ref in concept_to_id:
+                    target_id = concept_to_id[ref]
+            if target_id is None:
+                raise WorksheetRevisionQAError(
+                    "coverage_matrix entry references an unknown learning target: "
+                    + repr(ref)
+                )
+            tasks = entry_map.get("worksheet_tasks")
+            if not isinstance(tasks, list) or not tasks:
+                raise WorksheetRevisionQAError(
+                    "coverage_matrix entry must list non-empty worksheet_tasks"
+                )
+            for task in tasks:
+                task_id = _spec_text(task, "coverage_matrix worksheet task")
+                task_targets.setdefault(task_id, set()).add(target_id)
+            if _coverage_entry_is_approximate(entry_map):
+                approximate_refs.append(target_id)
+    worksheet_task_coverage = (
+        tuple(
+            (task_id, tuple(sorted(covered)))
+            for task_id, covered in sorted(task_targets.items())
+        )
+        or None
+    )
+
+    deck_evidence = spec.get("deck_evidence")
+    verified = False
+    if deck_evidence is not None:
+        evidence = _spec_mapping(deck_evidence, "deck_evidence")
+        kind = evidence.get("kind")
+        evidence_filename = evidence.get("filename")
+        if kind == _VERIFIED_DECK_EVIDENCE_KIND:
+            if not (isinstance(evidence_filename, str) and evidence_filename == deck_filename):
+                raise WorksheetRevisionQAError(
+                    "deck_evidence claims a teacher-owned deck read but does not name "
+                    "the declared deck filename; the evidence is not attributable."
+                )
+            if approximate_refs:
+                raise WorksheetRevisionQAError(
+                    "deck_evidence claims a verified teacher-owned deck read while the "
+                    "spec still carries approximate slide markers ("
+                    + ", ".join(sorted(set(approximate_refs)))
+                    + "); approximate self-authored mappings are rejected as "
+                    "verified evidence. Remove the approximate markers or drop the "
+                    "verified claim."
+                )
+            verified = True
+        elif kind not in (None, ""):
+            raise WorksheetRevisionQAError(
+                "deck_evidence.kind must be "
+                + repr(_VERIFIED_DECK_EVIDENCE_KIND)
+                + " to count as verified teacher-owned deck evidence; got "
+                + repr(kind)
+            )
+
+    return LessonRevisionSpec(
+        lesson_id=lesson_id,
+        deck_revision_id=deck_revision_id,
+        deck_filename=deck_filename,
+        deck_learning_target_ids=tuple(target_ids),
+        worksheet_lesson_id=worksheet_lesson_id,
+        worksheet_synced_deck_revision_id=worksheet_synced,
+        worksheet_task_coverage=worksheet_task_coverage,
+        deck_evidence_verified=verified,
+        approximate_evidence_refs=tuple(sorted(set(approximate_refs))),
+    )

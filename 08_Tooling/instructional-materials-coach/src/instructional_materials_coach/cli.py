@@ -10,6 +10,8 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
+import yaml
+
 from .artifact_structure import PASS, validate_required_worksheet_sections
 from .artifact_content_qa import DEFAULT_QA_EVIDENCE_DIR, TerminalQAExpectations
 from .asset_slot_resolution import resolve_asset_slots
@@ -33,6 +35,11 @@ from .slides_requests import build_slides_replace_requests
 from .teacher_decisions import DEFAULT_TEACHER_DECISIONS_DIR, load_teacher_decisions
 from .template_resolution import TemplateCandidate, resolve_approved_template_pair
 from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
+from .worksheet_revision_qa import (
+    LessonRevisionSpec,
+    WorksheetRevisionQAError,
+    parse_lesson_revision_spec,
+)
 from .workspace_clients import build_docs_service, build_slides_service
 
 DEFAULT_LESSONS_DIR = "reports/lessons"
@@ -75,6 +82,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="Directory of durable terminal-QA evidence (#3258). Verified QA "
                             "reports are recovered on retry while artifact revision and "
                             "expectations still match, and re-verified otherwise.")
+    build.add_argument("--lesson-revision-spec", default="",
+                       help="Optional governed lesson-revision spec YAML (#3577): deck "
+                            "revision identity, deck learning targets, and the "
+                            "worksheet's sync declaration. Arms the terminal-QA "
+                            "cross-artifact alignment gate on the worksheet; an "
+                            "unreadable or contradictory spec refuses the build.")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -92,6 +105,25 @@ def _load_json(path: str, *, default: object) -> object:
     if not path:
         return default
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _load_lesson_revision_spec(path: str) -> LessonRevisionSpec:
+    """Load and parse a governed lesson-revision spec YAML (#3577).
+
+    Fail-closed: an unreadable, invalid, or contradictory spec (e.g. a
+    verified deck-read claim backed by approximate slide markers) refuses
+    the build rather than arming terminal QA with untrustworthy evidence.
+    """
+    try:
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read --lesson-revision-spec {path}: {exc}")
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"Invalid lesson-revision spec YAML {path}: {exc}")
+    try:
+        return parse_lesson_revision_spec(raw)
+    except WorksheetRevisionQAError as exc:
+        raise RuntimeError(f"Lesson-revision spec {path} rejected: {exc}")
 
 
 def _canonical_json(value: object) -> str:
@@ -629,6 +661,14 @@ def main(argv: list[str] | None = None) -> int:
         # these expectations; metadata-only success is "persisted", never
         # "final".
         slides_requests = tuple(build_slides_replace_requests(content))
+        # #3577: arm the terminal-QA lesson-revision alignment gate from a
+        # governed spec when supplied. The spec is parsed fail-closed above;
+        # terminal QA evaluates it against the persisted worksheet artifact.
+        lesson_revision_spec = (
+            _load_lesson_revision_spec(args.lesson_revision_spec)
+            if args.lesson_revision_spec
+            else None
+        )
         composed = compose_governed_build_request(
             slides_template_id=args.slides_template, doc_template_id=args.doc_template,
             target_folder_id=args.target_folder, content_title=content.title,
@@ -637,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+            lesson_revision_spec=lesson_revision_spec,
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}

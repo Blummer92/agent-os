@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from .artifact_content_qa import TerminalQAExpectations
 from .live_build import LiveBuildInput
+from .worksheet_revision_qa import LessonRevisionSpec
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ def compose_governed_build_request(
     visual_placements: tuple[Any, ...],
     resume_dir: str, placement_transport: object | None,
     placement_receipts_dir: str, qa_evidence_dir: str,
+    lesson_revision_spec: LessonRevisionSpec | None = None,
 ) -> GovernedBuildRequest:
     """One input/QA/options composition for CLI and scheduled consumers."""
     if not all((slides_template_id, doc_template_id, target_folder_id, content_title, idempotency_key)):
@@ -33,6 +35,7 @@ def compose_governed_build_request(
     qa_expectations = TerminalQAExpectations.build_from_requests(
         idempotency_key=idempotency_key, docs_requests=docs_requests,
         slides_requests=slides_requests, visual_placements=visual_placements,
+        lesson_revision_spec=lesson_revision_spec,
     )
     return GovernedBuildRequest(
         build_input=LiveBuildInput(
