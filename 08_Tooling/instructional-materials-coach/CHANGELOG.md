@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Tutorial-day connection for worksheets (#3215): lesson content specs may
+  declare `prerequisite_tutorials` (tutorial ids); `tutorial_connection.py`
+  resolves them against a typed tutorial registry (Tutorial 0: Adobe
+  Express favorite-food reference setup — Text, Recommended fonts,
+  Alignment and spacing, Export) and `compose_generation_context` projects
+  the moves as context tokens plus a standard "tutorial connection"
+  section naming the transfer moves with a catch-up pointer. Unknown
+  tutorial ids fail closed; governed curriculum values win and are never
+  duplicated.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.

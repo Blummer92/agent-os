@@ -17,6 +17,10 @@ class LessonContent:
     slides: list[dict[str, Any]]
     worksheet_questions: list[str]
     context_tokens: dict[str, str] = dataclasses.field(default_factory=dict)
+    # #3215: prerequisite tutorial ids (e.g. "tutorial-0") the lesson's
+    # tool moves transfer from. Resolved against the typed tutorial
+    # registry in tutorial_connection.py -- never prose convention.
+    prerequisite_tutorials: tuple[str, ...] = dataclasses.field(default_factory=tuple)
 
     def placeholder_tokens(self) -> dict[str, str]:
         tokens: dict[str, str] = {"title": self.title}
@@ -57,7 +61,28 @@ def content_from_dict(data: dict[str, Any]) -> LessonContent:
         objectives=list(data["objectives"]),
         slides=list(data["slides"]),
         worksheet_questions=list(data["worksheet_questions"]),
+        prerequisite_tutorials=_parse_prerequisite_tutorials(data.get("prerequisite_tutorials")),
     )
+
+
+def _parse_prerequisite_tutorials(value: object) -> tuple[str, ...]:
+    """Parse the optional ``prerequisite_tutorials`` lesson declaration (#3215).
+
+    Fail closed on malformed declarations: a mistyped tutorial id must
+    never silently drop the tutorial-day connection.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Lesson content 'prerequisite_tutorials' must be a list")
+    tutorials: list[str] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(
+                f"prerequisite_tutorials[{index}] must be a non-empty tutorial id"
+            )
+        tutorials.append(entry.strip())
+    return tuple(tutorials)
 
 
 def load_lesson_content(path: str | Path) -> LessonContent:
