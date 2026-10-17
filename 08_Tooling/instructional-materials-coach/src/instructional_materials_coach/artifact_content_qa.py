@@ -44,7 +44,11 @@ from typing import Any, Mapping
 
 from .placement_receipts import load_placement_records
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
-from .worksheet_revision_qa import validate_revision_render_visuals
+from .worksheet_revision_qa import (
+    LessonRevisionSpec,
+    validate_lesson_revision_alignment,
+    validate_revision_render_visuals,
+)
 
 
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
@@ -66,6 +70,8 @@ QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
+QA_STATE_LESSON_REVISION_MISMATCH = "lesson-revision-mismatch"  # #3577
+QA_STATE_LESSON_ALIGNMENT_UNVERIFIED = "lesson-alignment-unverified"  # #3577
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
 QA_STATE_ARTIFACT_CONFLICT = "artifact-conflict"
@@ -88,6 +94,8 @@ _STATE_SEVERITY = {
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
+    QA_STATE_LESSON_REVISION_MISMATCH: 11,  # #3577
+    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED: 11,  # #3577
     QA_STATE_ARTIFACT_STALE: 20,
     QA_STATE_ARTIFACT_CONFLICT: 20,
     QA_STATE_EVIDENCE_INCOMPLETE: 30,
@@ -173,6 +181,11 @@ class TerminalQAExpectations:
     docs_content: tuple[ContentExpectation, ...] = ()
     slides_content: tuple[ContentExpectation, ...] = ()
     visuals: tuple[VisualExpectation, ...] = ()
+    # #3577: optional governed lesson-revision spec (deck revision identity +
+    # deck learning targets + the worksheet's sync declaration). When present,
+    # terminal QA evaluates cross-artifact lesson-revision alignment on the
+    # worksheet artifact; when absent the gate is not armed for this build.
+    lesson_revision: LessonRevisionSpec | None = None
 
     @staticmethod
     def build_from_requests(
@@ -181,6 +194,7 @@ class TerminalQAExpectations:
         docs_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
+        lesson_revision_spec: LessonRevisionSpec | None = None,
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
 
@@ -216,9 +230,11 @@ class TerminalQAExpectations:
                 )
                 for binding in visual_placements or ()
             ),
+            lesson_revision=lesson_revision_spec,
         )
 
     def expectations_hash(self) -> str:
+        lesson_revision = self.lesson_revision
         payload = {
             "docs": [
                 {"token": e.token, "text": e.expected_text,
@@ -237,6 +253,30 @@ class TerminalQAExpectations:
                  "content_identity": dict(v.content_identity), "required": v.required}
                 for v in self.visuals
             ],
+            # #3577: bind the lesson-revision spec so recovered QA evidence
+            # never crosses a changed deck-revision declaration.
+            "lesson_revision": (
+                {
+                    "lesson_id": lesson_revision.lesson_id,
+                    "deck_revision_id": lesson_revision.deck_revision_id,
+                    "deck_filename": lesson_revision.deck_filename,
+                    "deck_learning_target_ids": list(lesson_revision.deck_learning_target_ids),
+                    "worksheet_lesson_id": lesson_revision.worksheet_lesson_id,
+                    "worksheet_synced_deck_revision_id":
+                        lesson_revision.worksheet_synced_deck_revision_id,
+                    "worksheet_task_coverage": (
+                        [
+                            {"task_id": task_id, "targets": list(targets)}
+                            for task_id, targets in lesson_revision.worksheet_task_coverage
+                        ]
+                        if lesson_revision.worksheet_task_coverage is not None
+                        else None
+                    ),
+                    "deck_evidence_verified": lesson_revision.deck_evidence_verified,
+                }
+                if lesson_revision is not None
+                else None
+            ),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -776,6 +816,70 @@ def _evaluate_visuals(
     return findings
 
 
+def _evaluate_lesson_revision_alignment(
+    spec: LessonRevisionSpec,
+) -> list[QAFinding]:
+    """#3577: cross-artifact lesson-revision alignment on the worksheet.
+
+    Fail findings (stale deck revision, lesson identity mismatch, uncovered
+    deck learning targets) refuse terminal completion. A clean validator
+    result is accepted ONLY when the spec's deck evidence is verified
+    teacher-owned deck evidence: approximate or self-authored slide mappings
+    route to manual review via an advisory and can never produce a clean
+    acceptance.
+    """
+    result = validate_lesson_revision_alignment(
+        lesson_id=spec.lesson_id,
+        deck_revision_id=spec.deck_revision_id,
+        deck_learning_target_ids=spec.deck_learning_target_ids,
+        worksheet_lesson_id=spec.worksheet_lesson_id,
+        worksheet_synced_deck_revision_id=spec.worksheet_synced_deck_revision_id,
+        worksheet_task_coverage=spec.worksheet_task_coverage,
+    )
+    findings: list[QAFinding] = []
+    has_fail = False
+    for revision_finding in result.findings:
+        if revision_finding.severity == "fail":
+            has_fail = True
+            findings.append(
+                _fail(
+                    "qa-" + revision_finding.code,
+                    QA_STATE_LESSON_REVISION_MISMATCH,
+                    revision_finding.message,
+                    source="worksheet_revision_qa",
+                )
+            )
+        else:
+            findings.append(
+                _advisory(
+                    "qa-" + revision_finding.code,
+                    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                    revision_finding.message,
+                    source="worksheet_revision_qa",
+                )
+            )
+    if not has_fail and not spec.deck_evidence_verified:
+        approximate = (
+            ", ".join(spec.approximate_evidence_refs)
+            if spec.approximate_evidence_refs
+            else "no verified teacher-owned deck read recorded"
+        )
+        findings.append(
+            _advisory(
+                "qa-worksheet-alignment-deck-evidence-unverified",
+                QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                "The lesson-revision spec's deck evidence is not verified "
+                "teacher-owned deck evidence (" + approximate + "). "
+                "Self-authored slide mappings and approximate slide numbers are "
+                "not verified deck evidence and can never produce a clean "
+                "acceptance: manual review must confirm the worksheet against "
+                "the declared deck revision before a classroom-ready claim.",
+                source="worksheet_revision_qa",
+            )
+        )
+    return findings
+
+
 def evaluate_artifact_qa(
     *,
     artifact_type: str,
@@ -874,6 +978,12 @@ def evaluate_artifact_qa(
             placement_records=placement_records,
         )
     )
+    # #3577: cross-artifact lesson-revision alignment gate, evaluated on the
+    # persisted worksheet (docs) artifact only, when a governed spec armed it.
+    if artifact_type == "docs" and expectations.lesson_revision is not None:
+        findings.extend(
+            _evaluate_lesson_revision_alignment(expectations.lesson_revision)
+        )
     return _report(QA_STATE_VERIFIED)
 
 
