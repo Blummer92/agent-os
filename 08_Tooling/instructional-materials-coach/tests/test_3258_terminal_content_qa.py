@@ -92,11 +92,16 @@ class FakeDocsService:
         self.docs: dict[str, dict[str, Any]] = {}
 
     def add(self, doc_id: str, paragraphs: list[str],
-            inline_objects: list[str] | None = None, revision: str = "r1") -> None:
+            inline_objects: list[str] | None = None, revision: str = "r1",
+            image_at_paragraph: dict[int, str] | None = None) -> None:
         self.docs[doc_id] = {
             "revisionId": revision,
             "paragraphs": list(paragraphs),
             "inline_objects": list(inline_objects or []),
+            # #3389: paragraph index -> inlineObjectId for images whose
+            # position matters (caption adjacency). When set, get() places
+            # the image in that paragraph instead of appending.
+            "image_at_paragraph": dict(image_at_paragraph or {}),
         }
 
     def documents(self) -> "_FakeDocsResource":
@@ -109,14 +114,28 @@ class _FakeDocsResource:
 
     def get(self, *, documentId: str, fields: str | None = None) -> _Executable:
         doc = self._service.docs[documentId]
-        content = [
-            {"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}
-            for text in doc["paragraphs"]
-        ]
+        positioned = doc.get("image_at_paragraph", {})
+        content = []
+        for index, text in enumerate(doc["paragraphs"]):
+            image_id = positioned.get(index)
+            if image_id is not None:
+                content.append(
+                    {"paragraph": {"elements": [
+                        {"inlineObjectElement": {"inlineObjectId": image_id}}
+                    ]}}
+                )
+            else:
+                content.append(
+                    {"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}
+                )
+        # #3389: real Docs API shape -- inlineObjectElement carries
+        # inlineObjectId (not embeddedObjectId). Unpositioned images are
+        # appended (legacy fake behavior for position-agnostic tests).
         for object_id in doc["inline_objects"]:
-            content.append(
-                {"paragraph": {"elements": [{"inlineObjectElement": {"embeddedObjectId": object_id}}]}}
-            )
+            if object_id not in positioned.values():
+                content.append(
+                    {"paragraph": {"elements": [{"inlineObjectElement": {"inlineObjectId": object_id}}]}}
+                )
         return _Executable({
             "documentId": documentId,
             "revisionId": doc["revisionId"],
@@ -172,10 +191,15 @@ def _content(token: str, text: str, artifact_type: str = "docs", **kwargs: Any) 
 
 
 def _visual(role_id: str = "worked-example", asset_id: str = "asset-1",
-            identity: Mapping[str, Any] | None = None, required: bool = True) -> VisualExpectation:
+            identity: Mapping[str, Any] | None = None, required: bool = True,
+            provenance: Mapping[str, Any] | None = None) -> VisualExpectation:
+    # #3389: pass provenance explicitly for visuals that must verify.
+    # Visuals without provenance report qa-provenance-unresolved (unknown
+    # origin never rides to verified).
     return VisualExpectation(
         role_id=role_id, slot_id="0", asset_id=asset_id,
         content_identity=dict(identity or IDENTITY), required=required,
+        provenance=provenance,
     )
 
 
@@ -335,9 +359,11 @@ def test_issue_regression_leftover_token_fails_qa():
 
 def _placed_docs(tmp_path, *, paragraphs=("Worksheet",), inline_objects=("img-1",),
                  revision="r1", receipt_revision=None, identity=None, artifact_id="doc-1",
-                 role_id="worked-example", asset_id="asset-1", key=KEY):
+                 role_id="worked-example", asset_id="asset-1", key=KEY,
+                 image_at_paragraph=None):
     docs = FakeDocsService()
-    docs.add(artifact_id, list(paragraphs), list(inline_objects), revision=revision)
+    docs.add(artifact_id, list(paragraphs), list(inline_objects), revision=revision,
+             image_at_paragraph=image_at_paragraph)
     receipts_dir = tmp_path / "receipts"
     _store_receipt(receipts_dir, role_id=role_id, artifact_type="docs",
                    artifact_id=artifact_id, asset_id=asset_id,
@@ -348,9 +374,16 @@ def _placed_docs(tmp_path, *, paragraphs=("Worksheet",), inline_objects=("img-1"
 
 
 def test_matrix_06_valid_doc_visual_is_verified(tmp_path):
-    docs, receipts_dir = _placed_docs(tmp_path)
+    # #3389: the repaired contract requires reviewed provenance and the
+    # rendered caption immediately following the image.
+    docs, receipts_dir = _placed_docs(
+        tmp_path,
+        paragraphs=("Worksheet", "", "AI-generated image"),
+        image_at_paragraph={1: "img-1"},
+    )
     report = _run(docs=docs, receipts_dir=receipts_dir,
-                  expectations=_expectations(visuals=(_visual(),)))
+                  expectations=_expectations(
+                      visuals=(_visual(provenance={"origin_kind": "ai-generated"}),)))
     assert report.worksheet.state == QA_STATE_VERIFIED
     assert report.state == QA_STATE_VERIFIED
 
@@ -363,7 +396,8 @@ def test_matrix_06b_valid_slides_visual_is_verified(tmp_path):
     receipts_dir = tmp_path / "receipts"
     _store_receipt(receipts_dir, artifact_type="slides", artifact_id="slides-1", revision="r1")
     report = _run(slides=slides, receipts_dir=receipts_dir,
-                  expectations=_expectations(visuals=(_visual(),)))
+                  expectations=_expectations(
+                      visuals=(_visual(provenance={"origin_kind": "ai-generated"}),)))
     assert report.slides.state == QA_STATE_VERIFIED
     assert report.state == QA_STATE_VERIFIED
 
@@ -460,12 +494,19 @@ def test_matrix_13_artifact_changed_after_placement_is_stale(tmp_path):
 
 def test_matrix_17_partial_multi_visual_success_is_not_verified(tmp_path):
     docs = FakeDocsService()
-    docs.add("doc-1", ["Worksheet"], ["img-1"], revision="r1")
+    # #3389: the placed visual carries provenance and an adjacent caption
+    # so the partial failure is about the missing second visual, not
+    # about unattributed evidence.
+    docs.add("doc-1", ["Worksheet", "", "AI-generated image"], ["img-1"],
+             revision="r1", image_at_paragraph={1: "img-1"})
     receipts_dir = tmp_path / "receipts"
     _store_receipt(receipts_dir, role_id="worked-example", revision="r1")
     report = _run(docs=docs, receipts_dir=receipts_dir,
                   expectations=_expectations(visuals=(
-                      _visual("worked-example"), _visual("teacher-model"),)),)
+                      _visual("worked-example",
+                             provenance={"origin_kind": "ai-generated"}),
+                      _visual("teacher-model",
+                             provenance={"origin_kind": "ai-generated"}),)),)
     assert report.worksheet.state == QA_STATE_PLACEMENT_UNVERIFIED
     assert report.state != QA_STATE_VERIFIED
 

@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .placement_receipts import load_placement_records
+from .docs_requests import provenance_caption_token
 from .image_provenance import (
     ImageProvenance,
     ImageProvenanceError,
@@ -191,9 +192,10 @@ class VisualExpectation:
     expected_representation_class: str = UNCONSTRAINED_REPRESENTATION_CLASS
     # #3389: student-visible provenance/AI-disclosure evidence carried from
     # the placement binding (dict form of ImageProvenance). None = the
-    # upstream path carries no provenance evidence; terminal QA enforces
-    # carried evidence strictly and is silent about uncarried legacy
-    # evidence (documented boundary).
+    # upstream path carries no provenance evidence; terminal QA reports
+    # every student-visible image with missing provenance as
+    # provenance-unresolved (manual review) -- unknown origin never
+    # rides to verified.
     provenance: Mapping[str, Any] | None = None
 
     def marker(self) -> str:
@@ -356,6 +358,10 @@ class ArtifactObservation:
     slide_texts: tuple[str, ...] = ()  # per-slide normalized text; () for docs
     observed_at: str = ""
     headings: tuple[HeadingParagraph, ...] = ()  # #3416; () for slides
+    # #3389: ordered structural Docs blocks (paragraph / table-cell /
+    # document-tab paths with real inlineObjectIds); () for slides and
+    # for observations built without a structure walk.
+    docs_blocks: tuple[DocsContentBlock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -459,12 +465,68 @@ def _read_resource(service: Any, artifact_type: str, artifact_id: str) -> dict[s
     return resource
 
 
-def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
-    """Extract Docs body text and inline-object (image) element ids."""
-    parts: list[str] = []
-    image_ids: list[str] = []
+@dataclass(frozen=True)
+class DocsContentBlock:
+    """One structural text block in a Docs artifact (#3389).
 
-    def _walk_content(content: Any) -> None:
+    A paragraph's concatenated text plus the inline images it holds,
+    located by its container path: ``("body",)`` for top-level body
+    paragraphs, ``("body", "table", <ti>, "row", <ri>, "cell", <ci>)``
+    for table cells, ``("tab", <tab_id>, ...)`` for document tabs.
+    The ``(container, index)`` pair orders blocks within their
+    container, which is what caption adjacency is evaluated against.
+    """
+
+    container: tuple[str, ...]
+    index: int
+    text: str
+    image_ids: tuple[str, ...] = ()
+
+
+def docs_content_blocks(document: Mapping[str, Any]) -> tuple[DocsContentBlock, ...]:
+    """Walk a Docs resource into ordered structural blocks.
+
+    Retains paragraph, table-cell, and document-tab paths and reads the
+    real ``inlineObjectElement.inlineObjectId`` field (the previous
+    walker read ``embeddedObjectId``, which is not a Docs API field, so
+    it missed every real image and was masked only by the
+    ``inlineObjects`` map fallback).
+    """
+    blocks: list[DocsContentBlock] = []
+    counts: dict[tuple[str, ...], int] = {}
+
+    def _emit(container: tuple[str, ...], text: str, image_ids: list[str]) -> None:
+        index = counts.get(container, 0)
+        counts[container] = index + 1
+        blocks.append(
+            DocsContentBlock(
+                container=container,
+                index=index,
+                text=text,
+                image_ids=tuple(image_ids),
+            )
+        )
+
+    def _walk_paragraph(paragraph: Mapping[str, Any], container: tuple[str, ...]) -> None:
+        texts: list[str] = []
+        image_ids: list[str] = []
+        elements = paragraph.get("elements")
+        if not isinstance(elements, list):
+            elements = []
+        for child in elements:
+            if not isinstance(child, dict):
+                continue
+            text_run = child.get("textRun")
+            if isinstance(text_run, dict):
+                texts.append(str(text_run.get("content", "")))
+            inline = child.get("inlineObjectElement")
+            if isinstance(inline, dict):
+                object_id = inline.get("inlineObjectId")
+                if isinstance(object_id, str) and object_id:
+                    image_ids.append(object_id)
+        _emit(container, "".join(texts), image_ids)
+
+    def _walk_content(content: Any, container: tuple[str, ...]) -> None:
         if not isinstance(content, list):
             return
         for element in content:
@@ -472,31 +534,73 @@ def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
                 continue
             paragraph = element.get("paragraph")
             if isinstance(paragraph, dict):
-                for child in paragraph.get("elements", []):
-                    if not isinstance(child, dict):
-                        continue
-                    text_run = child.get("textRun")
-                    if isinstance(text_run, dict):
-                        parts.append(str(text_run.get("content", "")))
-                    inline = child.get("inlineObjectElement")
-                    if isinstance(inline, dict) and inline.get("embeddedObjectId"):
-                        image_ids.append(str(inline["embeddedObjectId"]))
+                _walk_paragraph(paragraph, container)
             table = element.get("table")
             if isinstance(table, dict):
-                for row in table.get("tableRows", []):
+                rows = table.get("tableRows")
+                if not isinstance(rows, list):
+                    continue
+                for row_index, row in enumerate(rows):
                     if not isinstance(row, dict):
                         continue
-                    for cell in row.get("tableCells", []):
-                        if isinstance(cell, dict):
-                            _walk_content(cell.get("content"))
+                    cells = row.get("tableCells")
+                    if not isinstance(cells, list):
+                        continue
+                    for cell_index, cell in enumerate(cells):
+                        if not isinstance(cell, dict):
+                            continue
+                        _walk_content(
+                            cell.get("content"),
+                            container
+                            + ("table", str(row_index), "cell", str(cell_index)),
+                        )
 
-    _walk_content((document.get("body") or {}).get("content"))
+    def _walk_tabs(tabs: Any) -> None:
+        if not isinstance(tabs, list):
+            return
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                continue
+            document_tab = tab.get("documentTab")
+            if not isinstance(document_tab, dict):
+                continue
+            properties = tab.get("tabProperties")
+            tab_id = (
+                properties.get("tabId")
+                if isinstance(properties, dict)
+                else None
+            )
+            container = ("tab", str(tab_id)) if isinstance(tab_id, str) and tab_id else ("tab", "?")
+            body = document_tab.get("body")
+            _walk_content(
+                (body or {}).get("content") if isinstance(body, dict) else None,
+                container,
+            )
+            _walk_tabs(tab.get("childTabs"))
+
+    body = document.get("body")
+    _walk_content(
+        (body or {}).get("content") if isinstance(body, dict) else None,
+        ("body",),
+    )
+    _walk_tabs(document.get("tabs"))
+    return tuple(blocks)
+
+
+def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """Extract Docs body text and inline-object (image) element ids."""
+    blocks = docs_content_blocks(document)
+    image_ids: list[str] = []
+    for block in blocks:
+        for object_id in block.image_ids:
+            if object_id not in image_ids:
+                image_ids.append(object_id)
     inline_objects = document.get("inlineObjects") or {}
     if isinstance(inline_objects, dict):
         for object_id in inline_objects:
             if str(object_id) not in image_ids:
                 image_ids.append(str(object_id))
-    return "".join(parts), image_ids
+    return "".join(block.text for block in blocks), image_ids
 
 
 def _slides_text_and_images(presentation: Mapping[str, Any]) -> tuple[list[str], list[str]]:
@@ -555,8 +659,10 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
             f"different {artifact_type} artifact {echoed}"
         )
     headings: tuple[HeadingParagraph, ...] = ()
+    docs_blocks: tuple[DocsContentBlock, ...] = ()
     if artifact_type == "docs":
         full_text, image_ids = _docs_text_and_images(resource)
+        docs_blocks = docs_content_blocks(resource)
         slide_texts: tuple[str, ...] = ()
         headings = heading_paragraphs(resource)
     else:
@@ -573,6 +679,7 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
         slide_texts=slide_texts,
         observed_at=_utc_now(),
         headings=headings,
+        docs_blocks=docs_blocks,
     )
 
 
@@ -684,6 +791,152 @@ def _evaluate_pagination(observation: ArtifactObservation) -> list[QAFinding]:
     ]
 
 
+def _check_provenance_caption_binding(
+    *,
+    visual: "VisualExpectation",
+    carried: ImageProvenance,
+    inserted_element_id: Any,
+    blocks: tuple[DocsContentBlock, ...],
+    consumed: dict[tuple[tuple[str, ...], int], str],
+) -> QAFinding | None:
+    """Bind the student-visible caption to its image structurally (#3389).
+
+    Returns None when the caption is proven adjacent; otherwise the
+    failing QAFinding. Rules:
+
+    - the receipt's inserted element must be locatable in the observed
+      Docs structure by its real ``inlineObjectId``;
+    - the exact expected caption text must appear in the image's own
+      block or the immediately following block of the same container
+      (paragraph / table cell / document tab) -- global caption
+      presence cannot attribute a caption to an image, count one
+      caption per image, or prove adjacency;
+    - one caption occurrence satisfies exactly one image: a block
+      already consumed by another role fails as shared.
+    """
+    caption_text = student_visible_caption(carried)
+    element_id = str(inserted_element_id) if inserted_element_id else ""
+    if not element_id:
+        return _fail(
+            "qa-caption-not-adjacent", QA_STATE_VISUAL_MISMATCH,
+            f"Verified receipt for role {visual.role_id} names no inserted "
+            "element id; the provenance caption cannot be bound to an image.",
+            role_id=visual.role_id, slot_id=visual.slot_id,
+        )
+    image_blocks = [block for block in blocks if element_id in block.image_ids]
+    if not image_blocks:
+        return _fail(
+            "qa-caption-not-adjacent", QA_STATE_VISUAL_MISMATCH,
+            f"Inserted element {element_id} for role {visual.role_id} is not "
+            "locatable in the observed Docs structure; the provenance "
+            "caption cannot be proven adjacent to its image.",
+            role_id=visual.role_id, slot_id=visual.slot_id,
+            inserted_element_id=element_id,
+        )
+    block = image_blocks[0]
+    candidates = [block]
+    for other in blocks:
+        if other.container == block.container and other.index == block.index + 1:
+            candidates.append(other)
+            break
+    caption_block = next(
+        (candidate for candidate in candidates if caption_text in candidate.text),
+        None,
+    )
+    if caption_block is None:
+        return _fail(
+            "qa-caption-not-adjacent", QA_STATE_VISUAL_MISMATCH,
+            f"Provenance caption {caption_text!r} for role {visual.role_id} "
+            f"(slot {visual.slot_id}) is not rendered immediately following "
+            "its image in the same figure/container; a caption elsewhere "
+            "in the document cannot be attributed to this image.",
+            role_id=visual.role_id, slot_id=visual.slot_id,
+            expected_caption=caption_text,
+            inserted_element_id=element_id,
+        )
+    key = (caption_block.container, caption_block.index)
+    owner = consumed.get(key)
+    if owner is not None and owner != visual.role_id:
+        return _fail(
+            "qa-caption-shared", QA_STATE_VISUAL_MISMATCH,
+            f"Provenance caption {caption_text!r} for role {visual.role_id} "
+            f"is already bound to role {owner}; one caption occurrence "
+            "satisfies exactly one image.",
+            role_id=visual.role_id, slot_id=visual.slot_id,
+            expected_caption=caption_text,
+            bound_to_role=owner,
+        )
+    consumed[key] = visual.role_id
+    return None
+
+
+def preflight_template_caption_anchors(
+    document: Mapping[str, Any],
+    bindings: tuple[Any, ...] | list[Any],
+) -> list[str]:
+    """Pre-write template check: the template must prove marker/caption pairing.
+
+    For each binding carrying ``image_provenance``, the template must
+    contain the visual marker (``{{visual:<role>}}`` or
+    ``{{visual:<role>:<slot>}}``) and the caption token
+    ``{{provenance_caption_<role>.<slot>}}`` in the marker's block or the
+    immediately following block of the same container (paragraph / table
+    cell / document tab). Returns a list of failure messages; empty means
+    the template proves every pairing. Bindings without carried
+    provenance need no caption anchor (nothing is invented for them).
+
+    A template that cannot prove the pairing fails closed here -- before
+    any write -- instead of producing an unattributed placed image.
+    """
+    failures: list[str] = []
+    blocks = docs_content_blocks(document)
+    for binding in bindings or ():
+        provenance = getattr(binding, "image_provenance", None)
+        if provenance is None:
+            continue
+        role_id = str(getattr(binding, "role_id", "") or "")
+        slot_id = str(getattr(binding, "slot_id", "") or "")
+        try:
+            token = "{{" + provenance_caption_token(role_id=role_id, slot_id=slot_id) + "}}"
+        except Exception as exc:
+            failures.append(
+                f"role {role_id!r} slot {slot_id!r}: caption token cannot be "
+                f"built: {exc}"
+            )
+            continue
+        markers = (
+            "{{visual:" + role_id + "}}",
+            "{{visual:" + role_id + ":" + slot_id + "}}",
+        )
+        marker_blocks = [
+            block for block in blocks
+            if any(marker in block.text for marker in markers)
+        ]
+        if not marker_blocks:
+            failures.append(
+                f"role {role_id!r} slot {slot_id!r}: visual marker "
+                f"{markers[0]!r} not found in the template; placement would "
+                "fail closed after the write"
+            )
+            continue
+        marker_block = marker_blocks[0]
+        candidates = [marker_block]
+        for other in blocks:
+            if (
+                other.container == marker_block.container
+                and other.index == marker_block.index + 1
+            ):
+                candidates.append(other)
+                break
+        if not any(token in candidate.text for candidate in candidates):
+            failures.append(
+                f"role {role_id!r} slot {slot_id!r}: caption token {token!r} "
+                "is not adjacent to the visual marker in the template; "
+                "the placed image would have no attributable caption"
+            )
+    return failures
+
+
 def _evaluate_visuals(
     *,
     artifact_type: str,
@@ -696,6 +949,10 @@ def _evaluate_visuals(
     verified_roles: list[str] = []
     unresolved_roles: list[str] = []
     required_roles_here: list[str] = []
+    # #3389: caption occurrence consumption for this QA run: maps
+    # (container, block index) -> role_id. One caption occurrence
+    # satisfies exactly one image.
+    caption_consumed: dict[tuple[tuple[str, ...], int], str] = {}
 
     for visual in visual_expectations:
         records_here = [
@@ -817,43 +1074,72 @@ def _evaluate_visuals(
                 )
             )
             continue
-        # #3389: student-visible provenance/AI disclosure. Carried
-        # provenance evidence is enforced strictly: an AI-generated image
-        # and a human photograph with a known creator pass; an unknown
-        # origin (or a human photograph with no known creator) cannot be
-        # presented as ordinary sourced photography -- the role routes to
-        # manual review with an explicit unresolved-provenance finding, and
-        # terminal completion is refused. Image presence alone is never
+        # #3389: student-visible provenance/AI disclosure. Unknown origin
+        # is UNRESOLVED for every student-visible image: carried evidence
+        # is enforced strictly (an AI-generated image and a human
+        # photograph with a known creator pass; an unknown origin or a
+        # human photograph with no known creator routes to manual review),
+        # and MISSING provenance evidence is unresolved too -- it can no
+        # longer ride to verified. Image presence alone is never
         # sufficient provenance evidence.
-        if visual.provenance is not None:
-            try:
-                carried = image_provenance_from_mapping(visual.provenance)
-            except ImageProvenanceError as exc:
-                findings.append(
-                    _fail(
-                        "qa-provenance-evidence-invalid", QA_STATE_EVIDENCE_INCOMPLETE,
-                        f"Carried provenance evidence for role {visual.role_id} "
-                        f"is malformed: {exc}; terminal success is refused.",
-                        role_id=visual.role_id, slot_id=visual.slot_id,
-                    )
+        if visual.provenance is None:
+            findings.append(
+                _fail(
+                    "qa-provenance-unresolved", QA_STATE_PROVENANCE_UNRESOLVED,
+                    f"Placed image for role {visual.role_id} (slot "
+                    f"{visual.slot_id}) carries no image-provenance "
+                    "evidence; the origin is unknown and the image cannot "
+                    "be presented as sourced photography. Route to manual "
+                    "review.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
                 )
-                continue
-            assert carried is not None
-            if provenance_qa_outcome(carried) != "verified":
-                caption = student_visible_caption(carried)
-                findings.append(
-                    _fail(
-                        "qa-provenance-unresolved", QA_STATE_PROVENANCE_UNRESOLVED,
-                        f"Placed image for role {visual.role_id} (slot "
-                        f"{visual.slot_id}) has unresolved provenance: the "
-                        f"student-visible disclosure would read "
-                        f"{caption!r}. The image cannot be presented as "
-                        "sourced photography; route to manual review.",
-                        role_id=visual.role_id, slot_id=visual.slot_id,
-                        provenance=carried.to_dict(),
-                        student_visible_caption=caption,
-                    )
+            )
+            continue
+        try:
+            carried = image_provenance_from_mapping(visual.provenance)
+        except ImageProvenanceError as exc:
+            findings.append(
+                _fail(
+                    "qa-provenance-evidence-invalid", QA_STATE_EVIDENCE_INCOMPLETE,
+                    f"Carried provenance evidence for role {visual.role_id} "
+                    f"is malformed: {exc}; terminal success is refused.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
                 )
+            )
+            continue
+        assert carried is not None
+        if provenance_qa_outcome(carried) != "verified":
+            caption = student_visible_caption(carried)
+            findings.append(
+                _fail(
+                    "qa-provenance-unresolved", QA_STATE_PROVENANCE_UNRESOLVED,
+                    f"Placed image for role {visual.role_id} (slot "
+                    f"{visual.slot_id}) has unresolved provenance: the "
+                    f"student-visible disclosure would read "
+                    f"{caption!r}. The image cannot be presented as "
+                    "sourced photography; route to manual review.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    provenance=carried.to_dict(),
+                    student_visible_caption=caption,
+                )
+            )
+            continue
+        # #3389: structural caption binding (Docs). The student-visible
+        # caption must be rendered IMMEDIATELY following its image in the
+        # same figure/container -- global caption presence cannot bind a
+        # caption to an image. One caption occurrence satisfies exactly
+        # one image. (Slides has no caption-token mechanism yet; the
+        # provenance outcome rule above still applies.)
+        if artifact_type == "docs":
+            caption_failure = _check_provenance_caption_binding(
+                visual=visual,
+                carried=carried,
+                inserted_element_id=inserted_id,
+                blocks=observation.docs_blocks,
+                consumed=caption_consumed,
+            )
+            if caption_failure is not None:
+                findings.append(caption_failure)
                 continue
         # #3386: semantic visual-role fulfillment. Presence and placement
         # checks above prove *an* image exists for this role; this check

@@ -22,13 +22,14 @@ Required-behavior matrix (from the issue):
   evidence
 
 Scope note: provenance is explicit governed input carried on the plan
-assignment (`image_provenance`), enforced strictly by terminal QA
-whenever it is carried. Upstream paths that predate provenance tracking
-carry no evidence (None) and keep their existing QA behavior -- that
-boundary is pinned by `test_legacy_expectation_without_provenance_keeps_behavior`
-and documented in the module. Web-photo provenance metadata needs live
-image metadata for full validation (Phase 1 partial-dependency
-classification); fixtures here are synthetic only.
+assignment (`image_provenance`). Unknown origin is UNRESOLVED for every
+student-visible image: carried unknown/ambiguous evidence AND missing
+(None) evidence both route to manual review -- the former silent
+missing-provenance -> verified path was the reproduced P1 defect and is
+pinned refused by `test_missing_provenance_is_unresolved_never_verified`.
+Web-photo provenance metadata needs live image metadata for full validation
+(Phase 1 partial-dependency classification); fixtures here are synthetic
+only.
 """
 from __future__ import annotations
 
@@ -42,7 +43,9 @@ from instructional_materials_coach.artifact_content_qa import (
     QA_STATE_EVIDENCE_INCOMPLETE,
     QA_STATE_PROVENANCE_UNRESOLVED,
     QA_STATE_VERIFIED,
+    QA_STATE_VISUAL_MISMATCH,
     ArtifactObservation,
+    DocsContentBlock,
     TerminalQAExpectations,
     evaluate_artifact_qa,
 )
@@ -203,11 +206,26 @@ def _record(role_id: str, slot_id: str, asset_id: str,
     )
 
 
-def _observation(*, images: tuple[str, ...] = ("img-0",)) -> ArtifactObservation:
+def _observation(*, images: tuple[str, ...] = ("img-0",),
+                 captions: tuple[str, ...] | None = None) -> ArtifactObservation:
+    """Build an observation whose Docs structure places each image
+    immediately before its caption (#3389 structural adjacency)."""
+    if captions is None:
+        captions = ("",) * len(images)
+    blocks: list[DocsContentBlock] = []
+    for i, (image_id, caption) in enumerate(zip(images, captions)):
+        blocks.append(
+            DocsContentBlock(container=("body",), index=2 * i, text="",
+                             image_ids=(image_id,))
+        )
+        blocks.append(
+            DocsContentBlock(container=("body",), index=2 * i + 1,
+                             text=caption, image_ids=())
+        )
     return ArtifactObservation(
         artifact_type="docs", artifact_id="doc-1", revision_id="r1",
         full_text="Composition Comparison worksheet", token_hits=(),
-        image_element_ids=images,
+        image_element_ids=images, docs_blocks=tuple(blocks),
     )
 
 
@@ -229,7 +247,7 @@ def test_sourced_photo_with_known_photographer_passes_qa():
     report = _evaluate(
         (_binding("rule-of-thirds", "0", "asset-1", prov),),
         (_record("rule-of-thirds", "0", "asset-1", prov.to_dict()),),
-        _observation(),
+        _observation(captions=("Photo: Ada Lovelace",)),
     )
     assert report.state == QA_STATE_VERIFIED, [(f.code, f.message) for f in report.findings]
 
@@ -241,7 +259,7 @@ def test_ai_generated_image_passes_qa_with_disclosure():
     report = _evaluate(
         (_binding("leading-lines", "0", "asset-1", prov),),
         (_record("leading-lines", "0", "asset-1", prov.to_dict()),),
-        _observation(),
+        _observation(captions=("AI-generated image",)),
     )
     assert report.state == QA_STATE_VERIFIED
 
@@ -298,17 +316,23 @@ def test_malformed_carried_provenance_fails_closed_in_qa():
     assert "qa-provenance-evidence-invalid" in _codes(report)
 
 
-def test_legacy_expectation_without_provenance_keeps_behavior():
-    """Documented boundary: expectations that carry no provenance evidence
-    (upstream predates provenance tracking) are not given provenance
-    findings. The requirement is enforced whenever evidence IS carried."""
+def test_missing_provenance_is_unresolved_never_verified():
+    """#3389 production repair: unknown origin is UNRESOLVED for every
+    student-visible image. A placed image carrying no provenance evidence
+    (None) can no longer ride to verified -- the former silent legacy
+    boundary was the reproduced P1 defect (missing-provenance ->
+    verified)."""
     report = _evaluate(
         (_binding("rule-of-thirds", "0", "asset-1", None),),
         (_record("rule-of-thirds", "0", "asset-1", None),),
         _observation(),
     )
-    assert report.state == QA_STATE_VERIFIED
-    assert not [c for c in _codes(report) if "provenance" in c]
+    assert report.state == QA_STATE_PROVENANCE_UNRESOLVED
+    assert "qa-provenance-unresolved" in _codes(report)
+    finding = next(f for f in report.findings if f.code == "qa-provenance-unresolved")
+    assert finding.severity == "fail"
+    assert "no image-provenance evidence" in finding.message
+    assert "manual review" in finding.message
 
 
 def test_invalid_provenance_on_binding_fails_closed_at_expectations_build():
@@ -342,7 +366,18 @@ def test_focus_test_2b_composition_comparison_shape():
     records = tuple(_record(role, str(i), f"asset-{i}", prov.to_dict())
                     for i, (role, prov) in enumerate(roles))
     images = tuple(f"img-{i}" for i in range(4))
-    report = _evaluate(bindings, records, _observation(images=images))
+    report = _evaluate(
+        bindings, records,
+        _observation(
+            images=images,
+            captions=(
+                "Photo: Ada Lovelace",
+                "Photo: Grace Hopper",
+                "AI-generated image",
+                "Image source unknown",
+            ),
+        ),
+    )
     assert report.state == QA_STATE_PROVENANCE_UNRESOLVED
     unresolved = [f for f in report.findings if f.code == "qa-provenance-unresolved"]
     assert len(unresolved) == 1

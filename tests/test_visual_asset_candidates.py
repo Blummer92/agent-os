@@ -367,6 +367,9 @@ def test_valid_v2_candidate_preserves_exact_validated_projection() -> None:
         "freshness",
         "matched_asset",
         "cohesion_profile",
+        # #3389: reviewed image-provenance evidence from the asset record
+        # (None = the record carries no reviewed origin evidence).
+        "image_provenance",
         "authority",
         # #3251: eligible entries name the role_ids that admitted them.
         "matched_role_ids",

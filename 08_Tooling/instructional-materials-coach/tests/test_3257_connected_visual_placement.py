@@ -45,6 +45,10 @@ from instructional_materials_coach.connected_visual_placement import (
     require_all_required_visuals_placed,
 )
 from instructional_materials_coach.drive_client import DriveLookupError
+from instructional_materials_coach.docs_requests import (
+    build_provenance_caption_requests,
+    provenance_caption_token,
+)
 from instructional_materials_coach.placement_receipts import load_placement_records
 from instructional_materials_coach.placement_transport import (
     PlacementRuntimeUnavailable,
@@ -130,14 +134,22 @@ class FakeDocsService:
     """Fake Docs v1 service over an in-memory document store.
 
     documents_store: doc_id -> {"revisionId": str, "paragraphs": [str, ...],
-    "inline_objects": [embeddedObjectId, ...]}.
+    "inline_objects": [inlineObjectId, ...],
+    "image_at_paragraph": {paragraph_index: inlineObjectId}}.
+
+    Mirrors the real documents.get surface: placed images are emitted as
+    ``inlineObjectElement`` children carrying the real ``inlineObjectId``
+    field, positioned in the paragraph where the visual marker was.
     """
 
     def __init__(self) -> None:
         self.documents_store: dict[str, dict[str, Any]] = {}
 
     def add_document(self, doc_id: str, paragraphs: list[str], revision: str = "r1") -> None:
-        self.documents_store[doc_id] = {"revisionId": revision, "paragraphs": list(paragraphs), "inline_objects": []}
+        self.documents_store[doc_id] = {
+            "revisionId": revision, "paragraphs": list(paragraphs), "inline_objects": [],
+            "image_at_paragraph": {},
+        }
 
     def documents(self) -> "_FakeDocsResource":
         return _FakeDocsResource(self)
@@ -149,16 +161,23 @@ class _FakeDocsResource:
 
     def get(self, *, documentId: str, fields: str | None = None) -> _FakeExecutable:
         doc = self._service.documents_store[documentId]
-        content = [
-            {"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}
-            for text in doc["paragraphs"]
-        ]
+        content = []
+        for index, text in enumerate(doc["paragraphs"]):
+            image_id = doc.get("image_at_paragraph", {}).get(index)
+            if image_id is not None:
+                # Real Docs API shape: inlineObjectElement carries
+                # inlineObjectId (not embeddedObjectId).
+                content.append(
+                    {"paragraph": {"elements": [
+                        {"inlineObjectElement": {"inlineObjectId": image_id}}
+                    ]}}
+                )
+            else:
+                content.append(
+                    {"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}
+                )
         # #3258: placed visuals are observable as inline objects, mirroring
         # the real documents.get inlineObjects surface.
-        for object_id in doc.get("inline_objects", []):
-            content.append(
-                {"paragraph": {"elements": [{"inlineObjectElement": {"embeddedObjectId": object_id}}]}}
-            )
         inline_objects = {object_id: {"objectId": object_id} for object_id in doc.get("inline_objects", [])}
         return _FakeExecutable({"revisionId": doc["revisionId"], "body": {"content": content}, "inlineObjects": inline_objects})
 
@@ -248,7 +267,11 @@ class FakePlacementTransport:
         else:
             assert self._docs is not None
             doc = self._docs.documents_store[target.artifact_id]
-            doc["paragraphs"] = ["" if p.strip() == target.marker else p for p in doc["paragraphs"]]
+            for index, para in enumerate(doc["paragraphs"]):
+                if para.strip() == target.marker:
+                    doc["paragraphs"][index] = ""
+                    doc.setdefault("image_at_paragraph", {})[index] = inserted_id
+                    break
             # #3258: the inserted visual is observable in readback as an
             # inline object, like the real Docs API.
             doc.setdefault("inline_objects", []).append(inserted_id)
@@ -544,11 +567,22 @@ def _repo_fixture(name: str) -> dict[str, Any]:
 
 
 def _real_plan(teacher_decisions: tuple = ()):
-    """Run the real governed reuse planner (no hand-built intermediate state)."""
+    """Run the real governed reuse planner (no hand-built intermediate state).
+
+    The candidate carries reviewed image-provenance evidence in the
+    library record's ``extra_fields`` (#3389: the existing intake
+    surface), so bindings on the real path carry provenance and the
+    full-build tests exercise the repaired terminal-QA contract.
+    """
     from instructional_materials_coach.visual_reuse import plan_governed_visual_reuse
+    candidate = _repo_fixture("valid_visual_asset_compatibility_v2.json")
+    candidate["library_record"]["extra_fields"]["image_provenance"] = {
+        "origin_kind": "ai-generated",
+        "source_detail": "test_3257 reviewed intake",
+    }
     return plan_governed_visual_reuse(
         _repo_fixture("valid_material_requirement_v2.json"),
-        visual_candidates=[_repo_fixture("valid_visual_asset_compatibility_v2.json")],
+        visual_candidates=[candidate],
         source_revision="visual-library-snapshot-v2",
         teacher_decisions=tuple(teacher_decisions),
     )
@@ -757,6 +791,27 @@ def _live_build_meta(file_id, mime, role, key):
     }
 
 
+def _apply_docs_requests_to_fake(service: Any, document_id: str, requests: Any, **kwargs: Any) -> None:
+    """Faithful replaceAllText for the fake Docs store.
+
+    The real build applies caption requests between the preflight (which
+    needs the caption tokens present) and terminal QA (which needs the
+    rendered caption text). The mock in these tests previously dropped
+    every request; this side effect applies the text replacements so the
+    full build exercises the real caption flow.
+    """
+    doc = service.documents_store[document_id]
+    for request in requests or ():
+        replace = request.get("replaceAllText") if isinstance(request, dict) else None
+        if not isinstance(replace, dict):
+            continue
+        token = replace.get("containsText", {}).get("text", "")
+        text = replace.get("replaceText", "")
+        if not token:
+            continue
+        doc["paragraphs"] = [p.replace(token, text) for p in doc["paragraphs"]]
+
+
 def _run_connected_build(*, bindings, docs, slides, drive, transport, tmp_path,
                          resume_dir=None, copies=([], []), key="k" * 64):
     """Run the real build_live_materials composition with injected fakes."""
@@ -766,7 +821,9 @@ def _run_connected_build(*, bindings, docs, slides, drive, transport, tmp_path,
     slides_meta = _live_build_meta("slides-id", "application/vnd.google-apps.presentation", "slides", key)
     doc_meta = _live_build_meta("doc-id", "application/vnd.google-apps.document", "worksheet", key)
     slides_requests = ({"replaceAllText": {}},)
-    docs_requests = ({"replaceAllText": {}},)
+    # #3389: the shared composer derives caption requests; these tests
+    # build LiveBuildInput directly, so they derive them the same way.
+    docs_requests = ({"replaceAllText": {}},) + tuple(build_provenance_caption_requests(bindings))
     build = LiveBuildInput(
         slides_template_id="slides-template", doc_template_id="doc-template",
         target_folder_id="folder", slides_name="Lesson - Slides", doc_name="Lesson - Worksheet",
@@ -787,7 +844,8 @@ def _run_connected_build(*, bindings, docs, slides, drive, transport, tmp_path,
          patch("instructional_materials_coach.live_build.duplicate_template",
                side_effect=[slides_meta, doc_meta]), \
          patch("instructional_materials_coach.live_build.apply_slides_requests"), \
-         patch("instructional_materials_coach.live_build.apply_docs_requests"), \
+         patch("instructional_materials_coach.live_build.apply_docs_requests",
+               side_effect=_apply_docs_requests_to_fake), \
          patch("instructional_materials_coach.live_build.verify_final_copy",
                side_effect=[slides_meta, doc_meta]):
         receipt = build_live_materials(
@@ -809,11 +867,19 @@ def test_connected_build_regression(tmp_path):
     refused any non-empty visual selection before planning completed, so a
     visuals-required build could never complete. After repair the same
     selection flows through the normal composition into verified placements.
+
+    #3389: the template carries the caption token next to the visual
+    marker; the build applies the caption request (faithful fake) so the
+    persisted copy has the rendered caption adjacent to the image.
     """
     plan, bindings = _real_bindings()
     role_id = bindings[0].role_id
     docs = FakeDocsService()
-    docs.add_document("doc-id", ["Worksheet", marker_for_role(role_id)])
+    docs.add_document(
+        "doc-id",
+        ["Worksheet", marker_for_role(role_id),
+         "{{" + provenance_caption_token(role_id=role_id, slot_id="0") + "}}"],
+    )
     slides = FakeSlidesService()
     slides.add_presentation("slides-id", [{"objectId": "slide-1", "elements": []}])
     drive = FakeDriveService({"file-1": _drive_metadata("file-1")})
@@ -854,11 +920,19 @@ def test_connected_build_fails_closed_without_transport(tmp_path):
 
 
 def test_build_retry_recovers_receipts_without_duplicate_placement(tmp_path):
-    """Matrices 12-13 at build level: resume recovery never re-inserts."""
+    """Matrices 12-13 at build level: resume recovery never re-inserts.
+
+    #3389: the template carries the caption token next to the visual
+    marker (see test_connected_build_regression).
+    """
     _, bindings = _real_bindings()
     role_id = bindings[0].role_id
     docs = FakeDocsService()
-    docs.add_document("doc-id", ["Worksheet", marker_for_role(role_id)])
+    docs.add_document(
+        "doc-id",
+        ["Worksheet", marker_for_role(role_id),
+         "{{" + provenance_caption_token(role_id=role_id, slot_id="0") + "}}"],
+    )
     slides = FakeSlidesService()
     slides.add_presentation("slides-id", [{"objectId": "slide-1", "elements": []}])
     drive = FakeDriveService({"file-1": _drive_metadata("file-1")})

@@ -13,7 +13,10 @@ Assertions prove: the image is placed, the caption token is resolved, the
 exact caption text is present in the persisted artifact, terminal QA is
 verified, attribution is bound to the right image, and the fail-closed
 cases (missing template token, duplicate tokens, malformed provenance,
-untokenizable identity, uncarried provenance) all hold.
+untokenizable identity, uncarried provenance now reported unresolved,
+caption not adjacent to its image, one caption shared by two images) all
+hold. The fake Docs service mirrors the real documents.get surface
+(inlineObjectElement.inlineObjectId, image positioned at the marker).
 """
 from __future__ import annotations
 
@@ -22,9 +25,10 @@ from typing import Any, Mapping
 import pytest
 
 from instructional_materials_coach.artifact_content_qa import (
-    ArtifactObservation,
+    QA_STATE_PROVENANCE_UNRESOLVED,
     TerminalQAExpectations,
     evaluate_artifact_qa,
+    observe_artifact,
     scan_unresolved_tokens,
 )
 from instructional_materials_coach.connected_visual_placement import (
@@ -113,6 +117,10 @@ class FakeDocsService:
             "revisionId": revision,
             "paragraphs": list(paragraphs),
             "inline_objects": [],
+            # paragraph index -> inserted inlineObjectId (the marker's
+            # paragraph becomes the image's paragraph, mirroring the
+            # real insertion).
+            "image_at_paragraph": {},
         }
 
     def documents(self) -> "_FakeDocsResource":
@@ -127,15 +135,34 @@ class _FakeDocsResource:
         doc = self._service.documents_store[documentId]
         if fields == "revisionId":
             return _FakeExecutable({"revisionId": doc["revisionId"]})
-        content = [
-            {
-                "paragraph": {
-                    "elements": [{"textRun": {"content": para}}],
-                }
-            }
-            for para in doc["paragraphs"]
-        ]
-        return _FakeExecutable({"revisionId": doc["revisionId"], "body": {"content": content}})
+        content = []
+        for index, para in enumerate(doc["paragraphs"]):
+            image_id = doc["image_at_paragraph"].get(index)
+            if image_id is not None:
+                # Real Docs API shape: the inline image element carries
+                # inlineObjectId (not embeddedObjectId), positioned in
+                # the paragraph where the visual marker was.
+                content.append(
+                    {"paragraph": {"elements": [
+                        {"inlineObjectElement": {"inlineObjectId": image_id}}
+                    ]}}
+                )
+            else:
+                content.append(
+                    {
+                        "paragraph": {
+                            "elements": [{"textRun": {"content": para}}],
+                        }
+                    }
+                )
+        inline_objects = {
+            object_id: {"objectId": object_id}
+            for object_id in doc["inline_objects"]
+        }
+        return _FakeExecutable(
+            {"revisionId": doc["revisionId"], "body": {"content": content},
+             "inlineObjects": inline_objects}
+        )
 
 
 class FakePlacementTransport:
@@ -152,7 +179,11 @@ class FakePlacementTransport:
         target = request.target
         inserted_id = f"fake-inserted-{len(self.calls)}"
         doc = self._docs.documents_store[target.artifact_id]
-        doc["paragraphs"] = ["" if p.strip() == target.marker else p for p in doc["paragraphs"]]
+        for index, para in enumerate(doc["paragraphs"]):
+            if para.strip() == target.marker:
+                doc["paragraphs"][index] = ""
+                doc["image_at_paragraph"][index] = inserted_id
+                break
         doc["inline_objects"].append(inserted_id)
         doc["revisionId"] = doc["revisionId"] + "-p"
         return {"state": "placed", "inserted_element_id": inserted_id}
@@ -208,15 +239,10 @@ def _run_path(*, paragraphs: list[str], bindings: tuple[VisualPlacementBinding, 
         visual_placements=bindings,
     )
     doc = docs.documents_store["doc-1"]
-    full_text = "\n".join(doc["paragraphs"])
-    observation = ArtifactObservation(
-        artifact_type="docs",
-        artifact_id="doc-1",
-        revision_id=str(records[0].get("post_insertion_revision_id")),
-        full_text=full_text,
-        token_hits=scan_unresolved_tokens(full_text),
-        image_element_ids=tuple(doc["inline_objects"]),
-    )
+    # Read back the persisted artifact through the real observation
+    # path: the Docs structure (real inlineObjectIds, paragraph /
+    # table-cell / tab positions) is what terminal QA evaluates.
+    observation = observe_artifact(docs, "docs", "doc-1")
     report = evaluate_artifact_qa(
         artifact_type="docs",
         artifact_id="doc-1",
@@ -235,7 +261,7 @@ def _run_path(*, paragraphs: list[str], bindings: tuple[VisualPlacementBinding, 
 
 def test_caption_token_names_bind_role_and_slot():
     assert provenance_caption_token(role_id="worked-example", slot_id="0") == (
-        "provenance_caption_worked-example_0"
+        "provenance_caption_worked-example.0"
     )
 
 
@@ -329,7 +355,7 @@ def test_end_to_end_caption_renders_and_qa_verifies(tmp_path):
         paragraphs=[
             "Worksheet",
             "{{visual:worked-example}}",
-            "{{provenance_caption_worked-example_0}}",
+            "{{provenance_caption_worked-example.0}}",
             "Footer",
         ],
         bindings=(binding,),
@@ -340,7 +366,7 @@ def test_end_to_end_caption_renders_and_qa_verifies(tmp_path):
     assert "{{visual:worked-example}}" not in doc["paragraphs"]
     # Caption rendered adjacent to the placed image; token fully resolved.
     assert doc["paragraphs"][2] == "Photo: Maya Chen"
-    assert "{{provenance_caption_worked-example_0}}" not in "\n".join(doc["paragraphs"])
+    assert "{{provenance_caption_worked-example.0}}" not in "\n".join(doc["paragraphs"])
     assert scan_unresolved_tokens("\n".join(doc["paragraphs"])) == ()
     # Terminal QA is verified: caption text proven present, token gone,
     # image element observed, provenance verified.
@@ -353,7 +379,7 @@ def test_end_to_end_ai_disclosure_caption(tmp_path):
         paragraphs=[
             "Worksheet",
             "{{visual:worked-example}}",
-            "{{provenance_caption_worked-example_0}}",
+            "{{provenance_caption_worked-example.0}}",
             "Footer",
         ],
         bindings=(binding,),
@@ -382,8 +408,8 @@ def test_two_images_captions_stay_attached_to_their_image():
         r["replaceAllText"]["containsText"]["text"]: r["replaceAllText"]["replaceText"]
         for r in requests
     }
-    assert by_token["{{provenance_caption_worked-example_0}}"] == "Photo: Maya Chen"
-    assert by_token["{{provenance_caption_exit-ticket_0}}"] == "Photo: Jordan Lee"
+    assert by_token["{{provenance_caption_worked-example.0}}"] == "Photo: Maya Chen"
+    assert by_token["{{provenance_caption_exit-ticket.0}}"] == "Photo: Jordan Lee"
     assert len(by_token) == 2
 
 
@@ -406,7 +432,7 @@ def test_end_to_end_missing_template_token_fails_closed_not_silent(tmp_path):
     codes = [f.code for f in report.findings]
     assert "qa-content-missing" in codes
     missing = [f for f in report.findings if f.code == "qa-content-missing"][0]
-    assert "provenance_caption_worked-example_0" in missing.message
+    assert "provenance_caption_worked-example.0" in missing.message
 
 
 def test_end_to_end_unresolved_provenance_still_refuses_terminal(tmp_path):
@@ -417,7 +443,7 @@ def test_end_to_end_unresolved_provenance_still_refuses_terminal(tmp_path):
         paragraphs=[
             "Worksheet",
             "{{visual:worked-example}}",
-            "{{provenance_caption_worked-example_0}}",
+            "{{provenance_caption_worked-example.0}}",
             "Footer",
         ],
         bindings=(binding,),
@@ -429,9 +455,11 @@ def test_end_to_end_unresolved_provenance_still_refuses_terminal(tmp_path):
     assert "qa-provenance-unresolved" in codes
 
 
-def test_end_to_end_no_carried_provenance_keeps_legacy_boundary(tmp_path):
-    """Provenance=None (predates tracking): no caption invented, QA silent
-    about uncarried evidence per the documented #3389 boundary."""
+def test_end_to_end_no_carried_provenance_is_unresolved(tmp_path):
+    """#3389 production repair: provenance=None (predates tracking) emits
+    no caption -- nothing invented -- AND terminal QA reports the placed
+    image as provenance-unresolved instead of verifying it. Unknown
+    origin is unresolved for every student-visible image."""
     binding = _binding("worked-example", provenance=None)
     outcomes, caption_requests, doc, report = _run_path(
         paragraphs=["Worksheet", "{{visual:worked-example}}", "Footer"],
@@ -439,4 +467,5 @@ def test_end_to_end_no_carried_provenance_keeps_legacy_boundary(tmp_path):
         tmp_path=tmp_path,
     )
     assert caption_requests == []
-    assert report.state == "verified", [f.message for f in report.findings]
+    assert report.state == QA_STATE_PROVENANCE_UNRESOLVED
+    assert "qa-provenance-unresolved" in [f.code for f in report.findings]

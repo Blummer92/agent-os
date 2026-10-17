@@ -111,8 +111,9 @@ class VisualPlacementBinding:
     observed_representation_class: str | None = None
     # #3389: student-visible provenance/AI-disclosure evidence carried from
     # the governed plan assignment (None = the upstream path carries no
-    # provenance evidence). Never invented here; terminal QA enforces
-    # carried evidence strictly.
+    # provenance evidence). Never invented here; terminal QA reports
+    # missing provenance as provenance-unresolved for every
+    # student-visible image.
     image_provenance: ImageProvenance | None = None
 
 

@@ -18,7 +18,7 @@ from .build_receipt import build_receipt_record, write_build_receipt_atomic
 from .build_request import compose_governed_build_request
 from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
-from .docs_requests import build_docs_replace_requests, build_provenance_caption_requests
+from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials, get_file_metadata
 from .generation_context import compose_generation_context, curriculum_decision_token
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
@@ -605,17 +605,14 @@ def main(argv: list[str] | None = None) -> int:
                 "planned from the governed plan; refusing a build that would silently "
                 f"drop selected visuals. selected_asset_ids={','.join(visual_plan.selected_asset_ids)}"
             )
-        # #3389: render the student-visible provenance/AI-disclosure caption
-        # adjacent to each placed image. One replaceAllText request per
-        # binding carrying governed provenance (the governed Doc template
-        # carries {{provenance_caption_<role>_<slot>}} adjacent to the
-        # visual marker); terminal QA verifies each caption through the
-        # #3258 content contract (token resolved, exact caption text present
-        # in the persisted artifact). Bindings without carried provenance
-        # emit no caption -- nothing invented.
-        docs_requests = tuple(docs_requests) + tuple(
-            build_provenance_caption_requests(visual_placements)
-        )
+        # #3389: the student-visible provenance/AI-disclosure caption
+        # requests are derived in the shared composer
+        # (compose_governed_build_request) so CLI and scheduled builds
+        # carry identical caption expectations; the governed Doc template
+        # carries {{provenance_caption_<role>.<slot>}} adjacent to the
+        # visual marker and terminal QA verifies each caption
+        # structurally against its image. Bindings without carried
+        # provenance emit no caption -- nothing invented.
         placement_transport = (
             build_placement_transport(script_id=args.placement_script_id, credentials=credentials)
             if visual_placements

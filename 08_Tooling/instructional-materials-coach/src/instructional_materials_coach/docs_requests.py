@@ -33,7 +33,7 @@ def build_docs_replace_requests(content: LessonContent) -> list[dict]:
 # Each visual placement binding that carries governed provenance evidence
 # renders its student-visible caption as a governed placeholder token,
 # mirroring #3643's figure-label tokens: the governed Doc template carries
-# ``{{provenance_caption_<role>_<slot>}}`` adjacent to the corresponding
+# ``{{provenance_caption_<role>.<slot>}}`` adjacent to the corresponding
 # ``{{visual:<role>}}`` marker paragraph, and replaceAllText requests
 # substitute the exact caption text at build time.
 #
@@ -46,13 +46,16 @@ def build_docs_replace_requests(content: LessonContent) -> list[dict]:
 # one marker match per binding).
 #
 # Fail-closed: bindings without carried provenance (the upstream path
-# predates provenance tracking) emit no caption -- nothing is invented, and
-# terminal QA stays silent about uncarried evidence per the documented #3389
-# boundary. Malformed provenance, an untokenizable role/slot, or two
+# predates provenance tracking) emit no caption -- nothing is invented.
+# Terminal QA reports every student-visible image with missing provenance
+# as provenance-unresolved, so an unattributed image can no longer ride
+# to verified. Malformed provenance, an untokenizable role/slot, or two
 # bindings claiming the same caption token raise instead of guessing.
-# Terminal QA verifies every emitted caption through the #3258 content
-# contract: the token must be gone from the persisted artifact and the exact
-# caption text must be present in it.
+# Terminal QA verifies every emitted caption structurally: the exact
+# caption text must be rendered immediately following its image in the
+# same figure/container (one caption occurrence satisfies exactly one
+# image), in addition to the #3258 content contract (token resolved,
+# exact caption text present).
 
 _CAPTION_TOKEN_PREFIX = "provenance_caption_"
 _ROLE_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -60,14 +63,20 @@ _SLOT_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def provenance_caption_token(*, role_id: str, slot_id: str) -> str:
-    """Build the caption placeholder token name for one (role_id, slot_id) binding."""
+    """Build the caption placeholder token name for one (role_id, slot_id) binding.
+
+    The role and slot are joined with ``.``, which cannot appear in either
+    (both match ``[A-Za-z0-9][A-Za-z0-9_-]*``), so distinct (role, slot)
+    pairs never collide: ``("a_b", "c")`` -> ``...a_b.c`` while
+    ``("a", "b_c")`` -> ``...a.b_c``.
+    """
     role = role_id.strip() if isinstance(role_id, str) else ""
     slot = slot_id.strip() if isinstance(slot_id, str) else ""
     if not role or not _ROLE_TOKEN_RE.fullmatch(role):
         raise ImageProvenanceError(f"role_id {role_id!r} cannot be a caption token name")
     if not slot or not _SLOT_TOKEN_RE.fullmatch(slot):
         raise ImageProvenanceError(f"slot_id {slot_id!r} cannot be a caption token name")
-    return f"{_CAPTION_TOKEN_PREFIX}{role}_{slot}"
+    return f"{_CAPTION_TOKEN_PREFIX}{role}.{slot}"
 
 
 def build_provenance_caption_requests(bindings) -> list[dict]:

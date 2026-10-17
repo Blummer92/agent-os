@@ -623,6 +623,10 @@ def _resolve_eligible_candidates(
                 "freshness": projection["freshness"],
                 "matched_asset": projection["matched_asset"],
                 "cohesion_profile": projection.get("cohesion_profile"),
+                # #3389: reviewed image-provenance evidence from the asset
+                # record (None = the record carries no reviewed origin
+                # evidence; never invented here).
+                "image_provenance": projection.get("image_provenance"),
                 "authority": projection["authority"],
             }
         )
@@ -955,6 +959,26 @@ def _score(role: dict[str, Any], candidate: dict[str, Any]) -> tuple[int, int, i
     return (score, canonical, orientation_exact, cognitive_preference)
 
 
+def _assignment_image_provenance(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Project reviewed provenance evidence from a normal candidate.
+
+    #3389: returns the candidate's carried ``image_provenance`` mapping
+    (already normalized at compatibility intake) or None when the asset
+    record carries no reviewed origin evidence. A non-mapping value is
+    an upstream contract breach and fails closed -- provenance is never
+    guessed, and the governed vocabulary check happens downstream.
+    """
+    raw = candidate.get("image_provenance")
+    if raw is None:
+        return None
+    if type(raw) is not dict:
+        raise ContractValidationError(
+            "handoff-wrong-type",
+            "candidate image_provenance must be a built-in mapping when present",
+        )
+    return dict(raw)
+
+
 def _assignment(
     role: dict[str, Any],
     candidate: dict[str, Any],
@@ -977,6 +1001,17 @@ def _assignment(
         "required_representation_class": role.get(
             "required_representation_class", "unspecified"
         ),
+        # #3389: reviewed image-provenance evidence projected from the
+        # normal candidate's asset record (bound to the candidate's Asset
+        # ID, Drive/content identity, and source record via
+        # "selected_candidate" below). None = the asset record carries no
+        # reviewed origin evidence -- terminal QA reports every
+        # student-visible image with unresolved provenance as
+        # provenance-unresolved (manual review), never as verified.
+        # Malformed carried evidence fails closed here; the governed
+        # origin vocabulary is enforced downstream by
+        # instructional_materials_coach.image_provenance.
+        "image_provenance": _assignment_image_provenance(candidate),
         "role_type": role["role_type"],
         "requirement_state": requirement_state,
         "instructional_purpose": role["instructional_purpose"],

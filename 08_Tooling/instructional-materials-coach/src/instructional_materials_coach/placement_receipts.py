@@ -172,8 +172,9 @@ def build_placement_record(
     # to manual review when a kind constraint was declared).
     observed_representation_class: str | None = None,
     # #3389: student-visible provenance/AI-disclosure evidence for this
-    # placed image (None = no provenance evidence carried). Terminal QA
-    # enforces carried evidence; it never re-derives it here.
+    # placed image (None = no provenance evidence carried; terminal QA
+    # reports it as provenance-unresolved). Terminal QA enforces the
+    # evidence; it never re-derives it here.
     image_provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the persisted record envelope around a verified receipt."""

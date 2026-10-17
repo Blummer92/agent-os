@@ -244,6 +244,9 @@ def validate_visual_asset_compatibility_evidence(
     try:
         envelope = _envelope(value)
         library = _library_record(envelope["library_record"])
+        # #3389: reviewed image-provenance evidence rides the candidate
+        # from the existing asset record (None = no reviewed evidence).
+        image_provenance = _library_image_provenance(library)
         manifest_record = _manifest_record(envelope["artifact_manifest"])
         manifest = manifest_record.to_dict()
         evidence = validate_mapping(
@@ -400,6 +403,12 @@ def validate_visual_asset_compatibility_evidence(
         }
         if cohesion_profile is not None:
             normalized_payload["cohesion_profile"] = cohesion_profile
+        # #3389: reviewed provenance evidence is part of the governed
+        # candidate identity when present (a provenance change is a
+        # different candidate). Absent evidence leaves the payload --
+        # and every existing fingerprint -- byte-identical.
+        if image_provenance is not None:
+            normalized_payload["image_provenance"] = image_provenance
         normalized_payload = validate_and_normalize_json(
             normalized_payload,
             max_bytes=MAX_RESULT_BYTES,
@@ -503,6 +512,58 @@ def _library_record(value: object) -> dict[str, Any]:
             "library extra_fields must be a built-in mapping",
         )
     return normalized
+
+
+def _library_image_provenance(library: dict[str, Any]) -> dict[str, Any] | None:
+    """Project reviewed image-provenance evidence from the asset record.
+
+    #3389: the library record's ``extra_fields`` is the existing intake
+    surface for reviewed creator/source evidence (never a new registry,
+    never inferred from Drive owner). When the record carries a governed
+    ``image_provenance`` mapping it is projected here -- normalized to
+    the governed ImageProvenance shape -- and bound downstream to the
+    asset/Drive identity the candidate already carries (asset_reference,
+    library_reference, manifest_reference). Absent means the asset
+    record carries no reviewed origin evidence: the projection omits the
+    key entirely so existing evidence identities stay byte-identical.
+    Malformed evidence (bad shape OR unknown origin_kind) fails closed
+    at intake: the governed origin vocabulary is enforced here, mirroring
+    ``instructional_materials_coach.image_provenance.ORIGIN_KINDS``
+    (this layer cannot import the IMC package; the two must stay in sync).
+    """
+    raw = (library.get("extra_fields") or {}).get("image_provenance")
+    if raw is None:
+        return None
+    evidence = validate_mapping(raw, "library extra_fields image_provenance")
+    origin_kind = evidence.get("origin_kind")
+    if type(origin_kind) is not str or not origin_kind.strip():
+        raise ContractValidationError(
+            "handoff-invalid",
+            "library extra_fields image_provenance origin_kind must be "
+            "a non-empty string",
+        )
+    if origin_kind not in _GOVERNED_ORIGIN_KINDS:
+        raise ContractValidationError(
+            "handoff-invalid",
+            "library extra_fields image_provenance origin_kind "
+            f"{origin_kind!r} is not a governed origin kind",
+        )
+    projected: dict[str, Any] = {"origin_kind": origin_kind}
+    for field in ("creator_name", "source_detail"):
+        value = evidence.get(field)
+        if value is not None:
+            projected[field] = validate_text(
+                value,
+                f"library extra_fields image_provenance {field}",
+            )
+    return projected
+
+
+#: Governed image-origin vocabulary (#3389). Mirrors
+#: ``instructional_materials_coach.image_provenance.ORIGIN_KINDS``; this
+#: contracts layer cannot import the IMC package, so the two definitions
+#: must stay in sync. Intake fails closed on any other value.
+_GOVERNED_ORIGIN_KINDS = frozenset({"human-photograph", "ai-generated", "unknown"})
 
 
 def _manifest_record(value: object) -> ValidatedRecord:

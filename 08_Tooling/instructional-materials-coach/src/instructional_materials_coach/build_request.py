@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .artifact_content_qa import TerminalQAExpectations
+from .docs_requests import build_provenance_caption_requests
 from .live_build import LiveBuildInput
 
 
@@ -30,6 +31,18 @@ def compose_governed_build_request(
     """One input/QA/options composition for CLI and scheduled consumers."""
     if not all((slides_template_id, doc_template_id, target_folder_id, content_title, idempotency_key)):
         raise ValueError("governed-build-request-identity-missing")
+    # #3389: derive the student-visible provenance/AI-disclosure caption
+    # requests here -- in the shared composer -- so CLI and scheduled
+    # builds carry identical caption expectations. One replaceAllText
+    # request per visual placement binding carrying governed provenance
+    # (the governed Doc template carries
+    # {{provenance_caption_<role>.<slot>}} adjacent to the visual
+    # marker); terminal QA verifies each caption structurally against
+    # its image. Bindings without carried provenance emit no caption --
+    # nothing is invented.
+    docs_requests = tuple(docs_requests) + tuple(
+        build_provenance_caption_requests(visual_placements)
+    )
     qa_expectations = TerminalQAExpectations.build_from_requests(
         idempotency_key=idempotency_key, docs_requests=docs_requests,
         slides_requests=slides_requests, visual_placements=visual_placements,

@@ -81,6 +81,24 @@ logical Asset ID, provider identity, and exact content identity match the
 governed selection; the inserted element exists in the persisted artifact;
 no unresolved placement error remains.
 
+## Image and caption identity (#3389)
+
+The binding carries reviewed image provenance
+(`VisualPlacementBinding.image_provenance`, from the plan assignment's
+`image_provenance`, from the candidate's compatibility record, from the
+library record's `extra_fields.image_provenance`). Unknown origin is
+carried as `None` and reported unresolved downstream -- never invented.
+
+One caption binding is keyed by artifact/role/slot/asset/inserted element
+plus the structural anchor: `build_provenance_caption_requests` emits
+one `replaceAllText` per binding, replacing
+`{{provenance_caption_<role>.<slot>}}` with the exact
+`student_visible_caption`. The `.` separator is collision-resistant
+(role/slot ids cannot contain `.`); duplicate tokens raise.
+
+The template must carry the caption token adjacent to the visual marker;
+`preflight_template_caption_anchors` proves the pairing before any write.
+
 ## Failure taxonomy (all fail closed, none become absence)
 
 | Reason | Meaning |

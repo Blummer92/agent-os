@@ -9,6 +9,7 @@ from .artifact_content_qa import (
     QA_STATE_VERIFIED,
     TerminalQAExpectations,
     TerminalQAReport,
+    preflight_template_caption_anchors,
     run_terminal_qa,
 )
 from .build_resume import (
@@ -668,6 +669,28 @@ def build_live_materials(
             is_retry = bool(applied) or (
                 not resume_was_loaded and worksheet.state == "recovered"
             )
+            # #3389 preflight: the template copy must prove visual
+            # marker/caption-anchor pairing before any write. Fresh
+            # copies only: on retry the same template + bindings were
+            # already validated (the idempotency key binds both), and
+            # the caption tokens are already resolved.
+            if not is_retry and any(
+                getattr(binding, "image_provenance", None) is not None
+                for binding in build.visual_placements or ()
+            ):
+                template_resource = docs_service.documents().get(
+                    documentId=worksheet.file_id
+                ).execute()
+                preflight_failures = preflight_template_caption_anchors(
+                    template_resource, build.visual_placements
+                )
+                if preflight_failures:
+                    raise RuntimeError(
+                        "template-caption-preflight-failed: the worksheet "
+                        "template cannot prove marker/caption-anchor pairing "
+                        "for provenance-carrying visuals; refusing the write: "
+                        + "; ".join(preflight_failures)
+                    )
             _apply_requests_tracked(
                 role="worksheet",
                 service=docs_service,

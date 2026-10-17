@@ -32,10 +32,12 @@ import pytest
 
 from instructional_materials_coach.artifact_content_qa import (
     QA_STATE_PLACEMENT_UNVERIFIED,
+    QA_STATE_PROVENANCE_UNRESOLVED,
     QA_STATE_VERIFIED,
     QA_STATE_VISUAL_MISMATCH,
     QA_STATE_VISUAL_ROLE_MISMATCH,
     ArtifactObservation,
+    DocsContentBlock,
     TerminalQAExpectations,
     VisualExpectation,
     evaluate_artifact_qa,
@@ -45,6 +47,7 @@ from instructional_materials_coach.connected_visual_placement import (
     VisualPlacementBinding,
     plan_visual_placement_bindings,
 )
+from instructional_materials_coach.image_provenance import ImageProvenance
 from instructional_materials_coach.placement_receipts import (
     build_placement_record,
     load_placement_records,
@@ -157,6 +160,29 @@ def test_observed_kind_reads_from_governed_compatibility_evidence():
 # Binding fixtures: bindings -> terminal-QA expectations -> QA verdict
 # ---------------------------------------------------------------------------
 
+def _provenance() -> ImageProvenance:
+    # #3389: kind tests carry explicit AI-disclosure provenance so the
+    # provenance dimension passes and the kind assertions stay focused.
+    return ImageProvenance(origin_kind="ai-generated")
+
+
+def _caption_blocks(pairs: tuple[tuple[str, str], ...]) -> tuple[DocsContentBlock, ...]:
+    """Build docs_blocks where each (image_id, caption) pair becomes an
+    image block immediately followed by its caption block (#3389
+    structural adjacency)."""
+    blocks: list[DocsContentBlock] = []
+    for i, (image_id, caption) in enumerate(pairs):
+        blocks.append(
+            DocsContentBlock(container=("body",), index=2 * i, text="",
+                             image_ids=(image_id,))
+        )
+        blocks.append(
+            DocsContentBlock(container=("body",), index=2 * i + 1,
+                             text=caption, image_ids=())
+        )
+    return tuple(blocks)
+
+
 def _binding(role_id: str, slot_id: str, asset_id: str, *,
              expected: str = "photography",
              observed: str | None = "diagram") -> VisualPlacementBinding:
@@ -166,6 +192,7 @@ def _binding(role_id: str, slot_id: str, asset_id: str, *,
         required=True, slot_id=slot_id,
         expected_representation_class=expected,
         observed_representation_class=observed,
+        image_provenance=_provenance(),
     )
 
 
@@ -183,6 +210,7 @@ def _record(role_id: str, slot_id: str, asset_id: str, observed: str | None,
         eligibility_evidence=None, transport_name="test",
         post_insertion_revision=revision,
         observed_representation_class=observed,
+        image_provenance=_provenance().to_dict(),
     )
 
 
@@ -191,6 +219,7 @@ def _observation(*, revision: str = "r1", images: tuple[str, ...] = ("img-0",),
     return ArtifactObservation(
         artifact_type="docs", artifact_id="doc-1", revision_id=revision,
         full_text=text, token_hits=(), image_element_ids=images,
+        docs_blocks=_caption_blocks(tuple((img, "AI-generated image") for img in images)),
     )
 
 
@@ -444,9 +473,15 @@ def _signed_requirement(required_class: str | None) -> dict[str, Any]:
 def _diagram_candidate() -> dict[str, Any]:
     """A governed v2 candidate whose compatibility evidence assigns it the
     ``diagram`` class (the Fix This Photo reproduction: schematic line
-    illustrations placed where photographs were required)."""
+    illustrations placed where photographs were required). The library
+    record carries reviewed image-provenance evidence in ``extra_fields``
+    (#3389: the existing intake surface, never a new registry)."""
     cand = _repo_fixture("valid_visual_asset_compatibility_v2.json")
     cand["compatibility_evidence"]["cohesion_profile"]["representation_class"] = "diagram"
+    cand["library_record"]["extra_fields"]["image_provenance"] = {
+        "origin_kind": "ai-generated",
+        "source_detail": "test intake review",
+    }
     return cand
 
 
@@ -464,7 +499,9 @@ def _plan_and_bind(requirement: dict[str, Any], candidates: list[dict[str, Any]]
 
 def _receipt_from_binding(binding: VisualPlacementBinding, image_id: str) -> dict[str, Any]:
     """Build the durable receipt exactly the way _place_one_binding does:
-    the binding's observed class is carried, never re-derived."""
+    the binding's observed class and provenance are carried, never
+    re-derived."""
+    provenance = binding.image_provenance
     return build_placement_record(
         receipt={
             "asset_id": binding.asset_id, "drive_file_id": binding.drive_file_id,
@@ -478,6 +515,7 @@ def _receipt_from_binding(binding: VisualPlacementBinding, image_id: str) -> dic
         required=binding.required,
         eligibility_evidence=binding.eligibility_evidence,
         observed_representation_class=binding.observed_representation_class,
+        image_provenance=provenance.to_dict() if provenance is not None else None,
         transport_name="test", post_insertion_revision="r1",
     )
 
