@@ -150,7 +150,16 @@ VISUAL_ROLE_FIELDS = frozenset(
 # #3251: optional explicit slot list. A role with no slots fills one implicit
 # slot ("0"); a role with slots binds one placement per declared slot id.
 # Downstream keys bindings on (role_id, slot_id).
-VISUAL_ROLE_OPTIONAL_FIELDS = frozenset({"concept", "slots"})
+# #3386: optional required representation class. The requirement author may
+# declare the governed visual kind this role needs (e.g. "photography" for
+# a weak-photographic-composition role); the declaration's shape is
+# validated here and its membership in the governed REPRESENTATION_CLASSES
+# vocabulary is validated by the visual-needs planner (which references,
+# never redefines, the vocabulary -- this module's import surface is pinned
+# by contract test and cannot import it). It is carried through planning
+# onto the cohesive-plan assignment, where the placement and terminal-QA
+# path enforces it. Never invented, never required.
+VISUAL_ROLE_OPTIONAL_FIELDS = frozenset({"concept", "slots", "required_representation_class"})
 
 # Slot ids must survive the controlled visual-marker syntax
 # ({{visual:<role_id>}} / {{visual:<role_id>:<slot_id>}}), so ':' and
@@ -627,6 +636,23 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
         slots = role.get("slots")
         if slots is not None:
             normalized_role["slots"] = _visual_slot_ids(slots)
+        # #3386: optional required representation class. The shape is
+        # validated here (must be a string); membership in the governed
+        # vocabulary is validated by the visual-needs planner
+        # (visual_needs._roles), which may reference
+        # visual_asset_compatibility -- this module's import surface is
+        # pinned by contract test to __future__/typing/common, so it cannot
+        # import the vocabulary itself. Never invented; absent means no kind
+        # constraint was declared (downstream "unspecified"). Like slots, it
+        # is not role identity: it never enters the semantic key.
+        required_class = role.get("required_representation_class")
+        if required_class is not None:
+            if not isinstance(required_class, str):
+                raise ContractValidationError(
+                    "material-invalid-visual-direction",
+                    "visual role required representation class must be a string",
+                )
+            normalized_role["required_representation_class"] = required_class
         semantic_key = _visual_role_semantic_key(normalized_role)
         if semantic_key in seen:
             raise ContractValidationError(

@@ -588,6 +588,9 @@ def _candidate_entry(
             "freshness": payload["freshness"],
             "matched_asset": payload["matched_asset"],
             "cohesion_profile": payload["cohesion_profile"],
+            # #3389: reviewed image-provenance evidence from the asset
+            # record (None = no reviewed origin evidence carried).
+            "image_provenance": payload.get("image_provenance"),
             "authority": payload["authority"],
         }
     )

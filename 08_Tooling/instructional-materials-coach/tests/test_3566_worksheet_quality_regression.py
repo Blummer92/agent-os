@@ -32,6 +32,7 @@ from instructional_materials_coach.artifact_content_qa import (
     QA_STATE_PAGINATION_UNVERIFIED,
     QA_STATE_PLACEMENT_UNVERIFIED,
     ArtifactObservation,
+    DocsContentBlock,
     VisualExpectation,
     _evaluate_pagination,
     _evaluate_visuals,
@@ -162,10 +163,14 @@ def test_day1_worksheet_plan_missing_exit_ticket_fails() -> None:
 # --- (7) visual presence / identity / receipt attribution -----------------------
 
 _DAY1_VISUALS = (
+    # #3389: the Day-1 visuals carry reviewed provenance; the repaired
+    # contract requires it for every student-visible image.
     VisualExpectation(role_id="day1-hero-image", slot_id="slot-1", asset_id="asset-day1-hero",
-                      content_identity={"sha256": "day1hero"}, required=True),
+                      content_identity={"sha256": "day1hero"}, required=True,
+                      provenance={"origin_kind": "ai-generated"}),
     VisualExpectation(role_id="day1-diagram", slot_id="slot-2", asset_id="asset-day1-diagram",
-                      content_identity={"sha256": "day1diagram"}, required=True),
+                      content_identity={"sha256": "day1diagram"}, required=True,
+                      provenance={"origin_kind": "ai-generated"}),
 )
 
 
@@ -184,6 +189,8 @@ def _day1_receipt(role_id: str, slot_id: str, asset_id: str, content_identity: d
 
 
 def test_day1_verified_visual_placement_passes() -> None:
+    # #3389: the repaired contract requires the rendered caption
+    # immediately following each image in the Docs structure.
     observation = ArtifactObservation(
         artifact_type="docs",
         artifact_id="day1-marketing-detectives",
@@ -191,6 +198,16 @@ def test_day1_verified_visual_placement_passes() -> None:
         full_text="Day 1 worksheet content",
         image_element_ids=("img-day1-hero-image", "img-day1-diagram"),
         headings=(),
+        docs_blocks=(
+            DocsContentBlock(container=("body",), index=0, text="",
+                             image_ids=("img-day1-hero-image",)),
+            DocsContentBlock(container=("body",), index=1,
+                             text="AI-generated image", image_ids=()),
+            DocsContentBlock(container=("body",), index=2, text="",
+                             image_ids=("img-day1-diagram",)),
+            DocsContentBlock(container=("body",), index=3,
+                             text="AI-generated image", image_ids=()),
+        ),
     )
     records = tuple(
         _day1_receipt(v.role_id, v.slot_id, v.asset_id, dict(v.content_identity))

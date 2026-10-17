@@ -151,13 +151,48 @@ read APIs. Correspondence is established through the receipt chain
 marker/target verification) plus QA's artifact/revision binding. See
 "Live-acceptance boundary".
 
+## Provenance and caption binding (#3389)
+
+Every student-visible image must carry reviewed creator/origin evidence;
+unknown origin is `provenance-unresolved` (manual review), never
+verified. The evidence rides the existing asset record
+(`library_record.extra_fields.image_provenance`) through candidate →
+assignment → binding → receipt → expectation; it is never invented from
+Drive owner metadata and never inferred.
+
+Each placed image must have its rendered `student_visible_caption`
+immediately following it in the same figure container (paragraph,
+table cell, or document tab). The binding is structural, not a global
+substring search:
+
+- One caption occurrence satisfies exactly one image; a shared caption
+  fails the uncaptioned image (`qa-caption-not-adjacent`).
+- Swapped captions (human caption under the AI image and vice versa)
+  fail both images.
+- A caption 30 paragraphs below its image fails; metadata without a
+  rendered caption fails.
+- Caption token identities are collision-resistant
+  (`{{provenance_caption_<role>.<slot>}}` -- the `.` separator cannot
+  appear in role/slot ids); duplicates raise instead of producing
+  ambiguous attribution.
+
+The template preflight (`preflight_template_caption_anchors`) proves
+marker/caption-token pairing before any write; a template that cannot
+prove the pairing fails closed before placement.
+
 ## Docs vs Slides
 
 Both artifact types share the contract. Capability differences:
 
 - Docs observation: body paragraphs + tables text; inline objects
-  (`inlineObjectElement.embeddedObjectId` + `inlineObjects` map); heading
-  paragraphs with their effective `keepWithNext` (#3416).
+  (`inlineObjectElement.inlineObjectId` + `inlineObjects` map -- the real
+  Docs API field; the walker no longer reads the non-existent
+  `embeddedObjectId`); heading paragraphs with their effective
+  `keepWithNext` (#3416). #3389: the walker also retains
+  paragraph/table-cell/document-tab structure (`docs_blocks`) so
+  terminal QA can prove each image's caption is immediately adjacent
+  to its own image in the same container -- one caption occurrence
+  satisfies exactly one image.
 - Slides observation: per-slide text; all page-element object ids (image
   elements carry `image`; the inserted element is matched by id, mirroring
   the #3257 post-insertion verification).

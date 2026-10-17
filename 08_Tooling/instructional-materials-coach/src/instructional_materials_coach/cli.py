@@ -230,14 +230,20 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
             except (ValueError, TypeError):
                 identity = None
             slot_id = assignment.get("slot_id", "0")
-            visuals.append(
-                {
-                    "role": assignment.get("role_id"),
-                    "slot": str(slot_id),
-                    "asset_id": asset_id,
-                    "content_identity": identity,
-                }
-            )
+            raw_provenance = assignment.get("image_provenance")
+            visual_entry = {
+                "role": assignment.get("role_id"),
+                "slot": str(slot_id),
+                "asset_id": asset_id,
+                "content_identity": identity,
+            }
+            if isinstance(raw_provenance, Mapping):
+                # #3389: the provenance caption is persisted artifact text;
+                # a provenance change must produce a fresh build, never
+                # resume into a stale caption. Legacy assignments without
+                # provenance keep their historic key (nothing to stale).
+                visual_entry["image_provenance"] = dict(raw_provenance)
+            visuals.append(visual_entry)
     visuals.sort(key=lambda item: _canonical_json(item))
     return visuals
 
@@ -599,6 +605,14 @@ def main(argv: list[str] | None = None) -> int:
                 "planned from the governed plan; refusing a build that would silently "
                 f"drop selected visuals. selected_asset_ids={','.join(visual_plan.selected_asset_ids)}"
             )
+        # #3389: the student-visible provenance/AI-disclosure caption
+        # requests are derived in the shared composer
+        # (compose_governed_build_request) so CLI and scheduled builds
+        # carry identical caption expectations; the governed Doc template
+        # carries {{provenance_caption_<role>.<slot>}} adjacent to the
+        # visual marker and terminal QA verifies each caption
+        # structurally against its image. Bindings without carried
+        # provenance emit no caption -- nothing invented.
         placement_transport = (
             build_placement_transport(script_id=args.placement_script_id, credentials=credentials)
             if visual_placements

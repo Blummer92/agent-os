@@ -20,6 +20,20 @@
   red/green proof that the pre-repair base reported final with an
   unresolved token persisted. Canonical contract:
   `docs/terminal-qa-contract.md`.
+- #3389 production repair: unknown image origin is now UNRESOLVED for
+  every student-visible image (the missing-provenance -> verified path
+  was a reproduced defect). The Docs walker reads the real
+  `inlineObjectElement.inlineObjectId` (not `embeddedObjectId`) and
+  retains paragraph/table-cell/document-tab structure; terminal QA
+  requires each image's caption immediately adjacent in the same
+  container (shared/swapped/distant/metadata-only captions fail closed).
+  Caption tokens are collision-resistant
+  (`{{provenance_caption_<role>.<slot>}}`); reviewed provenance flows
+  library record -> candidate -> assignment -> binding -> receipt ->
+  expectation, with malformed evidence failing closed at intake. A
+  template preflight proves marker/caption pairing before any write.
+  Caption requests derive in the shared build composer (covers CLI +
+  scheduled builds).
 - Worksheet revision QA (#2890): `worksheet_revision_qa.py` binds required
   visual roles across revisions so a vocabulary/content/layout fix cannot
   silently drop visual scaffolds and still pass as complete; render evidence
