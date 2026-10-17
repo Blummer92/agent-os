@@ -50,6 +50,12 @@ from .image_provenance import (
     provenance_qa_outcome,
     student_visible_caption,
 )
+from .visual_role_fulfillment import (
+    UNCONSTRAINED_REPRESENTATION_CLASS,
+    VisualRoleFulfillmentError,
+    check_visual_role_fulfillment,
+    validate_representation_class,
+)
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -71,6 +77,10 @@ QA_STATE_CONTENT_MISSING = "content-missing"
 QA_STATE_CONTENT_MISMATCH = "content-mismatch"
 QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
+# #3386: a placed visual failed the semantic visual-role (representation
+# class) fulfillment check -- the image exists and is placed, but it is
+# the wrong kind of visual for the required role.
+QA_STATE_VISUAL_ROLE_MISMATCH = "visual-role-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 # #3389: a placed student-facing image carries unresolved provenance
 # (unknown origin, or a human photograph with no known creator). The
@@ -99,6 +109,7 @@ _STATE_SEVERITY = {
     QA_STATE_PAGINATION_UNVERIFIED: 10,
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
+    QA_STATE_VISUAL_ROLE_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
     QA_STATE_PROVENANCE_UNRESOLVED: 11,
     QA_STATE_ARTIFACT_STALE: 20,
@@ -173,6 +184,11 @@ class VisualExpectation:
     asset_id: str
     content_identity: Mapping[str, Any]
     required: bool = True
+    # #3386: the representation class the governed plan declared for this
+    # role ("unspecified" = no kind constraint was declared). The
+    # fulfillment check never invents a constraint the plan did not
+    # declare.
+    expected_representation_class: str = UNCONSTRAINED_REPRESENTATION_CLASS
     # #3389: student-visible provenance/AI-disclosure evidence carried from
     # the placement binding (dict form of ImageProvenance). None = the
     # upstream path carries no provenance evidence; terminal QA enforces
@@ -208,6 +224,8 @@ class TerminalQAExpectations:
         artifact and the ``replaceText`` must be present. Visual expectations
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
+        #3386: an invalid ``expected_representation_class`` on a binding is
+        an upstream contract breach and fails closed here.
         #3389: provenance evidence carried on a binding flows into the
         # visual expectation; malformed carried evidence fails closed here.
         """
@@ -228,6 +246,19 @@ class TerminalQAExpectations:
                         f"visual expectation for role {getattr(binding, 'role_id', '?')} "
                         f"carries invalid image provenance: {exc}"
                     ) from exc
+            raw_expected = getattr(binding, "expected_representation_class", None)
+            if raw_expected is None or (isinstance(raw_expected, str) and not raw_expected.strip()):
+                expected_kind = UNCONSTRAINED_REPRESENTATION_CLASS
+            else:
+                try:
+                    expected_kind = validate_representation_class(
+                        raw_expected, name="expected representation_class"
+                    )
+                except VisualRoleFulfillmentError as exc:
+                    raise ValueError(
+                        f"visual expectation for role {getattr(binding, 'role_id', '?')} "
+                        f"carries an invalid expected representation class: {exc}"
+                    ) from exc
             visuals.append(
                 VisualExpectation(
                     role_id=str(binding.role_id),
@@ -235,6 +266,9 @@ class TerminalQAExpectations:
                     asset_id=str(binding.asset_id),
                     content_identity=dict(binding.content_identity or {}),
                     required=bool(binding.required),
+                    # #3386: direct-route and plan-route bindings both carry
+                    # the required visual kind into terminal QA.
+                    expected_representation_class=expected_kind,
                     provenance=provenance_dict,
                 )
             )
@@ -274,6 +308,7 @@ class TerminalQAExpectations:
             "visuals": [
                 {"role_id": v.role_id, "slot_id": v.slot_id, "asset_id": v.asset_id,
                  "content_identity": dict(v.content_identity), "required": v.required,
+                 "expected_representation_class": v.expected_representation_class,
                  # #3389: carried provenance is part of the governed QA
                  # identity; changing it changes the expectations hash.
                  "provenance": dict(v.provenance) if v.provenance else None}
@@ -820,6 +855,44 @@ def _evaluate_visuals(
                     )
                 )
                 continue
+        # #3386: semantic visual-role fulfillment. Presence and placement
+        # checks above prove *an* image exists for this role; this check
+        # proves it is the *right kind* of visual. A declared kind
+        # constraint with a mismatching placed asset fails with an
+        # explicit finding naming the required and observed classes. A
+        # declared constraint with no governed kind evidence on the placed
+        # asset is unverifiable: it routes to manual review with the role
+        # named, never to a false pass.
+        fulfillment = check_visual_role_fulfillment(
+            role_id=visual.role_id,
+            slot_id=visual.slot_id,
+            required_representation_class=visual.expected_representation_class,
+            observed_representation_class=record.get("observed_representation_class"),
+        )
+        if fulfillment.status == "mismatch":
+            findings.append(
+                _fail(
+                    "qa-visual-role-kind-mismatch", QA_STATE_VISUAL_ROLE_MISMATCH,
+                    fulfillment.message()
+                    + " Image count/placement alone cannot satisfy this "
+                    "required visual role.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    required_representation_class=fulfillment.required,
+                    observed_representation_class=fulfillment.observed,
+                )
+            )
+            continue
+        if fulfillment.status == "unverifiable":
+            findings.append(
+                _advisory(
+                    "qa-visual-role-kind-unverifiable", QA_STATE_PLACEMENT_UNVERIFIED,
+                    fulfillment.message(),
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    required_representation_class=fulfillment.required,
+                    source="visual_role_fulfillment",
+                )
+            )
+            continue
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build
