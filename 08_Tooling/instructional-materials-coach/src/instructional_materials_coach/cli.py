@@ -482,6 +482,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
+        # #3644 R5: verified projection of the {{token}} names the worksheet
+        # Doc template carries; scopes the pre-write teacher-voice screen to
+        # genuine worksheet copy. Stays None (fail-closed scan-all) when the
+        # template pair was given as raw IDs without governed evidence.
+        doc_template_tokens: tuple[str, ...] | None = None
         if args.template_candidates:
             raw_candidates = _load_json(args.template_candidates, default=[])
             if not isinstance(raw_candidates, list):
@@ -496,6 +501,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             args.slides_template = pair.slides_template_id
             args.doc_template = pair.docs_template_id
+            doc_template_tokens = next(
+                (tuple(candidate.supported_placeholders)
+                 for candidate in candidates
+                 if candidate.kind == "docs" and candidate.template_id == pair.docs_template_id),
+                None,
+            )
         if not args.slides_template or not args.doc_template:
             raise RuntimeError("Provide both exact approved template IDs or --template-candidates governed evidence.")
         context["slides_template"] = args.slides_template
@@ -637,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+            doc_template_tokens=doc_template_tokens,
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
