@@ -18,7 +18,7 @@ from .build_receipt import build_receipt_record, write_build_receipt_atomic
 from .build_request import compose_governed_build_request
 from .connected_visual_placement import plan_visual_placement_bindings
 from .content_spec import load_lesson_content
-from .docs_requests import build_docs_replace_requests
+from .docs_requests import build_docs_replace_requests, build_provenance_caption_requests
 from .drive_client import build_drive_service, get_credentials, get_file_metadata
 from .generation_context import compose_generation_context, curriculum_decision_token
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
@@ -230,14 +230,20 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
             except (ValueError, TypeError):
                 identity = None
             slot_id = assignment.get("slot_id", "0")
-            visuals.append(
-                {
-                    "role": assignment.get("role_id"),
-                    "slot": str(slot_id),
-                    "asset_id": asset_id,
-                    "content_identity": identity,
-                }
-            )
+            raw_provenance = assignment.get("image_provenance")
+            visual_entry = {
+                "role": assignment.get("role_id"),
+                "slot": str(slot_id),
+                "asset_id": asset_id,
+                "content_identity": identity,
+            }
+            if isinstance(raw_provenance, Mapping):
+                # #3389: the provenance caption is persisted artifact text;
+                # a provenance change must produce a fresh build, never
+                # resume into a stale caption. Legacy assignments without
+                # provenance keep their historic key (nothing to stale).
+                visual_entry["image_provenance"] = dict(raw_provenance)
+            visuals.append(visual_entry)
     visuals.sort(key=lambda item: _canonical_json(item))
     return visuals
 
@@ -599,6 +605,17 @@ def main(argv: list[str] | None = None) -> int:
                 "planned from the governed plan; refusing a build that would silently "
                 f"drop selected visuals. selected_asset_ids={','.join(visual_plan.selected_asset_ids)}"
             )
+        # #3389: render the student-visible provenance/AI-disclosure caption
+        # adjacent to each placed image. One replaceAllText request per
+        # binding carrying governed provenance (the governed Doc template
+        # carries {{provenance_caption_<role>_<slot>}} adjacent to the
+        # visual marker); terminal QA verifies each caption through the
+        # #3258 content contract (token resolved, exact caption text present
+        # in the persisted artifact). Bindings without carried provenance
+        # emit no caption -- nothing invented.
+        docs_requests = tuple(docs_requests) + tuple(
+            build_provenance_caption_requests(visual_placements)
+        )
         placement_transport = (
             build_placement_transport(script_id=args.placement_script_id, credentials=credentials)
             if visual_placements
