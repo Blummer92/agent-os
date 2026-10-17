@@ -24,6 +24,7 @@ validator, a QA framework, or a provenance registry (#3258 owns those).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -33,6 +34,9 @@ from typing import Any, Mapping
 
 
 RECEIPT_RECORD_CONTRACT = "visual-placement-receipt-v1"
+# #3258: atomic reconciled batch proof bound to the ordered complete receipt
+# set of one placement run (see reconcile_placement_batch).
+BATCH_PROOF_CONTRACT = "visual-placement-batch-proof-v1"
 
 
 def _utc_now() -> str:
@@ -50,17 +54,22 @@ def placement_record_path(receipts_dir: str | Path, idempotency_key: str) -> Pat
 
 def load_placement_records(receipts_dir: str | Path, idempotency_key: str) -> tuple[dict[str, Any], ...]:
     """Load all persisted placement records for one build, oldest first."""
-    path = placement_record_path(receipts_dir, idempotency_key)
-    if not path.exists():
-        return ()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ()
-    records = payload.get("records") if isinstance(payload, dict) else None
+    records = _load_payload(receipts_dir, idempotency_key).get("records")
     if not isinstance(records, list):
         return ()
     return tuple(item for item in records if isinstance(item, dict))
+
+
+def _load_payload(receipts_dir: str | Path, idempotency_key: str) -> dict[str, Any]:
+    """Load the raw store payload (records plus any batch proofs)."""
+    path = placement_record_path(receipts_dir, idempotency_key)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _write_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -116,7 +125,12 @@ def append_placement_record(
             )
     records.append(stored)
     path = placement_record_path(receipts_dir, idempotency_key)
-    _write_atomic(path, {"idempotency_key": str(idempotency_key), "records": records})
+    # Preserve any reconciled batch proofs already in the payload: appending
+    # a record must never drop proof evidence.
+    payload = _load_payload(receipts_dir, idempotency_key)
+    payload["idempotency_key"] = str(idempotency_key)
+    payload["records"] = records
+    _write_atomic(path, payload)
     return stored
 
 
@@ -189,3 +203,200 @@ def build_placement_record(
         "post_insertion_revision_id": post_insertion_revision,
         "placed_at": _utc_now(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Reconciled batch proofs (#3258)
+# ---------------------------------------------------------------------------
+# Sequential genuine insertions each advance the artifact revision, so the
+# original per-insertion receipts legitimately disagree with the final
+# revision. The receipts are append-only and are NEVER rewritten to the
+# final revision. Instead, a completed placement run reconciles its ordered
+# complete receipt set against one current artifact snapshot and persists
+# this atomic batch proof, bound to:
+#   - the ordered complete receipt set (role/slot/artifact/asset/content
+#     identity/inserted element/original per-insertion revision),
+#   - exact asset/content and element identities,
+#   - artifact and build (idempotency key) identity,
+#   - the observed final revision,
+#   - verified per-insertion mutation continuity (before/after snapshots),
+#   - a tamper-evident proof fingerprint that terminal QA also binds into
+#     its recovery identity (the recovery cache fingerprint).
+# Terminal QA consumes the proof for members it revalidates; a missing,
+# conflicting, or tampered proof is MANUAL REVIEW, never verification.
+
+
+_BATCH_PROOF_MEMBER_FIELDS = (
+    "role_id",
+    "slot_id",
+    "artifact_type",
+    "artifact_id",
+    "asset_id",
+    "drive_file_id",
+    "content_identity",
+    "inserted_element_id",
+    "post_insertion_revision_id",
+    "member_source",
+)
+
+
+def batch_proof_fingerprint(proof: Mapping[str, Any]) -> str:
+    """Tamper-evident fingerprint over the proof's semantic content.
+
+    Covers everything except ``proof_fingerprint`` itself and the
+    non-semantic ``reconciled_at`` timestamp.
+    """
+    payload = {
+        key: value for key, value in dict(proof).items()
+        if key not in ("proof_fingerprint", "reconciled_at")
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def receipt_set_fingerprint(records: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
+    """Fingerprint over the ordered receipt set for recovery identity.
+
+    Any membership or content change in the receipt set changes this
+    fingerprint, so terminal QA recovery cannot reuse cached verified QA
+    after the receipt set changed.
+    """
+    return hashlib.sha256(
+        _canonical_json([dict(record) for record in records or ()]).encode("utf-8")
+    ).hexdigest()
+
+
+def batch_proofs_fingerprint(proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None) -> str:
+    """Fingerprint over the ordered batch proofs for recovery identity.
+
+    Hashes the RECOMPUTED proof fingerprints (semantic content), never the
+    proofs' self-claimed ``proof_fingerprint`` fields: tampering with a
+    proof's members changes this fingerprint even when the stored field is
+    left untouched, so terminal QA recovery cannot reuse cached verified
+    QA after a proof change.
+    """
+    fingerprints = [batch_proof_fingerprint(proof) for proof in proofs or ()]
+    return hashlib.sha256(_canonical_json(fingerprints).encode("utf-8")).hexdigest()
+
+
+def load_batch_proofs(receipts_dir: str | Path, idempotency_key: str) -> tuple[dict[str, Any], ...]:
+    """Load all reconciled batch proofs for one build, oldest first."""
+    proofs = _load_payload(receipts_dir, idempotency_key).get("batch_proofs")
+    if not isinstance(proofs, list):
+        return ()
+    return tuple(
+        proof for proof in proofs
+        if isinstance(proof, dict) and proof.get("proof_contract") == BATCH_PROOF_CONTRACT
+    )
+
+
+def reconcile_placement_batch(
+    *,
+    receipts_dir: str | Path,
+    idempotency_key: str,
+    artifact_type: str,
+    artifact_id: str,
+    ordered_members: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    insertion_continuity: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    initial_revision_id: str,
+    final_revision_id: str,
+) -> dict[str, Any]:
+    """Persist one atomic reconciled batch proof; returns the stored proof.
+
+    ``ordered_members`` is the complete ordered receipt set for this run
+    (bindings placed or recovered here), each carrying the ORIGINAL
+    per-insertion ``post_insertion_revision_id``. ``insertion_continuity``
+    holds the verified before/after evidence for the insertions performed
+    in this run, in insertion order. The continuity chain must link:
+    first pre-revision == initial, each post == next pre, last post ==
+    final (or final == initial when nothing was inserted).
+    """
+    kind = str(artifact_type or "").strip().lower()
+    if kind not in ("docs", "slides"):
+        raise ValueError(f"reconcile_placement_batch: unsupported artifact type {artifact_type!r}")
+    target_artifact = str(artifact_id or "").strip()
+    if not target_artifact:
+        raise ValueError("reconcile_placement_batch: artifact_id is required")
+    members = [dict(member) for member in ordered_members or ()]
+    if not members:
+        raise ValueError("reconcile_placement_batch: ordered_members must not be empty")
+    seen: set[tuple[str, str]] = set()
+    for member in members:
+        for field in _BATCH_PROOF_MEMBER_FIELDS:
+            if field == "content_identity":
+                if not isinstance(member.get(field), Mapping) or not member[field]:
+                    raise ValueError(f"reconcile_placement_batch: member is missing {field}")
+                continue
+            value = member.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"reconcile_placement_batch: member is missing {field}")
+        if member.get("member_source") not in ("placed", "recovered"):
+            raise ValueError("reconcile_placement_batch: member_source must be 'placed' or 'recovered'")
+        key = (str(member["role_id"]), str(member["slot_id"]))
+        if key in seen:
+            raise ValueError(f"reconcile_placement_batch: duplicate member for role={key[0]} slot={key[1]}")
+        seen.add(key)
+    continuity = [dict(entry) for entry in insertion_continuity or ()]
+    placed_keys = {key for key, member in
+                   (((str(m["role_id"]), str(m["slot_id"])), m) for m in members)
+                   if member.get("member_source") == "placed"}
+    for entry in continuity:
+        for field in ("role_id", "slot_id", "inserted_element_id", "pre_revision_id", "post_revision_id"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"reconcile_placement_batch: continuity entry is missing {field}")
+        entry_key = (str(entry["role_id"]), str(entry["slot_id"]))
+        if entry_key not in placed_keys:
+            raise ValueError(
+                "reconcile_placement_batch: continuity entry for "
+                f"role={entry_key[0]} slot={entry_key[1]} has no 'placed' member"
+            )
+        placed_member = next(m for m in members
+                             if (str(m["role_id"]), str(m["slot_id"])) == entry_key)
+        if str(placed_member.get("inserted_element_id")) != str(entry["inserted_element_id"]):
+            raise ValueError(
+                "reconcile_placement_batch: continuity entry element id does not "
+                "match its placed member"
+            )
+    if continuity:
+        if str(continuity[0].get("pre_revision_id")) != str(initial_revision_id):
+            raise ValueError("reconcile_placement_batch: first pre-revision != initial revision")
+        for previous, current in zip(continuity, continuity[1:]):
+            if str(current.get("pre_revision_id")) != str(previous.get("post_revision_id")):
+                raise ValueError("reconcile_placement_batch: insertion chain is broken")
+        if str(continuity[-1].get("post_revision_id")) != str(final_revision_id):
+            raise ValueError("reconcile_placement_batch: last post-revision != final revision")
+    elif str(initial_revision_id) != str(final_revision_id):
+        raise ValueError("reconcile_placement_batch: final != initial with no insertions")
+    proof: dict[str, Any] = {
+        "proof_contract": BATCH_PROOF_CONTRACT,
+        "idempotency_key": str(idempotency_key),
+        "artifact_type": kind,
+        "artifact_id": target_artifact,
+        "initial_revision_id": str(initial_revision_id),
+        "final_revision_id": str(final_revision_id),
+        "ordered_members": members,
+        "insertion_continuity": continuity,
+        "reconciled_at": _utc_now(),
+    }
+    proof["proof_fingerprint"] = batch_proof_fingerprint(proof)
+    path = placement_record_path(receipts_dir, idempotency_key)
+    payload = _load_payload(receipts_dir, idempotency_key)
+    payload["idempotency_key"] = str(idempotency_key)
+    # The proof is the CURRENT reconciled attestation for one artifact: a
+    # new reconciliation supersedes the previous proof for the same
+    # artifact (the append-only receipt history is preserved untouched).
+    # Proofs for other artifacts sharing this build's store are kept. Two
+    # proofs ever claiming the same artifact is conflicting evidence, not
+    # history -- terminal QA fails it closed.
+    proofs = [
+        existing for existing in (payload.get("batch_proofs") or [])
+        if isinstance(existing, dict)
+        and not (
+            existing.get("artifact_type") == kind
+            and str(existing.get("artifact_id")) == target_artifact
+        )
+    ]
+    proofs.append(proof)
+    payload["batch_proofs"] = proofs
+    _write_atomic(path, payload)
+    return proof

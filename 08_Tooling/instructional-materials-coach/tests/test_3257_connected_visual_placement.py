@@ -212,7 +212,13 @@ class FakePlacementTransport:
     Simulates the #2087 Apps Script seam: removes the marker from the fake
     artifact store and records an inserted element, returning a "placed"
     result. ``fail_for_roles`` makes insertion raise for chosen roles.
+
+    Inserted element ids come from a process-wide monotonic counter: like
+    real Docs/Slides element ids, they never repeat, even across transport
+    instances (a retry in a new process still gets fresh ids).
     """
+
+    _next_element_id = 0
 
     name = "fake-test-transport"
 
@@ -233,7 +239,8 @@ class FakePlacementTransport:
         if request.role_id in self._fail_for_roles:
             raise PlacementTransportError(f"placement-transport-failed: simulated failure for role={request.role_id}")
         target = request.target
-        inserted_id = f"fake-inserted-{len(self.calls)}"
+        FakePlacementTransport._next_element_id += 1
+        inserted_id = f"fake-inserted-{FakePlacementTransport._next_element_id}"
         if target.artifact_type == "slides":
             assert self._slides is not None
             pres = self._slides.presentations_store[target.artifact_id]

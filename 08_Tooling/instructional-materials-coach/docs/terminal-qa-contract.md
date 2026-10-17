@@ -104,6 +104,21 @@ revision → `artifact-stale`), the receipt may reference another artifact
 (`visual-mismatch`). QA re-binds every receipt to the inspected artifact
 state at terminal time.
 
+Sequential genuine insertions each advance the artifact revision, so
+earlier legitimate receipts disagree with the final revision by design.
+The receipts are append-only and are never re-stamped with the final
+revision. Instead, each completed placement run persists an atomic
+**reconciled batch proof** (`visual-placement-batch-proof-v1`) bound to
+the ordered complete receipt set, exact asset/content/element identities,
+artifact/build identity, the observed final revision, verified
+per-insertion mutation continuity (before/after snapshots proving each
+insertion changed exactly the marker plus one element), and a
+tamper-evident proof fingerprint. Terminal QA consumes the proof for the
+members it revalidates; a missing proof keeps the pre-repair per-receipt
+rule, while a conflicting, tampered, or revision-mismatched proof fails
+closed (`qa-batch-proof-conflict` / `qa-batch-proof-invalid` /
+`qa-artifact-stale`) for manual review -- never verification.
+
 ## Text proof
 
 - Expectations derive from the governed planned `replaceAllText`
@@ -135,7 +150,14 @@ artifact observation → expected target → QA result.
 - Receipt-to-artifact binding: artifact id, asset id, exact content
   identity, and post-insertion revision must all match the inspected
   state; mismatch → `artifact-conflict` / `visual-mismatch` /
-  `artifact-stale`.
+  `artifact-stale`. Members revalidated by a verified reconciled batch
+  proof are bound to the proof's observed final revision instead of their
+  original per-insertion revisions (the originals are preserved, never
+  rewritten).
+- A batch proof whose fingerprint does not recompute, whose member set
+  conflicts with the receipt store, or whose final revision differs from
+  the observation fails the whole batch closed; two proofs claiming one
+  artifact are conflicting evidence.
 - Persisted observation: the `{{visual:<role>}}` marker must be gone and
   the receipt's `inserted_element_id` must be present among the observed
   elements (Docs inline objects; Slides page elements).
@@ -168,7 +190,12 @@ Both artifact types share the contract. Capability differences:
 - QA evidence persists per idempotency key (`reports/terminal-qa/`),
   atomically, bound to expectations hash + artifact revisions.
 - Retry with unchanged artifact: a prior `verified` report is recovered
-  while revision and expectations still match (no re-evaluation).
+  while revision, expectations, receipt-set membership, and batch-proof
+  identity still match (no re-evaluation). The recovery identity binds
+  the receipt-set fingerprint and the recomputed batch-proof fingerprint:
+  an unchanged artifact/expectations pair never reuses cached verified QA
+  after a receipt was added, removed, or altered, or after a proof
+  changed.
 - Retry after artifact mutation: revision mismatch → prior proof is NOT
   reused → fresh verification required; terminal success refused until it
   passes.

@@ -21,6 +21,9 @@ governed visual requirement
   -> post-insertion verification against the persisted artifact
   -> verify_placement_receipt (#2087 -> state "verified")
   -> durable receipt in placement_receipts/ (the #3258 handoff surface)
+  -> atomic reconciled batch proof (#3258: ordered complete receipt set
+     bound to the observed final revision with verified per-insertion
+     mutation continuity)
   -> artifact completion (only when every required slot is verified-placed)
 ```
 
@@ -96,8 +99,45 @@ no unresolved placement error remains.
 | `post-insertion-verification-failed` | persisted artifact does not show the placement |
 | `placement-eligibility-evidence-missing` | upstream evidence breach -> fail closed |
 | `placement-binding-ambiguous` / `-incomplete` | binding construction breach -> fail closed |
+| `placement-continuity-unverifiable` | artifact unreadable around an insertion -> fail closed |
+| `placement-continuity-broken` | insertion changed text/elements beyond the single marker removal + one element -> external/intervening mutation suspected |
+| `placement-element-id-reused` | transport reported an element id already present before insertion -> same-ID byte replacement rejected |
+| `placement-element-id-missing` | transport reported no inserted element id -> insertion unprovable |
+| `placement-batch-unreconciled` | revision/continuity chain broken, unexplained drift, or unobservable member -> no batch proof written |
 
 No failure path emits an image gap brief or authorizes new visual creation.
+
+## Batch reconciliation (#3258)
+
+Sequential genuine insertions each advance the artifact revision, so
+earlier legitimate receipts disagree with the final revision by design.
+The original per-insertion receipts are append-only and are never
+re-stamped with the final revision. Instead:
+
+- `_place_one_binding` observes the artifact immediately before and
+  after the transport call (the same observation surface terminal QA
+  consumes). The only permitted delta is the single placement marker's
+  removal plus exactly the reported inserted element; anything else --
+  external/intervening text or element mutations, reused element ids --
+  fails the insertion closed.
+- `execute_artifact_visual_placements` reconciles the completed run: the
+  insertion chain must link (first pre-revision = run initial, each post
+  = next pre, last post = final; text digests and element sets must link
+  too), recovered members must have been reconciled by a prior proof (or
+  predate proofs with the artifact unmoved since their insertion), and
+  every member's element must be observable in the final snapshot.
+- `reconcile_placement_batch` persists one atomic batch proof
+  (`visual-placement-batch-proof-v1`) per artifact, superseding the
+  previous proof for that artifact. The proof binds the ordered complete
+  receipt set (with original per-insertion revisions preserved), exact
+  asset/content/element identities, artifact/build identity, the observed
+  final revision, the verified per-insertion continuity, and a
+  tamper-evident proof fingerprint that terminal QA also binds into its
+  recovery identity.
+
+Terminal QA consumes the proof for members it revalidates. Missing proofs
+keep the pre-repair per-receipt revision rule; conflicting, tampered, or
+revision-mismatched proofs fail closed for manual review, never verify.
 
 ## Retry / continuation (#3252 semantics)
 
@@ -110,6 +150,10 @@ No failure path emits an image gap brief or authorizes new visual creation.
 - Retry after partial placement: already-placed bindings recover; only
   unresolved bindings continue; stale/conflicting/failed bindings keep
   their explicit reasons.
+- Every completed run (including recovery-only runs) re-reconciles its
+  complete receipt set against the current artifact snapshot and
+  supersedes the batch proof; unexplained drift since the last
+  reconciliation fails the run closed with no new proof.
 - Continuation after a teacher decision: the plan re-honors the durable
   decision; placement consumes the resulting binding unchanged.
 
@@ -118,10 +162,12 @@ No failure path emits an image gap brief or authorizes new visual creation.
 `placement_receipts/<idempotency_key>.json` records, per verified placement:
 required visual roles and slots (bindings), selected assets (Asset IDs),
 intended exact content identities, placement receipts (with artifact type/id,
-marker, container, inserted element), and post-insertion revision. Terminal
-artifact-content QA can answer: which roles were required, which assets were
+marker, container, inserted element), and post-insertion revision -- plus the
+current reconciled batch proof (`batch_proofs`, at most one per artifact).
+Terminal artifact-content QA can answer: which roles were required, which assets were
 selected, which revisions were intended, which receipts exist, which
-artifact received them. Full semantic finality remains #3258's ownership.
+artifact received them, and which reconciled batch proof binds them to the
+observed final revision. Full semantic finality remains #3258's ownership.
 
 ## Live acceptance
 

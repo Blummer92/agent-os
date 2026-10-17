@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Placement receipt batch reconciliation (#3258): sequential genuine
+  multi-image placements no longer fail terminal QA as `artifact-stale`.
+  `connected_visual_placement.py` now observes the artifact immediately
+  before and after every insertion and verifies per-insertion mutation
+  continuity (single marker removal plus exactly the reported inserted
+  element; external/intervening mutations and same-ID byte replacement
+  fail closed). `execute_artifact_visual_placements` reconciles the
+  completed run's ordered complete receipt set against the current
+  snapshot and `placement_receipts.py` persists one atomic batch proof
+  (`visual-placement-batch-proof-v1`) per artifact, bound to exact
+  asset/content/element identities, artifact/build identity, the observed
+  final revision, verified continuity, and a tamper-evident fingerprint.
+  Original per-insertion receipts stay append-only and are never
+  re-stamped. `artifact_content_qa.py` consumes the proof for members it
+  revalidates; missing proofs keep the pre-repair per-receipt rule, while
+  conflicting/tampered/revision-mismatched proofs fail closed for manual
+  review. Terminal QA recovery now also binds the receipt-set fingerprint
+  and the recomputed batch-proof fingerprint, so cached verified QA is
+  never reused after receipt membership or proof changes. New regression
+  suite `tests/test_3258_receipt_batch_reconciliation.py` (19 scenarios:
+  1/2/4 genuine images verify on docs and slides; intervening,
+  post-reconciliation, and same-ID mutations rejected; swapped/missing
+  members rejected; partial retry inserts no duplicates; stale QA cache
+  after membership/proof changes rejected). Contracts:
+  `docs/visual-placement-contract.md`, `docs/terminal-qa-contract.md`.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
