@@ -28,14 +28,30 @@ def compose_governed_build_request(
     resume_dir: str, placement_transport: object | None,
     placement_receipts_dir: str, qa_evidence_dir: str,
     lesson_revision_spec: LessonRevisionSpec | None = None,
+    lesson_revision_required: bool = False,
 ) -> GovernedBuildRequest:
-    """One input/QA/options composition for CLI and scheduled consumers."""
+    """One input/QA/options composition for CLI and scheduled consumers.
+
+    ``lesson_revision_required`` arms the #3577 lesson-revision alignment
+    gate when the governed requirement declares the dependency (CLI and
+    scheduled consumers alike). A required gate can never be disabled by
+    missing optional inputs: required-but-missing spec refuses composition
+    fail-closed here, before any write.
+    """
     if not all((slides_template_id, doc_template_id, target_folder_id, content_title, idempotency_key)):
         raise ValueError("governed-build-request-identity-missing")
+    if lesson_revision_required and lesson_revision_spec is None:
+        raise ValueError(
+            "governed-lesson-revision-required-but-missing: the governed "
+            "requirement declares the lesson-revision dependency but no "
+            "lesson-revision spec was supplied; refusing composition rather "
+            "than silently disabling a required gate."
+        )
     qa_expectations = TerminalQAExpectations.build_from_requests(
         idempotency_key=idempotency_key, docs_requests=docs_requests,
         slides_requests=slides_requests, visual_placements=visual_placements,
         lesson_revision_spec=lesson_revision_spec,
+        lesson_revision_required=lesson_revision_required,
     )
     return GovernedBuildRequest(
         build_input=LiveBuildInput(

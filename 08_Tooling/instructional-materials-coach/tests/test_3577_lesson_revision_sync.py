@@ -11,6 +11,7 @@ receives a mechanical pass.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -184,24 +185,36 @@ from instructional_materials_coach.artifact_content_qa import (
     TerminalQAExpectations,
     evaluate_artifact_qa,
 )
+from instructional_materials_coach.worksheet_revision_qa import (
+    SourceContentReceipt,
+    SourcePage,
+    bind_source_evidence,
+)
 
 _QA_KEY = "k" * 64
 _DECK_FILENAME = "Marketing_Foundations_Day1_Convenience_Revised.pdf"
+_DRIVE_ID = "drive-deck-convenience-1"
+_DRIVE_REVISION = "drv-rev-2026-10-13"
 
 
-def _spec_dict(*, verified=False, synced=_DECK_REVISION, with_coverage=True):
-    """Minimal governed spec; approximate markers unless verified=True."""
+def _spec_dict(*, synced=_DECK_REVISION, with_coverage=True, approximate=False,
+               slide_note="exact slide 1", drive_id=_DRIVE_ID, digest=None):
+    """Governed spec assertion; evidence comes from an injected receipt."""
+    deck = {
+        "revision_id": _DECK_REVISION,
+        "filename": _DECK_FILENAME,
+        "drive_id": drive_id,
+        "slide_mapping_source": (
+            "issue-3577-body; exact slide mapping pending (approximate)"
+            if approximate
+            else "independent deck read via Drive"
+        ),
+    }
+    if digest is not None:
+        deck["content_digest"] = digest
     spec = {
         "lesson_id": _LESSON_ID,
-        "deck": {
-            "revision_id": _DECK_REVISION,
-            "filename": _DECK_FILENAME,
-            "slide_mapping_source": (
-                "teacher-owned deck read 2026-10-16"
-                if verified
-                else "issue-3577-body; exact slide read pending (approximate)"
-            ),
-        },
+        "deck": deck,
         "learning_targets": [{"id": target, "concept": target} for target in _DECK_TARGETS],
         "worksheet": {
             "lesson_id": _LESSON_ID,
@@ -213,27 +226,74 @@ def _spec_dict(*, verified=False, synced=_DECK_REVISION, with_coverage=True):
             {
                 "target_id": target,
                 "deck_slide_note": (
-                    "read from teacher-owned deck" if verified else "approximate slide"
+                    "approximate slide; pending teacher read"
+                    if approximate
+                    else slide_note
                 ),
                 "worksheet_tasks": [f"task-{target}"],
             }
             for target in _DECK_TARGETS
         ]
-    if verified:
-        spec["deck_evidence"] = {
-            "kind": "teacher-owned-deck-read",
-            "filename": _DECK_FILENAME,
-            "verified_at": "2026-10-16T00:00:00Z",
-        }
     return spec
 
 
-def _qa_report(spec_dict_or_none):
-    spec = parse_lesson_revision_spec(spec_dict_or_none) if spec_dict_or_none else None
-    expectations = TerminalQAExpectations(idempotency_key=_QA_KEY, lesson_revision=spec)
+def _pages(*slide_numbers):
+    return tuple(
+        SourcePage(
+            page_number=i + 1,
+            slide_number=n,
+            text=f"Slide {n}: convenience content for {target}",
+        )
+        for i, (n, target) in enumerate(zip(slide_numbers, _DECK_TARGETS))
+    )
+
+
+def _receipt(*, drive_id=_DRIVE_ID, endorsed=True, pages=None, digest=None,
+             filename=_DECK_FILENAME, revision_id=_DRIVE_REVISION):
+    body = b"%PDF-1.4 fake deck bytes for " + drive_id.encode("utf-8")
+    actual_digest = digest if digest is not None else "sha256:" + hashlib.sha256(body).hexdigest()
+    return SourceContentReceipt(
+        source_drive_id=drive_id,
+        source_filename=filename,
+        source_revision_id=revision_id,
+        content_digest=actual_digest,
+        pages=_pages(1, 2, 3, 4, 5) if pages is None else pages,
+        retrieved_at="2026-10-16T12:00:00+00:00",
+        source_provenance="drive-v3-files-get-media:" + drive_id,
+        teacher_owner_identity="teacher@example.org" if endorsed else None,
+        teacher_endorsed=endorsed,
+    )
+
+
+def _bind(spec_dict, **receipt_kwargs):
+    return bind_source_evidence(parse_lesson_revision_spec(spec_dict),
+                                _receipt(**receipt_kwargs))
+
+
+def _persisted_text(spec_dict=None):
+    """Persisted worksheet text carrying the trusted anchors + observed tasks."""
+    spec = parse_lesson_revision_spec(spec_dict or _spec_dict())
+    tasks = " ".join(task for task, _ in (spec.worksheet_task_coverage or ()))
+    return (
+        f"Lesson {spec.worksheet_lesson_id} worksheet synchronized against "
+        f"{spec.worksheet_synced_deck_revision_id}. Tasks: {tasks}."
+    )
+
+
+def _qa_report(spec_dict_or_none, *, persisted=None, required=False, bind=True,
+               **receipt_kwargs):
+    spec = None
+    if spec_dict_or_none:
+        spec = parse_lesson_revision_spec(spec_dict_or_none)
+        if bind:
+            spec = bind_source_evidence(spec, _receipt(**receipt_kwargs))
+    expectations = TerminalQAExpectations(
+        idempotency_key=_QA_KEY, lesson_revision=spec,
+        lesson_revision_required=required,
+    )
     observation = ArtifactObservation(
         artifact_type="docs", artifact_id="doc-1", revision_id="r1",
-        full_text="worksheet text",
+        full_text=persisted if persisted is not None else _persisted_text(spec_dict_or_none),
     )
     return evaluate_artifact_qa(
         artifact_type="docs", artifact_id="doc-1",
@@ -246,43 +306,49 @@ def _codes(report):
     return [finding.code for finding in report.findings]
 
 
-# --- Spec parsing: evidence provenance ---------------------------------------
+# --- Spec parsing: YAML is an assertion, never a read receipt ----------------
 
 
-def test_verified_deck_read_parses_verified() -> None:
-    spec = parse_lesson_revision_spec(_spec_dict(verified=True))
-    assert spec.deck_evidence_verified
-    assert spec.approximate_evidence_refs == ()
-    assert spec.deck_learning_target_ids == _DECK_TARGETS
-    assert spec.worksheet_task_coverage is not None
-
-
-def test_approximate_slide_mapping_is_not_verified_evidence() -> None:
-    """Self-authored approximate mappings never count as verified
-    teacher-owned deck evidence."""
-    spec = parse_lesson_revision_spec(_spec_dict(verified=False))
-    assert not spec.deck_evidence_verified
-    assert spec.approximate_evidence_refs
-
-
-def test_verified_claim_with_approximate_markers_is_rejected() -> None:
-    """A spec claiming a verified teacher-owned deck read while carrying
-    approximate slide markers is contradictory evidence: rejected, not
-    silently downgraded."""
-    spec_dict = _spec_dict(verified=False)
+def test_typed_yaml_deck_evidence_is_rejected() -> None:
+    """A caller-typed ``deck_evidence`` record (``kind:
+    teacher-owned-deck-read``) is self-authored fake evidence: YAML can never
+    certify a deck read, so the spec is rejected outright, not parsed as
+    verified."""
+    spec_dict = _spec_dict()
     spec_dict["deck_evidence"] = {
         "kind": "teacher-owned-deck-read",
         "filename": _DECK_FILENAME,
+        "verified_at": "2026-10-16T00:00:00Z",
     }
     with pytest.raises(WorksheetRevisionQAError):
         parse_lesson_revision_spec(spec_dict)
 
 
-def test_deck_evidence_naming_wrong_file_is_rejected() -> None:
-    spec_dict = _spec_dict(verified=True)
-    spec_dict["deck_evidence"]["filename"] = "Some_Other_Deck.pdf"
+def test_typed_yaml_deck_evidence_with_wrong_kind_is_rejected() -> None:
+    """Any ``deck_evidence`` mapping shape is rejected: evidence is
+    independently injected, never declared in YAML."""
+    spec_dict = _spec_dict()
+    spec_dict["deck_evidence"] = {"kind": "unverified", "note": "pending read"}
     with pytest.raises(WorksheetRevisionQAError):
         parse_lesson_revision_spec(spec_dict)
+
+
+def test_approximate_slide_mapping_parses_as_assertion() -> None:
+    """Self-authored approximate mappings parse (assertion), but carry no
+    source evidence and keep their approximate markers: they can never
+    produce a clean acceptance downstream."""
+    spec = parse_lesson_revision_spec(_spec_dict(approximate=True))
+    assert spec.source_evidence is None
+    assert spec.approximate_evidence_refs
+    assert spec.deck_drive_id == _DRIVE_ID
+
+
+def test_exact_slide_refs_are_parsed() -> None:
+    spec = parse_lesson_revision_spec(_spec_dict())
+    assert sorted(spec.exact_slide_refs) == sorted(
+        (target, 1) for target in _DECK_TARGETS
+    )
+    assert spec.approximate_evidence_refs == ()
 
 
 def test_coverage_entry_referencing_unknown_target_is_rejected() -> None:
@@ -297,12 +363,12 @@ def test_missing_coverage_matrix_parses_unmeasured() -> None:
     assert spec.worksheet_task_coverage is None
 
 
-def test_committed_day1_sample_parses_as_unverified_evidence() -> None:
+def test_committed_day1_sample_parses_without_source_evidence() -> None:
     """The committed Day 1 spec's slide mapping is explicitly approximate
-    (slide_mapping_source + deck_slides_approx): it must parse as
-    unverified evidence, never as verified deck evidence."""
+    (slide_mapping_source + deck_slides_approx): it parses as an assertion
+    with no source evidence and keeps its approximate markers."""
     spec = parse_lesson_revision_spec(_load_day1_spec())
-    assert not spec.deck_evidence_verified
+    assert spec.source_evidence is None
     assert "deck.slide_mapping_source" in spec.approximate_evidence_refs
     assert set(spec.deck_learning_target_ids) == set(_DECK_TARGETS)
     assert spec.worksheet_task_coverage is not None
@@ -311,24 +377,89 @@ def test_committed_day1_sample_parses_as_unverified_evidence() -> None:
 # --- Terminal-QA wiring: the gate actually executes ----------------------------
 
 
-def test_verified_spec_with_full_coverage_can_pass_clean() -> None:
-    report = _qa_report(_spec_dict(verified=True))
+def test_bound_evidence_with_matching_persisted_tasks_passes_clean() -> None:
+    """Positive: independently retrieved valid source content (injected
+    receipt), teacher approval, validated slide refs, and persisted
+    worksheet carrying the trusted anchors + observed tasks -> verified."""
+    report = _qa_report(_spec_dict())
     assert report.state == QA_STATE_VERIFIED
     assert _codes(report) == []
 
 
-def test_approximate_evidence_cannot_produce_clean_acceptance() -> None:
-    """Approximate slide numbers + full coverage: the alignment gate must
-    refuse a clean acceptance and route to manual review."""
-    report = _qa_report(_spec_dict(verified=False))
+def test_invented_exact_slide_fails_at_binding() -> None:
+    """The reproduced slide-9999 counterexample: the spec references an
+    invented exact slide absent from the independently retrieved pages, so
+    the evidence binding fails before terminal QA."""
+    with pytest.raises(WorksheetRevisionQAError):
+        _bind(_spec_dict(slide_note="exact slide 9999"))
+
+
+def test_foreign_deck_id_fails_at_binding() -> None:
+    """A wrong/foreign Drive ID in the injected receipt cannot satisfy the
+    spec's asserted canonical teacher-owned Drive ID."""
+    with pytest.raises(WorksheetRevisionQAError):
+        _bind(_spec_dict(), drive_id="drive-some-other-deck")
+
+
+def test_digest_mismatch_fails_at_binding() -> None:
+    """The spec asserts a content digest; retrieved bytes with a different
+    digest fail the binding."""
+    with pytest.raises(WorksheetRevisionQAError):
+        _bind(_spec_dict(digest="sha256:" + "0" * 64))
+
+
+def test_filename_mismatch_fails_at_binding() -> None:
+    with pytest.raises(WorksheetRevisionQAError):
+        _bind(_spec_dict(), filename="Some_Other_Deck.pdf")
+
+
+def test_missing_drive_id_in_spec_fails_at_binding() -> None:
+    """Without an asserted canonical Drive ID the retrieved source cannot
+    be attributed to the declared deck: binding is refused."""
+    with pytest.raises(WorksheetRevisionQAError):
+        _bind(_spec_dict(drive_id=None))
+
+
+def test_unapproved_receipt_routes_to_manual_review() -> None:
+    """Content evidence without a teacher ownership/approval assertion stays
+    manual-review: hashes bind bytes, never teacher approval."""
+    report = _qa_report(_spec_dict(), endorsed=False)
     assert report.state == QA_STATE_LESSON_ALIGNMENT_UNVERIFIED
     assert report.state != QA_STATE_VERIFIED
-    assert "qa-worksheet-alignment-deck-evidence-unverified" in _codes(report)
+    assert "qa-worksheet-alignment-teacher-approval-unverified" in _codes(report)
+
+
+def test_unverifiable_slide_refs_route_to_manual_review() -> None:
+    """Exact slide references against a metadata-only receipt (no retrieved
+    pages) cannot be validated: manual review, never clean acceptance."""
+    report = _qa_report(_spec_dict(), pages=())
+    bound = _bind(_spec_dict(), pages=())
+    assert not bound.slide_refs_validated
+    assert report.state == QA_STATE_LESSON_ALIGNMENT_UNVERIFIED
+    assert "qa-worksheet-alignment-slide-refs-unverifiable" in _codes(report)
+
+
+def test_approximate_evidence_cannot_produce_clean_acceptance() -> None:
+    """Approximate slide markers + bound evidence: the alignment gate must
+    refuse a clean acceptance and route to manual review."""
+    report = _qa_report(_spec_dict(approximate=True))
+    assert report.state == QA_STATE_LESSON_ALIGNMENT_UNVERIFIED
+    assert report.state != QA_STATE_VERIFIED
+    assert "qa-worksheet-alignment-approximate-evidence" in _codes(report)
+
+
+def test_missing_source_evidence_stays_manual_review() -> None:
+    """No injected receipt (the authentic Day-1 PDF is unavailable): the
+    alignment gate routes to MANUAL REVIEW — not verified, not failed."""
+    report = _qa_report(_spec_dict(), bind=False)
+    assert report.state == QA_STATE_LESSON_ALIGNMENT_UNVERIFIED
+    assert report.state != QA_STATE_VERIFIED
+    assert "qa-worksheet-alignment-source-unverified" in _codes(report)
 
 
 def test_missing_coverage_evidence_stays_manual_review() -> None:
-    """Missing revised-PDF / unmeasured coverage evidence stays
-    manual-review; it never passes and never hard-fails."""
+    """Unmeasured task coverage stays manual-review; it never passes and
+    never hard-fails."""
     report = _qa_report(_spec_dict(with_coverage=False))
     assert report.state == QA_STATE_LESSON_ALIGNMENT_UNVERIFIED
     assert "qa-worksheet-alignment-coverage-unmeasured" in _codes(report)
@@ -340,26 +471,66 @@ def test_stale_revision_fails_in_terminal_qa() -> None:
     assert "qa-worksheet-stale-deck-revision" in _codes(report)
 
 
+def test_stale_persisted_worksheet_fails_in_terminal_qa() -> None:
+    """The reproduced stale-Day-8 counterexample: the persisted worksheet
+    text carries none of the trusted lesson/revision/task anchors, so
+    terminal QA fails even though the YAML declarations are internally
+    consistent."""
+    report = _qa_report(
+        _spec_dict(), persisted="Stale Day 8 worksheet: draw a logo."
+    )
+    assert report.state == QA_STATE_LESSON_REVISION_MISMATCH
+    assert "qa-worksheet-persisted-revision-mismatch" in _codes(report)
+
+
+def test_unobserved_task_fails_in_terminal_qa() -> None:
+    """A YAML-declared worksheet task absent from the persisted worksheet
+    fails: coverage requires observed tasks, not YAML-declared names."""
+    persisted = _persisted_text(_spec_dict()).replace("task-price-convenience-premium", "something-else")
+    report = _qa_report(_spec_dict(), persisted=persisted)
+    assert report.state == QA_STATE_LESSON_REVISION_MISMATCH
+    assert "qa-worksheet-task-not-observed" in _codes(report)
+
+
 def test_uncovered_target_fails_in_terminal_qa() -> None:
-    spec_dict = _spec_dict(verified=True)
+    spec_dict = _spec_dict()
     spec_dict["coverage_matrix"] = spec_dict["coverage_matrix"][:-1]
-    report = _qa_report(spec_dict)
+    report = _qa_report(spec_dict, persisted=_persisted_text(spec_dict))
     assert report.state == QA_STATE_LESSON_REVISION_MISMATCH
     assert "qa-worksheet-learning-target-uncovered" in _codes(report)
 
 
+def test_required_but_missing_spec_fails_in_terminal_qa() -> None:
+    """Defense in depth: expectations armed as required without a spec fail
+    terminal QA instead of silently disabling the gate."""
+    report = _qa_report(None, required=True)
+    assert report.state == QA_STATE_LESSON_REVISION_MISMATCH
+    assert "qa-lesson-revision-required-but-missing" in _codes(report)
+
+
 def test_gate_not_armed_without_spec() -> None:
-    """A build with no governed lesson-revision spec gets no alignment
-    findings: the gate is opt-in per build, not invented evidence."""
+    """A build with no governed lesson-revision spec and no declared
+    dependency gets no alignment findings: the gate is opt-in per build,
+    not invented evidence. Unaffected legacy lessons stay unaffected."""
     report = _qa_report(None)
     assert report.state == QA_STATE_VERIFIED
     assert not [code for code in _codes(report) if "alignment" in code or "stale-deck" in code]
 
 
+def test_gate_armed_for_required_build_without_spec_change() -> None:
+    """A required gate stays armed through expectations: required=True is
+    bound into the expectations hash so recovered QA cannot cross a
+    changed gate."""
+    report = _qa_report(_spec_dict(), required=True)
+    assert report.state == QA_STATE_VERIFIED
+    assert _codes(report) == []
+
+
 def test_committed_day1_sample_never_passes_clean_in_qa() -> None:
     """End to end on the committed sample: its approximate slide mapping
-    can never yield a clean terminal acceptance without a verified
-    teacher-owned deck read."""
-    report = _qa_report(_load_day1_spec())
+    and missing independent source receipt can never yield a clean terminal
+    acceptance."""
+    report = _qa_report(_load_day1_spec(), bind=False,
+                        persisted=_persisted_text())
     assert report.state != QA_STATE_VERIFIED
-    assert "qa-worksheet-alignment-deck-evidence-unverified" in _codes(report)
+    assert "qa-worksheet-alignment-source-unverified" in _codes(report)

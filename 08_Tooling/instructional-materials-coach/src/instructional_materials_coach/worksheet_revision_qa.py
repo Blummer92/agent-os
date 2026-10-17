@@ -12,6 +12,9 @@ provider call, or external-system mutation.
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -307,26 +310,121 @@ def validate_lesson_revision_alignment(
 # governed YAML record, e.g.
 # samples/marketing_foundations_day1_lesson.yaml), parsed fail-closed here.
 #
-# Evidence provenance is part of the parse. A spec carries VERIFIED deck
-# evidence ONLY when it declares an explicit teacher-owned-deck read record
-# for the declared deck filename. Self-authored slide mappings (approximate
-# slide indices, approximate mapping sources, approximate slide notes) are
-# NEVER verified teacher-owned deck evidence: they parse as unverified, and a
-# spec that claims a verified deck read while still carrying approximate
-# slide markers is contradictory evidence and is rejected outright. Downstream
-# (terminal QA), approximate slide numbers can never produce a clean
-# acceptance result — they route to manual review.
+# YAML IS AN ASSERTION, NEVER A READ RECEIPT. The spec may assert the
+# canonical teacher-owned Drive ID (``deck.drive_id``), the asserted revision
+# and byte digest, and the coverage mapping — but it can never certify that
+# the deck was actually read. A YAML ``deck_evidence`` block is rejected
+# outright: a caller-typed "teacher-owned-deck-read" record is self-authored
+# fake evidence, not an independently retrieved receipt.
+#
+# Actual source evidence arrives as an independently injected
+# ``SourceContentReceipt`` built by the retrieval path (existing Drive
+# metadata/fetch tools plus the host's PDF/page reader), never from YAML.
+# ``bind_source_evidence`` validates the receipt against the YAML assertion
+# fail-closed: wrong/foreign Drive ID, digest mismatch, filename mismatch, or
+# an exact slide reference absent from the retrieved pages refuses the
+# binding. Teacher ownership/endorsement is carried on the receipt as a
+# SEPARATE assertion from the content hash: a hash binds bytes, it never
+# establishes teacher ownership or pedagogical endorsement.
 
 
-_VERIFIED_DECK_EVIDENCE_KIND = "teacher-owned-deck-read"
+@dataclass(frozen=True)
+class SourcePage:
+    """One retrieved source page/slide: number + retrieved text content."""
+
+    page_number: int
+    slide_number: int | None
+    text: str
+
+
+@dataclass(frozen=True)
+class SourceContentReceipt:
+    """Independently retrieved, read-only source-content evidence (#3577).
+
+    Built ONLY by the independent retrieval path (a Drive-backed retriever
+    or an injected host reader), never parsed from YAML. ``content_digest``
+    is the immutable digest of the retrieved bytes; ``teacher_owner_identity``
+    and ``teacher_endorsed`` are asserted by the independent retrieval path
+    (separate from the content hash — a hash binds bytes, it never
+    establishes teacher ownership or pedagogical endorsement).
+    """
+
+    source_drive_id: str
+    source_filename: str
+    source_revision_id: str | None
+    content_digest: str
+    pages: tuple[SourcePage, ...]
+    retrieved_at: str
+    source_provenance: str
+    teacher_owner_identity: str | None
+    teacher_endorsed: bool
+
+    def receipt_fingerprint(self) -> str:
+        """Stable fingerprint binding every receipt field (incl. pages)."""
+        payload = {
+            "source_drive_id": self.source_drive_id,
+            "source_filename": self.source_filename,
+            "source_revision_id": self.source_revision_id,
+            "content_digest": self.content_digest,
+            "pages": [
+                {"page_number": p.page_number, "slide_number": p.slide_number, "text": p.text}
+                for p in self.pages
+            ],
+            "retrieved_at": self.retrieved_at,
+            "source_provenance": self.source_provenance,
+            "teacher_owner_identity": self.teacher_owner_identity,
+            "teacher_endorsed": self.teacher_endorsed,
+        }
+        canonical = (
+            "{"
+            + ",".join(
+                f"{key!r}:{_receipt_value(payload[key])}" for key in sorted(payload)
+            )
+            + "}"
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _receipt_value(value: object) -> str:
+    if isinstance(value, str):
+        return repr(value)
+    if value is None or isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_receipt_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ",".join(
+                f"{key!r}:{_receipt_value(value[key])}" for key in sorted(value)
+            )
+            + "}"
+        )
+    return repr(value)
+
+
 # Text markers meaning "not yet a verified exact deck read": approximate
 # slide numbers, a read still pending, or a proposed/unverified mapping.
 _UNVERIFIED_EVIDENCE_MARKERS = ("approximate", "pending", "proposed", "tbd", "unverified")
 
+#: "exact slide N" assertions inside coverage notes; validated against the
+#: independently retrieved pages at binding time. Slide 9999 (or any invented
+#: number) fails the binding because no retrieved page carries it.
+_EXACT_SLIDE_RE = re.compile(r"\bexact\s+slide\s+(\d+)\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class LessonRevisionSpec:
-    """Governed, parsed lesson-revision alignment inputs (#3577)."""
+    """Governed, parsed lesson-revision alignment inputs (#3577).
+
+    Pure assertion: lesson/deck identity, the asserted canonical teacher-owned
+    Drive ID (``deck_drive_id``), the asserted byte digest/revision, the
+    deck's material learning targets, and the worksheet's sync declaration.
+    ``source_evidence`` is attached ONLY by ``bind_source_evidence`` from an
+    independently retrieved ``SourceContentReceipt``; ``slide_refs_validated``
+    records whether every exact slide reference was validated against the
+    retrieved pages.
+    """
 
     lesson_id: str
     deck_revision_id: str
@@ -335,8 +433,13 @@ class LessonRevisionSpec:
     worksheet_lesson_id: str
     worksheet_synced_deck_revision_id: str
     worksheet_task_coverage: tuple[tuple[str, tuple[str, ...]], ...] | None
-    deck_evidence_verified: bool
     approximate_evidence_refs: tuple[str, ...]
+    deck_drive_id: str | None = None
+    deck_drive_revision_id: str | None = None
+    deck_content_digest: str | None = None
+    exact_slide_refs: tuple[tuple[str, int], ...] = ()
+    source_evidence: SourceContentReceipt | None = None
+    slide_refs_validated: bool = False
 
 
 def _spec_text(value: object, name: str) -> str:
@@ -345,6 +448,12 @@ def _spec_text(value: object, name: str) -> str:
     if value != value.strip() or any(char.isspace() for char in value):
         raise WorksheetRevisionQAError(f"{name} is a malformed identity")
     return value
+
+
+def _spec_optional_text(value: object, name: str) -> str | None:
+    if value is None:
+        return None
+    return _spec_text(value, name)
 
 
 def _spec_mapping(value: object, name: str) -> dict:
@@ -368,22 +477,50 @@ def _coverage_entry_is_approximate(entry: dict) -> bool:
     )
 
 
+def _coverage_entry_exact_slides(entry: dict) -> tuple[int, ...]:
+    slides: list[int] = []
+    for key in ("deck_slide_note", "slide_note", "deck_mapping_note"):
+        note = entry.get(key)
+        if isinstance(note, str):
+            slides.extend(int(match) for match in _EXACT_SLIDE_RE.findall(note))
+    return tuple(slides)
+
+
 def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
     """Parse a lesson-revision spec mapping fail-closed (#3577).
 
-    The spec declares the deck revision identity, the deck's material
-    learning targets, and the worksheet's sync declaration (synced deck
-    revision + task coverage). ``deck_evidence_verified`` is True only for a
-    spec with an explicit teacher-owned-deck read record for the declared
-    deck filename and zero approximate slide markers; a spec claiming a
-    verified read while carrying approximate slide markers is rejected.
+    The spec is an ASSERTION: the deck revision identity, the asserted
+    canonical teacher-owned Drive ID (``deck.drive_id``), asserted byte
+    digest/revision, the deck's material learning targets, and the
+    worksheet's sync declaration (synced deck revision + task coverage).
+
+    A ``deck_evidence`` mapping is REJECTED outright: YAML is never a
+    self-certified read receipt, and a caller-typed
+    ``teacher-owned-deck-read`` record is fake evidence. Source evidence is
+    attached later by ``bind_source_evidence`` from an independently
+    injected ``SourceContentReceipt``.
     """
     spec = _spec_mapping(value, "lesson_revision_spec")
     lesson_id = _spec_text(spec.get("lesson_id"), "lesson_id")
 
+    if spec.get("deck_evidence") is not None:
+        raise WorksheetRevisionQAError(
+            "lesson_revision_spec must not carry deck_evidence: YAML is an "
+            "assertion, never a self-certified read receipt. Source evidence "
+            "is independently injected and bound via bind_source_evidence; a "
+            "caller-typed deck_evidence record is rejected as fake evidence."
+        )
+
     deck = _spec_mapping(spec.get("deck"), "deck")
     deck_revision_id = _spec_text(deck.get("revision_id"), "deck.revision_id")
     deck_filename = _spec_text(deck.get("filename"), "deck.filename")
+    deck_drive_id = _spec_optional_text(deck.get("drive_id"), "deck.drive_id")
+    deck_drive_revision_id = _spec_optional_text(
+        deck.get("drive_revision_id"), "deck.drive_revision_id"
+    )
+    deck_content_digest = _spec_optional_text(
+        deck.get("content_digest"), "deck.content_digest"
+    )
     approximate_refs: list[str] = []
     if _looks_approximate(deck.get("slide_mapping_source")):
         approximate_refs.append("deck.slide_mapping_source")
@@ -413,6 +550,7 @@ def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
 
     coverage_matrix = spec.get("coverage_matrix")
     task_targets: dict[str, set[str]] = {}
+    exact_slide_refs: list[tuple[str, int]] = []
     if coverage_matrix is not None:
         if not isinstance(coverage_matrix, list):
             raise WorksheetRevisionQAError("coverage_matrix must be a list")
@@ -441,6 +579,8 @@ def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
                 task_targets.setdefault(task_id, set()).add(target_id)
             if _coverage_entry_is_approximate(entry_map):
                 approximate_refs.append(target_id)
+            for slide_no in _coverage_entry_exact_slides(entry_map):
+                exact_slide_refs.append((target_id, slide_no))
     worksheet_task_coverage = (
         tuple(
             (task_id, tuple(sorted(covered)))
@@ -448,36 +588,6 @@ def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
         )
         or None
     )
-
-    deck_evidence = spec.get("deck_evidence")
-    verified = False
-    if deck_evidence is not None:
-        evidence = _spec_mapping(deck_evidence, "deck_evidence")
-        kind = evidence.get("kind")
-        evidence_filename = evidence.get("filename")
-        if kind == _VERIFIED_DECK_EVIDENCE_KIND:
-            if not (isinstance(evidence_filename, str) and evidence_filename == deck_filename):
-                raise WorksheetRevisionQAError(
-                    "deck_evidence claims a teacher-owned deck read but does not name "
-                    "the declared deck filename; the evidence is not attributable."
-                )
-            if approximate_refs:
-                raise WorksheetRevisionQAError(
-                    "deck_evidence claims a verified teacher-owned deck read while the "
-                    "spec still carries approximate slide markers ("
-                    + ", ".join(sorted(set(approximate_refs)))
-                    + "); approximate self-authored mappings are rejected as "
-                    "verified evidence. Remove the approximate markers or drop the "
-                    "verified claim."
-                )
-            verified = True
-        elif kind not in (None, ""):
-            raise WorksheetRevisionQAError(
-                "deck_evidence.kind must be "
-                + repr(_VERIFIED_DECK_EVIDENCE_KIND)
-                + " to count as verified teacher-owned deck evidence; got "
-                + repr(kind)
-            )
 
     return LessonRevisionSpec(
         lesson_id=lesson_id,
@@ -487,6 +597,168 @@ def parse_lesson_revision_spec(value: object) -> LessonRevisionSpec:
         worksheet_lesson_id=worksheet_lesson_id,
         worksheet_synced_deck_revision_id=worksheet_synced,
         worksheet_task_coverage=worksheet_task_coverage,
-        deck_evidence_verified=verified,
         approximate_evidence_refs=tuple(sorted(set(approximate_refs))),
+        deck_drive_id=deck_drive_id,
+        deck_drive_revision_id=deck_drive_revision_id,
+        deck_content_digest=deck_content_digest,
+        exact_slide_refs=tuple(sorted(set(exact_slide_refs))),
     )
+
+
+def bind_source_evidence(
+    spec: LessonRevisionSpec, receipt: SourceContentReceipt
+) -> LessonRevisionSpec:
+    """Bind an independently retrieved receipt to a parsed spec (#3577).
+
+    Validates the receipt against the YAML assertion fail-closed and returns
+    a new spec carrying ``source_evidence``:
+
+    - the spec must assert a canonical ``deck.drive_id``; without it the
+      source cannot be attributed and the binding is refused;
+    - the receipt's Drive ID must equal the asserted ID (wrong/foreign deck
+      IDs fail);
+    - the receipt's filename must equal the asserted filename;
+    - when the spec asserts ``deck.content_digest`` / ``deck.drive_revision_id``,
+      the receipt must match (hash/revision mismatch fails);
+    - every exact slide reference in the spec must resolve to a retrieved
+      page/slide with non-empty content (an invented "exact slide 9999"
+      fails);
+    - when the receipt carries no retrieved pages, exact slide references
+      cannot be validated: the binding succeeds but
+      ``slide_refs_validated`` stays False so terminal QA routes to manual
+      review instead of a clean acceptance.
+    """
+    if not isinstance(spec, LessonRevisionSpec):
+        raise WorksheetRevisionQAError("spec must be a LessonRevisionSpec")
+    if not isinstance(receipt, SourceContentReceipt):
+        raise WorksheetRevisionQAError("receipt must be a SourceContentReceipt")
+
+    if spec.deck_drive_id is None:
+        raise WorksheetRevisionQAError(
+            "lesson-revision spec asserts no deck.drive_id: the independently "
+            "retrieved source cannot be attributed to the declared deck and "
+            "the evidence binding is refused. Assert the canonical "
+            "teacher-owned Drive ID in the spec."
+        )
+    if receipt.source_drive_id != spec.deck_drive_id:
+        raise WorksheetRevisionQAError(
+            "source evidence Drive ID "
+            + receipt.source_drive_id
+            + " does not match the spec's asserted canonical teacher-owned "
+            "Drive ID "
+            + spec.deck_drive_id
+            + "; a wrong/foreign deck cannot satisfy the lesson-revision gate."
+        )
+    if receipt.source_filename != spec.deck_filename:
+        raise WorksheetRevisionQAError(
+            "source evidence filename "
+            + repr(receipt.source_filename)
+            + " does not match the spec's asserted deck filename "
+            + repr(spec.deck_filename)
+            + "."
+        )
+    if (
+        spec.deck_content_digest is not None
+        and receipt.content_digest != spec.deck_content_digest
+    ):
+        raise WorksheetRevisionQAError(
+            "source evidence content digest does not match the spec's asserted "
+            "deck content digest; the retrieved bytes are not the declared "
+            "deck revision."
+        )
+    if (
+        spec.deck_drive_revision_id is not None
+        and receipt.source_revision_id != spec.deck_drive_revision_id
+    ):
+        raise WorksheetRevisionQAError(
+            "source evidence Drive revision "
+            + repr(receipt.source_revision_id)
+            + " does not match the spec's asserted deck Drive revision "
+            + repr(spec.deck_drive_revision_id)
+            + "."
+        )
+
+    slide_refs_validated = True
+    if spec.exact_slide_refs:
+        if not receipt.pages:
+            slide_refs_validated = False
+        else:
+            retrieved = {
+                page.slide_number
+                for page in receipt.pages
+                if page.slide_number is not None and page.text.strip()
+            }
+            for target_id, slide_no in spec.exact_slide_refs:
+                if slide_no not in retrieved:
+                    raise WorksheetRevisionQAError(
+                        "spec references exact slide "
+                        + str(slide_no)
+                        + " (coverage target "
+                        + target_id
+                        + ") but the independently retrieved source content "
+                        "contains no such slide with retrieved content; "
+                        "invented slide references cannot satisfy the "
+                        "lesson-revision gate."
+                    )
+
+    return dataclasses.replace(
+        spec, source_evidence=receipt, slide_refs_validated=slide_refs_validated
+    )
+
+
+def observed_worksheet_alignment_findings(
+    *,
+    spec: LessonRevisionSpec,
+    observed_text: str,
+) -> WorksheetRevisionVisualResult:
+    """Check the OBSERVED worksheet against the trusted anchors (#3577).
+
+    The YAML assertion is never compared to itself: the persisted worksheet
+    text must carry the trusted lesson/revision anchors from the bound spec,
+    and every worksheet task in the reviewed target mapping must be observed
+    in the persisted worksheet. A stale persisted worksheet (e.g. Day-8 text
+    against a Day-1 declaration) fails; invented YAML tasks absent from the
+    persisted worksheet fail.
+    """
+    if not isinstance(spec, LessonRevisionSpec):
+        raise WorksheetRevisionQAError("spec must be a LessonRevisionSpec")
+    observed = observed_text.casefold() if isinstance(observed_text, str) else ""
+    findings: list[WorksheetRevisionVisualFinding] = []
+
+    missing_anchors = [
+        anchor
+        for anchor in (spec.worksheet_lesson_id, spec.worksheet_synced_deck_revision_id)
+        if anchor.casefold() not in observed
+    ]
+    if missing_anchors:
+        findings.append(
+            WorksheetRevisionVisualFinding(
+                "worksheet-persisted-revision-mismatch",
+                "fail",
+                "The persisted worksheet does not carry the trusted "
+                "lesson/revision anchors (" + ", ".join(missing_anchors) + "). "
+                "The observed worksheet is stale or belongs to a different "
+                "lesson revision than the declared synchronized deck revision.",
+            )
+        )
+
+    if spec.worksheet_task_coverage is not None:
+        unobserved = sorted(
+            task_id
+            for task_id, _ in spec.worksheet_task_coverage
+            if task_id.casefold() not in observed
+        )
+        if unobserved:
+            findings.append(
+                WorksheetRevisionVisualFinding(
+                    "worksheet-task-not-observed",
+                    "fail",
+                    "Worksheet tasks from the reviewed target mapping are not "
+                    "observed in the persisted worksheet: "
+                    + ", ".join(unobserved)
+                    + ". Coverage requires observed tasks, not YAML-declared "
+                    "task names.",
+                )
+            )
+
+    return WorksheetRevisionVisualResult(tuple(findings))

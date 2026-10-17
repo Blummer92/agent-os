@@ -37,7 +37,10 @@ from .template_resolution import TemplateCandidate, resolve_approved_template_pa
 from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
 from .worksheet_revision_qa import (
     LessonRevisionSpec,
+    SourceContentReceipt,
+    SourcePage,
     WorksheetRevisionQAError,
+    bind_source_evidence,
     parse_lesson_revision_spec,
 )
 from .workspace_clients import build_docs_service, build_slides_service
@@ -85,9 +88,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build.add_argument("--lesson-revision-spec", default="",
                        help="Optional governed lesson-revision spec YAML (#3577): deck "
                             "revision identity, deck learning targets, and the "
-                            "worksheet's sync declaration. Arms the terminal-QA "
-                            "cross-artifact alignment gate on the worksheet; an "
-                            "unreadable or contradictory spec refuses the build.")
+                            "worksheet's sync declaration. The YAML is an assertion, "
+                            "never a read receipt: source evidence is retrieved "
+                            "independently via Drive and bound fail-closed before "
+                            "the build. Arms the terminal-QA cross-artifact "
+                            "alignment gate on the worksheet; an unreadable, "
+                            "contradictory, or unbindable spec refuses the build, "
+                            "while missing evidence routes terminal QA to manual "
+                            "review.")
+    build.add_argument("--lesson-revision-required", action="store_true",
+                       help="Declare the #3577 lesson-revision dependency for this "
+                            "build (including scheduled builds via the shared "
+                            "composer): the alignment gate stays armed and a "
+                            "missing spec refuses the build instead of silently "
+                            "disabling a required gate.")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -107,12 +121,123 @@ def _load_json(path: str, *, default: object) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _load_lesson_revision_spec(path: str) -> LessonRevisionSpec:
-    """Load and parse a governed lesson-revision spec YAML (#3577).
+def retrieve_deck_source_receipt(
+    drive_service: object,
+    spec: LessonRevisionSpec,
+    *,
+    page_reader: object | None = None,
+    teacher_approval: Mapping[str, object] | None = None,
+) -> SourceContentReceipt:
+    """Retrieve independent deck source evidence through existing Drive tools (#3577).
 
-    Fail-closed: an unreadable, invalid, or contradictory spec (e.g. a
-    verified deck-read claim backed by approximate slide markers) refuses
-    the build rather than arming terminal QA with untrustworthy evidence.
+    Uses the existing Drive metadata boundary (``drive_client.get_file_metadata``)
+    for identity/revision/checksum, downloads the file bytes via
+    ``files().get_media()`` for the immutable byte digest, and extracts
+    page/slide content ONLY through an injected ``page_reader`` callable
+    ``(file_bytes, mime_type) -> tuple[SourcePage, ...]`` — the approved
+    PDF/page-reader boundary lives with the host; this module builds no PDF
+    parser. Teacher ownership/approval comes from an independently supplied
+    ``teacher_approval`` mapping (``{"owner_identity": str, "approved": bool}``);
+    it is never derived from the content hash or Drive ownership metadata.
+
+    Raises ``WorksheetRevisionQAError`` for malformed inputs and propagates
+    Drive lookup failures to the caller (missing/unverifiable evidence routes
+    to MANUAL REVIEW upstream; it is never silently treated as verified).
+    """
+    if not isinstance(spec, LessonRevisionSpec):
+        raise WorksheetRevisionQAError("spec must be a LessonRevisionSpec")
+    if spec.deck_drive_id is None:
+        raise WorksheetRevisionQAError(
+            "lesson-revision spec asserts no deck.drive_id: no canonical "
+            "teacher-owned Drive file can be retrieved."
+        )
+    if drive_service is None:
+        raise WorksheetRevisionQAError("drive_service is required for source retrieval")
+
+    metadata = get_file_metadata(drive_service, spec.deck_drive_id)
+    if not isinstance(metadata, dict):
+        raise WorksheetRevisionQAError("Drive metadata lookup returned no metadata mapping")
+    drive_id = metadata.get("id") or spec.deck_drive_id
+    filename = metadata.get("name") or spec.deck_filename
+    revision_id = metadata.get("headRevisionId")
+    if revision_id is not None and not isinstance(revision_id, str):
+        raise WorksheetRevisionQAError("Drive headRevisionId is malformed")
+    mime_type = metadata.get("mimeType") if isinstance(metadata.get("mimeType"), str) else ""
+
+    media_request = drive_service.files().get_media(
+        fileId=spec.deck_drive_id, supportsAllDrives=True
+    )
+    file_bytes = media_request.execute()
+    if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
+        raise WorksheetRevisionQAError(
+            "Drive media download returned no bytes for " + spec.deck_drive_id
+        )
+    content_digest = "sha256:" + hashlib.sha256(bytes(file_bytes)).hexdigest()
+
+    pages: tuple[SourcePage, ...] = ()
+    if page_reader is not None:
+        if not callable(page_reader):
+            raise WorksheetRevisionQAError("page_reader must be callable")
+        read_pages = page_reader(bytes(file_bytes), mime_type)
+        if not isinstance(read_pages, (tuple, list)):
+            raise WorksheetRevisionQAError("page_reader must return a tuple/list of SourcePage")
+        normalized: list[SourcePage] = []
+        for page in read_pages:
+            if not isinstance(page, SourcePage):
+                raise WorksheetRevisionQAError("page_reader must return SourcePage entries")
+            normalized.append(page)
+        pages = tuple(normalized)
+
+    owner_identity: str | None = None
+    endorsed = False
+    if teacher_approval is not None:
+        if not isinstance(teacher_approval, Mapping):
+            raise WorksheetRevisionQAError("teacher_approval must be a mapping")
+        raw_owner = teacher_approval.get("owner_identity")
+        if isinstance(raw_owner, str) and raw_owner.strip():
+            owner_identity = raw_owner.strip()
+        endorsed = teacher_approval.get("approved") is True
+
+    return SourceContentReceipt(
+        source_drive_id=str(drive_id),
+        source_filename=str(filename),
+        source_revision_id=revision_id,
+        content_digest=content_digest,
+        pages=pages,
+        retrieved_at=_utc_now_iso(),
+        source_provenance="drive-v3-files-get-media:" + spec.deck_drive_id,
+        teacher_owner_identity=owner_identity,
+        teacher_endorsed=endorsed,
+    )
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_lesson_revision_spec(
+    path: str,
+    *,
+    drive_service: object | None = None,
+    source_reader: object | None = None,
+) -> LessonRevisionSpec:
+    """Load a governed lesson-revision spec YAML and bind source evidence (#3577).
+
+    The YAML is an assertion, never a self-certified read receipt. After
+    parsing it fail-closed, this function retrieves the independently
+    injected source-content receipt — via ``source_reader`` when the host
+    injects one, otherwise through the existing Drive metadata/fetch tools
+    when ``drive_service`` is available — and binds it with
+    ``bind_source_evidence``. A typed YAML ``deck_evidence`` claim, a
+    wrong/foreign Drive ID or digest, or an invented slide reference fails
+    the build here, before any write.
+
+    When no receipt can be retrieved (no reader, no Drive service, or a
+    lookup failure), the spec is returned WITHOUT source evidence: terminal
+    QA then routes the alignment gate to MANUAL REVIEW rather than a clean
+    acceptance. Missing evidence is manual review, never verification.
     """
     try:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -121,9 +246,33 @@ def _load_lesson_revision_spec(path: str) -> LessonRevisionSpec:
     except yaml.YAMLError as exc:
         raise RuntimeError(f"Invalid lesson-revision spec YAML {path}: {exc}")
     try:
-        return parse_lesson_revision_spec(raw)
+        spec = parse_lesson_revision_spec(raw)
     except WorksheetRevisionQAError as exc:
         raise RuntimeError(f"Lesson-revision spec {path} rejected: {exc}")
+
+    receipt = None
+    try:
+        if source_reader is not None:
+            if not callable(source_reader):
+                raise RuntimeError("source_reader must be callable")
+            receipt = source_reader(drive_service, spec)
+        elif drive_service is not None:
+            receipt = retrieve_deck_source_receipt(drive_service, spec)
+    except WorksheetRevisionQAError as exc:
+        raise RuntimeError(f"Lesson-revision source retrieval rejected: {exc}")
+    except Exception as exc:  # noqa: BLE001 - missing/unverifiable evidence -> manual review
+        print(
+            f"Warning: lesson-revision source evidence unavailable ({exc}); "
+            "terminal QA will route the alignment gate to MANUAL REVIEW.",
+            file=sys.stderr,
+        )
+        receipt = None
+    if receipt is None:
+        return spec
+    try:
+        return bind_source_evidence(spec, receipt)
+    except WorksheetRevisionQAError as exc:
+        raise RuntimeError(f"Lesson-revision source evidence rejected: {exc}")
 
 
 def _canonical_json(value: object) -> str:
@@ -662,10 +811,15 @@ def main(argv: list[str] | None = None) -> int:
         # "final".
         slides_requests = tuple(build_slides_replace_requests(content))
         # #3577: arm the terminal-QA lesson-revision alignment gate from a
-        # governed spec when supplied. The spec is parsed fail-closed above;
-        # terminal QA evaluates it against the persisted worksheet artifact.
+        # governed spec when supplied. The YAML is an assertion; source
+        # evidence is retrieved independently (Drive) and bound fail-closed
+        # here. When the requirement declares the dependency
+        # (--lesson-revision-required), the shared composer refuses a missing
+        # spec rather than silently disabling a required gate.
         lesson_revision_spec = (
-            _load_lesson_revision_spec(args.lesson_revision_spec)
+            _load_lesson_revision_spec(
+                args.lesson_revision_spec, drive_service=drive_service
+            )
             if args.lesson_revision_spec
             else None
         )
@@ -678,6 +832,7 @@ def main(argv: list[str] | None = None) -> int:
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
             lesson_revision_spec=lesson_revision_spec,
+            lesson_revision_required=args.lesson_revision_required,
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
