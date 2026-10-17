@@ -52,6 +52,9 @@ The planner selects required members plus optional members that are actually ava
 
 All bundle authority evidence remains false. A successful plan grants no execution, external-write, production, publication, approval, readiness, or side-effect authority. Connected Slides/Docs production remains a separate governed path.
 
+## Governed lesson content and offline worksheet preview (#3582)
+`lesson_content_result.py` composes one verified #3580 Notion `lesson-content` result onto authored lesson YAML through `LessonContent.with_context_tokens`, bound to an exact request, canonical unit, lesson number, and run provenance. Authored slides and worksheet questions are required and preserved; scalar authored fields and malformed slide structures fail closed; authored objectives must agree with the verified Daily Learning Target, and an explicitly empty objective list is filled only under an independent authored `lesson_identity` binding exactly matching the selected lesson; absent Key Vocabulary stays absent; anything foreign, stale, malformed, drifted, or conflicting fails closed. `imc-build preview-worksheet` produces an offline, no-write planned-worksheet receipt without `ALLOW_WRITE`, credentials, or Google clients; it is not a rendered or native artifact. See `docs/lesson-content-result-adapter.md`.
+
 ## Safety
 - Never edits template/master files directly; it duplicates first, then writes only to the copy.
 - Requires an explicit `--target-folder`; it never guesses a Drive destination.
