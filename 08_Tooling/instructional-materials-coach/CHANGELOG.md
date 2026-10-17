@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Production wiring for the student-voice screen (#3213/#3644):
+  `build_request.compose_governed_build_request` now fails closed
+  (`StudentVoiceError`) when the planned worksheet `replaceAllText` text
+  carries teacher-guide modeling voice, before any `LiveBuildInput` is
+  returned and before any Drive write. The single seam covers both `imc
+  build` and scheduled consumers via `live_build_input_factory`. New
+  `student_voice.require_student_voice` reuses the existing vocabulary and
+  preserves the explicit-declaration escape hatch
+  (`explicit_student_copy_teacher_voice_phrases`; unknown declarations fail
+  closed).
 - Student-voice filtering for student-facing worksheets (#3213):
   `student_voice.py` screens student copy for teacher-guide modeling voice
   (rigor-ramp stage labels, cognitive-load jargon, teacher-phrased
