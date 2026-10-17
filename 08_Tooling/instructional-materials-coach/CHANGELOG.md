@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Required Docs visual coverage repair (#3212): each declared worksheet
+  figure is now a required Docs target with a distinct `(role_id, slot_id)`.
+  `required_visual_example_bindings` fails closed on duplicate same-slot
+  declarations across independent sections (naming both sections); approved
+  reuse of one asset across *distinct* slots still passes.
+  `require_visual_example_plan_coverage` now consumes
+  `(role_id, slot_id, asset_id, required)` plan quadruples and rejects
+  declarations covered only by *optional* plan assignments — an optional
+  binding that is never placed cannot discharge a required worksheet figure.
+  `compose_governed_build_request` accepts `worksheet_visual_targets` and
+  binds each declared figure into `TerminalQAExpectations` as a docs-scoped
+  `VisualExpectation` (`artifact_type="docs"`, part of `expectations_hash`);
+  `_evaluate_visuals` fails closed with `qa-visual-wrong-artifact` when a
+  required Docs figure has verified receipts only in other artifacts, so a
+  Slides receipt can no longer satisfy a required Docs image obligation.
+  Declarations merge into the existing placement expectations — no second
+  completeness validator. Lessons declaring no visual examples keep the
+  legacy artifact-agnostic behavior unchanged.
 - Visual-example requirements for worksheets (#3212): lesson content specs
   may declare `visual_examples` (section, role_id, slot_id, caption) — the
   unit's per-section image needs (worked examples, before/after frames,

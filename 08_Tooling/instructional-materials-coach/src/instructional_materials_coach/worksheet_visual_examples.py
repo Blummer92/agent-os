@@ -35,23 +35,39 @@ def required_visual_example_bindings(
     """Sorted unique ``(role_id, slot_id)`` pairs the lesson declares.
 
     One pair is one completeness obligation (#3251): a role with N slots is
-    N distinct obligations.
+    N distinct obligations. A ``(role_id, slot_id)`` pair declared in more
+    than one section is a conflicting obligation, not a shared one: slots
+    are distinct placement targets, so the same slot cannot satisfy two
+    independent sections. Fail closed and name both sections (#3212).
     """
-    return tuple(
-        sorted({(example.role_id, example.slot_id) for example in content.visual_examples})
-    )
+    seen: dict[tuple[str, str], str] = {}
+    for example in content.visual_examples:
+        key = (example.role_id, example.slot_id)
+        first_section = seen.get(key)
+        if first_section is not None:
+            raise VisualExampleCoverageError(
+                "declared visual examples reuse (role_id, slot_id) "
+                f"{example.role_id}:{example.slot_id} across independent "
+                f"sections ({first_section!r} and {example.section!r}); "
+                "declare a distinct slot for each section or keep one declaration"
+            )
+        seen[key] = example.section
+    return tuple(sorted(seen))
 
 
 def require_visual_example_plan_coverage(
     content: LessonContent,
-    visual_bindings: tuple[tuple[str, str, str], ...],
+    visual_bindings: tuple[tuple[str, str, str, bool], ...],
 ) -> None:
     """Fail closed unless the governed visual plan covers every declared example.
 
-    ``visual_bindings`` are the ``(role_id, slot_id, asset_id)`` triples
-    from the governed #944 plan. Declared visual examples with no plan
-    binding raise instead of shipping a text-only worksheet; a lesson that
-    declares no visual examples is unaffected.
+    ``visual_bindings`` are the ``(role_id, slot_id, asset_id, required)``
+    quadruples from the governed #944 plan. Declared visual examples are
+    required Docs obligations (#3212): a declared example with no plan
+    binding raises, and so does one covered only by an *optional* plan
+    assignment -- an optional binding that is never placed cannot discharge
+    a required worksheet figure. A lesson that declares no visual examples
+    is unaffected.
     """
     required = required_visual_example_bindings(content)
     if not required:
@@ -62,9 +78,26 @@ def require_visual_example_plan_coverage(
             "plan was supplied: "
             + ", ".join(f"{role_id}:{slot_id}" for role_id, slot_id in required)
         )
-    planned = {(role_id, slot_id) for role_id, slot_id, _ in visual_bindings}
-    missing = [binding for binding in required if binding not in planned]
+    planned_required = {
+        (role_id, slot_id)
+        for role_id, slot_id, _asset_id, is_required in visual_bindings
+        if is_required
+    }
+    planned_optional = {
+        (role_id, slot_id)
+        for role_id, slot_id, _asset_id, is_required in visual_bindings
+        if not is_required
+    }
+    missing = [binding for binding in required if binding not in planned_required]
     if missing:
+        optional_only = [binding for binding in missing if binding in planned_optional]
+        if optional_only:
+            raise VisualExampleCoverageError(
+                "declared visual examples are covered only by optional visual-plan "
+                "assignments, which cannot satisfy a required worksheet figure: "
+                + ", ".join(f"{role_id}:{slot_id}" for role_id, slot_id in optional_only)
+                + ". Require the assignment in the governed plan or remove the declaration."
+            )
         raise VisualExampleCoverageError(
             "governed visual plan does not cover declared visual examples: "
             + ", ".join(f"{role_id}:{slot_id}" for role_id, slot_id in missing)

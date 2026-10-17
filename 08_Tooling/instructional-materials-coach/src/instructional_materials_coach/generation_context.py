@@ -120,7 +120,7 @@ def compose_generation_context(
         raise GenerationContextError(
             "Selected visual identities require governed #944 visual-plan evidence"
         )
-    plan_asset_ids = tuple(sorted(asset_id for _, _, asset_id in visual_bindings))
+    plan_asset_ids = tuple(sorted(asset_id for _, _, asset_id, _ in visual_bindings))
     if supplied_asset_ids and not _multiset_covered(supplied_asset_ids, plan_asset_ids):
         raise GenerationContextError("Selected visual identity does not match governed visual plan")
 
@@ -166,7 +166,7 @@ def compose_generation_context(
             # #3251: per-binding asset ids with multiplicity preserved -- a
             # shared asset across N slots appears N times, keyed downstream
             # on (role_id, slot_id) via context_selected_visual_assignments.
-            "context_selected_asset_ids": _join(asset_id for _, _, asset_id in visual_bindings),
+            "context_selected_asset_ids": _join(asset_id for _, _, asset_id, _ in visual_bindings),
             "context_selected_visual_assignments": visual_assignments,
             _ASSESSMENT_DEPENDENCY_TOKEN: assessment_dependency,
             _ASSESSMENT_CURRENTNESS_TOKEN: "current",
@@ -324,12 +324,15 @@ def _reference_stable_id(value: object) -> str:
     return stable_id if isinstance(stable_id, str) else ""
 
 
-def _visual_context(value: object | None) -> tuple[tuple[tuple[str, str, str], ...], str]:
+def _visual_context(value: object | None) -> tuple[tuple[tuple[str, str, str, bool], ...], str]:
     """Extract governed visual bindings and their assignment evidence.
 
     Returns ``(bindings, assignments_json)`` where each binding is a
-    ``(role_id, slot_id, asset_id)`` triple (#3251). Bindings are sorted
-    for determinism; a shared asset appears once per binding it fills.
+    ``(role_id, slot_id, asset_id, required)`` quadruple (#3251, #3212).
+    Bindings are sorted for determinism; a shared asset appears once per
+    binding it fills. The ``required`` flag marks required plan assignments
+    (which can discharge a declared required worksheet figure) versus
+    optional ones (which cannot).
     """
     if value is None:
         return (), "[]"
@@ -351,21 +354,22 @@ def _visual_context(value: object | None) -> tuple[tuple[tuple[str, str, str], .
         *payload.get("required_role_assignments", []),
         *payload.get("optional_role_assignments", []),
     ]
-    bindings: list[tuple[str, str, str]] = []
-    for assignment in assignments:
-        try:
-            role_id = assignment["role_id"]
-            slot_id = assignment.get("slot_id", "0")
-            asset_id = assignment["selected_candidate"]["asset_reference"]["asset_id"]
-        except (KeyError, TypeError):
-            raise GenerationContextError("Governed visual assignment identity is incomplete") from None
-        if not isinstance(role_id, str) or not role_id:
-            raise GenerationContextError("Governed visual assignment role identity is invalid")
-        if not isinstance(slot_id, str) or not slot_id:
-            raise GenerationContextError("Governed visual assignment slot identity is invalid")
-        if not isinstance(asset_id, str) or not asset_id:
-            raise GenerationContextError("Governed visual assignment asset identity is invalid")
-        bindings.append((role_id, slot_id, asset_id))
+    bindings: list[tuple[str, str, str, bool]] = []
+    for is_required, key in ((True, "required_role_assignments"), (False, "optional_role_assignments")):
+        for assignment in payload.get(key, []) or []:
+            try:
+                role_id = assignment["role_id"]
+                slot_id = assignment.get("slot_id", "0")
+                asset_id = assignment["selected_candidate"]["asset_reference"]["asset_id"]
+            except (KeyError, TypeError):
+                raise GenerationContextError("Governed visual assignment identity is incomplete") from None
+            if not isinstance(role_id, str) or not role_id:
+                raise GenerationContextError("Governed visual assignment role identity is invalid")
+            if not isinstance(slot_id, str) or not slot_id:
+                raise GenerationContextError("Governed visual assignment slot identity is invalid")
+            if not isinstance(asset_id, str) or not asset_id:
+                raise GenerationContextError("Governed visual assignment asset identity is invalid")
+            bindings.append((role_id, slot_id, asset_id, is_required))
 
     encoded = json.dumps(assignments, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return tuple(sorted(bindings)), encoded

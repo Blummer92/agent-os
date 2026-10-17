@@ -165,13 +165,28 @@ def test_required_bindings_are_sorted_unique_role_slot_pairs():
         visual_examples=[
             {"section": "b", "role_id": "figure", "slot_id": "1"},
             {"section": "a", "role_id": "figure", "slot_id": "0"},
-            {"section": "a2", "role_id": "figure", "slot_id": "0"},
+            {"section": "a2", "role_id": "diagram", "slot_id": "0"},
         ]
     )
     assert required_visual_example_bindings(content) == (
+        ("diagram", "0"),
         ("figure", "0"),
         ("figure", "1"),
     )
+
+
+def test_required_bindings_reject_duplicate_slot_across_sections():
+    # #3212 repair: the same (role_id, slot_id) declared in two independent
+    # sections is a conflicting obligation, not a shared one; fail closed
+    # and name both sections.
+    content = _content(
+        visual_examples=[
+            {"section": "page1", "role_id": "figure", "slot_id": "0"},
+            {"section": "page2", "role_id": "figure", "slot_id": "0"},
+        ]
+    )
+    with pytest.raises(VisualExampleCoverageError, match="page1.*page2|page2.*page1"):
+        required_visual_example_bindings(content)
 
 
 def test_require_coverage_passes_when_plan_covers():
@@ -179,8 +194,20 @@ def test_require_coverage_passes_when_plan_covers():
         visual_examples=[{"section": "day-3-build", "role_id": "worked-example-figure"}]
     )
     require_visual_example_plan_coverage(
-        content, (("worked-example-figure", "0", "asset-9"),)
+        content, (("worked-example-figure", "0", "asset-9", True),)
     )
+
+
+def test_require_coverage_fails_closed_when_covered_only_by_optional():
+    # #3212 repair: an optional plan assignment cannot discharge a declared
+    # required worksheet figure.
+    content = _content(
+        visual_examples=[{"section": "day-3-build", "role_id": "worked-example-figure"}]
+    )
+    with pytest.raises(VisualExampleCoverageError, match="optional"):
+        require_visual_example_plan_coverage(
+            content, (("worked-example-figure", "0", "asset-9", False),)
+        )
 
 
 def test_require_coverage_ignores_lessons_without_declarations():
@@ -202,7 +229,7 @@ def test_require_coverage_fails_closed_on_uncovered_slot():
     )
     with pytest.raises(VisualExampleCoverageError, match="missing-comparison:0"):
         require_visual_example_plan_coverage(
-            content, (("worked-example-figure", "0", "asset-9"),)
+            content, (("worked-example-figure", "0", "asset-9", True),)
         )
 
 

@@ -21,6 +21,7 @@ from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials, get_file_metadata
 from .generation_context import compose_generation_context, curriculum_decision_token
+from .worksheet_visual_examples import required_visual_example_bindings
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
 from instructional_workflow_contracts.current_curriculum_state import resolve_current_curriculum_state
 from instructional_workflow_contracts.material_requirement import validate_material_requirement
@@ -637,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+            # #3212: declared worksheet figures are required Docs targets;
+            # compose_generation_context already proved required plan
+            # coverage, so this only binds terminal QA artifact scope.
+            worksheet_visual_targets=required_visual_example_bindings(content),
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
