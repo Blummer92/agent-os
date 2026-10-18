@@ -113,6 +113,61 @@ No failure path emits an image gap brief or authorizes new visual creation.
 - Continuation after a teacher decision: the plan re-honors the durable
   decision; placement consumes the resulting binding unchanged.
 
+## Producer-side recovery readback (local #3257 repair)
+
+A recovered receipt is **not** sufficient by itself: the exact governed
+asset/Drive file/source plan must still match, and the persisted Docs/Slides
+artifact must still contain the recorded inserted element in the recorded
+container with no unresolved marker. Docs verifies both `inlineObjects` and
+the document-body inline-object reference. A stale/conflicting receipt is a
+`placement-recovery-stale` or `placement-recovery-conflict` failure, never a
+successful recovery and never permission to insert another image blindly.
+
+This is offline repository-side hardening, **not live Docs/Slides acceptance**.
+Neither the original asset bytes nor a visual's semantic placement can be
+reconstructed from an element ID alone. Unreceipted orphan images after an
+unknown-outcome transport timeout still require governed reconciliation; the
+completion backstop must refuse finality. Live Apps Script deployment and
+execution rights remain separately governed. Producer revision-ID changes in
+PR #3651 are out of scope for this patch.
+
+## Interrupted insertion and revision-continuity fence (#3257 Phase 2)
+
+Before invoking the transport, the repository durably creates an **exclusive**
+per-build, per-artifact, per-role/slot attempt fence alongside the existing
+receipt ledger (`.attempts-<build-digest>/<identity-digest>.json`).
+Short hashed path components avoid Windows MAX_PATH failures; the build
+digest keeps separate idempotency keys from sharing a fence directory. A crash after the
+remote image mutation but before receipt persistence leaves this fence. A
+retry MUST block with `placement-reconciliation-required` even when a marker
+has vanished; it must not guess which inserted object belongs to that binding.
+
+Only an authoritative `PlacementNoMutation` exception (transport guarantees
+no write was started), supported by unchanged artifact revision, marker and
+object IDs, can release an attempt fence after an error. Generic timeouts,
+API errors, and any ambiguous failure keep the fence even if immediate
+readback appears unchanged, because the remote mutation could complete late.
+Success clears the fence only after verified receipt persistence; crashing
+between those actions is recoverable only if the verified receipt, current
+image readback, and complete recorded revision chain all validate. Invalid,
+unreadable, cross-build, or duplicated receipt evidence fails closed.
+
+Multiple consecutive images may advance the revision: recovery accepts
+only an unbroken chain of **verified** later placements from the target
+receipt's post-insertion revision to the current artifact revision. A
+teacher edit, unreceipted insertion, or unknown revision transition is NOT
+silently accepted. The completion backstop rejects unresolved attempt
+fences, including optional-only builds. Before another remote mutation,
+preflight also rejects attempt files from roles/artifacts absent from the
+current placement scope. In-plan crash-after-receipt fences can still be
+cleared after full receipt, revision-chain and live-object validation. A
+manual reconciliation flow is still necessary for true orphans;
+this code **never manufactures a placement receipt** from a missing marker.
+
+No live Apps Script runtime is deployed here, and producer revisions under
+PR #3651 are not modified. Independent QA and live execution authorization
+remain separate.
+
 ## #3258 handoff
 
 `placement_receipts/<idempotency_key>.json` records, per verified placement:

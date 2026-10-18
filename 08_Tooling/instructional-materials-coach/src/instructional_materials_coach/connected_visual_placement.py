@@ -48,11 +48,19 @@ from .placement_receipts import (
     build_placement_record,
     find_verified_record,
     load_placement_records,
+    load_placement_records_strict,
+    load_placement_attempt,
+    begin_placement_attempt,
+    clear_placement_attempt,
+    assert_no_unresolved_placement_attempts,
+    placement_attempt_path,
+    PlacementStoreIntegrityError,
 )
 from .placement_transport import (
     PlacementRuntimeUnavailable,
     PlacementTransport,
     PlacementTransportError,
+    PlacementNoMutation,
 )
 from .visual_placement import (
     VisualPlacementError,
@@ -307,6 +315,7 @@ def _verify_insertion_against_artifact(
     artifact_id: str,
     binding: VisualPlacementBinding,
     inserted_element_id: str,
+    expected_container_id: str | None = None,
 ) -> None:
     """Verify the insertion against the persisted artifact.
 
@@ -315,6 +324,10 @@ def _verify_insertion_against_artifact(
     proof that replaces the old fail-closed refusal: placement is reported
     only when the persisted artifact shows it.
     """
+    if not inserted_element_id:
+        raise PlacementExecutionError(
+            "post-insertion-verification-failed: inserted element identity is missing"
+        )
     if artifact_type == "slides":
         matches = discover_slides_markers(slides_service=service, presentation_id=artifact_id)
         remaining = [
@@ -328,14 +341,18 @@ def _verify_insertion_against_artifact(
                 f"is still present in {artifact_id} after the transport reported placement"
             )
         response = service.presentations().get(
-            presentationId=artifact_id, fields="slides(objectId,pageElements(objectId))"
+            presentationId=artifact_id, fields="slides(objectId,pageElements(objectId,image))"
         ).execute()
         element_ids: set[str] = set()
         for slide in response.get("slides", ()):
             if not isinstance(slide, Mapping):
                 continue
+            if expected_container_id and slide.get("objectId") != expected_container_id:
+                continue
             for page_element in slide.get("pageElements", ()):
-                if isinstance(page_element, Mapping) and isinstance(page_element.get("objectId"), str):
+                if (isinstance(page_element, Mapping)
+                        and isinstance(page_element.get("objectId"), str)
+                        and isinstance(page_element.get("image"), Mapping)):
                     element_ids.add(page_element["objectId"])
         if inserted_element_id not in element_ids:
             raise PlacementExecutionError(
@@ -354,6 +371,137 @@ def _verify_insertion_against_artifact(
                 f"post-insertion-verification-failed: marker for role={binding.role_id} slot={binding.slot_id} "
                 f"is still present in {artifact_id} after the transport reported placement"
             )
+        # A removed marker alone does not prove that an image exists in the
+        # current Doc. Confirm the receipt's embeddedObjectId is actually
+        # referenced by the persisted body and the inlineObjects map.
+        response = service.documents().get(
+            documentId=artifact_id, fields="inlineObjects,body(content)"
+        ).execute()
+        if not isinstance(response, Mapping):
+            raise PlacementExecutionError(
+                "post-insertion-verification-failed: persisted Docs readback was invalid"
+            )
+        objects = response.get("inlineObjects")
+        if not isinstance(objects, Mapping) or inserted_element_id not in objects:
+            raise PlacementExecutionError(
+                f"post-insertion-verification-failed: inline object {inserted_element_id} "
+                f"is absent from the persisted document {artifact_id}"
+            )
+        body = response.get("body")
+        content = body.get("content", ()) if isinstance(body, Mapping) else ()
+        referenced = False
+        for element in content:
+            paragraph = element.get("paragraph") if isinstance(element, Mapping) else None
+            if not isinstance(paragraph, Mapping):
+                continue
+            for part in paragraph.get("elements", ()):
+                obj = part.get("inlineObjectElement") if isinstance(part, Mapping) else None
+                if isinstance(obj, Mapping) and obj.get("embeddedObjectId") == inserted_element_id:
+                    referenced = True
+                    break
+            if referenced:
+                break
+        if not referenced:
+            raise PlacementExecutionError(
+                f"post-insertion-verification-failed: inline object {inserted_element_id} "
+                f"is not referenced in the persisted document body {artifact_id}"
+            )
+
+
+
+def _revision_chain_is_current(
+    record: Mapping[str, Any], all_records: tuple[dict[str, Any], ...], current_revision: str,
+) -> bool:
+    """Accept later *recorded placements*, never an unexplained revision drift.
+
+    One image can be placed at r1->r2 and another at r2->r3. The first
+    placement remains recoverable at r3 only if that full chain is recorded.
+    """
+    revision = record.get('post_insertion_revision_id')
+    if not isinstance(revision, str) or not revision:
+        return False
+    seen: set[str] = set()
+    while revision != current_revision:
+        if revision in seen:
+            return False
+        seen.add(revision)
+        candidates = [r for r in all_records if r.get('state') == 'verified'
+                      and r.get('artifact_type') == record.get('artifact_type')
+                      and r.get('artifact_id') == record.get('artifact_id')
+                      and r.get('artifact_revision_id') == revision]
+        if len(candidates) != 1:
+            return False
+        revision = candidates[0].get('post_insertion_revision_id')
+        if not isinstance(revision,str) or not revision:
+            return False
+    return True
+
+
+def _attempt_matches_binding(attempt: Mapping[str, Any], binding: VisualPlacementBinding) -> bool:
+    return (
+        attempt.get('asset_id') == binding.asset_id
+        and attempt.get('drive_file_id') == binding.drive_file_id
+        and attempt.get('source_plan_id') == binding.source_plan_id
+        and attempt.get('content_identity') == dict(binding.content_identity)
+    )
+
+
+def _artifact_element_ids(*, artifact_type: str, service: Any, artifact_id: str) -> frozenset[str]:
+    if artifact_type == 'docs':
+        response = service.documents().get(documentId=artifact_id,fields='inlineObjects').execute()
+        if not isinstance(response,Mapping):
+            raise PlacementExecutionError('placement-readback-unavailable: invalid Docs readback')
+        # Google Docs omits inlineObjects when the document has zero images.
+        obj = response.get('inlineObjects',{})
+        if not isinstance(obj,Mapping):
+            raise PlacementExecutionError('placement-readback-unavailable: malformed Docs inlineObjects')
+        return frozenset(str(v) for v in obj)
+    response = service.presentations().get(
+        presentationId=artifact_id,fields='slides(objectId,pageElements(objectId))'
+    ).execute()
+    slides = response.get('slides') if isinstance(response,Mapping) else None
+    if not isinstance(slides,(list,tuple)):
+        raise PlacementExecutionError('placement-readback-unavailable: Slides page elements not observable')
+    ids = set()
+    for slide in slides:
+        if not isinstance(slide,Mapping):
+            raise PlacementExecutionError('placement-readback-unavailable: malformed slide')
+        els = slide.get('pageElements',())
+        if not isinstance(els,(list,tuple)):
+            raise PlacementExecutionError('placement-readback-unavailable: malformed slide elements')
+        for el in els:
+            if isinstance(el,Mapping) and isinstance(el.get('objectId'),str):
+                ids.add(el['objectId'])
+    return frozenset(ids)
+
+
+def _no_mutation_observed(
+    *, artifact_type: str, service: Any, artifact_id: str,
+    binding: VisualPlacementBinding, target_revision: str,
+    target_marker: str, target_container: str, target_element: str,
+    before_element_ids: frozenset[str],
+) -> bool:
+    """Fresh revision + original marker prove a transport failure had no effect.
+
+    If readback fails or revision changes, retain the durable fence. This
+    check only unlocks the existing known-no-write test case; it never
+    infers ownership of an orphaned image.
+    """
+    try:
+        if _revision_id(artifact_type=artifact_type,service=service,artifact_id=artifact_id) != target_revision:
+            return False
+        if _artifact_element_ids(artifact_type=artifact_type,service=service,artifact_id=artifact_id) != before_element_ids:
+            return False
+        matches = (discover_slides_markers(slides_service=service,presentation_id=artifact_id)
+                   if artifact_type == 'slides' else
+                   discover_docs_markers(docs_service=service,document_id=artifact_id))
+        found = [m for m in matches if m.get('marker') == target_marker
+                 and m.get('container_id') == target_container
+                 and m.get('element_id') == target_element
+                 and parse_marker_binding(m['marker']) == (binding.role_id,binding.slot_id)]
+        return len(found) == 1
+    except Exception:
+        return False
 
 
 def _place_one_binding(
@@ -418,13 +566,43 @@ def _place_one_binding(
             f"approved content identity for asset {binding.asset_id} (role={binding.role_id}); "
             "stale bytes are never placed silently and never reinterpret the selection"
         )
+    if not receipts_dir:
+        raise PlacementExecutionError(
+            'placement-receipt-store-unavailable: cannot begin an unjournaled external insertion'
+        )
+    # Snapshot persisted object identity before attempting any mutation.
+    # Without an observable baseline, a known-no-effect retry cannot be
+    # established and placement must block before the transport call.
+    pre_ids = _artifact_element_ids(
+        artifact_type=artifact_type,service=artifact_service,artifact_id=artifact_id
+    )
+    if _revision_id(artifact_type=artifact_type,service=artifact_service,
+                    artifact_id=artifact_id) != request.target.artifact_revision_id:
+        raise PlacementExecutionError('placement-revision-stale: artifact changed before insertion')
+    intent = {
+        'artifact_type': artifact_type, 'artifact_id': artifact_id,
+        'role_id': binding.role_id, 'slot_id': binding.slot_id,
+        'asset_id': binding.asset_id, 'drive_file_id': binding.drive_file_id,
+        'source_plan_id': binding.source_plan_id,
+        'content_identity': dict(binding.content_identity),
+        'artifact_revision_id': request.target.artifact_revision_id,
+        'marker': request.target.marker, 'container_id': request.target.container_id,
+    }
+    begin_placement_attempt(receipts_dir, idempotency_key, intent)
     try:
         raw = transport.insert_placement(request=request)
-    except PlacementRuntimeUnavailable:
-        raise
-    except PlacementTransportError:
-        raise
     except Exception as exc:
+        # A timeout may happen AFTER the remote insertion succeeded. Only
+        # release the fence if fresh persisted readback proves no mutation.
+        if isinstance(exc, PlacementNoMutation) and _no_mutation_observed(
+            artifact_type=artifact_type, service=artifact_service, artifact_id=artifact_id,
+            binding=binding, target_revision=request.target.artifact_revision_id,
+            target_marker=request.target.marker, target_container=request.target.container_id,
+            target_element=request.target.element_id, before_element_ids=pre_ids,
+        ):
+            clear_placement_attempt(receipts_dir, idempotency_key, intent)
+        if isinstance(exc, (PlacementRuntimeUnavailable, PlacementTransportError)):
+            raise
         raise PlacementTransportError(
             f"placement-transport-failed: transport {type(exc).__name__}: {exc}"
         ) from exc
@@ -436,6 +614,7 @@ def _place_one_binding(
         artifact_id=artifact_id,
         binding=binding,
         inserted_element_id=str(raw.get("inserted_element_id") or ""),
+        expected_container_id=request.target.container_id,
     )
     # Assemble the receipt candidate from request-known identity plus the
     # transport's completion claim; the verifier accepts only an exact
@@ -489,6 +668,7 @@ def _place_one_binding(
             post_insertion_revision=post_revision,
         ),
     )
+    clear_placement_attempt(receipts_dir, idempotency_key, intent)
     outcome_record = BindingOutcome(
         binding=binding,
         artifact_type=artifact_type,
@@ -543,7 +723,50 @@ def execute_artifact_visual_placements(
     by_binding: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for match in discovered:
         by_binding.setdefault(parse_marker_binding(match["marker"]), []).append(match)
-    stored = load_placement_records(receipts_dir, idempotency_key) if receipts_dir else ()
+    if not receipts_dir:
+        raise PlacementExecutionError('placement-receipt-store-unavailable: cannot verify recovery')
+    try:
+        stored = load_placement_records_strict(receipts_dir, idempotency_key)
+    except PlacementStoreIntegrityError as exc:
+        raise PlacementExecutionError(str(exc)) from exc
+    # Current bindings may retain a matching crash-after-receipt fence,
+    # which is verified and cleared by the existing recovery path below.
+    # All OTHER attempt files (including abandoned roles, artifacts, and
+    # malformed unknown files) must block before any fresh remote mutation.
+    permitted = frozenset(
+        placement_attempt_path(
+            receipts_dir, idempotency_key, artifact_type=kind,
+            artifact_id=artifact_id, role_id=binding.role_id, slot_id=binding.slot_id,
+        )
+        for binding in bindings
+    )
+    try:
+        assert_no_unresolved_placement_attempts(
+            receipts_dir, idempotency_key, permitted_for_recovery=permitted,
+        )
+    except PlacementStoreIntegrityError as exc:
+        raise PlacementExecutionError(str(exc)) from exc
+    # Preflight every currently selected pending attempt BEFORE inserting
+    # another image. An unreceipted in-plan attempt also fails closed.
+    for binding in bindings:
+        try:
+            pending = load_placement_attempt(
+                receipts_dir,idempotency_key,artifact_type=kind,artifact_id=artifact_id,
+                role_id=binding.role_id,slot_id=binding.slot_id,
+            )
+        except PlacementStoreIntegrityError as exc:
+            raise PlacementExecutionError(str(exc)) from exc
+        if pending is not None:
+            verified = find_verified_record(
+                stored,role_id=binding.role_id,slot_id=binding.slot_id,
+                artifact_type=kind,artifact_id=artifact_id,content_identity=binding.content_identity,
+            )
+            if verified is None:
+                reason = ('placement-reconciliation-required: unreceipted mutation'
+                          if _attempt_matches_binding(pending,binding) else
+                          'placement-recovery-conflict: pending attempt does not match selected asset')
+                raise PlacementExecutionError(reason, outcomes=(BindingOutcome(
+                    binding,kind,artifact_id,'failed',reason=reason),))
     outcomes: list[BindingOutcome] = []
     for binding in bindings:
         # Recovery first (#3252): a verified receipt for this exact binding
@@ -558,7 +781,82 @@ def execute_artifact_visual_placements(
             artifact_id=artifact_id,
             content_identity=binding.content_identity,
         )
+        if recovered is None and any(
+            r.get('role_id') == binding.role_id and str(r.get('slot_id')) == str(binding.slot_id)
+            and r.get('artifact_type') == kind and r.get('artifact_id') == artifact_id
+            for r in stored
+        ):
+            outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',
+                reason='placement-recovery-conflict: prior receipt differs from governed identity'))
+            continue
+        try:
+            attempt = load_placement_attempt(
+                receipts_dir,idempotency_key,artifact_type=kind,artifact_id=artifact_id,
+                role_id=binding.role_id,slot_id=binding.slot_id,
+            )
+        except PlacementStoreIntegrityError as exc:
+            outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',reason=str(exc)))
+            continue
+        if attempt is not None and not _attempt_matches_binding(attempt,binding):
+            outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',
+                reason='placement-recovery-conflict: in-flight attempt differs from selected asset'))
+            continue
+        if attempt is not None and recovered is None:
+            outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',
+                reason='placement-reconciliation-required: unknown insertion outcome; '
+                       'do not reinsert or attribute an unreceipted image by marker absence'))
+            continue
         if recovered is not None:
+            # A matching role/content hash does not prove that a receipt
+            # still describes the selected asset or a present image.
+            # Reject evidence substitution instead of trusting the cache.
+            if (
+                recovered.get("asset_id") != binding.asset_id
+                or recovered.get("drive_file_id") != binding.drive_file_id
+                or recovered.get("source_plan_id") != binding.source_plan_id
+                or recovered.get("required") != binding.required
+                or not isinstance(recovered.get("inserted_element_id"), str)
+                or not recovered.get("inserted_element_id")
+                or (kind == "docs" and recovered.get("container_id") != "body")
+            ):
+                outcomes.append(BindingOutcome(
+                    binding, kind, artifact_id, "failed",
+                    reason="placement-recovery-conflict: verified receipt differs from the "
+                           "governed selected asset or is missing target/element evidence",
+                ))
+                continue
+            try:
+                _verify_insertion_against_artifact(
+                    artifact_type=kind,
+                    service=artifact_service,
+                    artifact_id=artifact_id,
+                    binding=binding,
+                    inserted_element_id=recovered["inserted_element_id"],
+                    expected_container_id=str(recovered.get("container_id") or ""),
+                )
+            except Exception as exc:
+                # Never reinsert on an uncertain outcome: the marker was
+                # removed by the original placement, so target is ambiguous.
+                outcomes.append(BindingOutcome(
+                    binding, kind, artifact_id, "failed",
+                    reason=f"placement-recovery-stale: current artifact does not "
+                           f"verify the stored placement ({type(exc).__name__}: {exc})",
+                ))
+                continue
+            live_revision = _revision_id(artifact_type=kind,service=artifact_service,artifact_id=artifact_id)
+            if not _revision_chain_is_current(recovered,stored,live_revision):
+                outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',
+                    reason='placement-recovery-stale: unaccounted artifact revision drift'))
+                continue
+            if attempt is not None:
+                # Crash after durable receipt but before deleting the fence:
+                # current readback and the recorded revision chain are now
+                # proven, so removing this exact matching fence is safe.
+                try:
+                    clear_placement_attempt(receipts_dir,idempotency_key,attempt)
+                except PlacementStoreIntegrityError as exc:
+                    outcomes.append(BindingOutcome(binding,kind,artifact_id,'failed',reason=str(exc)))
+                    continue
             outcomes.append(BindingOutcome(binding, kind, artifact_id, "recovered", record=recovered))
             continue
         matches = by_binding.get((binding.role_id, binding.slot_id), [])
@@ -622,6 +920,13 @@ def require_all_required_visuals_placed(
     paths where placement ran in an earlier attempt (resume recovery).
     """
     required = [b for b in (bindings or ()) if b.required]
+    # Unresolved writes are a build-wide block, even when every remaining
+    # visual is optional (or a changed plan has no required roles).
+    if receipts_dir:
+        try:
+            assert_no_unresolved_placement_attempts(receipts_dir, idempotency_key)
+        except PlacementStoreIntegrityError as exc:
+            raise PlacementExecutionError(str(exc)) from exc
     if not required:
         return
     if not receipts_dir:
@@ -629,8 +934,30 @@ def require_all_required_visuals_placed(
             "placement-receipt-store-unavailable: required visual placements cannot be "
             "proven without the durable receipt store"
         )
-    records = load_placement_records(receipts_dir, idempotency_key)
+    try:
+        records = load_placement_records_strict(receipts_dir, idempotency_key)
+    except PlacementStoreIntegrityError as exc:
+        raise PlacementExecutionError(str(exc)) from exc
     artifact_ids = {str(v) for v in artifact_files.values() if v}
+    # Scan the full build journal, including abandoned role bindings that a
+    # changed plan no longer lists. No orphan may be silently ignored.
+    try:
+        assert_no_unresolved_placement_attempts(receipts_dir,idempotency_key)
+    except PlacementStoreIntegrityError as exc:
+        raise PlacementExecutionError(str(exc)) from exc
+    # A pending mutation (including an optional role) prevents release, even
+    # if a historical verified receipt exists. The outcome is unresolved.
+    for binding in bindings or ():
+        for role, file_id in artifact_files.items():
+            kind = 'docs' if role in ('worksheet','docs') else 'slides'
+            if file_id and load_placement_attempt(
+                receipts_dir,idempotency_key,artifact_type=kind,artifact_id=str(file_id),
+                role_id=binding.role_id,slot_id=binding.slot_id,
+            ) is not None:
+                raise PlacementExecutionError(
+                    'placement-reconciliation-required: unresolved insertion attempt for '
+                    f'role={binding.role_id} slot={binding.slot_id} in {kind}:{file_id}'
+                )
     missing: list[str] = []
     for binding in sorted(required, key=lambda b: (b.role_id, b.slot_id)):
         satisfied = any(
@@ -638,6 +965,9 @@ def require_all_required_visuals_placed(
             and record.get("role_id") == binding.role_id
             and str(record.get("slot_id")) == str(binding.slot_id)
             and record.get("artifact_id") in artifact_ids
+            and record.get("asset_id") == binding.asset_id
+            and record.get("drive_file_id") == binding.drive_file_id
+            and record.get("source_plan_id") == binding.source_plan_id
             and record.get("content_identity") == dict(binding.content_identity)
             for record in records
         )
