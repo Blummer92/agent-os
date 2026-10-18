@@ -42,7 +42,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .placement_receipts import load_placement_records
+from .placement_receipts import (
+    PlacementStoreIntegrityError,
+    assert_no_unresolved_placement_attempts,
+    load_placement_evidence,
+)
+from .connected_visual_placement import _revision_chain_is_current
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -50,7 +55,7 @@ from .worksheet_revision_qa import validate_revision_render_visuals
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
 # v2 (#3416): verified evidence now includes the heading keep-with-next
 # check, so v1 evidence recorded before that rule is never recovered.
-QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v2"
+QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v4"
 
 # Default directory for durable terminal-QA evidence (mirrors the
 # placement-receipts default; the CLI overrides it with --qa-evidence-dir).
@@ -279,6 +284,8 @@ class ArtifactObservation:
     slide_texts: tuple[str, ...] = ()  # per-slide normalized text; () for docs
     observed_at: str = ""
     headings: tuple[HeadingParagraph, ...] = ()  # #3416; () for slides
+    # Only actual Slides image objects qualify; key -> actual slide objectId.
+    image_element_containers: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -326,6 +333,7 @@ class TerminalQAReport:
     worksheet: ArtifactQAReport
     state: str
     generated_at: str = ""
+    placement_evidence_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -333,6 +341,7 @@ class TerminalQAReport:
             "idempotency_key": self.idempotency_key,
             "state": self.state,
             "generated_at": self.generated_at,
+            "placement_evidence_hash": self.placement_evidence_hash,
             "slides": self.slides.to_dict(),
             "worksheet": self.worksheet.to_dict(),
         }
@@ -422,24 +431,38 @@ def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
     return "".join(parts), image_ids
 
 
-def _slides_text_and_images(presentation: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """Extract per-slide text and every page-element object id (images incl.)."""
+def _slides_text_and_images(
+    presentation: Mapping[str, Any],
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """Extract text and actual image IDs, preserving each image's slide.
+
+    Object IDs of shapes, tables, and lines are never image evidence.
+    Ambiguous duplicate image IDs lose their location proof.
+    """
     slide_texts: list[str] = []
     element_ids: list[str] = []
+    image_containers: dict[str, str] = {}
     slides = presentation.get("slides")
     if not isinstance(slides, list):
-        return [], []
+        return [], [], {}
     for slide in slides:
         if not isinstance(slide, dict):
             slide_texts.append("")
             continue
         parts: list[str] = []
+        slide_id = slide.get("objectId")
         for element in slide.get("pageElements", []):
             if not isinstance(element, dict):
                 continue
             object_id = element.get("objectId")
-            if object_id:
-                element_ids.append(str(object_id))
+            if (isinstance(object_id, str) and object_id
+                    and isinstance(element.get("image"), dict)):
+                element_ids.append(object_id)
+                if isinstance(slide_id, str) and slide_id:
+                    if object_id in image_containers:
+                        image_containers[object_id] = ""  # ambiguous ID, fail closed
+                    else:
+                        image_containers[object_id] = slide_id
             shape = element.get("shape")
             if isinstance(shape, dict):
                 text = shape.get("text")
@@ -451,7 +474,7 @@ def _slides_text_and_images(presentation: Mapping[str, Any]) -> tuple[list[str],
                         if isinstance(text_run, dict):
                             parts.append(str(text_run.get("content", "")))
         slide_texts.append(normalize_text("".join(parts)))
-    return slide_texts, element_ids
+    return slide_texts, element_ids, image_containers
 
 
 def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> ArtifactObservation:
@@ -478,12 +501,13 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
             f"different {artifact_type} artifact {echoed}"
         )
     headings: tuple[HeadingParagraph, ...] = ()
+    image_containers: dict[str, str] = {}
     if artifact_type == "docs":
         full_text, image_ids = _docs_text_and_images(resource)
         slide_texts: tuple[str, ...] = ()
         headings = heading_paragraphs(resource)
     else:
-        slide_texts_list, image_ids = _slides_text_and_images(resource)
+        slide_texts_list, image_ids, image_containers = _slides_text_and_images(resource)
         slide_texts = tuple(slide_texts_list)
         full_text = "\n".join(slide_texts_list)
     return ArtifactObservation(
@@ -496,6 +520,7 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
         slide_texts=slide_texts,
         observed_at=_utc_now(),
         headings=headings,
+        image_element_containers=image_containers,
     )
 
 
@@ -697,18 +722,18 @@ def _evaluate_visuals(
             )
             continue
         post_revision = record.get("post_insertion_revision_id")
-        if post_revision and str(post_revision) != observation.revision_id:
-            # The artifact mutated after the verified placement: the receipt
-            # no longer describes the current artifact state. Never reuse
-            # stale placement evidence for terminal admission.
+        if not _revision_chain_is_current(record, placement_records, observation.revision_id):
+            # Later image insertions may legitimately advance the artifact
+            # revision. Accept only the uniquely recorded, verified
+            # same-artifact placement chain; reject all other drift.
             findings.append(
                 _fail(
                     "qa-artifact-stale", QA_STATE_ARTIFACT_STALE,
-                    f"Artifact {artifact_id} revision {observation.revision_id} no "
-                    f"longer matches the post-placement revision {post_revision} "
-                    f"on the verified receipt for role {visual.role_id}; the "
-                    "artifact mutated after placement and the visual must be "
-                    "re-verified.",
+                    f"Artifact {artifact_id} revision {observation.revision_id} "
+                    f"cannot be reached from placement revision {post_revision} "
+                    f"for role {visual.role_id} through a unique verified "
+                    "placement chain; external or unaccounted mutation "
+                    "requires re-verification.",
                     role_id=visual.role_id,
                     post_insertion_revision_id=str(post_revision),
                     current_revision_id=observation.revision_id,
@@ -727,7 +752,17 @@ def _evaluate_visuals(
             )
             continue
         inserted_id = record.get("inserted_element_id")
-        if inserted_id and str(inserted_id) not in observation.image_element_ids:
+        if not inserted_id:
+            findings.append(
+                _fail(
+                    "qa-visual-element-missing", QA_STATE_PLACEMENT_UNVERIFIED,
+                    f"Receipt for role {visual.role_id} has no inserted-element "
+                    "identity, so the actual visual cannot be verified.",
+                    role_id=visual.role_id,
+                )
+            )
+            continue
+        if str(inserted_id) not in observation.image_element_ids:
             findings.append(
                 _fail(
                     "qa-visual-element-mismatch", QA_STATE_VISUAL_MISMATCH,
@@ -740,6 +775,23 @@ def _evaluate_visuals(
                 )
             )
             continue
+        if artifact_type == "slides":
+            expected_slide = record.get("container_id")
+            actual_slide = observation.image_element_containers.get(str(inserted_id))
+            if (not isinstance(expected_slide, str) or not expected_slide
+                    or actual_slide != expected_slide):
+                findings.append(
+                    _fail(
+                        "qa-visual-container-mismatch", QA_STATE_VISUAL_MISMATCH,
+                        f"Image {inserted_id} for role {visual.role_id} is not "
+                        f"observed as an image on recorded slide {expected_slide!r}; "
+                        f"actual slide is {actual_slide!r}.",
+                        role_id=visual.role_id, inserted_element_id=str(inserted_id),
+                        expected_container_id=expected_slide,
+                        observed_container_id=actual_slide,
+                    )
+                )
+                continue
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build
@@ -940,6 +992,7 @@ def _try_recover_verified(
     artifact_type: str,
     artifact_id: str,
     observation: ArtifactObservation,
+    placement_evidence_hash: str | None,
 ) -> ArtifactQAReport | None:
     """Recover a prior verified QA result when identity assumptions still hold.
 
@@ -962,6 +1015,10 @@ def _try_recover_verified(
     if stored_artifact.get("revision_id") != observation.revision_id:
         return None
     if stored.get("expectations_hash") != expectations.expectations_hash():
+        return None
+    # The positive cache is valid only for the exact current receipt snapshot.
+    # None means the placement evidence is unavailable/invalid; never recover.
+    if placement_evidence_hash is None or stored.get("placement_evidence_hash") != placement_evidence_hash:
         return None
     findings = tuple(
         QAFinding(
@@ -993,9 +1050,38 @@ def _qa_one_artifact(
     service: Any,
     expectations: TerminalQAExpectations,
     placement_records: tuple[dict[str, Any], ...],
+    placement_evidence_hash: str | None,
+    pending_attempt_issue: str | None,
     qa_evidence_dir: str | Path | None,
 ) -> ArtifactQAReport:
     """Observe, evaluate (or recover), and persist QA for one artifact."""
+    # Attempt evidence is separate from verified receipt JSON. A pending
+    # fence MUST block both fresh admission and cached success, including
+    # an optional-only or now-abandoned visual binding.
+    if pending_attempt_issue is not None:
+        return ArtifactQAReport(
+            artifact_type=artifact_type, artifact_id=artifact_id, revision_id="",
+            idempotency_key=expectations.idempotency_key,
+            state=QA_STATE_EVIDENCE_INCOMPLETE,
+            findings=(_fail(
+                "qa-placement-attempt-unresolved", QA_STATE_EVIDENCE_INCOMPLETE,
+                "A placement attempt has an unresolved or invalid durable fence; "
+                "terminal verification is blocked: " + pending_attempt_issue,
+            ),),
+            expectations_hash=expectations.expectations_hash(),
+        )
+    if expectations.visuals and placement_evidence_hash is None:
+        return ArtifactQAReport(
+            artifact_type=artifact_type, artifact_id=artifact_id, revision_id="",
+            idempotency_key=expectations.idempotency_key,
+            state=QA_STATE_EVIDENCE_INCOMPLETE,
+            findings=(_fail(
+                "qa-placement-evidence-unavailable", QA_STATE_EVIDENCE_INCOMPLETE,
+                "Placement evidence is malformed, unreadable, or unavailable; "
+                "terminal success is refused.",
+            ),),
+            expectations_hash=expectations.expectations_hash(),
+        )
     try:
         observation = observe_artifact(service, artifact_type, artifact_id)
     except VerificationRuntimeUnavailableError as exc:
@@ -1049,6 +1135,7 @@ def _qa_one_artifact(
             artifact_type=artifact_type,
             artifact_id=artifact_id,
             observation=observation,
+            placement_evidence_hash=placement_evidence_hash,
         )
         if recovered is not None:
             return recovered
@@ -1107,8 +1194,24 @@ def run_terminal_qa(
         return report
 
     placement_records: tuple[dict[str, Any], ...] = ()
-    if receipts_dir is not None and expectations.visuals:
-        placement_records = load_placement_records(receipts_dir, expectations.idempotency_key)
+    placement_evidence_hash: str | None = "no-visual-expectations"
+    if expectations.visuals:
+        placement_evidence_hash = None
+        if receipts_dir is not None:
+            # Snapshot and digest come from the same read, avoiding a cache
+            # fingerprint detached from the evidence the evaluator consumed.
+            placement_records, placement_evidence_hash = load_placement_evidence(
+                receipts_dir, expectations.idempotency_key,
+            )
+
+    pending_attempt_issue: str | None = None
+    if receipts_dir is not None:
+        try:
+            assert_no_unresolved_placement_attempts(
+                receipts_dir, expectations.idempotency_key,
+            )
+        except PlacementStoreIntegrityError as exc:
+            pending_attempt_issue = str(exc)
 
     slides_report = _qa_one_artifact(
         artifact_type="slides",
@@ -1116,6 +1219,8 @@ def run_terminal_qa(
         service=slides_service,
         expectations=expectations,
         placement_records=placement_records,
+        placement_evidence_hash=placement_evidence_hash,
+        pending_attempt_issue=pending_attempt_issue,
         qa_evidence_dir=qa_evidence_dir,
     )
     worksheet_report = _qa_one_artifact(
@@ -1124,6 +1229,8 @@ def run_terminal_qa(
         service=docs_service,
         expectations=expectations,
         placement_records=placement_records,
+        placement_evidence_hash=placement_evidence_hash,
+        pending_attempt_issue=pending_attempt_issue,
         qa_evidence_dir=qa_evidence_dir,
     )
     overall = QA_STATE_VERIFIED
@@ -1136,6 +1243,7 @@ def run_terminal_qa(
         worksheet=worksheet_report,
         state=overall,
         generated_at=_utc_now(),
+        placement_evidence_hash=placement_evidence_hash,
     )
     if qa_evidence_dir is not None:
         persist_qa_report(qa_evidence_dir, report)

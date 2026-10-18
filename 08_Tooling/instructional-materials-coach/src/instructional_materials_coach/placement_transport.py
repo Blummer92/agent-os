@@ -45,6 +45,13 @@ class PlacementTransportError(RuntimeError):
     """
 
 
+class PlacementNoMutation(PlacementTransportError):
+    """Attested pre-mutation failure: no external write was started."""
+
+    # Timeout, HTTP errors, and ambiguous script failures must NEVER
+    # be classified as PlacementNoMutation.
+
+
 @runtime_checkable
 class PlacementTransport(Protocol):
     """Insert one placement request's exact asset at its exact target.

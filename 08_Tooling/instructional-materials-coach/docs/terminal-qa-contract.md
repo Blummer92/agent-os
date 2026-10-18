@@ -209,3 +209,43 @@ Until that activation:
 
 #3258 owns terminal finality over all rendered content. #3257 owns
 positive placement evidence only. Neither reimplements the other.
+
+## Cached-success receipt integrity (Phase 1 repair)
+
+Terminal QA evidence contract `terminal-qa-evidence-v3` includes a SHA-256
+fingerprint of the exact on-disk placement-receipt snapshot read for the QA
+evaluation. Cached `verified` is reusable only when the build key, artifact
+identity, artifact revision, governed expectations, and current placement
+evidence fingerprint all match. Receipt deletion, substitution, byte changes,
+or malformed/unreadable receipt data prevent recovery. Current records are
+then independently evaluated, with missing/altered evidence failing closed.
+Receipts are not rewritten by terminal QA. Legacy v2 evidence is reverified
+instead of being trusted under the stronger v3 cache contract.
+
+Receipt snapshots are read once per run and shared between fingerprinting
+and QA evaluation to avoid comparing a different receipt from the one QA
+actually consumed. This is cache integrity, not a substitute for the existing
+final Docs/Slides content and placement checks.
+
+
+## Interrupted placement journal and cached terminal QA
+
+An unresolved #3257 insertion-attempt fence prevents terminal QA success
+regardless of whether its binding still appears in the current plan. This
+check runs before fresh evaluation and before v3 receipt-cache recovery,
+including optional-only and zero-current-visual expectation cases. The
+verified-receipt hash is not a substitute for attempt-journal inspection.
+No attempt fence is automatically cleared by terminal QA: only #3257's
+verified placement reconciliation path may clear it.
+
+
+## Slides image-type and container proof (v4 follow-up)
+
+Terminal verified evidence `terminal-qa-evidence-v4` supersedes prior v3
+positive cache entries. A receipt's inserted Slides element must be an
+actual `pageElement.image` on the exact slide named by `container_id`. A
+matching shape, line, table, or image on another slide is insufficient.
+Producer-side insertion/recovery readback requires the same image-type
+and exact-slide proof. The existing revision chain, journal, receipt digest,
+and identity checks remain mandatory. This is repository-side offline
+validation; live Docs/Slides canary acceptance remains separate.
