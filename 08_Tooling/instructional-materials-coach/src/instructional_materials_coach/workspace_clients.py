@@ -62,16 +62,27 @@ def _validate_replace_results(
 
 
 def _already_applied(content_fetcher: Any, replace: Any) -> bool:
-    """True when the replacement text is already present in the document."""
+    """True when the replacement text is already present in the document.
+
+    The production request builders (``docs_requests.build_docs_replace_requests``
+    and ``slides_requests.build_slides_replace_requests``) emit the API-native
+    string-valued ``replaceText``. A previously applied replacement is accepted
+    only when that exact string is observed in the read-back document text.
+    Missing, empty, malformed, or unreadable replacement evidence fails closed:
+    the caller keeps the "required placeholder was not replaced" failure.
+    """
     try:
         text = content_fetcher()
     except Exception:
         return False
     if not isinstance(text, str) or not text:
         return False
-    new_text = replace.get("replaceText", {}) if isinstance(replace, dict) else {}
-    replacement = new_text.get("text", "") if isinstance(new_text, dict) else ""
-    return isinstance(replacement, str) and bool(replacement) and replacement in text
+    if not isinstance(replace, dict):
+        return False
+    replacement = replace.get("replaceText")
+    if not isinstance(replacement, str) or not replacement:
+        return False
+    return replacement in text
 
 
 def apply_slides_requests(
