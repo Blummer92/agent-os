@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .merge_authorization import pr_metadata_fingerprint
 from .merge_authorization_source import (
     MergeAuthorizationCommentSnapshot,
     MergeAuthorizationSourceSnapshot,
@@ -155,7 +156,7 @@ def evaluate_merge_admission_transport(
             and record.binding.base_sha_or_evidence_id == pr.base.sha
             and record.binding.permitted_merge_method == parsed["merge_admission_method_or_none"]
             and record.binding.pr_metadata_sha256
-            == __import__("scripts.agent_os_issue_acceptance.merge_authorization", fromlist=["pr_metadata_fingerprint"]).pr_metadata_fingerprint(pr.title or "", pr.body or "")
+            == pr_metadata_fingerprint(pr.title or "", pr.body or "")
         ]
         return _receipt(
             parsed, repository,
