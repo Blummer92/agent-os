@@ -114,3 +114,23 @@ def test_candidate_does_not_bypass_existing_duplicate_admission():
     )
     assert result["create_allowed"] is False
     assert result["work_reconciliation"]["disposition"] == "candidate-new-work"
+
+
+def test_missing_navigation_package_fails_closed_without_server_startup_failure(monkeypatch):
+    """Host wheels that lack Navigation Registry must not crash unrelated MCP tools."""
+    import builtins
+
+    original_import = builtins.__import__
+
+    def unavailable(name, *args, **kwargs):
+        if name == "navigation_registry.reconciliation":
+            raise ModuleNotFoundError("No module named 'navigation_registry'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable)
+    output = mcp_server.reconcile_agent_os_proposed_work_tool(evidence())
+    assert output["disposition"] == "manual-review"
+    assert "triage.canonical-classifier-unavailable" in output["reason_codes"]
+    assert output["execution_authorized"] is False
+    assert output["authorizes_issue_creation"] is False
+    assert output["source_evidence_complete"] is False
