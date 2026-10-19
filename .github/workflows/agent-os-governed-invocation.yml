@@ -707,7 +707,7 @@ jobs:
     name: Run finite read-only merge-admission evidence acquisition
     # #3463: This operation carries only immutable selectors.
     # No merge, authorization creation, or GitHub write is granted.
-    if: \${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os merge-admit ') }}
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os merge-admit ') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -735,7 +735,7 @@ jobs:
 
       - name: Reacquire canonical authorization source (read-only)
         env:
-          GITHUB_TOKEN: \${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python -m scripts.agent_os_issue_acceptance.merge_admission_actions \
             --transport "$RUNNER_TEMP/agent-os-merge-admission/transport.json" \
@@ -743,7 +743,7 @@ jobs:
             --output "$RUNNER_TEMP/agent-os-merge-admission/receipt.json"
 
       - name: Publish non-authorizing evidence summary
-        if: \${{ always() }}
+        if: ${{ always() }}
         run: |
           python - <<'PY'
           import json
@@ -764,10 +764,10 @@ jobs:
           PY
 
       - name: Publish bounded non-authorizing receipt artifact
-        if: \${{ always() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-os-merge-admission-\${{ github.run_id }}-\${{ github.run_attempt }}
-          path: \${{ runner.temp }}/agent-os-merge-admission/*.json
+          name: agent-os-merge-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-merge-admission/*.json
           if-no-files-found: warn
           retention-days: 7
