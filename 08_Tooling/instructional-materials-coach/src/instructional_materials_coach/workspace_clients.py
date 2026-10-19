@@ -2,6 +2,8 @@
 from __future__ import annotations
 from typing import Any
 
+from .slides_requests import QA_SLIDE_INDEX_KEY
+
 
 def build_slides_service(credentials: Any) -> Any:
     from googleapiclient.discovery import build
@@ -84,7 +86,17 @@ def apply_slides_requests(
 ) -> None:
     if not requests:
         return
-    body: dict[str, Any] = {"requests": requests}
+    # The QA-only slide-identity metadata (slides_requests.QA_SLIDE_INDEX_KEY)
+    # must never reach the Slides API: batchUpdate rejects unknown request
+    # fields. Strip it here at the API boundary; per-request validation below
+    # still runs against the original request list.
+    api_requests = [
+        {key: value for key, value in request.items() if key != QA_SLIDE_INDEX_KEY}
+        if isinstance(request, dict)
+        else request
+        for request in requests
+    ]
+    body: dict[str, Any] = {"requests": api_requests}
     if required_revision_id is not None:
         body["writeControl"] = {"requiredRevisionId": required_revision_id}
     response = service.presentations().batchUpdate(

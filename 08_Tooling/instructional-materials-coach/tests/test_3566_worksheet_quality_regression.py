@@ -36,6 +36,10 @@ from instructional_materials_coach.artifact_content_qa import (
     _evaluate_pagination,
     _evaluate_visuals,
 )
+from instructional_materials_coach.placement_receipts import (
+    BATCH_PROOF_CONTRACT,
+    batch_proof_fingerprint,
+)
 from instructional_materials_coach.artifact_structure import (
     FAIL,
     PASS,
@@ -183,6 +187,44 @@ def _day1_receipt(role_id: str, slot_id: str, asset_id: str, content_identity: d
     }
 
 
+def _day1_batch_proof(records) -> dict:
+    """Hand-built reconciled batch proof for the Day 1 receipts.
+
+    Terminal QA's strict rule requires a batch proof for a multi-receipt
+    batch; the proof is attested here (not synthesized by placement) and
+    its fingerprint is recomputed by the verifier, so tampering is still
+    caught.
+    """
+    members = [
+        {
+            "role_id": r["role_id"],
+            "slot_id": r["slot_id"],
+            "batch_artifact_type": "docs",
+            "artifact_id": "day1-marketing-detectives",
+            "asset_id": r.get("asset_id"),
+            "drive_file_id": r.get("drive_file_id"),
+            "content_identity": dict(r["content_identity"]),
+            "inserted_element_id": r["inserted_element_id"],
+            "post_insertion_revision_id": r["post_insertion_revision_id"],
+            "member_source": "placed",
+        }
+        for r in records
+    ]
+    proof = {
+        "proof_contract": BATCH_PROOF_CONTRACT,
+        "idempotency_key": "day1-key",
+        "batch_artifact_type": "docs",
+        "artifact_id": "day1-marketing-detectives",
+        "initial_revision_id": "rev-day1-0",
+        "final_revision_id": "rev-day1-1",
+        "ordered_members": members,
+        "insertion_continuity": [],
+        "reconciled_at": "2026-10-19T00:00:00+00:00",
+    }
+    proof["proof_fingerprint"] = batch_proof_fingerprint(proof)
+    return proof
+
+
 def test_day1_verified_visual_placement_passes() -> None:
     observation = ArtifactObservation(
         artifact_type="docs",
@@ -202,6 +244,7 @@ def test_day1_verified_visual_placement_passes() -> None:
         observation=observation,
         visual_expectations=_DAY1_VISUALS,
         placement_records=records,
+        batch_proofs=(_day1_batch_proof(records),),
     )
     assert findings == []
 
