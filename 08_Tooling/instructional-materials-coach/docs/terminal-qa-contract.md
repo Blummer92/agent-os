@@ -104,6 +104,23 @@ revision → `artifact-stale`), the receipt may reference another artifact
 (`visual-mismatch`). QA re-binds every receipt to the inspected artifact
 state at terminal time.
 
+Sequential genuine insertions each advance the artifact revision, so
+earlier legitimate receipts disagree with the final revision by design.
+The receipts are append-only and are never re-stamped with the final
+revision. Instead, each completed placement run persists an atomic
+**reconciled batch proof** (`visual-placement-batch-proof-v1`) bound to
+the ordered complete receipt set, exact asset/content/element identities,
+artifact/build identity, the observed final revision, verified
+per-insertion mutation continuity (before/after snapshots proving each
+insertion changed exactly the marker plus one element), and a
+tamper-evident proof fingerprint that QA recomputes. Terminal QA consumes
+the proof for the members it revalidates; a missing proof is strict
+fail-closed when required (multi-receipt batch →
+`qa-batch-proof-missing`), while a conflicting, tampered, or
+revision-mismatched proof fails closed (`qa-batch-proof-conflict` /
+`qa-batch-proof-invalid` / `qa-artifact-stale`) for manual review --
+never verification.
+
 ## Text proof
 
 - Expectations derive from the governed planned `replaceAllText`
@@ -135,7 +152,15 @@ artifact observation → expected target → QA result.
 - Receipt-to-artifact binding: artifact id, asset id, exact content
   identity, and post-insertion revision must all match the inspected
   state; mismatch → `artifact-conflict` / `visual-mismatch` /
-  `artifact-stale`.
+  `artifact-stale`. Members revalidated by a verified reconciled batch
+  proof are bound to the proof's observed final revision instead of their
+  original per-insertion revisions (the originals are preserved, never
+  rewritten).
+- A batch proof whose fingerprint does not recompute, whose member set
+  conflicts with the receipt store, or whose final revision differs from
+  the observation fails the whole batch closed; two proofs claiming one
+  artifact are conflicting evidence; a multi-receipt batch with no proof
+  at all fails closed (`qa-batch-proof-missing`).
 - Persisted observation: the `{{visual:<role>}}` marker must be gone and
   the receipt's `inserted_element_id` must be present among the observed
   elements (Docs inline objects; Slides page elements).
@@ -168,7 +193,12 @@ Both artifact types share the contract. Capability differences:
 - QA evidence persists per idempotency key (`reports/terminal-qa/`),
   atomically, bound to expectations hash + artifact revisions.
 - Retry with unchanged artifact: a prior `verified` report is recovered
-  while revision and expectations still match (no re-evaluation).
+  while revision, expectations, and the exact stored receipt bytes still
+  match (no re-evaluation). The recovery identity is the byte fingerprint
+  of the receipt store file, which also holds the reconciled batch
+  proofs: an unchanged artifact/expectations pair never reuses cached
+  verified QA after a receipt was added, removed, or altered, or after a
+  proof changed.
 - Retry after artifact mutation: revision mismatch → prior proof is NOT
   reused → fresh verification required; terminal success refused until it
   passes.
@@ -209,3 +239,43 @@ Until that activation:
 
 #3258 owns terminal finality over all rendered content. #3257 owns
 positive placement evidence only. Neither reimplements the other.
+
+## Cached-success receipt integrity (Phase 1 repair)
+
+Terminal QA evidence contract `terminal-qa-evidence-v3` includes a SHA-256
+fingerprint of the exact on-disk placement-receipt snapshot read for the QA
+evaluation. Cached `verified` is reusable only when the build key, artifact
+identity, artifact revision, governed expectations, and current placement
+evidence fingerprint all match. Receipt deletion, substitution, byte changes,
+or malformed/unreadable receipt data prevent recovery. Current records are
+then independently evaluated, with missing/altered evidence failing closed.
+Receipts are not rewritten by terminal QA. Legacy v2 evidence is reverified
+instead of being trusted under the stronger v3 cache contract.
+
+Receipt snapshots are read once per run and shared between fingerprinting
+and QA evaluation to avoid comparing a different receipt from the one QA
+actually consumed. This is cache integrity, not a substitute for the existing
+final Docs/Slides content and placement checks.
+
+
+## Interrupted placement journal and cached terminal QA
+
+An unresolved #3257 insertion-attempt fence prevents terminal QA success
+regardless of whether its binding still appears in the current plan. This
+check runs before fresh evaluation and before v3 receipt-cache recovery,
+including optional-only and zero-current-visual expectation cases. The
+verified-receipt hash is not a substitute for attempt-journal inspection.
+No attempt fence is automatically cleared by terminal QA: only #3257's
+verified placement reconciliation path may clear it.
+
+
+## Slides image-type and container proof (v4 follow-up)
+
+Terminal verified evidence `terminal-qa-evidence-v4` supersedes prior v3
+positive cache entries. A receipt's inserted Slides element must be an
+actual `pageElement.image` on the exact slide named by `container_id`. A
+matching shape, line, table, or image on another slide is insufficient.
+Producer-side insertion/recovery readback requires the same image-type
+and exact-slide proof. The existing revision chain, journal, receipt digest,
+and identity checks remain mandatory. This is repository-side offline
+validation; live Docs/Slides canary acceptance remains separate.

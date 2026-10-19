@@ -2,12 +2,34 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
 
 REQUIRED_KEYS = ("title", "objectives", "slides", "worksheet_questions")
+
+# Governed slide-scoped token convention: slide_<index>_heading and
+# slide_<index>_bullet_<n>, where <index> is the authored slide["index"].
+# This regex is the single source of truth for "slide-scoped" used by the
+# request builders (identity threading) and terminal QA (location binding).
+_SLIDE_SCOPED_TOKEN_RE = re.compile(r"slide_(\d+)_(?:heading|bullet_\d+)")
+
+
+def slide_token_index(token_name: str) -> int | None:
+    """Return the authored 1-based ``slide["index"]`` for a slide-scoped token name.
+
+    Returns None for presentation-wide tokens (``title``, ``objective_N``,
+    ``question_N``, context tokens). The token name is the ``{{...}}``
+    interior, e.g. ``slide_2_heading``.
+    """
+    if not isinstance(token_name, str):
+        return None
+    match = _SLIDE_SCOPED_TOKEN_RE.fullmatch(token_name.strip())
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 @dataclasses.dataclass
@@ -36,6 +58,20 @@ class LessonContent:
                 raise ValueError(f"Context token collides with authored lesson token: {key}")
             tokens[key] = self.context_tokens[key]
         return tokens
+
+    def slide_token_indexes(self) -> dict[str, int]:
+        """Map each slide-scoped token name to its authored 1-based slide index.
+
+        Derived from the governed ``slides[].index`` values through the same
+        token naming as :meth:`placeholder_tokens`; never inferred from any
+        observed artifact. Presentation-wide tokens are absent from the map.
+        """
+        mapping: dict[str, int] = {}
+        for name in self.placeholder_tokens():
+            index = slide_token_index(name)
+            if index is not None:
+                mapping[name] = index
+        return mapping
 
     def with_context_tokens(self, values: Mapping[str, str]) -> "LessonContent":
         merged = dict(self.context_tokens)
