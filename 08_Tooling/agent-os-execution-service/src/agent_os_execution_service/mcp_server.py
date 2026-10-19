@@ -39,6 +39,7 @@ from scripts.agent_os_github_target_guard import (
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
+from .work_reconciliation_facade import reconcile_proposed_work_for_host
 from .governed_mutation_seams_facade import (
     evaluate_issue_comment_mutation_boundary_for_host,
     project_lane_post_pr_issue_reconciliation_for_host,
@@ -235,6 +236,12 @@ def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dic
     }
 
 @mcp.tool()
+def reconcile_agent_os_proposed_work_tool(evidence: dict[str, object]) -> dict[str, object]:
+    """Run #3308 on host-acquired complete current evidence; never mutate."""
+    return reconcile_proposed_work_for_host(evidence)
+
+
+@mcp.tool()
 def plan_connected_issue_creation_tool(
     repository: str,
     issue_body: str,
@@ -243,8 +250,9 @@ def plan_connected_issue_creation_tool(
     distinct_repair_seam: bool = False,
     candidate_evidence: list[dict[str, object]] | None = None,
     candidate_enumeration_complete: bool = False,
+    reconciliation_evidence: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Project canonical connected-issue admission evidence without performing writes."""
+    """Project connected-issue admission, optionally gated by live #3308 evidence."""
     if canonical_issue_number is not None:
         _github_target_entry_guard(
             repository=repository,
@@ -270,7 +278,25 @@ def plan_connected_issue_creation_tool(
         )
         for item in (candidate_evidence or [])
     )
-    return plan_connected_issue_creation_for_host(
+    triage = (
+        reconcile_proposed_work_for_host(reconciliation_evidence)
+        if reconciliation_evidence is not None else None
+    )
+    if triage is not None and triage["disposition"] != "candidate-new-work":
+        return {
+            "repository": repository,
+            "create_allowed": False,
+            "next_operation": "manual-review-work-reconciliation-required",
+            "work_reconciliation": triage,
+            "reason_codes": triage["reason_codes"],
+            "implementation_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+            "closure_authorized": False,
+            "external_write_authorized": False,
+            "side_effects_performed": False,
+        }
+    result = plan_connected_issue_creation_for_host(
         repository=repository,
         issue_body=issue_body,
         duplicate_review_disposition=duplicate_review_disposition,
@@ -279,6 +305,9 @@ def plan_connected_issue_creation_tool(
         candidate_evidence=inspected,
         candidate_enumeration_complete=candidate_enumeration_complete,
     )
+    if triage is not None:
+        result["work_reconciliation"] = triage
+    return result
 
 @mcp.tool()
 def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> dict[str, object]:
