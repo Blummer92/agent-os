@@ -12,6 +12,9 @@ def _inputs():
         visual_placements=(), resume_dir="resume",
         placement_transport=None, placement_receipts_dir="placements",
         qa_evidence_dir="qa",
+        # #3259 D2: strict fail-closed -- the caller must state its authored
+        # token set; empty here because the plan is empty.
+        expected_content_tokens=(),
     )
 
 

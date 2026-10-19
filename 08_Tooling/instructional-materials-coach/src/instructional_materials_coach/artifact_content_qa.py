@@ -173,6 +173,10 @@ class TerminalQAExpectations:
     docs_content: tuple[ContentExpectation, ...] = ()
     slides_content: tuple[ContentExpectation, ...] = ()
     visuals: tuple[VisualExpectation, ...] = ()
+    # #3259 D2: the authored content-token set the composer verified the
+    # plan covers. Bound into the expectations identity so a truncated plan
+    # can never be mistaken for a complete one at recovery time.
+    expected_content_tokens: tuple[str, ...] = ()
 
     @staticmethod
     def build_from_requests(
@@ -181,6 +185,7 @@ class TerminalQAExpectations:
         docs_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
+        expected_content_tokens: tuple[str, ...] | list[str] | None = None,
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
 
@@ -189,6 +194,10 @@ class TerminalQAExpectations:
         artifact and the ``replaceText`` must be present. Visual expectations
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
+
+        ``expected_content_tokens`` records the authored token set the
+        shared composer verified the plan covers (#3259 D2); it is bound
+        into the expectations identity but never generates expectations.
         """
         return TerminalQAExpectations(
             idempotency_key=str(idempotency_key or ""),
@@ -216,6 +225,7 @@ class TerminalQAExpectations:
                 )
                 for binding in visual_placements or ()
             ),
+            expected_content_tokens=tuple(sorted(set(expected_content_tokens or ()))),
         )
 
     def expectations_hash(self) -> str:
@@ -237,6 +247,11 @@ class TerminalQAExpectations:
                  "content_identity": dict(v.content_identity), "required": v.required}
                 for v in self.visuals
             ],
+            # #3259 D2: the authored token set is part of the expectations
+            # identity. Pre-repair evidence (recorded without it) can never
+            # hash-match a repaired build's expectations, so a truncated
+            # plan's VERIFIED is never recovered.
+            "expected_content_tokens": sorted(self.expected_content_tokens),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -963,6 +978,29 @@ def _try_recover_verified(
         return None
     if stored.get("expectations_hash") != expectations.expectations_hash():
         return None
+    # #3259 D2 second layer: never recover a VERIFIED whose plan-derived
+    # expectations do not cover the authored token set bound into the
+    # expectations at compose time. Coverage is per artifact -- the
+    # demonstrated defect truncated the Docs plan only. A truncated plan
+    # that bypassed the shared composer cannot be blessed by recovery.
+    expected_tokens = set(expectations.expected_content_tokens or ())
+    if expected_tokens:
+        # ContentExpectation.token carries the braced marker ({{token}});
+        # the authored set carries bare tokens -- compare on bare form.
+        def _bare(token: str) -> str:
+            if (
+                isinstance(token, str)
+                and token.startswith("{{")
+                and token.endswith("}}")
+                and len(token) > 4
+            ):
+                return token[2:-2]
+            return token
+
+        docs_planned = {_bare(e.token) for e in expectations.docs_content}
+        slides_planned = {_bare(e.token) for e in expectations.slides_content}
+        if not (expected_tokens <= docs_planned and expected_tokens <= slides_planned):
+            return None
     findings = tuple(
         QAFinding(
             code=str(item.get("code", "")),

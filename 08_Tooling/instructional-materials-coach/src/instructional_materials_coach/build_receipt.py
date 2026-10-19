@@ -101,6 +101,13 @@ def build_receipt_record(
             role: _artifact_record(build, receipt, role) for role in ("slides", "worksheet")
         },
         "qa_expectations_hash": expectation.expectations_hash() if expectation is not None else None,
+        # #3259 D2: the authored content-token set the shared composer
+        # verified the plan covers, persisted as evidence alongside the
+        # expectations hash.
+        "expected_content_tokens": (
+            sorted(getattr(expectation, "expected_content_tokens", None) or ())
+            if expectation is not None else []
+        ),
         "terminal_qa_state": getattr(qa, "state", None),
         "placement_receipt_references": placements,
         "renderer_version": _package_version(),

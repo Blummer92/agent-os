@@ -637,6 +637,9 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+            # #3259 D2: the authored token set the shared composer verifies
+            # the plan covers before QA expectations exist.
+            expected_content_tokens=tuple(content.placeholder_tokens()),
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
