@@ -239,6 +239,36 @@ def pr_metadata_fingerprint(pr_title: str, pr_body: str) -> str:
     ).hexdigest()
 
 
+def changed_scope_fingerprint(files: Iterable[tuple[str, str]]) -> str:
+    """Return the canonical fingerprint for a PR's changed file scope (#3463).
+
+    Each entry is a (filename, blob_sha) pair as reported by the GitHub API.
+    The fingerprint is deterministic over the sorted pairs, so the merge
+    authorization producer and any consumer compute the identical value for
+    the identical file set. Any added, removed, or modified file changes the
+    fingerprint, invalidating the binding as stale.
+    """
+    pairs: list[tuple[str, str]] = []
+    for entry in files:
+        if (
+            not isinstance(entry, tuple)
+            or len(entry) != 2
+            or not isinstance(entry[0], str)
+            or not entry[0]
+            or "\x00" in entry[0]
+            or not isinstance(entry[1], str)
+            or _SHA40_RE.fullmatch(entry[1]) is None
+        ):
+            raise ValueError(
+                "changed scope entries must be (filename, blob_sha40) pairs"
+            )
+        pairs.append((entry[0], entry[1]))
+    pairs.sort()
+    return hashlib.sha256(
+        _canonical_bytes([[name, sha] for name, sha in pairs])
+    ).hexdigest()
+
+
 def _pr_text(value: Any, name: str) -> str:
     """Validate PR title/body metadata text (#3157).
 
