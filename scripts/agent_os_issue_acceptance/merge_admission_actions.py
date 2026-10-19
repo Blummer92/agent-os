@@ -75,7 +75,7 @@ def _parse(transport: object, repository: str) -> tuple[dict[str, Any] | None, s
     if (type(pr) is not int or not 1 <= pr <= 999_999_999
             or type(head) is not str or _SHA40.fullmatch(head) is None
             or type(body) is not str or _SHA256.fullmatch(body) is None
-            or method not in _ALLOWED_METHODS
+            or type(method) is not str or method not in _ALLOWED_METHODS
             or type(transport.get("comment_id")) is not int
             or type(transport.get("issue_number")) is not int
             or type(transport.get("logical_trigger_id_or_none")) is not str):
