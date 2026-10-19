@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
@@ -700,5 +700,74 @@ jobs:
         with:
           name: agent-os-ready-admission-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-ready/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  merge_admission:
+    name: Run finite read-only merge-admission evidence acquisition
+    # #3463: This operation carries only immutable selectors.
+    # No merge, authorization creation, or GitHub write is granted.
+    if: \${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os merge-admit ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Install bounded runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
+
+      - name: Parse fixed merge-admission trigger
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-merge-admission"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-merge-admission/transport.json"
+
+      - name: Reacquire canonical authorization source (read-only)
+        env:
+          GITHUB_TOKEN: \${{ github.token }}
+        run: |
+          python -m scripts.agent_os_issue_acceptance.merge_admission_actions \
+            --transport "$RUNNER_TEMP/agent-os-merge-admission/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/agent-os-merge-admission/receipt.json"
+
+      - name: Publish non-authorizing evidence summary
+        if: \${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-merge-admission" / "receipt.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Merge-admission source acquisition (#3463)\n\n")
+              summary.write("This job grants no merge authority and performs no GitHub mutation.\n\n")
+              if not path.exists():
+                  summary.write("Evidence missing; fail closed.\n")
+              else:
+                  result = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Status: {result.get('status')}\n\n")
+                  summary.write(f"Reasons: {','.join(result.get('reason_codes', []))}\n\n")
+                  summary.write(f"Source: {result.get('authorization_source_status')}\n\n")
+                  summary.write("Merge authorized: False\n")
+          PY
+
+      - name: Publish bounded non-authorizing receipt artifact
+        if: \${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-merge-admission-\${{ github.run_id }}-\${{ github.run_attempt }}
+          path: \${{ runner.temp }}/agent-os-merge-admission/*.json
           if-no-files-found: warn
           retention-days: 7
