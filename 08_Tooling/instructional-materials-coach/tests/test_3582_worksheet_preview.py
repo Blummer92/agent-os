@@ -226,14 +226,17 @@ def _base_args(tmp_path: Path, content_text: str, result_path: Path) -> list[str
     ]
 
 
-def _nested_list(depth: int) -> list:
-    root: list = []
-    current = root
-    for _ in range(depth):
-        child: list = []
-        current.append(child)
-        current = child
-    return root
+def _write_result_text(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "result.json"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _nested_json_text(depth: int) -> str:
+    # Build the deeply nested payload as raw JSON text. Serializing the
+    # equivalent nested Python object with json.dumps() raises RecursionError
+    # inside this test helper itself (never reaching the CLI under test).
+    return "[" * depth + "]" * depth
 
 
 def test_cli_byte_bound_enforced_on_actual_bytes(tmp_path, monkeypatch) -> None:
@@ -274,7 +277,11 @@ def test_cli_malformed_yaml_fails_controlled(tmp_path, content_text) -> None:
 
 def test_cli_deeply_nested_result_json_fails_controlled(tmp_path) -> None:
     """Deep JSON nesting is blocked, never an uncaught RecursionError."""
-    args = _base_args(tmp_path, yaml.safe_dump(AUTHORED), _write_result(tmp_path, _nested_list(5000)))
+    args = _base_args(
+        tmp_path,
+        yaml.safe_dump(AUTHORED),
+        _write_result_text(tmp_path, _nested_json_text(5000)),
+    )
     with _no_client_boundary():
         assert cli.main(args) == 1
 
