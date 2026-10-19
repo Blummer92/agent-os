@@ -8,13 +8,6 @@ matches, and conditional #3307 navigation preflight through their existing owner
 
 from __future__ import annotations
 
-from navigation_registry.reconciliation import (
-    CapabilityMatch,
-    LineageCandidate,
-    ReconciliationInput,
-    classify_proposed_work,
-)
-
 _MAX_MATCHES = 128
 _LINEAGE_KEYS = frozenset({
     "issue_number", "state", "match", "state_reason", "lifecycle_stage",
@@ -37,6 +30,33 @@ def reconcile_proposed_work_for_host(evidence: dict[str, object]) -> dict[str, o
     skipped pages, unverified GitHub issue/PR evidence, or missing registry
     acquisition must be represented as incomplete, not as zero matches.
     """
+    # #3308: The privileged offline host-installer does not yet install the
+    # Navigation Registry wheel. Keep existing MCP tools importable; a call
+    # requiring the classifier fails closed instead of taking down the server.
+    # This does not establish host activation or package-install authority.
+    try:
+        from navigation_registry.reconciliation import (
+            CapabilityMatch,
+            LineageCandidate,
+            ReconciliationInput,
+            classify_proposed_work,
+        )
+    except ImportError:
+        return {
+            "disposition": "manual-review",
+            "reason_codes": ["triage.canonical-classifier-unavailable"],
+            "owner_issue_number": None,
+            "capability_id": None,
+            "evidence_issue_numbers": [],
+            "input_digest": None,
+            "contract_version": "1.0",
+            "live_verification_required": True,
+            "authorizes_issue_creation": False,
+            "authorizes_mutation": False,
+            "execution_authorized": False,
+            "source_evidence_complete": False,
+        }
+
     subject = evidence.get("subject") if type(evidence) is dict else None
     if type(subject) is not str or not subject.strip() or len(subject) > 2048:
         subject = "unverified-proposed-work"
