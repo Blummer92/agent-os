@@ -4,6 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+# Integration tests load the canonical in-repo Navigation Registry.
+# This does not change production installation or the fail-closed import path.
+_REPOSITORY_SRC = Path(__file__).resolve().parents[3] / "src"
+if _REPOSITORY_SRC.is_dir() and str(_REPOSITORY_SRC) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_SRC))
+
+
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))

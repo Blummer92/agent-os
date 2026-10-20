@@ -10,6 +10,7 @@ EXPECTED_TOOLS = frozenset(
     {
         "bind_agent_os_request_interpretation_tool",
         "plan_connected_issue_creation_tool",
+        "reconcile_agent_os_proposed_work_tool",
         "plan_agent_os_continuation_tool",
         "admit_agent_os_primary_pr_creation_tool",
         "admit_agent_os_batch_pr_packaging_tool",
