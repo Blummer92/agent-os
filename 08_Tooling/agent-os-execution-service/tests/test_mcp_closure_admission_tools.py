@@ -270,6 +270,43 @@ def test_tools_fail_closed_on_target_binding_mismatch():
     assert receipt["reason_codes"] == ["closure-target-binding-mismatch"]
 
 
+def test_evaluate_tool_refuses_overbroad_decision_with_valid_mutations():
+    # Regression (QA D1): a decision authorizing more than close-issue with
+    # otherwise valid canonical mutation names must return the refusal
+    # projection, never raise.
+    for mutations in (
+        ["close-issue", "merge"],
+        ["merge"],
+        ["close-issue", "mark-ready"],
+    ):
+        receipt = admit_agent_os_issue_closure_tool(
+            REPO,
+            3432,
+            decision_dict(requested_mutations=mutations),
+            acceptance_dict(),
+            snapshot_dict(),
+        )
+        assert receipt["admitted"] is False
+        assert receipt["reason_codes"] == ["closure-evidence-invalid"]
+
+
+def test_verify_tool_rejects_non_dict_receipt_without_raising():
+    # Regression (QA D2): the canonical gate returns False for non-dict
+    # receipts; the wrapper must project that refusal, never raise.
+    for bad_receipt in ([], None, "receipt"):
+        result = verify_agent_os_issue_closure_admission_tool(
+            REPO,
+            3432,
+            bad_receipt,
+            _authorization().to_dict(),
+            snapshot_dict(),
+            acceptance_dict(),
+        )
+        assert result["verified"] is False
+        assert result["receipt_id"] is None
+        assert result["host_dispatch_contract"] is None
+
+
 def test_closure_tools_are_in_publication_profile():
     assert "admit_agent_os_issue_closure_tool" in _CHATGPT_PUBLICATION_TOOLS
     assert "verify_agent_os_issue_closure_admission_tool" in _CHATGPT_PUBLICATION_TOOLS

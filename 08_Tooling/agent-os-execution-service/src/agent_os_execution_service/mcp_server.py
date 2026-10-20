@@ -896,6 +896,7 @@ def admit_agent_os_issue_closure_tool(
         )
         evidence = _closure_acceptance(acceptance)
         snap = _closure_snapshot(snapshot)
+        request = IssueClosureRequest(decision=decision, acceptance=evidence)
     except (KeyError, TypeError, ValueError):
         return _refused_closure_projection(
             repository=repository,
@@ -915,9 +916,7 @@ def admit_agent_os_issue_closure_tool(
             reason_codes=("closure-target-binding-mismatch",),
             next_action="reacquire-issue-and-reevaluate",
         )
-    return evaluate_issue_closure(
-        IssueClosureRequest(decision=decision, acceptance=evidence), snap
-    )
+    return evaluate_issue_closure(request, snap)
 
 
 @mcp.tool()
@@ -978,7 +977,7 @@ def verify_agent_os_issue_closure_admission_tool(
         "issue_number": issue_number,
         "admitted": verified,
         "verified": verified,
-        "receipt_id": receipt.get("receipt_id"),
+        "receipt_id": receipt.get("receipt_id") if isinstance(receipt, dict) else None,
         "reason_codes": [] if verified else ["closure-admission-not-verified"],
         "next_action": (
             "host-close-issue-then-canonical-readback"
