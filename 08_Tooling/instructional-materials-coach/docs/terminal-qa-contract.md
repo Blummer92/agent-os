@@ -126,6 +126,15 @@ never verification.
 - Expectations derive from the governed planned `replaceAllText`
   requests: `containsText` token (must be absent) + `replaceText` (must be
   present). Nothing is inferred beyond the plan.
+- Governed exception (#3259 D2): the shared composer
+  (`compose_governed_build_request`) verifies the plan covers the
+  caller-supplied authored content-token set (`expected_content_tokens`)
+  before expectations exist and before any external write. A plan missing
+  authored tokens fails closed (`build-request-incomplete-content-plan`);
+  a caller that cannot state its authored token set fails closed
+  (`build-request-expected-tokens-missing`). Terminal-QA recovery
+  additionally refuses a VERIFIED whose plan-derived expectations do not
+  cover the authored tokens bound into the expectations identity.
 - Global unresolved-token scan (`{{...}}`) over the observed artifact
   text; any hit fails QA with a token-level finding.
 - Normalization is whitespace-folding ONLY: no case folding, no
@@ -285,3 +294,4 @@ Producer-side insertion/recovery readback requires the same image-type
 and exact-slide proof. The existing revision chain, journal, receipt digest,
 and identity checks remain mandatory. This is repository-side offline
 validation; live Docs/Slides canary acceptance remains separate.
+
