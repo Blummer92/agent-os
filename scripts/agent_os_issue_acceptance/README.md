@@ -126,6 +126,11 @@ A linked issue resolves only when exactly one unique same-repository target is i
 
 Bare references and `Addresses #...` are non-authoritative. Fenced code, inline code, blockquotes, and HTML comments are masked. Critical consumers use `parse_linked_issue_result()`; `parse_linked_issue()` remains a lossy wrapper.
 
+## Criterion-preservation handoff packet (#3677)
+`criterion_preservation.py` is a pure, deterministic packet surface for implementation handoffs. `parse_acceptance_criteria()` reads the checkbox criteria of an issue body's `## Acceptance criteria` section in order, preserving each criterion's exact text; a criterion's identity is its 1-based position plus a digest of that exact text. `build_criterion_packet()` emits the handoff packet output — every parsed criterion with its identity — and `verify_criterion_packet()` compares a packet against the canonical issue body: a missing index is a dropped criterion, the same index with different text is a reworded criterion, and each is reported as a manual-review item for that criterion. Only a byte-exact full match verifies as `preserved`. The module performs no I/O and creates no authority.
+
+The PR template (`.github/PULL_REQUEST_TEMPLATE.md`) applies the same contract at authoring time: linkage defaults to a non-closing reference (`Part of #N`, closing opt-in only with an exact-issue closure admission), and its criterion-preservation section requires a per-criterion mapping or an explicit manual-review statement naming the unmapped criteria.
+
 ## Public-interface policy
 Existing package exports remain supported until a separately governed compatibility migration proves removal safe. New interfaces use direct-module imports by default.
 

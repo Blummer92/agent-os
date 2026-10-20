@@ -94,6 +94,16 @@ are never identities.
 ## Pull Request Evidence
 PRs should include linked issue, summary, files changed, tests, docs, blockers,
 handoffs, risks, and an Issue Acceptance Report or manual-only explanation.
+The shipped PR template defaults the linked-issue section to a non-closing
+reference (`Part of #N`); a closing keyword is an explicit opt-in admitted
+only with a closure admission for the exact issue. The template's
+criterion-preservation section names the linked issue and requires either a
+per-criterion mapping (each acceptance criterion quoted unchanged, with its
+PR evidence) or an explicit manual-review statement. Handoff packets carry
+the criterion set through `criterion_preservation.py`: the packet reports
+every criterion parsed from the canonical issue body with its identity
+preserved, and packet verification returns manual-review for any criterion
+that was dropped or reworded.
 ## Acceptance Report Schema
 ```text
 Issue Acceptance Report
