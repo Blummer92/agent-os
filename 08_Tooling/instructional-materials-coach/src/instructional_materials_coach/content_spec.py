@@ -122,6 +122,8 @@ class LessonContent:
     #: objectives are empty, the #3582 adapter requires it to exactly match
     #: the selected lesson before adopting governed objectives.
     lesson_identity: dict[str, str] | None = None
+    # #3215: typed prerequisite tutorial ids; unknown ones fail at context composition.
+    prerequisite_tutorials: tuple[str, ...] = dataclasses.field(default_factory=tuple)
 
     def placeholder_tokens(self) -> dict[str, str]:
         tokens: dict[str, str] = {"title": self.title}
@@ -261,7 +263,28 @@ def content_from_dict(data: dict[str, Any]) -> LessonContent:
         slides=_require_slide_list(data["slides"]),
         worksheet_questions=_require_text_list(data["worksheet_questions"], "worksheet_questions"),
         lesson_identity=identity,
+        prerequisite_tutorials=_parse_prerequisite_tutorials(data.get("prerequisite_tutorials")),
     )
+
+
+def _parse_prerequisite_tutorials(value: object) -> tuple[str, ...]:
+    """Parse the optional ``prerequisite_tutorials`` lesson declaration (#3215).
+
+    Fail closed on malformed declarations: a mistyped tutorial id must
+    never silently drop the tutorial-day connection.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Lesson content 'prerequisite_tutorials' must be a list")
+    tutorials: list[str] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(
+                f"prerequisite_tutorials[{index}] must be a non-empty tutorial id"
+            )
+        tutorials.append(entry.strip())
+    return tuple(tutorials)
 
 
 def load_lesson_content(path: str | Path) -> LessonContent:
