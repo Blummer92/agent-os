@@ -189,3 +189,4 @@ def test_blocked_producer_evidence_is_not_consumable() -> None:
     with pytest.raises(LessonContentResultError) as caught:
         compose_lesson_content_result(_authored(), evidence, SELECTION)
     assert caught.value.reason_code == "dispatch-not-completed"
+

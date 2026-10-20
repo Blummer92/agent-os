@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Main refresh for #3584 preserves slide-token location identity, rejects
+   duplicate or invalid canonical slide indices and present null headings,
+   and keeps worksheet preview imports free of provider transports.
 
 - Governed lesson-content adapter (#3582): `lesson_content_result.py`
   consumes one #3580 `lesson-content` result (or its #2283 runner envelope)
@@ -73,3 +76,4 @@
 - Initial release: build a Slides deck and Docs worksheet from an
   approved template pair and a lesson content YAML, via Drive
   `files.copy` plus Slides/Docs `batchUpdate` `replaceAllText`.
+

@@ -798,3 +798,4 @@ def test_admission_result_provenance_triple_must_agree() -> None:
         evidence = _evidence()
         evidence["admission"][key] = "tampered"
         _reject("provenance-mismatch", evidence=evidence)
+

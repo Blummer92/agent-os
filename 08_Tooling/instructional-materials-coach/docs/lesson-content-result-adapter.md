@@ -21,6 +21,13 @@ dashed canonical-unit page id, `Day / Lesson Number`, and the result's run
 provenance (`generated_at`, `<run_id>:<attempt>`). Every field must match.
 
 ## Fail-closed rules
+Authored slide indices use the same positive integer identity as the existing
+slide-token and location contracts. Numeric string indices are canonicalized
+on a copied slide; invalid or duplicate canonical indices and present null
+headings block both parsed content and direct adapter composition. Omitted
+headings remain valid. The direct adapter also requires a visible authored
+title. Main's slide-token helpers remain available.
+
 Each rejection raises `LessonContentResultError` with a closed reason code:
 
 | Condition | Reason code |
@@ -119,3 +126,4 @@ No rendered Docs/PDF preview, native artifact identity, slide preview,
 teacher-modeling or worked-example alignment, cross-artifact instructional
 QA, teacher rehearsal, MaterialRequirement reconciliation with Notion unit
 identity, or Notion/Drive write. Each needs separate admission and evidence.
+

@@ -9,6 +9,7 @@ Authored lesson text here is fixture text only, used to prove preservation.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -58,6 +59,43 @@ def _evidence() -> dict:
 
 def _content(**overrides):
     return content_from_dict({**AUTHORED, **overrides})
+
+
+@pytest.mark.parametrize("slides", [
+    [{"index": 1, "heading": "first"}, {"index": "01", "heading": "second"}],
+    [{"index": "abc", "heading": "text"}],
+    [{"index": 0, "heading": "text"}],
+    [{"index": 1, "heading": None}],
+])
+def test_invalid_slide_identity_or_heading_blocks_parser_and_direct_preview(slides):
+    with pytest.raises(ValueError):
+        _content(slides=slides)
+    content = dataclasses.replace(_content(), slides=slides)
+    receipt = preview_lesson_worksheet(content, _evidence(), SELECTION)
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_code"] == "authored-content-missing"
+    assert receipt["worksheet"] is None
+
+
+def test_numeric_slide_index_uses_same_canonical_token_and_location():
+    authored = [{"index": "01", "heading": "Fixture slide heading"}]
+    content = _content(slides=authored)
+    receipt = preview_lesson_worksheet(content, _evidence(), SELECTION)
+    assert receipt["status"] == "preview"
+    assert content.slide_token_indexes() == {"slide_1_heading": 1}
+    planned = {item["token"]: item["text"] for item in receipt["worksheet"]["planned_replacements"]}
+    assert planned["slide_1_heading"] == "Fixture slide heading"
+    assert "slide_01_heading" not in planned
+    assert authored[0]["index"] == "01"
+
+
+@pytest.mark.parametrize("title", [None, 3, "\u200b"])
+def test_direct_preview_blocks_malformed_authored_title(title):
+    content = dataclasses.replace(_content(), title=title)
+    receipt = preview_lesson_worksheet(content, _evidence(), SELECTION)
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_code"] == "authored-content-missing"
+    assert receipt["worksheet"] is None
 
 
 @contextlib.contextmanager
@@ -310,3 +348,4 @@ def test_blocked_receipt_never_claims_readiness_or_side_effects(tmp_path) -> Non
     assert receipt["classroom_ready"] is False
     assert set(receipt["side_effects"].values()) == {False}
     assert set(receipt["authority"].values()) == {False}
+

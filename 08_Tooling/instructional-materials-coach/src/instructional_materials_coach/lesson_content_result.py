@@ -29,7 +29,7 @@ import unicodedata
 from typing import Any, Mapping
 
 from .artifact_content_qa import normalize_text, scan_unresolved_tokens
-from .content_spec import LessonContent
+from .content_spec import LessonContent, _validate_slide_indexes
 
 #: Published #3580 lesson-content result contract (scripts/agent_os_notion_read_request).
 RESULT_KIND = "agent-os-notion-lesson-content-result"
@@ -496,6 +496,8 @@ def _reject_variant_duplicate_identities(lessons: list[Mapping[str, Any]]) -> No
 def _require_authored_materials(content: LessonContent) -> None:
     if not isinstance(content, LessonContent):
         raise LessonContentResultError("authored-content-missing", "authored LessonContent is required")
+    if not _text(content.title):
+        raise LessonContentResultError("authored-content-missing", "authored title must be visible text")
     # Scalar authored fields must not reach iteration: a bare string for
     # objectives or worksheet_questions would be walked character by
     # character and silently accepted.
@@ -522,6 +524,10 @@ def _require_authored_slides(slides: object) -> None:
     """
     if isinstance(slides, (str, bytes)) or not isinstance(slides, list) or not slides:
         raise LessonContentResultError("authored-content-missing", "authored slides are required; Notion supplies none")
+    try:
+        _validate_slide_indexes(slides)
+    except ValueError as exc:
+        raise LessonContentResultError("authored-content-missing", str(exc)) from None
     for position, slide in enumerate(slides):
         where = f"authored slide #{position + 1}"
         if not isinstance(slide, Mapping):
@@ -532,7 +538,7 @@ def _require_authored_slides(slides: object) -> None:
         ):
             raise LessonContentResultError("authored-content-missing", f"{where} must carry a usable 'index'")
         heading = slide.get("heading")
-        if heading is not None and not isinstance(heading, str):
+        if "heading" in slide and not isinstance(heading, str):
             raise LessonContentResultError("authored-content-missing", f"{where} 'heading' must be text")
         bullets = slide.get("bullets", [])
         if isinstance(bullets, (str, bytes)) or not isinstance(bullets, list) or any(
@@ -664,3 +670,4 @@ __all__ = [
     "result_lessons",
     "verify_lesson_content_result",
 ]
+

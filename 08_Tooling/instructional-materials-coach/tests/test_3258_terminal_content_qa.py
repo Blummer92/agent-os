@@ -192,7 +192,7 @@ def _store_receipt(receipts_dir: Any, *, role_id: str = "worked-example",
                    asset_id: str = "asset-1",
                    identity: Mapping[str, Any] | None = None,
                    revision: str = "r1", inserted: str = "img-1",
-                   key: str = KEY) -> dict[str, Any]:
+                   key: str = KEY, container_id: str | None = None) -> dict[str, Any]:
     record = {
         "asset_id": asset_id,
         "drive_file_id": "file-1",
@@ -202,7 +202,7 @@ def _store_receipt(receipts_dir: Any, *, role_id: str = "worked-example",
         "artifact_id": artifact_id,
         "artifact_revision_id": "r0",
         "marker": "{{visual:" + role_id + "}}",
-        "container_id": "c1",
+        "container_id": container_id or ("s1" if artifact_type == "slides" else "c1"),
         "inserted_element_id": inserted,
         "state": "verified",
         "content_identity": dict(identity or IDENTITY),
@@ -657,3 +657,151 @@ def test_cli_reports_final_only_on_qa_pass(capsys):
     assert "slides=verified" in summary
     assert "worksheet=persisted-not-final" in summary
     assert "qa-token-unresolved" in summary
+
+
+# ---------------------------------------------------------------------------
+# #3258 adversarial cached-success/placement-evidence integrity regressions.
+# These fail (RED) against the pre-repair terminal QA recovery path.
+# ---------------------------------------------------------------------------
+
+def _cache_receipt_fixture(tmp_path):
+    docs = FakeDocsService()
+    docs.add("doc-1", ["Worksheet"], ["img-1"], revision="r1")
+    receipts_dir = tmp_path / "receipts"
+    qa_dir = tmp_path / "qa"
+    _store_receipt(receipts_dir, revision="r1", inserted="img-1")
+    expectations = _expectations(visuals=(_visual(),))
+    result = _run(docs=docs, expectations=expectations,
+                  receipts_dir=receipts_dir, qa_evidence_dir=qa_dir)
+    assert result.state == QA_STATE_VERIFIED
+    assert not result.worksheet.recovered
+    return docs, receipts_dir, qa_dir, expectations
+
+
+def _cache_receipt_rerun(fixture):
+    docs, receipts_dir, qa_dir, expectations = fixture
+    return _run(docs=docs, expectations=expectations,
+                receipts_dir=receipts_dir, qa_evidence_dir=qa_dir)
+
+
+def test_cache_receipt_unchanged_recovers(tmp_path):
+    fixture = _cache_receipt_fixture(tmp_path)
+    result = _cache_receipt_rerun(fixture)
+    assert result.worksheet.state == QA_STATE_VERIFIED
+    assert result.worksheet.recovered
+
+
+def test_cache_receipt_deleted_fails_closed(tmp_path):
+    from instructional_materials_coach.placement_receipts import placement_record_path
+    fixture = _cache_receipt_fixture(tmp_path)
+    placement_record_path(fixture[1], KEY).unlink()
+    result = _cache_receipt_rerun(fixture)
+    assert not result.worksheet.recovered
+    assert result.worksheet.state == QA_STATE_PLACEMENT_UNVERIFIED
+    assert result.state != QA_STATE_VERIFIED
+
+
+@pytest.mark.parametrize('field,value', [
+    ('asset_id', 'other-asset'),
+    ('content_identity', {'sha256': 'altered'}),
+    ('inserted_element_id', 'phantom-image'),
+    ('inserted_element_id', None),
+    ('post_insertion_revision_id', 'old-revision'),
+])
+def test_cache_receipt_mutated_contents_fails_closed(tmp_path, field, value):
+    import json
+    from instructional_materials_coach.placement_receipts import placement_record_path
+    fixture = _cache_receipt_fixture(tmp_path)
+    path = placement_record_path(fixture[1], KEY)
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    payload['records'][0][field] = value
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    result = _cache_receipt_rerun(fixture)
+    assert not result.worksheet.recovered
+    assert result.state != QA_STATE_VERIFIED
+
+
+@pytest.mark.parametrize('invalid', ['{', '[]', '{"records": "wrong-shape"}',
+                                     '{"idempotency_key": "different", "records": []}'])
+def test_cache_receipt_malformed_fails_closed(tmp_path, invalid):
+    from instructional_materials_coach.placement_receipts import placement_record_path
+    fixture = _cache_receipt_fixture(tmp_path)
+    placement_record_path(fixture[1], KEY).write_text(invalid, encoding='utf-8')
+    result = _cache_receipt_rerun(fixture)
+    assert not result.worksheet.recovered
+    assert result.state != QA_STATE_VERIFIED
+
+
+def test_cache_receipt_unreadable_fails_closed(tmp_path, monkeypatch):
+    from pathlib import Path
+    from instructional_materials_coach.placement_receipts import placement_record_path
+    fixture = _cache_receipt_fixture(tmp_path)
+    target = placement_record_path(fixture[1], KEY)
+    original = Path.read_bytes
+
+    def cannot_read(self):
+        if self == target:
+            raise PermissionError('simulated read refusal')
+        return original(self)
+
+    monkeypatch.setattr(Path, 'read_bytes', cannot_read)
+    result = _cache_receipt_rerun(fixture)
+    assert not result.worksheet.recovered
+    assert result.state != QA_STATE_VERIFIED
+
+
+def test_cache_receipt_changed_expectations_invalidates(tmp_path):
+    fixture = _cache_receipt_fixture(tmp_path)
+    docs, receipts_dir, qa_dir, _ = fixture
+    result = _run(docs=docs, receipts_dir=receipts_dir, qa_evidence_dir=qa_dir,
+                  expectations=_expectations(visuals=(_visual(asset_id='different'),)))
+    assert not result.worksheet.recovered
+    assert result.state != QA_STATE_VERIFIED
+
+
+def test_cache_receipt_changed_revision_invalidates(tmp_path):
+    fixture = _cache_receipt_fixture(tmp_path)
+    fixture[0].docs['doc-1']['revisionId'] = 'r2'
+    result = _cache_receipt_rerun(fixture)
+    assert not result.worksheet.recovered
+    assert result.state != QA_STATE_VERIFIED
+
+
+def test_cache_receipt_legacy_evidence_not_recovered(tmp_path):
+    import json
+    from instructional_materials_coach.artifact_content_qa import qa_evidence_path
+    fixture = _cache_receipt_fixture(tmp_path)
+    path = qa_evidence_path(fixture[2], KEY)
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    payload['evidence_contract_version'] = 'terminal-qa-evidence-v2'
+    payload.pop('placement_evidence_hash', None)
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    result = _cache_receipt_rerun(fixture)
+    assert result.state == QA_STATE_VERIFIED
+    assert not result.worksheet.recovered
+
+
+def test_image_type_proof_invalidates_legacy_v3_verified_cache(tmp_path):
+    """A v3 cached success cannot suppress new v4 image/container verification."""
+    from instructional_materials_coach.artifact_content_qa import qa_evidence_path
+    qa_dir = tmp_path / "qa"
+    receipts_dir = tmp_path / "receipts"
+    slides = FakeSlidesService()
+    slides.add("slides-1", [{"objectId": "s1", "elements": [
+        {"objectId": "img-1", "image": True},
+    ]}], revision="r1")
+    _store_receipt(receipts_dir, artifact_type="slides", artifact_id="slides-1")
+    expectations = _expectations(visuals=(_visual(),))
+    first = _run(slides=slides, receipts_dir=receipts_dir, qa_evidence_dir=qa_dir, expectations=expectations)
+    assert first.state == QA_STATE_VERIFIED
+    path = qa_evidence_path(qa_dir, KEY)
+    import json
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["evidence_contract_version"] = "terminal-qa-evidence-v3"
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    slides.presentations_store["slides-1"]["slides"][0]["elements"][0] = (
+        {"objectId": "img-1", "image": False, "text": "shape replacement"}
+    )
+    second = _run(slides=slides, receipts_dir=receipts_dir, qa_evidence_dir=qa_dir, expectations=expectations)
+    assert second.state != QA_STATE_VERIFIED
+    assert not second.slides.recovered
