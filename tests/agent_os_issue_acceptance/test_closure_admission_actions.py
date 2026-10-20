@@ -4,6 +4,7 @@ import pytest
 
 from scripts.agent_os_issue_acceptance.closure_admission_actions import (
     ClosureAcceptanceEvidence,
+    ClosureIssueReadback,
     ClosureWriteUncertain,
     IssueClosureRequest,
     evaluate_issue_closure,
@@ -61,16 +62,43 @@ def request(issue=3432, **kw):
 
 
 class FakeReader:
-    def __init__(self, snapshots):
+    """Reader fake implementing the extended readback protocol.
+
+    Default ``state_reason`` derivation preserves the pre-D3 test intent:
+    a closed snapshot reads back as ``"completed"`` and an open snapshot
+    as ``None``, unless a test overrides the reason for the closed state
+    (``closed_state_reasons`` / ``set_closed_reason``, applied only once
+    the snapshot is closed, so it can be preset for a post-write readback)
+    or for the open state (``open_state_reasons``, for inconsistent
+    readbacks).
+    """
+
+    def __init__(self, snapshots, *, closed_state_reasons=None, open_state_reasons=None):
         self._snapshots = dict(snapshots)
+        self._closed_state_reasons = dict(closed_state_reasons or {})
+        self._open_state_reasons = dict(open_state_reasons or {})
         self.reads = []
 
     def read_issue_snapshot(self, repository, issue_number):
         self.reads.append(issue_number)
         return self._snapshots[issue_number]
 
+    def read_issue_readback(self, repository, issue_number):
+        snap = self.read_issue_snapshot(repository, issue_number)
+        if snap.issue_state == "closed":
+            reason = self._closed_state_reasons.get(issue_number, "completed")
+        else:
+            reason = self._open_state_reasons.get(issue_number)
+        return ClosureIssueReadback(snapshot=snap, state_reason=reason)
+
     def set(self, snap):
         self._snapshots[snap.issue_number] = snap
+
+    def set_closed_reason(self, issue_number, reason):
+        self._closed_state_reasons[issue_number] = reason
+
+    def set_open_reason(self, issue_number, reason):
+        self._open_state_reasons[issue_number] = reason
 
 
 class FakeWriter:
@@ -457,3 +485,353 @@ def test_gate_rejects_extra_keys_and_nonserializable_core():
     assert verify_closure_admission_receipt(
         evil, authorization=auth, fresh_snapshot=snap, acceptance=acc
     ) is False
+
+
+# --- D1: readback identity -------------------------------------------------
+
+
+def _substitute_snapshot_from(reader, call_number, replacement):
+    original = reader.read_issue_snapshot
+    calls = {"n": 0}
+
+    def substituted(repository, issue_number):
+        calls["n"] += 1
+        if calls["n"] >= call_number:
+            return replacement
+        return original(repository, issue_number)
+
+    reader.read_issue_snapshot = substituted
+
+
+def _substitute_readback_from(reader, call_number, replacement):
+    original = reader.read_issue_readback
+    calls = {"n": 0}
+
+    def substituted(repository, issue_number):
+        calls["n"] += 1
+        if calls["n"] >= call_number:
+            return replacement
+        return original(repository, issue_number)
+
+    reader.read_issue_readback = substituted
+
+
+def test_d1_already_closed_wrong_repository_blocked_no_write():
+    reader = FakeReader(
+        {3432: snapshot(repository="Other/repo", issue_state="closed")}
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "blocked"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d1_already_closed_wrong_issue_blocked_no_write():
+    reader = FakeReader({3432: snapshot(9999, issue_state="closed")})
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "blocked"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d1_cross_issue_snapshot_substitution_in_batch():
+    # Issue B's initial read returns issue A's closed snapshot: B must be
+    # blocked, never verified, and only A may be written (with A's own
+    # repository/issue identity).
+    reader = FakeReader(
+        {
+            3432: snapshot(),
+            3306: snapshot(3432, issue_state="closed"),
+        }
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch(
+        (request(3432), request(3306)), reader=reader, writer=writer
+    )
+    assert outcomes[0].status == "closed-verified"
+    assert outcomes[1].status == "blocked"
+    assert outcomes[1].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[1].readback_verified is False
+    assert writer.calls == [(3432, "completed")]
+
+
+def test_d1_fresh_snapshot_wrong_repository_blocked_no_write():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader)
+    _substitute_snapshot_from(
+        reader, 2, snapshot(repository="Other/repo")
+    )
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "blocked"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d1_fresh_snapshot_wrong_issue_blocked_no_write():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader)
+    _substitute_snapshot_from(reader, 2, snapshot(9999))
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "blocked"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d1_post_write_wrong_repository_not_verified():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader)
+    _substitute_readback_from(
+        reader,
+        2,
+        ClosureIssueReadback(
+            snapshot=snapshot(repository="Other/repo", issue_state="closed"),
+            state_reason="completed",
+        ),
+    )
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "readback-identity-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+def test_d1_post_write_wrong_issue_not_verified():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader)
+    _substitute_readback_from(
+        reader,
+        2,
+        ClosureIssueReadback(
+            snapshot=snapshot(9999, issue_state="closed"),
+            state_reason="completed",
+        ),
+    )
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "readback-identity-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+def test_d1_uncertain_write_wrong_identity_readback_not_verified():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader, uncertain_for={3432})
+    _substitute_readback_from(
+        reader,
+        2,
+        ClosureIssueReadback(
+            snapshot=snapshot(9999, issue_state="closed"),
+            state_reason="completed",
+        ),
+    )
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "readback-identity-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-identity-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+# --- D2: uncertain-write classification ------------------------------------
+
+
+def test_d2_uncertain_write_applied_with_stale_ready_label_verified():
+    reader = FakeReader({3432: snapshot()})
+
+    class UncertainLabelWriter:
+        def __init__(self):
+            self.calls = []
+
+        def close_issue(self, repository, issue_number, *, state_reason):
+            self.calls.append((repository, issue_number, state_reason))
+            reader.set(
+                snapshot(
+                    issue_number,
+                    issue_state="closed",
+                    lifecycle_labels=("status:ready",),
+                    observed_revision="rev-3432-1-closed",
+                )
+            )
+            raise ClosureWriteUncertain("response lost")
+
+    writer = UncertainLabelWriter()
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == (
+        "closed-verified-after-uncertain-write-label-reconciliation-required"
+    )
+    assert outcomes[0].reason_codes == (
+        "closure.readback-closed",
+        "closure.stale-ready-label-present",
+    )
+    assert outcomes[0].readback_verified is True
+    assert writer.calls == [(REPO, 3432, "completed")]
+
+
+def test_d2_uncertain_write_applied_clean_verified():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader, uncertain_for={3432})
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-verified-after-uncertain-write"
+    assert outcomes[0].reason_codes == ("closure.readback-closed",)
+    assert outcomes[0].readback_verified is True
+    assert len(writer.calls) == 1
+
+
+def test_d2_uncertain_write_reason_mismatch_not_verified():
+    reader = FakeReader(
+        {3432: snapshot()}, closed_state_reasons={3432: "not_planned"}
+    )
+    writer = FakeWriter(reader, uncertain_for={3432})
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+def test_d2_uncertain_write_missing_reason_not_verified():
+    reader = FakeReader({3432: snapshot()}, closed_state_reasons={3432: None})
+    writer = FakeWriter(reader, uncertain_for={3432})
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-unverified"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-unverified",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+# --- D3: closure state_reason ----------------------------------------------
+
+
+def test_d3_readback_rejects_unsupported_state_reason():
+    with pytest.raises(ValueError):
+        ClosureIssueReadback(snapshot=snapshot(), state_reason="reopened")
+    with pytest.raises(ValueError):
+        ClosureIssueReadback(snapshot=snapshot(), state_reason="bogus")
+    for reason in (None, "completed", "not_planned", "duplicate"):
+        readback = ClosureIssueReadback(snapshot=snapshot(), state_reason=reason)
+        assert readback.state_reason == reason
+
+
+def test_d3_post_write_completed_verified():
+    reader = FakeReader(
+        {3432: snapshot()}, closed_state_reasons={3432: "completed"}
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-verified"
+    assert outcomes[0].readback_verified is True
+
+
+def test_d3_post_write_not_planned_reason_mismatch():
+    reader = FakeReader(
+        {3432: snapshot()}, closed_state_reasons={3432: "not_planned"}
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+def test_d3_post_write_duplicate_reason_mismatch():
+    reader = FakeReader(
+        {3432: snapshot()}, closed_state_reasons={3432: "duplicate"}
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-mismatch",)
+    assert outcomes[0].readback_verified is False
+
+
+def test_d3_post_write_missing_reason_unverified():
+    reader = FakeReader({3432: snapshot()}, closed_state_reasons={3432: None})
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-unverified"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-unverified",)
+    assert outcomes[0].readback_verified is False
+
+
+def test_d3_post_write_inconsistent_via_substituted_readback():
+    reader = FakeReader({3432: snapshot()})
+    writer = FakeWriter(reader, silent_for={3432})
+    _substitute_readback_from(
+        reader,
+        2,
+        ClosureIssueReadback(snapshot=snapshot(), state_reason="completed"),
+    )
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "readback-inconsistent"
+    assert outcomes[0].reason_codes == ("closure.readback-inconsistent",)
+    assert outcomes[0].readback_verified is False
+    assert len(writer.calls) == 1
+
+
+def test_d3_already_closed_completed_verified():
+    reader = FakeReader(
+        {3432: snapshot(issue_state="closed")},
+        closed_state_reasons={3432: "completed"},
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "already-closed"
+    assert outcomes[0].readback_verified is True
+    assert writer.calls == []
+
+
+def test_d3_already_closed_not_planned_reason_mismatch():
+    reader = FakeReader(
+        {3432: snapshot(issue_state="closed")},
+        closed_state_reasons={3432: "not_planned"},
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d3_already_closed_duplicate_reason_mismatch():
+    reader = FakeReader(
+        {3432: snapshot(issue_state="closed")},
+        closed_state_reasons={3432: "duplicate"},
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-mismatch"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-mismatch",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d3_already_closed_missing_reason_unverified():
+    reader = FakeReader(
+        {3432: snapshot(issue_state="closed")},
+        closed_state_reasons={3432: None},
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "closed-reason-unverified"
+    assert outcomes[0].reason_codes == ("closure.readback-reason-unverified",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []
+
+
+def test_d3_initial_open_with_terminal_reason_inconsistent_no_write():
+    reader = FakeReader(
+        {3432: snapshot()}, open_state_reasons={3432: "completed"}
+    )
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((request(),), reader=reader, writer=writer)
+    assert outcomes[0].status == "readback-inconsistent"
+    assert outcomes[0].reason_codes == ("closure.readback-inconsistent",)
+    assert outcomes[0].readback_verified is False
+    assert writer.calls == []

@@ -111,12 +111,40 @@ class IssueClosureRequest:
             raise ValueError("closure request may authorize only the close-issue mutation")
 
 
+CLOSURE_STATE_REASONS = frozenset({"completed", "not_planned", "duplicate"})
+
+
+@dataclass(frozen=True, slots=True)
+class ClosureIssueReadback:
+    """Canonical issue readback carrying GitHub ``state_reason`` evidence.
+
+    Wraps the shared ``LifecycleStateSnapshot`` (which has no
+    ``state_reason`` field and is not modified) with the closure reason
+    observed by the host's canonical read. ``state_reason`` must be
+    ``None`` or one of ``"completed"`` / ``"not_planned"`` /
+    ``"duplicate"``; anything else raises ``ValueError``.
+    """
+
+    snapshot: LifecycleStateSnapshot
+    state_reason: str | None
+
+    def __post_init__(self) -> None:
+        if type(self.snapshot) is not LifecycleStateSnapshot:
+            raise TypeError("snapshot must be a LifecycleStateSnapshot")
+        if self.state_reason is not None and self.state_reason not in CLOSURE_STATE_REASONS:
+            raise ValueError("state_reason is unsupported")
+
+
 class ClosureIssueReader(Protocol):
     """Canonical GitHub read surface supplied by the host."""
 
     def read_issue_snapshot(
         self, repository: str, issue_number: int
     ) -> LifecycleStateSnapshot: ...
+
+    def read_issue_readback(
+        self, repository: str, issue_number: int
+    ) -> ClosureIssueReadback: ...
 
 
 class ClosureIssueWriter(Protocol):
@@ -398,20 +426,47 @@ class ClosureBatchOutcome:
     readback_verified: bool = False
 
 
+def _identity_mismatch(
+    snapshot: LifecycleStateSnapshot, repository: str, issue_number: int
+) -> bool:
+    return snapshot.repository != repository or snapshot.issue_number != issue_number
+
+
 def _readback_status(
-    snapshot: LifecycleStateSnapshot, *, wrote: bool
+    readback: ClosureIssueReadback, *, wrote: bool
 ) -> tuple[str, tuple[str, ...], bool]:
-    """Classify the canonical post-mutation readback for one issue."""
+    """Classify a canonical readback (snapshot + ``state_reason``).
+
+    A closed snapshot is verified only when ``state_reason`` is
+    ``"completed"``; ``"not_planned"``/``"duplicate"`` is a reason
+    mismatch and a missing reason is unverified. An open snapshot
+    carrying a terminal reason is inconsistent.
+    """
+    snapshot = readback.snapshot
     if snapshot.issue_state == "closed":
-        if READY_LABEL in snapshot.lifecycle_labels:
-            # Closure is proven; the stale Ready label is a separate,
-            # separately-admitted reconciliation — never edited here.
+        if readback.state_reason == "completed":
+            if READY_LABEL in snapshot.lifecycle_labels:
+                # Closure is proven; the stale Ready label is a separate,
+                # separately-admitted reconciliation — never edited here.
+                return (
+                    "closed-verified-label-reconciliation-required",
+                    ("closure.readback-closed", "closure.stale-ready-label-present"),
+                    True,
+                )
+            return "closed-verified", ("closure.readback-closed",), True
+        if readback.state_reason in ("not_planned", "duplicate"):
             return (
-                "closed-verified-label-reconciliation-required",
-                ("closure.readback-closed", "closure.stale-ready-label-present"),
-                True,
+                "closed-reason-mismatch",
+                ("closure.readback-reason-mismatch",),
+                False,
             )
-        return "closed-verified", ("closure.readback-closed",), True
+        return (
+            "closed-reason-unverified",
+            ("closure.readback-reason-unverified",),
+            False,
+        )
+    if readback.state_reason is not None:
+        return "readback-inconsistent", ("closure.readback-inconsistent",), False
     if wrote:
         return "write-unverified", ("closure.readback-still-open",), False
     return "still-open", ("closure.readback-still-open",), False
@@ -446,7 +501,10 @@ def run_closure_batch(
         assert issue_number is not None  # enforced by IssueClosureRequest
         repository = decision.repository
         try:
-            snapshot = reader.read_issue_snapshot(repository, issue_number)
+            initial_readback = reader.read_issue_readback(repository, issue_number)
+            if type(initial_readback) is not ClosureIssueReadback:
+                raise TypeError("reader must return a ClosureIssueReadback")
+            snapshot = initial_readback.snapshot
         except Exception:
             outcomes.append(
                 ClosureBatchOutcome(
@@ -454,14 +512,43 @@ def run_closure_batch(
                 )
             )
             continue
-        if snapshot.issue_state == "closed":
-            status, reasons, verified = _readback_status(snapshot, wrote=False)
+        # D1: validate identity for every canonical readback, before any
+        # short-circuit — a substituted snapshot never proves closure.
+        if _identity_mismatch(snapshot, repository, issue_number):
             outcomes.append(
                 ClosureBatchOutcome(
                     issue_number,
-                    "already-closed",
-                    ("closure.already-closed",) + reasons[1:],
-                    readback_verified=verified,
+                    "blocked",
+                    ("closure.readback-identity-mismatch",),
+                )
+            )
+            continue
+        if snapshot.issue_state == "closed":
+            status, reasons, verified = _readback_status(
+                initial_readback, wrote=False
+            )
+            if verified:
+                outcomes.append(
+                    ClosureBatchOutcome(
+                        issue_number,
+                        "already-closed",
+                        ("closure.already-closed",) + reasons[1:],
+                        readback_verified=True,
+                    )
+                )
+            else:
+                outcomes.append(
+                    ClosureBatchOutcome(
+                        issue_number, status, reasons, readback_verified=False
+                    )
+                )
+            continue
+        if initial_readback.state_reason is not None:
+            outcomes.append(
+                ClosureBatchOutcome(
+                    issue_number,
+                    "readback-inconsistent",
+                    ("closure.readback-inconsistent",),
                 )
             )
             continue
@@ -489,6 +576,18 @@ def run_closure_batch(
                     issue_number,
                     "blocked",
                     ("closure.reacquire-failed",),
+                    receipt=receipt,
+                )
+            )
+            continue
+        # D1: explicit identity check on the fresh pre-dispatch snapshot,
+        # in addition to the verification gate below.
+        if _identity_mismatch(fresh, repository, issue_number):
+            outcomes.append(
+                ClosureBatchOutcome(
+                    issue_number,
+                    "blocked",
+                    ("closure.readback-identity-mismatch",),
                     receipt=receipt,
                 )
             )
@@ -529,7 +628,9 @@ def run_closure_batch(
         # reconciliation: its result decides the outcome and no retry is
         # attempted in this run.
         try:
-            after = reader.read_issue_snapshot(repository, issue_number)
+            after_readback = reader.read_issue_readback(repository, issue_number)
+            if type(after_readback) is not ClosureIssueReadback:
+                raise TypeError("reader must return a ClosureIssueReadback")
         except Exception:
             outcomes.append(
                 ClosureBatchOutcome(
@@ -540,11 +641,35 @@ def run_closure_batch(
                 )
             )
             continue
-        status, reasons, verified = _readback_status(after, wrote=True)
-        if uncertain and status == "closed-verified":
-            status = "closed-verified-after-uncertain-write"
-        elif uncertain:
-            status = "uncertain-write-not-closed"
+        # D1: post-write (and post-uncertain-write) identity check — a
+        # readback for any other repository/issue never verifies closure.
+        if _identity_mismatch(after_readback.snapshot, repository, issue_number):
+            outcomes.append(
+                ClosureBatchOutcome(
+                    issue_number,
+                    "readback-identity-mismatch",
+                    ("closure.readback-identity-mismatch",),
+                    receipt=receipt,
+                    readback_verified=False,
+                )
+            )
+            continue
+        status, reasons, verified = _readback_status(after_readback, wrote=True)
+        if uncertain:
+            # D2: a canonical readback confirming closure preserves the
+            # verified outcome; only a non-closed readback is
+            # "uncertain-write-not-closed". Reason-mismatch / unverified /
+            # inconsistent classifications keep their own (non-verified)
+            # status so the state_reason evidence is not hidden.
+            if status == "closed-verified":
+                status = "closed-verified-after-uncertain-write"
+            elif status == "closed-verified-label-reconciliation-required":
+                status = (
+                    "closed-verified-after-uncertain-write"
+                    "-label-reconciliation-required"
+                )
+            elif status == "write-unverified":
+                status = "uncertain-write-not-closed"
         outcomes.append(
             ClosureBatchOutcome(
                 issue_number, status, reasons, receipt=receipt,
