@@ -47,11 +47,18 @@ from .placement_receipts import (
     PlacementStoreIntegrityError,
     assert_no_unresolved_placement_attempts,
     batch_proof_fingerprint,
+    load_placement_records,
     load_receipt_store_snapshot,
     validate_batch_proof_structure,
 )
 from .content_spec import slide_token_index
 from .slides_requests import QA_SLIDE_INDEX_KEY
+from .visual_role_fulfillment import (
+    UNCONSTRAINED_REPRESENTATION_CLASS,
+    VisualRoleFulfillmentError,
+    check_visual_role_fulfillment,
+    validate_representation_class,
+)
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -73,6 +80,10 @@ QA_STATE_CONTENT_MISSING = "content-missing"
 QA_STATE_CONTENT_MISMATCH = "content-mismatch"
 QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
+# #3386: a placed visual failed the semantic visual-role (representation
+# class) fulfillment check -- the image exists and is placed, but it is
+# the wrong kind of visual for the required role.
+QA_STATE_VISUAL_ROLE_MISMATCH = "visual-role-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
@@ -96,6 +107,7 @@ _STATE_SEVERITY = {
     QA_STATE_PAGINATION_UNVERIFIED: 10,
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
+    QA_STATE_VISUAL_ROLE_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
     QA_STATE_ARTIFACT_STALE: 20,
     QA_STATE_ARTIFACT_CONFLICT: 20,
@@ -169,6 +181,11 @@ class VisualExpectation:
     asset_id: str
     content_identity: Mapping[str, Any]
     required: bool = True
+    # #3386: the representation class the governed plan declared for this
+    # role ("unspecified" = no kind constraint was declared). The
+    # fulfillment check never invents a constraint the plan did not
+    # declare.
+    expected_representation_class: str = UNCONSTRAINED_REPRESENTATION_CLASS
 
     def marker(self) -> str:
         return "{{visual:" + self.role_id + "}}"
@@ -203,11 +220,40 @@ class TerminalQAExpectations:
         artifact and the ``replaceText`` must be present. Visual expectations
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
+        #3386: an invalid ``expected_representation_class`` on a binding is
+        an upstream contract breach and fails closed here.
 
         ``expected_content_tokens`` records the authored token set the
         shared composer verified the plan covers (#3259 D2); it is bound
         into the expectations identity but never generates expectations.
         """
+        visuals: list[VisualExpectation] = []
+        for binding in visual_placements or ():
+            raw_expected = getattr(binding, "expected_representation_class", None)
+            if raw_expected is None or (isinstance(raw_expected, str) and not raw_expected.strip()):
+                expected_kind = UNCONSTRAINED_REPRESENTATION_CLASS
+            else:
+                try:
+                    expected_kind = validate_representation_class(
+                        raw_expected, name="expected representation_class"
+                    )
+                except VisualRoleFulfillmentError as exc:
+                    raise ValueError(
+                        f"visual expectation for role {getattr(binding, 'role_id', '?')} "
+                        f"carries an invalid expected representation class: {exc}"
+                    ) from exc
+            visuals.append(
+                VisualExpectation(
+                    role_id=str(binding.role_id),
+                    slot_id=str(binding.slot_id),
+                    asset_id=str(binding.asset_id),
+                    content_identity=dict(binding.content_identity or {}),
+                    required=bool(binding.required),
+                    # #3386: direct-route and plan-route bindings both carry
+                    # the required visual kind into terminal QA.
+                    expected_representation_class=expected_kind,
+                )
+            )
         return TerminalQAExpectations(
             idempotency_key=str(idempotency_key or ""),
             docs_content=tuple(
@@ -224,16 +270,7 @@ class TerminalQAExpectations:
                 )
                 if expectation is not None
             ),
-            visuals=tuple(
-                VisualExpectation(
-                    role_id=str(binding.role_id),
-                    slot_id=str(binding.slot_id),
-                    asset_id=str(binding.asset_id),
-                    content_identity=dict(binding.content_identity or {}),
-                    required=bool(binding.required),
-                )
-                for binding in visual_placements or ()
-            ),
+            visuals=tuple(visuals),
             expected_content_tokens=tuple(sorted(set(expected_content_tokens or ()))),
         )
 
@@ -253,7 +290,8 @@ class TerminalQAExpectations:
             ],
             "visuals": [
                 {"role_id": v.role_id, "slot_id": v.slot_id, "asset_id": v.asset_id,
-                 "content_identity": dict(v.content_identity), "required": v.required}
+                 "content_identity": dict(v.content_identity), "required": v.required,
+                 "expected_representation_class": v.expected_representation_class}
                 for v in self.visuals
             ],
             # #3259 D2: the authored token set is part of the expectations
@@ -1207,6 +1245,44 @@ def _evaluate_visuals(
                     )
                 )
                 continue
+        # #3386: semantic visual-role fulfillment. Presence and placement
+        # checks above prove *an* image exists for this role; this check
+        # proves it is the *right kind* of visual. A declared kind
+        # constraint with a mismatching placed asset fails with an
+        # explicit finding naming the required and observed classes. A
+        # declared constraint with no governed kind evidence on the placed
+        # asset is unverifiable: it routes to manual review with the role
+        # named, never to a false pass.
+        fulfillment = check_visual_role_fulfillment(
+            role_id=visual.role_id,
+            slot_id=visual.slot_id,
+            required_representation_class=visual.expected_representation_class,
+            observed_representation_class=record.get("observed_representation_class"),
+        )
+        if fulfillment.status == "mismatch":
+            findings.append(
+                _fail(
+                    "qa-visual-role-kind-mismatch", QA_STATE_VISUAL_ROLE_MISMATCH,
+                    fulfillment.message()
+                    + " Image count/placement alone cannot satisfy this "
+                    "required visual role.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    required_representation_class=fulfillment.required,
+                    observed_representation_class=fulfillment.observed,
+                )
+            )
+            continue
+        if fulfillment.status == "unverifiable":
+            findings.append(
+                _advisory(
+                    "qa-visual-role-kind-unverifiable", QA_STATE_PLACEMENT_UNVERIFIED,
+                    fulfillment.message(),
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    required_representation_class=fulfillment.required,
+                    source="visual_role_fulfillment",
+                )
+            )
+            continue
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build
