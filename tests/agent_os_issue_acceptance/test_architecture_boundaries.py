@@ -50,7 +50,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
     ),
     (
         "handoff",
-        frozenset({"scheduler_handoff"}),
+        frozenset({"criterion_preservation", "scheduler_handoff"}),
         (),
     ),
     (
