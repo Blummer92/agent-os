@@ -42,7 +42,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .placement_receipts import load_placement_records
+
+from .placement_receipts import (
+    BATCH_PROOF_CONTRACT,
+    PlacementStoreIntegrityError,
+    assert_no_unresolved_placement_attempts,
+    batch_proof_fingerprint,
+    load_placement_records,
+    load_receipt_store_snapshot,
+    validate_batch_proof_structure,
+)
+from .content_spec import slide_token_index
+from .slides_requests import QA_SLIDE_INDEX_KEY
 from .visual_role_fulfillment import (
     UNCONSTRAINED_REPRESENTATION_CLASS,
     VisualRoleFulfillmentError,
@@ -56,7 +67,7 @@ from .worksheet_revision_qa import validate_revision_render_visuals
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
 # v2 (#3416): verified evidence now includes the heading keep-with-next
 # check, so v1 evidence recorded before that rule is never recovered.
-QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v2"
+QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v4"
 
 # Default directory for durable terminal-QA evidence (mirrors the
 # placement-receipts default; the CLI overrides it with --qa-evidence-dir).
@@ -189,6 +200,10 @@ class TerminalQAExpectations:
     docs_content: tuple[ContentExpectation, ...] = ()
     slides_content: tuple[ContentExpectation, ...] = ()
     visuals: tuple[VisualExpectation, ...] = ()
+    # #3259 D2: the authored content-token set the composer verified the
+    # plan covers. Bound into the expectations identity so a truncated plan
+    # can never be mistaken for a complete one at recovery time.
+    expected_content_tokens: tuple[str, ...] = ()
 
     @staticmethod
     def build_from_requests(
@@ -197,6 +212,7 @@ class TerminalQAExpectations:
         docs_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
+        expected_content_tokens: tuple[str, ...] | list[str] | None = None,
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
 
@@ -207,6 +223,10 @@ class TerminalQAExpectations:
         content identity). Nothing is inferred beyond these governed inputs.
         #3386: an invalid ``expected_representation_class`` on a binding is
         an upstream contract breach and fails closed here.
+
+        ``expected_content_tokens`` records the authored token set the
+        shared composer verified the plan covers (#3259 D2); it is bound
+        into the expectations identity but never generates expectations.
         """
         visuals: list[VisualExpectation] = []
         for binding in visual_placements or ():
@@ -252,6 +272,7 @@ class TerminalQAExpectations:
                 if expectation is not None
             ),
             visuals=tuple(visuals),
+            expected_content_tokens=tuple(sorted(set(expected_content_tokens or ()))),
         )
 
     def expectations_hash(self) -> str:
@@ -274,6 +295,11 @@ class TerminalQAExpectations:
                  "expected_representation_class": v.expected_representation_class}
                 for v in self.visuals
             ],
+            # #3259 D2: the authored token set is part of the expectations
+            # identity. Pre-repair evidence (recorded without it) can never
+            # hash-match a repaired build's expectations, so a truncated
+            # plan's VERIFIED is never recovered.
+            "expected_content_tokens": sorted(self.expected_content_tokens),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -300,7 +326,41 @@ def _expectation_from_request(artifact_type: str, request: Mapping[str, Any]) ->
         expected = expected.get("text")
     if not isinstance(expected, str):
         return None
-    return ContentExpectation(artifact_type=artifact_type, token=token, expected_text=expected)
+    location_hint: Mapping[str, Any] | None = None
+    if artifact_type == "slides" and isinstance(request, Mapping):
+        authored_index = request.get(QA_SLIDE_INDEX_KEY)
+        if (
+            isinstance(authored_index, int)
+            and not isinstance(authored_index, bool)
+            and authored_index >= 1
+        ):
+            # Bind the authored slide identity to the observed readback
+            # position. Governed template convention: the title/objectives
+            # slide is read back at position 0 and authored slide n follows
+            # at position n, so the 0-based observed position equals the
+            # authored 1-based index. The identity comes from the authored
+            # LessonContent via the request builder -- never inferred from
+            # unverified observed order.
+            location_hint = {"slide_index": authored_index}
+    return ContentExpectation(
+        artifact_type=artifact_type, token=token, expected_text=expected,
+        location_hint=location_hint,
+    )
+
+
+def _is_slide_scoped_token(token: str) -> bool:
+    """Whether a content token is slide-scoped under the governed convention.
+
+    Slide-scoped tokens (``{{slide_<index>_heading}}`` /
+    ``{{slide_<index>_bullet_<n>}}``) name one authored slide and must be
+    proven at that slide's location. Everything else (``{{title}}``,
+    ``{{objective_N}}``, ``{{question_N}}``, context tokens) is
+    presentation-wide and keeps whole-artifact scope.
+    """
+    name = token
+    if isinstance(name, str) and name.startswith("{{") and name.endswith("}}"):
+        name = name[2:-2]
+    return slide_token_index(name) is not None
 
 
 @dataclass(frozen=True)
@@ -316,6 +376,8 @@ class ArtifactObservation:
     slide_texts: tuple[str, ...] = ()  # per-slide normalized text; () for docs
     observed_at: str = ""
     headings: tuple[HeadingParagraph, ...] = ()  # #3416; () for slides
+    # Only actual Slides image objects qualify; key -> actual slide objectId.
+    image_element_containers: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -363,6 +425,7 @@ class TerminalQAReport:
     worksheet: ArtifactQAReport
     state: str
     generated_at: str = ""
+    placement_evidence_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -370,6 +433,7 @@ class TerminalQAReport:
             "idempotency_key": self.idempotency_key,
             "state": self.state,
             "generated_at": self.generated_at,
+            "placement_evidence_hash": self.placement_evidence_hash,
             "slides": self.slides.to_dict(),
             "worksheet": self.worksheet.to_dict(),
         }
@@ -459,24 +523,38 @@ def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
     return "".join(parts), image_ids
 
 
-def _slides_text_and_images(presentation: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """Extract per-slide text and every page-element object id (images incl.)."""
+def _slides_text_and_images(
+    presentation: Mapping[str, Any],
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """Extract text and actual image IDs, preserving each image's slide.
+
+    Object IDs of shapes, tables, and lines are never image evidence.
+    Ambiguous duplicate image IDs lose their location proof.
+    """
     slide_texts: list[str] = []
     element_ids: list[str] = []
+    image_containers: dict[str, str] = {}
     slides = presentation.get("slides")
     if not isinstance(slides, list):
-        return [], []
+        return [], [], {}
     for slide in slides:
         if not isinstance(slide, dict):
             slide_texts.append("")
             continue
         parts: list[str] = []
+        slide_id = slide.get("objectId")
         for element in slide.get("pageElements", []):
             if not isinstance(element, dict):
                 continue
             object_id = element.get("objectId")
-            if object_id:
-                element_ids.append(str(object_id))
+            if (isinstance(object_id, str) and object_id
+                    and isinstance(element.get("image"), dict)):
+                element_ids.append(object_id)
+                if isinstance(slide_id, str) and slide_id:
+                    if object_id in image_containers:
+                        image_containers[object_id] = ""  # ambiguous ID, fail closed
+                    else:
+                        image_containers[object_id] = slide_id
             shape = element.get("shape")
             if isinstance(shape, dict):
                 text = shape.get("text")
@@ -488,7 +566,7 @@ def _slides_text_and_images(presentation: Mapping[str, Any]) -> tuple[list[str],
                         if isinstance(text_run, dict):
                             parts.append(str(text_run.get("content", "")))
         slide_texts.append(normalize_text("".join(parts)))
-    return slide_texts, element_ids
+    return slide_texts, element_ids, image_containers
 
 
 def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> ArtifactObservation:
@@ -515,12 +593,13 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
             f"different {artifact_type} artifact {echoed}"
         )
     headings: tuple[HeadingParagraph, ...] = ()
+    image_containers: dict[str, str] = {}
     if artifact_type == "docs":
         full_text, image_ids = _docs_text_and_images(resource)
         slide_texts: tuple[str, ...] = ()
         headings = heading_paragraphs(resource)
     else:
-        slide_texts_list, image_ids = _slides_text_and_images(resource)
+        slide_texts_list, image_ids, image_containers = _slides_text_and_images(resource)
         slide_texts = tuple(slide_texts_list)
         full_text = "\n".join(slide_texts_list)
     return ArtifactObservation(
@@ -533,6 +612,7 @@ def observe_artifact(service: Any, artifact_type: str, artifact_id: str) -> Arti
         slide_texts=slide_texts,
         observed_at=_utc_now(),
         headings=headings,
+        image_element_containers=image_containers,
     )
 
 
@@ -564,13 +644,19 @@ def _evaluate_content(
         norm_expected = normalize_text(expectation.expected_text)
         if not norm_expected:
             continue  # vacuous expectation: nothing governed to prove
-        scope_text = observation.full_text
-        normalized_scope = normalized_full
-        hint = expectation.location_hint or {}
+        hint = expectation.location_hint
+        if not isinstance(hint, Mapping):
+            hint = {}
         slide_index = hint.get("slide_index")
-        if slide_index is not None:
-            if artifact_type != "slides" or not isinstance(slide_index, int) or not (
-                0 <= slide_index < len(observation.slide_texts)
+        if artifact_type == "slides" and _is_slide_scoped_token(expectation.token):
+            # Slide-scoped expectations must prove content at the governed
+            # slide location. A missing or unresolvable hint fails closed
+            # (evidence-incomplete) instead of silently widening scope to the
+            # whole presentation.
+            if (
+                not isinstance(slide_index, int)
+                or isinstance(slide_index, bool)
+                or not 0 <= slide_index < len(observation.slide_texts)
             ):
                 findings.append(
                     _fail(
@@ -585,6 +671,11 @@ def _evaluate_content(
             scope_text = observation.slide_texts[slide_index]
             # slide_texts are already normalized
             normalized_scope = scope_text
+        else:
+            # Presentation-wide tokens (title, objective_N, ...) and every
+            # docs expectation keep whole-artifact scope.
+            scope_text = observation.full_text
+            normalized_scope = normalized_full
         if expectation.token in scope_text:
             findings.append(
                 _fail(
@@ -644,6 +735,270 @@ def _evaluate_pagination(observation: ArtifactObservation) -> list[QAFinding]:
     ]
 
 
+def _verify_single_batch_proof(
+    *,
+    proof: Mapping[str, Any],
+    artifact_type: str,
+    artifact_id: str,
+    observation: ArtifactObservation,
+    placement_records: tuple[dict[str, Any], ...],
+) -> tuple[str, dict[tuple[str, str], Mapping[str, Any]], list[QAFinding]]:
+    """Verify one reconciled batch proof against the current observation.
+
+    Returns (status, members, findings) where status is "verified",
+    "invalid" (tampered/corrupt/conflicting), or "stale" (the artifact
+    moved after reconciliation). Members maps (role_id, slot_id) to the
+    proof's member entries. A missing (when required), conflicting, or
+    tampered proof is never verification: callers route those to manual
+    review.
+
+    Structural validation runs BEFORE any member iteration, fingerprint
+    verification, or membership reconciliation: malformed evidence fails
+    closed here instead of crashing iteration or being silently skipped.
+    """
+    structure_issues = validate_batch_proof_structure(proof)
+    if structure_issues:
+        return (
+            "invalid",
+            {},
+            [
+                _fail(
+                    "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                    f"Batch placement proof for {artifact_type} {artifact_id} "
+                    "is structurally malformed "
+                    f"({'; '.join(structure_issues)}); the proof cannot be "
+                    "trusted. Manual review required; the batch is not "
+                    "verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    structure_issues=list(structure_issues),
+                )
+            ],
+        )
+    claimed: dict[tuple[str, str], Mapping[str, Any]] = {}
+    # Structurally validated above: ordered_members is a non-empty list of
+    # mappings with unique (role_id, slot_id) keys, so no silent skips or
+    # collapses are possible here.
+    for member in proof.get("ordered_members") or ():
+        claimed[(str(member.get("role_id")), str(member.get("slot_id")))] = member
+    stored_fingerprint = proof.get("proof_fingerprint")
+    if (
+        not isinstance(stored_fingerprint, str)
+        or not stored_fingerprint
+        or stored_fingerprint != batch_proof_fingerprint(proof)
+    ):
+        return (
+            "invalid",
+            claimed,
+            [
+                _fail(
+                    "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                    f"Batch placement proof for {artifact_type} {artifact_id} "
+                    "failed fingerprint verification; the proof was tampered "
+                    "with or corrupted. Manual review required; the batch is "
+                    "not verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                )
+            ],
+        )
+    if str(proof.get("final_revision_id")) != observation.revision_id:
+        return (
+            "stale",
+            claimed,
+            [
+                _fail(
+                    "qa-artifact-stale", QA_STATE_ARTIFACT_STALE,
+                    f"Artifact {artifact_id} revision {observation.revision_id} "
+                    "no longer matches the reconciled batch proof revision "
+                    f"{proof.get('final_revision_id')}; the artifact mutated "
+                    "after reconciliation and the batch must be re-verified. "
+                    "Manual review required.",
+                    proof_final_revision_id=str(proof.get("final_revision_id")),
+                    current_revision_id=observation.revision_id,
+                )
+            ],
+        )
+    members: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for key, member in claimed.items():
+        match: dict[str, Any] | None = None
+        for record in placement_records:
+            if (
+                record.get("state") == "verified"
+                and str(record.get("role_id")) == key[0]
+                and str(record.get("slot_id")) == key[1]
+                and record.get("artifact_type") == artifact_type
+                and str(record.get("artifact_id")) == artifact_id
+                and _canonical_json(record.get("content_identity"))
+                == _canonical_json(member.get("content_identity"))
+            ):
+                match = record
+                break
+        if match is None:
+            return (
+                "invalid",
+                claimed,
+                [
+                    _fail(
+                        "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                        f"Batch proof member role={key[0]} slot={key[1]} has no "
+                        "matching stored verified receipt; the proof's member "
+                        "set conflicts with the receipt store. Manual review "
+                        "required.",
+                        role_id=key[0], slot_id=key[1],
+                    )
+                ],
+            )
+        for field in ("asset_id", "inserted_element_id", "post_insertion_revision_id"):
+            if str(match.get(field)) != str(member.get(field)):
+                return (
+                    "invalid",
+                    claimed,
+                    [
+                        _fail(
+                            "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                            f"Batch proof member role={key[0]} slot={key[1]} "
+                            f"diverges from its stored receipt on {field}; "
+                            "conflicting evidence. Manual review required.",
+                            role_id=key[0], slot_id=key[1], field=field,
+                        )
+                    ],
+                )
+        element_id = str(member.get("inserted_element_id") or "")
+        if element_id not in observation.image_element_ids:
+            return (
+                "stale",
+                claimed,
+                [
+                    _fail(
+                        "qa-visual-element-mismatch", QA_STATE_VISUAL_MISMATCH,
+                        f"Batch proof member role={key[0]} slot={key[1]} names "
+                        f"inserted element {element_id}, but the persisted "
+                        f"{artifact_type} artifact contains no such element; "
+                        "the persisted visual cannot be observed.",
+                        role_id=key[0], slot_id=key[1],
+                        inserted_element_id=element_id,
+                    )
+                ],
+            )
+        members[key] = member
+    # #3258 P1-2: exact BIDIRECTIONAL membership. The loop above enforces
+    # proof->receipts (every claimed member matches a stored verified
+    # receipt); this enforces receipts->proof (every verified receipt for
+    # this artifact is claimed by exactly one proof member). A proof that
+    # silently drops a member while the receipt survives is conflicting
+    # evidence, never verification.
+    verified_receipt_keys = {
+        (str(record.get("role_id")), str(record.get("slot_id")))
+        for record in placement_records
+        if record.get("state") == "verified"
+        and record.get("artifact_type") == artifact_type
+        and str(record.get("artifact_id")) == artifact_id
+    }
+    unclaimed = sorted(verified_receipt_keys - set(claimed.keys()))
+    if unclaimed:
+        return (
+            "invalid",
+            claimed,
+            [
+                _fail(
+                    "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                    f"{len(unclaimed)} verified placement receipt(s) for "
+                    f"{artifact_type} {artifact_id} "
+                    f"({', '.join(f'role={role} slot={slot}' for role, slot in unclaimed)}) "
+                    "are not claimed by the reconciled batch proof; the "
+                    "proof's member set is incomplete. Manual review "
+                    "required; the batch is not verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    unclaimed_members=[
+                        {"role_id": role, "slot_id": slot}
+                        for role, slot in unclaimed
+                    ],
+                )
+            ],
+        )
+    return ("verified", members, [])
+
+
+def _resolve_batch_proof(
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
+    *,
+    artifact_type: str,
+    artifact_id: str,
+    observation: ArtifactObservation,
+    placement_records: tuple[dict[str, Any], ...],
+) -> tuple[str, dict[tuple[str, str], Mapping[str, Any]], list[QAFinding]]:
+    """Select and verify the batch proof for one artifact.
+
+    Status "absent" carries no findings by itself; the caller applies the
+    strict missing-proof rule (a multi-receipt batch without its
+    reconciled proof fails closed). "conflict"/"invalid"/"stale" each
+    carry their own fail-closed finding; "verified" carries the
+    revalidated member map terminal QA may consume. The proof-side
+    artifact field is ``batch_artifact_type`` (deliberately distinct from
+    the receipt envelope's ``artifact_type``).
+    """
+    candidates = [
+        proof for proof in batch_proofs or ()
+        if isinstance(proof, dict)
+        and proof.get("proof_contract") == BATCH_PROOF_CONTRACT
+        and proof.get("batch_artifact_type") == artifact_type
+        and str(proof.get("artifact_id")) == artifact_id
+    ]
+    if not candidates:
+        return ("absent", {}, [])
+    if len(candidates) > 1:
+        return (
+            "conflict",
+            {},
+            [
+                _fail(
+                    "qa-batch-proof-conflict", QA_STATE_ARTIFACT_CONFLICT,
+                    f"{len(candidates)} batch placement proofs claim "
+                    f"{artifact_type} {artifact_id}; conflicting evidence. "
+                    "Manual review required; the batch is not verified.",
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    proof_count=len(candidates),
+                )
+            ],
+        )
+    return _verify_single_batch_proof(
+        proof=candidates[0],
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        observation=observation,
+        placement_records=placement_records,
+    )
+
+
+def _batch_proof_required_but_missing(
+    *,
+    placement_records: tuple[dict[str, Any], ...],
+    artifact_type: str,
+    artifact_id: str,
+) -> bool:
+    """Whether this artifact's receipt set requires a reconciled batch proof.
+
+    A batch proof is required when the store holds more than one verified
+    placement receipt for this artifact: sequential insertions each
+    advance the artifact revision, and only the reconciled proof's
+    verified per-insertion continuity can legitimately re-bind that
+    receipt set to the observed final revision. The governed placement
+    path always persists the proof, so a multi-receipt batch without one
+    is unproven evidence and must fail closed (strict fail-closed; there
+    is no permissive per-receipt fallback for the batch case).
+    """
+    verified_here = [
+        record for record in placement_records
+        if record.get("state") == "verified"
+        and record.get("artifact_type") == artifact_type
+        and str(record.get("artifact_id")) == str(artifact_id)
+    ]
+    return len(verified_here) > 1
+
+
 def _evaluate_visuals(
     *,
     artifact_type: str,
@@ -651,11 +1006,56 @@ def _evaluate_visuals(
     observation: ArtifactObservation,
     visual_expectations: tuple[VisualExpectation, ...],
     placement_records: tuple[dict[str, Any], ...],
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> list[QAFinding]:
     findings: list[QAFinding] = []
     verified_roles: list[str] = []
     unresolved_roles: list[str] = []
     required_roles_here: list[str] = []
+
+    # #3258: a verified reconciled batch proof re-binds the ordered complete
+    # receipt set to the observed final revision, so members it revalidates
+    # are not rejected as stale for their original per-insertion revisions.
+    # Conflicting, invalid, or stale proofs fail closed with their own
+    # finding, never verify. A missing proof is strict fail-closed exactly
+    # when the proof is required (multi-receipt batch): there is no
+    # permissive per-receipt fallback for the batch case.
+    proof_status, proof_members, proof_findings = _resolve_batch_proof(
+        batch_proofs,
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        observation=observation,
+        placement_records=placement_records,
+    )
+    findings.extend(proof_findings)
+    proof_required_missing = (
+        proof_status == "absent"
+        and _batch_proof_required_but_missing(
+            placement_records=placement_records,
+            artifact_type=artifact_type,
+            artifact_id=artifact_id,
+        )
+    )
+    if proof_required_missing:
+        verified_count = sum(
+            1 for r in placement_records
+            if r.get("state") == "verified"
+            and r.get("artifact_type") == artifact_type
+            and str(r.get("artifact_id")) == str(artifact_id)
+        )
+        findings.append(
+            _fail(
+                "qa-batch-proof-missing", QA_STATE_ARTIFACT_STALE,
+                f"No reconciled batch proof exists for the {verified_count} "
+                f"verified placement receipts in {artifact_type} {artifact_id}; "
+                "a multi-receipt batch cannot be admitted without its "
+                "reconciled continuity proof. Manual review required; the "
+                "batch is not verified.",
+                artifact_type=artifact_type,
+                artifact_id=artifact_id,
+                verified_receipt_count=verified_count,
+            )
+        )
 
     for visual in visual_expectations:
         records_here = [
@@ -692,6 +1092,18 @@ def _evaluate_visuals(
             continue
         if visual.required:
             required_roles_here.append(visual.role_id)
+        proof_key = (visual.role_id, str(visual.slot_id))
+        if proof_status in ("stale", "invalid", "conflict") and (
+            proof_status == "conflict" or proof_key in proof_members
+        ):
+            # The batch proof already failed this visual with its own
+            # fail-closed finding; do not re-verify or double-report it.
+            continue
+        if proof_required_missing and records_here:
+            # The missing-proof finding above already failed this visual
+            # closed; without a reconciled proof its receipts must not be
+            # re-verified through the per-receipt fallback.
+            continue
         if len(records_here) > 1:
             findings.append(
                 _fail(
@@ -734,18 +1146,48 @@ def _evaluate_visuals(
             )
             continue
         post_revision = record.get("post_insertion_revision_id")
-        if post_revision and str(post_revision) != observation.revision_id:
-            # The artifact mutated after the verified placement: the receipt
-            # no longer describes the current artifact state. Never reuse
-            # stale placement evidence for terminal admission.
+        # #3258: a member revalidated by a verified batch proof is bound to
+        # the proof's observed final revision, not to its original
+        # per-insertion revision. Without such a proof the revision-chain
+        # rule stands: only the uniquely recorded, verified same-artifact
+        # placement chain is accepted; all other drift fails closed.
+        # The original per-insertion revisions are never rewritten.
+        if proof_status == "verified" and proof_key not in proof_members:
+            # #3258 P1-2: a verified proof claims every verified receipt for
+            # this artifact (bidirectional membership is enforced in
+            # _verify_single_batch_proof), so a visual outside the proof's
+            # member set must NOT fall back to the per-receipt
+            # revision-chain rule -- that fallback admitted shrunken proofs.
+            findings.append(
+                _fail(
+                    "qa-batch-proof-invalid", QA_STATE_ARTIFACT_CONFLICT,
+                    f"Visual for role {visual.role_id} slot {visual.slot_id} "
+                    f"is not claimed by the verified reconciled batch proof "
+                    f"for {artifact_type} {artifact_id}; a visual outside the "
+                    "proof's member set cannot be admitted through the "
+                    "per-receipt rule. Manual review required.",
+                    role_id=visual.role_id, slot_id=visual.slot_id,
+                    artifact_type=artifact_type, artifact_id=artifact_id,
+                )
+            )
+            continue
+        proof_covers = proof_status == "verified" and proof_key in proof_members
+        # Preview consumers reuse the pure content expectations without
+        # importing the provider/write path used only for visual validation.
+        from .connected_visual_placement import _revision_chain_is_current
+
+        if not proof_covers and not _revision_chain_is_current(record, placement_records, observation.revision_id):
+            # Later image insertions may legitimately advance the artifact
+            # revision. Accept only the uniquely recorded, verified
+            # same-artifact placement chain; reject all other drift.
             findings.append(
                 _fail(
                     "qa-artifact-stale", QA_STATE_ARTIFACT_STALE,
-                    f"Artifact {artifact_id} revision {observation.revision_id} no "
-                    f"longer matches the post-placement revision {post_revision} "
-                    f"on the verified receipt for role {visual.role_id}; the "
-                    "artifact mutated after placement and the visual must be "
-                    "re-verified.",
+                    f"Artifact {artifact_id} revision {observation.revision_id} "
+                    f"cannot be reached from placement revision {post_revision} "
+                    f"for role {visual.role_id} through a unique verified "
+                    "placement chain; external or unaccounted mutation "
+                    "requires re-verification.",
                     role_id=visual.role_id,
                     post_insertion_revision_id=str(post_revision),
                     current_revision_id=observation.revision_id,
@@ -764,7 +1206,17 @@ def _evaluate_visuals(
             )
             continue
         inserted_id = record.get("inserted_element_id")
-        if inserted_id and str(inserted_id) not in observation.image_element_ids:
+        if not inserted_id:
+            findings.append(
+                _fail(
+                    "qa-visual-element-missing", QA_STATE_PLACEMENT_UNVERIFIED,
+                    f"Receipt for role {visual.role_id} has no inserted-element "
+                    "identity, so the actual visual cannot be verified.",
+                    role_id=visual.role_id,
+                )
+            )
+            continue
+        if str(inserted_id) not in observation.image_element_ids:
             findings.append(
                 _fail(
                     "qa-visual-element-mismatch", QA_STATE_VISUAL_MISMATCH,
@@ -777,6 +1229,24 @@ def _evaluate_visuals(
                 )
             )
             continue
+        if artifact_type == "slides":
+            expected_slide = record.get("container_id")
+            actual_slide = observation.image_element_containers.get(str(inserted_id))
+            if (not isinstance(expected_slide, str) or not expected_slide
+                    or actual_slide != expected_slide):
+                findings.append(
+                    _fail(
+                        "qa-visual-container-mismatch", QA_STATE_VISUAL_MISMATCH,
+                        f"Image {inserted_id} for role {visual.role_id} is not "
+                        f"observed as an image on recorded slide {expected_slide!r}; "
+                        f"actual slide is {actual_slide!r}.",
+                        role_id=visual.role_id, inserted_element_id=str(inserted_id),
+                        expected_container_id=expected_slide,
+                        observed_container_id=actual_slide,
+                    )
+                )
+                continue
+
         # #3386: semantic visual-role fulfillment. Presence and placement
         # checks above prove *an* image exists for this role; this check
         # proves it is the *right kind* of visual. A declared kind
@@ -815,6 +1285,7 @@ def _evaluate_visuals(
                 )
             )
             continue
+
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build
@@ -859,9 +1330,15 @@ def evaluate_artifact_qa(
     observation: ArtifactObservation,
     placement_records: tuple[dict[str, Any], ...],
     idempotency_key: str,
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> ArtifactQAReport:
     """Evaluate one persisted artifact against its governed expectations."""
     findings: list[QAFinding] = []
+    # #3258: only this build's proofs are consumable here.
+    proofs_for_build = tuple(
+        proof for proof in batch_proofs or ()
+        if isinstance(proof, dict) and str(proof.get("idempotency_key") or "") == idempotency_key
+    )
 
     def _report(state: str, extra: list[QAFinding] | None = None) -> ArtifactQAReport:
         all_findings = findings + list(extra or ())
@@ -947,6 +1424,7 @@ def evaluate_artifact_qa(
             observation=observation,
             visual_expectations=expectations.visuals,
             placement_records=placement_records,
+            batch_proofs=proofs_for_build,
         )
     )
     return _report(QA_STATE_VERIFIED)
@@ -1008,6 +1486,54 @@ def persist_qa_report(qa_evidence_dir: str | Path, report: TerminalQAReport) -> 
     return path
 
 
+def _parse_recovery_findings(raw: Any) -> tuple[tuple[QAFinding, ...], bool]:
+    """Defensively parse cached findings for recovery. Never raises.
+
+    Returns ``(findings, malformed)``. Valid ``persist_qa_report`` output
+    always stores findings as a list of mappings with string
+    code/severity/state/message and a mapping (or absent) detail. The parse
+    itself never raises: null becomes empty, non-dict items are skipped, and
+    non-mapping detail is coerced to ``{}`` -- but any such deviation still
+    marks the payload malformed so the caller refuses recovery instead of
+    trusting it.
+    """
+    if raw is None:
+        return (), True
+    if not isinstance(raw, (list, tuple)):
+        return (), True
+    findings: list[QAFinding] = []
+    malformed = False
+    for item in raw:
+        if not isinstance(item, dict):
+            malformed = True
+            continue
+        detail = item.get("detail")
+        if detail is None:
+            detail = {}
+        elif not isinstance(detail, Mapping):
+            detail = {}
+            malformed = True
+        code = item.get("code")
+        severity = item.get("severity")
+        state = item.get("state")
+        message = item.get("message")
+        if not (
+            isinstance(code, str)
+            and isinstance(severity, str)
+            and isinstance(state, str)
+            and isinstance(message, str)
+        ):
+            malformed = True
+            continue
+        findings.append(
+            QAFinding(
+                code=code, severity=severity, state=state,
+                message=message, detail=detail,
+            )
+        )
+    return tuple(findings), malformed
+
+
 def _try_recover_verified(
     *,
     qa_evidence_dir: str | Path,
@@ -1015,6 +1541,7 @@ def _try_recover_verified(
     artifact_type: str,
     artifact_id: str,
     observation: ArtifactObservation,
+    placement_evidence_hash: str | None,
 ) -> ArtifactQAReport | None:
     """Recover a prior verified QA result when identity assumptions still hold.
 
@@ -1026,9 +1553,27 @@ def _try_recover_verified(
     stored = load_qa_evidence(qa_evidence_dir, expectations.idempotency_key)
     if stored is None or stored.get("state") != QA_STATE_VERIFIED:
         return None
+    # D2 (a): the evidence file is located by the current idempotency key,
+    # but the payload's own top-level identity must also match -- a planted
+    # file carrying a foreign build identity must never be recovered.
+    if stored.get("idempotency_key") != expectations.idempotency_key:
+        return None
+    # D2 (b): the report contract version (top level and, below, nested) must
+    # equal the canonical report contract. The envelope evidence-contract
+    # version is already enforced by load_qa_evidence.
+    if stored.get("contract_version") != TERMINAL_QA_CONTRACT:
+        return None
     key = "slides" if artifact_type == "slides" else "worksheet"
     stored_artifact = stored.get(key)
     if not isinstance(stored_artifact, dict):
+        return None
+    # D2 (a)/(c): the nested build identity must match; the nested report must
+    # carry its required identity fields. Any missing field fails the
+    # comparison below and refuses recovery.
+    if stored_artifact.get("idempotency_key") != expectations.idempotency_key:
+        return None
+    # D2 (b): nested report contract version.
+    if stored_artifact.get("contract_version") != TERMINAL_QA_CONTRACT:
         return None
     if stored_artifact.get("state") != QA_STATE_VERIFIED:
         return None
@@ -1038,17 +1583,47 @@ def _try_recover_verified(
         return None
     if stored.get("expectations_hash") != expectations.expectations_hash():
         return None
-    findings = tuple(
-        QAFinding(
-            code=str(item.get("code", "")),
-            severity=str(item.get("severity", "")),
-            state=str(item.get("state", "")),
-            message=str(item.get("message", "")),
-            detail=dict(item.get("detail") or {}),
-        )
-        for item in stored_artifact.get("findings", [])
-        if isinstance(item, dict)
+    # #3259 D2 second layer: never recover a VERIFIED whose plan-derived
+    # expectations do not cover the authored token set bound into the
+    # expectations at compose time. Coverage is per artifact -- the
+    # demonstrated defect truncated the Docs plan only. A truncated plan
+    # that bypassed the shared composer cannot be blessed by recovery.
+    expected_tokens = set(expectations.expected_content_tokens or ())
+    if expected_tokens:
+        # ContentExpectation.token carries the braced marker ({{token}});
+        # the authored set carries bare tokens -- compare on bare form.
+        def _bare(token: str) -> str:
+            if (
+                isinstance(token, str)
+                and token.startswith("{{")
+                and token.endswith("}}")
+                and len(token) > 4
+            ):
+                return token[2:-2]
+            return token
+
+        docs_planned = {_bare(e.token) for e in expectations.docs_content}
+        slides_planned = {_bare(e.token) for e in expectations.slides_content}
+        if not (expected_tokens <= docs_planned and expected_tokens <= slides_planned):
+            return None
+    # The positive cache is valid only for the exact current receipt snapshot.
+    # None means the placement evidence is unavailable/invalid; never recover.
+    if placement_evidence_hash is None or stored.get("placement_evidence_hash") != placement_evidence_hash:
+        return None
+    # D2 (d)/(e)/(f): cached findings are untrusted -- parse defensively
+    # (never raise) and require coherence with the claimed VERIFIED state.
+    findings, findings_malformed = _parse_recovery_findings(
+        stored_artifact.get("findings")
     )
+    if findings_malformed:
+        return None
+    for finding in findings:
+        # (e) a VERIFIED report must not carry failure findings ...
+        if finding.severity == "fail":
+            return None
+        # (f) ... nor findings whose state contradicts the terminal state.
+        if _STATE_SEVERITY.get(finding.state, 99) != _STATE_SEVERITY[QA_STATE_VERIFIED]:
+            return None
     return ArtifactQAReport(
         artifact_type=artifact_type,
         artifact_id=artifact_id,
@@ -1068,9 +1643,39 @@ def _qa_one_artifact(
     service: Any,
     expectations: TerminalQAExpectations,
     placement_records: tuple[dict[str, Any], ...],
+    placement_evidence_hash: str | None,
+    pending_attempt_issue: str | None,
     qa_evidence_dir: str | Path | None,
+    batch_proofs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = (),
 ) -> ArtifactQAReport:
     """Observe, evaluate (or recover), and persist QA for one artifact."""
+    # Attempt evidence is separate from verified receipt JSON. A pending
+    # fence MUST block both fresh admission and cached success, including
+    # an optional-only or now-abandoned visual binding.
+    if pending_attempt_issue is not None:
+        return ArtifactQAReport(
+            artifact_type=artifact_type, artifact_id=artifact_id, revision_id="",
+            idempotency_key=expectations.idempotency_key,
+            state=QA_STATE_EVIDENCE_INCOMPLETE,
+            findings=(_fail(
+                "qa-placement-attempt-unresolved", QA_STATE_EVIDENCE_INCOMPLETE,
+                "A placement attempt has an unresolved or invalid durable fence; "
+                "terminal verification is blocked: " + pending_attempt_issue,
+            ),),
+            expectations_hash=expectations.expectations_hash(),
+        )
+    if expectations.visuals and placement_evidence_hash is None:
+        return ArtifactQAReport(
+            artifact_type=artifact_type, artifact_id=artifact_id, revision_id="",
+            idempotency_key=expectations.idempotency_key,
+            state=QA_STATE_EVIDENCE_INCOMPLETE,
+            findings=(_fail(
+                "qa-placement-evidence-unavailable", QA_STATE_EVIDENCE_INCOMPLETE,
+                "Placement evidence is malformed, unreadable, or unavailable; "
+                "terminal success is refused.",
+            ),),
+            expectations_hash=expectations.expectations_hash(),
+        )
     try:
         observation = observe_artifact(service, artifact_type, artifact_id)
     except VerificationRuntimeUnavailableError as exc:
@@ -1118,13 +1723,19 @@ def _qa_one_artifact(
             expectations_hash=expectations.expectations_hash(),
         )
     if qa_evidence_dir is not None:
-        recovered = _try_recover_verified(
-            qa_evidence_dir=qa_evidence_dir,
-            expectations=expectations,
-            artifact_type=artifact_type,
-            artifact_id=artifact_id,
-            observation=observation,
-        )
+        try:
+            recovered = _try_recover_verified(
+                qa_evidence_dir=qa_evidence_dir,
+                expectations=expectations,
+                artifact_type=artifact_type,
+                artifact_id=artifact_id,
+                observation=observation,
+                placement_evidence_hash=placement_evidence_hash,
+            )
+        except Exception:
+            # A malformed cache must fail closed (fresh verification), never
+            # crash terminal QA.
+            recovered = None
         if recovered is not None:
             return recovered
     return evaluate_artifact_qa(
@@ -1134,6 +1745,7 @@ def _qa_one_artifact(
         observation=observation,
         placement_records=placement_records,
         idempotency_key=expectations.idempotency_key,
+        batch_proofs=batch_proofs,
     )
 
 
@@ -1152,9 +1764,13 @@ def run_terminal_qa(
     Fail-closed: with no governed expectations, both artifacts report
     ``evidence-incomplete`` without touching the services. Otherwise each
     artifact is observed from its persisted state and evaluated; verified
-    prior evidence is recovered only while artifact revision and
-    expectations still match. The report is persisted to
-    ``qa_evidence_dir`` when one is supplied.
+    prior evidence is recovered only while the exact stored receipt bytes
+    (records plus reconciled batch proofs, via the placement evidence
+    hash), artifact revision, and expectations still match. Terminal
+    visual evaluation consumes the reconciled batch proof (#3258) for
+    members it revalidates; a missing (when required), conflicting, or
+    tampered proof fails closed for manual review, never verification.
+    The report is persisted to ``qa_evidence_dir`` when one is supplied.
     """
     if expectations is None or not expectations.idempotency_key:
         key = ""
@@ -1182,8 +1798,34 @@ def run_terminal_qa(
         return report
 
     placement_records: tuple[dict[str, Any], ...] = ()
-    if receipts_dir is not None and expectations.visuals:
-        placement_records = load_placement_records(receipts_dir, expectations.idempotency_key)
+    placement_evidence_hash: str | None = "no-visual-expectations"
+    batch_proofs: tuple[dict[str, Any], ...] = ()
+    if expectations.visuals:
+        placement_evidence_hash = None
+        if receipts_dir is not None:
+            # #3258 P1-3: single-snapshot read. Records, batch proofs, and
+            # the evidence hash all derive from the same store bytes, so a
+            # writer landing mid-read cannot mix receipts from one snapshot
+            # with proofs from another (the old two-read sequence let
+            # mixed evidence verify). The hash still binds every proof
+            # change into recovery: any proof change refuses cached
+            # verified QA.
+            (
+                placement_records,
+                batch_proofs,
+                placement_evidence_hash,
+            ) = load_receipt_store_snapshot(
+                receipts_dir, expectations.idempotency_key,
+            )
+
+    pending_attempt_issue: str | None = None
+    if receipts_dir is not None:
+        try:
+            assert_no_unresolved_placement_attempts(
+                receipts_dir, expectations.idempotency_key,
+            )
+        except PlacementStoreIntegrityError as exc:
+            pending_attempt_issue = str(exc)
 
     slides_report = _qa_one_artifact(
         artifact_type="slides",
@@ -1191,7 +1833,10 @@ def run_terminal_qa(
         service=slides_service,
         expectations=expectations,
         placement_records=placement_records,
+        placement_evidence_hash=placement_evidence_hash,
+        pending_attempt_issue=pending_attempt_issue,
         qa_evidence_dir=qa_evidence_dir,
+        batch_proofs=batch_proofs,
     )
     worksheet_report = _qa_one_artifact(
         artifact_type="docs",
@@ -1199,7 +1844,10 @@ def run_terminal_qa(
         service=docs_service,
         expectations=expectations,
         placement_records=placement_records,
+        placement_evidence_hash=placement_evidence_hash,
+        pending_attempt_issue=pending_attempt_issue,
         qa_evidence_dir=qa_evidence_dir,
+        batch_proofs=batch_proofs,
     )
     overall = QA_STATE_VERIFIED
     for candidate in (slides_report.state, worksheet_report.state):
@@ -1211,7 +1859,9 @@ def run_terminal_qa(
         worksheet=worksheet_report,
         state=overall,
         generated_at=_utc_now(),
+        placement_evidence_hash=placement_evidence_hash,
     )
     if qa_evidence_dir is not None:
         persist_qa_report(qa_evidence_dir, report)
     return report
+
