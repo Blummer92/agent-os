@@ -52,6 +52,7 @@ from .placement_receipts import (
 )
 from .content_spec import slide_token_index
 from .slides_requests import QA_SLIDE_INDEX_KEY
+from .student_voice import scan_teacher_voice
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
 from .worksheet_revision_qa import validate_revision_render_visuals
 
@@ -75,6 +76,7 @@ QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
+QA_STATE_TEACHER_VOICE = "teacher-voice"  # #3213/#3644 R5: teacher-guide modeling voice in persisted student copy
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
 QA_STATE_ARTIFACT_CONFLICT = "artifact-conflict"
@@ -94,6 +96,7 @@ _STATE_SEVERITY = {
     QA_STATE_CONTENT_MISSING: 10,
     QA_STATE_CONTENT_MISMATCH: 10,
     QA_STATE_PAGINATION_UNVERIFIED: 10,
+    QA_STATE_TEACHER_VOICE: 10,
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
@@ -186,6 +189,10 @@ class TerminalQAExpectations:
     # plan covers. Bound into the expectations identity so a truncated plan
     # can never be mistaken for a complete one at recovery time.
     expected_content_tokens: tuple[str, ...] = ()
+    # #3213/#3644 R5: deliberately student-facing teacher-voice phrases
+    # declared at build composition. The persisted rendered Doc is rechecked
+    # with the same vocabulary and these same exemptions.
+    allowed_teacher_voice_phrases: tuple[str, ...] = ()
 
     @staticmethod
     def build_from_requests(
@@ -195,6 +202,7 @@ class TerminalQAExpectations:
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
         expected_content_tokens: tuple[str, ...] | list[str] | None = None,
+        allowed_teacher_voice_phrases: tuple[str, ...] | list[str] = (),
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
 
@@ -210,6 +218,7 @@ class TerminalQAExpectations:
         """
         return TerminalQAExpectations(
             idempotency_key=str(idempotency_key or ""),
+            allowed_teacher_voice_phrases=tuple(allowed_teacher_voice_phrases or ()),
             docs_content=tuple(
                 expectation
                 for expectation in (
@@ -261,6 +270,10 @@ class TerminalQAExpectations:
             # hash-match a repaired build's expectations, so a truncated
             # plan's VERIFIED is never recovered.
             "expected_content_tokens": sorted(self.expected_content_tokens),
+            # Voice declarations change what persisted QA accepts, so they
+            # are bound into the hash: recovery cannot reuse a verified QA
+            # result across different declaration sets.
+            "allowed_teacher_voice_phrases": list(self.allowed_teacher_voice_phrases),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -672,6 +685,42 @@ def _evaluate_content(
                     )
                 )
     return findings
+
+
+def _evaluate_student_voice(
+    *,
+    artifact_type: str,
+    observation: ArtifactObservation,
+    allowed_teacher_voice_phrases: tuple[str, ...],
+) -> list[QAFinding]:
+    """#3213/#3644 R5: recheck persisted rendered Docs text for teacher voice.
+
+    The pre-write screen in ``build_request.compose_governed_build_request``
+    sees only planned replacement values; this is the after-write backstop
+    over the actual rendered artifact text, including inherited template
+    boilerplate the composer never sees. Uses the single shared
+    ``student_voice.scan_teacher_voice`` scanner -- no second vocabulary.
+    Only the worksheet Doc is student copy: the slide deck legitimately
+    carries teacher guidance.
+    """
+    if artifact_type != "docs":
+        return []
+    leaked = scan_teacher_voice(
+        (observation.full_text or "",),
+        allowed=allowed_teacher_voice_phrases,
+    )
+    if not leaked:
+        return []
+    return [
+        _fail(
+            "qa-teacher-voice-in-worksheet", QA_STATE_TEACHER_VOICE,
+            "Persisted worksheet Doc contains teacher-guide modeling voice: "
+            + ", ".join(leaked)
+            + ". Rewrite in student voice; teacher guidance belongs in the "
+            "teacher guide and slide deck, not on the student sheet.",
+            labels=list(leaked),
+        )
+    ]
 
 
 def _evaluate_pagination(observation: ArtifactObservation) -> list[QAFinding]:
@@ -1335,6 +1384,13 @@ def evaluate_artifact_qa(
             artifact_type=artifact_type,
             observation=observation,
             expectations=expectations.for_artifact(artifact_type),
+        )
+    )
+    findings.extend(
+        _evaluate_student_voice(
+            artifact_type=artifact_type,
+            observation=observation,
+            allowed_teacher_voice_phrases=expectations.allowed_teacher_voice_phrases,
         )
     )
     findings.extend(_evaluate_pagination(observation))
