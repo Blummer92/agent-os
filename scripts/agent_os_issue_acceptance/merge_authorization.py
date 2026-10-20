@@ -239,6 +239,29 @@ def pr_metadata_fingerprint(pr_title: str, pr_body: str) -> str:
     ).hexdigest()
 
 
+def changed_scope_fingerprint(changed_files: Iterable[tuple[str, str]]) -> str:
+    """Return the canonical fingerprint over a PR's changed-file list (#2340).
+
+    Each entry is a ``(path, blob_sha)`` pair exactly as reported by the GitHub
+    API. Entries are sorted by path; the fingerprint is sha256 over
+    ``"path\\0blob_sha\\n"`` lines. Both the authorization producer and any
+    consumer must use this single definition: it is what binds a merge
+    authorization to the exact file scope it was granted for.
+
+    The empty change set is rejected: a merge authorization must bind a
+    non-empty scope, and an empty live file list can never match a granted
+    binding.
+    """
+    entries = sorted(
+        (_text(str(path), "changed file path"), _sha40(str(sha), "changed file sha"))
+        for path, sha in changed_files
+    )
+    if not entries:
+        raise ValueError("changed scope fingerprint requires a non-empty file list")
+    material = "".join(f"{path}\0{sha}\n" for path, sha in entries)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def _pr_text(value: Any, name: str) -> str:
     """Validate PR title/body metadata text (#3157).
 

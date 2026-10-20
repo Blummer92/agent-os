@@ -1,7 +1,35 @@
 # Changelog
 
 ## Unreleased
+- Main refresh for #3584 preserves slide-token location identity, rejects
+   duplicate or invalid canonical slide indices and present null headings,
+   and keeps worksheet preview imports free of provider transports.
 
+- Governed lesson-content adapter (#3582): `lesson_content_result.py`
+  consumes one #3580 `lesson-content` result (or its #2283 runner envelope)
+  into the existing `LessonContent` via `with_context_tokens`, bound to an
+  exact request, canonical unit, lesson number, and run provenance. Foreign
+  unit, wrong lesson, malformed relation, unverified/stale source, run
+  mismatch, widened authority, extra or credential-bearing keys, missing
+  required fields, empty-string vocabulary, and authored-objective conflicts
+  fail closed with explicit reason codes. Authored slides, questions, and
+  title are preserved; absent Key Vocabulary stays absent; YAML-only
+  behavior is unchanged. `worksheet_preview.py` and `imc-build
+  preview-worksheet` add an enforceable offline no-write planned-worksheet
+  preview receipt (`imc-lesson-worksheet-preview-v1`) that never requests
+  credentials, builds Google clients, renders, or claims a native or
+  classroom-ready artifact. See `docs/lesson-content-result-adapter.md`.
+- Governed lesson-content adapter hardening (#3582, #3584 repair): the
+  adapter and `preview-worksheet` CLI now fail closed on scalar authored
+  fields, unhashable sources, zero-width required text, admission or
+  envelope schema drift (admission exact-keyed, `gce_required` fail-closed),
+  display-name mismatch, case/whitespace-variant lesson identities, deeply
+  nested evidence, malformed slide structures, and unresolved
+  `{{placeholder}}` governed text. Empty authored objectives are filled only
+  under an independent authored `lesson_identity` binding exactly matching
+  the selected lesson; whitespace-only optional source fields are absent,
+  not malformed. The CLI byte bound applies to bytes actually read, and
+  malformed/null/scalar YAML fails controlled as input-unreadable.
 - Student-voice repair (#3213/#3644 R5): `student_voice.py` matching is
   now Unicode-normalized (NFKC) and casefolded with explicit zero-width
   separator, dash-variant, and soft-hyphen handling followed by
