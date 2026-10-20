@@ -257,6 +257,29 @@ Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconcili
 
 Fail-closed reasons: every seam tool is pure admission/readback composition with `side_effects_performed: False` and no GitHub write authority; uncertain or stale evidence resolves to non-terminal, non-retrying dispositions rather than optimistic success; and missing closure authority surfaces visibly as `reconcile-ready-awaiting-closure-authority` instead of silently leaving the issue looking actionable.
 
+## Governed issue-closure dispatch (#3489)
+
+`closure_admission_actions.py` supplies the previously missing production edge
+between an admitted `close-issue` lifecycle mutation and the GitHub mutation
+itself. Admission, authorization, and readback proof are unchanged and reused:
+owner decisions are bound by `lifecycle_mutation_authorization.py`, admission
+is evaluated by `lifecycle_mutation_guard.py`; post-PR lane disposition
+remains owned by `lane_post_pr_issue_reconciliation.py`, while the batch
+consumer records the canonical post-dispatch issue readback directly. The new consumer adds the closure
+analogue of the Ready host gate: `evaluate_issue_closure` builds one
+content-bound, non-performing receipt (independent acceptance checked first,
+evaluator distinct from the authorizer), `verify_closure_admission_receipt`
+recomputes the admission against a fresh snapshot immediately before dispatch
+(any drift fails closed), and `run_closure_batch` walks exactly the finite
+owner-authorized issue set through host-injected reader/writer protocols —
+per-issue blockers never stop unrelated items, an uncertain write is
+reconciled by canonical readback and never retried blindly, and an
+already-closed issue is never re-closed. The fixed host dispatch contract
+names the native GitHub MCP `issue_write` tool (`update`, `state=closed`,
+`state_reason=completed`) as the only writer; this module performs no GitHub
+I/O and its receipt fixes `closure_performed: False` — closure is proven only
+by post-dispatch canonical readback.
+
 ## Canonical lifecycle-stage acquisition (#3433)
 
 `lifecycle_stage_acquisition.py` is a deterministic, pure-local evaluator that
