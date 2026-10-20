@@ -25,7 +25,7 @@ from instructional_materials_coach.live_build import (
     build_live_materials,
 )
 from instructional_materials_coach.artifact_content_qa import TerminalQAExpectations
-from instructional_materials_coach.content_spec import content_from_dict
+from instructional_materials_coach.content_spec import content_from_dict, slide_token_index
 from instructional_materials_coach.docs_requests import build_docs_replace_requests
 from instructional_materials_coach.slides_requests import build_slides_replace_requests
 from instructional_materials_coach.workspace_clients import (
@@ -182,9 +182,23 @@ class _FakeWorkspaceService:
             return _Executable(
                 {"revisionId": revision, "body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": text}}]}}]}}
             )
-        return _Executable(
-            {"revisionId": revision, "slides": [{"pageElements": [{"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}}]}]}
-        )
+        # Preserve the governed layout for terminal QA: the title/objectives
+        # page occupies index 0; authored slide n occupies index n. The old
+        # one-slide fake flattened everything and incorrectly failed the
+        # location-bound QA checks added on main.
+        by_slide = self._store.get("_slide_texts", {}).get(fid, {})
+        slide_count = max(by_slide, default=0) + 1
+        slides = [
+            {
+                "pageElements": [
+                    {"shape": {"text": {"textElements": [
+                        {"textRun": {"content": by_slide.get(index, "")}}
+                    ]}}}
+                ]
+            }
+            for index in range(slide_count)
+        ]
+        return _Executable({"revisionId": revision, "slides": slides})
 
     def batchUpdate(self, presentationId: str | None = None, documentId: str | None = None,
                     body: dict[str, Any] | None = None) -> _Executable:
@@ -209,6 +223,20 @@ class _FakeWorkspaceService:
                 new_text = replace.get("replaceText")
                 if isinstance(new_text, str):
                     texts[fid] = texts.get(fid, "") + new_text
+                    if self._kind == "presentations":
+                        # The API-bound request no longer carries QA metadata.
+                        # Simulate the template's authored slide location from
+                        # the governed placeholder token, not observed text.
+                        contains = replace.get("containsText", {})
+                        token = contains.get("text", "") if isinstance(contains, dict) else ""
+                        slide_index = (
+                            slide_token_index(token[2:-2])
+                            if isinstance(token, str) and token.startswith("{{") and token.endswith("}}")
+                            else None
+                        )
+                        slot = slide_index if slide_index is not None else 0
+                        slide_texts = self._store.setdefault("_slide_texts", {}).setdefault(fid, {})
+                        slide_texts[slot] = slide_texts.get(slot, "") + new_text
         filled.add(fid)
         replies = [{"replaceAllText": {"occurrencesChanged": n}} for n in occurrences]
         return _Executable({"replies": replies})
