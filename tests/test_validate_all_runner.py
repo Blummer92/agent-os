@@ -52,6 +52,7 @@ def repo(tmp_path: Path) -> Path:
         "    print('PYTEST_MARKER ' + target)\n"
         "    print('CWD_MARKER ' + os.getcwd())\n"
         "    print('PYTHONPATH_MARKER ' + os.environ.get('PYTHONPATH', ''))\n"
+        "    print('COVERAGE_FILE_MARKER ' + os.environ.get('COVERAGE_FILE', ''))\n"
         "    barrier = os.environ.get('PYTEST_BARRIER_DIR')\n"
         "    cwd_name = pathlib.Path.cwd().name\n"
         "    if barrier and cwd_name.startswith('pkg-'):\n"
@@ -414,3 +415,65 @@ def test_instructional_materials_suite_is_explicitly_kept_out_of_parallel_batch(
     content = SOURCE_SCRIPT.read_text(encoding="utf-8")
     assert 'if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then' in content
     assert "flush_parallel_batch" in content
+
+
+def test_3432_bounded_coverage_in_existing_pytest_invocations(repo: Path) -> None:
+    """Coverage augments exactly three suites; no collection is rerun."""
+    for name, module in (
+        ("workflow-scheduler", "workflow_scheduler"),
+        ("reusable-capability-registry", "reusable_capability_registry"),
+        ("visual-asset-intake", "visual_asset_intake"),
+        ("untargeted-package", "other"),
+    ):
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+
+    result = run(repo, env={"VALIDATE_ALL_MAX_PARALLEL": "3"})
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.count("PYTEST_MARKER tests") == 5
+    checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    for name in (
+        "workflow-scheduler",
+        "reusable-capability-registry",
+        "visual-asset-intake",
+        "untargeted-package",
+    ):
+        assert checks.count("PASS | 08_Tooling/" + name + " |") == 1
+    assert "--cov=src/workflow_scheduler --cov-report=term" in checks
+    assert "--cov=src/reusable_capability_registry --cov-report=term-missing" in checks
+    assert "--cov=src/visual_asset_intake --cov-report=term-missing" in checks
+    untargeted = next(line for line in checks.splitlines() if "PASS | 08_Tooling/untargeted-package |" in line)
+    assert "--cov=" not in untargeted
+
+
+def test_3432_parallel_coverage_uses_per_suite_temporary_files(repo: Path) -> None:
+    """No parallel suites write the same coverage file or leave files behind."""
+    for name, module in (
+        ("workflow-scheduler", "workflow_scheduler"),
+        ("reusable-capability-registry", "reusable_capability_registry"),
+        ("visual-asset-intake", "visual_asset_intake"),
+    ):
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+
+    result = run(repo, env={"VALIDATE_ALL_MAX_PARALLEL": "3"})
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    paths = [
+        Path(line.removeprefix("COVERAGE_FILE_MARKER "))
+        for line in result.stdout.splitlines()
+        if line.startswith("COVERAGE_FILE_MARKER ") and line != "COVERAGE_FILE_MARKER "
+    ]
+    assert len(paths) == 3
+    assert len(set(paths)) == 3
+    assert all(p.is_absolute() and p.name == ".coverage" for p in paths)
+    assert all("agent-os-validate." in str(p) for p in paths)
+    assert all(not p.exists() for p in paths)
+    assert {p.parent.name for p in paths} == {
+        "workflow-scheduler",
+        "reusable-capability-registry",
+        "visual-asset-intake",
+    }

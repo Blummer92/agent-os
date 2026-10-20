@@ -74,6 +74,27 @@ configurable from 1 through 8 with `VALIDATE_ALL_MAX_PARALLEL`). Each suite keep
 its existing pytest command and isolated output capture; results and timings are
 rendered in deterministic discovery order after each bounded batch completes.
 The Workflow Scheduler remains one suite with its existing coverage command.
+
+Issue #3432 extends coverage in the **same** aggregate pytest invocations for
+`08_Tooling/reusable-capability-registry` and `08_Tooling/visual-asset-intake`.
+These two suites report uncovered Python lines in the existing terminal/CI logs
+using `--cov-report=term-missing`; Workflow Scheduler retains its original
+`--cov=src/workflow_scheduler --cov-report=term` behavior. Coverage is limited
+to each package's `src/<package>` directory, excluding separate test trees,
+vendor dependencies, and unrelated/generated directories outside that path.
+No repository-wide threshold, extra test pass, new dependency, or workflow is
+introduced.
+
+The runner sets a distinct temporary `COVERAGE_FILE` for each covered suite,
+including parallel suites. Those intermediate data files are removed on exit;
+there is no combine step or persistent coverage artifact. The regular aggregate
+console output is the coverage report retained by the existing CI log path.
+To inspect uncovered lines, run `./scripts/validate-all.sh` and read the
+`term-missing` sections for the two packages. Uncovered code is **advisory
+test-gap evidence**, not evidence that code is unreachable or safe to remove.
+Any wire-or-retire decisions belong to #1729, and static security analysis to
+#3427.
+
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
 
