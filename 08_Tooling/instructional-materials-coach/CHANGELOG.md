@@ -60,6 +60,29 @@
   routing, backend-handoff phrasing) from student-facing copy unless
   explicitly declared student copy, and provenance moved from a rendered
   footer paragraph into the PDF document properties.
+- Lesson-revision evidence repair (#3577): the lesson-revision spec YAML is
+  now an assertion, never a self-certified read receipt — a `deck_evidence`
+  mapping is rejected at parse, and terminal QA trusts the spec only through
+  an independently injected `SourceContentReceipt` (canonical teacher-owned
+  Drive ID, revision/immutable byte digest, retrieved page/slide content,
+  retrieval time, provenance; teacher ownership/endorsement asserted
+  separately from the content hash) bound fail-closed by
+  `bind_source_evidence` (wrong/foreign deck ID, digest mismatch, filename
+  mismatch, or invented slide reference refuses the binding). The CLI
+  retrieves the receipt through the existing Drive metadata/fetch tools
+  (`cli.retrieve_deck_source_receipt`); the host injects the page reader —
+  no PDF parser is built. Terminal QA validates exact slide references
+  against retrieved pages and checks the persisted worksheet against the
+  trusted lesson/revision/task anchors (stale persisted worksheet or
+  unobserved declared tasks fail); missing/unverifiable evidence routes to
+  manual review, never a clean acceptance. The gate is armed by a supplied
+  spec or a declared dependency (`--lesson-revision-required`, or the
+  scheduled consumer's governed inputs through the shared composer): a
+  required gate can never be disabled by missing optional inputs, and a
+  required-but-missing spec refuses composition fail-closed. Builds with no
+  spec and no declared dependency keep the gate unarmed. The expectations
+  hash now binds `lesson_revision_required` and the receipt fingerprint;
+  terminal-QA evidence contract bumped to `terminal-qa-evidence-v3`.
 
 ## 0.2.0
 

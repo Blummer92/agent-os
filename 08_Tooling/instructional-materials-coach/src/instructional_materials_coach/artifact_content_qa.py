@@ -53,13 +53,24 @@ from .placement_receipts import (
 from .content_spec import slide_token_index
 from .slides_requests import QA_SLIDE_INDEX_KEY
 from .worksheet_pagination import HeadingParagraph, heading_paragraphs
-from .worksheet_revision_qa import validate_revision_render_visuals
+from .worksheet_revision_qa import (
+    LessonRevisionSpec,
+    observed_worksheet_alignment_findings,
+    validate_lesson_revision_alignment,
+    validate_revision_render_visuals,
+)
 
 
 TERMINAL_QA_CONTRACT = "terminal-artifact-content-qa-v1"
 # v2 (#3416): verified evidence now includes the heading keep-with-next
 # check, so v1 evidence recorded before that rule is never recovered.
-QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v4"
+# v5 (integrated #3577 + current main): the expectations hash binds BOTH
+# main's authored-token set (#3259 D2, which took the contract to v4) and
+# #3577's lesson_revision_required plus the independently injected
+# source-evidence receipt fingerprint, so recovered QA evidence never
+# crosses a changed revision gate, changed source evidence, or a
+# truncated authored-content plan.
+QA_EVIDENCE_CONTRACT = "terminal-qa-evidence-v5"
 
 # Default directory for durable terminal-QA evidence (mirrors the
 # placement-receipts default; the CLI overrides it with --qa-evidence-dir).
@@ -75,6 +86,8 @@ QA_STATE_VISUAL_MISSING = "visual-missing"
 QA_STATE_VISUAL_MISMATCH = "visual-mismatch"
 QA_STATE_PLACEMENT_UNVERIFIED = "placement-unverified"
 QA_STATE_PAGINATION_UNVERIFIED = "pagination-unverified"  # #3416
+QA_STATE_LESSON_REVISION_MISMATCH = "lesson-revision-mismatch"  # #3577
+QA_STATE_LESSON_ALIGNMENT_UNVERIFIED = "lesson-alignment-unverified"  # #3577
 QA_STATE_ARTIFACT_STALE = "artifact-stale"
 QA_STATE_ARTIFACT_INACCESSIBLE = "artifact-inaccessible"
 QA_STATE_ARTIFACT_CONFLICT = "artifact-conflict"
@@ -97,6 +110,8 @@ _STATE_SEVERITY = {
     QA_STATE_VISUAL_MISSING: 11,
     QA_STATE_VISUAL_MISMATCH: 11,
     QA_STATE_PLACEMENT_UNVERIFIED: 11,
+    QA_STATE_LESSON_REVISION_MISMATCH: 11,  # #3577
+    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED: 11,  # #3577
     QA_STATE_ARTIFACT_STALE: 20,
     QA_STATE_ARTIFACT_CONFLICT: 20,
     QA_STATE_EVIDENCE_INCOMPLETE: 30,
@@ -182,6 +197,20 @@ class TerminalQAExpectations:
     docs_content: tuple[ContentExpectation, ...] = ()
     slides_content: tuple[ContentExpectation, ...] = ()
     visuals: tuple[VisualExpectation, ...] = ()
+    # #3577: optional governed lesson-revision spec (deck revision identity +
+    # deck learning targets + the worksheet's sync declaration). The spec is a
+    # YAML ASSERTION, never a self-certified read receipt: terminal QA trusts
+    # it only through an independently injected SourceContentReceipt bound by
+    # bind_source_evidence. When present, terminal QA evaluates cross-artifact
+    # lesson-revision alignment on the worksheet artifact; when absent and
+    # the requirement does not declare the dependency, the gate is not armed
+    # for this build (legacy lessons without a declared dependency stay
+    # unaffected).
+    lesson_revision: LessonRevisionSpec | None = None
+    # #3577: when True, the governed requirement declares the lesson-revision
+    # dependency and the alignment gate is armed even without a spec: a
+    # required gate can never be disabled by missing optional inputs.
+    lesson_revision_required: bool = False
     # #3259 D2: the authored content-token set the composer verified the
     # plan covers. Bound into the expectations identity so a truncated plan
     # can never be mistaken for a complete one at recovery time.
@@ -194,6 +223,8 @@ class TerminalQAExpectations:
         docs_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
+        lesson_revision_spec: LessonRevisionSpec | None = None,
+        lesson_revision_required: bool = False,
         expected_content_tokens: tuple[str, ...] | list[str] | None = None,
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
@@ -203,6 +234,9 @@ class TerminalQAExpectations:
         artifact and the ``replaceText`` must be present. Visual expectations
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
+        ``lesson_revision_required`` arms the #3577 lesson-revision alignment
+        gate when the governed requirement declares the dependency; the
+        required gate cannot be disabled by a missing spec.
 
         ``expected_content_tokens`` records the authored token set the
         shared composer verified the plan covers (#3259 D2); it is bound
@@ -234,10 +268,13 @@ class TerminalQAExpectations:
                 )
                 for binding in visual_placements or ()
             ),
+            lesson_revision=lesson_revision_spec,
+            lesson_revision_required=bool(lesson_revision_required),
             expected_content_tokens=tuple(sorted(set(expected_content_tokens or ()))),
         )
 
     def expectations_hash(self) -> str:
+        lesson_revision = self.lesson_revision
         payload = {
             "docs": [
                 {"token": e.token, "text": e.expected_text,
@@ -256,6 +293,41 @@ class TerminalQAExpectations:
                  "content_identity": dict(v.content_identity), "required": v.required}
                 for v in self.visuals
             ],
+            # #3577: bind the lesson-revision spec AND its independently
+            # retrieved source evidence so recovered QA evidence never crosses
+            # a changed deck-revision declaration or changed source evidence.
+            "lesson_revision_required": self.lesson_revision_required,
+            "lesson_revision": (
+                {
+                    "lesson_id": lesson_revision.lesson_id,
+                    "deck_revision_id": lesson_revision.deck_revision_id,
+                    "deck_filename": lesson_revision.deck_filename,
+                    "deck_drive_id": lesson_revision.deck_drive_id,
+                    "deck_learning_target_ids": list(lesson_revision.deck_learning_target_ids),
+                    "worksheet_lesson_id": lesson_revision.worksheet_lesson_id,
+                    "worksheet_synced_deck_revision_id":
+                        lesson_revision.worksheet_synced_deck_revision_id,
+                    "worksheet_task_coverage": (
+                        [
+                            {"task_id": task_id, "targets": list(targets)}
+                            for task_id, targets in lesson_revision.worksheet_task_coverage
+                        ]
+                        if lesson_revision.worksheet_task_coverage is not None
+                        else None
+                    ),
+                    "approximate_evidence_refs": list(
+                        lesson_revision.approximate_evidence_refs
+                    ),
+                    "source_evidence_fingerprint": (
+                        lesson_revision.source_evidence.receipt_fingerprint()
+                        if lesson_revision.source_evidence is not None
+                        else None
+                    ),
+                    "slide_refs_validated": lesson_revision.slide_refs_validated,
+                }
+                if lesson_revision is not None
+                else None
+            ),
             # #3259 D2: the authored token set is part of the expectations
             # identity. Pre-repair evidence (recorded without it) can never
             # hash-match a repaired build's expectations, so a truncated
@@ -1243,6 +1315,132 @@ def _evaluate_visuals(
     return findings
 
 
+def _evaluate_lesson_revision_alignment(
+    spec: LessonRevisionSpec,
+    observation: ArtifactObservation,
+) -> list[QAFinding]:
+    """#3577: cross-artifact lesson-revision alignment on the worksheet.
+
+    The YAML spec is an assertion, never evidence. Clean acceptance requires
+    an independently injected ``SourceContentReceipt`` bound to the spec,
+    teacher ownership/approval carried on that receipt (separate from the
+    content hash), every exact slide reference validated against the
+    retrieved pages, and zero approximate evidence markers. Missing or
+    unverifiable evidence routes to MANUAL REVIEW and can never produce a
+    clean acceptance; typed YAML evidence claims are rejected at parse/bind
+    time, not here.
+
+    The observed persisted worksheet is checked against the trusted
+    lesson/revision/task anchors from the bound spec: a stale persisted
+    worksheet and YAML-declared tasks absent from the persisted worksheet
+    are FAIL findings (declarations are never compared to declarations).
+    """
+    findings: list[QAFinding] = []
+    receipt = spec.source_evidence
+
+    if receipt is None:
+        findings.append(
+            _advisory(
+                "qa-worksheet-alignment-source-unverified",
+                QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                "The lesson-revision spec carries no independently retrieved "
+                "source-content receipt: YAML is an assertion, never a "
+                "self-certified read receipt. Manual review must confirm the "
+                "worksheet against the declared deck revision before a "
+                "classroom-ready claim.",
+                source="worksheet_revision_qa",
+            )
+        )
+    else:
+        if not receipt.teacher_endorsed:
+            findings.append(
+                _advisory(
+                    "qa-worksheet-alignment-teacher-approval-unverified",
+                    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                    "The independently retrieved source receipt carries no "
+                    "teacher ownership/endorsement assertion. Content hashes "
+                    "bind bytes only and never establish teacher ownership or "
+                    "pedagogical approval: manual review must confirm the "
+                    "source is the teacher-approved deck revision.",
+                    source="worksheet_revision_qa",
+                )
+            )
+        if spec.exact_slide_refs and not spec.slide_refs_validated:
+            findings.append(
+                _advisory(
+                    "qa-worksheet-alignment-slide-refs-unverifiable",
+                    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                    "The spec references exact deck slides but the source "
+                    "receipt carries no retrieved page content to validate "
+                    "them against. Unverifiable slide references route to "
+                    "manual review and never produce a clean acceptance.",
+                    source="worksheet_revision_qa",
+                )
+            )
+
+    if spec.approximate_evidence_refs:
+        findings.append(
+            _advisory(
+                "qa-worksheet-alignment-approximate-evidence",
+                QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                "The lesson-revision spec still carries approximate evidence "
+                "markers ("
+                + ", ".join(spec.approximate_evidence_refs)
+                + "). Approximate or self-authored slide mappings are not "
+                "verified deck evidence and can never produce a clean "
+                "acceptance: manual review must confirm the worksheet against "
+                "the declared deck revision before a classroom-ready claim.",
+                source="worksheet_revision_qa",
+            )
+        )
+
+    result = validate_lesson_revision_alignment(
+        lesson_id=spec.lesson_id,
+        deck_revision_id=spec.deck_revision_id,
+        deck_learning_target_ids=spec.deck_learning_target_ids,
+        worksheet_lesson_id=spec.worksheet_lesson_id,
+        worksheet_synced_deck_revision_id=spec.worksheet_synced_deck_revision_id,
+        worksheet_task_coverage=spec.worksheet_task_coverage,
+    )
+    for revision_finding in result.findings:
+        if revision_finding.severity == "fail":
+            findings.append(
+                _fail(
+                    "qa-" + revision_finding.code,
+                    QA_STATE_LESSON_REVISION_MISMATCH,
+                    revision_finding.message,
+                    source="worksheet_revision_qa",
+                )
+            )
+        else:
+            findings.append(
+                _advisory(
+                    "qa-" + revision_finding.code,
+                    QA_STATE_LESSON_ALIGNMENT_UNVERIFIED,
+                    revision_finding.message,
+                    source="worksheet_revision_qa",
+                )
+            )
+
+    # Observed-worksheet check: the trusted anchors and the reviewed
+    # task->target mapping from the bound spec must be observed in the
+    # PERSISTED worksheet, never merely declared in YAML.
+    observed_result = observed_worksheet_alignment_findings(
+        spec=spec, observed_text=observation.full_text
+    )
+    for revision_finding in observed_result.findings:
+        findings.append(
+            _fail(
+                "qa-" + revision_finding.code,
+                QA_STATE_LESSON_REVISION_MISMATCH,
+                revision_finding.message,
+                source="worksheet_revision_qa",
+            )
+        )
+
+    return findings
+
+
 def evaluate_artifact_qa(
     *,
     artifact_type: str,
@@ -1348,6 +1546,29 @@ def evaluate_artifact_qa(
             batch_proofs=proofs_for_build,
         )
     )
+    # #3577: cross-artifact lesson-revision alignment gate, evaluated on the
+    # persisted worksheet (docs) artifact only. The gate is armed when a
+    # governed spec is present OR when the governed requirement declares the
+    # dependency (lesson_revision_required): a required gate can never be
+    # disabled by missing optional inputs.
+    if artifact_type == "docs" and expectations.lesson_revision_required and (
+        expectations.lesson_revision is None
+    ):
+        findings.append(
+            _fail(
+                "qa-lesson-revision-required-but-missing",
+                QA_STATE_LESSON_REVISION_MISMATCH,
+                "The governed requirement declares the lesson-revision "
+                "dependency but no lesson-revision spec was supplied. A "
+                "required gate cannot be silently disabled by missing "
+                "optional inputs.",
+                source="worksheet_revision_qa",
+            )
+        )
+    if artifact_type == "docs" and expectations.lesson_revision is not None:
+        findings.extend(
+            _evaluate_lesson_revision_alignment(expectations.lesson_revision, observation)
+        )
     return _report(QA_STATE_VERIFIED)
 
 
