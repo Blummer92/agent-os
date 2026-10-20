@@ -77,6 +77,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             "reports are recovered on retry while artifact revision and "
                             "expectations still match, and re-verified otherwise.")
 
+    preview = subparsers.add_parser(
+        "preview-worksheet",
+        help="Offline no-write worksheet content preview from authored lesson content plus one "
+             "governed lesson-content result (#3582). Never requests credentials or writes to Drive/Notion.",
+    )
+    preview.add_argument("--content", required=True, help="Authored lesson content YAML (slides and questions required).")
+    preview.add_argument("--lesson-content-result", required=True,
+                         help="Governed #3580 lesson-content result JSON, or its #2283 runner evidence envelope.")
+    preview.add_argument("--request-id", required=True, help="Exact governed request id, e.g. candy-branding-lesson-content.")
+    preview.add_argument("--canonical-unit-page-id", required=True, help="Exact dashed Notion page id of the canonical unit.")
+    preview.add_argument("--lesson", required=True, help='Exact "Day / Lesson Number" value, e.g. "Day 1".')
+    preview.add_argument("--generated-at", required=True, help="Exact result run provenance, e.g. <run_id>:<attempt>.")
+    preview.add_argument("--preview-out", default="", help="Optional local JSON preview receipt (evidence only; non-authorizing).")
+
+    preview_slides_ab = subparsers.add_parser(
+        "preview-slides-ab",
+        help="Offline no-write A/B slide preview: two authored variants composed from one governed "
+             "lesson-content result (#3509). Notion-first and fail-closed: without an exact bound "
+             "verified lesson result both variants are blocked. Never requests credentials or writes "
+             "to Drive/Notion, and never claims a rendered/native artifact or an evaluation result.",
+    )
+    preview_slides_ab.add_argument("--content-a", required=True, help="Authored lesson content YAML for variant A (slides and questions required).")
+    preview_slides_ab.add_argument("--content-b", required=True, help="Authored lesson content YAML for variant B (slides and questions required).")
+    preview_slides_ab.add_argument("--lesson-content-result", required=True,
+                                   help="Governed #3580 lesson-content result JSON, or its #2283 runner evidence envelope.")
+    preview_slides_ab.add_argument("--request-id", required=True, help="Exact governed request id, e.g. candy-branding-lesson-content.")
+    preview_slides_ab.add_argument("--canonical-unit-page-id", required=True, help="Exact dashed Notion page id of the canonical unit.")
+    preview_slides_ab.add_argument("--lesson", required=True, help='Exact "Day / Lesson Number" value, e.g. "Day 3".')
+    preview_slides_ab.add_argument("--generated-at", required=True, help="Exact result run provenance, e.g. <run_id>:<attempt>.")
+    preview_slides_ab.add_argument("--preview-out", default="", help="Optional local JSON preview receipt (evidence only; non-authorizing).")
+
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
     log_lesson.add_argument("--what-happened", required=True)
@@ -465,8 +496,98 @@ def _write_classroom_admission_verdict(args, build_input, receipt, requirement_i
     return result
 
 
+#: Same byte bound the #2283 runner applies to its transport evidence.
+MAX_LESSON_CONTENT_RESULT_BYTES = 262_144
+
+
+def _preview_worksheet(args: argparse.Namespace) -> int:
+    """#3582 offline preview: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes."""
+    import yaml
+
+    from .lesson_content_result import LessonContentSelection
+    from .worksheet_preview import PREVIEW, preview_lesson_worksheet
+
+    try:
+        content = load_lesson_content(args.content)
+        result_path = Path(args.lesson_content_result)
+        # Enforce the bound on the bytes actually read, not on a stat() taken
+        # before the read: the limit must apply to the parsed input.
+        raw = result_path.read_bytes()
+        if len(raw) > MAX_LESSON_CONTENT_RESULT_BYTES:
+            raise ValueError("lesson-content result exceeds the byte bound")
+        evidence = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError) as exc:
+        print(f"Worksheet preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    selection = LessonContentSelection(
+        request_id=args.request_id,
+        canonical_unit_page_id=args.canonical_unit_page_id,
+        day_lesson_number=args.lesson,
+        generated_at=args.generated_at,
+    )
+    receipt = preview_lesson_worksheet(content, evidence, selection)
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, receipt)
+        except OSError as exc:
+            print(f"Worksheet preview: receipt persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(receipt, sort_keys=True, indent=2))
+    if receipt["status"] != PREVIEW:
+        print(f"Worksheet preview: blocked ({receipt['reason_code']}) — {receipt['detail']}", file=sys.stderr)
+        return 1
+    print("Worksheet preview: planned content only — not rendered, not a native artifact, non-authorizing.")
+    return 0
+
+
+def _preview_slides_ab(args: argparse.Namespace) -> int:
+    """#3509 offline A/B slide preview: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes."""
+    import yaml
+
+    from .lesson_content_result import LessonContentSelection
+    from .slides_ab_preview import PREVIEW, preview_lesson_slides_ab
+
+    try:
+        content_a = load_lesson_content(args.content_a)
+        content_b = load_lesson_content(args.content_b)
+        result_path = Path(args.lesson_content_result)
+        raw = result_path.read_bytes()
+        if len(raw) > MAX_LESSON_CONTENT_RESULT_BYTES:
+            raise ValueError("lesson-content result exceeds the byte bound")
+        evidence = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError) as exc:
+        print(f"Slides A/B preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    selection = LessonContentSelection(
+        request_id=args.request_id,
+        canonical_unit_page_id=args.canonical_unit_page_id,
+        day_lesson_number=args.lesson,
+        generated_at=args.generated_at,
+    )
+    receipt = preview_lesson_slides_ab(content_a, content_b, evidence, selection)
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, receipt)
+        except OSError as exc:
+            print(f"Slides A/B preview: receipt persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(receipt, sort_keys=True, indent=2))
+    if receipt["status"] != PREVIEW:
+        print(f"Slides A/B preview: blocked ({receipt['reason_code']}) — {receipt['detail']}", file=sys.stderr)
+        return 1
+    print("Slides A/B preview: planned content only for both variants — not rendered, not native artifacts, "
+          "no evaluation performed, non-authorizing.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "preview-worksheet":
+        return _preview_worksheet(args)
+    if args.command == "preview-slides-ab":
+        return _preview_slides_ab(args)
     if args.command == "log-lesson":
         path = record_lesson(LessonRecord(lesson_learned=args.title, what_happened=args.what_happened, what_to_do_next_time=args.what_to_do_next_time, guardrail=args.guardrail, severity=args.severity, learning_type=args.learning_type, source_link=args.source_link), args.lessons_dir)
         print(f"Lesson recorded: {path}")
@@ -642,6 +763,8 @@ def main(argv: list[str] | None = None) -> int:
             # compose_generation_context already proved required plan
             # coverage, so this only binds terminal QA artifact scope.
             worksheet_visual_targets=required_visual_example_bindings(content),
+            # #3259 D2: preserve mandatory authored-token coverage on main.
+            expected_content_tokens=tuple(content.placeholder_tokens()),
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
