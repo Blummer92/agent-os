@@ -1,9 +1,20 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { courses, schoolYears, selectCourse, selectUnit, type Material } from "./fixtures";
 
-type Screen = "chat" | "preview" | "edit";
+type Screen = "chat" | "preview" | "edit" | "connections";
 type Scenario = "fixture" | "loading" | "empty" | "unavailable" | "stale" | "error";
 type MessageMap = Record<string, readonly string[]>;
+
+type NotionSnapshot = {
+  provider: string;
+  authenticated: boolean;
+  basic_api_read: boolean;
+  write_authorized: boolean;
+  checked_at: string;
+  api_version: string;
+  mode: string;
+};
+
 
 export function TeacherApp() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -17,6 +28,34 @@ export function TeacherApp() {
   const [scenario, setScenario] = useState<Scenario>("fixture");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
+  const [notionSnapshot, setNotionSnapshot] = useState<NotionSnapshot | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/notion-status.json", { cache: "no-store" })
+      .then(response => {
+        if (!response.ok) throw new Error("Unavailable");
+        return response.json();
+      })
+      .then(data => {
+        const timestamp = Date.parse(data.checked_at);
+        const fresh = Number.isFinite(timestamp)
+          && timestamp <= Date.now()
+          && Date.now() - timestamp < 15 * 60 * 1000;
+        if (
+          active && fresh &&
+          data.provider === "notion" &&
+          data.mode === "manual-snapshot" &&
+          typeof data.authenticated === "boolean" &&
+          typeof data.basic_api_read === "boolean" &&
+          data.write_authorized === false &&
+          typeof data.api_version === "string"
+        ) setNotionSnapshot(data);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   const triggerRef = useRef<HTMLButtonElement>(null);
   const course = selectCourse(courseId) ?? courses[0];
   const unit = selectUnit(course, unitId) ?? course.units[0];
@@ -64,12 +103,14 @@ export function TeacherApp() {
     <div className="app-shell">
       <header className="app-header">
         <button className="icon-button" type="button" aria-label="Toggle recent conversations" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}>☰</button>
-        <div className="app-title"><strong>Agent OS Teacher</strong><span>{screen === "chat" ? "Lesson chat" : screen === "preview" ? "Material preview" : "Focused material chat"}</span></div>
+        <div className="app-title"><strong>Agent OS Teacher</strong><span>{screen === "chat" ? "Lesson chat" : screen === "preview" ? "Material preview" : screen === "connections" ? "Connections" : "Focused material chat"}</span></div>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
       <div className="demo-banner" role="status">Interactive sample · Fixture data · No Notion, Drive or AI connection</div>
       {menuOpen && <nav aria-label="Recent conversations" className="recent-menu">
-        <h2>Recent conversations</h2>
+        <h2>Navigation</h2>
+          <button type="button" onClick={() => { setScreen("connections"); setMenuOpen(false); setAssignmentOpen(false); }}>Connections & Permissions</button>
+          <h2>Recent conversations</h2>
         <button type="button" onClick={() => { backToLesson(); setMenuOpen(false); }}>Photography Foundations — lesson chat</button>
         {Object.keys(messages).filter(key => key !== "lesson").map(key => (
           <button type="button" key={key} onClick={() => {
@@ -107,6 +148,33 @@ export function TeacherApp() {
         </div>}
       </section>}
       <main className="main-content">
+        {screen === "connections" && <section aria-labelledby="connections-title" className="connections-screen">
+          <button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button>
+          <h1 id="connections-title">Connections & Permissions</h1>
+          <p className="muted">Read-only capability overview. No live provider checks are configured in this demonstration.</p>
+          <div className="connection-grid">
+            {[
+              { name: "Notion", detail: "Curriculum reads and page updates" },
+              { name: "GitHub", detail: "Repository and pull request access" },
+              { name: "Agent OS Execution Service", detail: "Governed workflow execution" }
+            ].map(connection => (
+              <article className="connection-card" key={connection.name}>
+                <h2>{connection.name}</h2>
+                <p>{connection.detail}</p>
+                {connection.name === "Notion" && notionSnapshot ? (
+                  <>
+                    <p><strong>Last check: {notionSnapshot.authenticated && notionSnapshot.basic_api_read ? "Authenticated" : "Unavailable"}</strong></p>
+                    <p>Basic API read: {notionSnapshot.basic_api_read ? "Verified" : "Not verified"}</p>
+                    <p>Write authorization: Not established</p>
+                    <p className="fine-print">Manual snapshot · {new Date(notionSnapshot.checked_at).toLocaleString()}</p>
+                  </>
+                ) : <p><strong>Status: Not verified</strong></p>}
+                <p className="fine-print">No live connection, permission, or authorization check has been performed.</p>
+              </article>
+            ))}
+          </div>
+          <p className="notice">No write actions are available from this screen.</p>
+        </section>}
         {screen === "chat" && <section aria-labelledby="chat-title"><h1 id="chat-title">Photography Foundations</h1><p className="muted">Discuss your lesson here, or open View Assignment in the top-right corner to inspect sample materials.</p><div className="assistant-note"><strong>Sample assistant</strong><p>We can explore the Rule of Thirds. The material previews are fixtures; no lesson has been generated or saved.</p></div></section>}
         {screen === "preview" && selectedMaterial && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Full sample preview · Grade {course.grade}</p><h1 id="preview-title">{selectedMaterial.title}</h1><p>{selectedMaterial.summary}</p><div className="sample-page">{selectedMaterial.preview.map((line, i) => <div key={i} className="preview-question"><strong>{i + 1}.</strong><p>{line}</p><div className="response-lines" aria-hidden="true" /></div>)}</div><button type="button" onClick={() => enter("edit", selectedMaterial)}>Edit in focused chat</button></section>}
         {screen === "edit" && selectedMaterial && <section aria-labelledby="edit-title"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Local demonstration · No material mutation</p><h1 id="edit-title">Editing: {selectedMaterial.title}</h1><div className="assistant-note"><strong>Focused chat context</strong><p>{selectedMaterial.summary}. Describe a proposed revision below; the text remains local and no worksheet or slide deck is changed.</p></div></section>}
