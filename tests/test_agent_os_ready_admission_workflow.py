@@ -36,4 +36,6 @@ def test_ready_admission_job_has_no_write_steps_or_generic_execution():
 
 
 def test_existing_jobs_unchanged_in_shape():
-    assert list(_workflow()["jobs"]) == ["ingress", "refresh_pr", "ready_admission"]
+    jobs = list(_workflow()["jobs"])
+    assert jobs[:3] == ["ingress", "refresh_pr", "ready_admission"]
+    assert jobs[3:] == ["merge_admission"]
