@@ -271,6 +271,10 @@ def _inputs(**overrides):
         visual_placements=(), resume_dir="resume",
         placement_transport=None, placement_receipts_dir="placements",
         qa_evidence_dir="qa",
+        # #3259 D2 (current main): the governed composer fails closed when
+        # the authored token set is missing. These fixtures compose empty
+        # plans with no authored content, so the set is explicitly empty.
+        expected_content_tokens=(),
     )
     data.update(overrides)
     return data

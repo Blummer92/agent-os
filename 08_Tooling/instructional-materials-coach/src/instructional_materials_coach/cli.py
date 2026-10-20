@@ -207,7 +207,8 @@ def retrieve_deck_source_receipt(
 
     pages: tuple[SourcePage, ...] = ()
     if page_reader is not None:
-        if not callable(page_reader):            raise WorksheetRevisionQAError("page_reader must be callable")
+        if not callable(page_reader):
+            raise WorksheetRevisionQAError("page_reader must be callable")
         read_pages = page_reader(bytes(file_bytes), mime_type)
         if not isinstance(read_pages, (tuple, list)):
             raise WorksheetRevisionQAError("page_reader must return a tuple/list of SourcePage")
@@ -626,8 +627,8 @@ def _classroom_admission_evidence(build_input, receipt, requirement_identity, te
             role_id=getattr(binding, "role_id", "") or "",
             slot_id=getattr(binding, "slot_id", "0") or "0",
             asset_id=getattr(binding, "asset_id", "") or "",
-            content_identity_json=_canonical_json(getattr(binding, "content_identity", None)),   
-                      required=bool(getattr(binding, "required", True)),
+            content_identity_json=_canonical_json(getattr(binding, "content_identity", None)),
+            required=bool(getattr(binding, "required", True)),
         )
         for binding in (getattr(build_input, "visual_placements", None) or ())
     ]
@@ -1004,3 +1005,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

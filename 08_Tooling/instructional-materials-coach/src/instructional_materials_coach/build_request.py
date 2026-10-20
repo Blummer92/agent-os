@@ -145,3 +145,4 @@ def live_build_input_factory(request: object, subject: Mapping[str, Any], *,
     if not isinstance(inputs, Mapping):
         raise ValueError("governed-inputs-unavailable")
     return compose_governed_build_request(**inputs)
+
