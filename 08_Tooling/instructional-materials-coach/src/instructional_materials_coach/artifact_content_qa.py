@@ -37,7 +37,7 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -169,6 +169,12 @@ class VisualExpectation:
     asset_id: str
     content_identity: Mapping[str, Any]
     required: bool = True
+    # Artifact scope (#3212): "" keeps the legacy artifact-agnostic behavior
+    # (a visual placed in any artifact of the build satisfies), while
+    # "docs"/"slides" binds the obligation to that artifact type. Declared
+    # required worksheet figures are docs-scoped: a Slides receipt must not
+    # satisfy a required Docs image obligation.
+    artifact_type: str = ""
 
     def marker(self) -> str:
         return "{{visual:" + self.role_id + "}}"
@@ -194,6 +200,7 @@ class TerminalQAExpectations:
         docs_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         slides_requests: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
         visual_placements: tuple[Any, ...] = (),
+        required_docs_visuals: tuple[tuple[str, str], ...] = (),
         expected_content_tokens: tuple[str, ...] | list[str] | None = None,
     ) -> "TerminalQAExpectations":
         """Derive expectations from the governed planned build inputs.
@@ -204,10 +211,54 @@ class TerminalQAExpectations:
         come from the Wave 3 placement bindings (role/slot/asset/exact
         content identity). Nothing is inferred beyond these governed inputs.
 
+        ``required_docs_visuals`` carries the lesson-declared required
+        worksheet figures as ``(role_id, slot_id)`` pairs (#3212). Each one
+        is a required Docs target: it must be backed by a *required*
+        placement binding (an optional binding cannot discharge it), and the
+        resulting expectation is docs-scoped so only a verified Docs receipt
+        satisfies it. A missing or optional-only backing binding fails
+        closed here, at composition time, instead of shipping a worksheet
+        whose required figure has no governed placement.
+
         ``expected_content_tokens`` records the authored token set the
         shared composer verified the plan covers (#3259 D2); it is bound
         into the expectations identity but never generates expectations.
         """
+        visuals = [
+            VisualExpectation(
+                role_id=str(binding.role_id),
+                slot_id=str(binding.slot_id),
+                asset_id=str(binding.asset_id),
+                content_identity=dict(binding.content_identity or {}),
+                required=bool(binding.required),
+            )
+            for binding in visual_placements or ()
+        ]
+        for role_id, slot_id in required_docs_visuals or ():
+            target = (str(role_id), str(slot_id))
+            matches = [
+                visual for visual in visuals
+                if (visual.role_id, visual.slot_id) == target
+            ]
+            if not matches:
+                raise ValueError(
+                    "declared required worksheet figure "
+                    f"{target[0]}:{target[1]} has no governed placement binding; "
+                    "the required Docs image obligation cannot be proven"
+                )
+            if not any(visual.required for visual in matches):
+                raise ValueError(
+                    "declared required worksheet figure "
+                    f"{target[0]}:{target[1]} is backed only by optional "
+                    "placement bindings; an optional binding cannot satisfy a "
+                    "required Docs image obligation"
+                )
+            visuals = [
+                replace(visual, artifact_type="docs")
+                if (visual.role_id, visual.slot_id) == target and visual.required
+                else visual
+                for visual in visuals
+            ]
         return TerminalQAExpectations(
             idempotency_key=str(idempotency_key or ""),
             docs_content=tuple(
@@ -224,16 +275,7 @@ class TerminalQAExpectations:
                 )
                 if expectation is not None
             ),
-            visuals=tuple(
-                VisualExpectation(
-                    role_id=str(binding.role_id),
-                    slot_id=str(binding.slot_id),
-                    asset_id=str(binding.asset_id),
-                    content_identity=dict(binding.content_identity or {}),
-                    required=bool(binding.required),
-                )
-                for binding in visual_placements or ()
-            ),
+            visuals=tuple(visuals),
             expected_content_tokens=tuple(sorted(set(expected_content_tokens or ()))),
         )
 
@@ -253,7 +295,8 @@ class TerminalQAExpectations:
             ],
             "visuals": [
                 {"role_id": v.role_id, "slot_id": v.slot_id, "asset_id": v.asset_id,
-                 "content_identity": dict(v.content_identity), "required": v.required}
+                 "content_identity": dict(v.content_identity), "required": v.required,
+                 "artifact_type": v.artifact_type}
                 for v in self.visuals
             ],
             # #3259 D2: the authored token set is part of the expectations
@@ -1019,6 +1062,12 @@ def _evaluate_visuals(
         )
 
     for visual in visual_expectations:
+        if visual.artifact_type and visual.artifact_type != artifact_type:
+            # The obligation is scoped to a different artifact type; it is
+            # not expected in this one. Declared required worksheet figures
+            # are docs-scoped, so the slides-side evaluation skips them here
+            # instead of treating them as slides obligations (#3212).
+            continue
         records_here = [
             record for record in placement_records
             if record.get("state") == "verified"
@@ -1049,6 +1098,24 @@ def _evaluate_visuals(
                 )
             continue
         if not records_here:
+            if visual.required and visual.artifact_type:
+                # A required artifact-scoped visual was verified-placed only
+                # in other artifacts: a Slides receipt must not satisfy a
+                # required Docs image obligation, and vice versa (#3212).
+                findings.append(
+                    _fail(
+                        "qa-visual-wrong-artifact", QA_STATE_VISUAL_MISMATCH,
+                        f"Required {visual.artifact_type} visual role "
+                        f"{visual.role_id} (slot {visual.slot_id}) has verified "
+                        "placement receipts only in other artifacts; the "
+                        f"inspected {artifact_type} artifact {artifact_id} "
+                        "carries no verified placement for it.",
+                        role_id=visual.role_id, slot_id=visual.slot_id,
+                        expected_artifact_type=visual.artifact_type,
+                        inspected_artifact_type=artifact_type,
+                    )
+                )
+                continue
             # Placed in another artifact (marker routing); not expected here.
             continue
         if visual.required:

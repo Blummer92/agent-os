@@ -77,9 +77,17 @@ def compose_governed_build_request(
     visual_placements: tuple[Any, ...],
     resume_dir: str, placement_transport: object | None,
     placement_receipts_dir: str, qa_evidence_dir: str,
+    worksheet_visual_targets: tuple[tuple[str, str], ...] = (),
     expected_content_tokens: tuple[str, ...] | list[str] | None = None,
 ) -> GovernedBuildRequest:
-    """One input/QA/options composition for CLI and scheduled consumers."""
+    """One input/QA/options composition for CLI and scheduled consumers.
+
+    ``worksheet_visual_targets`` carries the lesson-declared required
+    worksheet figures as ``(role_id, slot_id)`` pairs (#3212). Each becomes a
+    required Docs-scoped visual expectation: a Slides receipt or an
+    optional-only binding cannot satisfy it. Empty (no declarations)
+    preserves the legacy artifact-agnostic visual expectations unchanged.
+    """
     if not all((slides_template_id, doc_template_id, target_folder_id, content_title, idempotency_key)):
         raise ValueError("governed-build-request-identity-missing")
     # #3259 D2: verify authored-content coverage before QA expectations
@@ -91,6 +99,7 @@ def compose_governed_build_request(
     qa_expectations = TerminalQAExpectations.build_from_requests(
         idempotency_key=idempotency_key, docs_requests=docs_requests,
         slides_requests=slides_requests, visual_placements=visual_placements,
+        required_docs_visuals=worksheet_visual_targets,
         expected_content_tokens=expected,
     )
     return GovernedBuildRequest(
