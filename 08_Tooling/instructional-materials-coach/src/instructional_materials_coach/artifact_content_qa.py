@@ -42,7 +42,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-
 from .placement_receipts import (
     BATCH_PROOF_CONTRACT,
     PlacementStoreIntegrityError,
@@ -1246,7 +1245,6 @@ def _evaluate_visuals(
                     )
                 )
                 continue
-
         # #3386: semantic visual-role fulfillment. Presence and placement
         # checks above prove *an* image exists for this role; this check
         # proves it is the *right kind* of visual. A declared kind
@@ -1285,7 +1283,6 @@ def _evaluate_visuals(
                 )
             )
             continue
-
         verified_roles.append(visual.role_id)
 
     # Wire the existing revision/visual-completeness contract into the build
