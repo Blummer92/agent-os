@@ -22,7 +22,7 @@ def _visible_text(value: object) -> bool:
     """True for text carrying at least one visible character.
 
     Zero-width/format characters (Unicode category Cf) are invisible: a
-    "non-empty" string of only ``\\u200b``/``\\u200c``/``\\u200d``/``\\ufeff``
+    "non-empty" string of only ``\u200b``/``\u200c``/``\u200d``/``\ufeff``
     carries no readable content and must not satisfy a required-text rule.
     """
     if not isinstance(value, str):
@@ -290,4 +290,3 @@ def _parse_prerequisite_tutorials(value: object) -> tuple[str, ...]:
 def load_lesson_content(path: str | Path) -> LessonContent:
     data = yaml.safe_load(Path(path).read_text())
     return content_from_dict(data)
-
