@@ -31,6 +31,14 @@ def test_publication_removes_excluded_tools_from_sdk_catalog_and_dispatch() -> N
         return "ready"
 
     @server.tool()
+    def admit_agent_os_issue_closure_tool() -> str:
+        return "closure-admission"
+
+    @server.tool()
+    def verify_agent_os_issue_closure_admission_tool() -> str:
+        return "closure-verify"
+
+    @server.tool()
     def excluded_tool() -> str:
         return "should-not-run"
 
