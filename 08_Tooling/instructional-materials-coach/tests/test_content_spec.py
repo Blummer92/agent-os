@@ -67,3 +67,4 @@ def test_content_from_dict_rejects_unusable_slide_index():
                 "worksheet_questions": ["What is 1/2 + 1/4?"],
             }
         )
+

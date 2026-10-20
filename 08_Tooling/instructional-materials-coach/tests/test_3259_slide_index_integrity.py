@@ -99,6 +99,22 @@ def test_string_index_canonicalized_without_rejection():
     assert content.placeholder_tokens()["slide_1_heading"] == "Alpha"
 
 
+@pytest.mark.parametrize("index", ["01", " 1 ", "+1"])
+def test_canonical_index_preserves_slide_location_binding(index):
+    authored = _lesson([{"index": index, "heading": "Alpha"}])
+    content = content_from_dict(authored)
+    assert content.slides[0]["index"] == 1
+    assert content.placeholder_tokens()["slide_1_heading"] == "Alpha"
+    assert content.slide_token_indexes() == {"slide_1_heading": 1}
+    assert authored["slides"][0]["index"] == index
+
+
+@pytest.mark.parametrize("slide", [None, 1, "slide"])
+def test_non_mapping_slide_fails_closed(slide):
+    with pytest.raises(ValueError, match="content-spec-slide-index-invalid"):
+        content_from_dict(_lesson([slide]))
+
+
 def test_valid_content_token_map_unchanged():
     # Valid content behaves exactly as before the repair.
     content = content_from_dict(_lesson([

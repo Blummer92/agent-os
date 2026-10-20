@@ -31,3 +31,4 @@ def test_missing_identity_fails_closed():
     data["slides_template_id"] = ""
     with pytest.raises(ValueError, match="governed-build-request-identity-missing"):
         compose_governed_build_request(**data)
+

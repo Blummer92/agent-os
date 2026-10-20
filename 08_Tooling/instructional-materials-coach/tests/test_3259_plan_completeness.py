@@ -6,6 +6,11 @@ compose_governed_build_request() now requires the authored token set and
 rejects any plan that does not cover it -- per artifact, before QA
 expectations exist and before any external write.
 """
+import json
+import os
+import subprocess
+import sys
+
 import pytest
 
 from instructional_materials_coach.artifact_content_qa import (
@@ -43,6 +48,28 @@ def _lesson():
         ],
         "worksheet_questions": ["What is 1/2 + 1/4?", "What is 2/3 - 1/3?"],
     }
+
+
+def test_content_expectations_import_keeps_preview_provider_free():
+    probe = (
+        "import sys, json\n"
+        "from instructional_materials_coach.artifact_content_qa import TerminalQAExpectations\n"
+        "print(json.dumps(sorted(sys.modules)))\n"
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(path for path in sys.path if path))
+    loaded = json.loads(subprocess.run(
+        [sys.executable, "-c", probe], env=env, check=True,
+        capture_output=True, text=True,
+    ).stdout)
+    forbidden = (
+        "googleapiclient", "google.auth", "google_auth_oauthlib", "httplib2", "requests",
+        "instructional_materials_coach.connected_visual_placement",
+        "instructional_materials_coach.drive_client",
+        "instructional_materials_coach.workspace_clients",
+        "instructional_materials_coach.live_build",
+        "instructional_materials_coach.placement_transport",
+    )
+    assert not [name for name in loaded if name.startswith(forbidden)]
 
 
 def _with_sections(content):
@@ -254,7 +281,8 @@ def _persisted_verified(tmp_path, expectations, key):
             expectations_hash=expectations.expectations_hash(), recovered=False)
     report = TerminalQAReport(
         idempotency_key=key, state=QA_STATE_VERIFIED,
-        slides=_mk("slides", "slides-1"), worksheet=_mk("worksheet", "doc-1"))
+        slides=_mk("slides", "slides-1"), worksheet=_mk("worksheet", "doc-1"),
+        placement_evidence_hash="no-visual-expectations")
     persist_qa_report(tmp_path, report)
 
 
@@ -272,7 +300,8 @@ def test_recovery_refuses_truncated_plan_with_authored_tokens(tmp_path):
     recovered = _try_recover_verified(
         qa_evidence_dir=str(tmp_path), expectations=expectations,
         artifact_type="worksheet", artifact_id="doc-1",
-        observation=_observation("worksheet text"))
+        observation=_observation("worksheet text"),
+        placement_evidence_hash="no-visual-expectations")
     assert recovered is None
 
 
@@ -290,5 +319,6 @@ def test_recovery_without_authored_tokens_documents_residual_risk(tmp_path):
     recovered = _try_recover_verified(
         qa_evidence_dir=str(tmp_path), expectations=expectations,
         artifact_type="worksheet", artifact_id="doc-1",
-        observation=_observation("worksheet text"))
+        observation=_observation("worksheet text"),
+        placement_evidence_hash="no-visual-expectations")
     assert recovered is not None and recovered.recovered

@@ -142,3 +142,4 @@ def write_build_receipt_atomic(path: str | Path, record: Mapping[str, Any]) -> N
     finally:
         if temporary is not None and os.path.exists(temporary):
             os.unlink(temporary)
+
