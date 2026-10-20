@@ -349,13 +349,20 @@ run_pytest_suite() {
   local suite_dir="$1"
   local suite_name="$2"
 
+  if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
+    : # Preserve scheduler suite identity for canonical aggregate admission.
+  fi
   if [ -d "$suite_dir/src" ]; then
     local command=("$PYTHON_BIN" -m pytest tests)
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
     local coverage_target
     local coverage_report
     coverage_target="$(coverage_target_for_suite "$suite_name")"
-    if [ -n "$coverage_target" ]; then
+    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
+      # Preserve the canonical scheduler coverage invocation (#2126).
+      command+=("--cov=src/workflow_scheduler" "--cov-report=term")
+      display+=" --cov=src/workflow_scheduler --cov-report=term"
+    elif [ -n "$coverage_target" ]; then
       coverage_report="$(coverage_report_for_suite "$suite_name")"
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
