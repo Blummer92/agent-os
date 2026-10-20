@@ -328,6 +328,23 @@ is_python_pytest_suite() {
   find "$tests_dir" -type f \( -name 'test_*.py' -o -name '*_test.py' \) 2>/dev/null | grep -q .
 }
 
+coverage_target_for_suite() {
+  # Bounded coverage: other suites keep their existing pytest command.
+  case "$1" in
+    "08_Tooling/workflow-scheduler") printf '%s' 'src/workflow_scheduler' ;;
+    "08_Tooling/reusable-capability-registry") printf '%s' 'src/reusable_capability_registry' ;;
+    "08_Tooling/visual-asset-intake") printf '%s' 'src/visual_asset_intake' ;;
+  esac
+}
+
+coverage_report_for_suite() {
+  if [ "$1" = "08_Tooling/workflow-scheduler" ]; then
+    printf 'term'
+  else
+    printf 'term-missing'
+  fi
+}
+
 run_pytest_suite() {
   local suite_dir="$1"
   local suite_name="$2"
@@ -335,15 +352,26 @@ run_pytest_suite() {
   if [ -d "$suite_dir/src" ]; then
     local command=("$PYTHON_BIN" -m pytest tests)
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
-    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
-      command+=("--cov=src/workflow_scheduler" "--cov-report=term")
-      display+=" --cov=src/workflow_scheduler --cov-report=term"
+    local coverage_target
+    local coverage_report
+    coverage_target="$(coverage_target_for_suite "$suite_name")"
+    if [ -n "$coverage_target" ]; then
+      coverage_report="$(coverage_report_for_suite "$suite_name")"
+      command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
+      display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
     pythonpath_value="$(python_path_with_src "$src_dir")"
-    run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
+    if [ -n "$coverage_target" ]; then
+      # Isolated even across parallel suites; logs retain terminal reports.
+      local coverage_file="$parallel_tmp/coverage/$suite_name/.coverage"
+      mkdir -p "$(dirname "$coverage_file")" || runner_error "cannot prepare isolated coverage path for $suite_name"
+      run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" COVERAGE_FILE="$coverage_file" "${command[@]}"
+    else
+      run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
+    fi
   else
     run_check "$suite_name" "$suite_dir" "cd $suite_dir && $PYTHON_BIN -m pytest tests" "$PYTHON_BIN" -m pytest tests
   fi
@@ -354,11 +382,12 @@ suite_command_text() {
   local suite_name="$2"
   if [ -d "$suite_dir/src" ]; then
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
-    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
-      # Keep the operator display semantically identical without adding another
-      # literal copy of the canonical coverage target.
-      local coverage_target="src/workflow_scheduler"
-      display+=" --cov=$coverage_target --cov-report=term"
+    local coverage_target
+    coverage_target="$(coverage_target_for_suite "$suite_name")"
+    if [ -n "$coverage_target" ]; then
+      local coverage_report
+      coverage_report="$(coverage_report_for_suite "$suite_name")"
+      display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
     printf '%s' "$display"
   else
