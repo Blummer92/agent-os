@@ -111,7 +111,7 @@ _STATE_SEVERITY = {
 # Unresolved template tokens: {{...}} markers that must never survive into
 # a final artifact. Newlines are excluded so multi-line prose is not
 # misread as a token.
-_TOKEN_RE = re.compile(r"\{\{[^}\n]*\}\}")
+_TOKEN_RE = re.compile(r"\{\{[^{}\n]*\}\}")
 
 # Cap on token findings listed per artifact; the count is always exact.
 _MAX_TOKEN_FINDINGS = 10
@@ -497,7 +497,8 @@ def _docs_text_and_images(document: Mapping[str, Any]) -> tuple[str, list[str]]:
     return "".join(parts), image_ids
 
 
-def _slides_text_and_images(    presentation: Mapping[str, Any],
+def _slides_text_and_images(
+    presentation: Mapping[str, Any],
 ) -> tuple[list[str], list[str], dict[str, str]]:
     """Extract text and actual image IDs, preserving each image's slide.
 
@@ -996,7 +997,8 @@ def _batch_proof_required_but_missing(
     verified per-insertion continuity can legitimately re-bind that
     receipt set to the observed final revision. The governed placement
     path always persists the proof, so a multi-receipt batch without one
-    is unproven evidence and must fail closed (strict fail-closed; there    is no permissive per-receipt fallback for the batch case).
+    is unproven evidence and must fail closed (strict fail-closed; there
+    is no permissive per-receipt fallback for the batch case).
     """
     verified_here = [
         record for record in placement_records
@@ -1493,7 +1495,10 @@ def _parse_recovery_findings(raw: Any) -> tuple[tuple[QAFinding, ...], bool]:
         state = item.get("state")
         message = item.get("message")
         if not (
-            isinstance(code, str)            and isinstance(message, str)
+            isinstance(code, str)
+            and isinstance(severity, str)
+            and isinstance(state, str)
+            and isinstance(message, str)
         ):
             malformed = True
             continue
@@ -1836,3 +1841,4 @@ def run_terminal_qa(
     if qa_evidence_dir is not None:
         persist_qa_report(qa_evidence_dir, report)
     return report
+
