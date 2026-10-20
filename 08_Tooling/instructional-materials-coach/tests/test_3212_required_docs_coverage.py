@@ -97,6 +97,10 @@ def _compose(bindings, targets):
         placement_receipts_dir="placements",
         qa_evidence_dir="qa",
         worksheet_visual_targets=tuple(targets),
+        # #3259 D2 (current main): the governed composer fails closed when
+        # the authored token set is missing. These fixtures compose empty
+        # plans with no authored content, so the set is explicitly empty.
+        expected_content_tokens=(),
     )
 
 

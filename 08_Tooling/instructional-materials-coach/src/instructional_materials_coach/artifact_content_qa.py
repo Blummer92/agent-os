@@ -1852,3 +1852,4 @@ def run_terminal_qa(
     if qa_evidence_dir is not None:
         persist_qa_report(qa_evidence_dir, report)
     return report
+
