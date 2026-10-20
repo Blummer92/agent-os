@@ -30,11 +30,16 @@ I/O; executes no work; mutates no lifecycle state; and creates no authority.
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, replace
 from enum import Enum
 
-from .criterion_preservation import parse_acceptance_criteria
+from .criterion_preservation import (
+    _CHECKBOX_RE,
+    _CRITERIA_HEADING_RE,
+    _NEXT_HEADING_RE,
+    _criterion_identity,
+    parse_acceptance_criteria,
+)
 from .models import AcceptanceReport, CheckResult, Status
 
 __all__ = [
@@ -56,13 +61,6 @@ __all__ = [
 _AUTHORIZATION_LINE = (
     "authorization=informational-only-not-readiness-merge-closure-or-any-admission"
 )
-
-_CRITERIA_HEADING_RE = re.compile(
-    r"^##[ \t]+Acceptance criteria[ \t]*$", re.IGNORECASE | re.MULTILINE
-)
-_NEXT_HEADING_RE = re.compile(r"^##[ \t]+", re.MULTILINE)
-_CHECKBOX_RE = re.compile(r"^[ \t]*- \[[ xX]\][ \t]+(.*?)[ \t]*$")
-
 
 class Disposition(str, Enum):
     SATISFIED = "satisfied"
@@ -94,11 +92,6 @@ _VERDICTS = ("supports", "contradicts")
 def issue_body_digest(issue_body: str) -> str:
     """Return the version digest evidence is bound to: sha256 of the body."""
     return hashlib.sha256((issue_body or "").encode("utf-8")).hexdigest()
-
-
-def _criterion_identity(index: int, text: str) -> str:
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return f"criterion-{index}-{digest[:12]}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,12 +200,17 @@ class _ParsedCriterion:
 def _parse_criteria(issue_body: str) -> tuple[_ParsedCriterion, ...] | None:
     """Parse criterion-like lines of the ``## Acceptance criteria`` section.
 
-    Returns None when the section is absent. Checkbox lines are canonical
-    criteria (byte-identical in index, text, and identity to
-    ``criterion_preservation.parse_acceptance_criteria`` on a purely
-    canonical section). Any other non-empty line is an affected criterion
-    that cannot be parsed canonically and is carried as unparsable, so it
-    can be dispositioned manual-review instead of silently dropped.
+    Returns None when the section is absent. Parsable criteria are
+    extracted by the canonical ``criterion_preservation`` parser (the
+    section/checkbox patterns and the identity formula are that module's,
+    shared by import — nothing is re-implemented here): on a purely
+    canonical section the result is byte-identical in index, text, and
+    identity to ``parse_acceptance_criteria``. Any other non-empty line is
+    an affected criterion that cannot be parsed canonically and is carried
+    as unparsable at its section position, so it can be dispositioned
+    manual-review instead of silently dropped, and the positions (hence
+    identities) of the surrounding criteria are preserved exactly as the
+    section presents them.
     """
     body = issue_body or ""
     heading = _CRITERIA_HEADING_RE.search(body)
@@ -222,6 +220,18 @@ def _parse_criteria(issue_body: str) -> tuple[_ParsedCriterion, ...] | None:
     following = _NEXT_HEADING_RE.search(section)
     if following is not None:
         section = section[: following.start()]
+    try:
+        canonical_texts: tuple[str, ...] | None = tuple(
+            criterion.text for criterion in parse_acceptance_criteria(body)
+        )
+    except ValueError:
+        # The canonical parser rejects this body (it carries a criterion
+        # with empty text). The walk below then extracts checkbox texts
+        # itself — driven by the same canonical patterns — preserving the
+        # historical carry for such lines instead of failing the whole
+        # projection on one malformed line.
+        canonical_texts = None
+    canonical_iter = iter(canonical_texts) if canonical_texts is not None else None
     parsed: list[_ParsedCriterion] = []
     for line in section.splitlines():
         if not line.strip():
@@ -229,7 +239,9 @@ def _parse_criteria(issue_body: str) -> tuple[_ParsedCriterion, ...] | None:
         match = _CHECKBOX_RE.match(line)
         index = len(parsed) + 1
         if match is not None:
-            text = match.group(1)
+            text = next(canonical_iter, None) if canonical_iter is not None else None
+            if text is None:
+                text = match.group(1)
             parsed.append(_ParsedCriterion(index, _criterion_identity(index, text), text, True))
         else:
             text = line.strip()
