@@ -611,6 +611,9 @@ def test_recovered_copy_with_wrong_content_fails_closed(tmp_path):
     slides_fid = receipt1.slides.file_id
     assert slides_fid
     store.setdefault("_texts", {})[slides_fid] = "completely unrelated content"
+    # Corrupt the persisted slide-position readback too; terminal QA reads
+    # the structured Slides resource rather than the retry text cache.
+    store.setdefault("_slide_texts", {})[slides_fid] = {0: "completely unrelated content"}
 
     slides_svc2 = _FakeWorkspaceService("presentations", store)
     docs_svc2 = _FakeWorkspaceService("documents", store)
