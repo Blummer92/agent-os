@@ -13,6 +13,7 @@ import pytest
 from instructional_materials_coach.build_request import compose_governed_build_request
 from instructional_materials_coach.content_spec import LessonContent
 from instructional_materials_coach.docs_requests import build_docs_replace_requests
+from instructional_materials_coach.slides_requests import build_slides_replace_requests
 from instructional_materials_coach.student_voice import StudentVoiceError
 
 
@@ -40,9 +41,29 @@ def _inputs(**overrides):
 
 def _compose_question_through_production_chain(question: str, **composer_kwargs):
     """Real chain: request builder -> governed composer -> LiveBuildInput."""
-    docs_requests = tuple(build_docs_replace_requests(_content(question=question)))
+    content = _content(question=question)
+    docs_requests = tuple(build_docs_replace_requests(content))
     return compose_governed_build_request(
-        **_inputs(docs_requests=docs_requests), **composer_kwargs
+        **_inputs(
+            docs_requests=docs_requests,
+            slides_requests=tuple(build_slides_replace_requests(content)),
+            # #3259 D2 (current main): the composer fails closed unless the
+            # caller supplies the authored token set, as cli.py does.
+            expected_content_tokens=tuple(content.placeholder_tokens()),
+        ),
+        **composer_kwargs,
+    )
+
+
+def _compose_content(content, **composer_kwargs):
+    docs_requests = tuple(build_docs_replace_requests(content))
+    return compose_governed_build_request(
+        **_inputs(
+            docs_requests=docs_requests,
+            slides_requests=tuple(build_slides_replace_requests(content)),
+            expected_content_tokens=tuple(content.placeholder_tokens()),
+        ),
+        **composer_kwargs,
     )
 
 
@@ -67,11 +88,8 @@ def test_leaked_phrase_in_question_blocks_composition(phrase, label):
 
 
 def test_leak_in_worksheet_title_blocks_composition():
-    docs_requests = tuple(
-        build_docs_replace_requests(_content(question="Describe the photo.", title="Early Stage Review"))
-    )
     with pytest.raises(StudentVoiceError, match="rigor-ramp stage label"):
-        compose_governed_build_request(**_inputs(docs_requests=docs_requests))
+        _compose_content(_content(question="Describe the photo.", title="Early Stage Review"))
 
 
 def test_leak_in_student_visible_context_token_blocks_composition():
@@ -79,9 +97,8 @@ def test_leak_in_student_visible_context_token_blocks_composition():
     content = _content(question="Describe the photo.").with_context_tokens(
         {"context_tutorial_connection": "Recall our early stage setup day."}
     )
-    docs_requests = tuple(build_docs_replace_requests(content))
     with pytest.raises(StudentVoiceError, match="rigor-ramp stage label"):
-        compose_governed_build_request(**_inputs(docs_requests=docs_requests))
+        _compose_content(content)
 
 
 def test_clean_content_passes_composition_with_text_carried():
@@ -114,6 +131,12 @@ def test_unknown_declaration_fails_closed():
 
 def test_non_replace_requests_carry_no_student_copy():
     composed = compose_governed_build_request(
-        **_inputs(docs_requests=({"updateParagraphStyle": {"style": {}}},)),
+        # Synthetic request with no authored content: the authored token
+        # set is explicitly empty (the composer rejects only a *missing*
+        # set), and the non-replace request carries no student copy.
+        **_inputs(
+            docs_requests=({"updateParagraphStyle": {"style": {}}},),
+            expected_content_tokens=(),
+        ),
     )
     assert composed.build_input.docs_requests == ({"updateParagraphStyle": {"style": {}}},)

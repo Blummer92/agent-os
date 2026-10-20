@@ -416,7 +416,9 @@ def _terminal_qa_summary(receipt: object) -> str:
 def _classroom_admission_evidence(build_input, receipt, requirement_identity, template_revisions, placement_records):
     """Assemble canonical D8 admission evidence from live build objects (#3556).
 
-    Pure extraction: no I/O. The caller loads placement records from the    the live build receipt. Raises on malformed input — callers fall back to
+    Pure extraction: no I/O. The caller loads placement records from the
+    verified store; everything else comes from the governed build input and
+    the live build receipt. Raises on malformed input — callers fall back to
     a fail-closed verdict with no evidence bundle.
     """
     from .classroom_admission import RequiredVisual, assemble_admission_evidence
@@ -819,3 +821,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

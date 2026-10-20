@@ -26,6 +26,7 @@ from instructional_materials_coach.artifact_content_qa import (
 from instructional_materials_coach.build_request import compose_governed_build_request
 from instructional_materials_coach.content_spec import LessonContent
 from instructional_materials_coach.docs_requests import build_docs_replace_requests
+from instructional_materials_coach.slides_requests import build_slides_replace_requests
 from instructional_materials_coach.student_voice import (
     StudentVoiceError,
     docs_replace_student_texts,
@@ -65,7 +66,14 @@ def _inputs(**overrides):
 def _compose(content, **composer_kwargs):
     docs_requests = tuple(build_docs_replace_requests(content))
     return compose_governed_build_request(
-        **_inputs(docs_requests=docs_requests), **composer_kwargs
+        **_inputs(
+            docs_requests=docs_requests,
+            slides_requests=tuple(build_slides_replace_requests(content)),
+            # #3259 D2 (current main): the composer fails closed unless the
+            # caller supplies the authored token set, as cli.py does.
+            expected_content_tokens=tuple(content.placeholder_tokens()),
+        ),
+        **composer_kwargs,
     )
 
 
@@ -273,13 +281,14 @@ def test_explicit_declaration_escape_hatch_preserved_with_projection():
 # ---------------------------------------------------------------------------
 
 def test_invalid_planned_copy_raises_before_any_build_input_exists():
-    docs_requests = tuple(
-        build_docs_replace_requests(
-            _content(question="Follow the late stage gate rule before you revise.")
-        )
-    )
+    content = _content(question="Follow the late stage gate rule before you revise.")
+    docs_requests = tuple(build_docs_replace_requests(content))
     with pytest.raises(StudentVoiceError, match="teacher-phrased rule"):
-        compose_governed_build_request(**_inputs(docs_requests=docs_requests))
+        compose_governed_build_request(**_inputs(
+            docs_requests=docs_requests,
+            slides_requests=tuple(build_slides_replace_requests(content)),
+            expected_content_tokens=tuple(content.placeholder_tokens()),
+        ))
     # No GovernedBuildInput/LiveBuildInput is returned: neither the CLI nor
     # a scheduled consumer can proceed to a Drive write with tainted copy.
 
