@@ -5,3 +5,10 @@
 .connection-card h2{margin-bottom:.6rem}
 .connection-card p{overflow-wrap:anywhere}
 @media(prefers-color-scheme:light){.connection-card{background:#eaf3fb;color:#203243}}
+
+/* Inert Notion review proposal; never a live submit control. */
+.notion-handoff{margin:1.3rem 0;padding:1rem;border:1px solid #69819a;border-radius:14px}
+.notion-handoff label{margin-top:.9rem}
+.notion-handoff input{display:block;width:100%;min-height:44px;border-radius:10px;padding:.7rem;border:1px solid #71879b;background:#182834;color:#f6fbff;font:inherit}
+.notion-handoff input:focus-visible{outline:3px solid #e6b65a;outline-offset:3px}
+@media(prefers-color-scheme:light){.notion-handoff input{background:#fff;color:#1b2e3c;border-color:#6a8294}}

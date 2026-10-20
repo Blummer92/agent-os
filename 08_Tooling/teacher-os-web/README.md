@@ -41,3 +41,12 @@ No Figma synchronization or native comments (#3519), no real Notion enumeration 
 ## QA handoff
 
 Run build, unit and Playwright tests on the **exact PR head** through the existing governed executor. Independently inspect phone, tablet, Chromebook/desktop, keyboard, contrast, reduced motion, and fixture-versus-live labels. Treat unavailable CI/executor or browser dependencies as a blocker rather than claiming passing tests.
+
+## GitHub-mediated Notion planning proposal (not activated)
+
+The Connections screen now has a review-only planning handoff preview.
+It produces a finite public-safe proposal command; it does not post to GitHub,
+use a Notion token, or write a Notion record. GitHub MCP belongs to the ChatGPT
+host, not to the standalone browser app. See
+[the governance handoff](../../docs/teacher-os-github-notion-write-handoff.md)
+for the activation prerequisites and the offline proposal parser/tests.

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { NotionHandoff } from "./NotionHandoff";
 import { courses, schoolYears, selectCourse, selectUnit, type Material } from "./fixtures";
 
 type Screen = "chat" | "preview" | "edit" | "connections";
@@ -173,7 +174,8 @@ export function TeacherApp() {
               </article>
             ))}
           </div>
-          <p className="notice">No write actions are available from this screen.</p>
+          <p className="notice">No live write actions are available from this screen.</p>
+          <NotionHandoff />
         </section>}
         {screen === "chat" && <section aria-labelledby="chat-title"><h1 id="chat-title">Photography Foundations</h1><p className="muted">Discuss your lesson here, or open View Assignment in the top-right corner to inspect sample materials.</p><div className="assistant-note"><strong>Sample assistant</strong><p>We can explore the Rule of Thirds. The material previews are fixtures; no lesson has been generated or saved.</p></div></section>}
         {screen === "preview" && selectedMaterial && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Full sample preview · Grade {course.grade}</p><h1 id="preview-title">{selectedMaterial.title}</h1><p>{selectedMaterial.summary}</p><div className="sample-page">{selectedMaterial.preview.map((line, i) => <div key={i} className="preview-question"><strong>{i + 1}.</strong><p>{line}</p><div className="response-lines" aria-hidden="true" /></div>)}</div><button type="button" onClick={() => enter("edit", selectedMaterial)}>Edit in focused chat</button></section>}
