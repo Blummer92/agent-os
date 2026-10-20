@@ -462,6 +462,18 @@ def _normalize_assets(
         status = record.get("reuse_status", "unknown")
         if status not in {"reusable", "single-use", "unknown"}:
             raise CurriculumReadError(f"unsupported asset reuse_status {status!r}")
+        # #3672: preserve the governed Asset Title projected from the
+        # Notion record. A malformed title fails closed here rather than
+        # being silently dropped (which would make later provenance
+        # reconciliation read a verified record as title-less) or passed
+        # through unbounded.
+        asset_title = record.get("asset_title")
+        if asset_title is not None and (
+            not isinstance(asset_title, str)
+            or not asset_title.strip()
+            or len(asset_title.strip()) > 256
+        ):
+            raise CurriculumReadError("malformed asset_title")
         asset = {
             "asset_id": asset_id,
             "exists": exists,
@@ -487,6 +499,10 @@ def _normalize_assets(
                 "page_id": page_id.strip(),
                 "drive_file_id": drive_file_id.strip(),
             }
+        if asset_title is not None:
+            # Bound to the same record's identity above (asset_id +
+            # library_reference) — the title never travels alone.
+            asset["asset_title"] = asset_title.strip()
         assets.append(asset)
     return assets, incomplete
 
