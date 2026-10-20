@@ -123,7 +123,7 @@ _STATE_SEVERITY = {
 # Unresolved template tokens: {{...}} markers that must never survive into
 # a final artifact. Newlines are excluded so multi-line prose is not
 # misread as a token.
-_TOKEN_RE = re.compile(r"\{\{[^\{\}\n]*\}\}")
+_TOKEN_RE = re.compile(r"\{\{[^{}\n]*\}\}")
 
 # Cap on token findings listed per artifact; the count is always exact.
 _MAX_TOKEN_FINDINGS = 10
@@ -498,7 +498,7 @@ def _read_resource(service: Any, artifact_type: str, artifact_id: str) -> dict[s
         )
     try:
         if artifact_type == "docs":
-                      resource = read(documentId=artifact_id).execute()
+            resource = read(documentId=artifact_id).execute()
         else:
             resource = read(presentationId=artifact_id).execute()
     except (VerificationRuntimeUnavailableError, ArtifactInaccessibleError):
@@ -998,7 +998,7 @@ def _resolve_batch_proof(
             ],
         )
     return _verify_single_batch_proof(
-              proof=candidates[0],
+        proof=candidates[0],
         artifact_type=artifact_type,
         artifact_id=artifact_id,
         observation=observation,
@@ -1247,6 +1247,7 @@ def _evaluate_visuals(
                     "identity, so the actual visual cannot be verified.",
                     role_id=visual.role_id,
                 )
+            )
             continue
         if str(inserted_id) not in observation.image_element_ids:
             findings.append(
@@ -1497,7 +1498,7 @@ def evaluate_artifact_qa(
     if expectations.idempotency_key != idempotency_key:
         findings.append(
             _fail(
-              "qa-build-attribution-mismatch", QA_STATE_ARTIFACT_CONFLICT,
+                "qa-build-attribution-mismatch", QA_STATE_ARTIFACT_CONFLICT,
                 "QA expectations are bound to a different build idempotency key; "
                 "evidence is not attributable to this build.",
                 expectations_key=expectations.idempotency_key,
@@ -1997,7 +1998,7 @@ def run_terminal_qa(
     report = TerminalQAReport(
         idempotency_key=expectations.idempotency_key,
         slides=slides_report,
-              worksheet=worksheet_report,
+        worksheet=worksheet_report,
         state=overall,
         generated_at=_utc_now(),
         placement_evidence_hash=placement_evidence_hash,
