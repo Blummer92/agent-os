@@ -51,6 +51,7 @@ class AgentOsContinuationPlan(TypedDict):
     github_writes_authorized: Literal[False]
     scheduler_invoked: Literal[False]
     side_effects_performed: Literal[False]
+    agent_os_continuation: dict[str, object]
 
 
 def _repository(value: object) -> str:
@@ -76,8 +77,15 @@ def _handoff_id(value: object | None) -> str | None:
 def plan_agent_os_continuation(*, repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> AgentOsContinuationPlan:
     repo = _repository(repository); issue = _issue_number(issue_number); handoff = _handoff_id(canonical_handoff_id)
     if handoff is None:
-        return {"status": "agent-os-route", "repository": repo, "issue_number": issue, "next_operation": "discover-current-handoff", "handoff_id": None, "ingress": None, "execution_authorized": False, "github_writes_authorized": False, "scheduler_invoked": False, "side_effects_performed": False}
-    return {"status": "agent-os-route", "repository": repo, "issue_number": issue, "next_operation": "resume-existing-handoff", "handoff_id": handoff, "ingress": f"/agent-os resume {handoff}", "execution_authorized": False, "github_writes_authorized": False, "scheduler_invoked": False, "side_effects_performed": False}
+        plan: AgentOsContinuationPlan = {"status": "agent-os-route", "repository": repo, "issue_number": issue, "next_operation": "discover-current-handoff", "handoff_id": None, "ingress": None, "execution_authorized": False, "github_writes_authorized": False, "scheduler_invoked": False, "side_effects_performed": False, "agent_os_continuation": {}}
+    else:
+        plan = {"status": "agent-os-route", "repository": repo, "issue_number": issue, "next_operation": "resume-existing-handoff", "handoff_id": handoff, "ingress": f"/agent-os resume {handoff}", "execution_authorized": False, "github_writes_authorized": False, "scheduler_invoked": False, "side_effects_performed": False, "agent_os_continuation": {}}
+    # #3485 R1: attach the canonical non-authorizing payload like every sibling
+    # continuation site. This plan is route discovery only (nothing executed,
+    # nothing invoked), so the projection is never terminal and never blocked;
+    # its action mirrors the plan's own next_operation vocabulary.
+    plan["agent_os_continuation"] = completion_continuation_payload(terminal=False, blocked=False, next_action=plan["next_operation"], reason_codes=())
+    return plan
 
 
 def activate_agent_os_failed_repair(*, repository: str, issue_number: int, attempt_id: str, failed_hypothesis: str, result_summary: str, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, execute_read: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None, repair_context: str = "failed-pr-repair") -> dict[str, object]:
@@ -107,4 +115,11 @@ def classify_agent_os_continuation(*, repository: str, issue_number: int, operat
     try: outcome = ExecutionSurfaceAvailabilityOutcome(surface_outcome); effect = PriorAttemptEffect(prior_effect); domain = None if non_absorbed_domain is None else NonAbsorbedDomain(non_absorbed_domain)
     except ValueError as exc: raise ValueError("unsupported finite Agent OS continuation value") from exc
     decision = classify_post_selection_continuation(PostSelectionAttemptEvidence(operation_id=operation_id, lineage=ContinuationLineage(repository=repo, issue_number=issue, branch=branch, pull_request=pull_request, checkpoint_id=checkpoint_id, lease_id=lease_id), surface_outcome=outcome, approved_alternative_capability=approved_alternative_capability, alternative_widens_authority=alternative_widens_authority, prior_effect=effect, target_identity_reacquired=target_identity_reacquired, requires_exact_blob_identity=requires_exact_blob_identity, exact_blob_identity_reacquired=exact_blob_identity_reacquired, runtime_surface_transition=runtime_surface_transition, evidence_compatibility_confirmed=evidence_compatibility_confirmed, active_foreign_lease=active_foreign_lease, equivalent_transition_repeated=equivalent_transition_repeated, material_decision_required=material_decision_required, non_absorbed_domain=domain))
-    payload = asdict(decision); payload["classification"] = decision.classification.value; payload["reason_codes"] = [item.value for item in decision.reason_codes]; payload["obligations"] = [item.value for item in decision.obligations]; payload["lineage"] = asdict(decision.lineage); return payload
+    payload = asdict(decision); payload["classification"] = decision.classification.value; payload["reason_codes"] = [item.value for item in decision.reason_codes]; payload["obligations"] = [item.value for item in decision.obligations]; payload["lineage"] = asdict(decision.lineage)
+    # #3485 R1: project the #1237 decision into the canonical host payload like
+    # every sibling completion site, so continuation consumers see one schema.
+    # This classifier never admits mission completion (that is
+    # classify_agent_os_mission_completion's domain), so terminal stays False;
+    # blocked mirrors the decision's own blocker field, which the classifier
+    # sets only when no capable authorized route exists.
+    payload["agent_os_continuation"] = completion_continuation_payload(terminal=False, blocked=decision.blocker is not None, next_action="continue-with-approved-alternative" if decision.continue_automatically else "halt-no-capable-authorized-route" if decision.blocker is not None else "discharge-continuation-obligations", reason_codes=tuple(item.value for item in decision.reason_codes)); return payload
