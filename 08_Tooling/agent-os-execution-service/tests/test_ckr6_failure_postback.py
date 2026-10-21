@@ -193,6 +193,50 @@ def test_existing_result_for_same_request_deduplicates(monkeypatch):
     assert fake.posts == []
 
 
+def test_existing_non_ascii_bridge_result_deduplicates(monkeypatch):
+    # Regression (independent QA D1): the bridge canonicalizes with
+    # ensure_ascii=False, so a genuine bridge result carrying non-ASCII
+    # lesson/handoff text must still parse in the reporter's dedupe lookup;
+    # otherwise the reporter would post a duplicate, contradictory fallback
+    # for a request that already has its real result.
+    result = {
+        "operation": "issue-start",
+        "repository": REPOSITORY,
+        "issue_number": ISSUE_NUMBER,
+        "status": "not-needed",
+        "reason_codes": ["knowledge-not-needed"],
+        "selected_lesson_ids": [],
+        "canonical_github_refs": [],
+        "handoff_projection": {
+            "known_facts": ["leçon café — naïve façade"],
+            "prior_decisions": [],
+            "allowed_inspect_first": [],
+            "stop_conditions": [],
+        },
+        "substantial_hypothesis_admissible": True,
+        "mutation_admissible": False,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+    existing_body = bridge.serialize_ckr6_result_comment(
+        result, request_comment_id=REQUEST_COMMENT_ID
+    )
+    assert "leçon café" in existing_body  # bridge emits raw UTF-8, not \uXXXX
+    assert (
+        reporter.parse_result_comment(existing_body)["request_comment_id"]
+        == REQUEST_COMMENT_ID
+    )
+    fake = _Transport(existing_comments=[{"id": 7002, "body": existing_body}])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    outcome = _post(fake)
+    assert outcome["deduplicated"] is True
+    assert outcome["posted_comment_id"] == 7002
+    assert fake.posts == []
+
+
 def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
     other_body = bridge.serialize_ckr6_result_comment(
         bridge._fallback_result(REPOSITORY, ISSUE_NUMBER),

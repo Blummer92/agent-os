@@ -42,7 +42,17 @@ MAX_COMMENT_BYTES = 16 * 1024
 
 
 def _canonical_result_json(payload: Mapping[str, object]) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    # Identical to the bridge's canonical form (ensure_ascii=False,
+    # allow_nan=False): dedupe parses bridge-posted results, whose payloads
+    # may carry non-ASCII lesson/handoff text, and must recompute the exact
+    # same canonical string or the parse -- and therefore dedupe -- fails.
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def fallback_result(repository: str, issue_number: int) -> dict[str, object]:
