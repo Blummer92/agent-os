@@ -68,6 +68,185 @@ REASON_CODES = frozenset({
 })
 
 
+# ---------------------------------------------------------------------------
+# Satisfaction evidence snapshots (#3680, Option B).
+#
+# The satisfaction record is produced by the reporting domain
+# (``criterion_satisfaction``), which this approval-domain module must not
+# import (architecture dependency-direction contract). The producer
+# therefore hands over a plain mapping with the block shape below, and
+# this module strictly validates it at the input boundary and stores a
+# defensive copy in immutable form, so later mutation of the caller's
+# mapping cannot change reconciliation behavior. A malformed, mistyped,
+# or internally inconsistent snapshot is rejected with TypeError /
+# ValueError here — it is never silently accepted and never interpreted
+# as complete. The snapshot is evidence for QA judgment only; it never
+# carries or confers any authorization.
+# ---------------------------------------------------------------------------
+
+_SATISFACTION_STATUSES = frozenset({"complete", "incomplete", "manual-review"})
+_SATISFACTION_DISPOSITIONS = frozenset({
+    "satisfied", "unsatisfied", "stale", "missing", "contradicted",
+    "manual-review",
+})
+_SATISFACTION_KEYS = frozenset({"issue_body_digest", "status", "criteria"})
+_SATISFACTION_CRITERION_KEYS = frozenset({
+    "index", "identity", "disposition", "reason_code", "evidence",
+})
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+@dataclass(frozen=True, slots=True)
+class _SatisfactionCriterionSnapshot:
+    index: int
+    identity: str
+    disposition: str
+    reason_code: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SatisfactionSnapshot:
+    """One immutable, validated satisfaction evidence snapshot."""
+
+    issue_body_digest: str
+    status: str
+    criteria: tuple[_SatisfactionCriterionSnapshot, ...]
+
+    @property
+    def complete(self) -> bool:
+        return self.status == "complete"
+
+    @property
+    def unsatisfied_criteria(self) -> tuple[_SatisfactionCriterionSnapshot, ...]:
+        """Every criterion that does not hold satisfied (named, never hidden)."""
+        return tuple(
+            item for item in self.criteria if item.disposition != "satisfied"
+        )
+
+
+def _satisfaction_snapshot(value: object) -> _SatisfactionSnapshot:
+    """Validate one caller-supplied snapshot mapping; return the frozen copy.
+
+    Key sets are exact (missing or extra keys are rejected), types are
+    exact built-ins (a bool is not an index; criteria and evidence must
+    be exact lists), and the declared status must agree with the
+    criteria under the same derivation the #3678 projector applies:
+    ``complete`` iff at least one criterion exists and every criterion
+    is satisfied; ``manual-review`` iff any criterion is manual-review
+    (an empty criterion list only ever carries ``manual-review``);
+    otherwise ``incomplete``. A status that disagrees — in particular a
+    ``complete`` claim over unsatisfied, stale, missing, contradicted,
+    or absent criteria — is forged or inconsistent and is rejected.
+    """
+    if type(value) is _SatisfactionSnapshot:
+        return value
+    if type(value) is not dict:
+        raise TypeError("satisfaction must be an exact dict snapshot")
+    if set(value) != _SATISFACTION_KEYS:
+        raise ValueError(
+            "satisfaction snapshot keys must be exactly "
+            "issue_body_digest, status, criteria"
+        )
+    digest = value["issue_body_digest"]
+    if (
+        type(digest) is not str
+        or len(digest) != 64
+        or any(ch not in _HEX_DIGITS for ch in digest)
+    ):
+        raise ValueError(
+            "satisfaction issue_body_digest must be a 64-char lowercase hex digest"
+        )
+    status = value["status"]
+    if type(status) is not str or status not in _SATISFACTION_STATUSES:
+        raise ValueError("satisfaction status is unsupported")
+    raw_criteria = value["criteria"]
+    if type(raw_criteria) is not list:
+        raise TypeError("satisfaction criteria must be an exact list")
+    criteria: list[_SatisfactionCriterionSnapshot] = []
+    for position, raw in enumerate(raw_criteria, start=1):
+        if type(raw) is not dict:
+            raise TypeError("satisfaction criterion must be an exact dict")
+        if set(raw) != _SATISFACTION_CRITERION_KEYS:
+            raise ValueError(
+                "satisfaction criterion keys must be exactly index, "
+                "identity, disposition, reason_code, evidence"
+            )
+        index = raw["index"]
+        if type(index) is not int:
+            raise TypeError("satisfaction criterion index must be a built-in int")
+        if index != position:
+            raise ValueError(
+                "satisfaction criterion indexes must be 1..N contiguous, "
+                "unique, and in order"
+            )
+        identity = raw["identity"]
+        if type(identity) is not str or not identity:
+            raise TypeError(
+                "satisfaction criterion identity must be a non-empty string"
+            )
+        disposition = raw["disposition"]
+        if type(disposition) is not str or disposition not in _SATISFACTION_DISPOSITIONS:
+            raise ValueError("satisfaction criterion disposition is unsupported")
+        reason_code = raw["reason_code"]
+        if type(reason_code) is not str or not reason_code:
+            raise TypeError(
+                "satisfaction criterion reason_code must be a non-empty string"
+            )
+        evidence = raw["evidence"]
+        if (
+            type(evidence) is not list
+            or not evidence
+            or any(type(pointer) is not str or not pointer for pointer in evidence)
+        ):
+            raise TypeError(
+                "satisfaction criterion evidence must be a non-empty list "
+                "of non-empty string pointers"
+            )
+        criteria.append(
+            _SatisfactionCriterionSnapshot(
+                index, identity, disposition, reason_code, tuple(evidence)
+            )
+        )
+    if not criteria:
+        derived = "manual-review"
+    elif all(item.disposition == "satisfied" for item in criteria):
+        derived = "complete"
+    elif any(item.disposition == "manual-review" for item in criteria):
+        derived = "manual-review"
+    else:
+        derived = "incomplete"
+    if status != derived:
+        raise ValueError("satisfaction status disagrees with its criteria")
+    return _SatisfactionSnapshot(digest, status, tuple(criteria))
+
+
+def _satisfaction_block(snapshot: _SatisfactionSnapshot) -> dict[str, object]:
+    """Serialize one validated satisfaction snapshot for reporting (#3680).
+
+    The block is evidence for QA judgment only: per-criterion identities,
+    dispositions, reason codes, and evidence pointers exactly as the
+    validated snapshot carries them, plus the overall status and the
+    derived closure-ready signal (complete satisfaction). It never
+    carries or confers any authorization.
+    """
+    return {
+        "issue_body_digest": snapshot.issue_body_digest,
+        "status": snapshot.status,
+        "closure_ready": snapshot.complete,
+        "criteria": [
+            {
+                "index": item.index,
+                "identity": item.identity,
+                "disposition": item.disposition,
+                "reason_code": item.reason_code,
+                "evidence": list(item.evidence),
+            }
+            for item in snapshot.criteria
+        ],
+    }
+
+
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -181,6 +360,7 @@ class LifecycleReconciliationInput:
     projections: tuple[ProjectionEvidence, ...] = ()
     exact_head_evidence: tuple[ExactHeadEvidence, ...] = ()
     admissions: tuple[LifecycleMutationAdmissionResult, ...] = ()
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None
     input_id: str = ""
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -192,6 +372,12 @@ class LifecycleReconciliationInput:
             raise TypeError("invalid lifecycle snapshot")
         if self.current_pull_request is not None and type(self.current_pull_request) is not PullRequestEvidence:
             raise TypeError("invalid current pull request")
+        if self.satisfaction is not None:
+            # Strictly validate the caller-supplied snapshot mapping and
+            # store the frozen defensive copy (#3680 Option B).
+            object.__setattr__(
+                self, "satisfaction", _satisfaction_snapshot(self.satisfaction)
+            )
         for name, kind in (("dependencies", DependencyEvidence), ("projections", ProjectionEvidence), ("exact_head_evidence", ExactHeadEvidence), ("admissions", LifecycleMutationAdmissionResult)):
             if any(type(v) is not kind for v in _tuple(getattr(self, name), name)):
                 raise TypeError(f"invalid {name}")
@@ -204,7 +390,7 @@ class LifecycleReconciliationInput:
 
     def payload(self) -> dict[str, object]:
         pr = self.current_pull_request
-        return {
+        payload: dict[str, object] = {
             "repository": self.repository, "issue_number": self.issue_number,
             "operational_state_id": self.operational_state.state_id,
             "lifecycle_snapshot_id": self.lifecycle_snapshot.snapshot_id if self.lifecycle_snapshot else None,
@@ -214,6 +400,9 @@ class LifecycleReconciliationInput:
             "exact_heads": sorted((v.evidence_id, v.tested_head_sha) for v in self.exact_head_evidence),
             "admission_ids": sorted(v.result_id for v in self.admissions), "side_effects_performed": False,
         }
+        if self.satisfaction is not None:
+            payload["satisfaction"] = _satisfaction_block(self.satisfaction)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self.payload(), "input_id": self.input_id}
@@ -272,6 +461,7 @@ class LifecycleReconciliationResult:
     merge_authorization: AuthorizationState
     closure_authorization: AuthorizationState
     external_write_authorization: AuthorizationState
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None
     result_id: str = ""
     schema_name: Literal["agent-os-lifecycle-reconciliation"] = SCHEMA_NAME
     schema_version: Literal["1.0"] = SCHEMA_VERSION
@@ -294,6 +484,10 @@ class LifecycleReconciliationResult:
         ):
             if type(getattr(self, name)) is not AuthorizationState:
                 raise TypeError(f"invalid {name}")
+        if self.satisfaction is not None:
+            object.__setattr__(
+                self, "satisfaction", _satisfaction_snapshot(self.satisfaction)
+            )
         reasons = tuple(sorted(set(_tuple(self.reason_codes, "reason_codes"))))
         if any(type(v) is not str or v not in REASON_CODES for v in reasons):
             raise ValueError("unsupported reason code")
@@ -309,7 +503,10 @@ class LifecycleReconciliationResult:
         object.__setattr__(self, "result_id", expected)
 
     def payload(self) -> dict[str, object]:
-        return {"schema_name": self.schema_name, "schema_version": self.schema_version, "repository": self.repository, "issue_number": self.issue_number, "input_id": self.input_id, "operational_state_id": self.operational_state_id, "lifecycle_snapshot_id": self.lifecycle_snapshot_id, "outcome": self.outcome.value, "reason_codes": self.reason_codes, "actions": [v.to_dict() for v in self.actions], "implementation_authorization": self.implementation_authorization.value, "ready_for_review_authorization": self.ready_for_review_authorization.value, "execution_authorization": self.execution_authorization.value, "merge_authorization": self.merge_authorization.value, "closure_authorization": self.closure_authorization.value, "external_write_authorization": self.external_write_authorization.value, "side_effects_performed": False}
+        payload: dict[str, object] = {"schema_name": self.schema_name, "schema_version": self.schema_version, "repository": self.repository, "issue_number": self.issue_number, "input_id": self.input_id, "operational_state_id": self.operational_state_id, "lifecycle_snapshot_id": self.lifecycle_snapshot_id, "outcome": self.outcome.value, "reason_codes": self.reason_codes, "actions": [v.to_dict() for v in self.actions], "implementation_authorization": self.implementation_authorization.value, "ready_for_review_authorization": self.ready_for_review_authorization.value, "execution_authorization": self.execution_authorization.value, "merge_authorization": self.merge_authorization.value, "closure_authorization": self.closure_authorization.value, "external_write_authorization": self.external_write_authorization.value, "side_effects_performed": False}
+        if self.satisfaction is not None:
+            payload["satisfaction"] = _satisfaction_block(self.satisfaction)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self.payload(), "result_id": self.result_id}
@@ -470,6 +667,22 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         if auth is not None and adm is not None and adm.authorization_id != auth:
             reasons.add("source.conflicting-admission-evidence")
             decision = True
+        elif e.satisfaction is not None and not e.satisfaction.complete:
+            # #3680: an incomplete satisfaction record blocks the closure
+            # projection itself. Report not-closure-ready as a manual
+            # decision naming every blocking criterion; no close-issue
+            # mutation is projected, and satisfaction never substitutes
+            # for the closure authorization/admission checked above.
+            blocking = ",".join(
+                f"{item.identity}:{item.disposition}"
+                for item in e.satisfaction.unsatisfied_criteria
+            )
+            actions.append(ReconciliationAction(
+                ActionCategory.MANUAL_DECISION, close_reason, "issue-state",
+                f"satisfaction={e.satisfaction.status};blocking={blocking}",
+                "closed only with a complete satisfaction record (every criterion satisfied)",
+                None, None, None, _guards(e),
+            ))
         else:
             category = ActionCategory.GOVERNED_MUTATION if auth is not None and adm is not None else ActionCategory.MANUAL_DECISION
             actions.append(ReconciliationAction(category, close_reason, "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
@@ -483,7 +696,7 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         outcome = ReconciliationOutcome.NEEDS_DECISION
     else:
         outcome = ReconciliationOutcome.REQUIRED if actions else ReconciliationOutcome.CONSISTENT
-    return LifecycleReconciliationResult(e.repository, e.issue_number, e.input_id, s.state_id, snap.snapshot_id if snap else None, outcome, tuple(reasons), tuple(actions), s.implementation_authorization.state, s.ready_for_review_authorization.state, s.execution_authorization.state, s.merge_authorization.state, s.closure_authorization.state, s.external_write_authorization.state)
+    return LifecycleReconciliationResult(e.repository, e.issue_number, e.input_id, s.state_id, snap.snapshot_id if snap else None, outcome, tuple(reasons), tuple(actions), s.implementation_authorization.state, s.ready_for_review_authorization.state, s.execution_authorization.state, s.merge_authorization.state, s.closure_authorization.state, s.external_write_authorization.state, satisfaction=e.satisfaction)
 
 
 def serialize_lifecycle_reconciliation_input(value: LifecycleReconciliationInput) -> str:

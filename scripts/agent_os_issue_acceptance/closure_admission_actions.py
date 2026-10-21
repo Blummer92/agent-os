@@ -93,18 +93,197 @@ class ClosureAcceptanceEvidence:
             raise TypeError("evaluator_id must be a non-empty built-in string")
 
 
+# ---------------------------------------------------------------------------
+# Satisfaction evidence snapshots (#3680, Option B).
+#
+# The satisfaction record is produced by the reporting domain
+# (``criterion_satisfaction``), which this approval-domain module must not
+# import (architecture dependency-direction contract). The producer
+# therefore hands over a plain mapping with the block shape below, and
+# this module strictly validates it at the request boundary and stores a
+# defensive copy in immutable form, so later mutation of the caller's
+# mapping cannot change the packet. A malformed, mistyped, or internally
+# inconsistent snapshot is rejected with TypeError / ValueError here —
+# it is never silently accepted and never interpreted as complete. The
+# snapshot is cited evidence for the QA judgment only; it is never an
+# input to the admission decision.
+# ---------------------------------------------------------------------------
+
+_SATISFACTION_STATUSES = frozenset({"complete", "incomplete", "manual-review"})
+_SATISFACTION_DISPOSITIONS = frozenset({
+    "satisfied", "unsatisfied", "stale", "missing", "contradicted",
+    "manual-review",
+})
+_SATISFACTION_KEYS = frozenset({"issue_body_digest", "status", "criteria"})
+_SATISFACTION_CRITERION_KEYS = frozenset({
+    "index", "identity", "disposition", "reason_code", "evidence",
+})
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+@dataclass(frozen=True, slots=True)
+class _SatisfactionCriterionSnapshot:
+    index: int
+    identity: str
+    disposition: str
+    reason_code: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SatisfactionSnapshot:
+    """One immutable, validated satisfaction evidence snapshot."""
+
+    issue_body_digest: str
+    status: str
+    criteria: tuple[_SatisfactionCriterionSnapshot, ...]
+
+    @property
+    def complete(self) -> bool:
+        return self.status == "complete"
+
+
+def _satisfaction_snapshot(value: object) -> _SatisfactionSnapshot:
+    """Validate one caller-supplied snapshot mapping; return the frozen copy.
+
+    Key sets are exact (missing or extra keys are rejected), types are
+    exact built-ins (a bool is not an index; criteria and evidence must
+    be exact lists), and the declared status must agree with the
+    criteria under the same derivation the #3678 projector applies:
+    ``complete`` iff at least one criterion exists and every criterion
+    is satisfied; ``manual-review`` iff any criterion is manual-review
+    (an empty criterion list only ever carries ``manual-review``);
+    otherwise ``incomplete``. A status that disagrees — in particular a
+    ``complete`` claim over unsatisfied, stale, missing, contradicted,
+    or absent criteria — is forged or inconsistent and is rejected.
+    """
+    if type(value) is _SatisfactionSnapshot:
+        return value
+    if type(value) is not dict:
+        raise TypeError("satisfaction must be an exact dict snapshot")
+    if set(value) != _SATISFACTION_KEYS:
+        raise ValueError(
+            "satisfaction snapshot keys must be exactly "
+            "issue_body_digest, status, criteria"
+        )
+    digest = value["issue_body_digest"]
+    if (
+        type(digest) is not str
+        or len(digest) != 64
+        or any(ch not in _HEX_DIGITS for ch in digest)
+    ):
+        raise ValueError(
+            "satisfaction issue_body_digest must be a 64-char lowercase hex digest"
+        )
+    status = value["status"]
+    if type(status) is not str or status not in _SATISFACTION_STATUSES:
+        raise ValueError("satisfaction status is unsupported")
+    raw_criteria = value["criteria"]
+    if type(raw_criteria) is not list:
+        raise TypeError("satisfaction criteria must be an exact list")
+    criteria: list[_SatisfactionCriterionSnapshot] = []
+    for position, raw in enumerate(raw_criteria, start=1):
+        if type(raw) is not dict:
+            raise TypeError("satisfaction criterion must be an exact dict")
+        if set(raw) != _SATISFACTION_CRITERION_KEYS:
+            raise ValueError(
+                "satisfaction criterion keys must be exactly index, "
+                "identity, disposition, reason_code, evidence"
+            )
+        index = raw["index"]
+        if type(index) is not int:
+            raise TypeError("satisfaction criterion index must be a built-in int")
+        if index != position:
+            raise ValueError(
+                "satisfaction criterion indexes must be 1..N contiguous, "
+                "unique, and in order"
+            )
+        identity = raw["identity"]
+        if type(identity) is not str or not identity:
+            raise TypeError(
+                "satisfaction criterion identity must be a non-empty string"
+            )
+        disposition = raw["disposition"]
+        if type(disposition) is not str or disposition not in _SATISFACTION_DISPOSITIONS:
+            raise ValueError("satisfaction criterion disposition is unsupported")
+        reason_code = raw["reason_code"]
+        if type(reason_code) is not str or not reason_code:
+            raise TypeError(
+                "satisfaction criterion reason_code must be a non-empty string"
+            )
+        evidence = raw["evidence"]
+        if (
+            type(evidence) is not list
+            or not evidence
+            or any(type(pointer) is not str or not pointer for pointer in evidence)
+        ):
+            raise TypeError(
+                "satisfaction criterion evidence must be a non-empty list "
+                "of non-empty string pointers"
+            )
+        criteria.append(
+            _SatisfactionCriterionSnapshot(
+                index, identity, disposition, reason_code, tuple(evidence)
+            )
+        )
+    if not criteria:
+        derived = "manual-review"
+    elif all(item.disposition == "satisfied" for item in criteria):
+        derived = "complete"
+    elif any(item.disposition == "manual-review" for item in criteria):
+        derived = "manual-review"
+    else:
+        derived = "incomplete"
+    if status != derived:
+        raise ValueError("satisfaction status disagrees with its criteria")
+    return _SatisfactionSnapshot(digest, status, tuple(criteria))
+
+
+def _satisfaction_block(
+    snapshot: _SatisfactionSnapshot,
+) -> dict[str, object]:
+    """Serialize one validated satisfaction snapshot for the packet (#3680).
+
+    Carries the snapshot's issue-body digest, overall status, and
+    per-criterion identities, dispositions, reason codes, and evidence
+    pointers exactly as validated. The block is cited evidence for the QA
+    judgment only; it is never an input to the admission decision.
+    """
+    return {
+        "issue_body_digest": snapshot.issue_body_digest,
+        "status": snapshot.status,
+        "criteria": [
+            {
+                "index": item.index,
+                "identity": item.identity,
+                "disposition": item.disposition,
+                "reason_code": item.reason_code,
+                "evidence": list(item.evidence),
+            }
+            for item in snapshot.criteria
+        ],
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class IssueClosureRequest:
     """One item of the finite owner-authorized closure set."""
 
     decision: LifecycleOwnerDecision
     acceptance: ClosureAcceptanceEvidence
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if type(self.decision) is not LifecycleOwnerDecision:
             raise TypeError("decision must be a LifecycleOwnerDecision")
         if type(self.acceptance) is not ClosureAcceptanceEvidence:
             raise TypeError("acceptance must be ClosureAcceptanceEvidence")
+        if self.satisfaction is not None:
+            # Strictly validate the caller-supplied snapshot mapping and
+            # store the frozen defensive copy (#3680 Option B).
+            object.__setattr__(
+                self, "satisfaction", _satisfaction_snapshot(self.satisfaction)
+            )
         if self.decision.issue_number is None:
             raise ValueError("closure request requires an issue target")
         if tuple(self.decision.requested_mutations) != (CLOSE_ISSUE_MUTATION,):
@@ -193,6 +372,7 @@ def _receipt(
     snapshot_id: str | None,
     acceptance_evidence_id: str | None,
     next_action: str,
+    satisfaction: dict[str, object] | None = None,
 ) -> dict[str, object]:
     core: dict[str, object] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
@@ -208,6 +388,17 @@ def _receipt(
         "host_dispatch_contract": dict(HOST_DISPATCH_CONTRACT),
         "next_action": next_action,
     }
+    if satisfaction is not None:
+        # Inside the hashed core (#3680): the cited satisfaction evidence
+        # is integrity-bound by the receipt id exactly like every other
+        # core field, and the verifier recomputes it under the same
+        # conditional rule. Absent -> the core is byte-identical to the
+        # pre-#3680 form. The hash binds the block against later
+        # alteration of the receipt; it does not authenticate the
+        # evidence itself — authenticity rests with the producing
+        # verifier and the QA judgment, exactly as for the other
+        # caller-bound core fields.
+        core["satisfaction"] = satisfaction
     return {
         **core,
         "receipt_id": _receipt_id(core),
@@ -235,6 +426,11 @@ def evaluate_issue_closure(
     decision = request.decision
     repository = decision.repository
     issue_number = decision.issue_number
+    satisfaction_block = (
+        _satisfaction_block(request.satisfaction)
+        if request.satisfaction is not None
+        else None
+    )
     if issue_number in PROTECTED_ISSUE_NUMBERS:
         return _receipt(
             repository=repository,
@@ -245,6 +441,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="none-protected-target",
         )
     if snapshot.repository != repository or snapshot.issue_number != issue_number:
@@ -257,6 +454,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="reacquire-issue-and-reevaluate",
         )
     if request.acceptance.evaluator_id == decision.authorizer_id:
@@ -269,6 +467,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="obtain-independent-acceptance",
         )
     if request.acceptance.verdict != "pass":
@@ -281,6 +480,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="obtain-independent-acceptance",
         )
     try:
@@ -295,6 +495,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="record-owner-decision",
         )
     except (TypeError, ValueError):
@@ -307,6 +508,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
             next_action="reacquire-issue-and-reevaluate",
         )
     admission = evaluate_lifecycle_mutation(
@@ -321,6 +523,7 @@ def evaluate_issue_closure(
         admission_result_id=admission.result_id,
         snapshot_id=snapshot.snapshot_id,
         acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
         next_action=(
             "host-close-issue-then-canonical-readback"
             if admission.admitted
@@ -353,12 +556,30 @@ def verify_closure_admission_receipt(
     """
     if type(receipt) is not dict:
         return False
-    if set(receipt) != set(_RECEIPT_CORE_KEYS) | {
+    allowed_keys = set(_RECEIPT_CORE_KEYS) | {
         "receipt_id",
         "closure_performed",
         "merge_authorized",
         "side_effects_performed",
-    }:
+    }
+    satisfaction_core: dict[str, object] | None = None
+    if "satisfaction" in receipt:
+        # #3680: a satisfaction block is admitted to the key set only as
+        # an additional core field. It must pass the same strict snapshot
+        # validation the request boundary applies (shape, types, and
+        # status/criteria consistency — a forged or inconsistent block
+        # fails closed here), and its normalized form is integrity-checked
+        # below by the same conditional receipt-id recomputation that
+        # produced it. The recomputation binds the block to this receipt;
+        # it does not authenticate the underlying evidence.
+        try:
+            satisfaction_core = _satisfaction_block(
+                _satisfaction_snapshot(receipt.get("satisfaction"))
+            )
+        except (TypeError, ValueError):
+            return False
+        allowed_keys.add("satisfaction")
+    if set(receipt) != allowed_keys:
         return False
     if type(authorization) is not LifecycleMutationAuthorization:
         return False
@@ -410,6 +631,8 @@ def verify_closure_admission_receipt(
     if receipt.get("reason_codes") != []:
         return False
     core = {key: receipt.get(key) for key in _RECEIPT_CORE_KEYS}
+    if satisfaction_core is not None:
+        core["satisfaction"] = satisfaction_core
     try:
         expected_receipt_id = _receipt_id(core)
     except (TypeError, ValueError):
