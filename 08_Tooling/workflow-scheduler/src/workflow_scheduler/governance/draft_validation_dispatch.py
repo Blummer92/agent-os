@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,15 @@ RECEIPT_SCHEMA_VERSION = "1.0"
 RECEIPT_MARKER_PREFIX = "agent-os-draft-validation-receipt:"
 CORRELATION_SKEW = timedelta(seconds=10)
 MAX_RUNS_INSPECTED = 50
+# A completed run with one of these conclusions did not produce validation
+# evidence and may be retried by a new owner command; any other terminal
+# conclusion (success, skipped, neutral, ...) is final for that head.
+RETRYABLE_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out", "startup_failure"})
+# Total failed/cancelled dispatch runs tolerated per exact head; the next
+# command after this many is blocked until an owner decides otherwise.
+MAX_FAILED_DISPATCHES_PER_HEAD = 3
+_REASON_CODE_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -43,6 +53,7 @@ class PullRequestState:
     base_ref: str
     head_ref: str | None
     head_sha: str | None
+    head_repo_full_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -74,8 +85,14 @@ def verify_pr_state(
     *,
     pr_number: int,
     expected_head_sha: str,
+    repository: str,
 ) -> list[str]:
-    """Return fail-closed reason codes; an empty list means dispatch may proceed."""
+    """Return fail-closed reason codes; an empty list means dispatch may proceed.
+
+    Fork pull requests are rejected: the dispatched workflow runs the workflow
+    definition found on the head ref, so only same-repository heads are
+    admitted unless an independently authorized fork-support contract exists.
+    """
     reasons: list[str] = []
     if pr.state != "open":
         reasons.append("pr-not-open")
@@ -85,6 +102,8 @@ def verify_pr_state(
         reasons.append("pr-base-not-main")
     if not pr.head_ref:
         reasons.append("pr-head-ref-missing")
+    if pr.head_repo_full_name is None or pr.head_repo_full_name.casefold() != repository.casefold():
+        reasons.append("pr-head-fork-not-supported")
     if pr.head_sha != expected_head_sha:
         reasons.append("pr-head-mismatch")
     return reasons
@@ -92,12 +111,24 @@ def verify_pr_state(
 
 def select_duplicate_run(
     runs: list[WorkflowRunSummary], *, expected_head_sha: str
-) -> WorkflowRunSummary | None:
-    """Any earlier workflow_dispatch run for the exact head makes this a duplicate."""
-    for run in runs:
-        if run.head_sha == expected_head_sha:
-            return run
-    return None
+) -> tuple[WorkflowRunSummary | None, list[str]]:
+    """Decide whether earlier dispatch runs for the exact head block a new one.
+
+    Returns ``(blocking_run, reason_codes)``. An active run, a successful or
+    otherwise final run, and an exhausted retry budget all block. A run that
+    completed with a retryable conclusion does not block until
+    ``MAX_FAILED_DISPATCHES_PER_HEAD`` such runs exist for the head.
+    """
+    head_runs = [run for run in runs if run.head_sha == expected_head_sha]
+    for run in head_runs:
+        if run.status != "completed":
+            return run, ["duplicate-active-run"]
+    for run in head_runs:
+        if run.conclusion not in RETRYABLE_CONCLUSIONS:
+            return run, ["duplicate-dispatch-prevented"]
+    if len(head_runs) >= MAX_FAILED_DISPATCHES_PER_HEAD:
+        return head_runs[0], ["retry-limit-reached"]
+    return None, []
 
 
 def correlate_run(
@@ -105,13 +136,20 @@ def correlate_run(
     *,
     expected_head_sha: str,
     dispatched_at: datetime,
+    exclude_run_ids: frozenset[int] = frozenset(),
 ) -> tuple[str, WorkflowRunSummary | None]:
-    """Bind the dispatch to exactly one created run, failing closed otherwise."""
+    """Bind the dispatch to exactly one created run, failing closed otherwise.
+
+    Runs that existed before the dispatch (``exclude_run_ids``) are never
+    candidates, so a just-failed earlier run cannot be mistaken for the new one.
+    """
     window_start = dispatched_at - CORRELATION_SKEW
     candidates = [
         run
         for run in runs
-        if run.head_sha == expected_head_sha and run.created_at >= window_start
+        if run.head_sha == expected_head_sha
+        and run.created_at >= window_start
+        and run.run_id not in exclude_run_ids
     ]
     if len(candidates) == 1:
         return "correlated", candidates[0]
@@ -145,6 +183,14 @@ def _base_receipt(transport: dict) -> dict:
     }
 
 
+def _failure_reasons(code: str, exc: Exception) -> list[str]:
+    """Primary reason code plus an HTTP status detail when the error carries one."""
+    status = getattr(exc, "status", None)
+    if type(status) is int and 100 <= status <= 599:
+        return [code, f"{code}-http-{status}"]
+    return [code]
+
+
 def execute_dispatch(
     transport: dict,
     client: DispatchClient,
@@ -169,20 +215,38 @@ def execute_dispatch(
     pr_number: int = receipt["pr_number"]
     expected_head_sha: str = receipt["expected_head_sha"]
 
-    pr = client.get_pull_request(pr_number)
+    repository = receipt["repository"]
+    if type(repository) is not str:
+        receipt["reason_codes"] = ["transport-not-accepted"]
+        return receipt
+
+    try:
+        pr = client.get_pull_request(pr_number)
+    except Exception as exc:  # lookup failure: fail closed with a diagnosable reason
+        receipt["reason_codes"] = _failure_reasons("pr-lookup-failed", exc)
+        return receipt
     receipt["observed_head_sha"] = pr.head_sha
     receipt["head_ref"] = pr.head_ref
-    reasons = verify_pr_state(pr, pr_number=pr_number, expected_head_sha=expected_head_sha)
+    reasons = verify_pr_state(
+        pr, pr_number=pr_number, expected_head_sha=expected_head_sha, repository=repository
+    )
     if reasons:
         receipt["reason_codes"] = reasons
         return receipt
     assert pr.head_ref is not None  # verified above
 
-    prior_runs = client.list_validation_dispatch_runs(head_ref=pr.head_ref)
-    duplicate = select_duplicate_run(prior_runs, expected_head_sha=expected_head_sha)
+    try:
+        prior_runs = client.list_validation_dispatch_runs(head_ref=pr.head_ref)
+    except Exception as exc:
+        receipt["reason_codes"] = _failure_reasons("run-lookup-failed", exc)
+        return receipt
+    duplicate, duplicate_reasons = select_duplicate_run(
+        prior_runs, expected_head_sha=expected_head_sha
+    )
     if duplicate is not None:
-        receipt["decision"] = "duplicate"
-        receipt["reason_codes"] = ["duplicate-dispatch-prevented"]
+        retry_limited = duplicate_reasons == ["retry-limit-reached"]
+        receipt["decision"] = "blocked" if retry_limited else "duplicate"
+        receipt["reason_codes"] = duplicate_reasons
         receipt["run_id_or_none"] = duplicate.run_id
         receipt["run_url_or_none"] = duplicate.url
         receipt["run_status_or_none"] = duplicate.status
@@ -195,16 +259,25 @@ def execute_dispatch(
         client.create_validation_dispatch(
             ref=pr.head_ref, pr_number=pr_number, expected_head_sha=expected_head_sha
         )
-    except Exception:  # dispatch transport failure: fail closed, no run identity claimed
-        receipt["reason_codes"] = ["dispatch-failed"]
+    except Exception as exc:  # dispatch transport failure: fail closed, no run identity claimed
+        receipt["reason_codes"] = _failure_reasons("dispatch-failed", exc)
         return receipt
 
+    preexisting = frozenset(run.run_id for run in prior_runs)
     outcome = "run-not-found"
     run: WorkflowRunSummary | None = None
     for attempt in range(max(1, poll_attempts)):
-        runs = client.list_validation_dispatch_runs(head_ref=pr.head_ref)
+        try:
+            runs = client.list_validation_dispatch_runs(head_ref=pr.head_ref)
+        except Exception as exc:
+            receipt["decision"] = "correlation-failed"
+            receipt["reason_codes"] = _failure_reasons("run-lookup-failed", exc)
+            return receipt
         outcome, run = correlate_run(
-            runs, expected_head_sha=expected_head_sha, dispatched_at=dispatch_time
+            runs,
+            expected_head_sha=expected_head_sha,
+            dispatched_at=dispatch_time,
+            exclude_run_ids=preexisting,
         )
         if outcome == "correlated" or outcome == "run-ambiguous":
             break
@@ -224,14 +297,62 @@ def execute_dispatch(
     return receipt
 
 
-def receipt_marker(trigger_id: str) -> str:
-    return f"<!-- {RECEIPT_MARKER_PREFIX}{trigger_id} -->"
+def receipt_marker(trigger_id: str, comment_id: int) -> str:
+    """Marker for one receipt per invoking comment.
+
+    The logical trigger ID is stable across retries of the same PR head, so it
+    alone would suppress the receipt for a retry after a blocked attempt. The
+    invoking comment ID makes each owner command receive its own receipt while
+    a re-run of the same comment still posts at most once.
+    """
+    return f"<!-- {RECEIPT_MARKER_PREFIX}{trigger_id}:{comment_id} -->"
+
+
+def receipt_from_job_outputs(
+    transport: dict,
+    *,
+    decision: str,
+    reason_codes_csv: str,
+    run_id: str,
+    observed_head_sha: str,
+    run_status: str,
+    run_conclusion: str,
+    dispatch_trigger_id: str,
+) -> dict:
+    """Rebuild the receipt in the low-privilege receipt job from dispatch job
+    outputs, keeping the detailed reason codes. Every value is validated; an
+    unrecognized value is dropped or fails the receipt closed."""
+    receipt = _base_receipt(transport)
+    trigger_id = receipt["trigger_id"]
+    reasons = [code for code in reason_codes_csv.split(",") if code]
+    if not reasons or not all(_REASON_CODE_PATTERN.fullmatch(code) for code in reasons):
+        reasons = ["dispatch-job-no-output"]
+        decision = "blocked"
+    if decision not in {"dispatched", "duplicate", "blocked", "correlation-failed"}:
+        decision = "blocked"
+        reasons = ["dispatch-job-no-output"]
+    if type(trigger_id) is not str or trigger_id != dispatch_trigger_id:
+        decision = "blocked"
+        reasons = ["receipt-trigger-mismatch"]
+    receipt["decision"] = decision
+    receipt["reason_codes"] = reasons
+    if _SHA_PATTERN.fullmatch(observed_head_sha):
+        receipt["observed_head_sha"] = observed_head_sha
+    if run_id.isascii() and run_id.isdigit() and decision in {"dispatched", "duplicate", "blocked"}:
+        receipt["run_id_or_none"] = int(run_id)
+        receipt["run_url_or_none"] = (
+            f"https://github.com/{receipt['repository']}/actions/runs/{int(run_id)}"
+        )
+    for key, value in (("run_status_or_none", run_status), ("run_conclusion_or_none", run_conclusion)):
+        if _REASON_CODE_PATTERN.fullmatch(value.replace("_", "-")):
+            receipt[key] = value
+    return receipt
 
 
 def render_receipt_comment(receipt: dict) -> str:
     trigger_id = receipt.get("trigger_id")
     lines = [
-        receipt_marker(str(trigger_id)),
+        receipt_marker(str(trigger_id), receipt.get("comment_id")),  # type: ignore[arg-type]
         "## Agent OS Draft final-candidate validation dispatch receipt (#2410)",
         "",
         f"- Operation: `{receipt.get('operation')}`",
@@ -242,8 +363,10 @@ def render_receipt_comment(receipt: dict) -> str:
         f"- Observed head SHA: `{receipt.get('observed_head_sha')}`",
         f"- Decision: `{receipt.get('decision')}`",
         f"- Reasons: `{','.join(receipt.get('reason_codes') or [])}`",
+        f"- Invoking comment: `{receipt.get('comment_id')}`",
         f"- Run ID: `{receipt.get('run_id_or_none')}`",
         f"- Run URL: {receipt.get('run_url_or_none')}",
+        f"- Run status: `{receipt.get('run_status_or_none')}` / conclusion: `{receipt.get('run_conclusion_or_none')}`",
         "",
         "A dispatch is not validation. Authoritative evidence is the correlated "
         "run's terminal `agent-os/authoritative-aggregate` result on the exact "
@@ -253,8 +376,8 @@ def render_receipt_comment(receipt: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def find_existing_receipt(comment_bodies: list[str], trigger_id: str) -> bool:
-    marker = receipt_marker(trigger_id)
+def find_existing_receipt(comment_bodies: list[str], trigger_id: str, comment_id: int) -> bool:
+    marker = receipt_marker(trigger_id, comment_id)
     return any(marker in (body or "") for body in comment_bodies)
 
 
@@ -275,6 +398,7 @@ class _PyGithubClient:
             base_ref=pr.base.ref,
             head_ref=pr.head.ref,
             head_sha=pr.head.sha,
+            head_repo_full_name=pr.head.repo.full_name if pr.head.repo else None,
         )
 
     def list_validation_dispatch_runs(
@@ -340,12 +464,13 @@ def _receipt_main(args: argparse.Namespace) -> int:
     if not token:
         raise ValueError("GITHUB_TOKEN is required for receipt mode")
     trigger_id = receipt.get("trigger_id")
+    comment_id = receipt.get("comment_id")
     result = {"trigger_id": trigger_id, "posted": False, "reason": "not-attempted"}
-    if type(trigger_id) is str:
+    if type(trigger_id) is str and type(comment_id) is int:
         repo = Github(token).get_repo(args.repository)
         issue = repo.get_issue(args.issue_number)
         bodies = [comment.body or "" for comment in issue.get_comments()]
-        if find_existing_receipt(bodies, trigger_id):
+        if find_existing_receipt(bodies, trigger_id, comment_id):
             result["reason"] = "receipt-already-posted"
         else:
             issue.create_comment(render_receipt_comment(receipt))
@@ -355,19 +480,37 @@ def _receipt_main(args: argparse.Namespace) -> int:
     return 0
 
 
+def _assemble_main(args: argparse.Namespace) -> int:
+    """Rebuild the receipt from dispatch job outputs passed via environment."""
+    transport = json.loads(Path(args.transport).read_text(encoding="utf-8"))
+    receipt = receipt_from_job_outputs(
+        transport,
+        decision=os.environ.get("DISPATCH_DECISION", ""),
+        reason_codes_csv=os.environ.get("DISPATCH_REASON_CODES", ""),
+        run_id=os.environ.get("DISPATCH_RUN_ID", ""),
+        observed_head_sha=os.environ.get("DISPATCH_OBSERVED_HEAD_SHA", ""),
+        run_status=os.environ.get("DISPATCH_RUN_STATUS", ""),
+        run_conclusion=os.environ.get("DISPATCH_RUN_CONCLUSION", ""),
+        dispatch_trigger_id=os.environ.get("DISPATCH_TRIGGER_ID", ""),
+    )
+    _write_json(Path(args.output), receipt)
+    print(json.dumps(receipt, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("dispatch", "receipt"), default="dispatch")
+    parser.add_argument("--mode", choices=("dispatch", "assemble", "receipt"), default="dispatch")
     parser.add_argument("--transport", type=Path)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--issue-number", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    if args.mode == "dispatch":
+    if args.mode in ("dispatch", "assemble"):
         if args.transport is None:
-            parser.error("--transport is required in dispatch mode")
-        return _dispatch_main(args)
+            parser.error(f"--transport is required in {args.mode} mode")
+        return _dispatch_main(args) if args.mode == "dispatch" else _assemble_main(args)
     if args.receipt is None or args.issue_number is None:
         parser.error("--receipt and --issue-number are required in receipt mode")
     return _receipt_main(args)

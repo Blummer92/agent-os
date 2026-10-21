@@ -780,7 +780,7 @@ jobs:
     # of Actions write authority in this workflow; its token is confined to this job.
     # It dispatches the existing validation workflow for one open Draft PR at
     # its exact head. It never marks a PR Ready, merges, or closes an issue.
-    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    if: ${{ github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -790,6 +790,10 @@ jobs:
       decision: ${{ steps.dispatch.outputs.decision }}
       run_id: ${{ steps.dispatch.outputs.run_id }}
       trigger_id: ${{ steps.dispatch.outputs.trigger_id }}
+      reason_codes: ${{ steps.dispatch.outputs.reason_codes }}
+      observed_head_sha: ${{ steps.dispatch.outputs.observed_head_sha }}
+      run_status: ${{ steps.dispatch.outputs.run_status }}
+      run_conclusion: ${{ steps.dispatch.outputs.run_conclusion }}
     steps:
       - name: Check out canonical workflow source
         uses: actions/checkout@v7
@@ -830,6 +834,10 @@ jobs:
               output.write(f"decision={receipt.get('decision')}\n")
               output.write(f"run_id={receipt.get('run_id_or_none') or ''}\n")
               output.write(f"trigger_id={receipt.get('trigger_id') or ''}\n")
+              output.write(f"reason_codes={','.join(receipt.get('reason_codes') or [])}\n")
+              output.write(f"observed_head_sha={receipt.get('observed_head_sha') or ''}\n")
+              output.write(f"run_status={receipt.get('run_status_or_none') or ''}\n")
+              output.write(f"run_conclusion={receipt.get('run_conclusion_or_none') or ''}\n")
           PY
 
       - name: Publish bounded dispatch summary
@@ -868,7 +876,7 @@ jobs:
     # no Actions authority. Posting is idempotent: an existing receipt for
     # the same trigger ID is never duplicated.
     needs: draft_validation_dispatch
-    if: ${{ always() && github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    if: ${{ always() && github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -896,49 +904,17 @@ jobs:
           DISPATCH_DECISION: ${{ needs.draft_validation_dispatch.outputs.decision }}
           DISPATCH_RUN_ID: ${{ needs.draft_validation_dispatch.outputs.run_id }}
           DISPATCH_TRIGGER_ID: ${{ needs.draft_validation_dispatch.outputs.trigger_id }}
+          DISPATCH_REASON_CODES: ${{ needs.draft_validation_dispatch.outputs.reason_codes }}
+          DISPATCH_OBSERVED_HEAD_SHA: ${{ needs.draft_validation_dispatch.outputs.observed_head_sha }}
+          DISPATCH_RUN_STATUS: ${{ needs.draft_validation_dispatch.outputs.run_status }}
+          DISPATCH_RUN_CONCLUSION: ${{ needs.draft_validation_dispatch.outputs.run_conclusion }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          temp = Path(os.environ["RUNNER_TEMP"]) / "agent-os-draft-validation"
-          transport = json.loads((temp / "transport.json").read_text(encoding="utf-8"))
-          trigger_id = transport.get("logical_trigger_id_or_none")
-          decision = os.environ.get("DISPATCH_DECISION") or "blocked"
-          reason_codes = ["dispatch-job-output"]
-          if not trigger_id or trigger_id != os.environ.get("DISPATCH_TRIGGER_ID"):
-              decision = "blocked"
-              reason_codes = ["receipt-trigger-mismatch"]
-          run_id_raw = os.environ.get("DISPATCH_RUN_ID") or ""
-          run_id = int(run_id_raw) if run_id_raw.isdigit() else None
-          repository = transport.get("repository")
-          receipt = {
-              "schema_version": "1.0",
-              "operation": "draft-final-candidate-validation",
-              "workflow": "agent-os-validation.yml",
-              "repository": repository,
-              "issue_number": transport.get("issue_number"),
-              "comment_id": transport.get("comment_id"),
-              "actor": transport.get("actor"),
-              "trigger_id": trigger_id,
-              "pr_number": transport.get("draft_validation_pr_number_or_none"),
-              "expected_head_sha": transport.get("draft_validation_head_sha_or_none"),
-              "observed_head_sha": None,
-              "head_ref": None,
-              "decision": decision,
-              "reason_codes": reason_codes,
-              "run_id_or_none": run_id,
-              "run_url_or_none": (
-                  f"https://github.com/{repository}/actions/runs/{run_id}" if run_id else None
-              ),
-              "run_status_or_none": None,
-              "run_conclusion_or_none": None,
-              "dispatched_at_or_none": None,
-              "validation_executed": False,
-          }
-          (temp / "receipt.json").write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
-          print(json.dumps(receipt, sort_keys=True))
-          PY
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.draft_validation_dispatch \
+              --mode assemble \
+              --transport "$RUNNER_TEMP/agent-os-draft-validation/transport.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/receipt.json"
 
       - name: Post idempotent receipt comment
         env:

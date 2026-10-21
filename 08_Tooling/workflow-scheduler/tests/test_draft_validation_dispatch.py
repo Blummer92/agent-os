@@ -8,6 +8,7 @@ from workflow_scheduler.governance.draft_validation_dispatch import (
     correlate_run,
     execute_dispatch,
     find_existing_receipt,
+    receipt_from_job_outputs,
     render_receipt_comment,
     select_duplicate_run,
     verify_pr_state,
@@ -17,6 +18,7 @@ HEAD_SHA = "a" * 40
 OTHER_SHA = "b" * 40
 NOW = datetime(2026, 10, 21, 14, 0, 0, tzinfo=timezone.utc)
 TRIGGER_ID = "issue-comment-trigger:" + "c" * 64
+REPOSITORY = "Blummer92/agent-os"
 
 
 def pr(**overrides: object) -> PullRequestState:
@@ -26,6 +28,7 @@ def pr(**overrides: object) -> PullRequestState:
         base_ref="main",
         head_ref="agent/2411-example",
         head_sha=HEAD_SHA,
+        head_repo_full_name=REPOSITORY,
     )
     values.update(overrides)
     return PullRequestState(**values)  # type: ignore[arg-type]
@@ -87,24 +90,24 @@ class FakeClient:
 
 
 def test_verify_pr_state_accepts_exact_open_draft_on_main() -> None:
-    assert verify_pr_state(pr(), pr_number=2411, expected_head_sha=HEAD_SHA) == []
+    assert verify_pr_state(pr(), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY) == []
 
 
 def test_verify_pr_state_rejects_each_bad_state() -> None:
-    assert "pr-not-open" in verify_pr_state(pr(state="closed"), pr_number=2411, expected_head_sha=HEAD_SHA)
-    assert "pr-not-draft" in verify_pr_state(pr(draft=False), pr_number=2411, expected_head_sha=HEAD_SHA)
-    assert "pr-base-not-main" in verify_pr_state(pr(base_ref="develop"), pr_number=2411, expected_head_sha=HEAD_SHA)
-    assert "pr-head-mismatch" in verify_pr_state(pr(head_sha=OTHER_SHA), pr_number=2411, expected_head_sha=HEAD_SHA)
-    assert "pr-head-ref-missing" in verify_pr_state(pr(head_ref=None), pr_number=2411, expected_head_sha=HEAD_SHA)
+    assert "pr-not-open" in verify_pr_state(pr(state="closed"), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY)
+    assert "pr-not-draft" in verify_pr_state(pr(draft=False), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY)
+    assert "pr-base-not-main" in verify_pr_state(pr(base_ref="develop"), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY)
+    assert "pr-head-mismatch" in verify_pr_state(pr(head_sha=OTHER_SHA), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY)
+    assert "pr-head-ref-missing" in verify_pr_state(pr(head_ref=None), pr_number=2411, expected_head_sha=HEAD_SHA, repository=REPOSITORY)
 
 
 # --- dedupe / correlation ---------------------------------------------------
 
 
 def test_select_duplicate_run_matches_exact_head_only() -> None:
-    assert select_duplicate_run([run()], expected_head_sha=HEAD_SHA) is not None
-    assert select_duplicate_run([run(head_sha=OTHER_SHA)], expected_head_sha=HEAD_SHA) is None
-    assert select_duplicate_run([], expected_head_sha=HEAD_SHA) is None
+    assert select_duplicate_run([run()], expected_head_sha=HEAD_SHA)[0] is not None
+    assert select_duplicate_run([run(head_sha=OTHER_SHA)], expected_head_sha=HEAD_SHA) == (None, [])
+    assert select_duplicate_run([], expected_head_sha=HEAD_SHA) == (None, [])
 
 
 def test_correlate_run_requires_exactly_one_run_in_window() -> None:
@@ -218,6 +221,208 @@ def test_receipt_comment_is_idempotently_detectable() -> None:
     )
     comment = render_receipt_comment(receipt)
     assert TRIGGER_ID in comment
-    assert find_existing_receipt([comment], TRIGGER_ID) is True
-    assert find_existing_receipt(["unrelated comment"], TRIGGER_ID) is False
+    assert find_existing_receipt([comment], TRIGGER_ID, 7001) is True
+    assert find_existing_receipt(["unrelated comment"], TRIGGER_ID, 7001) is False
     assert "not validation" in comment
+
+
+# --- #2410 follow-up repairs -----------------------------------------------
+
+FAILED = dict(status="completed", conclusion="failure")
+
+
+def _dispatch(client: FakeClient, **kwargs: object) -> dict:
+    return execute_dispatch(
+        transport(), client, dispatched_at=NOW, poll_attempts=2, poll_interval_seconds=0,
+        sleeper=lambda s: None, **kwargs,  # type: ignore[arg-type]
+    )
+
+
+# Repair 1: a retry after a blocked attempt must receive its own receipt.
+
+
+def test_receipt_marker_is_per_comment_so_blocked_retry_gets_a_receipt() -> None:
+    blocked = _dispatch(FakeClient(pr(draft=False), run_pages=[]))
+    first = render_receipt_comment(blocked)
+    assert blocked["decision"] == "blocked"
+    # Same logical trigger, same comment: a workflow re-run must not double-post.
+    assert find_existing_receipt([first], TRIGGER_ID, 7001) is True
+    # Same logical trigger, new invoking comment (the owner's retry): not suppressed.
+    assert find_existing_receipt([first], TRIGGER_ID, 7002) is False
+
+
+# Repair 2: fork pull requests are rejected explicitly.
+
+
+def test_fork_pull_request_is_rejected_without_dispatch() -> None:
+    client = FakeClient(pr(head_repo_full_name="someone/agent-os"), run_pages=[])
+    receipt = _dispatch(client)
+    assert receipt["decision"] == "blocked"
+    assert "pr-head-fork-not-supported" in receipt["reason_codes"]
+    assert client.dispatch_calls == []
+
+
+def test_deleted_head_repository_is_rejected_as_fork() -> None:
+    client = FakeClient(pr(head_repo_full_name=None), run_pages=[])
+    receipt = _dispatch(client)
+    assert "pr-head-fork-not-supported" in receipt["reason_codes"]
+    assert client.dispatch_calls == []
+
+
+def test_same_repository_match_is_case_insensitive() -> None:
+    client = FakeClient(pr(head_repo_full_name="blummer92/AGENT-OS"), run_pages=[[], [run()]])
+    assert _dispatch(client)["decision"] == "dispatched"
+
+
+# Repair 3: failed/cancelled dedup is controlled retry, never duplicate active runs.
+
+
+def test_failed_prior_run_allows_one_controlled_retry() -> None:
+    client = FakeClient(pr(), run_pages=[[run(run_id=90, **FAILED)], [run(run_id=90, **FAILED), run(run_id=91, status="queued", conclusion=None)]])
+    receipt = _dispatch(client)
+    assert receipt["decision"] == "dispatched"
+    assert receipt["run_id_or_none"] == 91  # the new run, not the pre-existing failed one
+    assert len(client.dispatch_calls) == 1
+
+
+def test_cancelled_and_timed_out_runs_are_retryable() -> None:
+    for conclusion in ("cancelled", "timed_out", "startup_failure"):
+        prior = run(run_id=90, status="completed", conclusion=conclusion)
+        client = FakeClient(pr(), run_pages=[[prior], [prior, run(run_id=91)]])
+        assert _dispatch(client)["decision"] == "dispatched"
+
+
+def test_active_run_blocks_dispatch_even_when_a_failed_run_exists() -> None:
+    for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+        active = run(run_id=95, status=status, conclusion=None)
+        client = FakeClient(pr(), run_pages=[[run(run_id=90, **FAILED), active]])
+        receipt = _dispatch(client)
+        assert receipt["decision"] == "duplicate"
+        assert receipt["reason_codes"] == ["duplicate-active-run"]
+        assert receipt["run_id_or_none"] == 95
+        assert client.dispatch_calls == []
+
+
+def test_successful_or_final_prior_run_is_a_duplicate_not_retried() -> None:
+    for conclusion in ("success", "skipped", "neutral", "action_required"):
+        client = FakeClient(pr(), run_pages=[[run(run_id=90, status="completed", conclusion=conclusion)]])
+        receipt = _dispatch(client)
+        assert receipt["decision"] == "duplicate"
+        assert receipt["reason_codes"] == ["duplicate-dispatch-prevented"]
+        assert client.dispatch_calls == []
+
+
+def test_retry_budget_is_bounded_per_head() -> None:
+    failed = [run(run_id=80 + i, **FAILED) for i in range(3)]
+    client = FakeClient(pr(), run_pages=[failed])
+    receipt = _dispatch(client)
+    assert receipt["decision"] == "blocked"
+    assert receipt["reason_codes"] == ["retry-limit-reached"]
+    assert client.dispatch_calls == []
+    two = FakeClient(pr(), run_pages=[failed[:2], failed[:2] + [run(run_id=99)]])
+    assert _dispatch(two)["decision"] == "dispatched"
+
+
+def test_failed_run_on_other_head_does_not_consume_budget_or_block() -> None:
+    other = [run(run_id=70 + i, head_sha=OTHER_SHA, **FAILED) for i in range(5)]
+    client = FakeClient(pr(), run_pages=[other, other + [run(run_id=99)]])
+    assert _dispatch(client)["decision"] == "dispatched"
+
+
+def test_preexisting_recent_failed_run_is_not_correlated_as_the_new_run() -> None:
+    recent_failed = run(run_id=90, created_at=NOW - timedelta(seconds=3), **FAILED)
+    # The new run never appears: correlation must fail closed, not adopt run 90.
+    client = FakeClient(pr(), run_pages=[[recent_failed], [recent_failed], [recent_failed]])
+    receipt = _dispatch(client)
+    assert receipt["decision"] == "correlation-failed"
+    assert receipt["reason_codes"] == ["run-not-found"]
+    assert receipt["run_id_or_none"] is None
+    outcome, found = correlate_run(
+        [recent_failed], expected_head_sha=HEAD_SHA, dispatched_at=NOW, exclude_run_ids=frozenset()
+    )
+    assert outcome == "correlated" and found is not None  # excluded only when known pre-dispatch
+
+
+# Repair 4: detailed failure reasons survive into the receipt.
+
+
+class _HttpError(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+def test_dispatch_failure_preserves_http_status_reason() -> None:
+    class Failing(FakeClient):
+        def create_validation_dispatch(self, **kwargs: object) -> None:
+            raise _HttpError(403)
+
+    receipt = _dispatch(Failing(pr(), run_pages=[[]]))
+    assert receipt["reason_codes"] == ["dispatch-failed", "dispatch-failed-http-403"]
+    assert receipt["decision"] == "blocked"
+
+
+def test_pr_and_run_lookup_failures_are_receipted_not_raised() -> None:
+    class PrFails(FakeClient):
+        def get_pull_request(self, pr_number: int) -> PullRequestState:
+            raise _HttpError(404)
+
+    assert _dispatch(PrFails(pr(), run_pages=[]))["reason_codes"] == ["pr-lookup-failed", "pr-lookup-failed-http-404"]
+
+    class RunsFail(FakeClient):
+        def list_validation_dispatch_runs(self, **kwargs: object) -> list[WorkflowRunSummary]:
+            raise RuntimeError("boom")
+
+    assert _dispatch(RunsFail(pr(), run_pages=[]))["reason_codes"] == ["run-lookup-failed"]
+
+
+def _outputs(**overrides: str) -> dict:
+    values = dict(
+        decision="blocked",
+        reason_codes_csv="pr-not-draft,pr-head-mismatch",
+        run_id="",
+        observed_head_sha=OTHER_SHA,
+        run_status="",
+        run_conclusion="",
+        dispatch_trigger_id=TRIGGER_ID,
+    )
+    values.update(overrides)
+    return values
+
+
+def test_receipt_job_keeps_reason_codes_and_observed_head() -> None:
+    receipt = receipt_from_job_outputs(transport(), **_outputs())
+    assert receipt["decision"] == "blocked"
+    assert receipt["reason_codes"] == ["pr-not-draft", "pr-head-mismatch"]
+    assert receipt["observed_head_sha"] == OTHER_SHA
+    assert receipt["comment_id"] == 7001
+    comment = render_receipt_comment(receipt)
+    assert "pr-not-draft,pr-head-mismatch" in comment
+    assert OTHER_SHA in comment
+
+
+def test_receipt_job_carries_run_identity_and_status() -> None:
+    receipt = receipt_from_job_outputs(
+        transport(),
+        **_outputs(decision="duplicate", reason_codes_csv="duplicate-active-run", run_id="95",
+                   run_status="in_progress", run_conclusion=""),
+    )
+    assert receipt["run_id_or_none"] == 95
+    assert receipt["run_url_or_none"] == "https://github.com/Blummer92/agent-os/actions/runs/95"
+    assert receipt["run_status_or_none"] == "in_progress"
+    assert receipt["validation_executed"] is False
+
+
+def test_receipt_job_fails_closed_on_missing_or_malformed_outputs() -> None:
+    missing = receipt_from_job_outputs(transport(), **_outputs(decision="", reason_codes_csv="", observed_head_sha=""))
+    assert missing["decision"] == "blocked"
+    assert missing["reason_codes"] == ["dispatch-job-no-output"]
+    hostile = receipt_from_job_outputs(
+        transport(),
+        **_outputs(decision="dispatched", reason_codes_csv="ok`$(id)`", run_id="12; rm", observed_head_sha="zz"),
+    )
+    assert hostile["decision"] == "blocked"
+    assert hostile["run_id_or_none"] is None
+    assert hostile["observed_head_sha"] is None
+    mismatch = receipt_from_job_outputs(transport(), **_outputs(dispatch_trigger_id="issue-comment-trigger:" + "d" * 64))
+    assert mismatch["reason_codes"] == ["receipt-trigger-mismatch"]
