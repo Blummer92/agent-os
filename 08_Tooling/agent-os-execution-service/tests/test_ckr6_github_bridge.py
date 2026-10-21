@@ -307,6 +307,8 @@ def test_workflow_installs_repository_local_agent_os_runtime_graph_before_ckr6()
         "08_Tooling/reusable-capability-registry",
         "08_Tooling/agent-memory-context-manager",
         "08_Tooling/workflow-scheduler",
+        "src",
+        ".",
         "08_Tooling/agent-os-execution-service",
     )
     install_blocks = text.split("- name: Install existing Agent OS runtime")[1:]
