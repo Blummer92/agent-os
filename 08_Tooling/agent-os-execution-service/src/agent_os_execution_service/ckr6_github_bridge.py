@@ -606,6 +606,106 @@ def parse_ckr6_result_comment(body: object) -> dict[str, object]:
     return payload
 
 
+# #3502: host-observable states of one GitHub-ingress CKR6 request. Only a
+# correlated result comment can carry an admission; every other state is
+# capability or progress evidence and is never projected as admissible.
+INGRESS_PENDING_RUN_STATES = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
+INGRESS_OBSERVATION_STATES = frozenset({
+    "not-attempted",
+    "run-not-observed",
+    "pending",
+    "request-not-admitted",
+    "ingress-failed",
+    "result-not-returned",
+    "result-returned",
+})
+
+
+def classify_ckr6_ingress_observation(
+    *,
+    request_comment_id: int | None,
+    issue_comments: list[Mapping[str, object]],
+    run_status: str | None = None,
+    run_conclusion: str | None = None,
+    failed_step: str | None = None,
+    in_process_route_available: bool = False,
+) -> dict[str, object]:
+    """Classify what a host can observe about one ``/agent-os ckr6`` request (#3502).
+
+    Inputs are GitHub-readable facts only: the request comment id, the issue
+    comments posted after it, and the correlated Actions run status,
+    conclusion, and first failed step. A request whose run failed before a
+    result was posted (for example at runtime installation, run 39665727697)
+    is ``ingress-failed`` with the failed step named, never a lesson refusal
+    and never an admission. The next action reroutes to the canonical
+    in-process CKR6 owner when a capable surface exists, otherwise it is an
+    explicit capability blocker. No ``not-needed`` or ``sufficient`` outcome is
+    ever synthesized here.
+    """
+    if request_comment_id is not None and (type(request_comment_id) is not int or request_comment_id < 1):
+        raise ValueError("request_comment_id must be a positive integer or None")
+    if type(issue_comments) is not list:
+        raise TypeError("issue_comments must be a list")
+    if run_status is not None and type(run_status) is not str:
+        raise TypeError("run_status must be a string or None")
+    if run_conclusion is not None and type(run_conclusion) is not str:
+        raise TypeError("run_conclusion must be a string or None")
+    if failed_step is not None and (type(failed_step) is not str or not failed_step.strip()):
+        raise ValueError("failed_step must be non-empty text or None")
+    if type(in_process_route_available) is not bool:
+        raise TypeError("in_process_route_available must be a built-in bool")
+
+    reroute = "reroute-in-process-ckr6" if in_process_route_available else "report-ckr6-capability-blocker"
+
+    def observation(state: str, reasons: list[str], next_action: str, result: Mapping[str, object] | None = None) -> dict[str, object]:
+        admissible = result is not None and result.get("substantial_hypothesis_admissible") is True
+        return {
+            "state": state,
+            "request_comment_id": request_comment_id,
+            "result_status": result.get("status") if result is not None else None,
+            "result_reason_codes": list(result.get("reason_codes", [])) if result is not None else [],
+            "substantial_hypothesis_admissible": admissible,
+            "reason_codes": reasons,
+            "next_action": next_action,
+            "outcome_synthesized": False,
+            "execution_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+            "closure_authorized": False,
+        }
+
+    if request_comment_id is None:
+        return observation("not-attempted", ["ckr6-request-not-attempted"], "post-ckr6-request-or-" + reroute)
+
+    for comment in issue_comments:
+        if not isinstance(comment, Mapping):
+            raise TypeError("issue comments must be mappings")
+        try:
+            parsed = parse_ckr6_result_comment(comment.get("body"))
+        except (TypeError, ValueError):
+            continue
+        if parsed.get("request_comment_id") == request_comment_id:
+            status = parsed.get("status")
+            return observation(
+                "result-returned", [f"ckr6-result-returned:{status}"], "consume-ckr6-result", parsed
+            )
+
+    if run_status is None:
+        return observation("run-not-observed", ["ckr6-run-not-observed"], "reacquire-ckr6-run")
+    if run_status in INGRESS_PENDING_RUN_STATES:
+        return observation("pending", ["ckr6-run-pending"], "await-ckr6-result")
+    if run_status != "completed":
+        raise ValueError(f"unsupported run_status: {run_status!r}")
+    if run_conclusion == "skipped":
+        return observation(
+            "request-not-admitted", ["ckr6-request-not-admitted-by-ingress"], "repost-bounded-ckr6-request"
+        )
+    if failed_step is not None:
+        step = re.sub(r"[^a-z0-9]+", "-", failed_step.strip().lower()).strip("-")
+        return observation("ingress-failed", [f"ckr6-ingress-failed-before-result:{step}"], reroute)
+    return observation("result-not-returned", ["ckr6-result-not-returned"], reroute)
+
+
 def _fallback_result(repository: str, issue_number: int) -> dict[str, object]:
     """Bounded manual-review result when no CKR6 result evidence exists.
 
