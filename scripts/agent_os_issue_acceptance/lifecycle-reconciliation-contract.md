@@ -46,19 +46,33 @@ Callers supply immutable, already-normalized evidence for:
 - optional criterion-level satisfaction record (#3680): an evidence
   snapshot of the record produced by the #3678 verifier
   (`criterion_satisfaction.py`), handed over by the reporting-side
-  producer as a plain mapping — `{issue_body_digest, status, criteria}`
-  with one disposition and traceable evidence pointers per original
-  acceptance criterion. This approval-domain consumer imports nothing
-  from the reporting domain; it strictly validates the snapshot at the
-  input boundary (exact shape and types, contiguous criterion indexes,
-  and a declared status that must agree with the criteria under the
-  verifier's own derivation — a forged `complete` claim over
-  unsatisfied, stale, missing, contradicted, or absent criteria is
-  rejected, never interpreted as complete) and stores a defensive
-  copy, so later mutation of the caller's mapping cannot change
-  behavior. When the input carries no satisfaction record, input and
-  result serialization are byte-identical to the pre-#3680 form; the
-  manual judgment path below is unchanged.
+  producer as a plain mapping — `{repository, issue_number,
+  issue_body_digest, status, criteria}` with one disposition and
+  traceable evidence pointers per original acceptance criterion. This
+  approval-domain consumer imports nothing from the reporting domain;
+  it strictly validates the snapshot at the input boundary (exact
+  shape and types, contiguous criterion indexes, and a declared
+  status that must agree with the criteria under the verifier's own
+  derivation — a forged `complete` claim over unsatisfied, stale,
+  missing, contradicted, or absent criteria is rejected, never
+  interpreted as complete) and stores a defensive copy, so later
+  mutation of the caller's mapping cannot change behavior. The
+  envelope identity is enforced against the identity this consumer
+  already holds authoritatively: a snapshot whose `repository` or
+  `issue_number` names a different issue than the reconciliation
+  input's is rejected, so satisfaction evidence produced for one
+  issue cannot be attached to another undetected; the stored snapshot
+  classes enforce the same validation at construction, so no
+  hand-built instance can bypass the boundary rules. The identity
+  binding detects cross-issue attachment only — it does not
+  authenticate that the criteria or digest were produced from that
+  issue's body; provenance remains the producing verifier's and QA's
+  responsibility, and verifying the digest against the body itself
+  would require the body at this consumer, which is a producer/host
+  dependency outside this contract. When the input carries no
+  satisfaction record, input and result serialization are
+  byte-identical to the pre-#3680 form; the manual judgment path
+  below is unchanged.
 
 The component does not parse arbitrary issue, roadmap, PR, or comment prose.
 
@@ -90,10 +104,12 @@ admission or closure authority is represented explicitly; it never becomes an
 implicit mutation.
 
 When a satisfaction record is supplied, the result additionally carries a
-`satisfaction` block: the record's overall status, a `closure_ready` signal
-(true only when the record reports complete satisfaction — every criterion
-holds current, uncontradicted evidence), and the per-criterion dispositions
-and evidence pointers verbatim. The closure-ready reporting rule is:
+`satisfaction` block: the envelope issue identity (`repository` and
+`issue_number`) verbatim, the record's overall status, a `closure_ready`
+signal (true only when the record reports complete satisfaction — every
+criterion holds current, uncontradicted evidence), and the per-criterion
+dispositions and evidence pointers verbatim. The closure-ready reporting
+rule is:
 
 - In the merged-PR/open-issue case, an incomplete record (any criterion
   unsatisfied, stale, missing, contradicted, or manual-review) blocks the
@@ -113,14 +129,16 @@ and evidence pointers verbatim. The closure-ready reporting rule is:
 The closure-admission judgment packet produced by
 `closure_admission_actions.py` may cite the same record: when a closure
 request carries a satisfaction snapshot (validated at the request
-boundary under the same strict rules), the receipt includes the
-per-criterion dispositions and evidence pointers verbatim inside its
-hashed core, so the citation is integrity-bound by the receipt id and
-the verification gate revalidates the block and recomputes it under the
-same conditional rule. The receipt hash binds the cited block against
-later alteration of the receipt; it does not authenticate the evidence
-itself — authenticity rests with the producing verifier and the QA
-judgment, exactly as for the packet's other caller-bound fields. When
+boundary under the same strict rules, including the envelope identity
+checked against the closure decision's repository and issue number),
+the receipt includes the envelope identity, per-criterion dispositions,
+and evidence pointers verbatim inside its hashed core, so the citation
+is integrity-bound by the receipt id and the verification gate
+revalidates the block and recomputes it under the same conditional
+rule. The receipt hash binds the cited block against later alteration
+of the receipt; it does not authenticate the evidence itself —
+authenticity rests with the producing verifier and the QA judgment,
+exactly as for the packet's other caller-bound fields. When
 no record is carried, the receipt is byte-identical to the pre-#3680
 form.
 
