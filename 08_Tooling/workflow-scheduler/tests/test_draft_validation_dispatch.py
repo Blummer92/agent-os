@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from workflow_scheduler.governance.draft_validation_dispatch import (
+    MAX_RUNS_INSPECTED,
     PullRequestState,
     WorkflowRunSummary,
     correlate_run,
@@ -426,3 +429,113 @@ def test_receipt_job_fails_closed_on_missing_or_malformed_outputs() -> None:
     assert hostile["observed_head_sha"] is None
     mismatch = receipt_from_job_outputs(transport(), **_outputs(dispatch_trigger_id="issue-comment-trigger:" + "d" * 64))
     assert mismatch["reason_codes"] == ["receipt-trigger-mismatch"]
+
+
+# --- #2410 live defect: run lookup on a branch with no prior dispatch runs ---
+
+
+def _paginated_runs(items: list[dict]):
+    """A real PyGithub PaginatedList served through its real lazy fetch path.
+
+    The first page is fetched on demand (as in production), so an empty result
+    reproduces the live IndexError; no network access is possible.
+    """
+    pytest.importorskip("github")
+    from github.PaginatedList import PaginatedList
+    from github.WorkflowRun import WorkflowRun
+
+    class _CannedRequester:
+        per_page = 30
+        is_not_lazy = False
+
+        def requestJsonAndCheck(self, *args: object, **kwargs: object):
+            return {}, {"total_count": len(items), "workflow_runs": items}
+
+    return PaginatedList(
+        WorkflowRun,
+        _CannedRequester(),
+        "/repos/o/r/actions/workflows/w.yml/runs",
+        {},
+        list_item="workflow_runs",
+        total_count_item="total_count",
+    )
+
+
+class _FakeWorkflow:
+    def __init__(self, items: list[dict]) -> None:
+        self._items = items
+        self.calls: list[dict] = []
+
+    def get_runs(self, **kwargs: object):
+        self.calls.append(kwargs)
+        return _paginated_runs(self._items)
+
+
+def _client_over(items: list[dict]):
+    from workflow_scheduler.governance.draft_validation_dispatch import _PyGithubClient
+
+    client = object.__new__(_PyGithubClient)
+    client._workflow = _FakeWorkflow(items)  # type: ignore[attr-defined]
+    return client
+
+
+def _run_json(run_id: int, head_sha: str = HEAD_SHA) -> dict:
+    return {
+        "id": run_id,
+        "html_url": f"https://github.com/Blummer92/agent-os/actions/runs/{run_id}",
+        "head_sha": head_sha,
+        "created_at": "2026-10-21T14:00:05Z",
+        "status": "completed",
+        "conclusion": "failure",
+    }
+
+
+def test_run_lookup_with_no_prior_runs_returns_empty_instead_of_raising() -> None:
+    # Observed live: PyGithub 2.10.0 raised IndexError for runs[:50] on an empty
+    # PaginatedList, so the first dispatch on a fresh branch was always blocked.
+    client = _client_over([])
+    assert client.list_validation_dispatch_runs(head_ref="agent/x") == []
+    assert client._workflow.calls == [{"event": "workflow_dispatch", "branch": "agent/x"}]  # type: ignore[attr-defined]
+
+
+def test_run_lookup_returns_summaries_and_honours_the_inspection_cap() -> None:
+    client = _client_over([_run_json(101), _run_json(102, OTHER_SHA)])
+    found = client.list_validation_dispatch_runs(head_ref="agent/x")
+    assert [(r.run_id, r.head_sha) for r in found] == [(101, HEAD_SHA), (102, OTHER_SHA)]
+    assert found[0].status == "completed" and found[0].conclusion == "failure"
+
+    many = _client_over([_run_json(1000 + i) for i in range(MAX_RUNS_INSPECTED + 7)])
+    assert len(many.list_validation_dispatch_runs(head_ref="agent/x")) == MAX_RUNS_INSPECTED
+
+
+def test_first_dispatch_on_a_fresh_branch_reaches_dispatch_through_the_real_client_path() -> None:
+    # Full path: empty history -> dispatch allowed -> new run correlated.
+    class Fresh(FakeClient):
+        def __init__(self) -> None:
+            super().__init__(pr(), run_pages=[])
+            self._lookups = 0
+
+        def list_validation_dispatch_runs(self, *, head_ref: str) -> list[WorkflowRunSummary]:
+            self._lookups += 1
+            real = _client_over([]) if self._lookups == 1 else _client_over(
+                [{**_run_json(101), "created_at": NOW.isoformat().replace("+00:00", "Z")}]
+            )
+            return real.list_validation_dispatch_runs(head_ref=head_ref)
+
+    client = Fresh()
+    receipt = _dispatch(client)
+    assert receipt["decision"] == "dispatched", receipt
+    assert receipt["run_id_or_none"] == 101
+    assert len(client.dispatch_calls) == 1
+
+
+def test_lookup_failure_writes_exception_class_to_stderr_but_not_the_receipt(capsys) -> None:
+    class RunsFail(FakeClient):
+        def list_validation_dispatch_runs(self, **kwargs: object) -> list[WorkflowRunSummary]:
+            raise IndexError("list index out of range")
+
+    receipt = _dispatch(RunsFail(pr(), run_pages=[]))
+    assert receipt["reason_codes"] == ["run-lookup-failed"]
+    err = capsys.readouterr().err
+    assert "run-lookup-failed: IndexError: list index out of range" in err
+    assert "IndexError" not in str(receipt)
