@@ -16,6 +16,26 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+## Infrastructure-failure postback (#3691)
+
+The postback above lives in the `execute` job, so it cannot report a failure
+that prevents that job from running: when `classify` fails during checkout,
+Python setup, or the runtime `pip install` (live proof: run 39665727697,
+where the then-missing `agent-os-navigation-registry` distribution failed
+classification), `execute` is skipped by `needs: classify`, and the
+postback's own module is part of the install that failed. The workflow's
+`report-failure` job covers exactly that boundary. It runs only when the
+`classify` or `execute` job result is `failure` (a skipped classify —
+noncommand, PR comment, unauthorized actor — stays silent), holds job-scoped
+`issues: write`, and runs `scripts/ckr6_failure_postback.py`: a
+standard-library-only reporter that installs nothing, revalidates the event
+repository/issue/actor/command prefix, and posts the same bounded fallback
+result (`status: manual-review`, `reason_codes: [ckr6-result-unavailable]`,
+all authority flags false) under the same `agent-os-ckr6-result:v1` marker,
+correlated and deduplicated by `request_comment_id`. It adds no CKR6
+decision, scheduler, or second writer — it is the same single postback,
+reachable when the runtime is not.
+
 ## Failed-repair diagnostic postback (#2851)
 
 The existing failed-repair CKR6 activation produces two independent, finite
