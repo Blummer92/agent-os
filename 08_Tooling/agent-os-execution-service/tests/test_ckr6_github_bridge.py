@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -300,21 +302,48 @@ def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeyp
     assert result["github_writes_authorized"] is False
 
 
+def _local_runtime_closure(root: Path) -> set[str]:
+    """Repository-relative project paths of every first-party distribution the
+    execution service needs, derived from the declared ``pyproject.toml``
+    dependencies so a newly declared local distribution (#3197, #3502) cannot
+    be missed by a hand-maintained list."""
+    def canonical(name: str) -> str:
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    excluded = {"06_Archive", "03_Templates", "node_modules", "build", "dist", ".venv", "venv", ".git"}
+    projects: dict[str, tuple[str, list[str]]] = {}
+    for path in root.rglob("pyproject.toml"):
+        relative = path.parent.relative_to(root)
+        if excluded & set(relative.parts):
+            continue
+        project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
+        if project.get("name"):
+            projects[canonical(project["name"])] = (relative.as_posix(), list(project.get("dependencies", [])))
+    closure: set[str] = set()
+    pending = [canonical("agent-os-execution-service")]
+    while pending:
+        location, requirements = projects[pending.pop()]
+        if location in closure:
+            continue
+        closure.add(location)
+        for requirement in requirements:
+            name = canonical(re.match(r"[A-Za-z0-9._-]+", requirement).group(0))
+            if name in projects:
+                pending.append(name)
+    return closure
+
+
 def test_workflow_installs_repository_local_agent_os_runtime_graph_before_ckr6():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
-    local_projects = (
-        "08_Tooling/reusable-capability-registry",
-        "08_Tooling/agent-memory-context-manager",
-        "08_Tooling/workflow-scheduler",
-        "08_Tooling/agent-os-execution-service",
-    )
+    local_projects = _local_runtime_closure(root)
+    assert {"08_Tooling/workflow-scheduler", "08_Tooling/agent-os-execution-service"} <= local_projects
     install_blocks = text.split("- name: Install existing Agent OS runtime")[1:]
     assert len(install_blocks) == 2
     for block in install_blocks:
         bounded = block.split("\n\n", 1)[0]
-        for project in local_projects:
-            assert f"-e {project}" in bounded
+        installed = set(re.findall(r"^\s*-e\s+(\S+?)\s*\\?$", bounded, re.MULTILINE))
+        assert local_projects <= installed, sorted(local_projects - installed)
         assert bounded.index("reusable-capability-registry") < bounded.index("workflow-scheduler")
         assert bounded.index("agent-memory-context-manager") < bounded.index("agent-os-execution-service")
         assert bounded.index("workflow-scheduler") < bounded.index("agent-os-execution-service")
