@@ -35,7 +35,45 @@ def test_ready_admission_job_has_no_write_steps_or_generic_execution():
     assert "workflow_scheduler.governance.github_issue_comment_ingress" in text
 
 
+ORIGINAL_JOBS = ["ingress", "refresh_pr", "ready_admission", "merge_admission"]
+# #2410: the only additional jobs authorized in this workflow.
+DRAFT_VALIDATION_JOBS = ["draft_validation_dispatch", "draft_validation_receipt"]
+
+
 def test_existing_jobs_unchanged_in_shape():
     jobs = list(_workflow()["jobs"])
-    assert jobs[:3] == ["ingress", "refresh_pr", "ready_admission"]
-    assert jobs[3:] == ["merge_admission"]
+    # The original four jobs are preserved, in order and first.
+    assert jobs[: len(ORIGINAL_JOBS)] == ORIGINAL_JOBS
+    # Exactly the two authorized #2410 jobs follow; any other job fails closed.
+    assert jobs[len(ORIGINAL_JOBS):] == DRAFT_VALIDATION_JOBS
+
+
+def test_draft_validation_dispatch_job_has_only_the_bounded_permissions():
+    job = _workflow()["jobs"]["draft_validation_dispatch"]
+    assert job["permissions"] == {
+        "actions": "write", "contents": "read", "pull-requests": "read"}
+
+
+def test_draft_validation_receipt_job_has_no_actions_authority():
+    job = _workflow()["jobs"]["draft_validation_receipt"]
+    assert job["permissions"] == {"contents": "read", "issues": "write"}
+    assert job["needs"] == "draft_validation_dispatch"
+
+
+def test_draft_validation_jobs_are_owner_scoped_main_only_and_fixed_form():
+    for name in DRAFT_VALIDATION_JOBS:
+        condition = _workflow()["jobs"][name]["if"]
+        assert "github.event.issue.pull_request == null" in condition
+        assert "github.ref == 'refs/heads/main'" in condition
+        assert "github.event.comment.user.id == 32861845" in condition
+        assert "startsWith(github.event.comment.body, '/agent-os validate-draft ')" in condition
+    ingress_condition = _workflow()["jobs"]["ingress"]["if"]
+    assert "!startsWith(github.event.comment.body, '/agent-os validate-draft')" in ingress_condition
+
+
+def test_only_the_dispatch_job_can_hold_actions_write():
+    for name, job in _workflow()["jobs"].items():
+        grants = job.get("permissions", {})
+        if name == "draft_validation_dispatch":
+            continue
+        assert not (isinstance(grants, dict) and grants.get("actions") == "write"), name
