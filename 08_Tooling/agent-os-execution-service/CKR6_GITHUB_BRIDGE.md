@@ -107,22 +107,3 @@ may use the anchor-free API form
 `https://api.github.com/repos/Blummer92/agent-os/issues/comments/<id>`, because
 a host write route was observed rewriting `#issuecomment-` anchors in comment
 bodies (comment 6080494403); the `#issuecomment` form remains valid.
-
-## Host observation of an ingress request (#3502)
-
-`classify_ckr6_ingress_observation(...)` classifies what a host can observe
-about one `/agent-os ckr6` request from GitHub-readable facts only: the request
-comment id, the issue comments posted after it, and the correlated Actions run
-status, conclusion and first failed step. The finite states are
-`not-attempted`, `run-not-observed`, `pending`, `request-not-admitted`,
-`ingress-failed`, `result-not-returned` and `result-returned`.
-
-Only `result-returned` with a correlated `<!-- agent-os-ckr6-result:v1 -->`
-comment can carry `substantial_hypothesis_admissible=true`, copied from that
-canonical result. A run that failed before posting a result (run 39665727697
-failed at `Install existing Agent OS runtime`) is `ingress-failed` with the step
-named in `ckr6-ingress-failed-before-result:<step>`: capability evidence, never
-a lesson refusal and never an admission. Its next action is
-`reroute-in-process-ckr6` when a surface that can run the canonical in-process
-owner is available, otherwise `report-ckr6-capability-blocker`. The classifier
-never synthesizes `not-needed` or `sufficient` and grants no authority.
