@@ -19,9 +19,11 @@ never merges, and never closes an issue.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -184,7 +186,13 @@ def _base_receipt(transport: dict) -> dict:
 
 
 def _failure_reasons(code: str, exc: Exception) -> list[str]:
-    """Primary reason code plus an HTTP status detail when the error carries one."""
+    """Primary reason code plus an HTTP status detail when the error carries one.
+
+    The exception class and a bounded one-line message go to stderr (job log
+    only, never the receipt) so a non-HTTP failure stays diagnosable.
+    """
+    detail = " ".join(str(exc).split())[:300]
+    print(f"{code}: {type(exc).__name__}: {detail}", file=sys.stderr)
     status = getattr(exc, "status", None)
     if type(status) is int and 100 <= status <= 599:
         return [code, f"{code}-http-{status}"]
@@ -406,7 +414,9 @@ class _PyGithubClient:
     ) -> list[WorkflowRunSummary]:
         runs = self._workflow.get_runs(event="workflow_dispatch", branch=head_ref)
         summaries: list[WorkflowRunSummary] = []
-        for run in runs[:MAX_RUNS_INSPECTED]:
+        # islice, not runs[:N]: PyGithub 2.10.0 raises IndexError when slicing an
+        # empty PaginatedList, i.e. for the first dispatch on a fresh branch.
+        for run in itertools.islice(runs, MAX_RUNS_INSPECTED):
             summaries.append(
                 WorkflowRunSummary(
                     run_id=run.id,
