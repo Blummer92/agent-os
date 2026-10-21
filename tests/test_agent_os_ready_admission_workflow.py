@@ -77,3 +77,16 @@ def test_only_the_dispatch_job_can_hold_actions_write():
         if name == "draft_validation_dispatch":
             continue
         assert not (isinstance(grants, dict) and grants.get("actions") == "write"), name
+
+
+def test_draft_validation_jobs_do_not_persist_checkout_credentials():
+    # The dispatch job holds actions: write; its checkout must not leave the job
+    # token in .git/config for a later-installed dependency to read.
+    for name in DRAFT_VALIDATION_JOBS:
+        checkouts = [
+            step for step in _workflow()["jobs"][name]["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        assert checkouts, name
+        for step in checkouts:
+            assert step.get("with", {}).get("persist-credentials") is False, name

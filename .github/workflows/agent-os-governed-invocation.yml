@@ -797,6 +797,10 @@ jobs:
     steps:
       - name: Check out canonical workflow source
         uses: actions/checkout@v7
+        with:
+          # No later step runs git against the remote; do not leave the job
+          # token in .git/config where an installed dependency could read it.
+          persist-credentials: false
 
       - name: Install bounded dispatch runtime dependencies
         run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
@@ -884,6 +888,10 @@ jobs:
     steps:
       - name: Check out canonical workflow source
         uses: actions/checkout@v7
+        with:
+          # No later step runs git against the remote; do not leave the job
+          # token in .git/config where an installed dependency could read it.
+          persist-credentials: false
 
       - name: Install bounded receipt runtime dependencies
         run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
