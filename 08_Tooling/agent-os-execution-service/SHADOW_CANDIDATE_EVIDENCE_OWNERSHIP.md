@@ -95,7 +95,7 @@ The read-only shadow CLI accepts `--association-policy declared-non-closing-v1`.
 Since the owner's 2026-10-21 default-activation authorization, this is the CLI
 default; omitting the flag selects `declared-non-closing-v1`, and
 `closing-directive-v1` remains available as an explicit option.
-No existing workflow or composite action default changes.
+No workflow or composite-action file is edited by this PR. However, the existing shadow workflow invokes the CLI without an explicit `--association-policy`, so its runtime association behavior inherits the new CLI default (`declared-non-closing-v1`). This is an effect of the CLI change, not a separate workflow-file modification.
 The existing `parse_pr` parser remains the sole PR-linkage authority.
 
 Under this policy, parser `INFORMATIONAL` qualifies as an association when its
