@@ -99,7 +99,7 @@ def _name_from_url(value: object) -> str | None:
     return value.rsplit("/", 1)[-1][:160]
 
 
-def _cloud_inventory(run: Run) -> dict[str, object]:
+def _cloud_inventory(run: Run) -> tuple[dict[str, object], list[str]]:
     instance = _run_json(
         run,
         (
@@ -111,14 +111,18 @@ def _cloud_inventory(run: Run) -> dict[str, object]:
     if type(instance) is not dict:
         raise ValueError("retirement-instance-malformed")
 
+    reasons: list[str] = []
     disks = []
     for item in _bounded_list(instance.get("disks", []), "retirement-disks-malformed"):
         if type(item.get("autoDelete")) is not bool:
-            raise ValueError("retirement-disk-autodelete-unobserved")
+            reasons.append("retirement-disk-autodelete-unobserved")
+        if type(item.get("source")) is not str or not item.get("source").startswith(f"projects/{PROJECT}/zones/{ZONE}/disks/"):
+            reasons.append("retirement-disk-identity-unobserved")
         disks.append({
             "source": _name_from_url(item.get("source")),
+            "source_resource": item.get("source") if type(item.get("source")) is str and item.get("source").startswith(f"projects/{PROJECT}/zones/{ZONE}/disks/") else "UNKNOWN",
             "boot": item.get("boot") is True,
-            "auto_delete": item.get("autoDelete") is True,
+            "auto_delete": item.get("autoDelete") if type(item.get("autoDelete")) is bool else "UNKNOWN",
             "mode": item.get("mode") if type(item.get("mode")) is str else None,
         })
 
@@ -148,27 +152,24 @@ def _cloud_inventory(run: Run) -> dict[str, object]:
     if len(keys) != len(metadata_items):
         raise ValueError("retirement-metadata-malformed")
 
-    snapshots_raw = _run_json(
-        run,
-        ("gcloud", "compute", "snapshots", "list", "--project", PROJECT, "--format=json(name,sourceDisk,status)"),
-        "retirement-snapshot-read-failed",
-    )
-    snapshots = [
-        {"name": item.get("name"), "source_disk": _name_from_url(item.get("sourceDisk")), "status": item.get("status")}
-        for item in _bounded_list(snapshots_raw, "retirement-snapshots-malformed")
-        if type(item.get("name")) is str
-    ]
-
-    images_raw = _run_json(
-        run,
-        ("gcloud", "compute", "images", "list", "--project", PROJECT, "--no-standard-images", "--format=json(name,sourceDisk,status)"),
-        "retirement-image-read-failed",
-    )
-    images = [
-        {"name": item.get("name"), "source_disk": _name_from_url(item.get("sourceDisk")), "status": item.get("status")}
-        for item in _bounded_list(images_raw, "retirement-images-malformed")
-        if type(item.get("name")) is str
-    ]
+    snapshots: list[dict[str, object]] | str = "UNKNOWN"
+    images: list[dict[str, object]] | str = "UNKNOWN"
+    for kind, argv, failure in (
+        ("snapshots", ("gcloud", "compute", "snapshots", "list", "--project", PROJECT, "--format=json(name,sourceDisk,status)"), "retirement-snapshot-read-failed"),
+        ("images", ("gcloud", "compute", "images", "list", "--project", PROJECT, "--no-standard-images", "--format=json(name,sourceDisk,status)"), "retirement-image-read-failed"),
+    ):
+        try:
+            raw = _run_json(run, argv, failure)
+            entries = _bounded_list(raw, "retirement-" + kind + "-malformed")
+            values = [{"name": item.get("name"), "source_disk": _name_from_url(item.get("sourceDisk")), "status": item.get("status")} for item in entries if type(item.get("name")) is str]
+            if len(values) != len(entries):
+                raise ValueError("retirement-" + kind + "-malformed")
+            if kind == "snapshots":
+                snapshots = values
+            else:
+                images = values
+        except ValueError as exc:
+            reasons.append(str(exc))
 
     return {
         "status": instance.get("status") if type(instance.get("status")) is str else "UNKNOWN",
@@ -180,7 +181,7 @@ def _cloud_inventory(run: Run) -> dict[str, object]:
         "snapshots": snapshots,
         "images": images,
         "metadata_values_emitted": False,
-    }
+    }, reasons
 
 
 def _extract_host_payload(stdout: str) -> dict[str, object]:
@@ -203,7 +204,7 @@ def _extract_host_payload(stdout: str) -> dict[str, object]:
     return payload
 
 
-def collect_retirement_inventory(run: Run, host_run: HostRun) -> dict[str, object]:
+def collect_retirement_inventory(run: Run, host_run: HostRun | None = None) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "1.0",
         "status": "needs-decision",
@@ -225,9 +226,15 @@ def collect_retirement_inventory(run: Run, host_run: HostRun) -> dict[str, objec
     }
     reasons = [f"retirement-{key}-unobserved" for key in UNOBSERVED_EVIDENCE]
     try:
-        result["cloud"] = _cloud_inventory(run)
+        cloud, cloud_reasons = _cloud_inventory(run)
+        result["cloud"] = cloud
+        reasons.extend(cloud_reasons)
     except ValueError as exc:
         reasons.append(str(exc)[:160])
+    if host_run is None:
+        reasons.append("retirement-host-unavailable")
+        result["reason_codes"] = reasons
+        return result
     try:
         host = host_run(HOST_RETIREMENT_INVENTORY_COMMAND)
         if host.returncode != 0:
