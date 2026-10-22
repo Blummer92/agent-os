@@ -5,7 +5,7 @@ Issue: #3697. Measurement owner: #520. Existing aggregate/suite timing owner:
 
 ## Pilot outcome
 
-**Adoption deferred on the pilot host: the profiler could not be installed.**
+**Adoption deferred on the original pilot host (2026-10-21): the profiler could not be installed through that host's tested package routes.**
 This is an observed package-access limitation, not evidence that py-spy is
 incompatible with Agent OS or that process-memory access is denied. No profiler
 wrapper, dependency, CI tracing, workflow, or runtime change is introduced.
@@ -30,8 +30,29 @@ was attempted. Flamegraph count and profile sample count are both **0**.
 A bounded download attempt for the upstream v0.4.2 Linux x86_64 wheel also
 returned HTTP 403 (`curl --fail --location`, exit 22); no binary was obtained.
 Sampling overhead, attach permissions, launch-mode permissions and runtime
-compatibility remain **unmeasured**. The failed package lookup is not a profile
-and must never be reported as successful measurement.
+compatibility remained **unmeasured on that original pilot host**. The failed
+package lookup is not a profile and must never be reported as successful
+measurement.
+
+### Later independent QA capability observation (2026-10-21)
+
+The four-lane independent acceptance review reported that **a different QA host**
+installed `py-spy 0.4.2` and ran it without elevated privileges. It reported a
+synthetic run of 330 samples and a run against the actual readiness test suite
+of 76 samples with an approximately 216 KB flamegraph. Those observations
+contradict any *general* claim that py-spy cannot be installed or launched;
+they do **not** invalidate the original host-specific install failures above.
+This section is secondary evidence from that QA report, **not a profiling run
+performed by this documentation repair**. Full reproduction provenance
+(exact profiling source SHA, host details, command, profile digest, sampling
+errors, wall duration and raw profile) was not supplied in the acceptance
+summary and is **NOT VERIFIED** here; it must not be guessed or backfilled.
+
+The synthetic run is not representative Agent OS performance evidence. The
+readiness suite completed too quickly in the companion timing pilot to justify
+claiming an expensive hotspot. Neither QA smoke test identifies a verified
+expensive hot path or establishes sampling overhead; AC-3 remains open until
+an evidence-selected representative target is profiled and interpreted.
 
 ## Measured target selection
 
@@ -138,11 +159,13 @@ The normal CI path must not run twice to collect either number.
 
 ## Follow-up and acceptance boundary
 
-A capable host must still install and verify the tool, select a measured target,
-execute launch mode, inspect bounded output, measure/qualify overhead and obtain
-independent QA before a successful profiling capability is claimed. This pilot
-provides reproducible instructions and an evidence-backed limitation only;
-there are no observed hot functions or justified optimization recommendations.
+Although subsequent independent QA demonstrated that py-spy 0.4.2 could install
+and launch without elevated privileges on its host, a representative expensive
+Agent OS target still needs selection from #520/#1359 timing evidence, a bounded
+profiling run with full exact-source provenance, inspected hot-path output,
+qualified overhead, and independent QA of those findings before AC-3 is met.
+This documented pilot plus subsequent QA smoke test do **not** establish
+concrete hot functions or justified optimization recommendations.
 No fallback profiler or second performance framework is introduced.
 
 Rollback is removal of this document. No persistent runtime state, repository
