@@ -70,7 +70,8 @@ One focused execution used unchanged source files from main
 - Result: **43 passed in 0.21s**, exit 0, one suite execution.
 - Flags: `--durations=20 --durations-min=0`, with an optional local JUnit output.
 - Environment: Linux x86_64, Python 3.12.14; pytest 8.4.2 upstream source,
-  iniconfig 2.1.0 upstream source, pluggy 1.6.0 upstream source.
+  iniconfig 2.1.0 upstream source, pluggy 1.6.0 upstream source;
+  auto-loaded hypothesis plugin 6.98.15 (shown in the captured session header).
 - Sample count: one local session; no representative 30-day CI population.
 - The top 20 entries were call phases, all displayed as `0.00s`. The first ranked
   node was `test_legacy_build_issue_headings_are_recognized_but_require_tier_decision`.
@@ -85,7 +86,7 @@ read-only GitHub access. This was a selected-source snapshot, not a complete
 checkout or aggregate/exact-head CI run. pytest and its missing dependencies were
 materialized separately from pinned upstream tags; their generated version
 metadata was supplied locally. No runtime dependency sources or bootstrap files
-are added to Agent OS. The test module, fixtures, evaluator modules and pytest configuration retained their fetched contents. An empty local package initializer was used to load only the evaluator dependency subset; the repository package initializer and its unrelated export graph were not executed. This means package import/startup behavior was not reproduced. No such initializer change is published to the repository.
+are added to Agent OS. The test module, fixtures, evaluator modules and pytest configuration retained their fetched content apart from transport-added trailing newlines (no semantic source changes). An empty local package initializer was used to load only the evaluator dependency subset; the repository package initializer and its unrelated export graph were not executed. This means package import/startup behavior was not reproduced. No such initializer change is published to the repository.
 The pilot used the same Python test command with only the reporting flags and
 an optional JUnit path added, with local import paths supplying those sources.
 
