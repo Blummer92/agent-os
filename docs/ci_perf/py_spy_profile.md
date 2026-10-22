@@ -33,6 +33,19 @@ Sampling overhead, attach permissions, launch-mode permissions and runtime
 compatibility remain **unmeasured**. The failed package lookup is not a profile
 and must never be reported as successful measurement.
 
+## Measured target selection
+
+The companion #3695 pilot executed the current-main
+`tests/agent_os_issue_acceptance/test_readiness.py` suite once with
+`--durations=20 --durations-min=0`: **43 passed in 0.21 s**. All displayed top-20
+call phases rounded to 0.00 s. The first ranked node was
+`test_legacy_build_issue_headings_are_recognized_but_require_tier_decision`,
+but that rank does not establish an expensive function or fixture.
+One short-suite sample cannot justify an expensive-hotspot claim. Target
+selection therefore remains deferred; no synthetic repetition is used to
+manufacture a long-running profiling target. No flamegraph or hot-path
+conclusion is claimed for this suite.
+
 ## Least-privilege reproduction on a capable development host
 
 First use actual #520/#1359 timing or pytest duration evidence to select at most
