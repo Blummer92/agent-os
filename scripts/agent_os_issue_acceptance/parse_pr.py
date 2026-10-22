@@ -404,6 +404,75 @@ def missing_final_report_fields(pr_body: str) -> list[str]:
     return [field for field in REQUIRED_PR_FIELDS if not has_markdown_heading(pr_body, field)]
 
 
+_VALIDATION_COMMAND_RE = re.compile(
+    r"^(?:"
+    r"(?:\./)?scripts/validate-all\.sh"
+    r"|(?:\./)?scripts/validate-repo-structure\.sh"
+    r"|validate-all\.sh"
+    r"|validate-repo-structure\.sh"
+    r"|(?:python\d*(?:\.\d+)?[ \t]+-m[ \t]+)?pytest"
+    r"|gcloud[ \t]+builds?\b"
+    r"|cloudbuild\b"
+    r")(?:[ \t]|$)"
+)
+_VALIDATION_NEGATION_RE = re.compile(
+    r"\b(?:not[ \t]+(?:run|performed|executed)|did[ \t]+not[ \t]+run|was[ \t]+not[ \t]+(?:run|performed|executed)|never[ \t]+(?:run|ran)|no[ \t]+\S+[ \t]+(?:was[ \t]+)?(?:run|performed|executed))\b"
+)
+
+
 def has_validation_command(pr_body: str) -> bool:
-    lowered = (pr_body or "").lower()
-    return any(command in lowered for command in ["validate-all.sh", "pytest", "validate-repo-structure.sh", "cloud build", "cloudbuild"])
+    """True only for a command-shaped validation invocation (E2, #3506).
+
+    A bare substring mention of ``pytest`` (or a validator name) in prose
+    is not execution evidence, and a negated statement such as "no pytest
+    run was performed" must never satisfy this check. A line counts only
+    when, after stripping list markers / code-fence markers, it *starts*
+    with the validation command (optionally after a ``run:`` style label),
+    and the line carries no negation of the run.
+    """
+    for raw_line in (pr_body or "").splitlines():
+        line = raw_line.strip().lower()
+        # Strip markdown list / quote / checkbox markers and code fences.
+        line = re.sub(r"^(?:[-*+>]\s+|\[[ x]\]\s*)+", "", line)
+        line = line.strip("` ")
+        # Allow a short imperative label such as "run:" / "ran:".
+        line = re.sub(r"^(?:run|ran|command|validation)[ \t]*:[ \t]*", "", line)
+        if not line:
+            continue
+        if _VALIDATION_NEGATION_RE.search(line):
+            continue
+        if "not run" in line or "was not" in line or "did not" in line:
+            continue
+        if _VALIDATION_COMMAND_RE.match(line):
+            return True
+    return False
+
+
+def report_only_issue_number(result: LinkedIssueParseResult) -> int | None:
+    """Issue number a report-only evaluation may fetch, or None (E4, #3506).
+
+    RESOLVED already carries its single authoritative issue. An
+    INFORMATIONAL (declared non-closing) result may be evaluated
+    report-only only when its association is unambiguous: exactly one
+    distinct bare target, in this repository. It never resolves an
+    issue for closure -- ``parse_linked_issue_result`` still returns
+    ``issue_number=None`` for INFORMATIONAL -- this helper exists solely
+    so a workflow / CLI consumer can fetch that one issue's body for
+    evaluation. Ambiguous (multiple distinct targets) or
+    repository-qualified associations return None and remain
+    manual-review.
+    """
+    if result.status == LinkedIssueParseStatus.RESOLVED:
+        return result.issue_number
+    if result.status != LinkedIssueParseStatus.INFORMATIONAL:
+        return None
+    targets = {
+        candidate.issue_number
+        for candidate in result.bare_references
+        if candidate.repository is None
+    }
+    if len(targets) != 1:
+        return None
+    if any(candidate.repository is not None for candidate in result.bare_references):
+        return None
+    return next(iter(targets))
