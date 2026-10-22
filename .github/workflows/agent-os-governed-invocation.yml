@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') && !startsWith(github.event.comment.body, '/agent-os validate-draft') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
@@ -771,3 +771,168 @@ jobs:
           path: ${{ runner.temp }}/agent-os-merge-admission/*.json
           if-no-files-found: warn
           retention-days: 7
+
+  draft_validation_dispatch:
+    name: Dispatch bounded Draft final-candidate validation
+    # #2410: fixed operation only. The grammar, target workflow identity, and
+    # admission are owned by workflow_scheduler.governance modules running
+    # from the canonical default-branch source. This job is the sole holder
+    # of Actions write authority in this workflow; its token is confined to this job.
+    # It dispatches the existing validation workflow for one open Draft PR at
+    # its exact head. It never marks a PR Ready, merges, or closes an issue.
+    if: ${{ github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    outputs:
+      decision: ${{ steps.dispatch.outputs.decision }}
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      trigger_id: ${{ steps.dispatch.outputs.trigger_id }}
+      reason_codes: ${{ steps.dispatch.outputs.reason_codes }}
+      observed_head_sha: ${{ steps.dispatch.outputs.observed_head_sha }}
+      run_status: ${{ steps.dispatch.outputs.run_status }}
+      run_conclusion: ${{ steps.dispatch.outputs.run_conclusion }}
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+        with:
+          # No later step runs git against the remote; do not leave the job
+          # token in .git/config where an installed dependency could read it.
+          persist-credentials: false
+
+      - name: Install bounded dispatch runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
+
+      - name: Parse low-trust issue comment envelope
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-draft-validation"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/transport.json"
+
+      - name: Verify, deduplicate, dispatch, and correlate
+        id: dispatch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.draft_validation_dispatch \
+              --mode dispatch \
+              --transport "$RUNNER_TEMP/agent-os-draft-validation/transport.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/receipt.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          receipt = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "agent-os-draft-validation" / "receipt.json").read_text()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"decision={receipt.get('decision')}\n")
+              output.write(f"run_id={receipt.get('run_id_or_none') or ''}\n")
+              output.write(f"trigger_id={receipt.get('trigger_id') or ''}\n")
+              output.write(f"reason_codes={','.join(receipt.get('reason_codes') or [])}\n")
+              output.write(f"observed_head_sha={receipt.get('observed_head_sha') or ''}\n")
+              output.write(f"run_status={receipt.get('run_status_or_none') or ''}\n")
+              output.write(f"run_conclusion={receipt.get('run_conclusion_or_none') or ''}\n")
+          PY
+
+      - name: Publish bounded dispatch summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-draft-validation" / "receipt.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS Draft final-candidate validation dispatch (#2410)\n\n")
+              summary.write("A dispatch is not validation; this job grants no Ready, merge, or closure authority.\n\n")
+              if not path.exists():
+                  summary.write("Receipt unavailable; fail closed.\n")
+              else:
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Decision: `{receipt.get('decision')}`\n\n")
+                  summary.write(f"Reasons: `{','.join(receipt.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Run ID: `{receipt.get('run_id_or_none')}`\n\n")
+                  summary.write(f"Run URL: {receipt.get('run_url_or_none')}\n")
+          PY
+
+      - name: Publish bounded dispatch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-draft-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-draft-validation/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  draft_validation_receipt:
+    name: Publish Draft validation dispatch receipt
+    # #2410: receipt publication is a separate job holding issues: write and
+    # no Actions authority. Posting is idempotent: an existing receipt for
+    # the same trigger ID is never duplicated.
+    needs: draft_validation_dispatch
+    if: ${{ always() && github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+        with:
+          # No later step runs git against the remote; do not leave the job
+          # token in .git/config where an installed dependency could read it.
+          persist-credentials: false
+
+      - name: Install bounded receipt runtime dependencies
+        run: python -m pip install PyGithub==2.10.0 PyYAML==6.0.3
+
+      - name: Parse low-trust issue comment envelope
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-draft-validation"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/transport.json"
+
+      - name: Assemble receipt from dispatch job outputs
+        env:
+          DISPATCH_DECISION: ${{ needs.draft_validation_dispatch.outputs.decision }}
+          DISPATCH_RUN_ID: ${{ needs.draft_validation_dispatch.outputs.run_id }}
+          DISPATCH_TRIGGER_ID: ${{ needs.draft_validation_dispatch.outputs.trigger_id }}
+          DISPATCH_REASON_CODES: ${{ needs.draft_validation_dispatch.outputs.reason_codes }}
+          DISPATCH_OBSERVED_HEAD_SHA: ${{ needs.draft_validation_dispatch.outputs.observed_head_sha }}
+          DISPATCH_RUN_STATUS: ${{ needs.draft_validation_dispatch.outputs.run_status }}
+          DISPATCH_RUN_CONCLUSION: ${{ needs.draft_validation_dispatch.outputs.run_conclusion }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.draft_validation_dispatch \
+              --mode assemble \
+              --transport "$RUNNER_TEMP/agent-os-draft-validation/transport.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/receipt.json"
+
+      - name: Post idempotent receipt comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.draft_validation_dispatch \
+              --mode receipt \
+              --receipt "$RUNNER_TEMP/agent-os-draft-validation/receipt.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --issue-number "$ISSUE_NUMBER" \
+              --output "$RUNNER_TEMP/agent-os-draft-validation/receipt-publication.json"

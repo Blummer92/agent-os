@@ -404,6 +404,171 @@ def missing_final_report_fields(pr_body: str) -> list[str]:
     return [field for field in REQUIRED_PR_FIELDS if not has_markdown_heading(pr_body, field)]
 
 
+_VALIDATION_COMMAND_RE = re.compile(
+    r"^(?:"
+    r"(?P<script>(?:\./)?scripts/validate-all\.sh|(?:\./)?scripts/validate-repo-structure\.sh|validate-all\.sh|validate-repo-structure\.sh)"
+    r"|(?P<pytest>(?:python\d*(?:\.\d+)?[ \t]+-m[ \t]+)?pytest)"
+    r"|(?P<gcloud>gcloud[ \t]+builds?)"
+    r"|(?P<cloudbuild>cloudbuild)"
+    r")(?P<rest>(?:[ \t].*)?)$"
+)
+# Phrasings that describe a run that did not happen (or has not happened
+# yet), wherever they appear on the line: negations, perfect-tense and
+# contracted negations, "skipped", and future/modal plans. A line
+# carrying any of these never counts as validation evidence, even when
+# it starts with a command token (independent QA bypass set, 2026-10-22).
+_VALIDATION_NEGATION_RE = re.compile(
+    r"\b(?:skipped|pending|omitted|deferred|cancelled|canceled|postponed|scheduled|tomorrow|won't|aren't|wasn't|weren't|isn't|doesn't|don't|not[ \t]+run|not[ \t]+performed|not[ \t]+executed|not[ \t]+yet|not[ \t]+actually|has[ \t]+not|have[ \t]+not|had[ \t]+not|hasn't|haven't|didn't|did[ \t]+not|was[ \t]+not|were[ \t]+not|never[ \t]+(?:run|ran)|will[ \t]+(?:be[ \t]+)?run|to[ \t]+be[ \t]+run|should[ \t]+be[ \t]+run|must[ \t]+be[ \t]+run|needs?[ \t]+to[ \t]+be[ \t]+run|run[ \t]+later)\b"
+)
+# Negation / non-performance stems, checked per token part (tokens are
+# split on "-" and "_") so hyphenated forms such as "not-run" cannot
+# smuggle a negation past the line scan, while real flags (tokens
+# starting with "-") are exempt. Re-QA bypass set RB-3, 2026-10-22.
+# M02 (mutation-escape repair, 2026-10-22) adds the non-execution stems
+# abandoned / dropped / ignored / waived / unrun / aborted / blocked /
+# incomplete, which the earlier sets did not name at all.
+_NEGATION_TOKEN_PARTS = frozenset({
+    "not", "non", "never", "skip", "skipped", "pending", "omitted", "deferred",
+    "cancelled", "canceled", "postponed", "scheduled", "tomorrow",
+    "wont", "will", "should", "must", "yet", "later",
+    "abandoned", "aborted", "blocked", "dropped", "ignored", "incomplete",
+    "unrun", "waived",
+})
+
+
+def _token_is_argument(token: str) -> bool:
+    """One remainder token is argument-shaped: a flag, a path, a
+    file/node target, a key=value pair, or a bare number. A plain
+    English word is prose, never an argument."""
+    token = token.strip("`'\".,;:()[]")
+    if not token:
+        return False
+    if token.isdigit():
+        return True
+    return any(ch in token for ch in "/.:=-")
+
+
+def _token_carries_negation(token: str) -> bool:
+    if token.startswith("-"):
+        return False  # a flag, e.g. --no-cov, is not a negation statement
+    cleaned = token.strip("`'\".,;:()[]")
+    if "/" in cleaned or "." in cleaned:
+        # Path / file target (M02 repair). The v3 blanket exemption for
+        # path tokens let a non-execution claim be encoded purely as
+        # path segments: "pytest tests/waived/ok",
+        # "pytest abandoned/dropped/ignored/waived" and
+        # "pytest tests/never executed/ok" all counted as validation.
+        # Balance: an extensionless path *segment* (a directory name or
+        # a bare segment such as "waived") carrying a negation /
+        # non-execution stem as one of its "-"/"_"-separated parts is a
+        # negation claim, not a plausible test collection -- real
+        # collections are tests/, tests/unit/,
+        # tests/agent_os_issue_acceptance/ and similar. A segment with
+        # a "." in it is a filename and stays exempt, so legitimate
+        # file targets whose *topic* is negation still count:
+        # tests/test_non_run.py, tests/test_skipped_case.py,
+        # tests/test_waived_flag.py. The node-id part after "::" is a
+        # test-function name on a filename and is likewise not scanned.
+        for segment in cleaned.split("/"):
+            filename = segment.split("::")[0]
+            if "." in filename:
+                continue  # a filename target, e.g. test_non_run.py
+            parts = re.split(r"[-_]", filename.lower())
+            if any(part in _NEGATION_TOKEN_PARTS for part in parts):
+                return True
+        return False
+    parts = re.split(r"[-_]", cleaned)
+    return any(part in _NEGATION_TOKEN_PARTS for part in parts)
+
+
+def _is_command_remainder(rest: str, *, is_gcloud: bool = False) -> bool:
+    """Fail-closed remainder grammar (re-QA RB-1/RB-2, 2026-10-22).
+
+    Every remainder token must be argument-shaped; any plain prose word
+    anywhere in the remainder rejects the line, and so does any token
+    carrying a negation stem. The only plain-word exceptions are the
+    test-collection shorthand ``tests``/``test`` as the first token and,
+    for ``gcloud builds``, the ``submit`` subcommand. A bare command
+    with no remainder is a complete invocation claim and counts.
+    """
+    rest = rest.strip()
+    if not rest:
+        return True  # bare command line (e.g. "- ./scripts/validate-all.sh")
+    tokens = [token.strip("`'\".,;:()[]") for token in rest.split()]
+    if any(_token_carries_negation(token) for token in tokens):
+        return False
+    if is_gcloud:
+        if tokens[0] != "submit":
+            return False
+        tokens = tokens[1:]
+        return all(_token_is_argument(token) for token in tokens)
+    for index, token in enumerate(tokens):
+        if _token_is_argument(token):
+            continue
+        if index == 0 and token in {"tests", "test"}:
+            continue
+        return False
+    return True
+
+
 def has_validation_command(pr_body: str) -> bool:
-    lowered = (pr_body or "").lower()
-    return any(command in lowered for command in ["validate-all.sh", "pytest", "validate-repo-structure.sh", "cloud build", "cloudbuild"])
+    """True only for a command-shaped validation invocation (E2, #3506).
+
+    A bare substring mention of ``pytest`` (or a validator name) in prose
+    is not execution evidence; a negated, skipped, future, or otherwise
+    non-performed statement ("no pytest run was performed", "pytest was
+    skipped", "pytest has not been run", "pytest documentation was
+    reviewed") must never satisfy this check. A line counts only when,
+    after stripping list markers / code-fence markers, it *starts* with
+    the validation command (optionally after a ``run:`` style label),
+    carries no non-performance phrasing, and its remainder is
+    command-shaped rather than a prose sentence.
+    """
+    for raw_line in (pr_body or "").splitlines():
+        line = raw_line.strip().lower().replace("’", "'")
+        # Strip markdown list / quote / checkbox markers and code fences.
+        line = re.sub(r"^(?:[-*+>]\s+|\[[ x]\]\s*)+", "", line)
+        line = line.strip("` ")
+        # Allow a short imperative label such as "run:" / "ran:".
+        line = re.sub(r"^(?:run|ran|command|validation)[ \t]*:[ \t]*", "", line)
+        if not line:
+            continue
+        if _VALIDATION_NEGATION_RE.search(line):
+            continue
+        match = _VALIDATION_COMMAND_RE.match(line)
+        if match and _is_command_remainder(
+            match.group("rest") or "",
+            is_gcloud=match.group("gcloud") is not None,
+        ):
+            return True
+    return False
+
+
+def report_only_issue_number(result: LinkedIssueParseResult) -> int | None:
+    """Issue number a report-only evaluation may fetch, or None (E4, #3506).
+
+    RESOLVED already carries its single authoritative issue. An
+    INFORMATIONAL (declared non-closing) result may be evaluated
+    report-only only when its association is unambiguous: exactly one
+    distinct bare target, in this repository. It never resolves an
+    issue for closure -- ``parse_linked_issue_result`` still returns
+    ``issue_number=None`` for INFORMATIONAL -- this helper exists solely
+    so a workflow / CLI consumer can fetch that one issue's body for
+    evaluation. Ambiguous (multiple distinct targets) or
+    repository-qualified associations return None and remain
+    manual-review.
+    """
+    if result.status == LinkedIssueParseStatus.RESOLVED:
+        return result.issue_number
+    if result.status != LinkedIssueParseStatus.INFORMATIONAL:
+        return None
+    targets = {
+        candidate.issue_number
+        for candidate in result.bare_references
+        if candidate.repository is None
+    }
+    if len(targets) != 1:
+        return None
+    if any(candidate.repository is not None for candidate in result.bare_references):
+        return None
+    return next(iter(targets))
