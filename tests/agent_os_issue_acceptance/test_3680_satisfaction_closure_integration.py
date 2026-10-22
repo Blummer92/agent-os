@@ -799,15 +799,19 @@ def test_complete_satisfaction_without_owner_decision_is_not_admitted():
     assert receipt["satisfaction"]["status"] == "complete"
 
 
-def test_incomplete_record_is_cited_but_never_the_admission_reason():
-    # Satisfaction neither grants nor blocks admission: with the owner
-    # decision and QA pass in place the packet admits on the governed
-    # path and cites the incomplete record verbatim as evidence.
+def test_incomplete_record_blocks_admission_and_is_cited():
+    # Lane B (#3489, QA E5 C1/C6 + decision D1): a present-but-incomplete
+    # satisfaction record now BLOCKS closure admission, matching
+    # reconciliation, which already blocked on the same condition. The
+    # record is still cited verbatim in the (non-admitted) packet. This
+    # inverts the pre-repair test of the same scenario, which locked in
+    # the false pass reproduced in the 2026-10-22 independent QA report.
     snap = incomplete_snapshot_for(3432)
     receipt = evaluate_issue_closure(
         closure_request(satisfaction=snap), closure_snapshot()
     )
-    assert receipt["admitted"] is True
+    assert receipt["admitted"] is False
+    assert receipt["reason_codes"] == ["closure.satisfaction-incomplete"]
     assert receipt["satisfaction"] == snap
 
 

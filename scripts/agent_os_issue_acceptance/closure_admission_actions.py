@@ -83,6 +83,15 @@ class ClosureAcceptanceEvidence:
     verdict: Literal["pass", "fail", "missing"]
     evidence_id: str
     evaluator_id: str
+    # Lane B (#3489, QA E5 C3/C7): QA evidence may now be bound to the
+    # issue it judged and the exact head it validated. When a caller
+    # supplies either binding, admission and verification fail closed on
+    # a mismatch -- evidence produced for another issue, or for a
+    # different (stale / wrong) head, cannot satisfy closure. Both fields
+    # are optional so existing callers keep working; an unbound record
+    # carries no binding claim and is never upgraded to a bound one.
+    issue_number: int | None = None
+    validated_head_sha: str | None = None
 
     def __post_init__(self) -> None:
         if self.verdict not in ("pass", "fail", "missing"):
@@ -91,6 +100,14 @@ class ClosureAcceptanceEvidence:
             raise TypeError("evidence_id must be a non-empty built-in string")
         if type(self.evaluator_id) is not str or not self.evaluator_id:
             raise TypeError("evaluator_id must be a non-empty built-in string")
+        if self.issue_number is not None and (
+            type(self.issue_number) is not int or self.issue_number < 1
+        ):
+            raise TypeError("acceptance issue_number must be None or a positive built-in int")
+        if self.validated_head_sha is not None and (
+            type(self.validated_head_sha) is not str or not self.validated_head_sha
+        ):
+            raise TypeError("acceptance validated_head_sha must be None or a non-empty string")
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +121,12 @@ class ClosureAcceptanceEvidence:
 # defensive copy in immutable form, so later mutation of the caller's
 # mapping cannot change the packet. A malformed, mistyped, or internally
 # inconsistent snapshot is rejected with TypeError / ValueError here —
-# it is never silently accepted and never interpreted as complete. The
-# snapshot is cited evidence for the QA judgment only; it is never an
-# input to the admission decision.
+# it is never silently accepted and never interpreted as complete.
+# Lane B (#3489, QA E5/D1): a *present* snapshot is now also an
+# admission input in one narrow way -- a present record that is not
+# ``complete`` blocks admission (see ``evaluate_issue_closure``). An
+# absent record still neither grants nor blocks, exactly as before;
+# making satisfaction mandatory remains the open #3676 decision.
 #
 # Follow-up repairs (N1/N2): the snapshot envelope carries the issue
 # identity it was produced for (``repository`` + ``issue_number``), and
@@ -536,6 +556,8 @@ def _receipt(
 def evaluate_issue_closure(
     request: IssueClosureRequest,
     snapshot: LifecycleStateSnapshot,
+    *,
+    current_issue_body_digest: str | None = None,
 ) -> dict[str, object]:
     """Build one fail-closed closure-admission receipt for one issue.
 
@@ -581,6 +603,80 @@ def evaluate_issue_closure(
             acceptance_evidence_id=request.acceptance.evidence_id,
             satisfaction=satisfaction_block,
             next_action="reacquire-issue-and-reevaluate",
+        )
+    # Lane B (#3489, QA E5 C1/C6 + D1): a present satisfaction record that
+    # is not complete blocks admission. Reconciliation already blocks on
+    # this exact condition; closure admission previously admitted over it
+    # (locked in by a test that this repair inverts). An absent record is
+    # unchanged: it neither grants nor blocks (mandatory satisfaction is
+    # the still-open #3676 decision, not this repair).
+    if request.satisfaction is not None and not request.satisfaction.complete:
+        return _receipt(
+            repository=repository,
+            issue_number=issue_number,
+            admitted=False,
+            reason_codes=("closure.satisfaction-incomplete",),
+            authorization_id=None,
+            admission_result_id=None,
+            snapshot_id=snapshot.snapshot_id,
+            acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
+            next_action="obtain-complete-satisfaction-and-reevaluate",
+        )
+    # Lane B (QA E5 C2): when the caller supplies the digest of the issue
+    # body as freshly read, a satisfaction record produced from any other
+    # body revision is stale and fails closed.
+    if (
+        current_issue_body_digest is not None
+        and request.satisfaction is not None
+        and request.satisfaction.issue_body_digest != current_issue_body_digest
+    ):
+        return _receipt(
+            repository=repository,
+            issue_number=issue_number,
+            admitted=False,
+            reason_codes=("closure.satisfaction-stale",),
+            authorization_id=None,
+            admission_result_id=None,
+            snapshot_id=snapshot.snapshot_id,
+            acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
+            next_action="reacquire-issue-and-reevaluate",
+        )
+    # Lane B (QA E5 C3/C7): bound QA evidence, when it carries a binding,
+    # must name this issue and the snapshot's exact head.
+    if (
+        request.acceptance.issue_number is not None
+        and request.acceptance.issue_number != issue_number
+    ):
+        return _receipt(
+            repository=repository,
+            issue_number=issue_number,
+            admitted=False,
+            reason_codes=("closure.acceptance-issue-mismatch",),
+            authorization_id=None,
+            admission_result_id=None,
+            snapshot_id=snapshot.snapshot_id,
+            acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
+            next_action="obtain-acceptance-for-this-issue",
+        )
+    if (
+        request.acceptance.validated_head_sha is not None
+        and snapshot.source_head is not None
+        and request.acceptance.validated_head_sha != snapshot.source_head
+    ):
+        return _receipt(
+            repository=repository,
+            issue_number=issue_number,
+            admitted=False,
+            reason_codes=("closure.acceptance-head-mismatch",),
+            authorization_id=None,
+            admission_result_id=None,
+            snapshot_id=snapshot.snapshot_id,
+            acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
+            next_action="obtain-acceptance-for-exact-head",
         )
     if request.acceptance.evaluator_id == decision.authorizer_id:
         return _receipt(
@@ -721,6 +817,19 @@ def verify_closure_admission_receipt(
     if acceptance.verdict != "pass":
         return False
     if acceptance.evaluator_id == authorization.authorizer_id:
+        return False
+    # Lane B (#3489): a receipt carrying a present-but-incomplete
+    # satisfaction record can never verify, and bound QA evidence must
+    # name the authorized issue and the fresh snapshot's exact head.
+    if satisfaction_snapshot is not None and not satisfaction_snapshot.complete:
+        return False
+    if acceptance.issue_number is not None and acceptance.issue_number != authorization.issue_number:
+        return False
+    if (
+        acceptance.validated_head_sha is not None
+        and fresh_snapshot.source_head is not None
+        and acceptance.validated_head_sha != fresh_snapshot.source_head
+    ):
         return False
     if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
         return False
