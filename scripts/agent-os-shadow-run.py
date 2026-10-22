@@ -131,7 +131,7 @@ from scripts.agent_os_issue_acceptance.pr_lineage_reader import (  # noqa: E402
 )
 from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (  # noqa: E402
     ASSOCIATION_POLICIES,
-    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+    ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter  # noqa: E402
 from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  # noqa: E402
@@ -797,8 +797,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--association-policy",
         choices=sorted(ASSOCIATION_POLICIES),
-        default=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
-        help="PR association policy (default: closing-directive-v1)",
+        default=ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
+        help="PR association policy (default: declared-non-closing-v1)",
     )
     parser.add_argument(
         "--candidates",

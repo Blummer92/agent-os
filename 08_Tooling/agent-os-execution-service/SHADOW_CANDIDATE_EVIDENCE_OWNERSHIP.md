@@ -89,14 +89,16 @@ PYTHONPATH=08_Tooling/workflow-scheduler/src:08_Tooling/agent-os-execution-servi
 Ready-for-Review still requires the repository's current exact-head aggregate admission.
 
 
-## #3441 D-A1 — Opt-in non-closing association policy (2026-10-14)
+## #3441 D-A1 — Non-closing association policy (2026-10-14; default activation 2026-10-21)
 
-The read-only shadow CLI accepts optional `--association-policy declared-non-closing-v1`.
-Omitting this flag retains the previous `closing-directive-v1` default.
-No existing workflow or composite action default changes.
+The read-only shadow CLI accepts `--association-policy declared-non-closing-v1`.
+Since the owner's 2026-10-21 default-activation authorization, this is the CLI
+default; omitting the flag selects `declared-non-closing-v1`, and
+`closing-directive-v1` remains available as an explicit option.
+No workflow or composite-action file is edited by this PR. However, the existing shadow workflow invokes the CLI without an explicit `--association-policy`, so its runtime association behavior inherits the new CLI default (`declared-non-closing-v1`). This is an effect of the CLI change, not a separate workflow-file modification.
 The existing `parse_pr` parser remains the sole PR-linkage authority.
 
-On opt-in only, parser `INFORMATIONAL` qualifies as an association when its
+Under this policy, parser `INFORMATIONAL` qualifies as an association when its
 standalone `Non-closing: #N` directive covers exactly the requested issue
 in the same repository and there are zero GitHub-effective closing references.
 The reader includes these PRs in the same complete-population, exact-detail
@@ -107,10 +109,11 @@ retain fail-closed handling.
 An open Draft associated PR maps to `draft-pr`, and open Ready to `review`.
 A merged associated PR yields `manual-review` with reason
 `lifecycle-acquisition.non-closing-pr-merged`, never `merged` or completion.
-Closed-unmerged behavior is unchanged. The policy is recorded in opt-in
-acquisition evidence; the default result shape remains unchanged.
+Closed-unmerged behavior is unchanged. The policy is recorded in
+acquisition evidence when it is the declared-non-closing policy; the result
+shape is otherwise unchanged.
 `primary_claims` and `approval_applicability` remain unset by the CLI,
 so an acquired lifecycle stage cannot independently select or execute.
 
-Rollback: revert the D-A1 PR. Activation beyond an explicit CLI option,
+Rollback: revert the default-activation change. Workflow activation,
 Ready, merge, and issue closure require separate owner decisions.
