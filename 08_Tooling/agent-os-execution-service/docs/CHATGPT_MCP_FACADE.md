@@ -91,8 +91,8 @@ Remove `mcp_facade.py`, `mcp_server.py`, their focused tests/docs, and the `mcp`
 ## #3372 bounded ChatGPT publication profile
 
 The installed `agent-os-mcp` launcher remains the existing stdio MCP server.
-Its full 17-tool registration is preserved for the default local profile.
-To publish only the three owner-approved tools, start the **same launcher**
+Its full 19-tool registration is preserved for the default local profile.
+To publish only the five owner-approved tools, start the **same launcher**
 with `AGENT_OS_MCP_TOOL_PROFILE=chatgpt-governance` in the approved private
 host's Secure MCP Tunnel stdio command environment. Do not use an unfiltered
 launcher for the ChatGPT custom connection.
@@ -104,6 +104,8 @@ is supplied. The exact approved list is:
 - `admit_agent_os_issue_comment_mutation_tool`
 - `project_agent_os_lane_post_pr_issue_reconciliation_tool`
 - `admit_agent_os_ready_for_review_tool`
+- `admit_agent_os_issue_closure_tool`
+- `verify_agent_os_issue_closure_admission_tool`
 
 On the approved host, verify `tools/list` exposes exactly these names and
 `tools/call` refuses each excluded name. An app UI toggle is not sufficient
@@ -120,6 +122,16 @@ After actual ChatGPT attachment, prove host invocation and readback for #3281
 and #3446; repository tests alone cannot satisfy #3372.
 
 **Disconnect / rollback:** disable or remove the custom ChatGPT connection,
-stop the bounded tunnel process, and verify the three tools are absent from a
+stop the bounded tunnel process, and verify the five tools are absent from a
 new ChatGPT session. Remove the environment variable to restore the existing
-local 17-tool behavior. Do not remove the canonical MCP server or its guards.
+local 19-tool behavior. Do not remove the canonical MCP server or its guards.
+
+## Governed issue-closure admission (#3489)
+
+`admit_agent_os_issue_closure_tool(repository, issue_number, owner_decision, acceptance, snapshot)` exposes the canonical closure-admission evaluation (`evaluate_issue_closure` in `scripts/agent_os_issue_acceptance/closure_admission_actions.py`). The recorded owner decision must authorize exactly the `close-issue` mutation for the exact issue, the acceptance evidence must be an independent pass (evaluator != authorizer), and admission is bound to the snapshot's observed revision. It returns the single content-bound, non-performing receipt verbatim (`closure_performed: False`); the receipt alone authorizes nothing.
+
+`verify_agent_os_issue_closure_admission_tool(repository, issue_number, receipt, authorization, fresh_snapshot, acceptance)` is the caller-bound host gate — the closure analogue of the Ready admission receipt check. It recomputes the admission outside the receipt via `verify_closure_admission_receipt` against a freshly reacquired snapshot; any drift, forgery, stale revision, changed labels/state, non-independent or non-pass acceptance, cross-issue substitution, or protected target (#3292) fails closed with `verified: False` and `host_dispatch_contract: None`.
+
+Only after `verified: True` may the host perform the fixed dispatch contract the tool returns: the host's own native GitHub issue-update operation (ChatGPT GitHub connector `update_issue`; GitHub MCP `issue_write`) with `method=update`, `state=closed`, `state_reason=completed`, followed by canonical readback binding the exact repository, issue number, closed state, and completed reason. The MCP service itself has no GitHub write credential and never performs the closure; publication of these tools grants no closure authority by itself, and an unverified or refused admission must never be followed by a host closure dispatch.
+
+The two closure tools joined the `chatgpt-governance` publication surface under #3489. #3559's fixed-surface record (three tools, from #3372) must be amended by the host operator to list all five before attachment, and the attachment itself — Secure MCP Tunnel plus custom-app configuration on the ChatGPT host — remains host-owned work under #3559; no repository change creates it.
