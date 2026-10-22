@@ -895,6 +895,39 @@ jobs:
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+  jscpd-advisory:
+    name: jscpd duplicate-code advisory
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Generate report-only jscpd evidence
+        continue-on-error: true
+        run: python -m scripts.jscpd_advisory --output tmp/jscpd-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Upload advisory evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: jscpd-advisory-${{ github.event.pull_request.number }}
+          path: tmp/jscpd-advisory/
+          if-no-files-found: ignore
+          retention-days: 7
+
   aggregate-gate:
     # Terminal disposition only when authoritative aggregate validation is
     # required. Ordinary Draft PR events intentionally defer the aggregate and
