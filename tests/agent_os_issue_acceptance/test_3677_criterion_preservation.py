@@ -275,24 +275,27 @@ def test_suffixed_level2_heading_yields_real_criteria_3257() -> None:
 
 def test_suffixed_level3_heading_yields_real_criteria_3337() -> None:
     criteria = parse_acceptance_criteria(FIXTURE_3337)
-    # 9 acceptance checkboxes plus the 3 safety-confirmation checkboxes
-    # that sit in the same level-2-delimited section of the real body.
-    assert len(criteria) == 12
+    # Only the 9 acceptance checkboxes: the section ends at the next
+    # level-3 heading (### Tier 2 controls), so the sibling Safety
+    # confirmation field's attestations are not criteria.
+    assert len(criteria) == 9
     assert criteria[0].text.startswith("Identical frozen canonical task packets")
-    assert criteria[-1].text.startswith("Final implementation reporting will include")
+    assert criteria[-1].text.startswith("Future focused and exact-head validation passes")
 
 
 def test_packet_for_3337_reports_unparsable_lines_as_manual_review() -> None:
     packet = build_criterion_packet(FIXTURE_3337)
-    assert packet["criterion_count"] == 12
-    assert packet["section_entry_count"] == 16
+    assert packet["criterion_count"] == 9
+    assert packet["section_entry_count"] == 10
     manual = packet["manual_review_entries"]
-    assert len(manual) == 4
+    assert len(manual) == 1
     assert all(e["status"] == "manual-review" for e in manual)
     assert all(e["reason_code"] == "criterion-unparsable" for e in manual)
-    # Parsable criteria keep their section positions: the 4 unparsable
-    # lines sit between the 9 acceptance and 3 safety checkboxes.
-    assert [c["index"] for c in packet["criteria"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16]
+    # The one unparsable line is the Definition-of-done prose after the
+    # 9 acceptance checkboxes; parsable criteria keep positions 1-9.
+    assert [c["index"] for c in packet["criteria"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert manual[0]["index"] == 10
+    assert manual[0]["text"].startswith("Definition of done:")
 
 
 def test_mixed_section_positions_and_packet_counts_3258() -> None:
@@ -371,3 +374,82 @@ def test_packet_round_trip_for_suffixed_heading_3257() -> None:
     result = verify_criterion_packet(FIXTURE_3257, packet)
     assert result.status == "preserved"
     assert result.manual_review_indexes == ()
+
+
+# --- QA repair regressions: hierarchy boundary, ambiguity, empty checkbox ---
+
+
+def test_sibling_level3_form_field_is_not_promoted_to_criteria() -> None:
+    body = (
+        "### Acceptance criteria\n\n"
+        "- [ ] Real criterion.\n\n"
+        "### Safety confirmation\n\n"
+        "- [x] No merge is authorized.\n"
+        "- [x] No external write is authorized.\n"
+    )
+    criteria = parse_acceptance_criteria(body)
+    assert [c.text for c in criteria] == ["Real criterion."]
+    packet = build_criterion_packet(body)
+    assert packet["criterion_count"] == 1
+    assert packet["section_entry_count"] == 1
+    assert packet["manual_review_entries"] == []
+
+
+def test_level1_heading_ends_level2_section() -> None:
+    body = (
+        "## Acceptance criteria\n\n"
+        "- [ ] Real criterion.\n\n"
+        "# Later top-level section\n\n"
+        "- [ ] Not a criterion.\n"
+    )
+    assert [c.text for c in parse_acceptance_criteria(body)] == ["Real criterion."]
+
+
+def test_duplicate_recognized_heading_is_ambiguous_not_first_wins() -> None:
+    from scripts.agent_os_issue_acceptance.criterion_preservation import (
+        parse_criteria_section,
+    )
+
+    body = (
+        "## Acceptance criteria\n\n"
+        "- [ ] Old criterion.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] Amended criterion.\n"
+    )
+    assert parse_criteria_section(body) is None
+    assert parse_acceptance_criteria(body) == ()
+    packet = build_criterion_packet(body)
+    assert packet["criterion_count"] == 0
+    assert packet["section_entry_count"] == 0
+
+
+def test_quoted_earlier_heading_does_not_take_over_real_section() -> None:
+    from scripts.agent_os_issue_acceptance.criterion_preservation import (
+        parse_criteria_section,
+    )
+
+    # A criteria heading quoted in a Prior scope section, before the
+    # real section: two recognized headings are ambiguous, so neither
+    # silently wins (fail-closed, never a pass on the quoted set).
+    body = (
+        "## Prior scope\n\n"
+        "### Acceptance criteria\n\n"
+        "- [ ] Quoted sibling criterion.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] First real criterion.\n"
+        "- [ ] Second real criterion.\n"
+        "- [ ] Third real criterion.\n"
+    )
+    assert parse_criteria_section(body) is None
+    assert parse_acceptance_criteria(body) == ()
+
+
+def test_empty_text_checkbox_is_unparsable_not_an_error() -> None:
+    body = "## Acceptance criteria\n\n- [ ] Real criterion.\n- [ ] \n"
+    assert [c.text for c in parse_acceptance_criteria(body)] == ["Real criterion."]
+    packet = build_criterion_packet(body)
+    assert packet["criterion_count"] == 1
+    assert packet["section_entry_count"] == 2
+    assert len(packet["manual_review_entries"]) == 1
+    assert packet["manual_review_entries"][0]["index"] == 2
+    assert packet["manual_review_entries"][0]["reason_code"] == "criterion-unparsable"

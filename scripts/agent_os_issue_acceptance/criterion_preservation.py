@@ -13,10 +13,16 @@ Parsing is deliberately narrow: criteria are the checkbox lines of the
 issue body's acceptance-criteria section, matching the canonical issue
 form. The section heading is accepted at levels 2 and 3, with or without
 the attested ``and definition of done`` suffix (the forms carried by
-issues #3257 and #3337); no other heading text is recognized. One shared
-section walk (``parse_criteria_section``) enumerates every non-empty
-section line at its position: checkbox lines are parsable criteria, any
-other line is carried as an unparsable entry so it can be reported as
+issues #3257 and #3337); no other heading text is recognized. The
+section ends at the next heading of the same or a higher level, so
+sibling fields of the canonical issue form (which renders every field
+at level 3) never leak into the criteria. More than one recognized
+heading makes the section ambiguous: it is treated as missing, so no
+quoted or duplicated heading can silently take the section over. One
+shared section walk (``parse_criteria_section``) enumerates every
+non-empty section line at its position: checkbox lines with text are
+parsable criteria, any other line (including a checkbox with no text)
+is carried as an unparsable entry so it can be reported as
 manual-review instead of silently dropped, and never promoted to a
 criterion. Identity is the entry's position in that section plus a
 digest of its exact text, so any wording change produces a different
@@ -34,10 +40,9 @@ CRITERION_PACKET_SCHEMA_NAME = "agent-os-criterion-preservation-packet"
 CRITERION_PACKET_SCHEMA_VERSION = "1.0"
 
 _CRITERIA_HEADING_RE = re.compile(
-    r"^#{2,3}[ \t]+Acceptance criteria(?:[ \t]+and definition of done)?[ \t]*$",
+    r"^(#{2,3})[ \t]+Acceptance criteria(?:[ \t]+and definition of done)?[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_NEXT_HEADING_RE = re.compile(r"^##[ \t]+", re.MULTILINE)
 _CHECKBOX_RE = re.compile(r"^[ \t]*- \[[ xX]\][ \t]+(.*?)[ \t]*$")
 
 
@@ -114,17 +119,24 @@ def parse_criteria_section(
     This is the one section walk shared by this module and
     ``criterion_satisfaction``: both enumerate the same entries, at the
     same positions, with the same identities. Returns None when the body
-    has no recognized acceptance-criteria heading (fail-closed: callers
-    must treat a missing section as missing evidence, never as an empty
-    criterion set). The section runs from the recognized heading to the
-    next level-2 heading or the end of the body.
+    has no recognized acceptance-criteria heading, or has more than one
+    (ambiguous: no heading may silently win over another) — fail-closed:
+    callers must treat a missing or ambiguous section as missing
+    evidence, never as an empty criterion set. The section runs from
+    the recognized heading to the next heading of the same or a higher
+    level (a level-2 section ends at a level-1 or level-2 heading; a
+    level-3 section also ends at a level-3 heading), or to the end of
+    the body. A checkbox line with no text is an unparsable entry, not
+    a criterion and not an error.
     """
     body = issue_body or ""
-    heading = _CRITERIA_HEADING_RE.search(body)
-    if heading is None:
+    headings = list(_CRITERIA_HEADING_RE.finditer(body))
+    if len(headings) != 1:
         return None
+    heading = headings[0]
+    level = len(heading.group(1))
     section = body[heading.end() :]
-    following = _NEXT_HEADING_RE.search(section)
+    following = re.search(rf"^#{{1,{level}}}[ \t]+", section, re.MULTILINE)
     if following is not None:
         section = section[: following.start()]
     entries: list[CriterionSectionEntry] = []
@@ -133,7 +145,7 @@ def parse_criteria_section(
             continue
         match = _CHECKBOX_RE.match(line)
         index = len(entries) + 1
-        if match is not None:
+        if match is not None and match.group(1):
             text = match.group(1)
             entries.append(
                 CriterionSectionEntry(

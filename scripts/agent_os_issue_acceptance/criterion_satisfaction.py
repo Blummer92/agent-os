@@ -34,11 +34,9 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from .criterion_preservation import (
-    _CHECKBOX_RE,
     _CRITERIA_HEADING_RE,
-    _NEXT_HEADING_RE,
-    _criterion_identity,
-    parse_acceptance_criteria,
+    CriterionSectionEntry,
+    parse_criteria_section,
 )
 from .models import AcceptanceReport, CheckResult, Status
 
@@ -189,68 +187,6 @@ class SatisfactionProjection:
         return tuple(c for c in self.criteria if not c.satisfied)
 
 
-@dataclass(frozen=True, slots=True)
-class _ParsedCriterion:
-    index: int
-    identity: str
-    text: str
-    parsable: bool
-
-
-def _parse_criteria(issue_body: str) -> tuple[_ParsedCriterion, ...] | None:
-    """Parse criterion-like lines of the ``## Acceptance criteria`` section.
-
-    Returns None when the section is absent. Parsable criteria are
-    extracted by the canonical ``criterion_preservation`` parser (the
-    section/checkbox patterns and the identity formula are that module's,
-    shared by import — nothing is re-implemented here): on a purely
-    canonical section the result is byte-identical in index, text, and
-    identity to ``parse_acceptance_criteria``. Any other non-empty line is
-    an affected criterion that cannot be parsed canonically and is carried
-    as unparsable at its section position, so it can be dispositioned
-    manual-review instead of silently dropped, and the positions (hence
-    identities) of the surrounding criteria are preserved exactly as the
-    section presents them.
-    """
-    body = issue_body or ""
-    heading = _CRITERIA_HEADING_RE.search(body)
-    if heading is None:
-        return None
-    section = body[heading.end() :]
-    following = _NEXT_HEADING_RE.search(section)
-    if following is not None:
-        section = section[: following.start()]
-    try:
-        canonical_texts: tuple[str, ...] | None = tuple(
-            criterion.text for criterion in parse_acceptance_criteria(body)
-        )
-    except ValueError:
-        # The canonical parser rejects this body (it carries a criterion
-        # with empty text). The walk below then extracts checkbox texts
-        # itself — driven by the same canonical patterns — preserving the
-        # historical carry for such lines instead of failing the whole
-        # projection on one malformed line.
-        canonical_texts = None
-    canonical_iter = iter(canonical_texts) if canonical_texts is not None else None
-    parsed: list[_ParsedCriterion] = []
-    for line in section.splitlines():
-        if not line.strip():
-            continue
-        match = _CHECKBOX_RE.match(line)
-        index = len(parsed) + 1
-        if match is not None:
-            text = next(canonical_iter, None) if canonical_iter is not None else None
-            if text is None:
-                text = match.group(1)
-            parsed.append(_ParsedCriterion(index, _criterion_identity(index, text), text, True))
-        else:
-            text = line.strip()
-            parsed.append(
-                _ParsedCriterion(index, _criterion_identity(index, text), text, False)
-            )
-    return tuple(parsed)
-
-
 def _stale_reason(item: CriterionEvidence, lineage: dict[int, PrLineageEntry], body_digest: str) -> str | None:
     """Return the staleness reason code for one verdict record, or None if current."""
     if item.issue_body_digest != body_digest:
@@ -277,7 +213,7 @@ _STALE_PRIORITY = (
 
 
 def _disposition_for(
-    criterion: _ParsedCriterion,
+    criterion: CriterionSectionEntry,
     items: tuple[CriterionEvidence, ...],
     lineage: dict[int, PrLineageEntry],
     body_digest: str,
@@ -361,15 +297,24 @@ def project_criterion_satisfaction(
     produce the same projection. Evidence is reconciled (deduplicated)
     before any disposition is selected, and evidence is never inferred
     from merge state, CI, or review outcomes.
+
+    Criteria come from the one shared section walk,
+    ``criterion_preservation.parse_criteria_section``: this module has
+    no section walker of its own. A body with more than one recognized
+    criteria heading is ambiguous — the shared walk treats the section
+    as missing — and reports manual-review with the note
+    ``criteria-section-ambiguous`` instead of letting any one heading
+    silently win.
     """
     body_digest = issue_body_digest(issue_body)
-    parsed = _parse_criteria(issue_body)
+    parsed = parse_criteria_section(issue_body)
     if parsed is None:
+        ambiguous = len(_CRITERIA_HEADING_RE.findall(issue_body or "")) > 1
         return SatisfactionProjection(
             body_digest,
             (),
             CriterionSatisfactionStatus.MANUAL_REVIEW,
-            ("criteria-section-missing",),
+            ("criteria-section-ambiguous" if ambiguous else "criteria-section-missing",),
         )
     if not parsed:
         return SatisfactionProjection(

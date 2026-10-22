@@ -489,8 +489,11 @@ def test_satisfaction_recognizes_suffixed_level3_section_3337():
     assert projection.notes == ()
     parsable = [d for d in projection.criteria if d.reason_code != "criterion-unparsable"]
     unparsable = [d for d in projection.criteria if d.reason_code == "criterion-unparsable"]
-    assert len(parsable) == 12
-    assert len(unparsable) == 4
+    # The level-3 section ends at ### Tier 2 controls: 9 real criteria
+    # plus the 1 Definition-of-done prose line; the sibling Safety
+    # confirmation attestations are not criteria.
+    assert len(parsable) == 9
+    assert len(unparsable) == 1
     assert all(d.disposition is Disposition.MANUAL_REVIEW for d in unparsable)
     assert not projection.complete
     canonical = parse_acceptance_criteria(FIXTURE_3337)
@@ -535,3 +538,58 @@ def test_repaired_projection_is_deterministic():
     first = project_criterion_satisfaction(FIXTURE_3337)
     second = project_criterion_satisfaction(FIXTURE_3337)
     assert first == second
+
+
+# --- QA repair regressions: ambiguity, sibling fields, empty checkbox ---
+
+
+def test_duplicate_recognized_heading_reports_ambiguous_manual_review():
+    body = (
+        "## Acceptance criteria\n\n"
+        "- [ ] Old criterion.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] Amended criterion.\n"
+    )
+    projection = project_criterion_satisfaction(body)
+    assert projection.criteria == ()
+    assert not projection.complete
+    assert projection.status.value == "manual-review"
+    assert projection.notes == ("criteria-section-ambiguous",)
+
+
+def test_quoted_earlier_heading_cannot_report_complete():
+    body = (
+        "## Prior scope\n\n"
+        "### Acceptance criteria\n\n"
+        "- [ ] Quoted sibling criterion.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] First real criterion.\n"
+        "- [ ] Second real criterion.\n"
+        "- [ ] Third real criterion.\n"
+    )
+    projection = project_criterion_satisfaction(body)
+    assert projection.criteria == ()
+    assert not projection.complete
+    assert projection.notes == ("criteria-section-ambiguous",)
+
+
+def test_sibling_form_field_attestations_are_not_criteria_in_projection():
+    body = (
+        "### Acceptance criteria\n\n"
+        "- [ ] Real criterion.\n\n"
+        "### Safety confirmation\n\n"
+        "- [x] No merge is authorized.\n"
+    )
+    projection = project_criterion_satisfaction(body)
+    assert [d.text for d in projection.criteria] == ["Real criterion."]
+    assert projection.notes == ()
+
+
+def test_empty_text_checkbox_is_manual_review_not_an_error():
+    body = "## Acceptance criteria\n\n- [ ] Real criterion.\n- [ ] \n"
+    projection = project_criterion_satisfaction(body)
+    found = dispositions(projection)
+    assert found[1].disposition is Disposition.MISSING
+    assert found[2].disposition is Disposition.MANUAL_REVIEW
+    assert found[2].reason_code == "criterion-unparsable"
+    assert not projection.complete
