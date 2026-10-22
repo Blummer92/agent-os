@@ -157,6 +157,19 @@ def test_scan_stub_graph_edges_and_unresolved(tmp_path, monkeypatch):
     assert result["head_sha"] == "d" * 40
 
 
+def test_scan_dedupes_bare_unresolved_duplicate_of_resolved_edge(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    caller = _node("pkg.a", "main", filename=str(tmp_path / "pkg" / "a.py"))
+    callee = _node("pkg.a", "work", filename=str(tmp_path / "pkg" / "a.py"))
+    bare_dup = _node(None, "work", flavor="Flavor.UNKNOWN", defined=False)
+    bare_kept = _node(None, "other", flavor="Flavor.UNKNOWN", defined=False)
+    _patch_visitor(monkeypatch, visitor=_Visitor([caller, callee], {caller: {callee, bare_dup, bare_kept}}))
+    result = scan(tmp_path, tmp_path / "out", sha="f" * 40, scope=("pkg",))
+    assert result["unresolved"] == [{"from": "pkg.a.main", "target": "other"}]
+    assert result["unresolved_count"] == 1
+
+
 # --- real Pyan3 integration on deterministic fixtures ---
 
 def test_real_pyan_fixture_end_to_end(tmp_path):

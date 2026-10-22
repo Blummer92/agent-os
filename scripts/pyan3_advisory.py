@@ -98,6 +98,16 @@ def _normalize(visitor, root: Path) -> tuple[list[dict], list[dict], list[dict],
                 _kind(target) not in STRUCTURAL or not target.defined
             ):
                 unresolved.add((sid, tid))
+    # Pyan3 nondeterministically (hash order) also emits a bare, unnamespaced
+    # unresolved duplicate of a call it resolved to a qualified node from the
+    # same caller. Drop those duplicates so reports are deterministic; a bare
+    # name with no resolved counterpart from that caller stays unresolved.
+    resolved_leaves: dict[str, set[str]] = defaultdict(set)
+    for a, b in edges:
+        resolved_leaves[a].add(b.rsplit(".", 1)[-1])
+    unresolved = {
+        (a, t) for a, t in unresolved if "." in t or t not in resolved_leaves.get(a, set())
+    }
     defines = sum(len(t) for t in visitor.defines_edges.values())
     node_list = [nodes[k] for k in sorted(nodes)]
     edge_list = [{"from": a, "to": b, "type": "uses"} for a, b in sorted(edges)]

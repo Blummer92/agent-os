@@ -29,6 +29,8 @@ The scan covers only `scripts/agent_os_issue_acceptance` and `08_Tooling/agent-o
 
 Pyan3 is a static, approximate analyzer: it does not execute code, follow dynamic imports or `getattr` dispatch, resolve most attribute calls on instances, or see entrypoints invoked by frameworks, decorators, or external hosts. Never claim an unreferenced static node is safe to delete, and never use this report alone as deletion evidence.
 
+One upstream quirk is normalized away: Pyan3 nondeterministically (hash order) can emit a bare, unnamespaced unresolved duplicate of a call it also resolved to a qualified node from the same caller. The runner drops exactly those duplicates (a bare name with no resolved counterpart from that caller stays unresolved), which makes the emitted reports deterministic across runs.
+
 Review production callers, test callers, dynamic entrypoints, and invariants before sending a candidate to the existing #1729 Wire-or-Retire audit. The #2502 retirement gate still applies.
 
 ## CI status
