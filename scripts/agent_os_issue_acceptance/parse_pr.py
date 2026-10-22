@@ -424,10 +424,15 @@ _VALIDATION_NEGATION_RE = re.compile(
 # split on "-" and "_") so hyphenated forms such as "not-run" cannot
 # smuggle a negation past the line scan, while real flags (tokens
 # starting with "-") are exempt. Re-QA bypass set RB-3, 2026-10-22.
+# M02 (mutation-escape repair, 2026-10-22) adds the non-execution stems
+# abandoned / dropped / ignored / waived / unrun / aborted / blocked /
+# incomplete, which the earlier sets did not name at all.
 _NEGATION_TOKEN_PARTS = frozenset({
     "not", "non", "never", "skip", "skipped", "pending", "omitted", "deferred",
     "cancelled", "canceled", "postponed", "scheduled", "tomorrow",
     "wont", "will", "should", "must", "yet", "later",
+    "abandoned", "aborted", "blocked", "dropped", "ignored", "incomplete",
+    "unrun", "waived",
 })
 
 
@@ -446,9 +451,33 @@ def _token_is_argument(token: str) -> bool:
 def _token_carries_negation(token: str) -> bool:
     if token.startswith("-"):
         return False  # a flag, e.g. --no-cov, is not a negation statement
-    if "/" in token or "." in token:
-        return False  # a path/file target, e.g. tests/test_non_run.py
-    parts = re.split(r"[-_]", token.strip("`'\".,;:()[]"))
+    cleaned = token.strip("`'\".,;:()[]")
+    if "/" in cleaned or "." in cleaned:
+        # Path / file target (M02 repair). The v3 blanket exemption for
+        # path tokens let a non-execution claim be encoded purely as
+        # path segments: "pytest tests/waived/ok",
+        # "pytest abandoned/dropped/ignored/waived" and
+        # "pytest tests/never executed/ok" all counted as validation.
+        # Balance: an extensionless path *segment* (a directory name or
+        # a bare segment such as "waived") carrying a negation /
+        # non-execution stem as one of its "-"/"_"-separated parts is a
+        # negation claim, not a plausible test collection -- real
+        # collections are tests/, tests/unit/,
+        # tests/agent_os_issue_acceptance/ and similar. A segment with
+        # a "." in it is a filename and stays exempt, so legitimate
+        # file targets whose *topic* is negation still count:
+        # tests/test_non_run.py, tests/test_skipped_case.py,
+        # tests/test_waived_flag.py. The node-id part after "::" is a
+        # test-function name on a filename and is likewise not scanned.
+        for segment in cleaned.split("/"):
+            filename = segment.split("::")[0]
+            if "." in filename:
+                continue  # a filename target, e.g. test_non_run.py
+            parts = re.split(r"[-_]", filename.lower())
+            if any(part in _NEGATION_TOKEN_PARTS for part in parts):
+                return True
+        return False
+    parts = re.split(r"[-_]", cleaned)
     return any(part in _NEGATION_TOKEN_PARTS for part in parts)
 
 

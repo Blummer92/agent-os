@@ -118,3 +118,43 @@ def test_genuine_command_shapes_still_count(line):
 ])
 def test_reqa_bypass_lines_are_not_validation_commands(line):
     assert has_validation_command(line) is False
+
+# --- M02 bypass set (mutation-escape repair, 2026-10-22): a
+# non-execution claim encoded purely as path segments. The v3 grammar
+# exempted every path/file token from the negation scan, so each line
+# below returned True on the #3706 head (and on main, whose matcher is
+# a bare substring check). Extensionless path segments carrying a
+# non-execution stem are now negation claims. ---
+@_pytest.mark.parametrize("line", [
+    # The four exact M02 strings.
+    "pytest abandoned/dropped/ignored/waived",
+    "pytest tests/never executed/ok",
+    "pytest tests/waived/ok",
+    "pytest tests/unrun/ok",
+    # Single-word / path-segment variants of the same class.
+    "pytest waived", "pytest tests/waived", "pytest dropped/ok",
+    "pytest ignored", "pytest abandoned",
+    "pytest tests/abandoned/ok", "pytest tests/dropped/ok",
+    "pytest tests/ignored/ok", "pytest tests/never/ok",
+    "pytest never/run", "pytest tests/not-run/ok",
+    "pytest tests/skipped/ok", "pytest tests/blocked/ok",
+    "pytest tests/incomplete/ok",
+    # A negated directory segment stays a negation even when a real
+    # filename follows it.
+    "pytest tests/waived/test_x.py", "pytest tests/never-run/test_x.py",
+])
+def test_m02_path_segment_bypass_lines_are_not_validation_commands(line):
+    assert has_validation_command(line) is False
+
+@_pytest.mark.parametrize("line", [
+    "pytest tests/test_parse_pr.py",
+    "pytest tests/test_x.py::test_y -q",
+    # Tradeoff controls: a filename whose *topic* is negation is a
+    # concrete file target, not a non-execution claim, and must still
+    # count -- including a node-id naming a negation-topic test.
+    "pytest tests/test_non_run.py", "pytest tests/test_skipped_case.py",
+    "pytest tests/test_waived_flag.py -q",
+    "pytest tests/test_x.py::test_waived_case",
+])
+def test_m02_filename_topic_controls_still_count(line):
+    assert has_validation_command(line) is True
