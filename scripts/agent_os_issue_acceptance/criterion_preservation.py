@@ -10,10 +10,24 @@ never silently merged, dropped, or restated.
 It performs no GitHub, network, filesystem, subprocess, or provider I/O;
 executes no work; mutates no lifecycle state; and creates no authority.
 Parsing is deliberately narrow: criteria are the checkbox lines of the
-issue body's ``## Acceptance criteria`` section, matching the canonical
-issue form. Identity is the criterion's position in that section plus a
+issue body's acceptance-criteria section, matching the canonical issue
+form. The section heading is accepted at levels 2 and 3, with or without
+the attested ``and definition of done`` suffix (the forms carried by
+issues #3257 and #3337); no other heading text is recognized. The
+section ends at the next heading of the same or a higher level, so
+sibling fields of the canonical issue form (which renders every field
+at level 3) never leak into the criteria. More than one recognized
+heading makes the section ambiguous: it is treated as missing, so no
+quoted or duplicated heading can silently take the section over. One
+shared section walk (``parse_criteria_section``) enumerates every
+non-empty section line at its position: checkbox lines with text are
+parsable criteria, any other line (including a checkbox with no text)
+is carried as an unparsable entry so it can be reported as
+manual-review instead of silently dropped, and never promoted to a
+criterion. Identity is the entry's position in that section plus a
 digest of its exact text, so any wording change produces a different
-identity and fails verification closed.
+identity and fails verification closed, and the preservation and
+satisfaction modules assign identical identities to the same line.
 """
 
 from __future__ import annotations
@@ -26,9 +40,9 @@ CRITERION_PACKET_SCHEMA_NAME = "agent-os-criterion-preservation-packet"
 CRITERION_PACKET_SCHEMA_VERSION = "1.0"
 
 _CRITERIA_HEADING_RE = re.compile(
-    r"^##[ \t]+Acceptance criteria[ \t]*$", re.IGNORECASE | re.MULTILINE
+    r"^(#{2,3})[ \t]+Acceptance criteria(?:[ \t]+and definition of done)?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
 )
-_NEXT_HEADING_RE = re.compile(r"^##[ \t]+", re.MULTILINE)
 _CHECKBOX_RE = re.compile(r"^[ \t]*- \[[ xX]\][ \t]+(.*?)[ \t]*$")
 
 
@@ -80,34 +94,100 @@ class CriterionPacketVerification:
         )
 
 
-def parse_acceptance_criteria(issue_body: str) -> tuple[AcceptanceCriterion, ...]:
-    """Parse the checkbox criteria of the ``## Acceptance criteria`` section.
+@dataclass(frozen=True, slots=True)
+class CriterionSectionEntry:
+    """One non-empty line of the acceptance-criteria section, at its position.
 
-    Returns the criteria in body order with exact text and identity. A body
-    without the section, or a section without checkbox lines, yields an
-    empty tuple (fail-closed: callers must not treat that as preservation
-    of a non-empty criterion set).
+    ``parsable`` is True exactly for checkbox lines: those are the canonical
+    criteria. Any other non-empty line (free text, a numbered legacy
+    requirement, a stray sub-heading) is carried with ``parsable=False`` so
+    consumers report it as manual-review instead of silently dropping it;
+    it is never a criterion and can never be satisfied as one.
     """
-    heading = _CRITERIA_HEADING_RE.search(issue_body or "")
-    if heading is None:
-        return ()
-    section = (issue_body or "")[heading.end() :]
-    following = _NEXT_HEADING_RE.search(section)
+
+    index: int  # 1-based position among the section's non-empty lines
+    text: str  # checkbox text, or the exact stripped line for unparsable lines
+    identity: str  # position + digest of the exact text
+    parsable: bool
+
+
+def parse_criteria_section(
+    issue_body: str,
+) -> tuple[CriterionSectionEntry, ...] | None:
+    """Walk the acceptance-criteria section of an issue body, once.
+
+    This is the one section walk shared by this module and
+    ``criterion_satisfaction``: both enumerate the same entries, at the
+    same positions, with the same identities. Returns None when the body
+    has no recognized acceptance-criteria heading, or has more than one
+    (ambiguous: no heading may silently win over another) — fail-closed:
+    callers must treat a missing or ambiguous section as missing
+    evidence, never as an empty criterion set. The section runs from
+    the recognized heading to the next heading of the same or a higher
+    level (a level-2 section ends at a level-1 or level-2 heading; a
+    level-3 section also ends at a level-3 heading), or to the end of
+    the body. A checkbox line with no text is an unparsable entry, not
+    a criterion and not an error.
+    """
+    body = issue_body or ""
+    headings = list(_CRITERIA_HEADING_RE.finditer(body))
+    if len(headings) != 1:
+        return None
+    heading = headings[0]
+    level = len(heading.group(1))
+    section = body[heading.end() :]
+    following = re.search(rf"^#{{1,{level}}}[ \t]+", section, re.MULTILINE)
     if following is not None:
         section = section[: following.start()]
-    criteria: list[AcceptanceCriterion] = []
+    entries: list[CriterionSectionEntry] = []
     for line in section.splitlines():
-        match = _CHECKBOX_RE.match(line)
-        if match is None:
+        if not line.strip():
             continue
-        text = match.group(1)
-        index = len(criteria) + 1
-        criteria.append(
-            AcceptanceCriterion(
-                index=index, text=text, identity=_criterion_identity(index, text)
+        match = _CHECKBOX_RE.match(line)
+        index = len(entries) + 1
+        if match is not None and match.group(1):
+            text = match.group(1)
+            entries.append(
+                CriterionSectionEntry(
+                    index=index,
+                    text=text,
+                    identity=_criterion_identity(index, text),
+                    parsable=True,
+                )
             )
-        )
-    return tuple(criteria)
+        else:
+            text = line.strip()
+            entries.append(
+                CriterionSectionEntry(
+                    index=index,
+                    text=text,
+                    identity=_criterion_identity(index, text),
+                    parsable=False,
+                )
+            )
+    return tuple(entries)
+
+
+def parse_acceptance_criteria(issue_body: str) -> tuple[AcceptanceCriterion, ...]:
+    """Parse the checkbox criteria of the acceptance-criteria section.
+
+    Derived from the shared section walk (``parse_criteria_section``):
+    the criteria are exactly the walk's parsable entries, each keeping
+    its section position as its index, so a criterion's identity agrees
+    with the identity the satisfaction projection assigns to the same
+    line even when unparsable lines sit between criteria. A body without
+    the section, or a section without checkbox lines, yields an empty
+    tuple (fail-closed: callers must not treat that as preservation of a
+    non-empty criterion set).
+    """
+    entries = parse_criteria_section(issue_body)
+    if entries is None:
+        return ()
+    return tuple(
+        AcceptanceCriterion(index=e.index, text=e.text, identity=e.identity)
+        for e in entries
+        if e.parsable
+    )
 
 
 def build_criterion_packet(issue_body: str) -> dict[str, object]:
@@ -115,16 +195,34 @@ def build_criterion_packet(issue_body: str) -> dict[str, object]:
 
     The packet reports every criterion parsed from the body, each with its
     identity preserved, so a downstream handoff or PR can carry the set
-    without restating it in fresh prose.
+    without restating it in fresh prose. Unparsable section lines are not
+    dropped: they are reported under ``manual_review_entries`` at their
+    section positions, and ``section_entry_count`` counts every entry the
+    shared section walk enumerates, so the packet's total always agrees
+    with the number of criteria the satisfaction projection dispositions
+    for the same body.
     """
     criteria = parse_acceptance_criteria(issue_body)
+    entries = parse_criteria_section(issue_body) or ()
     return {
         "schema": CRITERION_PACKET_SCHEMA_NAME,
         "schema_version": CRITERION_PACKET_SCHEMA_VERSION,
         "criterion_count": len(criteria),
+        "section_entry_count": len(entries),
         "criteria": [
             {"index": c.index, "identity": c.identity, "text": c.text}
             for c in criteria
+        ],
+        "manual_review_entries": [
+            {
+                "index": e.index,
+                "identity": e.identity,
+                "text": e.text,
+                "status": "manual-review",
+                "reason_code": "criterion-unparsable",
+            }
+            for e in entries
+            if not e.parsable
         ],
     }
 
