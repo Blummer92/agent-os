@@ -97,10 +97,9 @@ jobs:
               (out / "pr_body.md").read_text(encoding="utf-8"),
               (out / "pr_title.txt").read_text(encoding="utf-8"),
           )
-          if result.status == LinkedIssueParseStatus.RESOLVED:
-              print(result.issue_number or "")
-          else:
-              print("")
+          from scripts.agent_os_issue_acceptance.parse_pr import report_only_issue_number
+          number = report_only_issue_number(result)
+          print(number or "")
           PY
           )"
           printf '%s\n' "$linked_issue" > "$out/linked_issue.txt"
@@ -201,14 +200,31 @@ jobs:
             | tee tmp/agent_os_issue_acceptance_report/report.txt
           checker_exit_code=${PIPESTATUS[0]}
           echo "checker_exit_code=${checker_exit_code}" >> "$GITHUB_OUTPUT"
-          exit 0
+          # E3 (#3506): the check must represent the child result. A `fail`
+          # report (checker exit 1) fails this non-required check instead of
+          # masquerading as green. Manual-review (exit 0 by checker design)
+          # remains green, exactly as the checker contract defines it.
+          exit "$checker_exit_code"
 
       - name: Publish report summary
+        # NB-2 (#3506): render the summary even when the checker step
+        # failed (E3 makes that failure visible as a red non-required
+        # check). This does not mask the failure: the checker step's
+        # non-zero exit still determines the job/check result.
+        if: always()
         run: |
           {
             echo "## Agent OS Issue Acceptance Report"
             echo
-            cat tmp/agent_os_issue_acceptance_report/report.txt
+            # The report file can be absent when an earlier step failed
+            # before the checker ran; degrade to an explicit notice
+            # instead of failing this step and truncating the summary.
+            # A partial report is rendered as-is.
+            if [ -f tmp/agent_os_issue_acceptance_report/report.txt ]; then
+              cat tmp/agent_os_issue_acceptance_report/report.txt
+            else
+              echo "Report output unavailable: the checker did not produce a report file."
+            fi
             echo
             echo "Checker exit code: ${{ steps.acceptance.outputs.checker_exit_code }}"
             echo
