@@ -466,6 +466,15 @@ def run_gate2_fixed_pilot_controller(
         receipt = invoke(envelope, bootstrap=bootstrap)
         if type(receipt) is not dict:
             raise Gate2ControllerError("driver-returned-non-mapping")
+        raw_reason_codes = receipt.get("reason_codes")
+        if type(raw_reason_codes) is not list or not raw_reason_codes:
+            raise Gate2ControllerError("receipt-reason-codes-invalid")
+        validated_reason_codes: list[str] = []
+        for raw_reason_code in raw_reason_codes:
+            if type(raw_reason_code) is not str or not raw_reason_code:
+                raise Gate2ControllerError("receipt-reason-codes-invalid")
+            validated_reason_codes.append(raw_reason_code)
+        reason_codes = tuple(validated_reason_codes)
         name = _receipt_file_name(envelope, bootstrap.evaluated_at)
         receipt_path = _persist_receipt_atomically(receipts_dir, name, receipt)
     except Gate2ControllerError:
@@ -484,7 +493,7 @@ def run_gate2_fixed_pilot_controller(
     status = "completed" if receipt.get("status") == "completed" else "blocked"
     return Gate2ControllerResult(
         status=status,
-        reason_codes=tuple(receipt.get("reason_codes") or []),
+        reason_codes=reason_codes,
         receipt=receipt,
         receipt_path=str(receipt_path),
         receipt_reference=reference,
