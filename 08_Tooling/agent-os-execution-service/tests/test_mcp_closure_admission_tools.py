@@ -315,18 +315,18 @@ def test_closure_tools_are_in_publication_profile():
 
 
 def test_bound_acceptance_is_forwarded_and_rejects_wrong_issue_or_head():
-    snap = snapshot_dict(source_head="head-A")
-    good = acceptance_dict(issue_number=3432, validated_head_sha="head-A")
+    snap = snapshot_dict(source_head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    good = acceptance_dict(issue_number=3432, validated_head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     receipt = admit_agent_os_issue_closure_tool(REPO, 3432, decision_dict(), good, snap)
     assert receipt["admitted"] is True
     auth = produce_lifecycle_mutation_authorization(
         LifecycleOwnerDecision(**{**decision_dict(), "requested_mutations": ("close-issue",)}),
-        _snapshot(source_head="head-A"),
+        _snapshot(source_head="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     )
     assert verify_agent_os_issue_closure_admission_tool(
         REPO, 3432, receipt, auth.to_dict(), snap, good
     )["verified"] is True
-    for bad in (acceptance_dict(issue_number=3306), acceptance_dict(validated_head_sha="head-B")):
+    for bad in (acceptance_dict(issue_number=3306), acceptance_dict(validated_head_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")):
         rejected = admit_agent_os_issue_closure_tool(REPO, 3432, decision_dict(), bad, snap)
         assert rejected["admitted"] is False
         assert verify_agent_os_issue_closure_admission_tool(
