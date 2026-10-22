@@ -312,3 +312,66 @@ def test_closure_tools_are_in_publication_profile():
     assert "verify_agent_os_issue_closure_admission_tool" in _CHATGPT_PUBLICATION_TOOLS
     registered = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
     assert _CHATGPT_PUBLICATION_TOOLS <= registered
+
+
+def test_bound_acceptance_is_forwarded_and_rejects_wrong_issue_or_head():
+    snap = snapshot_dict(source_head="head-A")
+    good = acceptance_dict(issue_number=3432, validated_head_sha="head-A")
+    receipt = admit_agent_os_issue_closure_tool(REPO, 3432, decision_dict(), good, snap)
+    assert receipt["admitted"] is True
+    auth = produce_lifecycle_mutation_authorization(
+        LifecycleOwnerDecision(**{**decision_dict(), "requested_mutations": ("close-issue",)}),
+        _snapshot(source_head="head-A"),
+    )
+    assert verify_agent_os_issue_closure_admission_tool(
+        REPO, 3432, receipt, auth.to_dict(), snap, good
+    )["verified"] is True
+    for bad in (acceptance_dict(issue_number=3306), acceptance_dict(validated_head_sha="head-B")):
+        rejected = admit_agent_os_issue_closure_tool(REPO, 3432, decision_dict(), bad, snap)
+        assert rejected["admitted"] is False
+        assert verify_agent_os_issue_closure_admission_tool(
+            REPO, 3432, receipt, auth.to_dict(), snap, bad
+        )["verified"] is False
+
+
+def test_satisfaction_pass_through_and_digest_currentness():
+    import hashlib
+    digest = hashlib.sha256(b"issue body").hexdigest()
+    other = hashlib.sha256(b"changed body").hexdigest()
+    def satisfaction(disposition):
+        return {
+            "repository": REPO, "issue_number": 3432, "issue_body_digest": digest,
+            "status": "complete" if disposition == "satisfied" else "incomplete",
+            "criteria": [{"index": 1, "identity": "criterion-1-abcdef123456",
+                          "disposition": disposition, "reason_code": "qa",
+                          "evidence": ["qa:1"]}],
+        }
+    complete = admit_agent_os_issue_closure_tool(
+        REPO, 3432, decision_dict(), acceptance_dict(), snapshot_dict(),
+        satisfaction=satisfaction("satisfied"), current_issue_body_digest=digest,
+    )
+    assert complete["admitted"] is True
+    assert complete["satisfaction"]["issue_body_digest"] == digest
+    assert verify_agent_os_issue_closure_admission_tool(
+        REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
+        acceptance_dict(), current_issue_body_digest=digest,
+    )["verified"] is True
+    assert verify_agent_os_issue_closure_admission_tool(
+        REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
+        acceptance_dict(), current_issue_body_digest=other,
+    )["verified"] is False
+    for status, expected in [("unsatisfied", "closure.satisfaction-incomplete"),
+                             ("satisfied", "closure.satisfaction-stale")]:
+        receipt = admit_agent_os_issue_closure_tool(
+            REPO, 3432, decision_dict(), acceptance_dict(), snapshot_dict(),
+            satisfaction=satisfaction(status),
+            current_issue_body_digest=other if status == "satisfied" else digest,
+        )
+        assert receipt["admitted"] is False
+        assert expected in receipt["reason_codes"]
+    malformed = admit_agent_os_issue_closure_tool(
+        REPO, 3432, decision_dict(), acceptance_dict(), snapshot_dict(),
+        satisfaction={"status": "complete"},
+    )
+    assert malformed["admitted"] is False
+    assert malformed["reason_codes"] == ["closure-evidence-invalid"]

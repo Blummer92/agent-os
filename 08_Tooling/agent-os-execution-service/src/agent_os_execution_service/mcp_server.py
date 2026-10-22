@@ -805,6 +805,8 @@ def _closure_acceptance(item: dict[str, object]) -> ClosureAcceptanceEvidence:
         verdict=item["verdict"],
         evidence_id=item["evidence_id"],
         evaluator_id=item["evaluator_id"],
+        issue_number=item.get("issue_number"),
+        validated_head_sha=item.get("validated_head_sha"),
     )
 
 
@@ -869,6 +871,8 @@ def admit_agent_os_issue_closure_tool(
     owner_decision: dict[str, object],
     acceptance: dict[str, object],
     snapshot: dict[str, object],
+    satisfaction: dict[str, object] | None = None,
+    current_issue_body_digest: str | None = None,
 ) -> dict[str, object]:
     """Evaluate governed issue-closure admission for one issue (#3489).
 
@@ -896,7 +900,9 @@ def admit_agent_os_issue_closure_tool(
         )
         evidence = _closure_acceptance(acceptance)
         snap = _closure_snapshot(snapshot)
-        request = IssueClosureRequest(decision=decision, acceptance=evidence)
+        request = IssueClosureRequest(
+            decision=decision, acceptance=evidence, satisfaction=satisfaction
+        )
     except (KeyError, TypeError, ValueError):
         return _refused_closure_projection(
             repository=repository,
@@ -916,7 +922,9 @@ def admit_agent_os_issue_closure_tool(
             reason_codes=("closure-target-binding-mismatch",),
             next_action="reacquire-issue-and-reevaluate",
         )
-    return evaluate_issue_closure(request, snap)
+    return evaluate_issue_closure(
+        request, snap, current_issue_body_digest=current_issue_body_digest
+    )
 
 
 @mcp.tool()
@@ -927,6 +935,7 @@ def verify_agent_os_issue_closure_admission_tool(
     authorization: dict[str, object],
     fresh_snapshot: dict[str, object],
     acceptance: dict[str, object],
+    current_issue_body_digest: str | None = None,
 ) -> dict[str, object]:
     """Verify a closure-admission receipt against a fresh snapshot (#3489).
 
@@ -969,7 +978,19 @@ def verify_agent_os_issue_closure_admission_tool(
             reason_codes=("closure-target-binding-mismatch",),
             next_action="reacquire-issue-and-reevaluate",
         )
-    verified = verify_closure_admission_receipt(
+    # A supplied current digest must match the receipt-bound satisfaction
+    # snapshot. Never turn missing or mismatched evidence into a verified write.
+    digest_ok = True
+    if current_issue_body_digest is not None:
+        block = receipt.get("satisfaction") if isinstance(receipt, dict) else None
+        digest_ok = (
+            type(current_issue_body_digest) is str
+            and len(current_issue_body_digest) == 64
+            and all(ch in "0123456789abcdef" for ch in current_issue_body_digest)
+            and type(block) is dict
+            and block.get("issue_body_digest") == current_issue_body_digest
+        )
+    verified = digest_ok and verify_closure_admission_receipt(
         receipt, authorization=auth, fresh_snapshot=snap, acceptance=evidence
     )
     return {
