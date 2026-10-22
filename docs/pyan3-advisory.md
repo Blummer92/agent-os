@@ -35,4 +35,4 @@ Review production callers, test callers, dynamic entrypoints, and invariants bef
 
 ## CI status
 
-Workflow integration is **not yet authorized**. Repository-only implementation is complete and locally reproducible; CI should later invoke this same command in the existing validation workflow as an isolated report-only job (read-only `contents` permission, seven-day artifact, no required check, no aggregate-gate dependency), mirroring the `jscpd-advisory` job added for #3688, pending the owner's separate workflow authorization.
+The owner separately authorized the workflow integration for #3689 on 2026-10-21. The existing `.github/workflows/agent-os-validation.yml` invokes this same command in an isolated `pyan3-advisory` pull-request job (setup-python 3.11, `pip install pyan3==2.9.0`, read-only `contents` permission, seven-day artifact), mirroring the `jscpd-advisory` job added for #3688. No required check or existing aggregate dependency was modified. A green job alone does not establish scanner success: inspect the JSON artifact's `status` field.
