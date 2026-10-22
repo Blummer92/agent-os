@@ -366,6 +366,16 @@ def validate_visual_asset_compatibility_evidence(
             cohesion_profile=cohesion_profile,
         )
 
+        # #3672: bind only a governed library-record title to the v2
+        # compatibility fingerprint. Extra fields are not verified concept facts.
+        source_context = None
+        if contract_version == V2_CONTRACT_ID and library["asset_title"] is not None:
+            source_context = {
+                "asset_title": validate_text(
+                    library["asset_title"], "source asset title", max_length=256
+                )
+            }
+
         compatibility_parts = {
             "manifest_reference": manifest_reference,
             "asset_reference": asset_reference,
@@ -378,6 +388,8 @@ def validate_visual_asset_compatibility_evidence(
         }
         if cohesion_profile is not None:
             compatibility_parts["cohesion_profile"] = cohesion_profile
+        if source_context is not None:
+            compatibility_parts["source_context"] = source_context
 
         normalized_payload = {
             "contract_version": contract_version,
@@ -400,6 +412,8 @@ def validate_visual_asset_compatibility_evidence(
         }
         if cohesion_profile is not None:
             normalized_payload["cohesion_profile"] = cohesion_profile
+        if source_context is not None:
+            normalized_payload["source_context"] = source_context
         normalized_payload = validate_and_normalize_json(
             normalized_payload,
             max_bytes=MAX_RESULT_BYTES,
