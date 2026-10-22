@@ -130,7 +130,7 @@ jobs:
 
       - name: Set up Python for focused validation
         if: ${{ steps.plan.outputs.profile == 'focused' }}
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -819,7 +819,7 @@ jobs:
 
       - name: Set up Python
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -912,7 +912,7 @@ jobs:
         with:
           node-version: "22"
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Generate report-only jscpd evidence
@@ -940,7 +940,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install pinned Pyan3
