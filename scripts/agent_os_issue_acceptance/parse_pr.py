@@ -406,29 +406,67 @@ def missing_final_report_fields(pr_body: str) -> list[str]:
 
 _VALIDATION_COMMAND_RE = re.compile(
     r"^(?:"
-    r"(?:\./)?scripts/validate-all\.sh"
-    r"|(?:\./)?scripts/validate-repo-structure\.sh"
-    r"|validate-all\.sh"
-    r"|validate-repo-structure\.sh"
-    r"|(?:python\d*(?:\.\d+)?[ \t]+-m[ \t]+)?pytest"
-    r"|gcloud[ \t]+builds?\b"
-    r"|cloudbuild\b"
-    r")(?:[ \t]|$)"
+    r"(?P<script>(?:\./)?scripts/validate-all\.sh|(?:\./)?scripts/validate-repo-structure\.sh|validate-all\.sh|validate-repo-structure\.sh)"
+    r"|(?P<pytest>(?:python\d*(?:\.\d+)?[ \t]+-m[ \t]+)?pytest)"
+    r"|(?P<gcloud>gcloud[ \t]+builds?)"
+    r"|(?P<cloudbuild>cloudbuild)"
+    r")(?P<rest>(?:[ \t].*)?)$"
 )
+# Phrasings that describe a run that did not happen (or has not happened
+# yet), wherever they appear on the line: negations, perfect-tense and
+# contracted negations, "skipped", and future/modal plans. A line
+# carrying any of these never counts as validation evidence, even when
+# it starts with a command token (independent QA bypass set, 2026-10-22).
 _VALIDATION_NEGATION_RE = re.compile(
-    r"\b(?:not[ \t]+(?:run|performed|executed)|did[ \t]+not[ \t]+run|was[ \t]+not[ \t]+(?:run|performed|executed)|never[ \t]+(?:run|ran)|no[ \t]+\S+[ \t]+(?:was[ \t]+)?(?:run|performed|executed))\b"
+    r"\b(?:skipped|not[ \t]+run|not[ \t]+performed|not[ \t]+executed|not[ \t]+yet|not[ \t]+actually|has[ \t]+not|have[ \t]+not|had[ \t]+not|hasn't|haven't|didn't|did[ \t]+not|was[ \t]+not|were[ \t]+not|never[ \t]+(?:run|ran)|will[ \t]+(?:be[ \t]+)?run|to[ \t]+be[ \t]+run|should[ \t]+be[ \t]+run|must[ \t]+be[ \t]+run|needs?[ \t]+to[ \t]+be[ \t]+run|run[ \t]+later)\b"
 )
+# A command token used as the noun subject of a prose sentence
+# ("pytest documentation was reviewed", "cloudbuild is mentioned") is
+# not an invocation. After the command, an invocation's first argument
+# is flag-like, path-like, or a test-path shorthand; two plain prose
+# words in a row are a sentence, not a command.
+_PROSE_FIRST_TOKENS = frozenset({
+    "is", "was", "are", "were", "documentation", "docs", "framework",
+    "reviewed", "discussed", "mentioned", "described", "has", "have",
+    "had", "not", "will", "should", "must", "can", "could", "would",
+    "provides", "allows", "supports", "runs", "running",
+})
+
+
+def _is_command_remainder(rest: str) -> bool:
+    rest = rest.strip()
+    if not rest:
+        return True  # bare command line (e.g. "- ./scripts/validate-all.sh")
+    tokens = rest.split()
+    first = tokens[0].strip("`.,;:")
+    if any(ch in first for ch in "/.:=-") or first.startswith("-"):
+        return True
+    if first in {"tests", "test"}:
+        return True
+    if first in _PROSE_FIRST_TOKENS:
+        return False
+    # A plain word followed by another plain word is prose; a single
+    # plain-word argument (a target name) is accepted as command-like.
+    if len(tokens) == 1:
+        return True
+    second = tokens[1].strip("`.,;:")
+    if any(ch in second for ch in "/.:=-") or second.startswith("-"):
+        return True
+    return False
 
 
 def has_validation_command(pr_body: str) -> bool:
     """True only for a command-shaped validation invocation (E2, #3506).
 
     A bare substring mention of ``pytest`` (or a validator name) in prose
-    is not execution evidence, and a negated statement such as "no pytest
-    run was performed" must never satisfy this check. A line counts only
-    when, after stripping list markers / code-fence markers, it *starts*
-    with the validation command (optionally after a ``run:`` style label),
-    and the line carries no negation of the run.
+    is not execution evidence; a negated, skipped, future, or otherwise
+    non-performed statement ("no pytest run was performed", "pytest was
+    skipped", "pytest has not been run", "pytest documentation was
+    reviewed") must never satisfy this check. A line counts only when,
+    after stripping list markers / code-fence markers, it *starts* with
+    the validation command (optionally after a ``run:`` style label),
+    carries no non-performance phrasing, and its remainder is
+    command-shaped rather than a prose sentence.
     """
     for raw_line in (pr_body or "").splitlines():
         line = raw_line.strip().lower()
@@ -441,9 +479,8 @@ def has_validation_command(pr_body: str) -> bool:
             continue
         if _VALIDATION_NEGATION_RE.search(line):
             continue
-        if "not run" in line or "was not" in line or "did not" in line:
-            continue
-        if _VALIDATION_COMMAND_RE.match(line):
+        match = _VALIDATION_COMMAND_RE.match(line)
+        if match and _is_command_remainder(match.group("rest") or ""):
             return True
     return False
 

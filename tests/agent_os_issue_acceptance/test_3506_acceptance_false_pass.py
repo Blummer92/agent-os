@@ -74,3 +74,33 @@ def test_report_only_number_ambiguous_non_closing_is_none():
 def test_report_only_number_for_closing_is_resolved_issue():
     result = parse_linked_issue_result("Closes #3506\n")
     assert report_only_issue_number(result) == 3506
+
+# --- Independent QA bypass set (2026-10-22 re-QA): non-performance and
+# prose-subject phrasings that a first repair draft still accepted. ---
+import pytest as _pytest
+
+@_pytest.mark.parametrize("line", [
+    "pytest was skipped", "pytest skipped", "validate-all.sh was skipped",
+    "cloudbuild was skipped", "pytest has not been run",
+    "pytest hasn't been run", "pytest didn't run",
+    "python -m pytest hasn't been run", "pytest not actually run",
+    "pytest not yet run", "pytest will be run later",
+    "pytest to be run later", "pytest should be run",
+    "pytest documentation was reviewed in this PR",
+    "pytest is a testing framework for Python",
+    "cloudbuild is mentioned in the docs",
+    "validate-all.sh is documented in the README",
+    "gcloud builds are discussed in the plan",
+])
+def test_qa_bypass_lines_are_not_validation_commands(line):
+    assert has_validation_command(line) is False
+
+@_pytest.mark.parametrize("line", [
+    "- python -m pytest tests/agent_os_issue_acceptance -q",
+    "./scripts/validate-all.sh --focused tests/x.py",
+    "pytest tests/ -q", "- ./scripts/validate-all.sh",
+    "Run: pytest tests/unit", "pytest tests",
+    "gcloud builds submit --config cloudbuild.yaml",
+])
+def test_genuine_command_shapes_still_count(line):
+    assert has_validation_command(line) is True
