@@ -104,3 +104,17 @@ def test_qa_bypass_lines_are_not_validation_commands(line):
 ])
 def test_genuine_command_shapes_still_count(line):
     assert has_validation_command(line) is True
+
+# --- Re-QA bypass set RB-1/RB-2/RB-3 (2026-10-22): plain-word remainders,
+# shorthand-token early-accept, and hyphenated negations. ---
+@_pytest.mark.parametrize("line", [
+    "pytest pending", "pytest omitted", "pytest deferred", "pytest cancelled",
+    "pytest tomorrow", "validate-all.sh pending", "python -m pytest pending",
+    "gcloud builds pending", "pytest tests are pending execution",
+    "pytest tests won't run", "pytest tests aren't run",
+    "pytest tests wasn't executed", "pytest tests will be executed tomorrow",
+    "pytest tests are discussed in the notes", "pytest not-run",
+    "pytest non-run", "pytest test-suite is pending",
+])
+def test_reqa_bypass_lines_are_not_validation_commands(line):
+    assert has_validation_command(line) is False
