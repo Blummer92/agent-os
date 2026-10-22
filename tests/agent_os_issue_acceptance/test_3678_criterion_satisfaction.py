@@ -33,6 +33,7 @@ import hashlib
 import pytest
 
 from scripts.agent_os_issue_acceptance.criterion_preservation import (
+    build_criterion_packet,
     parse_acceptance_criteria,
 )
 from scripts.agent_os_issue_acceptance.criterion_satisfaction import (
@@ -457,3 +458,80 @@ def test_projection_is_deterministic():
 def test_body_digest_binds_exact_version():
     assert issue_body_digest(BODY_V1) == hashlib.sha256(BODY_V1.encode()).hexdigest()
     assert issue_body_digest(BODY_V1) != issue_body_digest(BODY_V2)
+
+
+# --- Parser repair (#3677/#3678): one shared section walk ---------------
+# The trimmed real-body fixtures are defined in
+# test_3677_criterion_preservation.py's repair section; the excerpts here
+# are the same verbatim text, kept local so this file stays self-contained.
+
+FIXTURE_3257 = '## Acceptance criteria and definition of done\n\n- [x] `imc-build` accepts an authorized visual selection and no longer refuses it (gate fails closed only when no runtime is configured).\n- [x] Each selected visual is planned into an exact slot with a stable role identity, producing image-insertion requests (repo-side).\n- [x] The #3130 slot-coverage check runs on the selection path and fails closed on uncovered required slots.\n- [x] A visuals-required MaterialRequirement completes only when every required slot is verified-placed (`require_all_required_visuals_placed`, repo-side).\n- [x] A missing placement runtime yields an explicit `placement-runtime-unavailable` blocked state, never "final".\n- [ ] **Live:** after a build against a real Doc and Slide, every placed visual is verified against the persisted artifact (slot, asset, content identity) and a persisted placement receipt is produced.\n- [ ] **Live canary:** `imc-build` with a non-empty governed selection and a configured `--placement-script-id` inserts the image, passes post-insertion readback verification, and persists the durable verified receipt.\n## Required tests, validation, and documentation\n'
+
+FIXTURE_3337 = '### Acceptance criteria and definition of done\n\n- [ ] Identical frozen canonical task packets can be compared across candidate models/settings.\n- [ ] All seven task families and requested OpenAI/Anthropic/Muse identities are representable without fabricated capabilities.\n- [ ] #2744 configuration/continuity/source metadata is reused; model and actual reasoning setting are explicit.\n- [ ] Existing #1504 availability/reference/non-authority evidence mechanics are reused rather than duplicated.\n- [ ] Fixture-only evaluation performs zero external provider calls and needs no credentials.\n- [ ] Provider output stays untrusted and cannot authorize execution, readiness, merge, or closure.\n- [ ] Component metrics, comparability, contamination, sample sizes and unavailable costs/latency/tokens are reported faithfully.\n- [ ] Model-run cost/latency remains observational and does not redefine #520 or routing policy.\n- [ ] Future focused and exact-head validation passes.\nDefinition of done: a bounded offline harness, component report, mapping docs, and negative fixtures are reviewed; live results and automatic preference are not claimed from fake runs.\n\n### Tier 2 controls, when applicable\n\n_No response_\n\n### Safety confirmation\n\n- [x] No direct push to main, automatic merge, or autonomous issue closure is authorized.\n- [x] No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.\n- [x] Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.\n## 2026-10-13 — AI Navigation backlog reconciliation\n'
+
+FIXTURE_3258 = '## Acceptance criteria\nRepository (satisfied by merged PR #3274):\n- [x] `final` / `succeeded` require a passing terminal content QA over persisted readback. Metadata-only verification yields `persisted`, not `final`.\n- [x] Any unresolved template token in a persisted artifact fails terminal QA with a token-level finding.\n- [x] Missing required content or required visuals fails QA, or reports manual review with the unresolved roles named. The output is never "final".\n- [x] Visual completeness and revision QA run in the build path, keyed to stable role identities.\n- [x] The CLI prints "final" only on QA pass.\n\nLive acceptance (pending, separately governed):\n- [ ] Terminal QA verified over persisted Docs/Slides readback on a real connected build.\n- [ ] Required-visual verification against #3257 placement receipts.\n'
+
+FIXTURE_3333 = '## Acceptance criteria\n\n1. Current Codespace selection reuses the canonical resolver and fails closed for zero, multiple, stale, or invalid candidates.\n\n2. A currently admitted bounded implementation mission can invoke repository engineering operations on the selected Codespace without the user manually opening Codespaces or copying shell commands.\n'
+
+
+def test_satisfaction_recognizes_suffixed_level2_section_3257():
+    projection = project_criterion_satisfaction(FIXTURE_3257)
+    assert projection.notes == ()
+    assert len(projection.criteria) == 7
+    canonical = parse_acceptance_criteria(FIXTURE_3257)
+    assert [(d.index, d.text, d.identity) for d in projection.criteria] == [
+        (c.index, c.text, c.identity) for c in canonical
+    ]
+
+
+def test_satisfaction_recognizes_suffixed_level3_section_3337():
+    projection = project_criterion_satisfaction(FIXTURE_3337)
+    assert projection.notes == ()
+    parsable = [d for d in projection.criteria if d.reason_code != "criterion-unparsable"]
+    unparsable = [d for d in projection.criteria if d.reason_code == "criterion-unparsable"]
+    assert len(parsable) == 12
+    assert len(unparsable) == 4
+    assert all(d.disposition is Disposition.MANUAL_REVIEW for d in unparsable)
+    assert not projection.complete
+    canonical = parse_acceptance_criteria(FIXTURE_3337)
+    assert [(d.index, d.text, d.identity) for d in parsable] == [
+        (c.index, c.text, c.identity) for c in canonical
+    ]
+
+
+def test_preservation_and_satisfaction_agree_on_mixed_section_3258():
+    packet = build_criterion_packet(FIXTURE_3258)
+    projection = project_criterion_satisfaction(FIXTURE_3258)
+    # Same set, same positions, same identities in both modules.
+    assert packet["section_entry_count"] == len(projection.criteria) == 9
+    assert packet["criterion_count"] == 7
+    assert len(packet["manual_review_entries"]) == 2
+    canonical = parse_acceptance_criteria(FIXTURE_3258)
+    parsable = [d for d in projection.criteria if d.reason_code != "criterion-unparsable"]
+    assert [(d.index, d.text, d.identity) for d in parsable] == [
+        (c.index, c.text, c.identity) for c in canonical
+    ]
+    unparsable = [d for d in projection.criteria if d.reason_code == "criterion-unparsable"]
+    assert [d.index for d in unparsable] == [
+        e["index"] for e in packet["manual_review_entries"]
+    ]
+    assert all(d.disposition is Disposition.MANUAL_REVIEW for d in unparsable)
+
+
+def test_numbered_requirements_manual_review_in_both_modules_3333():
+    packet = build_criterion_packet(FIXTURE_3333)
+    projection = project_criterion_satisfaction(FIXTURE_3333)
+    assert packet["criterion_count"] == 0
+    assert packet["section_entry_count"] == len(projection.criteria) == 2
+    assert all(
+        d.disposition is Disposition.MANUAL_REVIEW
+        and d.reason_code == "criterion-unparsable"
+        for d in projection.criteria
+    )
+    assert not projection.complete
+
+
+def test_repaired_projection_is_deterministic():
+    first = project_criterion_satisfaction(FIXTURE_3337)
+    second = project_criterion_satisfaction(FIXTURE_3337)
+    assert first == second
