@@ -57,7 +57,7 @@ jobs:
           PYTHONPATH: 08_Tooling/agent-memory-context-manager/src
         run: |
           python 08_Tooling/ckr4-benchmark-harness/harness.py --tasks "$CKR4_TASKS" --out ckr4-evidence.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ckr4-bounded-evidence
