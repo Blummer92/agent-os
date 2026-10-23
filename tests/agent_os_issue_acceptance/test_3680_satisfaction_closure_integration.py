@@ -1106,26 +1106,72 @@ def test_valid_prebuilt_instance_is_accepted_by_its_own_consumer():
     assert receipt["satisfaction"]["issue_number"] == 3432
 
 
-def test_foreign_module_instance_is_not_a_snapshot_here():
-    # An instance of the OTHER module's snapshot class is neither this
-    # module's instance type nor a dict: rejected, never passed through.
+def test_shared_instance_is_accepted_by_both_consumers_but_stays_identity_bound():
+    # #3690 CR-1 supersedes the former "foreign module instance" rejection:
+    # both consumers now share one validated snapshot class, so a valid
+    # instance is the same evidence type everywhere. What still binds it is
+    # the N1 identity check of each owning consumer — an instance produced
+    # for #996 is accepted by #996's reconciliation input and rejected by a
+    # closure request for #3432.
     crit = closure_module._SatisfactionCriterionSnapshot
     snap = closure_module._SatisfactionSnapshot
-    foreign = snap(
+    instance = snap(
         "Blummer92/agent-os", 996, DIGEST, "complete",
         (crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),),
     )
-    with pytest.raises(TypeError):
-        merged_input(foreign)
+    assert merged_input(instance).satisfaction is instance
+    with pytest.raises(ValueError, match="identity does not match"):
+        closure_request(satisfaction=instance)
+
+
+def test_lookalike_snapshot_types_are_rejected_by_both_consumers():
+    # Only the exact shared class (or an exact dict) is a snapshot; a
+    # subclass, a same-named look-alike carrying every field and property,
+    # or an empty same-named object never passes through.
+    import dataclasses
+
+    shared_snap = closure_module._SatisfactionSnapshot
+    crit = closure_module._SatisfactionCriterionSnapshot
+    fields = (
+        "Blummer92/agent-os", 996, DIGEST, "complete",
+        (crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),),
+    )
+
+    class SubclassSnapshot(shared_snap):
+        __slots__ = ()
+
+    @dataclasses.dataclass(frozen=True)
+    class SatisfactionSnapshot:  # same name and shape as the shared class
+        repository: str
+        issue_number: int
+        issue_body_digest: str
+        status: str
+        criteria: tuple
+
+        @property
+        def complete(self):
+            return self.status == "complete"
+
+        @property
+        def unsatisfied_criteria(self):
+            return ()
+
+    empty = type("SatisfactionSnapshot", (), {})()
+    for value in (SubclassSnapshot(*fields), SatisfactionSnapshot(*fields), empty):
+        with pytest.raises(TypeError):
+            merged_input(value)
+        with pytest.raises(TypeError):
+            closure_request(satisfaction=value)
 
 
 # ---------------------------------------------------------------------------
-# Follow-up N3: cross-module consistency. The two consumers duplicate
-# the snapshot validator by design (no shared framework, no new
-# architecture dependency); this corpus pins them to identical
-# accept/reject outcomes and identical normalized content, so the
-# duplication cannot drift — including the N1 identity-malformed and
-# N2 forged cases.
+# Follow-up N3: cross-module consistency. Since #3690 CR-1 both consumers
+# alias the one shared validation core (``satisfaction_snapshot``); their
+# serializers stay distinct. This corpus now pins that aliasing: a
+# reintroduced local copy behind either module's ``_satisfaction_snapshot``
+# would surface here as divergent outcomes. Rejection through each
+# consumer's own entry point (reconciliation input, closure request) is
+# covered by ``test_3690_shared_satisfaction_validator``.
 # ---------------------------------------------------------------------------
 
 
