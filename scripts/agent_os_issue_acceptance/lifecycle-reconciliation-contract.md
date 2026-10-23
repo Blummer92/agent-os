@@ -142,6 +142,17 @@ exactly as for the packet's other caller-bound fields. When
 no record is carried, the receipt is byte-identical to the pre-#3680
 form.
 
+Both consumers apply one shared validation core,
+`satisfaction_snapshot.py` (#3690 CR-1; approval domain, standard library
+only). It owns the snapshot shape, the exact-type and digest rules, the
+contiguous criterion indexes, and the status derivation; each consumer
+keeps its own identity check against the authoritative issue it holds and
+its own serializer. The two serializers are intentionally distinct: the
+reconciliation block adds `closure_ready`, while the closure receipt block
+carries exactly the snapshot keys, because that key set is part of the
+hashed receipt core and of the verification gate's key-set check. A
+reconciliation block is therefore never a valid closure receipt block.
+
 ## Deterministic regressions
 
 The focused suite covers:
