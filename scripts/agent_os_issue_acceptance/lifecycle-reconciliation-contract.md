@@ -138,7 +138,11 @@ revalidates the block and recomputes it under the same conditional
 rule. The receipt hash binds the cited block against later alteration
 of the receipt; it does not authenticate the evidence itself —
 authenticity rests with the producing verifier and the QA judgment,
-exactly as for the packet's other caller-bound fields. When
+exactly as for the packet's other caller-bound fields. Because a caller
+can recompute that unkeyed hash, the verification gate never trusts the
+receipt's own block (#3690): the caller supplies the satisfaction record
+it reacquired independently, and the gate requires the receipt block to
+equal it — stripped, swapped, or self-attested blocks fail closed. When
 no record is carried, the receipt is byte-identical to the pre-#3680
 form.
 

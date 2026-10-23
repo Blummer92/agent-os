@@ -53,12 +53,14 @@ def test_complete_bound_evidence_admits_and_verifies():
     r=evaluate_issue_closure(rq, s)
     assert r["admitted"] is True
     PRODUCED=produce_lifecycle_mutation_authorization(rq.decision, s)
-    assert verify_closure_admission_receipt(r, authorization=PRODUCED, fresh_snapshot=s, acceptance=acc) is True
+    assert verify_closure_admission_receipt(r, authorization=PRODUCED, fresh_snapshot=s, acceptance=acc, satisfaction=rq.satisfaction) is True
 def test_c5_receipt_cannot_verify_against_drifted_snapshot():
     rq=req(satisfaction=complete()); s=snap(); r=evaluate_issue_closure(rq, s)
     PRODUCED=produce_lifecycle_mutation_authorization(rq.decision, s)
     drifted=snap(rev="rev-2")
-    assert verify_closure_admission_receipt(r, authorization=PRODUCED, fresh_snapshot=drifted, acceptance=rq.acceptance) is False
+    # The trusted record is supplied, so only the revision drift can refuse it.
+    assert verify_closure_admission_receipt(r, authorization=PRODUCED, fresh_snapshot=s, acceptance=rq.acceptance, satisfaction=rq.satisfaction) is True
+    assert verify_closure_admission_receipt(r, authorization=PRODUCED, fresh_snapshot=drifted, acceptance=rq.acceptance, satisfaction=rq.satisfaction) is False
 def test_verify_rejects_receipt_with_incomplete_satisfaction_block():
     rq=req(satisfaction=complete()); s=snap(); r=evaluate_issue_closure(rq, s)
     PRODUCED=produce_lifecycle_mutation_authorization(rq.decision, s)
@@ -69,3 +71,7 @@ def test_verify_rejects_receipt_with_incomplete_satisfaction_block():
     core={k:forged.get(k) for k in _RECEIPT_CORE_KEYS}; core["satisfaction"]=forged["satisfaction"]
     forged["receipt_id"]=_receipt_id(core); forged["reason_codes"]=[]; forged["admitted"]=True
     assert verify_closure_admission_receipt(forged, authorization=PRODUCED, fresh_snapshot=s, acceptance=rq.acceptance) is False
+    # Rejected even when the verifier holds the (complete) trusted record, and
+    # when it is handed the incomplete record itself.
+    assert verify_closure_admission_receipt(forged, authorization=PRODUCED, fresh_snapshot=s, acceptance=rq.acceptance, satisfaction=rq.satisfaction) is False
+    assert verify_closure_admission_receipt(forged, authorization=PRODUCED, fresh_snapshot=s, acceptance=rq.acceptance, satisfaction=incomplete()) is False

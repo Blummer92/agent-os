@@ -730,14 +730,14 @@ def test_tampered_satisfaction_block_fails_verify_gate():
     auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
     assert verify_closure_admission_receipt(
         receipt, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is True
 
     tampered = copy.deepcopy(receipt)
     tampered["satisfaction"]["criteria"][0]["disposition"] = "missing"
     assert verify_closure_admission_receipt(
         tampered, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
     tampered_pointer = copy.deepcopy(receipt)
@@ -746,14 +746,14 @@ def test_tampered_satisfaction_block_fails_verify_gate():
     ]
     assert verify_closure_admission_receipt(
         tampered_pointer, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
     stripped = copy.deepcopy(receipt)
     del stripped["satisfaction"]
     assert verify_closure_admission_receipt(
         stripped, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
 
@@ -771,7 +771,7 @@ def test_inconsistent_satisfaction_block_in_receipt_fails_verify_gate():
     forged["satisfaction"]["status"] = "complete"
     assert verify_closure_admission_receipt(
         forged, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
 
@@ -928,21 +928,21 @@ def test_receipt_satisfaction_identity_tamper_fails_verify_gate():
     auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
     assert verify_closure_admission_receipt(
         receipt, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is True
 
     swapped_issue = copy.deepcopy(receipt)
     swapped_issue["satisfaction"]["issue_number"] = 3306
     assert verify_closure_admission_receipt(
         swapped_issue, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
     swapped_repo = copy.deepcopy(receipt)
     swapped_repo["satisfaction"]["repository"] = "Other/repo"
     assert verify_closure_admission_receipt(
         swapped_repo, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
     # A pre-N1 block shape (identity keys stripped) no longer validates.
@@ -951,7 +951,7 @@ def test_receipt_satisfaction_identity_tamper_fails_verify_gate():
     del old_shape["satisfaction"]["issue_number"]
     assert verify_closure_admission_receipt(
         old_shape, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
 
@@ -981,7 +981,7 @@ def test_verify_gate_rejects_satisfaction_identity_mismatch_with_recomputed_id()
     # Control: the unmodified receipt verifies.
     assert verify_closure_admission_receipt(
         receipt, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is True
 
     forged_repo = copy.deepcopy(receipt)
@@ -989,7 +989,7 @@ def test_verify_gate_rejects_satisfaction_identity_mismatch_with_recomputed_id()
     forged_repo["receipt_id"] = _recompute_receipt_id(forged_repo)
     assert verify_closure_admission_receipt(
         forged_repo, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
     forged_issue = copy.deepcopy(receipt)
@@ -997,7 +997,7 @@ def test_verify_gate_rejects_satisfaction_identity_mismatch_with_recomputed_id()
     forged_issue["receipt_id"] = _recompute_receipt_id(forged_issue)
     assert verify_closure_admission_receipt(
         forged_issue, authorization=auth, fresh_snapshot=closure_snap,
-        acceptance=req.acceptance,
+        acceptance=req.acceptance, satisfaction=snap,
     ) is False
 
 

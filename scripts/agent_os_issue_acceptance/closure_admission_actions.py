@@ -226,20 +226,53 @@ class ClosureIssueReadback:
     observed by the host's canonical read. ``state_reason`` must be
     ``None`` or one of ``"completed"`` / ``"not_planned"`` /
     ``"duplicate"``; anything else raises ``ValueError``.
+
+    ``issue_body_digest`` (#3690 ADV-1) is the sha256 hex digest of the
+    issue body observed by the same canonical read, when the reader can
+    supply it. ``run_closure_batch`` passes it to ``evaluate_issue_closure``
+    as the current digest, so a satisfaction record produced for a
+    superseded body revision cannot authorize closure; dispatch is then
+    bound to that exact evaluated revision by the verification gate.
+    ``None`` means the reader supplied no body evidence; currentness is
+    then neither proven nor fabricated.
     """
 
     snapshot: LifecycleStateSnapshot
     state_reason: str | None
+    issue_body_digest: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.snapshot) is not LifecycleStateSnapshot:
             raise TypeError("snapshot must be a LifecycleStateSnapshot")
         if self.state_reason is not None and self.state_reason not in CLOSURE_STATE_REASONS:
             raise ValueError("state_reason is unsupported")
+        if self.issue_body_digest is not None and not _is_body_digest(
+            self.issue_body_digest
+        ):
+            raise ValueError(
+                "issue_body_digest must be None or a 64-char lowercase hex digest"
+            )
+
+
+def _is_body_digest(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
 
 
 class ClosureIssueReader(Protocol):
-    """Canonical GitHub read surface supplied by the host."""
+    """Canonical GitHub read surface supplied by the host.
+
+    ``read_issue_readback`` should report ``issue_body_digest`` (#3690
+    ADV-1) so satisfaction currentness is proven rather than unavailable.
+    The pre-dispatch ``read_issue_snapshot`` carries no digest, so a body
+    edit between the two reads is refused only through the exact snapshot
+    binding: the reader's ``observed_revision`` must change whenever the
+    issue body changes (a content-addressed revision such as
+    ``github-issue-v1`` does).
+    """
 
     def read_issue_snapshot(
         self, repository: str, issue_number: int
@@ -276,6 +309,10 @@ _RECEIPT_CORE_KEYS = (
     "host_dispatch_contract",
     "next_action",
 )
+
+
+def _canonical_block(block: object) -> str:
+    return json.dumps(block, sort_keys=True, separators=(",", ":"))
 
 
 def _receipt_id(core: dict[str, object]) -> str:
@@ -440,9 +477,30 @@ def evaluate_issue_closure(
             satisfaction=satisfaction_block,
             next_action="obtain-acceptance-for-this-issue",
         )
+    # #3690 ADV-2: a QA record that claims a validated head can only be
+    # honoured against a snapshot that carries a comparable head. A
+    # head-less snapshot neither confirms nor refutes the binding, so it
+    # fails closed instead of silently skipping the comparison. Unbound QA
+    # evidence (no validated_head_sha) is unaffected: legitimate issue-only
+    # closure never needs a manufactured PR head.
     if (
         request.acceptance.validated_head_sha is not None
-        and snapshot.source_head is not None
+        and snapshot.source_head is None
+    ):
+        return _receipt(
+            repository=repository,
+            issue_number=issue_number,
+            admitted=False,
+            reason_codes=("closure.acceptance-head-unverifiable",),
+            authorization_id=None,
+            admission_result_id=None,
+            snapshot_id=snapshot.snapshot_id,
+            acceptance_evidence_id=request.acceptance.evidence_id,
+            satisfaction=satisfaction_block,
+            next_action="reacquire-snapshot-with-validated-head",
+        )
+    if (
+        request.acceptance.validated_head_sha is not None
         and request.acceptance.validated_head_sha != snapshot.source_head
     ):
         return _receipt(
@@ -538,6 +596,8 @@ def verify_closure_admission_receipt(
     authorization: LifecycleMutationAuthorization,
     fresh_snapshot: LifecycleStateSnapshot,
     acceptance: ClosureAcceptanceEvidence,
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None,
+    current_issue_body_digest: str | None = None,
 ) -> bool:
     """Caller-bound host gate: recompute everything outside the receipt.
 
@@ -553,6 +613,27 @@ def verify_closure_admission_receipt(
     forgery — stale revision, changed labels/state, wrong issue, tampered
     receipt fields, synthetic receipts that never passed evaluation —
     fails closed.
+
+    Satisfaction (#3690 ADV-6/ADV-7). The receipt id is an unkeyed content
+    hash, so a caller can recompute it after editing the receipt; it binds
+    the receipt's own bytes and authenticates nothing. A satisfaction block
+    carried inside the receipt is therefore never trusted on its own. The
+    caller supplies ``satisfaction`` — the satisfaction record it reacquired
+    independently of the receipt, exactly like ``acceptance`` — and the gate
+    requires the receipt block and the trusted record to agree: a receipt
+    that cites satisfaction verifies only when a matching, complete,
+    same-issue trusted record is supplied, and a supplied trusted record
+    verifies only a receipt that carries exactly its block. Stripping the
+    block, swapping it, or adding one the verifier does not hold fails
+    closed. When neither side carries satisfaction the gate behaves exactly
+    as before: satisfaction stays optional (mandatory satisfaction is the
+    separate #3676 decision).
+
+    ``current_issue_body_digest`` (#3690 ADV-1) is the digest of the issue
+    body as freshly read before dispatch. When supplied it must be a valid
+    digest and must equal the trusted satisfaction record's digest; a digest
+    without a trusted satisfaction record has nothing to bind and fails
+    closed.
     """
     if type(receipt) is not dict:
         return False
@@ -562,25 +643,39 @@ def verify_closure_admission_receipt(
         "merge_authorized",
         "side_effects_performed",
     }
-    satisfaction_snapshot: _SatisfactionSnapshot | None = None
-    satisfaction_core: dict[str, object] | None = None
-    if "satisfaction" in receipt:
-        # #3680: a satisfaction block is admitted to the key set only as
-        # an additional core field. It must pass the same strict snapshot
-        # validation the request boundary applies (shape, types, and
-        # status/criteria consistency — a forged or inconsistent block
-        # fails closed here), and its normalized form is integrity-checked
-        # below by the same conditional receipt-id recomputation that
-        # produced it. The recomputation binds the block to this receipt;
-        # it does not authenticate the underlying evidence.
+    trusted: _SatisfactionSnapshot | None = None
+    if satisfaction is not None:
         try:
-            satisfaction_snapshot = _satisfaction_snapshot(
-                receipt.get("satisfaction")
-            )
-            satisfaction_core = _satisfaction_block(satisfaction_snapshot)
+            trusted = _satisfaction_snapshot(satisfaction)
+        except (TypeError, ValueError):
+            return False
+    if ("satisfaction" in receipt) != (trusted is not None):
+        # A self-attested block with no trusted record, or a trusted record
+        # whose block was stripped from the receipt (ADV-6), never verifies.
+        return False
+    satisfaction_core: dict[str, object] | None = None
+    if trusted is not None:
+        satisfaction_core = _satisfaction_block(trusted)
+        # ADV-7: the receipt must cite exactly the trusted record. The block
+        # is first strictly validated (exact built-in types, so ``True`` is
+        # never an index and ``3432.0`` never an issue number), then compared
+        # by canonical bytes rather than Python equality; a swapped,
+        # substituted, re-typed, or re-ordered block fails closed.
+        try:
+            _satisfaction_snapshot(receipt.get("satisfaction"))
+            if _canonical_block(receipt.get("satisfaction")) != _canonical_block(
+                satisfaction_core
+            ):
+                return False
         except (TypeError, ValueError):
             return False
         allowed_keys.add("satisfaction")
+    if current_issue_body_digest is not None and (
+        trusted is None
+        or not _is_body_digest(current_issue_body_digest)
+        or trusted.issue_body_digest != current_issue_body_digest
+    ):
+        return False
     if set(receipt) != allowed_keys:
         return False
     if type(authorization) is not LifecycleMutationAuthorization:
@@ -597,17 +692,22 @@ def verify_closure_admission_receipt(
         return False
     if acceptance.evaluator_id == authorization.authorizer_id:
         return False
-    # Lane B (#3489): a receipt carrying a present-but-incomplete
-    # satisfaction record can never verify, and bound QA evidence must
-    # name the authorized issue and the fresh snapshot's exact head.
-    if satisfaction_snapshot is not None and not satisfaction_snapshot.complete:
+    # Lane B (#3489): a present-but-incomplete satisfaction record can never
+    # verify, and bound QA evidence must name the authorized issue and the
+    # fresh snapshot's exact head. ADV-2: a head-less fresh snapshot cannot
+    # confirm a head binding, so it fails closed.
+    if trusted is not None and not trusted.complete:
+        return False
+    if trusted is not None and (
+        trusted.repository != authorization.repository
+        or trusted.issue_number != authorization.issue_number
+    ):
         return False
     if acceptance.issue_number is not None and acceptance.issue_number != authorization.issue_number:
         return False
-    if (
-        acceptance.validated_head_sha is not None
-        and fresh_snapshot.source_head is not None
-        and acceptance.validated_head_sha != fresh_snapshot.source_head
+    if acceptance.validated_head_sha is not None and (
+        fresh_snapshot.source_head is None
+        or acceptance.validated_head_sha != fresh_snapshot.source_head
     ):
         return False
     if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
@@ -626,15 +726,14 @@ def verify_closure_admission_receipt(
         return False
     if receipt.get("issue_number") != authorization.issue_number:
         return False
-    if satisfaction_snapshot is not None and (
-        satisfaction_snapshot.repository != receipt.get("repository")
-        or satisfaction_snapshot.issue_number != receipt.get("issue_number")
+    if trusted is not None and (
+        trusted.repository != receipt.get("repository")
+        or trusted.issue_number != receipt.get("issue_number")
     ):
         # #3680: the receipt-id recomputation binds the block's bytes, not
-        # its identity — a foreign block carrying a correctly recomputed
-        # id would otherwise pass. The cited evidence must belong to this
-        # receipt's canonical repository and issue (the fields just bound
-        # to the authorization above).
+        # its identity. The cited evidence must belong to this receipt's
+        # canonical repository and issue (the fields just bound to the
+        # authorization above).
         return False
     if receipt.get("authorization_id") != authorization.authorization_id:
         return False
@@ -680,20 +779,31 @@ def _identity_mismatch(
     return snapshot.repository != repository or snapshot.issue_number != issue_number
 
 
-def _readback_status(
-    readback: ClosureIssueReadback, *, wrote: bool
+def classify_closure_readback(
+    *,
+    issue_closed: bool,
+    state_reason: str | None,
+    lifecycle_labels: tuple[str, ...],
+    wrote: bool,
 ) -> tuple[str, tuple[str, ...], bool]:
-    """Classify a canonical readback (snapshot + ``state_reason``).
+    """Classify one canonical issue readback (state, ``state_reason``, labels).
 
-    A closed snapshot is verified only when ``state_reason`` is
-    ``"completed"``; ``"not_planned"``/``"duplicate"`` is a reason
-    mismatch and a missing reason is unverified. An open snapshot
-    carrying a terminal reason is inconsistent.
+    The single closure-readback rule, shared by ``run_closure_batch`` and
+    the lane post-PR readback proof (#3690 ADV-5). A closed issue is
+    verified only when ``state_reason`` is ``"completed"``;
+    ``"not_planned"``/``"duplicate"`` is a reason mismatch and a missing
+    reason is unverified. A verified closure that still carries the Ready
+    label is flagged for separately admitted label reconciliation. An open
+    issue carrying a terminal reason is inconsistent. Returns
+    ``(status, reason_codes, verified)``.
     """
-    snapshot = readback.snapshot
-    if snapshot.issue_state == "closed":
-        if readback.state_reason == "completed":
-            if READY_LABEL in snapshot.lifecycle_labels:
+    if type(issue_closed) is not bool or type(wrote) is not bool:
+        raise TypeError("issue_closed and wrote must be built-in bools")
+    if state_reason is not None and state_reason not in CLOSURE_STATE_REASONS:
+        raise ValueError("state_reason is unsupported")
+    if issue_closed:
+        if state_reason == "completed":
+            if READY_LABEL in lifecycle_labels:
                 # Closure is proven; the stale Ready label is a separate,
                 # separately-admitted reconciliation — never edited here.
                 return (
@@ -702,7 +812,7 @@ def _readback_status(
                     True,
                 )
             return "closed-verified", ("closure.readback-closed",), True
-        if readback.state_reason in ("not_planned", "duplicate"):
+        if state_reason in ("not_planned", "duplicate"):
             return (
                 "closed-reason-mismatch",
                 ("closure.readback-reason-mismatch",),
@@ -713,11 +823,24 @@ def _readback_status(
             ("closure.readback-reason-unverified",),
             False,
         )
-    if readback.state_reason is not None:
+    if state_reason is not None:
         return "readback-inconsistent", ("closure.readback-inconsistent",), False
     if wrote:
         return "write-unverified", ("closure.readback-still-open",), False
     return "still-open", ("closure.readback-still-open",), False
+
+
+def _readback_status(
+    readback: ClosureIssueReadback, *, wrote: bool
+) -> tuple[str, tuple[str, ...], bool]:
+    """Classify a canonical readback (snapshot + ``state_reason``)."""
+    snapshot = readback.snapshot
+    return classify_closure_readback(
+        issue_closed=snapshot.issue_state == "closed",
+        state_reason=readback.state_reason,
+        lifecycle_labels=snapshot.lifecycle_labels,
+        wrote=wrote,
+    )
 
 
 def run_closure_batch(
@@ -800,7 +923,14 @@ def run_closure_batch(
                 )
             )
             continue
-        receipt = evaluate_issue_closure(request, snapshot)
+        # ADV-1: the canonical readback's own body digest (when the reader
+        # supplies one) is the currentness evidence for the satisfaction
+        # record; a record bound to any other body revision is stale.
+        receipt = evaluate_issue_closure(
+            request,
+            snapshot,
+            current_issue_body_digest=initial_readback.issue_body_digest,
+        )
         if receipt["admitted"] is not True:
             outcomes.append(
                 ClosureBatchOutcome(
@@ -840,11 +970,17 @@ def run_closure_batch(
                 )
             )
             continue
+        # The request's own satisfaction record is the trusted evidence the
+        # gate binds the receipt block to (ADV-6/ADV-7). Body currentness was
+        # proven at evaluation against this iteration's canonical readback;
+        # the gate's exact snapshot binding then refuses any revision that
+        # moved before dispatch.
         if not verify_closure_admission_receipt(
             receipt,
             authorization=authorization,
             fresh_snapshot=fresh,
             acceptance=request.acceptance,
+            satisfaction=request.satisfaction,
         ):
             outcomes.append(
                 ClosureBatchOutcome(
