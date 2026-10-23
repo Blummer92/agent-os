@@ -71,6 +71,35 @@ def test_draft_validation_jobs_are_owner_scoped_main_only_and_fixed_form():
     assert "!startsWith(github.event.comment.body, '/agent-os validate-draft')" in ingress_condition
 
 
+SERVICE_ACTOR_ID = "199175422"  # chatgpt-codex-connector[bot]
+
+
+def test_draft_validation_jobs_also_admit_the_service_actor():
+    for name in DRAFT_VALIDATION_JOBS:
+        condition = _workflow()["jobs"][name]["if"]
+        assert f"github.event.comment.user.id == {SERVICE_ACTOR_ID}" in condition
+
+
+def test_no_other_job_admits_the_service_actor():
+    for name, job in _workflow()["jobs"].items():
+        if name in DRAFT_VALIDATION_JOBS:
+            continue
+        assert SERVICE_ACTOR_ID not in yaml.safe_dump(job), name
+        assert "chatgpt-codex-connector" not in yaml.safe_dump(job), name
+
+
+def test_draft_validation_parse_steps_scope_the_service_actor():
+    # The parser flag is what confines the app identity to validate-draft;
+    # both draft jobs must pass it, and no other job may.
+    for name, job in _workflow()["jobs"].items():
+        text = yaml.safe_dump(job)
+        if name in DRAFT_VALIDATION_JOBS:
+            assert "--draft-validation-service-actor" in text, name
+            assert "chatgpt-codex-connector[bot]" in text, name
+        else:
+            assert "--draft-validation-service-actor" not in text, name
+
+
 def test_only_the_dispatch_job_can_hold_actions_write():
     for name, job in _workflow()["jobs"].items():
         grants = job.get("permissions", {})

@@ -42,6 +42,10 @@ _DEV_VALIDATE_RE = re.compile(
 )
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
+# The service actor is an operator-configured identity (hardcoded by the
+# calling workflow), never an event- or input-derived value.
+_SERVICE_ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}(?:\[bot\])?", re.ASCII)
+_DRAFT_VALIDATION_PREFIX = "/agent-os validate-draft "
 _PPUX_PROJECTION_RE = re.compile(
     r"/agent-os project-ppux-prompts (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "
     r"(?P<sha>[0-9a-f]{40}) (?P<input_ref>[0-9a-f]{64})",
@@ -205,9 +209,10 @@ def _looks_like_notion_id(value:str)->bool:
 def _valid_notion_read_request_id(request_id:str)->bool:
     return 3<=len(request_id)<=63 and not request_id.startswith("-") and not request_id.endswith("-") and "--" not in request_id and not _looks_like_notion_id(request_id)
 
-def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_actor:str,run_attempt:int)->IssueCommentIngressResult:
+def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_actor:str,run_attempt:int,draft_validation_service_actor:str|None=None)->IssueCommentIngressResult:
     if not _REPOSITORY_RE.fullmatch(expected_repository): raise ValueError("expected_repository must use owner/name syntax")
     if not _ACTOR_RE.fullmatch(allowed_actor): raise ValueError("allowed_actor must use GitHub login syntax")
+    if draft_validation_service_actor is not None and not _SERVICE_ACTOR_RE.fullmatch(draft_validation_service_actor): raise ValueError("draft_validation_service_actor must use GitHub login syntax")
     if type(run_attempt) is not int or run_attempt<1: raise ValueError("run_attempt must be a positive integer")
     if type(event) is not dict:return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
     action=event.get("action");repository=event.get("repository");issue=event.get("issue");comment=event.get("comment");sender=event.get("sender")
@@ -220,9 +225,15 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if "pull_request" in issue:return _result(status="ignored",reason="pull-request-comment",**common)
     if repo_name!=expected_repository:return _result(status="blocked",reason="repository-mismatch",**common)
     if run_attempt!=1:return _result(status="blocked",reason="workflow-rerun",**common)
-    if actor!=allowed_actor:return _result(status="blocked",reason="actor-not-allowed",**common)
+    actor_is_service=draft_validation_service_actor is not None and actor==draft_validation_service_actor and actor!=allowed_actor
+    if actor!=allowed_actor and not actor_is_service:return _result(status="blocked",reason="actor-not-allowed",**common)
     if sender_login!=actor:return _result(status="blocked",reason="actor-evidence-mismatch",**common)
     body=comment.get("body")
+    # The service actor is admitted for the validate-draft operation only. The
+    # prefix is a coarse prefilter (the same pattern the workflow job-ifs use);
+    # the exact grammar remains _DRAFT_VALIDATION_RE below, and no other
+    # operation grammar can match a body with this prefix.
+    if actor_is_service and not (type(body) is str and body.startswith(_DRAFT_VALIDATION_PREFIX)):return _result(status="blocked",reason="actor-not-allowed",**common)
     if type(body) is not str or len(body.encode("utf-8"))>MAX_COMMENT_BYTES:return _result(status="ignored",reason="malformed-trigger",**common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
@@ -284,6 +295,6 @@ def _read_event(path:Path)->object:
 def _write_result(path:Path,result:IssueCommentIngressResult)->None:
     path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(result.to_dict(),sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
 def main(argv:list[str]|None=None)->int:
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--event",type=Path,required=True);parser.add_argument("--repository",required=True);parser.add_argument("--allowed-actor",required=True);parser.add_argument("--run-attempt",type=int,required=True);parser.add_argument("--output",type=Path,required=True);args=parser.parse_args(argv)
-    result=admit_issue_comment_event(_read_event(args.event),expected_repository=args.repository,allowed_actor=args.allowed_actor,run_attempt=args.run_attempt);_write_result(args.output,result);print(json.dumps(result.to_dict(),sort_keys=True));return 0
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--event",type=Path,required=True);parser.add_argument("--repository",required=True);parser.add_argument("--allowed-actor",required=True);parser.add_argument("--draft-validation-service-actor");parser.add_argument("--run-attempt",type=int,required=True);parser.add_argument("--output",type=Path,required=True);args=parser.parse_args(argv)
+    result=admit_issue_comment_event(_read_event(args.event),expected_repository=args.repository,allowed_actor=args.allowed_actor,run_attempt=args.run_attempt,draft_validation_service_actor=args.draft_validation_service_actor);_write_result(args.output,result);print(json.dumps(result.to_dict(),sort_keys=True));return 0
 if __name__=="__main__":raise SystemExit(main())
