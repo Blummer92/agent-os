@@ -83,6 +83,13 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     LifecycleMutationAdmissionResult,
     LifecycleStateSnapshot,
 )
+from scripts.agent_os_issue_acceptance.criterion_satisfaction import (
+    CriterionEvidence,
+    PrLineageEntry,
+    issue_body_digest,
+    project_criterion_satisfaction,
+    satisfaction_snapshot,
+)
 from scripts.agent_os_issue_acceptance.lifecycle_reconciliation import (
     ActionCategory,
     LifecycleReconciliationInput,
@@ -1220,3 +1227,130 @@ def test_snapshot_validation_is_consistent_across_consumers(name):
         except (TypeError, ValueError):
             outcomes.append(("reject",))
     assert outcomes[0] == outcomes[1]
+
+
+# ---------------------------------------------------------------------------
+# CR-2 (#3690): the reporting-side serializer. Until now the tests above
+# hand-built every snapshot dict; ``satisfaction_snapshot`` is the
+# production producer that turns a real ``SatisfactionProjection`` into
+# exactly that dict. Round-trip: projector -> serializer -> both
+# consumers' ``_satisfaction_snapshot`` validators.
+# ---------------------------------------------------------------------------
+
+_SERIALIZER_BODY = """## Acceptance criteria
+
+- [ ] Alpha criterion is verified.
+- [ ] Beta criterion is verified.
+- [ ] Gamma criterion is verified.
+"""
+
+_SERIALIZER_PR = PrLineageEntry(pr_number=101, state="merged", head_sha="aaa111")
+
+
+def _serializer_verdict(index, body=_SERIALIZER_BODY):
+    return CriterionEvidence(
+        criterion_index=index,
+        kind="criterion-verdict",
+        verdict="supports",
+        pr_number=_SERIALIZER_PR.pr_number,
+        pr_head_sha=_SERIALIZER_PR.head_sha,
+        issue_body_digest=issue_body_digest(body),
+        source=f"pr:101@aaa111/qa-verdict-{index}",
+    )
+
+
+def _serializer_projection(kind):
+    if kind == "complete":
+        return project_criterion_satisfaction(
+            _SERIALIZER_BODY,
+            [_serializer_verdict(i) for i in (1, 2, 3)],
+            [_SERIALIZER_PR],
+        )
+    if kind == "incomplete":
+        return project_criterion_satisfaction(
+            _SERIALIZER_BODY, [_serializer_verdict(1)], [_SERIALIZER_PR]
+        )
+    # No criteria section at all: manual-review with zero criteria.
+    return project_criterion_satisfaction("## Objective\n\nNothing here.\n")
+
+
+def test_serializer_produces_exact_3680_snapshot_shape():
+    projection = _serializer_projection("complete")
+    serialized = satisfaction_snapshot(
+        projection, repository="Blummer92/agent-os", issue_number=996
+    )
+    assert set(serialized) == {
+        "repository",
+        "issue_number",
+        "issue_body_digest",
+        "status",
+        "criteria",
+    }
+    assert serialized["repository"] == "Blummer92/agent-os"
+    assert serialized["issue_number"] == 996
+    assert serialized["issue_body_digest"] == projection.issue_body_digest
+    assert serialized["issue_body_digest"] == issue_body_digest(_SERIALIZER_BODY)
+    assert serialized["status"] == "complete"
+    assert type(serialized["status"]) is str
+    assert len(serialized["criteria"]) == 3
+    for item, disposition in zip(serialized["criteria"], projection.criteria):
+        # Exact criterion key set: CriterionDisposition.text is dropped.
+        assert set(item) == {
+            "index",
+            "identity",
+            "disposition",
+            "reason_code",
+            "evidence",
+        }
+        assert "text" not in item
+        assert item["index"] == disposition.index
+        assert item["identity"] == disposition.identity
+        assert item["disposition"] == disposition.disposition.value
+        assert type(item["disposition"]) is str
+        assert item["reason_code"] == disposition.reason_code
+        assert item["evidence"] == list(disposition.evidence)
+        assert type(item["evidence"]) is list
+
+
+@pytest.mark.parametrize("kind", ["complete", "incomplete", "manual-review"])
+def test_serializer_round_trip_accepted_identically_by_both_consumers(kind):
+    projection = _serializer_projection(kind)
+    serialized = satisfaction_snapshot(
+        projection, repository="Blummer92/agent-os", issue_number=996
+    )
+    expected = (
+        serialized["repository"],
+        serialized["issue_number"],
+        serialized["issue_body_digest"],
+        serialized["status"],
+        tuple(
+            (
+                item["index"],
+                item["identity"],
+                item["disposition"],
+                item["reason_code"],
+                tuple(item["evidence"]),
+            )
+            for item in serialized["criteria"]
+        ),
+    )
+    outcomes = []
+    for module in _SNAPSHOT_MODULES:
+        parsed = module._satisfaction_snapshot(copy.deepcopy(serialized))
+        outcomes.append(_normalized(parsed))
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[0] == expected
+
+
+def test_serializer_round_trip_tampered_status_rejected_by_both_consumers():
+    serialized = satisfaction_snapshot(
+        _serializer_projection("incomplete"),
+        repository="Blummer92/agent-os",
+        issue_number=996,
+    )
+    assert serialized["status"] == "incomplete"
+    tampered = copy.deepcopy(serialized)
+    tampered["status"] = "complete"  # forged completeness over missing criteria
+    for module in _SNAPSHOT_MODULES:
+        with pytest.raises((TypeError, ValueError)):
+            module._satisfaction_snapshot(copy.deepcopy(tampered))
