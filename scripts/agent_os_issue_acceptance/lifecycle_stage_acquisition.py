@@ -44,7 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from .issue_operational_state import (
@@ -227,7 +227,10 @@ class LifecycleStageAcquisitionRequest:
     observed_at: str
     pr_lineage: tuple[VerifiedPrLineage, ...]
     lineage_enumeration: PrLineageEnumeration
-    association_policy: str = ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
+    # Required and keyword-only (#3690 CR-4): every caller names its PR
+    # association policy explicitly, so no library default can silently
+    # diverge from the shadow-run CLI's explicit default.
+    association_policy: str = field(kw_only=True)
 
     def __post_init__(self) -> None:
         _repository(self.repository)

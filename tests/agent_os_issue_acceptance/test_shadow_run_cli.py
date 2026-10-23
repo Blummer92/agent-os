@@ -575,3 +575,34 @@ def test_association_policy_cli_default_is_declared_non_closing() -> None:
         cli._parse_args([
             "--campaign-id", "invalid", "--association-policy", "automatic",
         ])
+
+
+# #3690 CR-4: the library has no default, so the CLI is the only place a
+# policy is chosen. Pin that the parsed value (default or explicit) is the
+# exact value the one PrLineageAcquirer construction receives.
+@pytest.mark.parametrize(
+    "flag,expected",
+    [
+        ((), "declared-non-closing-v1"),
+        (("--association-policy", "declared-non-closing-v1"), "declared-non-closing-v1"),
+        (("--association-policy", "closing-directive-v1"), "closing-directive-v1"),
+    ],
+)
+def test_cli_forwards_the_parsed_association_policy_to_the_acquirer(
+    monkeypatch, tmp_path, flag, expected
+) -> None:
+    seen = []
+    real = cli.PrLineageAcquirer
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs.get("association_policy"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "PrLineageAcquirer", recording)
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request), *flag
+    )
+    assert code == 0
+    assert record is not None
+    assert seen == [expected]

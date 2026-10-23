@@ -115,5 +115,12 @@ shape is otherwise unchanged.
 `primary_claims` and `approval_applicability` remain unset by the CLI,
 so an acquired lifecycle stage cannot independently select or execute.
 
+Library callers have no default (#3690 CR-4): `PrLineageAcquirer` and
+`LifecycleStageAcquisitionRequest` take `association_policy` as a required
+keyword-only argument, so omitting it raises `TypeError` instead of silently
+selecting `closing-directive-v1`. The CLI default (`declared-non-closing-v1`)
+is the only default, and the CLI always passes the parsed value explicitly.
+Policy semantics are unchanged.
+
 Rollback: revert the default-activation change. Workflow activation,
 Ready, merge, and issue closure require separate owner decisions.

@@ -29,6 +29,8 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     LifecycleStage,
 )
 from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+    ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
     LIFECYCLE_ACQUISITION_REASON_CODES,
     REASON_ACQUIRED,
     REASON_CLOSED_UNMERGED_PR,
@@ -99,6 +101,7 @@ def acquisition_request(**changes: object) -> LifecycleStageAcquisitionRequest:
         observed_at=OBSERVED_AT,
         pr_lineage=(),
         lineage_enumeration=complete_enumeration(),
+        association_policy=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     )
     base.update(changes)
     return LifecycleStageAcquisitionRequest(**base)  # type: ignore[arg-type]
@@ -574,3 +577,64 @@ def test_non_closing_policy_enforces_currentness_and_strict_vocabulary() -> None
     )
     with pytest.raises(ValueError, match="association_policy"):
         acquisition_request(association_policy="automatic")
+
+
+# #3690 CR-4: the association policy is a required, keyword-only input.
+# There is no library default that could silently diverge from the
+# shadow-run CLI's explicit default; policy semantics are unchanged.
+def _request_fields_without_policy() -> dict[str, object]:
+    fields = dict(
+        repository=REPOSITORY,
+        issue_number=ISSUE_NUMBER,
+        issue_state=IssueState.OPEN,
+        issue_source_revision=ISSUE_REVISION,
+        source_revision=SOURCE_REVISION,
+        observed_at=OBSERVED_AT,
+        pr_lineage=(),
+        lineage_enumeration=complete_enumeration(),
+    )
+    return fields
+
+
+def test_association_policy_is_required() -> None:
+    with pytest.raises(TypeError, match="association_policy"):
+        LifecycleStageAcquisitionRequest(**_request_fields_without_policy())  # type: ignore[call-arg]
+
+
+def test_association_policy_is_keyword_only() -> None:
+    positional = tuple(_request_fields_without_policy().values())
+    with pytest.raises(TypeError):
+        LifecycleStageAcquisitionRequest(  # type: ignore[misc]
+            *positional, ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
+        )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1, ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1],
+)
+def test_explicit_policy_values_are_accepted_unchanged(policy) -> None:
+    request = acquisition_request(pr_lineage=(pr_claim(),), association_policy=policy)
+    assert request.association_policy == policy
+    # A canonical closing directive acquires the same stage under either policy.
+    assert acquire_lifecycle_stage(request).lifecycle_stage is LifecycleStage.REVIEW
+
+
+@pytest.mark.parametrize("policy", ["", "automatic", "CLOSING-DIRECTIVE-V1", None, 1])
+def test_unsupported_association_policy_still_fails_closed(policy) -> None:
+    with pytest.raises(ValueError, match="association_policy"):
+        acquisition_request(association_policy=policy)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1, ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1],
+)
+def test_claim_limit_still_fails_closed_under_either_policy(policy) -> None:
+    from scripts.agent_os_issue_acceptance.issue_operational_state import (
+        MAX_PRIMARY_CLAIMS,
+    )
+
+    lineage = tuple(pr_claim(1000 + n) for n in range(MAX_PRIMARY_CLAIMS + 1))
+    with pytest.raises(ValueError, match="pr_lineage exceeds its bound"):
+        acquisition_request(pr_lineage=lineage, association_policy=policy)
