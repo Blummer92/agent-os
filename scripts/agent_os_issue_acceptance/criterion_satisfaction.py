@@ -51,6 +51,7 @@ __all__ = [
     "issue_body_digest",
     "project_criterion_satisfaction",
     "satisfaction_informational_checks",
+    "satisfaction_snapshot",
 ]
 
 #: Fixed authority boundary line attached to every informational check, in
@@ -382,6 +383,41 @@ def project_criterion_satisfaction(
     else:
         status = CriterionSatisfactionStatus.INCOMPLETE
     return SatisfactionProjection(body_digest, dispositions, status, tuple(notes))
+
+
+def satisfaction_snapshot(
+    projection: SatisfactionProjection, *, repository: str, issue_number: int
+) -> dict[str, object]:
+    """Serialize one projection as the #3680 snapshot mapping.
+
+    Produces exactly the plain-dict shape the approval-domain consumers
+    (``closure_admission_actions`` and ``lifecycle_reconciliation``)
+    validate at their boundaries: ``{repository, issue_number,
+    issue_body_digest, status, criteria: [{index, identity, disposition,
+    reason_code, evidence}]}``, with ``status`` and each ``disposition``
+    as their ``.value`` strings and each criterion's evidence pointers
+    as a list. ``CriterionDisposition.text`` is dropped: it is not part
+    of the exact snapshot key set. The projection is deliberately
+    issue-identity-free, so ``repository`` and ``issue_number`` are
+    supplied by the caller. Pure function, no I/O; the consumers remain
+    the fail-closed validation boundary.
+    """
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "issue_body_digest": projection.issue_body_digest,
+        "status": projection.status.value,
+        "criteria": [
+            {
+                "index": item.index,
+                "identity": item.identity,
+                "disposition": item.disposition.value,
+                "reason_code": item.reason_code,
+                "evidence": list(item.evidence),
+            }
+            for item in projection.criteria
+        ],
+    }
 
 
 def satisfaction_informational_checks(
