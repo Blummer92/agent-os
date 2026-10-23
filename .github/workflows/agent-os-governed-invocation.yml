@@ -780,7 +780,11 @@ jobs:
     # of Actions write authority in this workflow; its token is confined to this job.
     # It dispatches the existing validation workflow for one open Draft PR at
     # its exact head. It never marks a PR Ready, merges, or closes an issue.
-    if: ${{ github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    # The GitHub Service Agent app identity (chatgpt-codex-connector[bot],
+    # user id 199175422) is admitted for this validate-draft operation only:
+    # the ingress parser enforces that scope in-job; every other operation in
+    # this workflow remains owner-only.
+    if: ${{ github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && (github.event.comment.user.id == 32861845 || github.event.comment.user.id == 199175422) && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -813,6 +817,7 @@ jobs:
               --event "$GITHUB_EVENT_PATH" \
               --repository "$GITHUB_REPOSITORY" \
               --allowed-actor Blummer92 \
+              --draft-validation-service-actor 'chatgpt-codex-connector[bot]' \
               --run-attempt "$GITHUB_RUN_ATTEMPT" \
               --output "$RUNNER_TEMP/agent-os-draft-validation/transport.json"
 
@@ -880,7 +885,7 @@ jobs:
     # no Actions authority. Posting is idempotent: an existing receipt for
     # the same trigger ID is never duplicated.
     needs: draft_validation_dispatch
-    if: ${{ always() && github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
+    if: ${{ always() && github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && (github.event.comment.user.id == 32861845 || github.event.comment.user.id == 199175422) && startsWith(github.event.comment.body, '/agent-os validate-draft ') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -904,6 +909,7 @@ jobs:
               --event "$GITHUB_EVENT_PATH" \
               --repository "$GITHUB_REPOSITORY" \
               --allowed-actor Blummer92 \
+              --draft-validation-service-actor 'chatgpt-codex-connector[bot]' \
               --run-attempt "$GITHUB_RUN_ATTEMPT" \
               --output "$RUNNER_TEMP/agent-os-draft-validation/transport.json"
 
