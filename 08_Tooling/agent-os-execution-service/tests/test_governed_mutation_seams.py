@@ -267,6 +267,7 @@ def test_3281_seam2_closed_issue_after_authorized_close_proves_reconciled() -> N
         lifecycle_labels=[],
         evidence_current=True,
         plan=plan,
+        state_reason="completed",
     )
     assert proof["fully_reconciled"] is True
     assert proof["reason_codes"] == ["lane-post-pr.issue-closed"]

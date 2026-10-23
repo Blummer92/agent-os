@@ -189,8 +189,16 @@ def project_lane_post_pr_issue_reconciliation_for_host(
     closure_authorized: bool = False,
     evidence_current: bool = False,
     plan: dict[str, object] | None = None,
+    repository: str | None = None,
+    state_reason: str | None = None,
 ) -> dict[str, object]:
-    """Run one phase of the lane post-PR reconciliation and return a JSON-safe dict."""
+    """Run one phase of the lane post-PR reconciliation and return a JSON-safe dict.
+
+    ``repository`` and ``state_reason`` (#3690 ADV-5) carry the canonical
+    issue identity and closure reason; a closed issue is reconciled only when
+    its reason is ``completed``, no stale Ready label remains, and the
+    readback repository matches the plan's.
+    """
     if phase not in _SEAM2_PHASES:
         raise ValueError(f"phase must be one of {sorted(_SEAM2_PHASES)}")
     if phase == "plan":
@@ -204,6 +212,8 @@ def project_lane_post_pr_issue_reconciliation_for_host(
             pr_readback_current=pr_readback_current,
             closure_authorized=closure_authorized,
             evidence_current=evidence_current,
+            repository=repository,
+            state_reason=state_reason,
         )
     return _evaluate_lane_post_pr_readback_for_host(
         issue_number=issue_number,
@@ -211,6 +221,8 @@ def project_lane_post_pr_issue_reconciliation_for_host(
         lifecycle_labels=lifecycle_labels,
         evidence_current=evidence_current,
         plan=plan,
+        repository=repository,
+        state_reason=state_reason,
     )
 
 
@@ -225,6 +237,8 @@ def _project_lane_post_pr_plan_for_host(
     pr_readback_current: bool,
     closure_authorized: bool,
     evidence_current: bool,
+    repository: str | None,
+    state_reason: str | None,
 ) -> dict[str, object]:
     evidence = LanePostPrIssueEvidence(
         issue_number=issue_number,
@@ -236,6 +250,8 @@ def _project_lane_post_pr_plan_for_host(
         pr_readback_current=pr_readback_current,
         closure_authorized=closure_authorized,
         evidence_current=evidence_current,
+        repository=repository,
+        state_reason=state_reason,
     )
     result = project_lane_post_pr_issue_reconciliation(evidence)
     disposition = result.disposition
@@ -266,6 +282,7 @@ def _reconstruct_reconciliation_plan(plan: dict[str, object]) -> LanePostPrIssue
         reason_codes=tuple(plan["reason_codes"]),
         readback_required=plan["readback_required"],
         fully_reconciled=plan["fully_reconciled"],
+        repository=plan.get("repository"),
     )
 
 
@@ -276,6 +293,8 @@ def _evaluate_lane_post_pr_readback_for_host(
     lifecycle_labels: tuple[str, ...],
     evidence_current: bool,
     plan: dict[str, object] | None,
+    repository: str | None,
+    state_reason: str | None,
 ) -> dict[str, object]:
     if plan is None:
         raise ValueError("plan is required for the readback-proof phase")
@@ -286,6 +305,8 @@ def _evaluate_lane_post_pr_readback_for_host(
         issue_open=issue_open,
         lifecycle_labels=lifecycle_labels,
         evidence_current=evidence_current,
+        state_reason=state_reason,
+        repository=repository,
     )
     payload = asdict(proof)
     payload["disposition"] = proof.disposition.value

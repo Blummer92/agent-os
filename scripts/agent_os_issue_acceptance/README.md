@@ -263,7 +263,7 @@ Seam 1, the issue-comment write boundary:
 - pre-write guard: `defect_evidence_mutation_guard.py` (#2741) admits persisting new defect/process evidence only on a target whose open state was reacquired immediately before the write. A closed target is refused fail-closed with a routing directive — `reacquire-target-state` (stale evidence), `route-to-open-owner` (open owner named), or `create-new-bug` — so evidence is never admitted onto a closed issue as its active owner; closed issues stay historical lineage only.
 - post-write readback: `comment_mutation_readback.py` (#2785). A subordinate comment write counts as persisted only after canonical readback proves the exact intended body; a provider success claim alone never proves persistence, and an uncertain response never authorizes an automatic retry, so uncertain-then-reconcile can never create a duplicate comment.
 
-Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`).
+Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`). A closed issue counts as reconciled only under the shared closure-readback rule (#3690): closed with `state_reason` `completed` and no stale Ready label; a missing or other reason, a surviving Ready label, or a readback repository that differs from the plan's never reports full reconciliation.
 
 Fail-closed reasons: every seam tool is pure admission/readback composition with `side_effects_performed: False` and no GitHub write authority; uncertain or stale evidence resolves to non-terminal, non-retrying dispositions rather than optimistic success; and missing closure authority surfaces visibly as `reconcile-ready-awaiting-closure-authority` instead of silently leaving the issue looking actionable.
 
@@ -289,6 +289,26 @@ names the native GitHub MCP `issue_write` tool (`update`, `state=closed`,
 `state_reason=completed`) as the only writer; this module performs no GitHub
 I/O and its receipt fixes `closure_performed: False` — closure is proven only
 by post-dispatch canonical readback.
+
+Trust-boundary repairs (#3690):
+
+- The receipt id is an unkeyed content hash, so it authenticates nothing. The
+  verification gate takes the satisfaction record the caller reacquired
+  independently of the receipt (`satisfaction=`) and requires the receipt's
+  block to equal it: a cited block without the trusted record, a trusted
+  record whose block was stripped, or a swapped block all fail closed. With
+  satisfaction absent on both sides the gate is unchanged (mandatory
+  satisfaction remains #3676). The gate also owns the
+  `current_issue_body_digest` check, which must match the trusted record.
+- QA evidence bound to a validated head fails closed
+  (`closure.acceptance-head-unverifiable`) against a snapshot with no
+  comparable head; unbound QA evidence for issue-only closure is unchanged.
+- `ClosureIssueReadback.issue_body_digest` lets the canonical reader report
+  the current body digest; `run_closure_batch` refuses a satisfaction record
+  bound to any other body (`closure.satisfaction-stale`). Without reader body
+  evidence, currentness is neither proven nor fabricated.
+- `classify_closure_readback` is the single closure-readback rule, shared by
+  the batch and the lane post-PR readback proof below.
 
 ## Canonical lifecycle-stage acquisition (#3433)
 

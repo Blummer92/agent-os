@@ -752,10 +752,15 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
     closure_authorized: bool = False,
     evidence_current: bool = False,
     plan: dict[str, object] | None = None,
+    repository: str | None = None,
+    state_reason: str | None = None,
 ) -> dict[str, object]:
-    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority."""
+    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority.
+
+    `repository` and `state_reason` (#3690 ADV-5) carry the canonical issue identity and closure reason: a closed issue is reconciled only when closed as `completed` with no stale Ready label, and a readback naming a repository other than the plan's never proves reconciliation.
+    """
     _github_target_entry_guard(
-        repository=None, issue_number=issue_number, operation="read-issue"
+        repository=repository, issue_number=issue_number, operation="read-issue"
     )
     if linked_pull_request_number:
         _github_target_entry_guard(
@@ -775,6 +780,8 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
         closure_authorized=closure_authorized,
         evidence_current=evidence_current,
         plan=plan,
+        repository=repository,
+        state_reason=state_reason,
     )
 
 
@@ -936,6 +943,7 @@ def verify_agent_os_issue_closure_admission_tool(
     fresh_snapshot: dict[str, object],
     acceptance: dict[str, object],
     current_issue_body_digest: str | None = None,
+    satisfaction: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Verify a closure-admission receipt against a fresh snapshot (#3489).
 
@@ -951,6 +959,15 @@ def verify_agent_os_issue_closure_admission_tool(
     `issue_write`) with method=update, state=closed, state_reason=completed,
     followed by canonical readback of the exact repository, issue number,
     closed state, and completed reason.
+
+    `satisfaction` (#3690 ADV-6/ADV-7) is the satisfaction record the host
+    reacquired independently of the receipt. The receipt id is an unkeyed
+    hash a caller can recompute, so a receipt's own satisfaction block is
+    never trusted: a receipt citing satisfaction verifies only with the
+    matching trusted record, and a supplied record verifies only a receipt
+    carrying exactly its block. `current_issue_body_digest` must then match
+    that trusted record's digest; a digest without a trusted record fails
+    closed. Both checks are owned by `verify_closure_admission_receipt`.
     """
     _github_target_entry_guard(
         repository=repository, issue_number=issue_number, operation="update-issue"
@@ -978,20 +995,16 @@ def verify_agent_os_issue_closure_admission_tool(
             reason_codes=("closure-target-binding-mismatch",),
             next_action="reacquire-issue-and-reevaluate",
         )
-    # A supplied current digest must match the receipt-bound satisfaction
-    # snapshot. Never turn missing or mismatched evidence into a verified write.
-    digest_ok = True
-    if current_issue_body_digest is not None:
-        block = receipt.get("satisfaction") if isinstance(receipt, dict) else None
-        digest_ok = (
-            type(current_issue_body_digest) is str
-            and len(current_issue_body_digest) == 64
-            and all(ch in "0123456789abcdef" for ch in current_issue_body_digest)
-            and type(block) is dict
-            and block.get("issue_body_digest") == current_issue_body_digest
-        )
-    verified = digest_ok and verify_closure_admission_receipt(
-        receipt, authorization=auth, fresh_snapshot=snap, acceptance=evidence
+    # The canonical gate owns the trusted-satisfaction binding and the
+    # body-digest currentness check; never turn missing or mismatched
+    # evidence into a verified write.
+    verified = verify_closure_admission_receipt(
+        receipt,
+        authorization=auth,
+        fresh_snapshot=snap,
+        acceptance=evidence,
+        satisfaction=satisfaction,
+        current_issue_body_digest=current_issue_body_digest,
     )
     return {
         "repository": repository,

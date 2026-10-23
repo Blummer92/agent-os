@@ -352,13 +352,27 @@ def test_satisfaction_pass_through_and_digest_currentness():
     )
     assert complete["admitted"] is True
     assert complete["satisfaction"]["issue_body_digest"] == digest
+    # #3690 ADV-6/ADV-7: the host supplies the satisfaction record it
+    # reacquired independently of the receipt; the gate binds the receipt's
+    # block to it, and the digest to the trusted record.
     assert verify_agent_os_issue_closure_admission_tool(
         REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
         acceptance_dict(), current_issue_body_digest=digest,
+        satisfaction=satisfaction("satisfied"),
     )["verified"] is True
     assert verify_agent_os_issue_closure_admission_tool(
         REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
         acceptance_dict(), current_issue_body_digest=other,
+        satisfaction=satisfaction("satisfied"),
+    )["verified"] is False
+    # A receipt that cites satisfaction never verifies on its own block.
+    assert verify_agent_os_issue_closure_admission_tool(
+        REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
+        acceptance_dict(),
+    )["verified"] is False
+    assert verify_agent_os_issue_closure_admission_tool(
+        REPO, 3432, complete, _authorization().to_dict(), snapshot_dict(),
+        acceptance_dict(), current_issue_body_digest=digest,
     )["verified"] is False
     for status, expected in [("unsatisfied", "closure.satisfaction-incomplete"),
                              ("satisfied", "closure.satisfaction-stale")]:
