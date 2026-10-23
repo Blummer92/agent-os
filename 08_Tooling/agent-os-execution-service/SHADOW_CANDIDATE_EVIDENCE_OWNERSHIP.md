@@ -98,13 +98,6 @@ default; omitting the flag selects `declared-non-closing-v1`, and
 No workflow or composite-action file is edited by this PR. However, the existing shadow workflow invokes the CLI without an explicit `--association-policy`, so its runtime association behavior inherits the new CLI default (`declared-non-closing-v1`). This is an effect of the CLI change, not a separate workflow-file modification.
 The existing `parse_pr` parser remains the sole PR-linkage authority.
 
-Library callers have no default (#3690 CR-4): `PrLineageAcquirer` and
-`LifecycleStageAcquisitionRequest` take `association_policy` as a required
-keyword-only argument, so omitting it raises `TypeError` instead of silently
-selecting `closing-directive-v1`. The CLI default above is the only default,
-and the CLI always passes the parsed value explicitly. Policy semantics are
-unchanged.
-
 Under this policy, parser `INFORMATIONAL` qualifies as an association when its
 standalone `Non-closing: #N` directive covers exactly the requested issue
 in the same repository and there are zero GitHub-effective closing references.
@@ -121,6 +114,13 @@ acquisition evidence when it is the declared-non-closing policy; the result
 shape is otherwise unchanged.
 `primary_claims` and `approval_applicability` remain unset by the CLI,
 so an acquired lifecycle stage cannot independently select or execute.
+
+Library callers have no default (#3690 CR-4): `PrLineageAcquirer` and
+`LifecycleStageAcquisitionRequest` take `association_policy` as a required
+keyword-only argument, so omitting it raises `TypeError` instead of silently
+selecting `closing-directive-v1`. The CLI default (`declared-non-closing-v1`)
+is the only default, and the CLI always passes the parsed value explicitly.
+Policy semantics are unchanged.
 
 Rollback: revert the default-activation change. Workflow activation,
 Ready, merge, and issue closure require separate owner decisions.
