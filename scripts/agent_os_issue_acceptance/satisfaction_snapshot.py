@@ -11,8 +11,10 @@ over a plain mapping of exactly::
 This module is the single strict validator for that mapping. Its two
 approval-domain consumers — ``lifecycle_reconciliation`` (post-merge
 reporting) and ``closure_admission_actions`` (the closure judgment packet)
-— previously carried byte-for-byte copies of this code, pinned together
-only by a cross-module consistency test. #3690 CR-1 consolidates the
+— previously carried copies of this code with identical validation rules
+and messages (the closure copy lacked only the read-only
+``unsatisfied_criteria`` convenience property), pinned together only by a
+cross-module consistency test. #3690 CR-1 consolidates the
 validation core here. Each consumer keeps its own serializer and its own
 trust boundary: the reconciliation block adds the ``closure_ready``
 reporting signal; the closure receipt block does not (its exact key set is

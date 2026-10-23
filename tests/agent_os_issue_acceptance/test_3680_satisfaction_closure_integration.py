@@ -1126,7 +1126,10 @@ def test_shared_instance_is_accepted_by_both_consumers_but_stays_identity_bound(
 
 def test_lookalike_snapshot_types_are_rejected_by_both_consumers():
     # Only the exact shared class (or an exact dict) is a snapshot; a
-    # subclass or a structurally identical look-alike never passes through.
+    # subclass, a same-named look-alike carrying every field and property,
+    # or an empty same-named object never passes through.
+    import dataclasses
+
     shared_snap = closure_module._SatisfactionSnapshot
     crit = closure_module._SatisfactionCriterionSnapshot
     fields = (
@@ -1137,8 +1140,24 @@ def test_lookalike_snapshot_types_are_rejected_by_both_consumers():
     class SubclassSnapshot(shared_snap):
         __slots__ = ()
 
-    lookalike = type("SatisfactionSnapshot", (), {})()
-    for value in (SubclassSnapshot(*fields), lookalike):
+    @dataclasses.dataclass(frozen=True)
+    class SatisfactionSnapshot:  # same name and shape as the shared class
+        repository: str
+        issue_number: int
+        issue_body_digest: str
+        status: str
+        criteria: tuple
+
+        @property
+        def complete(self):
+            return self.status == "complete"
+
+        @property
+        def unsatisfied_criteria(self):
+            return ()
+
+    empty = type("SatisfactionSnapshot", (), {})()
+    for value in (SubclassSnapshot(*fields), SatisfactionSnapshot(*fields), empty):
         with pytest.raises(TypeError):
             merged_input(value)
         with pytest.raises(TypeError):
@@ -1147,11 +1166,12 @@ def test_lookalike_snapshot_types_are_rejected_by_both_consumers():
 
 # ---------------------------------------------------------------------------
 # Follow-up N3: cross-module consistency. Since #3690 CR-1 both consumers
-# delegate to the one shared validation core (``satisfaction_snapshot``);
-# their serializers stay distinct. This corpus still runs through each
-# consumer's entry point, so a consumer that stopped delegating (or a
-# reintroduced local copy) would surface here as divergent outcomes —
-# including the N1 identity-malformed and N2 forged cases.
+# alias the one shared validation core (``satisfaction_snapshot``); their
+# serializers stay distinct. This corpus now pins that aliasing: a
+# reintroduced local copy behind either module's ``_satisfaction_snapshot``
+# would surface here as divergent outcomes. Rejection through each
+# consumer's own entry point (reconciliation input, closure request) is
+# covered by ``test_3690_shared_satisfaction_validator``.
 # ---------------------------------------------------------------------------
 
 

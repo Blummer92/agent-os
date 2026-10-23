@@ -1,7 +1,9 @@
 """#3690 CR-1: one shared satisfaction-validation core, two distinct serializers.
 
 ``lifecycle_reconciliation`` and ``closure_admission_actions`` previously held
-byte-for-byte copies of the #3680 satisfaction-snapshot validator. CR-1 moves
+copies of the #3680 satisfaction-snapshot validator with identical validation
+rules and messages (the closure copy lacked only the read-only
+``unsatisfied_criteria`` property). CR-1 moves
 only that validation core into ``satisfaction_snapshot``; each consumer keeps
 its own serializer and trust boundary. These tests prove:
 
