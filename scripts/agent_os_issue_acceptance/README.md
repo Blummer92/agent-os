@@ -306,7 +306,10 @@ Trust-boundary repairs (#3690):
 - `ClosureIssueReadback.issue_body_digest` lets the canonical reader report
   the current body digest; `run_closure_batch` refuses a satisfaction record
   bound to any other body (`closure.satisfaction-stale`). Without reader body
-  evidence, currentness is neither proven nor fabricated.
+  evidence, currentness is neither proven nor fabricated. The pre-dispatch
+  snapshot read carries no digest, so the reader's `observed_revision` must
+  change whenever the issue body changes; the exact snapshot binding then
+  refuses a body edited between evaluation and dispatch.
 - `classify_closure_readback` is the single closure-readback rule, shared by
   the batch and the lane post-PR readback proof below.
 

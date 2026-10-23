@@ -581,6 +581,32 @@ def test_adv7_swapping_in_complete_evidence_with_recomputed_id_never_verifies():
 
 
 @pytest.mark.parametrize(
+    "path,value",
+    [
+        (("criteria", 0, "index"), True),
+        (("issue_number",), 3432.0),
+        (("criteria", 0, "evidence"), ("pr:3432@" + "b" * 40 + "/qa-verdict-1",)),
+        (("criteria", 0, "identity"), "criterion-1-0123456789AB"),
+    ],
+)
+def test_adv7_retyped_block_never_verifies_even_when_equal_in_python(path, value):
+    # Python equality treats True == 1, 3432.0 == 3432, and a tuple vs list
+    # differently than the receipt's canonical bytes; the gate must compare
+    # exact canonical content, never loose equality.
+    snap = snapshot()
+    sat = satisfaction()
+    req = request(sat=sat)
+    receipt = evaluate_issue_closure(req, snap)
+    assert verify(receipt, req, snap, satisfaction=sat)
+    tampered = copy.deepcopy(receipt)
+    target = tampered["satisfaction"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert not verify(tampered, req, snap, satisfaction=sat)
+
+
+@pytest.mark.parametrize(
     "trusted",
     [
         satisfaction(issue=3306),

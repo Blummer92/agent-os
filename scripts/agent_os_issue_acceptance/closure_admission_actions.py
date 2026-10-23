@@ -263,7 +263,16 @@ def _is_body_digest(value: object) -> bool:
 
 
 class ClosureIssueReader(Protocol):
-    """Canonical GitHub read surface supplied by the host."""
+    """Canonical GitHub read surface supplied by the host.
+
+    ``read_issue_readback`` should report ``issue_body_digest`` (#3690
+    ADV-1) so satisfaction currentness is proven rather than unavailable.
+    The pre-dispatch ``read_issue_snapshot`` carries no digest, so a body
+    edit between the two reads is refused only through the exact snapshot
+    binding: the reader's ``observed_revision`` must change whenever the
+    issue body changes (a content-addressed revision such as
+    ``github-issue-v1`` does).
+    """
 
     def read_issue_snapshot(
         self, repository: str, issue_number: int
@@ -300,6 +309,10 @@ _RECEIPT_CORE_KEYS = (
     "host_dispatch_contract",
     "next_action",
 )
+
+
+def _canonical_block(block: object) -> str:
+    return json.dumps(block, sort_keys=True, separators=(",", ":"))
 
 
 def _receipt_id(core: dict[str, object]) -> str:
@@ -643,9 +656,18 @@ def verify_closure_admission_receipt(
     satisfaction_core: dict[str, object] | None = None
     if trusted is not None:
         satisfaction_core = _satisfaction_block(trusted)
-        if receipt.get("satisfaction") != satisfaction_core:
-            # ADV-7: the receipt must cite exactly the trusted record; a
-            # swapped, substituted, or re-ordered block fails closed.
+        # ADV-7: the receipt must cite exactly the trusted record. The block
+        # is first strictly validated (exact built-in types, so ``True`` is
+        # never an index and ``3432.0`` never an issue number), then compared
+        # by canonical bytes rather than Python equality; a swapped,
+        # substituted, re-typed, or re-ordered block fails closed.
+        try:
+            _satisfaction_snapshot(receipt.get("satisfaction"))
+            if _canonical_block(receipt.get("satisfaction")) != _canonical_block(
+                satisfaction_core
+            ):
+                return False
+        except (TypeError, ValueError):
             return False
         allowed_keys.add("satisfaction")
     if current_issue_body_digest is not None and (
