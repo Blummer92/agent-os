@@ -172,11 +172,30 @@ def test_service_actor_is_blocked_for_every_other_operation() -> None:
         f"/agent-os dev-validate agent/2411-example {HEAD_SHA} remote-validation-suite",
         "/agent-os notion-read req-123",
         f"/agent-os validate-first-run {HEAD_SHA}",
+        f"/agent-os activate-first-publication pre-publication-evidence:{'a' * 64}",
+        "/agent-os diagnose ppux-canva-cdp-readonly req-123",
+        f"/agent-os project-ppux-prompts agent/2411-example {HEAD_SHA} {'a' * 64}",
     )
     for body in other_commands:
         # Sanity: each body is a real command the owner may issue.
         assert admit(event(body)).status == "accepted", body
         result = admit_service(event(body, actor=SERVICE_ACTOR))
+        assert (result.status, result.reason) == ("blocked", "actor-not-allowed"), body
+
+
+def test_service_actor_blocked_for_issue_bound_operations() -> None:
+    # These two operations bind to fixed issue numbers; the service actor is
+    # refused even on the correct issue, while the owner is accepted there.
+    for issue_number, body in (
+        (2234, f"/agent-os apply-required-validation-gate {'a' * 64}"),
+        (3333, f"/agent-os codespace-implementation executor-handoff:{'a' * 64} {HEAD_SHA}"),
+    ):
+        owner_payload = event(body)
+        owner_payload["issue"] = {"number": issue_number}
+        assert admit(owner_payload).status == "accepted", body
+        service_payload = event(body, actor=SERVICE_ACTOR)
+        service_payload["issue"] = {"number": issue_number}
+        result = admit_service(service_payload)
         assert (result.status, result.reason) == ("blocked", "actor-not-allowed"), body
 
 

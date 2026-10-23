@@ -42,6 +42,8 @@ _DEV_VALIDATE_RE = re.compile(
 )
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
+# The service actor is an operator-configured identity (hardcoded by the
+# calling workflow), never an event- or input-derived value.
 _SERVICE_ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}(?:\[bot\])?", re.ASCII)
 _DRAFT_VALIDATION_PREFIX = "/agent-os validate-draft "
 _PPUX_PROJECTION_RE = re.compile(
