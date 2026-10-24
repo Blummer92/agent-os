@@ -53,6 +53,7 @@ from .lifecycle_mutation_guard import (
 from .satisfaction_snapshot import (
     SatisfactionCriterionSnapshot,
     SatisfactionSnapshot,
+    satisfaction_block,
     validate_satisfaction_snapshot,
 )
 
@@ -138,43 +139,14 @@ class ClosureAcceptanceEvidence:
 #
 # N1: ``IssueClosureRequest`` — which holds the authoritative identity in
 # its owner decision — rejects a snapshot naming any other issue. The
-# receipt serializer ``_satisfaction_block`` stays local to this module:
-# its exact key set (no ``closure_ready``) is part of the hashed receipt
-# core and of the verifier's key-set check.
+# shared serializer ``satisfaction_block`` excludes ``closure_ready`` for
+# the hashed receipt core and the verifier's exact key-set check.
 # ---------------------------------------------------------------------------
 
 _SatisfactionCriterionSnapshot = SatisfactionCriterionSnapshot
 _SatisfactionSnapshot = SatisfactionSnapshot
 _satisfaction_snapshot = validate_satisfaction_snapshot
 
-
-def _satisfaction_block(
-    snapshot: _SatisfactionSnapshot,
-) -> dict[str, object]:
-    """Serialize one validated satisfaction snapshot for the packet (#3680).
-
-    Carries the snapshot's envelope issue identity, issue-body digest,
-    overall status, and per-criterion identities, dispositions, reason
-    codes, and evidence pointers exactly as validated. The block is
-    cited evidence for the QA judgment only; it is never an input to
-    the admission decision.
-    """
-    return {
-        "repository": snapshot.repository,
-        "issue_number": snapshot.issue_number,
-        "issue_body_digest": snapshot.issue_body_digest,
-        "status": snapshot.status,
-        "criteria": [
-            {
-                "index": item.index,
-                "identity": item.identity,
-                "disposition": item.disposition,
-                "reason_code": item.reason_code,
-                "evidence": list(item.evidence),
-            }
-            for item in snapshot.criteria
-        ],
-    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,7 +362,7 @@ def evaluate_issue_closure(
     repository = decision.repository
     issue_number = decision.issue_number
     satisfaction_block = (
-        _satisfaction_block(request.satisfaction)
+        satisfaction_block(request.satisfaction)
         if request.satisfaction is not None
         else None
     )
@@ -655,7 +627,7 @@ def verify_closure_admission_receipt(
         return False
     satisfaction_core: dict[str, object] | None = None
     if trusted is not None:
-        satisfaction_core = _satisfaction_block(trusted)
+        satisfaction_core = satisfaction_block(trusted)
         # ADV-7: the receipt must cite exactly the trusted record. The block
         # is first strictly validated (exact built-in types, so ``True`` is
         # never an index and ``3432.0`` never an issue number), then compared

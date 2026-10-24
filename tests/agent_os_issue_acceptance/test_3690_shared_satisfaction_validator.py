@@ -1,11 +1,11 @@
-"""#3690 CR-1: one shared satisfaction-validation core, two distinct serializers.
+"""#3690 CR-1/CR-1B: shared satisfaction validation and serializer, distinct outputs.
 
 ``lifecycle_reconciliation`` and ``closure_admission_actions`` previously held
 copies of the #3680 satisfaction-snapshot validator with identical validation
 rules and messages (the closure copy lacked only the read-only
 ``unsatisfied_criteria`` property). CR-1 moves
-only that validation core into ``satisfaction_snapshot``; each consumer keeps
-its own serializer and trust boundary. These tests prove:
+that validation core into ``satisfaction_snapshot``; CR-1B shares the
+serializer while retaining each consumer's trust boundary and output shape. These tests prove:
 
 1. the existing acceptance/rejection corpus holds against the shared core;
 2. the closure receipt block never carries ``closure_ready``;
@@ -95,7 +95,7 @@ def test_corpus_contains_valid_and_adversarial_cases():
 
 
 # ---------------------------------------------------------------------------
-# 2./3. Distinct serializers.
+# 2./3. Distinct serialized output shapes.
 # ---------------------------------------------------------------------------
 
 
@@ -105,6 +105,9 @@ def test_closure_receipt_block_excludes_closure_ready():
         closure_snapshot(),
     )
     assert set(receipt["satisfaction"]) == shared.SATISFACTION_KEYS
+    assert tuple(receipt["satisfaction"]) == (
+        "repository", "issue_number", "issue_body_digest", "status", "criteria",
+    )
     assert "closure_ready" not in receipt["satisfaction"]
     # The closure block round-trips through the shared validator exactly.
     assert receipt["satisfaction"] == complete_snapshot_for(3432)
@@ -119,6 +122,10 @@ def test_reconciliation_block_keeps_closure_ready():
     ):
         block = reconcile_lifecycle(merged_input(value)).to_dict()["satisfaction"]
         assert set(block) == shared.SATISFACTION_KEYS | {"closure_ready"}
+        assert tuple(block) == (
+            "repository", "issue_number", "issue_body_digest", "status",
+            "closure_ready", "criteria",
+        )
         assert block["closure_ready"] is expected
 
 
@@ -324,6 +331,7 @@ def test_consumers_alias_the_shared_core(module):
     assert module._SatisfactionSnapshot is shared.SatisfactionSnapshot
     assert module._SatisfactionCriterionSnapshot is shared.SatisfactionCriterionSnapshot
     assert module._satisfaction_snapshot is shared.validate_satisfaction_snapshot
+    assert module.satisfaction_block is shared.satisfaction_block
 
 
 @pytest.mark.parametrize(
@@ -343,5 +351,5 @@ def test_consumers_define_no_local_validation_core(filename):
         "SatisfactionCriterionSnapshot",
         "derived_satisfaction_status",
     }
-    # Each consumer still owns its own serializer.
-    assert "_satisfaction_block" in defined
+    # The two local serializers have been removed; consumers import the shared one.
+    assert "_satisfaction_block" not in defined

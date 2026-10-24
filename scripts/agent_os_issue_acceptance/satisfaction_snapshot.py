@@ -8,17 +8,18 @@ over a plain mapping of exactly::
     {repository, issue_number, issue_body_digest, status,
      criteria: [{index, identity, disposition, reason_code, evidence}]}
 
-This module is the single strict validator for that mapping. Its two
+This module is the single strict validator and serializer for that mapping. Its two
 approval-domain consumers — ``lifecycle_reconciliation`` (post-merge
 reporting) and ``closure_admission_actions`` (the closure judgment packet)
 — previously carried copies of this code with identical validation rules
 and messages (the closure copy lacked only the read-only
 ``unsatisfied_criteria`` convenience property), pinned together only by a
 cross-module consistency test. #3690 CR-1 consolidates the
-validation core here. Each consumer keeps its own serializer and its own
-trust boundary: the reconciliation block adds the ``closure_ready``
-reporting signal; the closure receipt block does not (its exact key set is
-part of the hashed receipt core). Neither serializer lives here.
+validation core here. CR-1B also consolidates the two serializers while
+keeping their distinct output shapes: the reconciliation block includes
+``closure_ready``, and the closure receipt block excludes it (the exact
+receipt key set is part of its hashed core). Consumers retain their own
+identity checks and admission boundaries.
 
 Validation rules (unchanged from the consolidated copies):
 
@@ -55,6 +56,7 @@ __all__ = [
     "SatisfactionCriterionSnapshot",
     "SatisfactionSnapshot",
     "derived_satisfaction_status",
+    "satisfaction_block",
     "validate_satisfaction_snapshot",
 ]
 
@@ -288,3 +290,33 @@ def validate_satisfaction_snapshot(value: object) -> SatisfactionSnapshot:
     return SatisfactionSnapshot(
         repository, issue_number, digest, status, frozen_criteria
     )
+
+def satisfaction_block(
+    snapshot: SatisfactionSnapshot,
+    *,
+    include_closure_ready: bool = False,
+) -> dict[str, object]:
+    """Serialize frozen satisfaction evidence without changing either consumer shape.
+
+    Closure receipts exclude ``closure_ready``; reconciliation reporting
+    includes it before ``criteria``. Neither form confers authorization.
+    """
+    block: dict[str, object] = {
+        "repository": snapshot.repository,
+        "issue_number": snapshot.issue_number,
+        "issue_body_digest": snapshot.issue_body_digest,
+        "status": snapshot.status,
+    }
+    if include_closure_ready:
+        block["closure_ready"] = snapshot.complete
+    block["criteria"] = [
+        {
+            "index": item.index,
+            "identity": item.identity,
+            "disposition": item.disposition,
+            "reason_code": item.reason_code,
+            "evidence": list(item.evidence),
+        }
+        for item in snapshot.criteria
+    ]
+    return block

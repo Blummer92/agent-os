@@ -18,6 +18,7 @@ from .lifecycle_mutation_guard import (
 from .satisfaction_snapshot import (
     SatisfactionCriterionSnapshot,
     SatisfactionSnapshot,
+    satisfaction_block,
     validate_satisfaction_snapshot,
 )
 
@@ -91,43 +92,14 @@ REASON_CODES = frozenset({
 #
 # N1: ``LifecycleReconciliationInput`` — which holds the authoritative
 # identity — rejects a snapshot naming any other issue. The reporting
-# serializer ``_satisfaction_block`` stays local to this module: it adds
-# the ``closure_ready`` signal that the closure receipt block must not
-# carry.
+# shared serializer ``satisfaction_block`` adds the reporting-only
+# ``closure_ready`` key here; the closure receipt must omit it.
 # ---------------------------------------------------------------------------
 
 _SatisfactionCriterionSnapshot = SatisfactionCriterionSnapshot
 _SatisfactionSnapshot = SatisfactionSnapshot
 _satisfaction_snapshot = validate_satisfaction_snapshot
 
-
-def _satisfaction_block(snapshot: _SatisfactionSnapshot) -> dict[str, object]:
-    """Serialize one validated satisfaction snapshot for reporting (#3680).
-
-    The block is evidence for QA judgment only: the envelope issue
-    identity, per-criterion identities, dispositions, reason codes, and
-    evidence pointers exactly as the validated snapshot carries them,
-    plus the overall status and the derived closure-ready signal
-    (complete satisfaction). It never carries or confers any
-    authorization.
-    """
-    return {
-        "repository": snapshot.repository,
-        "issue_number": snapshot.issue_number,
-        "issue_body_digest": snapshot.issue_body_digest,
-        "status": snapshot.status,
-        "closure_ready": snapshot.complete,
-        "criteria": [
-            {
-                "index": item.index,
-                "identity": item.identity,
-                "disposition": item.disposition,
-                "reason_code": item.reason_code,
-                "evidence": list(item.evidence),
-            }
-            for item in snapshot.criteria
-        ],
-    }
 
 
 def _canonical(value: object) -> str:
@@ -295,7 +267,7 @@ class LifecycleReconciliationInput:
             "admission_ids": sorted(v.result_id for v in self.admissions), "side_effects_performed": False,
         }
         if self.satisfaction is not None:
-            payload["satisfaction"] = _satisfaction_block(self.satisfaction)
+            payload["satisfaction"] = satisfaction_block(self.satisfaction, include_closure_ready=True)
         return payload
 
     def to_dict(self) -> dict[str, object]:
@@ -408,7 +380,7 @@ class LifecycleReconciliationResult:
     def payload(self) -> dict[str, object]:
         payload: dict[str, object] = {"schema_name": self.schema_name, "schema_version": self.schema_version, "repository": self.repository, "issue_number": self.issue_number, "input_id": self.input_id, "operational_state_id": self.operational_state_id, "lifecycle_snapshot_id": self.lifecycle_snapshot_id, "outcome": self.outcome.value, "reason_codes": self.reason_codes, "actions": [v.to_dict() for v in self.actions], "implementation_authorization": self.implementation_authorization.value, "ready_for_review_authorization": self.ready_for_review_authorization.value, "execution_authorization": self.execution_authorization.value, "merge_authorization": self.merge_authorization.value, "closure_authorization": self.closure_authorization.value, "external_write_authorization": self.external_write_authorization.value, "side_effects_performed": False}
         if self.satisfaction is not None:
-            payload["satisfaction"] = _satisfaction_block(self.satisfaction)
+            payload["satisfaction"] = satisfaction_block(self.satisfaction, include_closure_ready=True)
         return payload
 
     def to_dict(self) -> dict[str, object]:
