@@ -353,3 +353,24 @@ def test_consumers_define_no_local_validation_core(filename):
     }
     # The two local serializers have been removed; consumers import the shared one.
     assert "_satisfaction_block" not in defined
+
+@pytest.mark.parametrize("name", sorted(CONSISTENCY_CORPUS))
+def test_cr5_constructor_remains_single_status_authority(name):
+    value = copy.deepcopy(CONSISTENCY_CORPUS[name])
+    if name in BAD_SNAPSHOTS:
+        with pytest.raises((TypeError, ValueError)):
+            shared.validate_satisfaction_snapshot(value)
+    else:
+        parsed = shared.validate_satisfaction_snapshot(value)
+        assert parsed.status == value["status"]
+
+
+@pytest.mark.parametrize("declared_status", ["complete", "incomplete", "manual-review"])
+def test_cr5_forged_declared_status_still_fails_closed(declared_status):
+    value = copy.deepcopy(complete_snapshot())
+    value["status"] = declared_status
+    if declared_status == "complete":
+        assert shared.validate_satisfaction_snapshot(value).complete
+    else:
+        with pytest.raises(ValueError, match="status disagrees with its criteria"):
+            shared.validate_satisfaction_snapshot(value)
