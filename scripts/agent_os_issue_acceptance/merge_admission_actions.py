@@ -18,8 +18,11 @@ module emits. The positive-admission consumer is separate:
 module's candidate receipt, additionally verifies the approval triple,
 live scope, checks, reviews, and lifecycle admission, and then delegates
 to the canonical evaluator with a typed ``MergeProposal``; only that
-consumer can emit an applicable receipt. This module's front-door role
-and its hard-coded ``False`` are unchanged by that delegation.
+consumer can emit an applicable receipt. In production, the
+``merge_admission`` job in ``agent-os-governed-invocation.yml`` runs that
+consumer immediately after this module, with the same fixed transport.
+This module's front-door role and its hard-coded ``False`` are unchanged
+by that delegation.
 """
 from __future__ import annotations
 

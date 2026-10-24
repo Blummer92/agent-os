@@ -2,8 +2,38 @@
 
 ## Status
 
-Repository-only integration, complete within its verified scope. Host/dispatch
-acceptance is outstanding (see "What this does not do").
+Repository integration plus its production caller, complete within its
+verified scope. The merge-executing dispatch and host enforcement proof
+are outstanding (see "What this does not do").
+
+## Production caller, trigger, authorization boundary, receipt path
+
+- **Caller.** The `merge_admission` job in
+  `.github/workflows/agent-os-governed-invocation.yml` is the production
+  caller of `merge_applicability.evaluate_merge_dispatch_applicability`.
+  It runs `merge_admission_actions` first, then `merge_applicability`
+  with the same fixed transport file, and publishes both
+  `receipt.json` (candidate) and `dispatch_receipt.json` (dispatch) as
+  job artifacts (7-day retention) plus a step summary naming both.
+- **Trigger.** An owner issue comment (user id 32861845, not a PR
+  comment) starting with `/agent-os merge-admit `, parsed by the fixed
+  `github_issue_comment_ingress` grammar into immutable selectors
+  (PR number, exact head SHA, body SHA-256, merge method, actor,
+  logical trigger id). No other actor, grammar, or comment text can
+  reach this job.
+- **Authorization boundary.** The job's permissions are read-only
+  (`contents`, `issues`, `pull-requests`, `checks`, `statuses` read).
+  It creates no authorization, posts no comment, and calls no merge
+  API. A positive dispatch receipt is admission only.
+- **Receipt-consumption path.** A future merge dispatch — separately
+  authorized, not built here — must, immediately before mutation,
+  re-verify that the dispatch receipt is `applicable` with
+  `merge_authorized is true`, that its authorization record is still
+  current and unconsumed, that `expected_head_sha` equals the live PR
+  head reacquired at dispatch time, and that expiry is in the future;
+  then merge natively with `expected_head_sha`, read back merged-at-head,
+  and record a consumption observation so a second dispatch with the
+  same authorization is refused as consumed.
 
 ## The chain, in order
 
@@ -95,9 +125,12 @@ consumed, superseded, revoked, or invalidated, is forbidden.
   NOT implemented here. No code in this change posts to GitHub, and no
   hand-crafted serialized record may be treated as produced evidence.
 - **No merge dispatch.** No repository code calls the GitHub merge API,
-  and no workflow, MCP tool, credential, or protected-setting change is
-  made here. The dispatch owner (repo-owned Actions dispatch vs.
-  product-side connector gating, decisions (a)/(b)) is still undecided.
+  and no MCP tool, credential, or protected-setting change is made here.
+  The one workflow change is read-only: the existing `merge_admission`
+  job additionally runs the dispatch evaluator and publishes its
+  receipt; it grants no merge authority. The dispatch owner
+  (repo-owned Actions dispatch vs. product-side connector gating,
+  decisions (a)/(b)) is still undecided for the merge-executing step.
 - **No host enforcement proof.** Repository tests prove the canonical
   gate evaluates and refuses correctly; they do not prove that any
   connector or host merge call enforces it. That proof requires a
@@ -129,6 +162,13 @@ consumed, superseded, revoked, or invalidated, is forbidden.
   test replaced by the positive-path test plus new negative tests),
   `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
   (one architecture-domain classification line for `merge_proposal`).
-- Unchanged: workflow files, MCP server/profile, credentials, protected
-  settings, `merge_authorization_source.py`, approval readers, and the
-  canonical task-planning evaluator branch.
+- Changed (continuation): `.github/workflows/agent-os-governed-invocation.yml`
+  (the `merge_admission` job now also runs `merge_applicability` with
+  the same transport and publishes `dispatch_receipt.json`; read-only
+  permissions unchanged), `merge_authorization_source.py`,
+  `pr_branch_refresh_authorization_source.py`, and
+  `pr_branch_refresh_actions.py` (Claude Code footer parity with
+  `approval_source.py`: exactly one of the `/code` or legacy bare
+  footers is stripped; doubled/embedded forms still fail closed).
+- Unchanged: MCP server/profile, credentials, protected settings,
+  approval readers, and the canonical task-planning evaluator branch.

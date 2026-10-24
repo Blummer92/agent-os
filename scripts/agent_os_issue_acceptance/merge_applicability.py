@@ -27,7 +27,13 @@ from prose, labels, or green CI alone. Only a canonical result of
 receipt blocked. This module itself performs no merge: a positive receipt
 is host-consumable admission, and any dispatch must still re-verify it
 immediately before mutation with ``expected_head_sha`` and record a
-consumption observation after. The dispatch job / connector gating that
+consumption observation after. The production caller is the
+``merge_admission`` job in
+``.github/workflows/agent-os-governed-invocation.yml``: on an owner
+``/agent-os merge-admit ...`` issue comment it runs the candidate
+consumer first and then this module with the same fixed transport, and
+publishes both receipts as job artifacts. That job is read-only and
+performs no merge; the merge-executing dispatch / connector gating that
 would consume this receipt is separately authorized and is NOT built here.
 """
 from __future__ import annotations

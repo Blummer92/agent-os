@@ -742,28 +742,57 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/agent-os-merge-admission/receipt.json"
 
-      - name: Publish non-authorizing evidence summary
+      # Production caller for the dispatch-time evaluator (#3463): this
+      # step runs merge_applicability with the SAME fixed transport the
+      # candidate step used, so a positive receipt is produced in
+      # production only by the canonical evaluator, never by prose or
+      # green CI. This step is read-only like the candidate step: it
+      # performs no merge, no GitHub write, and no authorization
+      # creation. A positive receipt here is admission only; any future
+      # merge dispatch must re-verify expected head, expiry, and
+      # currentness immediately before mutation, and is separately
+      # authorized (it is not this job).
+      - name: Evaluate dispatch-time merge applicability (read-only, no merge)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.agent_os_issue_acceptance.merge_applicability \
+            --transport "$RUNNER_TEMP/agent-os-merge-admission/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/agent-os-merge-admission/dispatch_receipt.json"
+
+      - name: Publish merge-admission evidence summary
         if: ${{ always() }}
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-merge-admission" / "receipt.json"
+          base = Path(os.environ["RUNNER_TEMP"]) / "agent-os-merge-admission"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Merge-admission source acquisition (#3463)\n\n")
-              summary.write("This job grants no merge authority and performs no GitHub mutation.\n\n")
+              summary.write("## Merge-admission evidence (#3463)\n\n")
+              summary.write("This job performs no merge and no GitHub mutation. A dispatch receipt is admission only.\n\n")
+              path = base / "receipt.json"
               if not path.exists():
-                  summary.write("Evidence missing; fail closed.\n")
+                  summary.write("Candidate evidence missing; fail closed.\n")
               else:
                   result = json.loads(path.read_text(encoding="utf-8"))
-                  summary.write(f"Status: {result.get('status')}\n\n")
-                  summary.write(f"Reasons: {','.join(result.get('reason_codes', []))}\n\n")
+                  summary.write(f"Candidate status: {result.get('status')}\n\n")
+                  summary.write(f"Candidate reasons: {','.join(result.get('reason_codes', []))}\n\n")
                   summary.write(f"Source: {result.get('authorization_source_status')}\n\n")
-                  summary.write("Merge authorized: False\n")
+                  summary.write("Candidate merge authorized: False\n\n")
+              dispatch = base / "dispatch_receipt.json"
+              if not dispatch.exists():
+                  summary.write("Dispatch evidence missing; fail closed.\n")
+              else:
+                  result = json.loads(dispatch.read_text(encoding="utf-8"))
+                  summary.write(f"Dispatch status: {result.get('status')}\n\n")
+                  summary.write(f"Dispatch merge authorized: {result.get('merge_authorized')}\n\n")
+                  summary.write(f"Dispatch reasons: {','.join(result.get('reason_codes', []))}\n\n")
+                  summary.write(f"Canonical applicability evaluated: {result.get('canonical_applicability_evaluated')}\n")
           PY
 
-      - name: Publish bounded non-authorizing receipt artifact
+      - name: Publish bounded merge-admission receipt artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
