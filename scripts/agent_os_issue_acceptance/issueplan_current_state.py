@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -10,10 +9,13 @@ from typing import Any, Literal
 
 from .issueplan_scanner import AdoptionClass, ScanFinding, ScanResult, SourceEnvelope
 
-# CR-6 (#3690): the canonical parameterized transport validators live in
-# scheduler_handoff; the former issueplan-local copies are deleted, not wrapped.
+# CR-6 (#3690): the canonical parameterized transport validators and the
+# canonical-bytes/digest helpers live in scheduler_handoff; the former
+# issueplan-local copies are deleted, not wrapped.
 from .scheduler_handoff import (
+    _canonical_bytes as _bytes,
     _decode_transport_payload,
+    _digest,
     _require_exact_keys,
     _require_string_array,
 )
@@ -837,19 +839,6 @@ def _jsonable(value: Any) -> Any:
         unique = {_bytes(_jsonable(item)): _jsonable(item) for item in value}
         return [unique[key] for key in sorted(unique)]
     raise TypeError(f"unsupported canonical value type: {type(value).__name__}")
-
-
-def _bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_bytes(value)).hexdigest()
 
 
 def _reasons(values: Iterable[str]) -> tuple[str, ...]:
