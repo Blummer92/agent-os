@@ -104,6 +104,21 @@ the criterion set through `criterion_preservation.py`: the packet reports
 every criterion parsed from the canonical issue body with its identity
 preserved, and packet verification returns manual-review for any criterion
 that was dropped or reworded.
+## Cumulative Required-Docs Coverage
+The `required docs` check covers a declaration when a file changed in the
+evaluated PR matches it. A declaration may also be covered by documentation
+an earlier merged PR delivered for the same issue (#3724), but only through
+producer-verified evidence: the source PR is merged and in this repository;
+the canonical linked-issue parser (`report_only_issue_number`) associates its
+own title and body with exactly the evaluated issue; its merge commit is an
+ancestor of the evaluated base; each counted documentation file has the
+identical blob at the merge commit and at the evaluated base; and the
+evidence is bound to the issue's current `required_docs` list. A GitHub
+cross-reference only nominates a candidate. Documentation edited, reverted,
+or deleted after the merge, ambiguous or bare linkage, changed declarations,
+and malformed or unavailable evidence contribute no coverage; a producer
+failure leaves current-PR coverage as the only path, so it can never turn a
+failure into a pass. Omitting the evidence preserves per-PR results exactly.
 ## Criterion-Level Satisfaction
 `criterion_satisfaction.py` projects criterion-level satisfaction for one
 issue from evidence gathered across all linked PRs. Every original criterion

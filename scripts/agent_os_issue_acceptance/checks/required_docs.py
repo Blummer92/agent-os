@@ -60,7 +60,7 @@ def check(
     delegates entirely to the canonical declared-path contract; invalid
     declarations fail closed with the stable ``DeclaredPathError.code``.
 
-    Cumulative coverage (#3719): a declaration not changed in the current PR
+    Cumulative coverage (#3724): a declaration not changed in the current PR
     may instead be covered by a valid merged-documentation record (see
     ``merged_docs``), matched with the same ``_is_covered`` contract. An
     invalid record never counts; a declaration with neither a current-PR

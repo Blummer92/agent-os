@@ -1,16 +1,18 @@
-"""Cumulative required-docs evidence (#3719, #3709 regression).
+"""Cumulative required-docs evidence: checker contract (#3724).
 
-#3709 is a tests-only follow-up to #3677 whose only changed file is a
-test. #3677 requires two documentation paths that merged PR #3681 already
-delivered to main. Before this change the required-docs check compared
-only the current PR's changed files, so #3709 failed with both paths
-``unmatched`` even though the documentation was already in its base tree.
+The fixtures use the shape of a tests-only follow-up (PR 3709) to an issue
+(3677) whose documentation an earlier PR (3681) delivered. They exercise
+the offline checker with hand-built records only; whether a live PR yields
+a record at all is decided by the producer (see
+``test_3719_merged_doc_producer.py``), which rejects that real PR on
+canonical association and changed documentation blobs.
 
-These tests pin the new contract: a declaration may be satisfied by a
+These tests pin the checker contract: a declaration may be satisfied by a
 merged PR only through a record passing every gate in
 ``merged_docs.validate_record`` (merged, timeline association, same
-issue, merge commit in the evaluated base, fresh declaration snapshot,
-exact-path match). Every single-gate failure below must keep docs failing.
+issue, merge commit in the evaluated base, fresh declaration snapshot)
+whose files match it under the canonical declared-path contract. Every
+single-gate failure below must keep docs failing.
 """
 from scripts.agent_os_issue_acceptance.checks import required_docs
 from scripts.agent_os_issue_acceptance.merged_docs import validate_record

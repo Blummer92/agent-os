@@ -1,28 +1,31 @@
-"""Cumulative required-documentation evidence (#3719).
+"""Cumulative required-documentation evidence (#3724).
 
 The per-PR required-docs contract is preserved: a declaration is satisfied
 by a file changed in the currently evaluated PR, exactly as before. A
 declaration may *also* be satisfied by a merged PR, but only through a
 verified record that passes every gate below. No single gate is sufficient
-on its own, and PR prose alone is never sufficient:
+on its own, and neither PR prose nor a GitHub cross-reference alone is ever
+sufficient:
 
 1. ``merged`` is exactly ``True`` (GitHub API ``merged_at``).
-2. ``association_basis`` is ``timeline-cross-reference``: the merged PR
-   appears as a GitHub-generated cross-referenced PR on the evaluated
-   issue's timeline, not a free-text claim.
+2. ``association_basis`` is ``timeline-cross-reference``: the producer found
+   the merged PR as a same-repository cross-reference on the evaluated
+   issue's timeline *and* the canonical linked-issue parser associates the
+   PR's own title and body unambiguously with that issue.
 3. The record's ``linked_issue_number`` equals the evaluated issue number
    (the report-only association for the current PR, see ``policy``).
 4. ``merge_commit_in_evaluated_base`` is exactly ``True``: the producer
    verified via the GitHub compare API that the merge commit is the
-   merge-base of the evaluated PR's base and that the base is not behind
-   it, so the merged documentation is actually present in the evaluated
-   tree.
+   merge-base of the evaluated PR's base and that the base is not behind it.
 5. ``declared_required_docs`` equals the current issue's ``required_docs``
    list exactly, so evidence recorded against an older declaration set
    cannot satisfy a changed issue (freshness).
-6. At least one file in ``files`` matches the declaration under the
-   canonical ``declared_path_matches`` contract (applied by the
-   required-docs check itself, not here).
+6. ``files`` lists only the source PR's documentation files that match a
+   current declaration and whose blob at the evaluated base is identical to
+   the blob at the merge commit (producer-verified), so documentation edited,
+   reverted, or deleted after the merge never counts. A declaration is
+   covered when one of these files matches it under the canonical
+   ``declared_path_matches`` contract (applied by the required-docs check).
 
 An invalid record simply does not count: it never broadens coverage, never
 turns a failure into a pass, and never turns a pass into a failure on its
