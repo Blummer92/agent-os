@@ -25,7 +25,7 @@ from .models import (
     strongest_status,
 )
 from .parse_issue import project_issue_metadata, scan_issue_metadata
-from .parse_pr import parse_linked_issue_result
+from .parse_pr import parse_linked_issue_result, report_only_issue_number
 
 
 def _unavailable_evidence_check(name: str, input_name: str) -> CheckResult:
@@ -162,6 +162,14 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
 
     changed_file_evidence_unavailable = data.changed_files_supplied and not data.changed_files
     diff_evidence_unavailable = data.diff_supplied and not data.diff_text.strip()
+    # Canonical association for merged-documentation evidence (#3719): the
+    # RESOLVED issue when one exists, otherwise the single unambiguous
+    # report-only association (e.g. a declared non-closing follow-up such as
+    # #3709 -> #3677). Ambiguous or manual-review associations yield None,
+    # so merged evidence can never satisfy docs for them.
+    merged_linked_issue = linked_issue_result.issue_number or report_only_issue_number(
+        linked_issue_result
+    )
 
     checks: list[CheckResult] = [
         linked_issue.check(data.pr_body, pr_title, parse_result=linked_issue_result),
@@ -179,7 +187,12 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
         (
             _unavailable_evidence_check("required docs", "changed-files")
             if changed_file_evidence_unavailable
-            else required_docs.check(metadata, data.changed_files)
+            else required_docs.check(
+                metadata,
+                data.changed_files,
+                merged_docs=data.merged_doc_evidence,
+                linked_issue=merged_linked_issue,
+            )
         ),
         required_tests.check(metadata, data.changed_files, data.pr_body),
         (
@@ -219,6 +232,7 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
     evidence = [
         f"changed_files={len(data.changed_files)}",
         f"changed_files_supplied={str(data.changed_files_supplied).lower()}",
+        f"merged_doc_records={len(data.merged_doc_evidence)}",
         f"diff_supplied={str(data.diff_supplied).lower()}",
         f"metadata_present={metadata.present}",
         f"linked_issue_status={linked_issue_result.status.value}",

@@ -20,6 +20,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "edit_relevance",
                 "legacy_preflight",
                 "linked_issue",
+                "merged_docs",
                 "metadata_validation",
                 "models",
                 "parse_pr",
@@ -98,6 +99,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         frozenset(
             {
                 "acceptance_report_transport",
+                "build_merged_doc_evidence",
                 "cli",
                 "coding_command_center_handoff",
                 "compute_control_projection",

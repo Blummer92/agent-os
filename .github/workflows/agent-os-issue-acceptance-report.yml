@@ -156,6 +156,28 @@ jobs:
             fi
           fi
 
+          # Cumulative merged-docs evidence (#3719, read-only): discover
+          # merged PRs for the same issue from the issue timeline, verify
+          # merged state and merge-commit ancestry of the evaluated base,
+          # and write a JSON record list (or [] on any failure). The
+          # checker re-validates every record; this step never passes a
+          # check on its own.
+          captured_pr_base_sha=""
+          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
+            captured_pr_base_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json baseRefOid --jq '.baseRefOid // ""')"
+          fi
+          if [ -n "$linked_issue" ] && [ -n "$captured_pr_base_sha" ]; then
+            python -m scripts.agent_os_issue_acceptance.build_merged_doc_evidence \
+              --repository "$GITHUB_REPOSITORY" \
+              --issue-number "$linked_issue" \
+              --current-pr-number "$GITHUB_PR_NUMBER" \
+              --base-sha "$captured_pr_base_sha" \
+              --issue-body-file tmp/agent_os_issue_acceptance_report/issue.md \
+              --output tmp/agent_os_issue_acceptance_report/merged_docs.json
+          else
+            printf '%s\n' '[]' > tmp/agent_os_issue_acceptance_report/merged_docs.json
+          fi
+
           transport_args=(
             --transport-repository "$GITHUB_REPOSITORY"
             --transport-issue-body-file "$captured_issue_body_file"
@@ -195,6 +217,7 @@ jobs:
             --diff tmp/agent_os_issue_acceptance_report/diff.patch \
             --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
             --documentation-advisory \
+            --merged-docs-evidence tmp/agent_os_issue_acceptance_report/merged_docs.json \
             "${evidence_args[@]}" \
             "${transport_args[@]}" \
             | tee tmp/agent_os_issue_acceptance_report/report.txt

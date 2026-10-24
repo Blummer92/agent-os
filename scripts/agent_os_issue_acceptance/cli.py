@@ -110,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr-body", help="Path to the pull request body markdown.")
     parser.add_argument("--changed-files", help="Path to newline-delimited changed files.")
     parser.add_argument("--diff", help="Optional path to unified diff or patch text.")
+    parser.add_argument(
+        "--merged-docs-evidence",
+        help="Optional path to a JSON list of merged-documentation evidence "
+        "records (#3719). Records are validated inside the required-docs "
+        "check; invalid records never count.",
+    )
     parser.add_argument("--pr-title", default="", help="Optional pull request title.")
     parser.add_argument(
         "--changed-files-incomplete",
@@ -202,6 +208,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"the following arguments are required: {', '.join(missing)}")
 
     issue_body = _read_text(args.issue)
+    merged_doc_evidence: tuple[dict, ...] = ()
+    if args.merged_docs_evidence:
+        try:
+            parsed_merged = _read_json(args.merged_docs_evidence)
+        except (OSError, json.JSONDecodeError) as error:
+            parser.error(f"invalid merged-docs evidence: {error}")
+        if isinstance(parsed_merged, dict):
+            parsed_merged = [parsed_merged]
+        if not isinstance(parsed_merged, list) or not all(
+            isinstance(item, dict) for item in parsed_merged
+        ):
+            parser.error("invalid merged-docs evidence: expected a JSON list of records")
+        merged_doc_evidence = tuple(parsed_merged)
     report = evaluate_acceptance(
         AcceptanceInput(
             issue_body=issue_body,
@@ -210,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             diff_text=_read_text(args.diff),
             changed_files_supplied=bool(args.changed_files),
             diff_supplied=bool(args.diff),
+            merged_doc_evidence=merged_doc_evidence,
         ),
         pr_title=args.pr_title,
     )

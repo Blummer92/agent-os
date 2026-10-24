@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..merged_docs import merged_source_for, valid_records
 from ..models import CheckResult, IssueMetadata, Status
 from ..path_contract import (
     DeclaredPathError,
@@ -43,7 +44,12 @@ def _is_covered(declaration: str, changed_files: list[str]) -> bool:
     return False
 
 
-def check(metadata: IssueMetadata, changed_files: list[str]) -> CheckResult:
+def check(
+    metadata: IssueMetadata,
+    changed_files: list[str],
+    merged_docs: object = (),
+    linked_issue: int | None = None,
+) -> CheckResult:
     """Report declared documentation-path coverage against supplied changed files.
 
     Coverage only: a match proves that a declared documentation path appears in
@@ -52,20 +58,46 @@ def check(metadata: IssueMetadata, changed_files: list[str]) -> CheckResult:
     canonical, relevant, or sufficient (see DOC5 for quality review). Matching
     delegates entirely to the canonical declared-path contract; invalid
     declarations fail closed with the stable ``DeclaredPathError.code``.
+
+    Cumulative coverage (#3719): a declaration not changed in the current PR
+    may instead be covered by a valid merged-documentation record (see
+    ``merged_docs``). Every gate in that module must pass; an invalid record
+    never counts, and a declaration with neither a current-PR match nor a
+    valid merged match remains ``unmatched``. Omitting ``merged_docs``
+    preserves the legacy per-PR contract exactly.
     """
     if not metadata.present:
         return CheckResult("required docs", Status.MANUAL_REVIEW, _MISSING_METADATA_MESSAGE)
 
+    valid_merged, _invalid_reasons = valid_records(
+        merged_docs, linked_issue=linked_issue, required_docs=metadata.required_docs
+    )
     problems: set[str] = set()
+    merged_evidence: list[str] = []
     for declaration in metadata.required_docs:
         try:
             normalize_declared_pattern(declaration)
         except DeclaredPathError as error:
             problems.add(_evidence(declaration, error.code))
             continue
-        if not _is_covered(declaration, changed_files):
-            problems.add(_evidence(declaration, _UNMATCHED_CODE))
+        if _is_covered(declaration, changed_files):
+            continue
+        source = merged_source_for(declaration, valid_merged)
+        if source is not None:
+            merged_evidence.append(
+                f"field=required_docs; value={_bounded(declaration)}; "
+                f"code=merged-pr-{source.source_pr_number}"
+            )
+            continue
+        problems.add(_evidence(declaration, _UNMATCHED_CODE))
 
     if problems:
         return CheckResult("required docs", Status.FAIL, _UNSATISFIED_MESSAGE, sorted(problems))
+    if merged_evidence:
+        return CheckResult(
+            "required docs",
+            Status.PASS,
+            "Declared required docs are satisfied, including merged-PR evidence.",
+            sorted(set(merged_evidence)),
+        )
     return CheckResult("required docs", Status.PASS, _SATISFIED_MESSAGE)
