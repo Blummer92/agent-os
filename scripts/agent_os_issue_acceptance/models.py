@@ -103,7 +103,7 @@ class AcceptanceInput:
     # Raw merged-documentation evidence records (#3719), as parsed from JSON.
     # They are validated against the evaluated issue inside the required-docs
     # check; an empty tuple preserves the legacy per-PR contract exactly.
-    merged_doc_evidence: tuple[dict, ...] = ()
+    merged_doc_evidence: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)

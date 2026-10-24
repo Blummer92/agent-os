@@ -148,9 +148,11 @@ def test_prose_only_association_basis_does_not_count():
     assert _docs_result([], merged=(_record(association_basis="pr-body-mention"),)).status == Status.FAIL
 
 
-def test_referenced_merge_commit_basis_is_accepted():
+def test_referenced_merge_commit_basis_does_not_count():
+    # No producer emits this basis, so the checker does not accept it.
     result = _docs_result([], merged=(_record(association_basis="timeline-referenced-merge-commit"),))
-    assert result.status == Status.PASS
+    assert result.status == Status.FAIL
+    assert "field=merged_docs_evidence; code=merged-docs-evidence-invalid:bad-association-basis" in result.evidence
 
 
 def test_stale_declaration_snapshot_does_not_count():
@@ -172,7 +174,13 @@ def test_malformed_record_does_not_count_or_raise():
 
 
 def test_validate_record_reasons_are_stable():
-    _, reason = validate_record(_record(linked_issue_number=1), linked_issue=3677, required_docs=REQUIRED)
-    assert reason == "linked-issue-mismatch"
-    _, reason = validate_record(_record(merged=False), linked_issue=3677, required_docs=REQUIRED)
-    assert reason == "not-merged"
+    assert validate_record(_record(), linked_issue=3677, required_docs=REQUIRED) is None
+    assert validate_record(_record(linked_issue_number=1), linked_issue=3677, required_docs=REQUIRED) == "linked-issue-mismatch"
+    assert validate_record(_record(linked_issue_number=True), linked_issue=1, required_docs=REQUIRED) == "bad-linked-issue"
+    assert validate_record(_record(merged=False), linked_issue=3677, required_docs=REQUIRED) == "not-merged"
+
+
+def test_invalid_record_reason_is_reported_with_failure():
+    result = _docs_result([], merged=(_record(merged=False),))
+    assert result.status == Status.FAIL
+    assert result.evidence[-1] == "field=merged_docs_evidence; code=merged-docs-evidence-invalid:not-merged"

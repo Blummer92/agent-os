@@ -208,17 +208,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"the following arguments are required: {', '.join(missing)}")
 
     issue_body = _read_text(args.issue)
-    merged_doc_evidence: tuple[dict, ...] = ()
+    merged_doc_evidence: tuple[object, ...] = ()
     if args.merged_docs_evidence:
         try:
             parsed_merged = _read_json(args.merged_docs_evidence)
         except (OSError, json.JSONDecodeError) as error:
             parser.error(f"invalid merged-docs evidence: {error}")
-        if isinstance(parsed_merged, dict):
-            parsed_merged = [parsed_merged]
-        if not isinstance(parsed_merged, list) or not all(
-            isinstance(item, dict) for item in parsed_merged
-        ):
+        if not isinstance(parsed_merged, list):
             parser.error("invalid merged-docs evidence: expected a JSON list of records")
         merged_doc_evidence = tuple(parsed_merged)
     report = evaluate_acceptance(
