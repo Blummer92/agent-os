@@ -422,3 +422,9 @@ so a pull request opened after it and before the run ends is not seen (the
 default-branch check and the exact re-read bound, but do not close, that
 window). Fixture and offline tests prove the contract; live behavior is
 observed separately through the shadow CLI.
+
+## Merge evidence repairs (#3463, non-closing)
+
+- `PullRequestMergeEvidence` bounds PR title/body text at GitHub's body limit (65,536 characters, 4 UTF-8 bytes each) instead of the generic 4,096-byte text bound; it stays bounded and NUL-free. Other text fields keep the generic bound.
+- `pull-request.multiple-implemented-issues` is part of the merge-authorization reason-code vocabulary and a blocking reason, so dual implemented-issue claims produce a typed refusal.
+- Approval-comment footer normalization strips exactly one trailing Claude Code footer, either `https://claude.ai/code` (actual) or the legacy `https://claude.ai`; anything else still fails closed.
