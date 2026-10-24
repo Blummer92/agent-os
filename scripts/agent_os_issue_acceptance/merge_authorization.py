@@ -50,6 +50,9 @@ _APPROVAL_REVISION_RE = re.compile(r"^approval-revision:[0-9a-f]{64}$")
 _EVIDENCE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}:[0-9a-f]{64}$")
 _REPOSITORY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MAX_TEXT_BYTES = 4096
+# GitHub allows PR bodies up to 65,536 characters (up to 4 UTF-8 bytes each).
+# PR title/body text is bounded by that platform limit, not the generic bound.
+_MAX_PR_TEXT_BYTES = 4 * 65536
 _MAX_ITEMS = 256
 # Public human-readable diagnostics are bounded and sanitized. Finite machine
 # reason codes remain the primary public classification; details are advisory.
@@ -116,6 +119,7 @@ MERGE_AUTHORIZATION_REASON_CODES = frozenset(
         "pull-request.head-changed",
         "pull-request.identity-changed",
         "pull-request.metadata-changed",
+        "pull-request.multiple-implemented-issues",
         "pull-request.not-ready",
         "pull-request.ready-state-changed",
         "pull-request.unauthorized-closing-reference",
@@ -147,6 +151,7 @@ _BLOCKED = frozenset(
         "checks.failed",
         "checks.skipped",
         "pull-request.draft",
+        "pull-request.multiple-implemented-issues",
         "pull-request.not-ready",
         "pull-request.unauthorized-closing-reference",
         "review.blocked",
@@ -269,7 +274,7 @@ def _pr_text(value: Any, name: str) -> str:
     """
     if not isinstance(value, str) or "\x00" in value:
         raise ValueError(f"{name} must be NUL-free text")
-    if len(value.encode("utf-8")) > _MAX_TEXT_BYTES:
+    if len(value.encode("utf-8")) > _MAX_PR_TEXT_BYTES:
         raise ValueError(f"{name} exceeds bounded byte length")
     return value
 
