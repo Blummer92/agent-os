@@ -361,7 +361,7 @@ def evaluate_issue_closure(
     decision = request.decision
     repository = decision.repository
     issue_number = decision.issue_number
-    satisfaction_block = (
+    satisfaction_payload = (
         satisfaction_block(request.satisfaction)
         if request.satisfaction is not None
         else None
@@ -376,7 +376,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="none-protected-target",
         )
     if snapshot.repository != repository or snapshot.issue_number != issue_number:
@@ -389,7 +389,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="reacquire-issue-and-reevaluate",
         )
     # Lane B (#3489, QA E5 C1/C6 + D1): a present satisfaction record that
@@ -408,7 +408,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="obtain-complete-satisfaction-and-reevaluate",
         )
     # Lane B (QA E5 C2): when the caller supplies the digest of the issue
@@ -428,7 +428,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="reacquire-issue-and-reevaluate",
         )
     # Lane B (QA E5 C3/C7): bound QA evidence, when it carries a binding,
@@ -446,7 +446,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="obtain-acceptance-for-this-issue",
         )
     # #3690 ADV-2: a QA record that claims a validated head can only be
@@ -468,7 +468,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="reacquire-snapshot-with-validated-head",
         )
     if (
@@ -484,7 +484,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="obtain-acceptance-for-exact-head",
         )
     if request.acceptance.evaluator_id == decision.authorizer_id:
@@ -497,7 +497,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="obtain-independent-acceptance",
         )
     if request.acceptance.verdict != "pass":
@@ -510,7 +510,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="obtain-independent-acceptance",
         )
     try:
@@ -525,7 +525,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="record-owner-decision",
         )
     except (TypeError, ValueError):
@@ -538,7 +538,7 @@ def evaluate_issue_closure(
             admission_result_id=None,
             snapshot_id=snapshot.snapshot_id,
             acceptance_evidence_id=request.acceptance.evidence_id,
-            satisfaction=satisfaction_block,
+            satisfaction=satisfaction_payload,
             next_action="reacquire-issue-and-reevaluate",
         )
     admission = evaluate_lifecycle_mutation(
@@ -553,7 +553,7 @@ def evaluate_issue_closure(
         admission_result_id=admission.result_id,
         snapshot_id=snapshot.snapshot_id,
         acceptance_evidence_id=request.acceptance.evidence_id,
-        satisfaction=satisfaction_block,
+        satisfaction=satisfaction_payload,
         next_action=(
             "host-close-issue-then-canonical-readback"
             if admission.admitted
