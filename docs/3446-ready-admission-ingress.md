@@ -12,6 +12,18 @@ classification, PR #3481), #3372 (optional custom-MCP host publication), #3281.
 | Fixed Codespaces/GCE operations | Same ingress, Codespaces-first router | Unchanged; Ready is deliberately **not** routed there |
 | `admit_agent_os_ready_for_review_tool` over MCP | Optional repository-local server | Unchanged; #3372 owns host publication |
 
+## Satisfying the overlay pre-step
+
+This route satisfies the GitHub Service Agent overlay Draft -> Ready
+pre-step where the MCP admission tool is unattached: the Actions consumer
+calls the same single canonical evaluator, and the host must verify the
+receipt through `verify_ready_admission_receipt` against a fresh PR
+readback before mutation, with exact head/body binding,
+closing-reference refusal, and fail-closed behavior on an absent,
+refused, stale, duplicate, or forged receipt. This does not delete the
+MCP tool, create a second evaluator, or grant merge, closure, workflow,
+protected-setting, production, or external-write authority.
+
 ## Fixed request
 
 Post on an open issue (not a PR conversation) as the allowed owner actor, exact text:
