@@ -284,11 +284,9 @@ def validate_satisfaction_snapshot(value: object) -> SatisfactionSnapshot:
                 index, identity, disposition, reason_code, tuple(evidence)
             )
         )
-    frozen_criteria = tuple(criteria)
-    if status != derived_satisfaction_status(frozen_criteria):
-        raise ValueError("satisfaction status disagrees with its criteria")
+    # The frozen constructor is the sole derived-status validation gate.
     return SatisfactionSnapshot(
-        repository, issue_number, digest, status, frozen_criteria
+        repository, issue_number, digest, status, tuple(criteria)
     )
 
 def satisfaction_block(
