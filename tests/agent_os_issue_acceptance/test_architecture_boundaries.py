@@ -103,6 +103,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "criterion_satisfaction",
                 "documentation_advisory",
                 "documentation_gap_report",
+                "github_closure_dispatch",
                 "issue_operational_state_acquisition",
                 "issue_operational_state_producer",
                 "lifecycle_stage_acquisition",
