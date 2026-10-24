@@ -1,8 +1,10 @@
 """Tests for merge_applicability.py: dispatch-time applicability consumer.
 
 Every authorization artifact is built through the canonical producers; the
-fake GitHub surface is read-only. The consumer must never emit
-merge_authorized=true, even when every verifiable check passes.
+fake GitHub surface is read-only. The consumer emits merge_authorized=true
+only when every dispatch check passes AND the canonical evaluator returns
+applicable for a typed MergeProposal; every negative case below must keep
+merge_authorized false, and no case in this file performs a merge.
 """
 from __future__ import annotations
 
@@ -299,23 +301,96 @@ def _run(bundle=None, record=None, pr=None, comments=None, transport=None,
 
 
 # ---------------------------------------------------------------- tests
-def test_all_verifiable_checks_pass_but_never_authorizes():
+def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     receipt = _run()
     assert receipt["dispatch_checks_passed"] is True
-    assert receipt["merge_authorized"] is False
-    assert receipt["reason_codes"] == ["merge-proposal-evidence-undefined"]
+    assert receipt["status"] == "applicable"
+    assert receipt["merge_authorized"] is True
+    assert receipt["reason_codes"] == []
     assert receipt["verified"] == [
         "transport-and-record", "approval-source-current",
         "approval-binding-linkage", "file-scope",
         "checks", "reviews", "lifecycle-admission",
+        "canonical-applicability",
     ]
-    assert receipt["missing_interfaces"]
-    assert receipt["canonical_applicability_evaluated"] is False
+    assert receipt["missing_interfaces"] == []
+    assert receipt["canonical_applicability_evaluated"] is True
+    canonical = receipt["canonical_applicability_result"]
+    assert canonical is not None
+    assert canonical["status"] == "applicable"
+    assert canonical["merge_authorized"] is True
+    assert canonical["changed_bindings"] == []
+    assert canonical["reason_codes"] == []
+    assert canonical["proposal_id"].startswith("merge-proposal:")
+    assert canonical["authorization_id"] == receipt["authorization_id"]
+    assert receipt["expected_head_sha"] == HEAD
+    assert receipt["authorization_expires_at"] is not None
     lifecycle = receipt["lifecycle_mutation_authorization"]
     assert lifecycle is not None
     assert lifecycle["expected_source_head"] == HEAD
     assert lifecycle["authorized_mutations"] == ["merge"]
     assert lifecycle["state"] == "authorized"
+
+
+def test_wrong_merge_method_blocked():
+    receipt = _run(transport=_transport(merge_admission_method_or_none="merge"))
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert "merge-dispatch-blocked-by-admission" in receipt["reason_codes"]
+
+
+def test_base_not_main_blocked():
+    receipt = _run(pr=_PR(base=_Ref("dev", BASE)))
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert "merge-dispatch-blocked-by-admission" in receipt["reason_codes"]
+    assert "base-not-main" in receipt["reason_codes"]
+
+
+def test_non_mergeable_protected_target_blocked():
+    receipt = _run(pr=_PR(mergeable=False))
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert "pr-mergeability-not-clean" in receipt["reason_codes"]
+
+
+class _BrokenClient:
+    def get_repo(self, name):
+        raise RuntimeError("provider unavailable")
+
+
+def test_provider_error_fails_closed():
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=_BrokenClient(),
+        evaluated_at=NOW,
+    )
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    # _receipt sorts reason codes.
+    assert receipt["reason_codes"] == [
+        "canonical-github-evidence-unavailable",
+        "merge-dispatch-blocked-by-admission",
+    ]
+
+
+def test_unauthorized_closing_reference_body_change_blocked():
+    # A record built for the clean body cannot be reused after the live
+    # body gains an unauthorized closing reference: the admission layer
+    # already blocks on the metadata binding drift, before any canonical
+    # step. The canonical evaluator independently refuses the same drift
+    # (see test_merge_proposal.test_unauthorized_closing_reference_and_dual_claim_block).
+    bundle = _tauth._bundle()
+    body = "Fixes #999"
+    receipt = _run(
+        bundle=bundle, pr=_PR(body=body),
+        transport=_transport(
+            merge_admission_body_sha256_or_none=sha256(body.encode("utf-8")).hexdigest()
+        ),
+    )
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert "merge-dispatch-blocked-by-admission" in receipt["reason_codes"]
+    assert "pull-request.metadata-changed" in receipt["reason_codes"]
 
 
 def test_changed_head_blocked_at_admission_layer():
