@@ -13,7 +13,13 @@ reported as not independently verified: the canonical applicability evaluator
 typed approval/projection/currentness evidence, not guesses from green CI or
 prose. A positive source record is therefore a *candidate*, never merge
 admission. ``merge_authorized`` is always ``False`` in every receipt this
-module emits.
+module emits. The positive-admission consumer is separate:
+``merge_applicability.evaluate_merge_dispatch_applicability`` takes this
+module's candidate receipt, additionally verifies the approval triple,
+live scope, checks, reviews, and lifecycle admission, and then delegates
+to the canonical evaluator with a typed ``MergeProposal``; only that
+consumer can emit an applicable receipt. This module's front-door role
+and its hard-coded ``False`` are unchanged by that delegation.
 """
 from __future__ import annotations
 
@@ -122,8 +128,9 @@ _HOST_DISPATCH_CONTRACT = {
         "revoked, or invalidated after the receipt was produced",
     ],
     "note": "This consumer never emits merge_authorized=true. A host-dispatchable "
-    "applicable receipt requires the separately owned approval/projection "
-    "producer chain (see the #3463 change request for issue #2340).",
+    "applicable receipt is produced by merge_applicability.py, which "
+    "delegates to the canonical evaluator with a typed MergeProposal "
+    "(see the #3463 change request for issue #2340).",
 }
 
 

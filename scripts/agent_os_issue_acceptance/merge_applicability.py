@@ -17,13 +17,18 @@ then additionally verifies:
 - a canonical lifecycle-mutation admission binding the owner's merge
   instruction to the exact live head via ``produce_lifecycle_mutation_authorization``.
 
-Fail-closed throughout. This module NEVER emits merge authorization: the
-canonical ``evaluate_merge_authorization_applicability`` additionally requires
-a merge-proposal evidence type (``DraftTaskProposal`` is task-planning
-specific; no canonical merge proposal exists), so the canonical
-proposal-based applicability evaluation cannot be honestly invoked for merge
-dispatch. That exact missing interface is reported, not simulated
-(reason ``merge-proposal-evidence-undefined``).
+Fail-closed throughout. Once every dispatch check above has passed, this
+module delegates to the canonical ``evaluate_merge_authorization_applicability``
+with a typed ``MergeProposal`` (ADR-001, ``merge-proposal/v1``) assembled
+from the already-verified trusted records and live PR evidence — never
+from prose, labels, or green CI alone. Only a canonical result of
+``applicable`` produces a positive receipt (``status == "applicable"``,
+``merge_authorized is true``); every other canonical outcome keeps the
+receipt blocked. This module itself performs no merge: a positive receipt
+is host-consumable admission, and any dispatch must still re-verify it
+immediately before mutation with ``expected_head_sha`` and record a
+consumption observation after. The dispatch job / connector gating that
+would consume this receipt is separately authorized and is NOT built here.
 """
 from __future__ import annotations
 
@@ -48,8 +53,14 @@ from .lifecycle_mutation_authorization import (
 from .lifecycle_mutation_guard import LifecycleStateSnapshot
 from .merge_authorization import (
     MergeAuthorizationRecord,
+    MergeCheckEvidence,
+    MergeReviewEvidence,
+    PullRequestMergeEvidence,
     approval_applicability_identity,
+    build_merge_proposal,
     changed_scope_fingerprint,
+    evaluate_merge_authorization_applicability,
+    pr_metadata_fingerprint,
 )
 from .merge_authorization_source import (
     MergeAuthorizationCommentSnapshot,
@@ -77,16 +88,6 @@ _COMMIT_STATUS_STATES = {
     "error": "failure",
     "pending": "pending",
 }
-
-_MISSING_INTERFACES = [
-    "merge-proposal-evidence-type: evaluate_merge_authorization_applicability "
-    "requires current_proposal (DraftTaskProposal), current_issueplan_evidence, "
-    "and current_repository_state_evidence; DraftTaskProposal is "
-    "task-planning-specific and no canonical merge-proposal producer exists, "
-    "so the canonical proposal-based applicability evaluation cannot be "
-    "honestly invoked for merge dispatch.",
-]
-
 
 class _GitHubCommentSource:
     """Bounded canonical GitHub PR comments for both source readers."""
@@ -135,7 +136,12 @@ def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str 
              missing_interfaces: list[str],
              lifecycle_mutation_authorization: dict[str, object] | None,
              lifecycle_snapshot_notes: list[str],
-             admission_receipt: dict[str, object] | None = None) -> dict[str, object]:
+             admission_receipt: dict[str, object] | None = None,
+             status: str = "blocked",
+             merge_authorized: bool = False,
+             canonical_applicability_evaluated: bool = False,
+             canonical_applicability_result: dict[str, object] | None = None,
+             authorization_expires_at: str | None = None) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": "1.0",
         "operation": "merge-dispatch-applicability",
@@ -158,9 +164,11 @@ def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str 
         "lifecycle_mutation_authorization": lifecycle_mutation_authorization,
         "lifecycle_snapshot_notes": lifecycle_snapshot_notes,
         "admission_receipt": admission_receipt,
-        "status": "blocked",
-        "merge_authorized": False,
-        "canonical_applicability_evaluated": False,
+        "status": status,
+        "merge_authorized": merge_authorized,
+        "canonical_applicability_evaluated": canonical_applicability_evaluated,
+        "canonical_applicability_result": canonical_applicability_result,
+        "authorization_expires_at": authorization_expires_at,
         "issue_closure_authorized": False,
         "workflow_authorized": False,
         "production_authorized": False,
@@ -273,7 +281,8 @@ def evaluate_merge_dispatch_applicability(
                                                 *authz.reason_codes]})
         record: MergeAuthorizationRecord = records[0]
         base_kwargs.update(authorization_id=record.authorization_id,
-                           authorization_revision=record.authorization_revision)
+                           authorization_revision=record.authorization_revision,
+                           authorization_expires_at=record.expires_at)
 
         # Trusted approval artifacts.
         approval_result = reacquire_approval_source(
@@ -398,14 +407,109 @@ def evaluate_merge_dispatch_applicability(
             return _receipt(**{**base_kwargs, "reason_codes": ["lifecycle.admission-failed"]})
         verified.append("lifecycle-admission")
 
+        # Canonical applicability, finally invocable: assemble the typed
+        # merge proposal from the verified records and live PR evidence,
+        # then let the canonical evaluator decide. Dispatch checks above
+        # are necessary but never sufficient — a canonical non-applicable
+        # outcome still blocks, with the canonical reason codes preserved.
+        # Check evidence states are live (from the rollup verified above),
+        # not copied from the binding: context/app_identity come from the
+        # binding's required set (the live rollup reports states per
+        # context only), tested_sha is the live head, and state is the
+        # live rolled-up state. A context missing from the live rollup
+        # already blocked above, so this construction cannot resurrect it.
+        live_check_evidence = tuple(
+            MergeCheckEvidence(
+                context=required.context,
+                app_identity=required.app_identity,
+                tested_sha=head,
+                evidence_id="",
+                state=check_states[required.context],
+            )
+            for required in record.binding.required_check_evidence
+        )
+        pr_evidence = PullRequestMergeEvidence(
+            repository=repository,
+            pull_request_number=pr.number,
+            head_sha=head,
+            base_branch=pr.base.ref,
+            base_sha_or_evidence_id=pr.base.sha,
+            draft=False,
+            ready_for_review=True,
+            proposed_merge_method=base.get("expected_method"),
+            changed_scope_fingerprint=live_scope,
+            allowed_files=record.binding.allowed_files,
+            forbidden_paths=record.binding.forbidden_paths,
+            required_tests=record.binding.required_tests,
+            required_checks=live_check_evidence,
+            review_evidence=MergeReviewEvidence(
+                blocking_review_present=blocking,
+                unresolved_conversation_count=0,
+                exact_head_reviewed=approved_at_head,
+            ),
+            evidence_id="",
+            pr_title=pr.title or "",
+            pr_body=pr.body or "",
+            pr_metadata_sha256=pr_metadata_fingerprint(pr.title or "", pr.body or ""),
+            closure_admissions=(),
+        )
+        try:
+            proposal = build_merge_proposal(
+                approval, applicability, projection, pr_evidence
+            )
+        except (TypeError, ValueError):
+            return _receipt(
+                **{**base_kwargs,
+                   "dispatch_checks_passed": True,
+                   "verified": verified,
+                   "reason_codes": ["merge-proposal-evidence-invalid"],
+                   "missing_interfaces": [],
+                   "lifecycle_mutation_authorization": lifecycle_authorization.to_dict(),
+                   "lifecycle_snapshot_notes": notes,
+                   "canonical_applicability_evaluated": False},
+            )
+        canonical = evaluate_merge_authorization_applicability(
+            record, approval, applicability, projection, pr_evidence,
+            current_proposal=proposal,
+            current_issueplan_evidence=None,
+            current_repository_state_evidence=None,
+            evaluated_at=now_text,
+        )
+        canonical_result = {
+            "status": canonical.status,
+            "authorization_id": canonical.authorization_id,
+            "authorization_revision": canonical.authorization_revision,
+            "current_pull_request_evidence_id": canonical.current_pull_request_evidence_id,
+            "changed_bindings": list(canonical.changed_bindings),
+            "reason_codes": list(canonical.reason_codes),
+            "merge_authorized": canonical.merge_authorized,
+            "proposal_id": proposal.proposal_id,
+        }
+        verified.append("canonical-applicability")
+        if canonical.status == "applicable" and canonical.merge_authorized:
+            return _receipt(
+                **{**base_kwargs,
+                   "dispatch_checks_passed": True,
+                   "verified": verified,
+                   "reason_codes": [],
+                   "missing_interfaces": [],
+                   "lifecycle_mutation_authorization": lifecycle_authorization.to_dict(),
+                   "lifecycle_snapshot_notes": notes,
+                   "status": "applicable",
+                   "merge_authorized": True,
+                   "canonical_applicability_evaluated": True,
+                   "canonical_applicability_result": canonical_result},
+            )
         return _receipt(
             **{**base_kwargs,
                "dispatch_checks_passed": True,
                "verified": verified,
-               "reason_codes": ["merge-proposal-evidence-undefined"],
-               "missing_interfaces": list(_MISSING_INTERFACES),
+               "reason_codes": list(canonical.reason_codes),
+               "missing_interfaces": [],
                "lifecycle_mutation_authorization": lifecycle_authorization.to_dict(),
-               "lifecycle_snapshot_notes": notes},
+               "lifecycle_snapshot_notes": notes,
+               "canonical_applicability_evaluated": True,
+               "canonical_applicability_result": canonical_result},
         )
     except Exception:
         return _receipt(**{**base_kwargs, "reason_codes": ["canonical-github-evidence-unavailable"]})
