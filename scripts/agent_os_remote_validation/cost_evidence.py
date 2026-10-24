@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from .dispatch_guard import (
     DispatchDecision,
+    _semantic_digest,
     serialize_dispatch_decision,
     validation_dispatch_identity,
 )
 from .models import ValidationPlan
-from .selector import validate_validation_plan, validation_plan_id
+from .selector import (
+    _canonical_bytes,
+    validate_validation_plan,
+    validation_plan_id,
+)
 
 COMPUTE_EVIDENCE_SCHEMA_NAME = "agent-os-compute-evidence-summary"
 COMPUTE_EVIDENCE_SCHEMA_VERSION = "1.0"
@@ -555,21 +558,6 @@ def _bounded_reasons(reasons: set[str]) -> tuple[str, ...]:
     return tuple(
         ordered[: MAX_COMPUTE_REASON_CODES - 1] + ["evidence.reason-limit"]
     )
-
-
-def _semantic_digest(domain: str, payload: dict[str, object]) -> str:
-    return hashlib.sha256(
-        domain.encode("ascii") + b"\0" + _canonical_bytes(payload)
-    ).hexdigest()
-
-
-def _canonical_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
 
 
 def _identifier(value: object, pattern: re.Pattern[str]) -> bool:
