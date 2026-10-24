@@ -50,6 +50,7 @@ from scripts.agent_os_issue_acceptance import (
 from scripts.agent_os_issue_acceptance import (
     lifecycle_reconciliation as reconciliation_module,
 )
+from scripts.agent_os_issue_acceptance import satisfaction_snapshot as shared
 from scripts.agent_os_issue_acceptance.closure_admission_actions import (
     ClosureAcceptanceEvidence,
     ClosureIssueReadback,
@@ -967,7 +968,7 @@ def _recompute_receipt_id(receipt):
     # the module does: core keys plus the normalized satisfaction block.
     core = {key: receipt.get(key) for key in closure_module._RECEIPT_CORE_KEYS}
     if "satisfaction" in receipt:
-        core["satisfaction"] = closure_module._satisfaction_block(
+        core["satisfaction"] = shared.satisfaction_block(
             closure_module._satisfaction_snapshot(receipt["satisfaction"])
         )
     return closure_module._receipt_id(core)
