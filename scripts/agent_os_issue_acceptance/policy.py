@@ -162,14 +162,11 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
 
     changed_file_evidence_unavailable = data.changed_files_supplied and not data.changed_files
     diff_evidence_unavailable = data.diff_supplied and not data.diff_text.strip()
-    # Canonical association for merged-documentation evidence (#3719): the
-    # RESOLVED issue when one exists, otherwise the single unambiguous
-    # report-only association (e.g. a declared non-closing follow-up such as
-    # #3709 -> #3677). Ambiguous or manual-review associations yield None,
-    # so merged evidence can never satisfy docs for them.
-    merged_linked_issue = linked_issue_result.issue_number or report_only_issue_number(
-        linked_issue_result
-    )
+    # Canonical association for merged-documentation evidence (#3724): the
+    # RESOLVED issue, or the single unambiguous declared non-closing target.
+    # Ambiguous or manual-review associations yield None, so merged evidence
+    # can never satisfy docs for them.
+    merged_linked_issue = report_only_issue_number(linked_issue_result)
 
     checks: list[CheckResult] = [
         linked_issue.check(data.pr_body, pr_title, parse_result=linked_issue_result),

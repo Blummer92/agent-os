@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--merged-docs-evidence",
         help="Optional path to a JSON list of merged-documentation evidence "
-        "records (#3719). Records are validated inside the required-docs "
+        "records (#3724). Records are validated inside the required-docs "
         "check; invalid records never count.",
     )
     parser.add_argument("--pr-title", default="", help="Optional pull request title.")
