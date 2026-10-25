@@ -117,75 +117,6 @@ A `blocked` receipt, or any receipt with reason codes, is never
 authorization. Reusing a receipt after expiry, or after its record was
 consumed, superseded, revoked, or invalidated, is forbidden.
 
-## Merge approval construction (Option A, design A1)
-
-The D5 preflight failure is repaired: a merge approval triple can
-now be constructed from a genuine owner merge decision plus live
-PR evidence, without fabricating planning evidence. See `scripts/agent_os_issue_acceptance/merge_approval.py` (adapter). The
-experimental producer and executor have been removed from this Draft PR:
-they had no production callers and their fake-tested route did not prove
-authenticated Actions receipt provenance or live GitHub evidence. Independent security review of the design (Phase 4)
-verdicted A1 PASS WITH FINDINGS; the blocking finding (B-1) and
-non-blocking findings (N-1–N-6) are carried into the code and tests
-as stated below.
-
-- **Adapter** (`build_merge_approval_triple`): validates the exact
-  owner decision against live PR evidence (repository, PR number,
-  head, base branch + base identity, method, authorizer, decision
-  id recomputed from decision + PR scope/metadata, expiry, ready
-  state), derives every binding field from decision + PR facts,
-  builds the approval through the existing generic
-  `record_approval_decision` state machine, and self-verifies the
-  triple (serialize/reconstruct round-trip plus
-  `build_merge_proposal`) before returning it. It never constructs
-  a `DraftTaskProposal`, issueplan evidence, or repository-state
-  evidence, and it never bypasses the triple reader: the reader
-  checks linkage, states, and reconstruction, never binding
-  provenance, and the merge evaluator checks triple consistency
-  plus live PR evidence, never planning evidence.
-- **Binding identity (A1)**: `proposal_id` uses the additive
-  `merge-approval:` prefix (allowed alongside
-  `draft-task-proposal:` in `approval_records.py` and
-  `approved_execution_projection.py`; every previously valid id
-  remains valid, planning behavior unchanged). `proposal_version`
-  is `merge-approval/1`, the single cohort is classified `merge`,
-  and the single node names the merge operation
-  (`merge:<repository>:<pr_number>`). Approval kind is reused
-  `SOURCE_MUTATION` (a merge mutates the target branch's source);
-  schema is 1.0 (no semantic subject). Planning-named digest
-  fields carry merge-derived hashes (decision digest in
-  `handoff_digest`, scope digest in `graph_digest`, PR-evidence
-  digest in `planning_result_digest`, check-evidence hash in
-  `scanner_result_fingerprint`, merge current-state hash under
-  the legacy `issueplan-current-state:` name): a naming debt,
-  documented here and in the module, not invented planning
-  evidence — no consumer verifies any of these fields against a
-  planning store.
-- **Execution boundary:** this PR does not include a producer or executor.
-  The existing read-only merge admission and canonical applicability
-  implementation remain unchanged on `main`. A future authorized production
-  route must authenticate the actual owner trigger, Actions run and receipt,
-  independently reacquire live PR evidence, and fail closed on any mismatch.
-- **Revocation, corrected (B-1)**: posting a revocation revision
-  alongside the approved revision makes the approval reader return
-  NEEDS_DECISION (`source.trusted-record-malformed`), NOT STALE.
-  Dispatch still blocks (non-`current` status), but the diagnostic
-  reads as corruption. Do NOT "fix" this by changing the approval
-  reader to latest-revision semantics inside this slice; that
-  reader change needs separate authorization. (The merge
-  authorization reader genuinely takes the latest revision, so
-  the CONSUMED story is as stated.)
-- **Process controls, not code guarantees (N-4)**: no code compares
-  a record's `authorizer_id` to the owner id; `decision_id` is a
-  content hash (integrity), not a signature (authenticity);
-  decision authorship rests on the decision's provenance channel;
-  the operative authorship check is comment author == snapshot
-  owner login (+ `User` type) at readback; no production caller of the adapter is connected in this PR. None of this may be described as code-enforced.
-- **Status:** only the merge-specific approval-construction adapter is
-  implemented in this slice and tested with in-memory evidence. The governed
-  producer/executor is not implemented or live. No merge canary has run.
-  Issue #3463 remains open for future separately admitted production wiring.
-
 ## What this does not do (explicitly out of scope)
 
 - **No live producer or merge executor.** The experimental modules were
@@ -213,11 +144,6 @@ as stated below.
 - New: `scripts/agent_os_issue_acceptance/merge_proposal.py`,
   `tests/agent_os_issue_acceptance/test_merge_proposal.py`,
   `docs/3463-merge-admission.md` (this file).
-- New (merge-approval repair, Option A / design A1):
-  `scripts/agent_os_issue_acceptance/merge_approval.py`,
-  `tests/agent_os_issue_acceptance/test_merge_approval.py`.
-- Changed (merge-approval repair): `approval_records.py` and
-  `approved_execution_projection.py` (additive `merge-approval:`
   proposal-id prefix alongside `draft-task-proposal:`; no existing
   id invalidated, no planning behavior changed),
   `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
@@ -246,13 +172,3 @@ as stated below.
   footers is stripped; doubled/embedded forms still fail closed).
 - Unchanged: MCP server/profile, credentials, protected settings,
   approval readers, and the canonical task-planning evaluator branch.
-
-## Adapter simplification
-
-The adapter reuses one merge-identity payload for the decision and proposal
-hashes, projects the existing ApprovalBinding fields with a shallow copy, and
-leaves triple/PR consistency checks to the existing build_merge_proposal.
-Strict serialize/reconstruct checks and all decision/provenance and lifecycle
-boundaries remain. Wire payloads and identifiers are unchanged. This removes
-duplicate internal transformations and validation, not a human approval step.
-No standing merge authority or automatic merge is introduced.
