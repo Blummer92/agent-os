@@ -121,10 +121,10 @@ consumed, superseded, revoked, or invalidated, is forbidden.
 
 The D5 preflight failure is repaired: a merge approval triple can
 now be constructed from a genuine owner merge decision plus live
-PR evidence, without fabricating planning evidence. See
-`scripts/agent_os_issue_acceptance/merge_approval.py` (adapter),
-`merge_producer.py` (E2 producer), and `merge_executor.py` (A2
-executor). Independent security review of the design (Phase 4)
+PR evidence, without fabricating planning evidence. See `scripts/agent_os_issue_acceptance/merge_approval.py` (adapter). The
+experimental producer and executor have been removed from this Draft PR:
+they had no production callers and their fake-tested route did not prove
+authenticated Actions receipt provenance or live GitHub evidence. Independent security review of the design (Phase 4)
 verdicted A1 PASS WITH FINDINGS; the blocking finding (B-1) and
 non-blocking findings (N-1–N-6) are carried into the code and tests
 as stated below.
@@ -161,30 +161,11 @@ as stated below.
   documented here and in the module, not invented planning
   evidence — no consumer verifies any of these fields against a
   planning store.
-- **Producer** (`produce_merge_authorization`): posts the triple
-  plus the merge authorization (built with the existing canonical
-  builders) to the target PR's conversation and returns success
-  only when both trusted readers read back CURRENT. On a readback
-  failure it raises; posted records are not retracted ("not
-  verified" is not "not posted"), and dispatch must not proceed
-  on a producer failure.
-- **Executor** (`execute_merge`): merges only when BOTH gates
-  pass — a positive, trigger-correlated Actions
-  `dispatch_receipt.json` (status applicable, merge_authorized,
-  checks passed, canonical applicability evaluated, no reasons,
-  consistent with trigger, authorization, and live evidence) AND
-  fresh in-run canonical applicability (fresh reacquisition of
-  both sources, fresh live PR evidence, `build_merge_proposal`,
-  `evaluate_merge_authorization_applicability`). Either failure
-  blocks with no merge call. The merge uses the exact head and
-  bound method only. Post-merge readback must agree, then the
-  CONSUMED revision is posted and read back. Result vocabulary is
-  strict: `blocked` (gate failed, no merge attempted), `failed`
-  (merge may have happened but verification/consumption failed —
-  escalate, never report as success), `dry-run-applicable`
-  (gates passed in dry-run, nothing merged or posted), `merged`.
-  `decision_id` is correlation/audit only; single-use is the
-  posted CONSUMED revision plus the merged-state gate.
+- **Execution boundary:** this PR does not include a producer or executor.
+  The existing read-only merge admission and canonical applicability
+  implementation remain unchanged on `main`. A future authorized production
+  route must authenticate the actual owner trigger, Actions run and receipt,
+  independently reacquire live PR evidence, and fail closed on any mismatch.
 - **Revocation, corrected (B-1)**: posting a revocation revision
   alongside the approved revision makes the approval reader return
   NEEDS_DECISION (`source.trusted-record-malformed`), NOT STALE.
@@ -202,31 +183,17 @@ as stated below.
   owner login (+ `User` type) at readback; the adapter is invoked
   only from the producer by convention (no import restriction
   enforces it). None of this may be described as code-enforced.
-- **Status**: the three modules exist and are tested with fake
-  transports/clients (see `test_merge_approval.py`). They are NOT
-  yet wired to a live GitHub Service Agent route: no production
-  caller supplies real credentials, trigger comments, receipt
-  artifacts, or live PR reads, and no live merge canary has run.
-  That wiring and any canary remain separately authorized future
-  work. Do not describe these modules as live production execution.
+- **Status:** only the merge-specific approval-construction adapter is
+  implemented in this slice and tested with in-memory evidence. The governed
+  producer/executor is not implemented or live. No merge canary has run.
+  Issue #3463 remains open for future separately admitted production wiring.
 
 ## What this does not do (explicitly out of scope)
 
-- **No live producer route yet.** The E2 producer module
-  (`merge_producer.py`) exists and is tested, but no production
-  caller wires it to a live GitHub Service Agent client: how an
-  owner decision reaches the producer, with what authentication,
-  is route wiring that remains separately authorized future work.
-  No code in this change posts to live GitHub, and no hand-crafted
-  serialized record may be treated as produced evidence.
-- **No live merge dispatch.** The A2 executor module
-  (`merge_executor.py`) exists and is tested, but no production
-  caller wires it to a live merge call, and no MCP tool,
-  credential, or protected-setting change is made here. The one
-  workflow change is read-only: the existing `merge_admission`
-  job additionally runs the dispatch evaluator and publishes its
-  receipt; it grants no merge authority. A live merge canary
-  remains separately authorized.
+- **No live producer or merge executor.** The experimental modules were
+  removed rather than expanding an unattached merge path. No authenticated
+  posting, merge API dispatch, receipt retrieval, or live evidence reader is
+  created here. A future producer and executor require separate admission.
 - **No host enforcement proof.** Repository tests prove the canonical
   gate evaluates and refuses correctly; they do not prove that any
   connector or host merge call enforces it. That proof requires a
@@ -250,15 +217,13 @@ as stated below.
   `docs/3463-merge-admission.md` (this file).
 - New (merge-approval repair, Option A / design A1):
   `scripts/agent_os_issue_acceptance/merge_approval.py`,
-  `merge_producer.py`, `merge_executor.py`,
   `tests/agent_os_issue_acceptance/test_merge_approval.py`.
 - Changed (merge-approval repair): `approval_records.py` and
   `approved_execution_projection.py` (additive `merge-approval:`
   proposal-id prefix alongside `draft-task-proposal:`; no existing
   id invalidated, no planning behavior changed),
   `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
-  (three architecture-domain classification lines for the new
-  modules, in the `approval` domain). The package facade
+  (one architecture-domain classification for the adapter). The package facade
   (`__init__.py` `__all__`) is intentionally UNCHANGED: exporting
   the new modules requires a separately authorized facade
   decision, which has not been granted; the modules are usable

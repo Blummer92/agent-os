@@ -78,8 +78,6 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "merge_admission_actions",
                 "merge_applicability",
                 "merge_approval",
-                "merge_executor",
-                "merge_producer",
                 "merge_authorization",
                 "merge_proposal",
                 "merge_authorization_source",
