@@ -77,13 +77,24 @@ def test_validation_candidate_step_carries_ingress_env_and_verification() -> Non
     assert "Ready recovery requires repository-owner dispatch" in body
     # Ingress branch requires the token identity plus verified evidence.
     assert "Ingress recovery requires the governed ingress token identity" in body
-    assert "agent_os_ready_recovery_ingress.py verify" in body
+    # #3732 race repair: the ingress block waits for the identified run
+    # and artifact via one wait-and-verify call instead of a single fetch.
+    assert "agent_os_ready_recovery_ingress.py wait-and-verify" in body
     assert "--governed-workflow-id" in body
     assert "--validation-run-id" in body
-    assert "agent-os-ready-recovery-" in body
-    # QA F1: the ingress branch carries its own fork check, without
-    # changing direct owner dispatch.
-    assert "Ingress recovery rejects fork pull requests" in body
+    # The receipt-artifact naming now lives in the wait module: the CLI
+    # derives the prefix from the ingress run id it is passed.
+    assert "--ingress-run-id" in body
+    script = (ROOT / "scripts/agent_os_ready_recovery_ingress.py").read_text()
+    assert 'f"agent-os-ready-recovery-{ingress_run_id}-"' in script
+    # The old single-fetch gate is gone (its failure was the race).
+    assert "Ingress recovery requires exactly one ready-recovery receipt artifact" not in body
+    assert "Ingress receipt artifact is missing receipt or transport evidence" not in body
+    # QA F1: the ingress fork check moved into wait_and_verify_ingress
+    # (after verification, same position); it is covered behaviorally by
+    # the wait suite, not by a shell string, without changing direct
+    # owner dispatch.
+    assert "Ingress recovery rejects fork pull requests" not in body
 
 
 def test_ingress_verification_checkout_is_scoped_to_ingress_dispatches() -> None:

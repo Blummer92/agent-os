@@ -436,9 +436,6 @@ jobs:
             # the run record and the receipt artifact are fetched from
             # GitHub and re-checked by scripts/agent_os_ready_recovery_ingress.py.
             if [ -n "$INGRESS_RUN_ID" ]; then
-              ingress_tmp="$RUNNER_TEMP/agent-os-ready-recovery-ingress"
-              mkdir -p "$ingress_tmp"
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INGRESS_RUN_ID" > "$ingress_tmp/ingress-run.json"
               governed_workflow_id="$(
                 gh api "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-governed-invocation.yml" --jq .id
               )"
@@ -446,25 +443,16 @@ jobs:
                 echo "Governed ingress workflow identity unavailable" >&2
                 exit 1
               fi
-              artifact_ids="$(
-                gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INGRESS_RUN_ID/artifacts?per_page=100" \
-                  --jq '.artifacts[] | select(.name | startswith("agent-os-ready-recovery-'"$INGRESS_RUN_ID"'-")) | .id'
-              )"
-              artifact_count="$(printf '%s' "$artifact_ids" | grep -c . || true)"
-              if [ "$artifact_count" != "1" ]; then
-                echo "Ingress recovery requires exactly one ready-recovery receipt artifact" >&2
-                exit 1
-              fi
-              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_ids/zip" > "$ingress_tmp/ingress-receipt.zip"
-              python3 -m zipfile -e "$ingress_tmp/ingress-receipt.zip" "$ingress_tmp/artifact"
-              if [ ! -f "$ingress_tmp/artifact/receipt.json" ] || [ ! -f "$ingress_tmp/artifact/transport.json" ]; then
-                echo "Ingress receipt artifact is missing receipt or transport evidence" >&2
-                exit 1
-              fi
-              python3 scripts/agent_os_ready_recovery_ingress.py verify \
-                --run "$ingress_tmp/ingress-run.json" \
-                --receipt "$ingress_tmp/artifact/receipt.json" \
-                --transport "$ingress_tmp/artifact/transport.json" \
+              # #2410 receipt-publication race (#3732): the ingress job
+              # dispatches validation before it publishes its receipt
+              # artifact, so validation may check before the evidence
+              # exists. Wait for the already-identified ingress run and
+              # its single receipt artifact with fixed bounds (300s run /
+              # 10s poll, 60s artifact / 5s poll); never dispatch while
+              # waiting. All trust checks still run in full after the
+              # evidence arrives, and the two-attempt limit is counted
+              # after this block exactly as before.
+              python3 scripts/agent_os_ready_recovery_ingress.py wait-and-verify \
                 --repository "$GITHUB_REPOSITORY" \
                 --pr-number "$PR_NUMBER" \
                 --expected-head-sha "$EXPECTED_HEAD_SHA" \
@@ -477,16 +465,6 @@ jobs:
                 --governed-workflow-id "$governed_workflow_id" \
                 --owner-login "${GITHUB_REPOSITORY%%/*}" \
                 --service-actor 'chatgpt-codex-connector[bot]'
-              # QA F1: the dispatch module rejects fork PRs; give the
-              # ingress branch its own validation-side counterpart without
-              # changing direct owner dispatch, which has no fork check.
-              head_repo="$(
-                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name'
-              )"
-              if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-                echo "Ingress recovery rejects fork pull requests" >&2
-                exit 1
-              fi
             fi
 
             # Count immutable GitHub workflow-run records, including

@@ -47,6 +47,18 @@ alone:
 - Fork pull requests are rejected on both sides: the ingress dispatch
   and the validation-side ingress check both require the PR head to
   live in the same repository.
+- Receipt-publication race (#3732): the ingress job dispatches validation
+  before it publishes its receipt artifact, so validation may check
+  before the evidence exists. The validation side therefore waits, via
+  the script's `wait-and-verify` mode, only for the already-identified
+  ingress run and its single receipt artifact, with fixed bounds (300s
+  run wait at 10s polls, 60s artifact grace at 5s polls). Pending
+  evidence (run queued/in_progress, artifact not yet listed) is awaited;
+  terminal failure (completed run with a non-success conclusion,
+  duplicate artifacts) fails immediately; timeout, provider failure,
+  forged evidence, or mismatch fails closed. No workflow is dispatched
+  while waiting, and every trust check runs in full after the evidence
+  arrives. The direct owner-dispatch path is unchanged and never waits.
 
 The workflow-wide concurrency group keeps manual runs distinct
 before admission, using their unique GitHub run IDs.
