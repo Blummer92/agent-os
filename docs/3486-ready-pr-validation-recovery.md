@@ -23,6 +23,28 @@ dispatch only when:
 - Provider-backed recovery history is available.
 - The existing two-attempt recovery limit is not exceeded.
 
+## Ingress-origin recovery (#2410)
+
+A governed issue-comment dispatch is admitted as an alternative to direct
+owner dispatch, under verification that is strictly stronger than actor
+alone:
+
+- The comment grammar is fixed: `/agent-os recover-ready <pr> <head>
+  <main> <workflow> <source-run-id>`, admitted for the repository owner
+  and the ChatGPT service actor for this operation only.
+- The governed ingress job re-verifies the PR, live main, workflow
+  revision, source-run identity, zero-job evidence, and the two-attempt
+  budget, then dispatches the validation workflow on `main` with the
+  ingress run id and trigger id as correlation inputs.
+- The validation workflow admits an ingress dispatch only when its actor
+  is the ingress job's token identity (`github-actions[bot]`) AND it
+  independently fetches the ingress run record and receipt artifact from
+  GitHub and verifies every binding, the recomputed trigger id, and the
+  content-derived receipt id (`scripts/agent_os_ready_recovery_ingress.py`).
+  Forged, stale, mismatched, duplicated, or unavailable evidence fails
+  closed. Direct owner dispatch is unchanged; supplying ingress inputs
+  never upgrades it, and no blanket service-actor admission exists.
+
 The workflow-wide concurrency group keeps manual runs distinct
 before admission, using their unique GitHub run IDs.
 

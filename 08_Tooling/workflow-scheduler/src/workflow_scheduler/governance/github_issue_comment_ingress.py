@@ -69,6 +69,16 @@ _DRAFT_VALIDATION_RE = re.compile(
     r"(?P<head_sha>[0-9a-f]{40})",
     re.ASCII,
 )
+# #2410 bounded Ready-recovery ingress grammar. The comment carries only
+# immutable selectors; the dispatch module and the validation workflow each
+# re-verify every binding against live GitHub records before any recovery.
+_RECOVER_READY_PREFIX = "/agent-os recover-ready "
+_RECOVER_READY_RE = re.compile(
+    r"/agent-os recover-ready (?P<pr_number>[1-9][0-9]{0,8}) "
+    r"(?P<head_sha>[0-9a-f]{40}) (?P<main_sha>[0-9a-f]{40}) "
+    r"(?P<workflow_sha>[0-9a-f]{40}) (?P<source_run_id>[1-9][0-9]{0,12})",
+    re.ASCII,
+)
 _DIAGNOSTIC_IDS = ("ppux-canva-cdp-readonly", "ppux-adobe-minimum-probe", "codespaces-environment-qualification-readonly")
 _DIAGNOSTIC_RE = re.compile(
     r"/agent-os diagnose (?P<diagnostic_id>"
@@ -92,6 +102,7 @@ IngressReason = Literal[
     "accepted-codespace-implementation-envelope", "codespace-implementation-issue-mismatch",
     "accepted-ppux-projection-envelope", "accepted-ready-admission-envelope",
     "accepted-merge-admission-envelope", "accepted-draft-validation-envelope",
+    "accepted-ready-recovery-envelope",
     "event-not-created", "pull-request-comment",
     "repository-mismatch", "workflow-rerun", "actor-not-allowed", "actor-evidence-mismatch",
     "ruleset-admin-issue-mismatch", "malformed-trigger", "invalid-event-envelope",
@@ -123,13 +134,18 @@ class IssueCommentIngressResult:
     merge_admission_method_or_none: str | None = None
     draft_validation_pr_number_or_none: int | None = None
     draft_validation_head_sha_or_none: str | None = None
+    ready_recovery_pr_number_or_none: int | None = None
+    ready_recovery_head_sha_or_none: str | None = None
+    ready_recovery_main_sha_or_none: str | None = None
+    ready_recovery_workflow_sha_or_none: str | None = None
+    ready_recovery_source_run_id_or_none: int | None = None
     codespace_implementation_handoff_id_or_none: str | None = None
     codespace_implementation_sha_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
     def to_dict(self) -> dict[str, object]:
-        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"codespace_implementation_handoff_id_or_none":self.codespace_implementation_handoff_id_or_none,"codespace_implementation_sha_or_none":self.codespace_implementation_sha_or_none,"ready_admission_pr_number_or_none":self.ready_admission_pr_number_or_none,"ready_admission_head_sha_or_none":self.ready_admission_head_sha_or_none,"ready_admission_body_sha256_or_none":self.ready_admission_body_sha256_or_none,"merge_admission_pr_number_or_none":self.merge_admission_pr_number_or_none,"merge_admission_head_sha_or_none":self.merge_admission_head_sha_or_none,"merge_admission_body_sha256_or_none":self.merge_admission_body_sha256_or_none,"merge_admission_method_or_none":self.merge_admission_method_or_none,"draft_validation_pr_number_or_none":self.draft_validation_pr_number_or_none,"draft_validation_head_sha_or_none":self.draft_validation_head_sha_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
+        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"ppux_projection_branch_or_none":self.ppux_projection_branch_or_none,"ppux_projection_sha_or_none":self.ppux_projection_sha_or_none,"ppux_projection_input_ref_or_none":self.ppux_projection_input_ref_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"diagnostic_id_or_none":self.diagnostic_id_or_none,"diagnostic_request_id_or_none":self.diagnostic_request_id_or_none,"ruleset_prestate_sha256_or_none":self.ruleset_prestate_sha256_or_none,"codespace_implementation_handoff_id_or_none":self.codespace_implementation_handoff_id_or_none,"codespace_implementation_sha_or_none":self.codespace_implementation_sha_or_none,"ready_admission_pr_number_or_none":self.ready_admission_pr_number_or_none,"ready_admission_head_sha_or_none":self.ready_admission_head_sha_or_none,"ready_admission_body_sha256_or_none":self.ready_admission_body_sha256_or_none,"merge_admission_pr_number_or_none":self.merge_admission_pr_number_or_none,"merge_admission_head_sha_or_none":self.merge_admission_head_sha_or_none,"merge_admission_body_sha256_or_none":self.merge_admission_body_sha256_or_none,"merge_admission_method_or_none":self.merge_admission_method_or_none,"draft_validation_pr_number_or_none":self.draft_validation_pr_number_or_none,"draft_validation_head_sha_or_none":self.draft_validation_head_sha_or_none,"ready_recovery_pr_number_or_none":self.ready_recovery_pr_number_or_none,"ready_recovery_head_sha_or_none":self.ready_recovery_head_sha_or_none,"ready_recovery_main_sha_or_none":self.ready_recovery_main_sha_or_none,"ready_recovery_workflow_sha_or_none":self.ready_recovery_workflow_sha_or_none,"ready_recovery_source_run_id_or_none":self.ready_recovery_source_run_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
@@ -182,7 +198,14 @@ def _draft_validation_trigger_id(repository:str,issue_number:int,pr_number:int,h
     material=f"{repository}\0{issue_number}\0validate-draft\0{pr_number}\0{head_sha}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,merge_admission_pr_number:int|None=None,merge_admission_head_sha:str|None=None,merge_admission_body_sha256:str|None=None,merge_admission_method:str|None=None,draft_validation_pr_number:int|None=None,draft_validation_head_sha:str|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
+def _ready_recovery_trigger_id(repository:str,issue_number:int,pr_number:int,head_sha:str,main_sha:str,workflow_sha:str,source_run_id:int)->str:
+    # The verifier in scripts/agent_os_ready_recovery_ingress.py recomputes
+    # this exact material from the artifact transport plus the dispatch
+    # inputs; any change here must change there in the same commit.
+    material=f"{repository}\0{issue_number}\0recover-ready\0{pr_number}\0{head_sha}\0{main_sha}\0{workflow_sha}\0{source_run_id}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,merge_admission_pr_number:int|None=None,merge_admission_head_sha:str|None=None,merge_admission_body_sha256:str|None=None,merge_admission_method:str|None=None,draft_validation_pr_number:int|None=None,draft_validation_head_sha:str|None=None,ready_recovery_pr_number:int|None=None,ready_recovery_head_sha:str|None=None,ready_recovery_main_sha:str|None=None,ready_recovery_workflow_sha:str|None=None,ready_recovery_source_run_id:int|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
     elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
@@ -192,12 +215,13 @@ def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attem
     elif ready_admission_pr_number is not None and ready_admission_head_sha is not None and ready_admission_body_sha256 is not None and issue_number is not None: logical_id=_ready_admission_trigger_id(repository,issue_number,ready_admission_pr_number,ready_admission_head_sha,ready_admission_body_sha256)
     elif merge_admission_pr_number is not None and merge_admission_head_sha is not None and merge_admission_body_sha256 is not None and merge_admission_method is not None and issue_number is not None: logical_id=_merge_admission_trigger_id(repository,issue_number,merge_admission_pr_number,merge_admission_head_sha,merge_admission_body_sha256,merge_admission_method)
     elif draft_validation_pr_number is not None and draft_validation_head_sha is not None and issue_number is not None: logical_id=_draft_validation_trigger_id(repository,issue_number,draft_validation_pr_number,draft_validation_head_sha)
+    elif ready_recovery_pr_number is not None and ready_recovery_head_sha is not None and ready_recovery_main_sha is not None and ready_recovery_workflow_sha is not None and ready_recovery_source_run_id is not None and issue_number is not None: logical_id=_ready_recovery_trigger_id(repository,issue_number,ready_recovery_pr_number,ready_recovery_head_sha,ready_recovery_main_sha,ready_recovery_workflow_sha,ready_recovery_source_run_id)
     elif codespace_implementation_handoff is not None and codespace_implementation_sha is not None and issue_number is not None: logical_id=_codespace_implementation_trigger_id(repository,issue_number,codespace_implementation_handoff,codespace_implementation_sha)
     elif ruleset_prestate_sha256 is not None and issue_number is not None: logical_id=_ruleset_admin_trigger_id(repository,issue_number,ruleset_prestate_sha256)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif ppux_projection_branch is not None and ppux_projection_sha is not None and ppux_projection_input_ref is not None and issue_number is not None: logical_id=_ppux_projection_trigger_id(repository,issue_number,ppux_projection_branch,ppux_projection_sha,ppux_projection_input_ref)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256,merge_admission_pr_number_or_none=merge_admission_pr_number,merge_admission_head_sha_or_none=merge_admission_head_sha,merge_admission_body_sha256_or_none=merge_admission_body_sha256,merge_admission_method_or_none=merge_admission_method,draft_validation_pr_number_or_none=draft_validation_pr_number,draft_validation_head_sha_or_none=draft_validation_head_sha)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256,merge_admission_pr_number_or_none=merge_admission_pr_number,merge_admission_head_sha_or_none=merge_admission_head_sha,merge_admission_body_sha256_or_none=merge_admission_body_sha256,merge_admission_method_or_none=merge_admission_method,draft_validation_pr_number_or_none=draft_validation_pr_number,draft_validation_head_sha_or_none=draft_validation_head_sha,ready_recovery_pr_number_or_none=ready_recovery_pr_number,ready_recovery_head_sha_or_none=ready_recovery_head_sha,ready_recovery_main_sha_or_none=ready_recovery_main_sha,ready_recovery_workflow_sha_or_none=ready_recovery_workflow_sha,ready_recovery_source_run_id_or_none=ready_recovery_source_run_id)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
@@ -209,10 +233,11 @@ def _looks_like_notion_id(value:str)->bool:
 def _valid_notion_read_request_id(request_id:str)->bool:
     return 3<=len(request_id)<=63 and not request_id.startswith("-") and not request_id.endswith("-") and "--" not in request_id and not _looks_like_notion_id(request_id)
 
-def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_actor:str,run_attempt:int,draft_validation_service_actor:str|None=None)->IssueCommentIngressResult:
+def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_actor:str,run_attempt:int,draft_validation_service_actor:str|None=None,ready_recovery_service_actor:str|None=None)->IssueCommentIngressResult:
     if not _REPOSITORY_RE.fullmatch(expected_repository): raise ValueError("expected_repository must use owner/name syntax")
     if not _ACTOR_RE.fullmatch(allowed_actor): raise ValueError("allowed_actor must use GitHub login syntax")
     if draft_validation_service_actor is not None and not _SERVICE_ACTOR_RE.fullmatch(draft_validation_service_actor): raise ValueError("draft_validation_service_actor must use GitHub login syntax")
+    if ready_recovery_service_actor is not None and not _SERVICE_ACTOR_RE.fullmatch(ready_recovery_service_actor): raise ValueError("ready_recovery_service_actor must use GitHub login syntax")
     if type(run_attempt) is not int or run_attempt<1: raise ValueError("run_attempt must be a positive integer")
     if type(event) is not dict:return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
     action=event.get("action");repository=event.get("repository");issue=event.get("issue");comment=event.get("comment");sender=event.get("sender")
@@ -225,15 +250,19 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if "pull_request" in issue:return _result(status="ignored",reason="pull-request-comment",**common)
     if repo_name!=expected_repository:return _result(status="blocked",reason="repository-mismatch",**common)
     if run_attempt!=1:return _result(status="blocked",reason="workflow-rerun",**common)
-    actor_is_service=draft_validation_service_actor is not None and actor==draft_validation_service_actor and actor!=allowed_actor
-    if actor!=allowed_actor and not actor_is_service:return _result(status="blocked",reason="actor-not-allowed",**common)
+    actor_is_draft_service=draft_validation_service_actor is not None and actor==draft_validation_service_actor and actor!=allowed_actor
+    actor_is_recovery_service=ready_recovery_service_actor is not None and actor==ready_recovery_service_actor and actor!=allowed_actor
+    if actor!=allowed_actor and not actor_is_draft_service and not actor_is_recovery_service:return _result(status="blocked",reason="actor-not-allowed",**common)
     if sender_login!=actor:return _result(status="blocked",reason="actor-evidence-mismatch",**common)
     body=comment.get("body")
-    # The service actor is admitted for the validate-draft operation only. The
-    # prefix is a coarse prefilter (the same pattern the workflow job-ifs use);
-    # the exact grammar remains _DRAFT_VALIDATION_RE below, and no other
-    # operation grammar can match a body with this prefix.
-    if actor_is_service and not (type(body) is str and body.startswith(_DRAFT_VALIDATION_PREFIX)):return _result(status="blocked",reason="actor-not-allowed",**common)
+    # A service actor is admitted only for its own operation(s). The prefix
+    # is a coarse prefilter (the same pattern the workflow job-ifs use); the
+    # exact grammar remains below, and no other operation grammar can match
+    # a body with one of the admitted prefixes.
+    _service_prefixes=[]
+    if actor_is_draft_service:_service_prefixes.append(_DRAFT_VALIDATION_PREFIX)
+    if actor_is_recovery_service:_service_prefixes.append(_RECOVER_READY_PREFIX)
+    if _service_prefixes and not (type(body) is str and any(body.startswith(prefix) for prefix in _service_prefixes)):return _result(status="blocked",reason="actor-not-allowed",**common)
     if type(body) is not str or len(body.encode("utf-8"))>MAX_COMMENT_BYTES:return _result(status="ignored",reason="malformed-trigger",**common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
@@ -278,6 +307,9 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     draft_validation=_DRAFT_VALIDATION_RE.fullmatch(body)
     if draft_validation is not None:
         return _result(status="accepted",reason="accepted-draft-validation-envelope",draft_validation_pr_number=int(draft_validation.group("pr_number")),draft_validation_head_sha=draft_validation.group("head_sha"),**common)
+    recover_ready=_RECOVER_READY_RE.fullmatch(body)
+    if recover_ready is not None:
+        return _result(status="accepted",reason="accepted-ready-recovery-envelope",ready_recovery_pr_number=int(recover_ready.group("pr_number")),ready_recovery_head_sha=recover_ready.group("head_sha"),ready_recovery_main_sha=recover_ready.group("main_sha"),ready_recovery_workflow_sha=recover_ready.group("workflow_sha"),ready_recovery_source_run_id=int(recover_ready.group("source_run_id")),**common)
     ppux_projection=_PPUX_PROJECTION_RE.fullmatch(body)
     if ppux_projection is not None:
         branch=ppux_projection.group("branch")
@@ -295,6 +327,6 @@ def _read_event(path:Path)->object:
 def _write_result(path:Path,result:IssueCommentIngressResult)->None:
     path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(result.to_dict(),sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
 def main(argv:list[str]|None=None)->int:
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--event",type=Path,required=True);parser.add_argument("--repository",required=True);parser.add_argument("--allowed-actor",required=True);parser.add_argument("--draft-validation-service-actor");parser.add_argument("--run-attempt",type=int,required=True);parser.add_argument("--output",type=Path,required=True);args=parser.parse_args(argv)
-    result=admit_issue_comment_event(_read_event(args.event),expected_repository=args.repository,allowed_actor=args.allowed_actor,run_attempt=args.run_attempt,draft_validation_service_actor=args.draft_validation_service_actor);_write_result(args.output,result);print(json.dumps(result.to_dict(),sort_keys=True));return 0
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--event",type=Path,required=True);parser.add_argument("--repository",required=True);parser.add_argument("--allowed-actor",required=True);parser.add_argument("--draft-validation-service-actor");parser.add_argument("--ready-recovery-service-actor");parser.add_argument("--run-attempt",type=int,required=True);parser.add_argument("--output",type=Path,required=True);args=parser.parse_args(argv)
+    result=admit_issue_comment_event(_read_event(args.event),expected_repository=args.repository,allowed_actor=args.allowed_actor,run_attempt=args.run_attempt,draft_validation_service_actor=args.draft_validation_service_actor,ready_recovery_service_actor=args.ready_recovery_service_actor);_write_result(args.output,result);print(json.dumps(result.to_dict(),sort_keys=True));return 0
 if __name__=="__main__":raise SystemExit(main())

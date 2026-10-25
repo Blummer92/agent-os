@@ -36,6 +36,14 @@ on:
         description: "Validation Gate run with action_required and zero jobs"
         required: false
         type: string
+      ingress_run_id:
+        description: "Governed ingress run that dispatched this recovery; empty for direct owner dispatch"
+        required: false
+        type: string
+      ingress_trigger_id:
+        description: "Logical trigger id from the ingress receipt; empty for direct owner dispatch"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -233,6 +241,15 @@ jobs:
       main_health_outcome: ${{ steps.main_health.outcome }}
       main_recovery_stop_outcome: ${{ steps.main_recovery_stop.outcome }}
     steps:
+      - name: Check out workflow source for ingress verification
+        # #2410: only an ingress-origin recovery needs scripts/ before
+        # admission; every other dispatch path is unchanged and pays no
+        # checkout. The checkout ref is the dispatch ref (main), so the
+        # verifier is the same revision as the running workflow.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.ingress_run_id != '' }}
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Admit exact-head Draft final candidate
         if: ${{ github.event_name == 'workflow_dispatch' }}
         id: candidate
@@ -244,6 +261,8 @@ jobs:
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
           SOURCE_VALIDATION_RUN_ID: ${{ inputs.source_validation_run_id }}
+          INGRESS_RUN_ID: ${{ inputs.ingress_run_id }}
+          INGRESS_TRIGGER_ID: ${{ inputs.ingress_trigger_id }}
         run: |
           set -euo pipefail
 
@@ -328,7 +347,31 @@ jobs:
               echo "Ready recovery requires an already-Ready PR" >&2
               exit 1
             fi
-            if [ "$GITHUB_ACTOR" != "${GITHUB_REPOSITORY%%/*}" ]; then
+            # #2410 ingress-origin recovery: the two correlation inputs must
+            # arrive together, the dispatch actor must be the governed
+            # ingress job's token identity, and the ingress run plus receipt
+            # are verified independently below. Supplying ingress inputs
+            # never upgrades a direct dispatch: an owner actor with ingress
+            # inputs fails the token-identity check, and a bot actor without
+            # verified ingress evidence fails the owner check.
+            if [ -n "$INGRESS_RUN_ID" ] || [ -n "$INGRESS_TRIGGER_ID" ]; then
+              if [ -z "$INGRESS_RUN_ID" ] || [ -z "$INGRESS_TRIGGER_ID" ]; then
+                echo "Ingress recovery requires both ingress run id and trigger id" >&2
+                exit 1
+              fi
+              if ! [[ "$INGRESS_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Ingress run id must be a positive integer" >&2
+                exit 1
+              fi
+              if ! [[ "$INGRESS_TRIGGER_ID" =~ ^issue-comment-trigger:[0-9a-f]{64}$ ]]; then
+                echo "Ingress trigger id has an invalid shape" >&2
+                exit 1
+              fi
+              if [ "$GITHUB_ACTOR" != "github-actions[bot]" ]; then
+                echo "Ingress recovery requires the governed ingress token identity" >&2
+                exit 1
+              fi
+            elif [ "$GITHUB_ACTOR" != "${GITHUB_REPOSITORY%%/*}" ]; then
               echo "Ready recovery requires repository-owner dispatch" >&2
               exit 1
             fi
@@ -385,6 +428,55 @@ jobs:
             if [ "$job_count" != "0" ]; then
               echo "Ready recovery source actually executed jobs" >&2
               exit 1
+            fi
+
+            # #2410 ingress-origin recovery: independently verify the trusted
+            # transport before the attempt bound is consulted. The
+            # caller-supplied run/trigger ids are correlation hints only;
+            # the run record and the receipt artifact are fetched from
+            # GitHub and re-checked by scripts/agent_os_ready_recovery_ingress.py.
+            if [ -n "$INGRESS_RUN_ID" ]; then
+              ingress_tmp="$RUNNER_TEMP/agent-os-ready-recovery-ingress"
+              mkdir -p "$ingress_tmp"
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INGRESS_RUN_ID" > "$ingress_tmp/ingress-run.json"
+              governed_workflow_id="$(
+                gh api "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-governed-invocation.yml" --jq .id
+              )"
+              if ! [[ "$governed_workflow_id" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Governed ingress workflow identity unavailable" >&2
+                exit 1
+              fi
+              artifact_ids="$(
+                gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INGRESS_RUN_ID/artifacts?per_page=100" \
+                  --jq '.artifacts[] | select(.name | startswith("agent-os-ready-recovery-'"$INGRESS_RUN_ID"'-")) | .id'
+              )"
+              artifact_count="$(printf '%s' "$artifact_ids" | grep -c . || true)"
+              if [ "$artifact_count" != "1" ]; then
+                echo "Ingress recovery requires exactly one ready-recovery receipt artifact" >&2
+                exit 1
+              fi
+              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_ids/zip" > "$ingress_tmp/ingress-receipt.zip"
+              python3 -m zipfile -e "$ingress_tmp/ingress-receipt.zip" "$ingress_tmp/artifact"
+              if [ ! -f "$ingress_tmp/artifact/receipt.json" ] || [ ! -f "$ingress_tmp/artifact/transport.json" ]; then
+                echo "Ingress receipt artifact is missing receipt or transport evidence" >&2
+                exit 1
+              fi
+              python3 scripts/agent_os_ready_recovery_ingress.py verify \
+                --run "$ingress_tmp/ingress-run.json" \
+                --receipt "$ingress_tmp/artifact/receipt.json" \
+                --transport "$ingress_tmp/artifact/transport.json" \
+                --repository "$GITHUB_REPOSITORY" \
+                --pr-number "$PR_NUMBER" \
+                --expected-head-sha "$EXPECTED_HEAD_SHA" \
+                --expected-main-sha "$EXPECTED_MAIN_SHA" \
+                --expected-workflow-sha "$EXPECTED_WORKFLOW_SHA" \
+                --source-run-id "$SOURCE_VALIDATION_RUN_ID" \
+                --trigger-id "$INGRESS_TRIGGER_ID" \
+                --ingress-run-id "$INGRESS_RUN_ID" \
+                --validation-run-id "$GITHUB_RUN_ID" \
+                --governed-workflow-id "$governed_workflow_id" \
+                --owner-login "${GITHUB_REPOSITORY%%/*}" \
+                --service-actor 'chatgpt-codex-connector[bot]'
             fi
 
             # Count immutable GitHub workflow-run records, including
