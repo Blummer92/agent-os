@@ -1217,6 +1217,24 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
     assert "exact_head_sha" in stale.changed_bindings
     assert "pull-request.head-changed" in stale.reason_codes
 
+    contract_drift = replace(
+        pr, forbidden_paths=("different/forbidden/*",), evidence_id="",
+    )
+    changed_contract = evaluate_merge_authorization_applicability(
+        authorized, contract_drift, evaluated_at="2026-07-26T14:40:00Z",
+    )
+    assert changed_contract.merge_authorized is False
+    assert "forbidden_paths" in changed_contract.changed_bindings
+    assert "contract.forbidden-paths-changed" in changed_contract.reason_codes
+
+    test_drift = replace(pr, required_tests=("pytest different.py",), evidence_id="")
+    changed_tests = evaluate_merge_authorization_applicability(
+        authorized, test_drift, evaluated_at="2026-07-26T14:40:00Z",
+    )
+    assert changed_tests.merge_authorized is False
+    assert "required_tests" in changed_tests.changed_bindings
+    assert "contract.required-tests-changed" in changed_tests.reason_codes
+
     with pytest.raises(ValueError, match="schema/binding"):
         replace(authorized, schema_version="1.1",
                 authorization_id="", authorization_revision="")
