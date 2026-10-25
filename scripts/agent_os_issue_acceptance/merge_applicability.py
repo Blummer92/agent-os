@@ -1,40 +1,12 @@
-"""Dispatch-time merge applicability consumer (#2340).
+"""Read-only merge-specific dispatch applicability consumer (#2340, #3463).
 
-Builds on the #3661 read-only pipeline: it requires the non-authorizing
-candidate receipt from ``merge_admission_actions`` (transport validation, live
-PR gates, trusted authorization-source acquisition, binding reconciliation),
-then additionally verifies:
-
-- trusted approval artifacts (``reacquire_approval_source``): APPROVED approval
-  record, applicable applicability result, complete execution projection, with
-  id/revision/identity linkage back to the authorization record's binding;
-- approval expiry;
-- live file scope (canonical ``changed_scope_fingerprint``), allowlist and
-  forbidden paths against the binding;
-- live check runs / commit statuses for the exact head against the binding's
-  required check evidence;
-- live reviews against the binding's review evidence;
-- a canonical lifecycle-mutation admission binding the owner's merge
-  instruction to the exact live head via ``produce_lifecycle_mutation_authorization``.
-
-Fail-closed throughout. Once every dispatch check above has passed, this
-module delegates to the canonical ``evaluate_merge_authorization_applicability``
-with a typed ``MergeProposal`` (ADR-001, ``merge-proposal/v1``) assembled
-from the already-verified trusted records and live PR evidence — never
-from prose, labels, or green CI alone. Only a canonical result of
-``applicable`` produces a positive receipt (``status == "applicable"``,
-``merge_authorized is true``); every other canonical outcome keeps the
-receipt blocked. This module itself performs no merge: a positive receipt
-is host-consumable admission, and any dispatch must still re-verify it
-immediately before mutation with ``expected_head_sha`` and record a
-consumption observation after. The production caller is the
-``merge_admission`` job in
-``.github/workflows/agent-os-governed-invocation.yml``: on an owner
-``/agent-os merge-admit ...`` issue comment it runs the candidate
-consumer first and then this module with the same fixed transport, and
-publishes both receipts as job artifacts. That job is read-only and
-performs no merge; the merge-executing dispatch / connector gating that
-would consume this receipt is separately authorized and is NOT built here.
+Reacquires the owner-authored authorization record, exact live PR, changed
+files, checks, reviews and complete GraphQL review-thread evidence. Only schema
+1.2 records are dispatchable; historical 1.1 records remain readable but are
+not current merge authority. The canonical merge evaluator decides using the
+native binding, not a task-planning approval triple. This module performs no
+merge. A host still must independently recheck the exact head and receipt
+immediately before any separately authorized mutation.
 """
 from __future__ import annotations
 
@@ -91,7 +63,7 @@ _COMMIT_STATUS_STATES = {
 }
 
 class _GitHubCommentSource:
-    """Bounded canonical GitHub PR comments for both source readers."""
+    """Bounded GitHub PR comments for the trusted merge-authorization reader."""
 
     def __init__(self, repo: Any, owner_login: str):
         self.repo = repo
@@ -119,9 +91,6 @@ class _GitHubCommentSource:
         return self._read(repository, pr_number, MergeAuthorizationSourceSnapshot, MergeAuthorizationCommentSnapshot)
 
 
-# _GitHubCommentSource satisfies both source transport protocols structurally
-# (read_merge_authorization_source / read_approval_source); each contract
-# isinstance-checks only its own method.
 
 
 def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str | None,
