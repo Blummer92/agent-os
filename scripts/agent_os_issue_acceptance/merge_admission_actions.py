@@ -15,9 +15,9 @@ prose. A positive source record is therefore a *candidate*, never merge
 admission. ``merge_authorized`` is always ``False`` in every receipt this
 module emits. The positive-admission consumer is separate:
 ``merge_applicability.evaluate_merge_dispatch_applicability`` takes this
-module's candidate receipt, additionally verifies the approval triple,
+module's candidate receipt, additionally verifies the trusted native merge record,
 live scope, checks, reviews, and lifecycle admission, and then delegates
-to the canonical evaluator with a typed ``MergeProposal``; only that
+to the canonical evaluator with native schema 1.2 evidence; only that
 consumer can emit an applicable receipt. In production, the
 ``merge_admission`` job in ``agent-os-governed-invocation.yml`` runs that
 consumer immediately after this module, with the same fixed transport.
@@ -132,7 +132,7 @@ _HOST_DISPATCH_CONTRACT = {
     ],
     "note": "This consumer never emits merge_authorized=true. A host-dispatchable "
     "applicable receipt is produced by merge_applicability.py, which "
-    "delegates to the canonical evaluator with a typed MergeProposal "
+    "delegates to the canonical native v1.2 merge evaluator "
     "(see the #3463 change request for issue #2340).",
 }
 
