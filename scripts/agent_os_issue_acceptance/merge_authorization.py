@@ -1071,18 +1071,22 @@ def record_merge_authorization_decision(
 
 def evaluate_merge_authorization_applicability(
     authorization_record: MergeAuthorizationRecord | None,
-    current_approval_record: ApprovalRecord,
-    current_approval_applicability: ApprovalApplicabilityResult,
-    current_approved_execution_projection: ApprovedExecutionProjection,
-    current_pull_request_evidence: PullRequestMergeEvidence,
+    current_approval_record: ApprovalRecord | PullRequestMergeEvidence | None = None,
+    current_approval_applicability: ApprovalApplicabilityResult | None = None,
+    current_approved_execution_projection: ApprovedExecutionProjection | None = None,
+    current_pull_request_evidence: PullRequestMergeEvidence | None = None,
     *,
-    current_proposal: object,
-    current_issueplan_evidence: object,
-    current_repository_state_evidence: object,
+    current_proposal: object = None,
+    current_issueplan_evidence: object = None,
+    current_repository_state_evidence: object = None,
     evaluated_at: str,
     invalidation_events: Iterable[str] = (),
 ) -> MergeAuthorizationApplicabilityResult:
     evaluation_time = _timestamp(evaluated_at, "evaluated_at")
+    if current_pull_request_evidence is None and isinstance(
+        current_approval_record, PullRequestMergeEvidence
+    ):
+        current_pull_request_evidence = current_approval_record
     try:
         current_pr = _verified(current_pull_request_evidence, PullRequestMergeEvidence)
     except (TypeError, ValueError) as exc:
@@ -1111,7 +1115,7 @@ def evaluate_merge_authorization_applicability(
         reason = (
             "version.unsupported"
             if getattr(authorization_record, "schema_version", None)
-            != MERGE_AUTHORIZATION_SCHEMA_VERSION
+            not in {MERGE_AUTHORIZATION_SCHEMA_VERSION, MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION}
             else "evidence.malformed"
         )
         return _result(
@@ -1123,6 +1127,54 @@ def evaluate_merge_authorization_applicability(
             (reason,),
             (_exception_detail("merge-authorization-record", exc),),
         )
+    if authorization.schema_version == MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION:
+        # No task-planning approval, applicability or execution-projection
+        # identity can supply authority in the merge-specific v1.2 contract.
+        # The caller must separately authenticate the record's source.
+        try:
+            current_binding = _current_merge_binding(current_pr, authorization.binding)
+            changed = _changed_bindings(authorization.binding, current_binding)
+            reasons, details = _eligibility_reasons(current_pr)
+            reasons.update(_reason_codes(invalidation_events))
+            reasons.update(_binding_reasons(changed))
+            reasons.update(_record_local_reasons(authorization))
+            if not current_pr.required_checks:
+                reasons.add("checks.missing")
+            if len(current_pr.required_checks) < len(
+                authorization.binding.required_check_evidence
+            ):
+                reasons.add("checks.missing")
+            if authorization.state is MergeAuthorizationState.PENDING:
+                reasons.add("authorization.pending")
+            elif authorization.state is MergeAuthorizationState.REJECTED:
+                reasons.add("authorization.rejected")
+            elif authorization.state is MergeAuthorizationState.CONSUMED:
+                reasons.add("authorization.consumed")
+            else:
+                lifecycle = _LIFECYCLE_REASON.get(authorization.state.value)
+                if lifecycle is not None:
+                    reasons.add(lifecycle)
+            if authorization.revoked_authorization_id is not None:
+                reasons.add("authorization.revoked")
+            if evaluation_time >= _timestamp(authorization.expires_at, "expires_at"):
+                reasons.add("authorization.expired")
+            status = _status_for_reasons(reasons)
+            if status == "applicable" and (
+                changed or authorization.state is not MergeAuthorizationState.AUTHORIZED
+            ):
+                status = "stale" if changed else "blocked"
+            return _result(
+                status, authorization.authorization_id,
+                authorization.authorization_revision,
+                current_pr.evidence_id, changed, reasons, details,
+            )
+        except (TypeError, ValueError) as exc:
+            return _result(
+                "invalid", authorization.authorization_id,
+                authorization.authorization_revision, current_pr.evidence_id,
+                (), ("evidence.malformed",),
+                (_exception_detail("current-merge-evidence", exc),),
+            )
     try:
         binding, current_reasons, current_details = _current_binding(
             current_approval_record,
@@ -1309,17 +1361,16 @@ def reconstruct_merge_authorization_record(
     binding_raw = raw["binding"]
     if type(binding_raw) is not dict:
         raise ValueError("merge authorization binding must be an object")
-    binding_expected = {
-        "repository", "pull_request_number", "exact_head_sha",
-        "target_base_branch", "base_sha_or_evidence_id",
-        "permitted_merge_method", "approval_id", "approval_revision",
-        "approval_applicability_identity", "approval_expires_at",
-        "approved_execution_projection_id", "changed_scope_fingerprint",
-        "allowed_files", "forbidden_paths", "required_tests",
-        "required_check_evidence", "review_evidence",
-        "pr_metadata_sha256", "closure_admission_ids",
-        "draft_ready_state",
-    }
+    binding_cls = (
+        MergeAuthorizationBindingV2
+        if raw["schema_version"] == MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION
+        else MergeAuthorizationBinding
+    )
+    if raw["schema_version"] not in {
+        MERGE_AUTHORIZATION_SCHEMA_VERSION, MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION
+    }:
+        raise ValueError("unsupported merge authorization version")
+    binding_expected = {item.name for item in fields(binding_cls)}
     if set(binding_raw) != binding_expected:
         raise ValueError("merge authorization binding fields are invalid")
     checks_raw = binding_raw["required_check_evidence"]
@@ -1349,18 +1400,13 @@ def reconstruct_merge_authorization_record(
         "exact_head_reviewed",
     }:
         raise ValueError("merge review evidence fields are invalid")
-    binding = MergeAuthorizationBinding(
+    binding_values = dict(
         repository=binding_raw["repository"],
         pull_request_number=binding_raw["pull_request_number"],
         exact_head_sha=binding_raw["exact_head_sha"],
         target_base_branch=binding_raw["target_base_branch"],
         base_sha_or_evidence_id=binding_raw["base_sha_or_evidence_id"],
         permitted_merge_method=binding_raw["permitted_merge_method"],
-        approval_id=binding_raw["approval_id"],
-        approval_revision=binding_raw["approval_revision"],
-        approval_applicability_identity=binding_raw["approval_applicability_identity"],
-        approval_expires_at=binding_raw["approval_expires_at"],
-        approved_execution_projection_id=binding_raw["approved_execution_projection_id"],
         changed_scope_fingerprint=binding_raw["changed_scope_fingerprint"],
         allowed_files=tuple(binding_raw["allowed_files"]),
         forbidden_paths=tuple(binding_raw["forbidden_paths"]),
@@ -1377,6 +1423,13 @@ def reconstruct_merge_authorization_record(
         closure_admission_ids=tuple(admission_ids_raw),
         draft_ready_state=binding_raw["draft_ready_state"],
     )
+    if binding_cls is MergeAuthorizationBinding:
+        for name in (
+            "approval_id", "approval_revision", "approval_applicability_identity",
+            "approval_expires_at", "approved_execution_projection_id",
+        ):
+            binding_values[name] = binding_raw[name]
+    binding = binding_cls(**binding_values)
     return MergeAuthorizationRecord(
         schema_version=raw["schema_version"],
         authorization_id=raw["authorization_id"],
