@@ -119,10 +119,18 @@ consumed, superseded, revoked, or invalidated, is forbidden.
 
 ## What this does not do (explicitly out of scope)
 
-- **No live producer or merge executor.** The experimental modules were
-  removed rather than expanding an unattached merge path. No authenticated
-  posting, merge API dispatch, receipt retrieval, or live evidence reader is
-  created here. A future producer and executor require separate admission.
+- **No authenticated producer posting path.** How an owner decision becomes
+  a trusted approval/authorization comment on a PR conversation — which
+  agent/route, with what authentication — is Phase 4 decision (e) and is
+  NOT implemented here. No code in this change posts to GitHub, and no
+  hand-crafted serialized record may be treated as produced evidence.
+- **No merge dispatch.** No repository code calls the GitHub merge API,
+  and no MCP tool, credential, or protected-setting change is made here.
+  The one workflow change is read-only: the existing `merge_admission`
+  job additionally runs the dispatch evaluator and publishes its
+  receipt; it grants no merge authority. The dispatch owner
+  (repo-owned Actions dispatch vs. product-side connector gating,
+  decisions (a)/(b)) is still undecided for the merge-executing step.
 - **No host enforcement proof.** Repository tests prove the canonical
   gate evaluates and refuses correctly; they do not prove that any
   connector or host merge call enforces it. That proof requires a
@@ -144,14 +152,6 @@ consumed, superseded, revoked, or invalidated, is forbidden.
 - New: `scripts/agent_os_issue_acceptance/merge_proposal.py`,
   `tests/agent_os_issue_acceptance/test_merge_proposal.py`,
   `docs/3463-merge-admission.md` (this file).
-  proposal-id prefix alongside `draft-task-proposal:`; no existing
-  id invalidated, no planning behavior changed),
-  `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
-  (one architecture-domain classification for the adapter). The package facade
-  (`__init__.py` `__all__`) is intentionally UNCHANGED: exporting
-  the new modules requires a separately authorized facade
-  decision, which has not been granted; the modules are usable
-  via direct module import, as all internal callers already do.
 - Changed: `scripts/agent_os_issue_acceptance/merge_authorization.py`
   (MergeProposal type import, `build_merge_proposal`, merge branch in
   `_current_binding`), `scripts/agent_os_issue_acceptance/merge_applicability.py`
