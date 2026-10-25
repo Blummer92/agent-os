@@ -1163,3 +1163,78 @@ def test_3246_non_closing_linkage_is_permitted_while_acceptance_is_unresolved():
 # covered by test_3157_closing_reference_added_after_authorization_blocks above.
 # The authoritative-aggregate case (#3114) is covered by
 # tests/test_agent_os_aggregate_gate.py; it is intentionally not duplicated here.
+
+
+# Native merge-specific v1.2 contract (planning approval remains legacy-only).
+def test_v12_native_authorization_roundtrip_and_direct_applicability():
+    from scripts.agent_os_issue_acceptance.merge_authorization import (
+        MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
+        MergeAuthorizationBindingV2,
+        build_merge_authorization_candidate_from_pr,
+        reconstruct_merge_authorization_record,
+        serialize_merge_authorization_record,
+    )
+
+    pr = _pr(_bundle())
+    pending = build_merge_authorization_candidate_from_pr(
+        pr,
+        authorizer_id="Blummer92",
+        decision_id="native-owner-decision",
+        decision_at=CANDIDATE,
+        expires_at=MERGE_EXPIRES,
+    )
+    assert pending.schema_version == MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION == "1.2"
+    assert type(pending.binding) is MergeAuthorizationBindingV2
+    assert not hasattr(pending.binding, "approval_id")
+    assert not hasattr(pending.binding, "approved_execution_projection_id")
+    authorized = record_merge_authorization_decision(
+        pending, state=MergeAuthorizationState.AUTHORIZED,
+        decision_id="native-authorization", authorizer_id="Blummer92",
+        decision_at=AUTHORIZED,
+    )
+    assert reconstruct_merge_authorization_record(
+        serialize_merge_authorization_record(authorized)
+    ) == authorized
+    result = evaluate_merge_authorization_applicability(
+        authorized, pr, evaluated_at="2026-07-26T14:40:00Z",
+    )
+    assert result.status == "applicable"
+    assert result.merge_authorized is True
+    assert result.changed_bindings == ()
+
+    expired = evaluate_merge_authorization_applicability(
+        authorized, pr, evaluated_at=MERGE_EXPIRES,
+    )
+    assert expired.merge_authorized is False
+    assert "authorization.expired" in expired.reason_codes
+
+    drift = _pr(_bundle(), head_sha="f" * 40,
+                required_checks=(_check(tested_sha="f" * 40),))
+    stale = evaluate_merge_authorization_applicability(
+        authorized, drift, evaluated_at="2026-07-26T14:40:00Z",
+    )
+    assert stale.merge_authorized is False
+    assert "exact_head_sha" in stale.changed_bindings
+    assert "pull-request.head-changed" in stale.reason_codes
+
+    with pytest.raises(ValueError, match="schema/binding"):
+        replace(authorized, schema_version="1.1",
+                authorization_id="", authorization_revision="")
+    with pytest.raises(ValueError, match="schema/binding"):
+        replace(_authorized()[0], schema_version="1.2",
+                authorization_id="", authorization_revision="")
+
+
+def test_v11_historical_records_remain_readable_not_native_authority():
+    from scripts.agent_os_issue_acceptance.merge_authorization import (
+        reconstruct_merge_authorization_record,
+        serialize_merge_authorization_record,
+    )
+
+    historical, _ = _authorized()
+    assert historical.schema_version == "1.1"
+    restored = reconstruct_merge_authorization_record(
+        serialize_merge_authorization_record(historical)
+    )
+    assert restored == historical
+    assert hasattr(restored.binding, "approval_id")
