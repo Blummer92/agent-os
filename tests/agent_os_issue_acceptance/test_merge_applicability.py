@@ -9,6 +9,7 @@ merge_authorized false, and no case in this file performs a merge.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 import sys
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -43,6 +44,7 @@ from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E40
 )
 from scripts.agent_os_issue_acceptance.merge_applicability import (  # noqa: E402
     evaluate_merge_dispatch_applicability,
+    _unresolved_review_threads,
 )
 
 _HERE = Path(__file__).parent
@@ -253,9 +255,34 @@ class _Repo:
         return self._commit
 
 
+class _Requester:
+    def __init__(self, pages=None):
+        self.pages = pages if pages is not None else [[{"isResolved": True}]]
+        self.calls = []
+
+    def graphql_query(self, query, variables):
+        self.calls.append(variables)
+        index = 0 if variables["cursor"] is None else int(variables["cursor"])
+        if index >= len(self.pages):
+            raise ValueError("missing review-thread page")
+        data = {
+            "data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "nodes": self.pages[index],
+                    "pageInfo": {
+                        "hasNextPage": index < len(self.pages) - 1,
+                        "endCursor": str(index + 1) if index < len(self.pages) - 1 else None,
+                    },
+                },
+            }}},
+        }
+        return {}, data
+
+
 class _Client:
-    def __init__(self, repo):
+    def __init__(self, repo, requester=None):
         self._repo = repo
+        self.requester = requester or _Requester()
 
     def get_repo(self, name):
         assert name == REPO
@@ -310,7 +337,7 @@ def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     assert receipt["verified"] == [
         "transport-and-record", "approval-source-current",
         "approval-binding-linkage", "file-scope",
-        "checks", "reviews", "lifecycle-admission",
+        "checks", "reviews", "review-threads", "lifecycle-admission",
         "canonical-applicability",
     ]
     assert receipt["missing_interfaces"] == []
@@ -557,6 +584,80 @@ def test_repeated_evaluation_is_idempotent():
     assert first["dispatch_checks_passed"] is True
     assert first["receipt_id"] == second["receipt_id"]
     assert first["reason_codes"] == second["reason_codes"]
+
+
+
+# Security regression checks: absence of positive review-thread evidence is
+# never equivalent to zero unresolved threads.
+def test_missing_graphql_review_thread_capability_fails_closed():
+    class _RestOnlyClient:
+        def __init__(self, repo):
+            self._repo = repo
+
+        def get_repo(self, name):
+            return self._repo
+
+    bundle = _tauth._bundle()
+    record = _authorized_record(bundle)
+    client = _RestOnlyClient(_Repo(_PR(), _comments_for(bundle, record)))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["review.threads-unverifiable"]
+
+
+def test_unresolved_thread_blocks_even_with_approved_head():
+    bundle = _tauth._bundle()
+    record = _authorized_record(bundle)
+    client = _Client(
+        _Repo(_PR(), _comments_for(bundle, record)),
+        requester=_Requester([[{"isResolved": False}]]),
+    )
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["review.unresolved"]
+
+
+def test_review_threads_use_every_page():
+    requester = _Requester([
+        [{"isResolved": True}],
+        [{"isResolved": False}, {"isResolved": True}],
+    ])
+    client = _Client(_Repo(_PR(), []), requester=requester)
+    assert _unresolved_review_threads(client, REPO, PR_NUMBER) == 1
+    assert [call["cursor"] for call in requester.calls] == [None, "1"]
+
+
+@pytest.mark.parametrize("invalid_page", [
+    [{"isResolved": "false"}],
+    [None],
+    [{"unexpected": True}],
+])
+def test_malformed_review_thread_page_fails_closed(invalid_page):
+    client = _Client(_Repo(_PR(), []), requester=_Requester([invalid_page]))
+    with pytest.raises(ValueError):
+        _unresolved_review_threads(client, REPO, PR_NUMBER)
+
+
+def test_forbidden_path_rechecked_even_when_authorized_fingerprint_matches():
+    bundle = _tauth._bundle()
+    original = _authorized_record(bundle)
+    # The record is content-addressed and trusted, but its own forbidden
+    # contract was not enforced at admission time. Current scope did not drift.
+    forbidden_binding = replace(original.binding, forbidden_paths=("scripts/*",))
+    record = replace(
+        original, binding=forbidden_binding,
+        authorization_id="", authorization_revision="",
+    )
+    client = _Client(_Repo(_PR(), _comments_for(bundle, record)))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "contract.forbidden-paths-changed" in receipt["reason_codes"]
 
 
 class TestChangedScopeFingerprint:
