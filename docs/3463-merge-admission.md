@@ -1,4 +1,4 @@
-# Merge admission via a typed MergeProposal (#3463, #2340 ADR-001)
+# Merge-specific authorization and read-only dispatch (#3463, #2340)
 
 ## Status
 
@@ -46,55 +46,19 @@ are outstanding (see "What this does not do").
    the 8 live-comparable binding fields. A fully matching record is a
    *candidate* receipt only: this module still hard-codes
    `merge_authorized=false` in every receipt, by design.
-2. **Dispatch-time verification (extended).**
-   `merge_applicability.evaluate_merge_dispatch_applicability` requires the
-   candidate receipt, then verifies the trusted approval triple
-   (`reacquire_approval_source`), its linkage to the authorization binding,
-   live file scope (canonical `changed_scope_fingerprint`), live check
-   states for the exact head, live reviews, and a lifecycle-mutation
-   admission binding the owner's instruction to the exact head.
-3. **Canonical applicability (new wiring).** After every dispatch check
-   passes, the consumer assembles a typed `MergeProposal`
-   (`merge-proposal/v1`, `scripts/agent_os_issue_acceptance/merge_proposal.py`)
-   from the verified records and live PR evidence via
-   `merge_authorization.build_merge_proposal`, and delegates to the
-   canonical `evaluate_merge_authorization_applicability`. Only a canonical
-   result of `applicable` produces a positive receipt: `status ==
-   "applicable"`, `merge_authorized is true`,
-   `canonical_applicability_evaluated is true`, with the canonical result
-   (authorization id/revision, PR evidence id, changed bindings, reason
-   codes, proposal id) embedded in the receipt. Any other canonical outcome
-   keeps the receipt blocked, with the canonical reason codes preserved.
-   Dispatch checks passing while the canonical gate fails is reported as
-   exactly that — `dispatch_checks_passed is true` with
-   `merge_authorized is false` — never as authorization.
-
-## What a MergeProposal is (and is not)
-
-A `MergeProposal` is frozen, content-bound evidence for one repository, PR
-number, exact head, base branch/identity, merge method, file-scope
-fingerprint, allowlist/forbidden paths, required tests, required checks,
-review state, PR metadata fingerprint, closure admission ids, ready state,
-and approval-triple linkage (approval id/revision, applicability identity,
-approval expiry, projection id). Its `proposal_id` is
-`merge-proposal:<sha256>` over every other field, so tampering with any
-bound field invalidates the identity at construction.
-
-It is NOT a task-planning proposal: it carries no issueplan, planning
-graph, or cohort state, and the canonical evaluator's merge branch checks
-it field-by-field against live PR evidence and the trusted approval triple
-instead of recomputing task-planning approval applicability. That
-recomputation would be the wrong check for a merge; the approval triple
-itself was reacquired through the trusted source readers, and the
-authorization record's state, expiry, and binding drift are still enforced
-by the evaluator around the merge branch.
-
-It confers no authority by itself, posts nothing, and dispatches nothing.
-`build_merge_proposal` refuses to assemble a proposal unless the approval
-is APPROVED, the supplied applicability is applicable and matches the
-approval, and the projection matches PR evidence. A matching proposal
-alone never produces `merge_authorized=true`; only the canonical evaluator,
-given an AUTHORIZED record with no binding drift, can do that.
+2. **Dispatch-time verification.**
+   `merge_applicability.evaluate_merge_dispatch_applicability` requires a
+   currently authorized schema 1.2 merge record, re-verifies its trusted
+   owner-authored source, complete PR changed files and forbidden paths,
+   required check states, reviews, every review-thread page, and the existing
+   lifecycle-mutation admission. Schema 1.1 records remain readable but never
+   authorize current dispatch.
+3. **Canonical merge applicability.** The same canonical
+   `evaluate_merge_authorization_applicability` compares the native schema
+   1.2 binding directly against fresh PR evidence without reconstructing
+   `ApprovalRecord`, generic approval applicability, execution projections
+   or a separate `MergeProposal` representation. Only `applicable` with
+   `merge_authorized=true` produces positive admission. No merge is executed.
 
 ## Host-consumable receipt contract
 
@@ -181,28 +145,17 @@ requirement is introduced.
   head as tested SHA; the live rollup reports states per context only.
   State and head are live-verified; app identity is binding-carried.
 
-## Files
+## Files and ownership
 
-- New: `scripts/agent_os_issue_acceptance/merge_proposal.py`,
-  `tests/agent_os_issue_acceptance/test_merge_proposal.py`,
-  `docs/3463-merge-admission.md` (this file).
-- Changed: `scripts/agent_os_issue_acceptance/merge_authorization.py`
-  (MergeProposal type import, `build_merge_proposal`, merge branch in
-  `_current_binding`), `scripts/agent_os_issue_acceptance/merge_applicability.py`
-  (canonical delegation, positive applicable receipt),
-  `scripts/agent_os_issue_acceptance/merge_admission_actions.py`
-  (docstring/contract note only; its hard-coded `false` is unchanged),
-  `tests/agent_os_issue_acceptance/test_merge_applicability.py` (ceiling
-  test replaced by the positive-path test plus new negative tests),
-  `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
-  (one architecture-domain classification line for `merge_proposal`).
-- Changed (continuation): `.github/workflows/agent-os-governed-invocation.yml`
-  (the `merge_admission` job now also runs `merge_applicability` with
-  the same transport and publishes `dispatch_receipt.json`; read-only
-  permissions unchanged), `merge_authorization_source.py`,
-  `pr_branch_refresh_authorization_source.py`, and
-  `pr_branch_refresh_actions.py` (Claude Code footer parity with
-  `approval_source.py`: exactly one of the `/code` or legacy bare
-  footers is stripped; doubled/embedded forms still fail closed).
-- Unchanged: MCP server/profile, credentials, protected settings,
-  approval readers, and the canonical task-planning evaluator branch.
+- `merge_authorization.py`: retains historical schema 1.1 record
+  reconstruction while adding the native schema 1.2 binding, candidate
+  construction and canonical direct applicability.
+- `merge_applicability.py`: verifies actual GitHub scope, checks, reviews,
+  GraphQL review-thread completeness and the owner-authored merge record.
+- `merge_admission_actions.py`: remains the non-authorizing candidate
+  front door and dispatch contract.
+- The redundant `merge_proposal.py` representation, its exclusive tests
+  and the `_merge_proposal_binding` approval-triple branch were retired.
+- Shared planning approval records, evaluators, projections and Scheduler
+  approvals remain unchanged.
+
