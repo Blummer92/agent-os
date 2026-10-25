@@ -266,6 +266,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          # #2410 ingress inputs are optional workflow inputs: GitHub
+          # renders an unset optional input as an empty string, but an
+          # offline or dynamic harness may leave them wholly unset, which
+          # trips `set -u` at the first bare reference. Normalize both to
+          # empty here so every later reference is safe; this changes no
+          # admission semantics, because unset and empty are the same
+          # direct-owner case throughout this step.
+          INGRESS_RUN_ID="${INGRESS_RUN_ID:-}"
+          INGRESS_TRIGGER_ID="${INGRESS_TRIGGER_ID:-}"
+
           if [ "$READY_RECOVERY" != "true" ] && [ "$READY_RECOVERY" != "false" ]; then
             echo "invalid Ready-recovery flag" >&2
             exit 1
