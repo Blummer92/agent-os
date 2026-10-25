@@ -46,6 +46,8 @@ from pathlib import Path
 from typing import Any
 
 from . import merge_admission_actions as admission
+from .checks.forbidden_paths import _matches as forbidden_path_matches
+from .path_contract import normalize_declared_path
 from .approval_source import (
     ApprovalCommentSnapshot,
     ApprovalSourceSnapshot,
@@ -223,6 +225,62 @@ def _live_check_states(commit: Any) -> dict[str, str]:
     return rolled
 
 
+_REVIEW_THREAD_QUERY = """
+query ($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        nodes { isResolved }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+def _unresolved_review_threads(github_client: Any, repository: str, number: int) -> int:
+    """Count every unresolved PR review thread from authenticated GraphQL pages.
+
+    A partial, malformed or inaccessible result is never evidence of zero.
+    GitHub's REST reviews/comments do not expose review-thread resolution.
+    """
+    owner, name = repository.split("/", 1)
+    requester = github_client.requester
+    cursor: str | None = None
+    seen: set[str] = set()
+    unresolved = 0
+    for _ in range(50):
+        _, response = requester.graphql_query(
+            _REVIEW_THREAD_QUERY,
+            {"owner": owner, "name": name, "number": number, "cursor": cursor},
+        )
+        if not isinstance(response, dict) or response.get("errors"):
+            raise ValueError("review threads unavailable")
+        item = response.get("data", {}).get("repository", {}).get("pullRequest", {})
+        page = item.get("reviewThreads") if isinstance(item, dict) else None
+        if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
+            raise ValueError("review threads incomplete")
+        nodes = page["nodes"]
+        if len(nodes) > 100 or any(
+            not isinstance(node, dict) or type(node.get("isResolved")) is not bool
+            for node in nodes
+        ):
+            raise ValueError("review threads malformed")
+        unresolved += sum(not node["isResolved"] for node in nodes)
+        info = page.get("pageInfo")
+        if not isinstance(info, dict) or type(info.get("hasNextPage")) is not bool:
+            raise ValueError("review-thread pagination unavailable")
+        if not info["hasNextPage"]:
+            return unresolved
+        next_cursor = info.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen:
+            raise ValueError("review-thread cursor unavailable")
+        seen.add(next_cursor)
+        cursor = next_cursor
+    raise ValueError("review-thread bounds exceeded")
+
+
 def evaluate_merge_dispatch_applicability(
     transport: object, *,
     repository: str,
@@ -335,13 +393,17 @@ def evaluate_merge_dispatch_applicability(
         paths = [path for path, _ in files]
         if set(paths) - set(record.binding.allowed_files):
             scope_failures.append("contract.allowlist-changed")
-        # NOTE: binding.forbidden_paths is deliberately not re-checked here.
-        # Forbidden paths use `/**` glob semantics whose canonical matcher
-        # lives outside this package; reimplementing it would be parallel
-        # authorization logic. It is also redundant: any forbidden-path
-        # violation changes the file set and is therefore caught by the
-        # scope fingerprint above, and the canonical producer validated
-        # forbidden paths against the projection at decision time.
+        # The fingerprint only proves the scope did not drift; it does not
+        # establish that the *authorized* scope was safe in the first place.
+        # Reuse the same forbidden-path matcher as Issue Acceptance.
+        try:
+            if any(
+                forbidden_path_matches(normalize_declared_path(path), pattern)
+                for path in paths for pattern in record.binding.forbidden_paths
+            ):
+                scope_failures.append("contract.forbidden-paths-changed")
+        except (TypeError, ValueError):
+            scope_failures.append("contract.forbidden-paths-changed")
         if scope_failures:
             return _receipt(**{**base_kwargs, "reason_codes": scope_failures})
         verified.append("file-scope")
@@ -372,7 +434,19 @@ def evaluate_merge_dispatch_applicability(
             return _receipt(**{**base_kwargs, "reason_codes": ["review.changed"]})
         if review_evidence.exact_head_reviewed != approved_at_head:
             return _receipt(**{**base_kwargs, "reason_codes": ["review.changed"]})
+        # Only the complete GraphQL review-thread connection can establish
+        # that there are no unresolved conversations. A REST review list
+        # alone cannot establish thread resolution.
+        try:
+            unresolved_threads = _unresolved_review_threads(github_client, repository, pr.number)
+        except Exception:
+            return _receipt(**{**base_kwargs, "reason_codes": ["review.threads-unverifiable"]})
+        if unresolved_threads:
+            return _receipt(**{**base_kwargs, "reason_codes": ["review.unresolved"]})
+        if unresolved_threads != review_evidence.unresolved_conversation_count:
+            return _receipt(**{**base_kwargs, "reason_codes": ["review.changed"]})
         verified.append("reviews")
+        verified.append("review-threads")
 
         # Lifecycle-mutation admission binding the owner's instruction to the head.
         actor = transport.get("actor") if isinstance(transport, dict) else None
@@ -381,16 +455,17 @@ def evaluate_merge_dispatch_applicability(
         if actor.casefold() != repo.owner.login.casefold():
             return _receipt(**{**base_kwargs, "reason_codes": ["lifecycle.actor-not-owner"]})
         notes = [
-            "unresolved_threads=0: no issue is bound (issue_number=None); PR review-thread "
-            "resolution is not observable via the REST API and is covered by review_state.",
+            f"unresolved_threads={unresolved_threads}: verified through complete GitHub GraphQL review-thread readback.",
         ]
         try:
             decision = LifecycleOwnerDecision(
                 repository=repository,
                 issue_number=None,
                 requested_mutations=("merge",),
-                authorizer_id=actor,
-                decision_id=base.get("logical_trigger_id") or "merge-dispatch",
+                # The current owner-authored merge authorization is the
+                # decision provenance, not an unauthenticated actor field.
+                authorizer_id=repo.owner.login,
+                decision_id=record.decision_id,
                 decision_recorded=True,
                 pull_request_number=pr.number,
             )
@@ -404,7 +479,7 @@ def evaluate_merge_dispatch_applicability(
                 merged=False,
                 issue_state=None,
                 review_state="blocked" if blocking else "clear",
-                unresolved_threads=0,
+                unresolved_threads=unresolved_threads,
                 lifecycle_labels=tuple(sorted(label.name for label in pr.get_labels())),
                 observed_revision=head,
             )
@@ -450,7 +525,7 @@ def evaluate_merge_dispatch_applicability(
             required_checks=live_check_evidence,
             review_evidence=MergeReviewEvidence(
                 blocking_review_present=blocking,
-                unresolved_conversation_count=0,
+                unresolved_conversation_count=unresolved_threads,
                 exact_head_reviewed=approved_at_head,
             ),
             evidence_id="",
