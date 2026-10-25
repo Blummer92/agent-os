@@ -1,91 +1,25 @@
-"""Merge-specific approval construction (issue #3463, Option A / design A1).
+"""Build a merge approval triple from an owner decision and current PR evidence.
 
-This module is the one missing link in the governed merge pipeline:
-it builds a canonical approval triple (approval record, applicability
-result, approved execution projection) for a merge from a genuine
-owner merge decision plus live pull-request evidence, without
-fabricating planning evidence.
+This adapter performs no I/O or merge and does not authenticate provenance.
+The caller must authenticate the owner decision; the trusted source reader must
+reacquire the records before dispatch. A content hash proves integrity, not
+owner authorship. No production producer or executor is connected here.
 
-What it does NOT do, by design:
+Existing planning constructors remain planning-only. The merge binding uses
+``merge-approval:`` identifiers and a ``merge`` cohort, so planning cross-use
+fails closed. Legacy planning-named fields are compatibility equality tokens:
+handoff_digest hashes the decision, graph_digest hashes scope, and
+planning_result_digest hashes current PR/check/review evidence. The issueplan
+identity hashes decision/currentness; scanner and contract fingerprints bind
+checks and execution scope. No planning artifact or lookup is fabricated.
 
-- It never constructs a ``DraftTaskProposal``, an
-  ``IssuePlanCurrentStateEvidence``, or a ``RepositoryStateEvidence``.
-  The planning constructors (``build_approval_candidate``,
-  ``evaluate_approval_applicability``,
-  ``build_approved_execution_projection``) are planning-only and are
-  left untouched; this module builds the three records with the
-  dataclasses directly and validates them against merge inputs.
-- It never bypasses the trusted approval-triple reader. The records
-  it produces are verified at dispatch by the unchanged
-  ``reacquire_approval_source`` (linkage, states, reconstruction)
-  and by ``build_merge_proposal`` / ``_merge_proposal_binding``
-  (triple consistency plus live PR evidence). What it bypasses is
-  only the planning constructors, which are a planning boundary,
-  not a merge trust boundary.
-- It never posts anything and never merges. Posting is the E2
-  producer's job (``merge_producer``); merging is the A2 executor's
-  job (``merge_executor``). By convention this constructor is invoked
-  only from the producer; no import restriction enforces that, so
-  the convention is documented here and in the merge-admission docs
-  as a process control (Phase 4 QA finding N-4).
-
-Field-name honesty (Phase 4 QA Q12): the ``ApprovalBinding`` container
-reuses planning-named fields. For merge approvals those fields carry
-merge-derived hashes, documented here field by field; no consumer
-verifies any of them against a planning store (they are equality
-tokens, or ignored by the merge branch), so the reuse is a naming
-debt, not invented planning evidence:
-
-- ``proposal_id``: ``merge-approval:<sha256>`` (design A1 additive
-  prefix; the ``draft-task-proposal:`` prefix is never used here, so
-  a merge record cannot be mistaken for planning provenance by its
-  primary identifier).
-- ``proposal_version``: ``"merge-approval/1"`` (distinguishing mark).
-- ``handoff_digest``: SHA-256 of the canonical decision artifact
-  JSON. No handoff exists; the field carries the decision digest.
-- ``graph_digest``: SHA-256 of the canonical scope (allowed files,
-  forbidden paths, scope fingerprint). No graph exists.
-- ``planning_result_digest``: SHA-256 of canonical PR evidence
-  (head, base, checks, reviews, metadata). No planning result
-  exists.
-- ``issueplan_current_state_evidence_id``:
-  ``issueplan-current-state:<sha256>`` of the canonical merge
-  current state (decision + PR evidence + expiry). The legacy
-  planning name is kept deliberately (A1b rejected as unnecessary:
-  the field is a secondary equality token, never looked up, never
-  compared by the merge branch).
-- ``scanner_result_fingerprint``: SHA-256 of canonical required-check
-  evidence. No scanner ran.
-- ``supplied_node_ids`` / ``cohort_summaries``: a single node naming
-  the merge operation (``merge:<repository>:<pr_number>``) in a single
-  cohort classified ``"merge"``. This is an operation identifier,
-  not planning nodes; it would fail ``_verified_proposal``'s
-  ``parallel-candidate`` requirement, which is the fail-closed
-  cross-use property, not a defect.
-- ``evaluated_repository_sha`` / ``evaluator_commit_sha``: the base
-  SHA at decision time (the evaluation anchor for a merge).
-- ``repository_evidence_type``: ``"branch-head"`` — the tested
-  repository genuinely is the PR branch head.
-- ``approval_kind``: ``SOURCE_MUTATION`` — a merge mutates the
-  target branch's source. No production code branches on kind.
-
-Trust notes the implementation must not overstate (Phase 4 QA
-N-4, Q3, Q4):
-
-- The record's ``authorizer_id`` field is NOT verified by any reader
-  or evaluator; the operative authorship check is comment author ==
-  snapshot owner login (+ ``User`` type) at readback.
-- ``decision_id`` is a content hash (integrity), not a signature
-  (authenticity). The adapter verifies ``decision_id`` against the
-  decision + PR evidence (integrity), but D's authorship rests on
-  D's provenance channel, an owner-process control.
-- Revocation (Phase 4 QA B-1): posting a revocation revision
-  alongside the approved revision makes the approval reader return
-  ``NEEDS_DECISION`` (``source.trusted-record-malformed``), NOT
-  ``STALE``. Dispatch still blocks (non-``current`` status), but
-  the diagnostic reads as corruption. Do not "fix" this by changing
-  the approval reader inside this slice; that needs separate
-  authorization.
+The canonical approval state machine, serialization readers and
+build_merge_proposal retain validation ownership. The adapter checks decision
+identity and time, constructs the records, verifies transport round trips, and
+calls that canonical proposal constructor for triple/PR consistency.
+Revocation through the trusted reader remains NEEDS_DECISION rather than STALE;
+both block execution. Lifecycle expiry/revocation/consumption checks remain in
+the unchanged merge-authorization evaluator.
 """
 
 from __future__ import annotations
@@ -93,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any
 
@@ -238,18 +172,7 @@ def merge_decision_id(
 
 
 def _decision_payload(decision: MergeApprovalDecision) -> dict[str, Any]:
-    return {
-        "authorizer_id": decision.authorizer_id,
-        "base_branch": decision.base_branch,
-        "base_sha_or_evidence_id": decision.base_sha_or_evidence_id,
-        "decision_at": decision.decision_at,
-        "decision_id": decision.decision_id,
-        "expires_at": decision.expires_at,
-        "head_sha": decision.head_sha,
-        "merge_method": decision.merge_method,
-        "pr_number": decision.pr_number,
-        "repository": decision.repository,
-    }
+    return {item.name: getattr(decision, item.name) for item in fields(MergeApprovalDecision)}
 
 
 def _check_payload(check: Any) -> list[Any]:
@@ -306,17 +229,17 @@ def build_merge_approval_triple(
         raise ValueError("decision base identity does not match PR evidence")
     if decision.merge_method != pr_evidence.proposed_merge_method:
         raise ValueError("decision merge method does not match PR evidence")
-    expected_decision_id = merge_decision_id(
-        repository=decision.repository,
-        pr_number=decision.pr_number,
-        head_sha=decision.head_sha,
-        base_branch=decision.base_branch,
-        base_sha_or_evidence_id=decision.base_sha_or_evidence_id,
-        merge_method=decision.merge_method,
-        changed_scope_fingerprint=pr_evidence.changed_scope_fingerprint,
-        pr_metadata_sha256=pr_evidence.pr_metadata_sha256,
-        expires_at=decision.expires_at,
-    )
+    merge_identity = {
+        "base_branch": decision.base_branch,
+        "base_sha_or_evidence_id": decision.base_sha_or_evidence_id,
+        "changed_scope_fingerprint": pr_evidence.changed_scope_fingerprint,
+        "head_sha": decision.head_sha,
+        "merge_method": decision.merge_method,
+        "pr_metadata_sha256": pr_evidence.pr_metadata_sha256,
+        "pr_number": decision.pr_number,
+        "repository": decision.repository,
+    }
+    expected_decision_id = merge_decision_id(**merge_identity, expires_at=decision.expires_at)
     if decision.decision_id != expected_decision_id:
         raise ValueError("decision_id does not match decision content")
     if pr_evidence.draft:
@@ -333,19 +256,7 @@ def build_merge_approval_triple(
     )
     review = pr_evidence.review_evidence
 
-    merge_identity = _sha256_hex(
-        {
-            "base_branch": decision.base_branch,
-            "base_sha_or_evidence_id": decision.base_sha_or_evidence_id,
-            "changed_scope_fingerprint": pr_evidence.changed_scope_fingerprint,
-            "head_sha": decision.head_sha,
-            "merge_method": decision.merge_method,
-            "pr_metadata_sha256": pr_evidence.pr_metadata_sha256,
-            "pr_number": decision.pr_number,
-            "repository": decision.repository,
-        }
-    )
-    proposal_id = f"merge-approval:{merge_identity}"
+    proposal_id = f"merge-approval:{_sha256_hex(merge_identity)}"
     node_id = f"merge:{decision.repository}:{decision.pr_number}"
 
     binding = ApprovalBinding(
@@ -467,8 +378,7 @@ def build_merge_approval_triple(
     projection = ApprovedExecutionProjection(
         schema_version=APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
         projection_id="",
-        proposal_version=binding.proposal_version,
-        proposal_id=binding.proposal_id,
+        **{item.name: getattr(binding, item.name) for item in fields(ApprovalBinding)},
         approval_id=approved.approval_id,
         approval_revision=approved.approval_revision,
         approval_revision_number=approved.revision_number,
@@ -479,25 +389,6 @@ def build_merge_approval_triple(
         approval_decision_at=approved.decision_at,
         approval_expires_at=approved.expires_at,
         approval_supersedes_id=None,
-        handoff_digest=binding.handoff_digest,
-        graph_digest=binding.graph_digest,
-        planning_result_digest=binding.planning_result_digest,
-        repository=binding.repository,
-        base_branch=binding.base_branch,
-        evaluated_repository_sha=binding.evaluated_repository_sha,
-        evaluator_commit_sha=binding.evaluator_commit_sha,
-        tested_repository_sha=binding.tested_repository_sha,
-        repository_evidence_type=binding.repository_evidence_type,
-        supplied_node_ids=binding.supplied_node_ids,
-        cohort_summaries=binding.cohort_summaries,
-        issueplan_current_state_evidence_id=binding.issueplan_current_state_evidence_id,
-        repository_state_evidence_id=binding.repository_state_evidence_id,
-        source_snapshot_fingerprint=binding.source_snapshot_fingerprint,
-        scanner_result_fingerprint=binding.scanner_result_fingerprint,
-        implementation_contract_fingerprint=binding.implementation_contract_fingerprint,
-        allowed_files=binding.allowed_files,
-        forbidden_paths=binding.forbidden_paths,
-        required_tests=binding.required_tests,
         # N-6: projected_at is set to evaluated_at, and the
         # evaluated_at >= decision_at check above enforces the
         # projected_at >= decision_at ordering (the dataclass
@@ -505,33 +396,8 @@ def build_merge_approval_triple(
         projected_at=evaluated_at,
     )
 
-    # Self-verification (design section 2, step 6 + QA N-1): the
-    # exact checks the reader and build_merge_proposal will run,
-    # including a serialize -> reconstruct round-trip for every
-    # record (applicability format is enforced only at
-    # reconstruction). Any failure raises; no unverified triple
-    # is ever returned.
-    if approved.state is not ApprovalState.APPROVED:
-        raise ValueError("merge approval triple is not approved")
-    if (
-        applicability.status != "applicable"
-        or not applicability.approval_applicable
-        or applicability.approval_id != approved.approval_id
-        or applicability.approval_revision != approved.approval_revision
-    ):
-        raise ValueError("merge approval applicability does not match approval")
-    if (
-        projection.approval_state != "approved"
-        or projection.approval_id != approved.approval_id
-        or projection.approval_revision != approved.approval_revision
-        or projection.repository != pr_evidence.repository
-        or projection.base_branch != pr_evidence.base_branch
-        or projection.tested_repository_sha != pr_evidence.head_sha
-        or projection.allowed_files != pr_evidence.allowed_files
-        or projection.forbidden_paths != pr_evidence.forbidden_paths
-        or projection.required_tests != pr_evidence.required_tests
-    ):
-        raise ValueError("merge approval projection does not match approval or PR evidence")
+    # Transport reconstruction retains wire-format validation. Triple state,
+    # linkage and PR/scope consistency are checked once by build_merge_proposal.
     if reconstruct_approval_record(serialize_approval_record(approved)) != approved:
         raise ValueError("merge approval record failed serialize/reconstruct round-trip")
     if (

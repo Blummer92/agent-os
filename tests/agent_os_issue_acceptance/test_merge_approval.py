@@ -354,3 +354,24 @@ def test_revocation_blocks_via_needs_decision_not_stale():
     assert "source.trusted-record-malformed" in result.reason_codes
 
 
+
+
+@pytest.mark.parametrize("method,expected", [
+    ("merge", "1d370916b7f86e9a575ca5f6a3ab6dc371f8d913eda59e80ba0282b572e112a2"),
+    ("squash", "beed5d2be2e601ac51d468c1c04031eda843bc0e44e1284b995038eec5b8afde"),
+    ("rebase", "ca65a7d69ef6dfd530eef58f435799a7038a04dce6b797981cbc2c9f9e1582c5"),
+])
+def test_serialized_triple_preserves_pre_simplification_identity(method, expected):
+    # Captured from a6101cc6, independently of the simplified implementation.
+    from scripts.agent_os_issue_acceptance.approved_execution_projection import (
+        serialize_approved_execution_projection,
+    )
+
+    evidence = make_evidence(proposed_merge_method=method)
+    approval, applicability, projection = build_merge_approval_triple(
+        make_decision(evidence), evidence, evaluated_at=EVALUATED_AT
+    )
+    payload = (serialize_approval_record(approval)
+               + serialize_approval_applicability_result(applicability)
+               + serialize_approved_execution_projection(projection))
+    assert hashlib.sha256(payload).hexdigest() == expected

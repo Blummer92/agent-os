@@ -180,9 +180,7 @@ as stated below.
   content hash (integrity), not a signature (authenticity);
   decision authorship rests on the decision's provenance channel;
   the operative authorship check is comment author == snapshot
-  owner login (+ `User` type) at readback; the adapter is invoked
-  only from the producer by convention (no import restriction
-  enforces it). None of this may be described as code-enforced.
+  owner login (+ `User` type) at readback; no production caller of the adapter is connected in this PR. None of this may be described as code-enforced.
 - **Status:** only the merge-specific approval-construction adapter is
   implemented in this slice and tested with in-memory evidence. The governed
   producer/executor is not implemented or live. No merge canary has run.
@@ -248,3 +246,13 @@ as stated below.
   footers is stripped; doubled/embedded forms still fail closed).
 - Unchanged: MCP server/profile, credentials, protected settings,
   approval readers, and the canonical task-planning evaluator branch.
+
+## Adapter simplification
+
+The adapter reuses one merge-identity payload for the decision and proposal
+hashes, projects the existing ApprovalBinding fields with a shallow copy, and
+leaves triple/PR consistency checks to the existing build_merge_proposal.
+Strict serialize/reconstruct checks and all decision/provenance and lifecycle
+boundaries remain. Wire payloads and identifiers are unchanged. This removes
+duplicate internal transformations and validation, not a human approval step.
+No standing merge authority or automatic merge is introduced.
