@@ -48,12 +48,6 @@ from typing import Any
 from . import merge_admission_actions as admission
 from .checks.forbidden_paths import _matches as forbidden_path_matches
 from .path_contract import normalize_declared_path
-from .approval_source import (
-    ApprovalCommentSnapshot,
-    ApprovalSourceSnapshot,
-    ApprovalSourceTransport,
-    reacquire_approval_source,
-)
 from .lifecycle_mutation_authorization import (
     LifecycleOwnerDecision,
     produce_lifecycle_mutation_authorization,
@@ -61,11 +55,10 @@ from .lifecycle_mutation_authorization import (
 from .lifecycle_mutation_guard import LifecycleStateSnapshot
 from .merge_authorization import (
     MergeAuthorizationRecord,
+    MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
     MergeCheckEvidence,
     MergeReviewEvidence,
     PullRequestMergeEvidence,
-    approval_applicability_identity,
-    build_merge_proposal,
     changed_scope_fingerprint,
     evaluate_merge_authorization_applicability,
     pr_metadata_fingerprint,
@@ -124,9 +117,6 @@ class _GitHubCommentSource:
 
     def read_merge_authorization_source(self, repository: str, pr_number: int) -> MergeAuthorizationSourceSnapshot:
         return self._read(repository, pr_number, MergeAuthorizationSourceSnapshot, MergeAuthorizationCommentSnapshot)
-
-    def read_approval_source(self, repository: str, pr_number: int) -> ApprovalSourceSnapshot:
-        return self._read(repository, pr_number, ApprovalSourceSnapshot, ApprovalCommentSnapshot)
 
 
 # _GitHubCommentSource satisfies both source transport protocols structurally
@@ -348,36 +338,14 @@ def evaluate_merge_dispatch_applicability(
                            authorization_revision=record.authorization_revision,
                            authorization_expires_at=record.expires_at)
 
-        # Trusted approval artifacts.
-        approval_result = reacquire_approval_source(
-            transport=source, repository=repository, pr_number=pr.number,
-            expected_approval_id=record.binding.approval_id,
-        )
-        if approval_result.status.value != "current":
-            return _receipt(**{**base_kwargs,
-                               "reason_codes": ["approval-source-not-current",
-                                                *approval_result.reason_codes]})
-        verified.append("approval-source-current")
-        approval = approval_result.approval
-        applicability = approval_result.applicability
-        projection = approval_result.projection
-        assert approval is not None and applicability is not None and projection is not None
-        base_kwargs.update(approval_id=approval.approval_id,
-                           approval_revision=approval.approval_revision)
-
-        # Linkage between the authorization binding and the current artifacts.
-        linkage_failures: list[str] = []
-        if approval.approval_id != record.binding.approval_id:
-            linkage_failures.append("approval.changed")
-        if approval.approval_revision != record.binding.approval_revision:
-            linkage_failures.append("approval.changed")
-        if approval_applicability_identity(applicability) != record.binding.approval_applicability_identity:
-            linkage_failures.append("approval.changed")
-        if projection.projection_id != record.binding.approved_execution_projection_id:
-            linkage_failures.append("projection.changed")
-        if linkage_failures:
-            return _receipt(**{**base_kwargs, "reason_codes": linkage_failures})
-        verified.append("approval-binding-linkage")
+        # Only native v1.2 merge records may authorize new dispatches.
+        # Historical 1.1 records remain readable, but their planning-named
+        # approvals cannot be promoted into current merge authority.
+        if record.schema_version != MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION:
+            return _receipt(**{**base_kwargs, "reason_codes": ["version.unsupported-for-dispatch"]})
+        if record.authorizer_id.casefold() != repo.owner.login.casefold():
+            return _receipt(**{**base_kwargs, "reason_codes": ["authorization.owner-provenance-mismatch"]})
+        verified.append("native-merge-record")
 
         # Live file scope.
         files = [(item.filename, item.sha) for item in pr.get_files()]
@@ -488,17 +456,9 @@ def evaluate_merge_dispatch_applicability(
             return _receipt(**{**base_kwargs, "reason_codes": ["lifecycle.admission-failed"]})
         verified.append("lifecycle-admission")
 
-        # Canonical applicability, finally invocable: assemble the typed
-        # merge proposal from the verified records and live PR evidence,
-        # then let the canonical evaluator decide. Dispatch checks above
-        # are necessary but never sufficient — a canonical non-applicable
-        # outcome still blocks, with the canonical reason codes preserved.
-        # Check evidence states are live (from the rollup verified above),
-        # not copied from the binding: context/app_identity come from the
-        # binding's required set (the live rollup reports states per
-        # context only), tested_sha is the live head, and state is the
-        # live rolled-up state. A context missing from the live rollup
-        # already blocked above, so this construction cannot resurrect it.
+        # Compare live PR facts directly with the merge-specific record.
+        # No task-planning ApprovalRecord, applicability result, execution
+        # projection or reconstructed MergeProposal participates in dispatch.
         live_check_evidence = tuple(
             MergeCheckEvidence(
                 context=required.context,
@@ -515,11 +475,11 @@ def evaluate_merge_dispatch_applicability(
             head_sha=head,
             base_branch=pr.base.ref,
             base_sha_or_evidence_id=pr.base.sha,
-            draft=False,
-            ready_for_review=True,
+            draft=pr.draft,
+            ready_for_review=not pr.draft,
             proposed_merge_method=base.get("expected_method"),
             changed_scope_fingerprint=live_scope,
-            allowed_files=record.binding.allowed_files,
+            allowed_files=tuple(sorted(paths)),
             forbidden_paths=record.binding.forbidden_paths,
             required_tests=record.binding.required_tests,
             required_checks=live_check_evidence,
@@ -534,27 +494,8 @@ def evaluate_merge_dispatch_applicability(
             pr_metadata_sha256=pr_metadata_fingerprint(pr.title or "", pr.body or ""),
             closure_admissions=(),
         )
-        try:
-            proposal = build_merge_proposal(
-                approval, applicability, projection, pr_evidence
-            )
-        except (TypeError, ValueError):
-            return _receipt(
-                **{**base_kwargs,
-                   "dispatch_checks_passed": True,
-                   "verified": verified,
-                   "reason_codes": ["merge-proposal-evidence-invalid"],
-                   "missing_interfaces": [],
-                   "lifecycle_mutation_authorization": lifecycle_authorization.to_dict(),
-                   "lifecycle_snapshot_notes": notes,
-                   "canonical_applicability_evaluated": False},
-            )
         canonical = evaluate_merge_authorization_applicability(
-            record, approval, applicability, projection, pr_evidence,
-            current_proposal=proposal,
-            current_issueplan_evidence=None,
-            current_repository_state_evidence=None,
-            evaluated_at=now_text,
+            record, pr_evidence, evaluated_at=now_text,
         )
         canonical_result = {
             "status": canonical.status,
@@ -564,7 +505,6 @@ def evaluate_merge_dispatch_applicability(
             "changed_bindings": list(canonical.changed_bindings),
             "reason_codes": list(canonical.reason_codes),
             "merge_authorized": canonical.merge_authorized,
-            "proposal_id": proposal.proposal_id,
         }
         verified.append("canonical-applicability")
         if canonical.status == "applicable" and canonical.merge_authorized:
