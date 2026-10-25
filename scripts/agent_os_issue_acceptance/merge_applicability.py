@@ -431,7 +431,7 @@ def evaluate_merge_dispatch_applicability(
             state, publisher, is_commit_status = observation
             if state != "success":
                 check_failures.append("checks.changed")
-            if publisher is None or publisher != required.app_identity:
+            elif publisher is None or publisher != required.app_identity:
                 check_failures.append("checks.publisher-unverifiable")
             if required.context == AUTHORITATIVE_AGGREGATE_CONTEXT and (
                 not is_commit_status
