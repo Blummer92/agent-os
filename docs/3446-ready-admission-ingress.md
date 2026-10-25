@@ -66,7 +66,18 @@ job log.
 ## Host consumption contract (ChatGPT via connected GitHub MCP)
 
 1. Compute `sha256(body)`; post the fixed comment on the owning issue.
-2. Observe the `Agent OS Governed Invocation Ingress` run; read the receipt.
+2. Observe the `Agent OS Governed Invocation Ingress` run; enumerate its
+   artifacts with `fetch_workflow_run_artifacts` and retrieve the
+   `agent-os-ready-admission-<run>-<attempt>` ZIP **only** with the
+   dedicated `download_workflow_artifact` action — never with generic
+   `fetch`, which rejects the binary artifact ZIP endpoint as an
+   unsupported URL. An `unsupported URL` rejection for the artifact
+   endpoint is a tool-selection signal, not a missing receipt connection:
+   switch to `download_workflow_artifact` (bounded fallback: the receipt
+   text echoed by `fetch_workflow_job_logs`) and continue the same
+   lineage; do not stop, do not re-post the admission request, and do not
+   reclassify the failure as a missing repository connection. Then read
+   `receipt.json` from the ZIP and proceed to step 3.
 3. Immediately before mutation, re-read the PR and call
    `verify_ready_admission_receipt` (head, body, trigger id, repository, PR,
    duplicate receipt id). Any failure stops this item only.
