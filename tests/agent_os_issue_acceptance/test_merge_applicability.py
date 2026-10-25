@@ -106,9 +106,15 @@ def _authorized_record(bundle, decision_at="2026-07-26T14:30:00Z",
         base_branch="main", base_sha_or_evidence_id=BASE, draft=False,
         ready_for_review=True, proposed_merge_method="squash",
         changed_scope_fingerprint=scope,
-        required_checks=(MergeCheckEvidence(
-            context="CI", app_identity="github-actions",
-            tested_sha=HEAD, evidence_id="", state="success"),),
+        required_checks=(
+            MergeCheckEvidence(
+                context="CI", app_identity="github-actions",
+                tested_sha=HEAD, evidence_id="", state="success"),
+            MergeCheckEvidence(
+                context="agent-os/authoritative-aggregate",
+                app_identity="github-actions",
+                tested_sha=HEAD, evidence_id="", state="success"),
+        ),
         review_evidence=MergeReviewEvidence(
             blocking_review_present=False, unresolved_conversation_count=0,
             exact_head_reviewed=True),
@@ -151,15 +157,23 @@ class _File:
 
 
 class _CheckRun:
-    def __init__(self, name, conclusion):
+    def __init__(self, name, conclusion, app_slug="github-actions",
+                 app_id=15368, run_id=100):
         self.name = name
         self.conclusion = conclusion
+        self.app = type("App", (), {"slug": app_slug, "id": app_id})()
+        self.id = run_id
 
 
 class _Status:
-    def __init__(self, context, state):
+    def __init__(self, context, state, creator="github-actions[bot]",
+                 creator_id=41898282, status_id=100):
         self.context = context
         self.state = state
+        self.id = status_id
+        self.creator = type("Creator", (), {
+            "login": creator, "id": creator_id
+        })()
 
 
 class _Commit:
@@ -232,12 +246,16 @@ class _Owner:
 
 
 class _Repo:
-    def __init__(self, pr, comments, commit=None):
+    def __init__(self, pr, comments, commit=None, include_aggregate=True):
         self.owner = _Owner(OWNER)
         self._pr = pr
         self._comments = comments
-        self._commit = commit or _Commit(
-            runs=[_CheckRun("CI", "success")])
+        self._commit = commit or _Commit(runs=[_CheckRun("CI", "success")])
+        if include_aggregate:
+            self._commit._statuses = [
+                *_Commit(statuses=self._commit._statuses).get_statuses(),
+                _Status("agent-os/authoritative-aggregate", "success"),
+            ]
 
     def get_pull(self, number):
         assert number == PR_NUMBER
@@ -669,3 +687,86 @@ class TestChangedScopeFingerprint:
     def test_empty_rejected(self):
         with pytest.raises(ValueError):
             changed_scope_fingerprint([])
+
+
+# Native schema 1.2 adversarial checks: the old source only checked names.
+def test_correct_context_from_wrong_app_is_not_authority():
+    receipt = _run(commit=_Commit(
+        runs=[_CheckRun("CI", "success", app_slug="untrusted-app")]))
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
+
+
+def test_forged_aggregate_commit_status_is_not_authority():
+    bundle = _tauth._bundle()
+    record = _authorized_record(bundle)
+    commit = _Commit(
+        runs=[_CheckRun("CI", "success")],
+        statuses=[_Status("agent-os/authoritative-aggregate", "success",
+                          creator="mallory", creator_id=999)],
+    )
+    client = _Client(_Repo(_PR(), _comments_for(bundle, record),
+                           commit=commit, include_aggregate=False))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
+
+
+def test_missing_live_aggregate_blocks():
+    bundle = _tauth._bundle()
+    record = _authorized_record(bundle)
+    client = _Client(_Repo(
+        _PR(), _comments_for(bundle, record),
+        commit=_Commit(runs=[_CheckRun("CI", "success")]),
+        include_aggregate=False,
+    ))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "checks.missing" in receipt["reason_codes"]
+
+
+def test_latest_commit_status_overrides_old_failure():
+    from scripts.agent_os_issue_acceptance.merge_applicability import _latest_evidence
+    commit = _Commit(statuses=[
+        _Status("agent-os/authoritative-aggregate", "success", status_id=3),
+        _Status("agent-os/authoritative-aggregate", "failure", status_id=2),
+    ])
+    assert _latest_evidence(commit)["agent-os/authoritative-aggregate"] == (
+        "success", "github-actions", True,
+    )
+
+
+def test_latest_commit_status_failure_overrides_old_success():
+    from scripts.agent_os_issue_acceptance.merge_applicability import _latest_evidence
+    commit = _Commit(statuses=[
+        _Status("agent-os/authoritative-aggregate", "failure", status_id=3),
+        _Status("agent-os/authoritative-aggregate", "success", status_id=2),
+    ])
+    assert _latest_evidence(commit)["agent-os/authoritative-aggregate"][0] == "failure"
+
+
+def test_extra_authorized_allowlist_paths_are_not_drift():
+    from dataclasses import replace
+    bundle = _tauth._bundle()
+    original = _authorized_record(bundle)
+    binding = replace(original.binding, allowed_files=(
+        ALLOWED_FILE, "scripts/also-authorized.py",
+    ))
+    record = replace(
+        original, binding=binding,
+        authorization_id="", authorization_revision="",
+    )
+    receipt = _run(bundle=bundle, record=record)
+    assert receipt["merge_authorized"] is True
+    assert receipt["reason_codes"] == []
+
+
+def test_missing_publisher_fails_closed():
+    receipt = _run(commit=_Commit(
+        runs=[_CheckRun("CI", "success", app_slug=None)]))
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
