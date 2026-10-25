@@ -176,21 +176,58 @@ def reacquire_merge_authorization_source(
             ("authorization.absent",), (), tuple(source_ids),
         )
 
-    by_id: dict[str, MergeAuthorizationRecord] = {}
+    # The latest revision alone is not proof of current authorization.
+    # Require a complete, identity-linked history before accepting a decision.
+    by_id: dict[str, list[MergeAuthorizationRecord]] = {}
     for record in records:
-        prior = by_id.get(record.authorization_id)
-        if prior is None or record.revision_number > prior.revision_number:
-            by_id[record.authorization_id] = record
-        elif record.revision_number == prior.revision_number and record != prior:
-            return MergeAuthorizationSourceResult(
-                MergeAuthorizationSourceStatus.NEEDS_DECISION,
-                ("authorization.conflicting-revision",), (), tuple(source_ids),
-            )
-
-    current = tuple(
-        record for record in by_id.values()
-        if record.state is MergeAuthorizationState.AUTHORIZED
-    )
+        by_id.setdefault(record.authorization_id, []).append(record)
+    allowed_next = {
+        MergeAuthorizationState.PENDING: {
+            MergeAuthorizationState.AUTHORIZED, MergeAuthorizationState.REJECTED,
+            MergeAuthorizationState.EXPIRED, MergeAuthorizationState.INVALIDATED,
+            MergeAuthorizationState.SUPERSEDED,
+        },
+        MergeAuthorizationState.AUTHORIZED: {
+            MergeAuthorizationState.EXPIRED, MergeAuthorizationState.INVALIDATED,
+            MergeAuthorizationState.CONSUMED, MergeAuthorizationState.SUPERSEDED,
+        },
+    }
+    current: list[MergeAuthorizationRecord] = []
+    for revisions in by_id.values():
+        revisions.sort(key=lambda item: item.revision_number)
+        for index, record in enumerate(revisions):
+            if index and record.revision_number == revisions[index - 1].revision_number:
+                return MergeAuthorizationSourceResult(
+                    MergeAuthorizationSourceStatus.NEEDS_DECISION,
+                    ("authorization.conflicting-revision",), (), tuple(source_ids),
+                )
+            if record.revision_number != index + 1:
+                return MergeAuthorizationSourceResult(
+                    MergeAuthorizationSourceStatus.NEEDS_DECISION,
+                    ("authorization.chain-invalid",), (), tuple(source_ids),
+                )
+            if index == 0:
+                if record.state is not MergeAuthorizationState.PENDING or record.previous_revision is not None:
+                    return MergeAuthorizationSourceResult(
+                        MergeAuthorizationSourceStatus.NEEDS_DECISION,
+                        ("authorization.chain-invalid",), (), tuple(source_ids),
+                    )
+            else:
+                prior = revisions[index - 1]
+                if (
+                    record.previous_revision != prior.authorization_revision
+                    or record.state not in allowed_next.get(prior.state, set())
+                    or record.binding != prior.binding
+                    or record.expires_at != prior.expires_at
+                    or record.decision_at < prior.decision_at
+                ):
+                    return MergeAuthorizationSourceResult(
+                        MergeAuthorizationSourceStatus.NEEDS_DECISION,
+                        ("authorization.chain-invalid",), (), tuple(source_ids),
+                    )
+        if revisions[-1].state is MergeAuthorizationState.AUTHORIZED:
+            current.append(revisions[-1])
+    current = tuple(current)
     if not current:
         return MergeAuthorizationSourceResult(
             MergeAuthorizationSourceStatus.STALE,
