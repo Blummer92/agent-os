@@ -31,29 +31,21 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     ApprovalState,
     HandoffCohort,
     MergeAuthorizationApplicabilityResult,
+    MergeAuthorizationBinding,
     MergeAuthorizationState,
     MergeCheckEvidence,
     MergeReviewEvidence,
     PullRequestMergeEvidence,
     SchedulerPlanningHandoff,
-    approval_applicability_identity,
     build_approval_candidate,
     build_approved_execution_projection,
     build_issueplan_current_state_evidence,
-    build_merge_authorization_candidate,
     compute_handoff_digest,
     evaluate_approval_applicability,
     evaluate_merge_authorization_applicability,
     record_approval_decision,
     record_merge_authorization_decision,
     record_merge_execution_observation,
-)
-from scripts.agent_os_issue_acceptance import merge_authorization  # noqa: E402
-from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (  # noqa: E402
-    IssueClosureAdmission,
-    LifecycleMutationAuthorization,
-    LifecycleStateSnapshot,
-    evaluate_lifecycle_mutation,
 )
 from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
     AdoptionClass,
@@ -62,6 +54,18 @@ from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
     SourceEnvelope,
 )
 from workflow_scheduler.planning import build_draft_task_proposals  # noqa: E402
+from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
+    MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
+    MergeAuthorizationBindingV2,
+    build_merge_authorization_candidate_from_pr,
+)
+from scripts.agent_os_issue_acceptance import merge_authorization  # noqa: E402
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (  # noqa: E402
+    IssueClosureAdmission,
+    LifecycleMutationAuthorization,
+    LifecycleStateSnapshot,
+    evaluate_lifecycle_mutation,
+)
 
 HEAD = "a" * 40
 BASE = "b" * 40
@@ -78,6 +82,10 @@ AUTHORIZED = "2026-07-26T14:30:00Z"
 MERGE_EXPIRES = "2026-07-26T15:00:00Z"
 APPROVAL_EXPIRES = "2026-07-26T16:00:00Z"
 
+
+# --- Planning fixtures: shared planning-approval tests only. ---
+# These build approval/applicability/projection artifacts for
+# approval_source tests. They are NOT merge authority under 1.2.
 
 def _handoff(**changes):
     data = {
@@ -116,7 +124,6 @@ def _handoff(**changes):
         created_at=data["created_at"],
         handoff_digest=data["handoff_digest"],
     )
-
 
 def _issueplan(handoff, **changes):
     scan = ScanResult(
@@ -166,7 +173,6 @@ def _issueplan(handoff, **changes):
         **values,
     )
 
-
 def _repo(*, head=HEAD, tested=HEAD, contract=CONTRACT):
     return RepositoryStateEvidence(
         schema_name=CAPABILITY_EVIDENCE_SCHEMA_NAME,
@@ -190,7 +196,6 @@ def _repo(*, head=HEAD, tested=HEAD, contract=CONTRACT):
         observed_at="2026-07-26T13:45:00Z",
         freshness_boundary="workflow-run-629",
     )
-
 
 def _bundle(*, approval_expires=APPROVAL_EXPIRES):
     handoff = _handoff()
@@ -220,10 +225,17 @@ def _bundle(*, approval_expires=APPROVAL_EXPIRES):
     assert projection_result.status == "complete" and projection_result.projection
     return approval, applicability, projection_result.projection, proposal, issueplan, repository
 
-
 def _check(**changes):
     values = dict(context="Agent OS Validation Gate", app_identity="github-actions",
                   tested_sha=HEAD, evidence_id="", state="success")
+    values.update(changes)
+    return MergeCheckEvidence(**values)
+
+
+def _aggregate_check(**changes):
+    values = dict(context="agent-os/authoritative-aggregate",
+                  app_identity="github-actions", tested_sha=HEAD,
+                  evidence_id="", state="success")
     values.update(changes)
     return MergeCheckEvidence(**values)
 
@@ -236,16 +248,17 @@ def _review(**changes):
 
 
 def _pr(bundle=None, **changes):
-    bundle = bundle or _bundle()
-    projection = bundle[2]
+    # Standalone native 1.2 PR evidence; `bundle` is accepted only so
+    # pre-1.2 call sites keep working while they are migrated away.
     values = dict(
-        repository=projection.repository, pull_request_number=630,
-        head_sha=projection.tested_repository_sha, base_branch=projection.base_branch,
+        repository="blummer92/agent-os", pull_request_number=630,
+        head_sha=HEAD, base_branch="main",
         base_sha_or_evidence_id=BASE, draft=False, ready_for_review=True,
         proposed_merge_method="squash", changed_scope_fingerprint=CONTRACT,
-        allowed_files=projection.allowed_files, forbidden_paths=projection.forbidden_paths,
-        required_tests=projection.required_tests,
-        required_checks=(_check(tested_sha=projection.tested_repository_sha),),
+        allowed_files=("scripts/agent_os_issue_acceptance/merge_authorization.py",),
+        forbidden_paths=(".github/workflows/**",),
+        required_tests=("python -m pytest tests/agent_os_issue_acceptance/test_merge_authorization.py -q",),
+        required_checks=(_check(), _aggregate_check()),
         review_evidence=_review(), evidence_id="",
         pr_title="", pr_body="",
         pr_metadata_sha256="",
@@ -256,23 +269,17 @@ def _pr(bundle=None, **changes):
 
 
 def _candidate(bundle=None, pr=None, **changes):
-    bundle = bundle or _bundle()
-    approval, applicability, projection, proposal, issueplan, repository = bundle
     values = dict(
-        current_proposal=proposal, current_issueplan_evidence=issueplan,
-        current_repository_state_evidence=repository,
         authorizer_id="repository-owner", decision_id="merge-request",
         decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
-        permitted_merge_method="squash",
     )
     values.update(changes)
-    return build_merge_authorization_candidate(
-        approval, applicability, projection, pr or _pr(bundle), **values,
+    return build_merge_authorization_candidate_from_pr(
+        pr or _pr(bundle), **values,
     )
 
 
 def _authorized(bundle=None, **changes):
-    bundle = bundle or _bundle()
     record = record_merge_authorization_decision(
         _candidate(bundle, **changes), state="authorized",
         decision_id="merge-authorized", authorizer_id="repository-owner",
@@ -282,18 +289,66 @@ def _authorized(bundle=None, **changes):
 
 
 def _evaluate(record, bundle=None, pr=None, at="2026-07-26T14:40:00Z", events=()):
-    bundle = bundle or _bundle()
-    approval, applicability, projection, proposal, issueplan, repository = bundle
     return evaluate_merge_authorization_applicability(
-        record, approval, applicability, projection, pr or _pr(bundle),
-        current_proposal=proposal, current_issueplan_evidence=issueplan,
-        current_repository_state_evidence=repository,
+        record, pr or _pr(bundle),
         evaluated_at=at, invalidation_events=events,
     )
 
 
+def _historical_authorized():
+    """Build a schema 1.1 record directly (no 1.1 builder remains).
+
+    Historical records are decodable and serializable, but the evaluator
+    must never treat them as current authority.
+    """
+    from scripts.agent_os_issue_acceptance.merge_authorization import (
+        pr_metadata_fingerprint as _fingerprint,
+    )
+    binding = MergeAuthorizationBinding(
+        repository="blummer92/agent-os", pull_request_number=630,
+        exact_head_sha=HEAD, target_base_branch="main",
+        base_sha_or_evidence_id=BASE, permitted_merge_method="squash",
+        approval_id="approval:" + "a" * 64,
+        approval_revision="approval-revision:" + "b" * 64,
+        approval_applicability_identity="approval-applicability:" + "c" * 64,
+        approval_expires_at=APPROVAL_EXPIRES,
+        approved_execution_projection_id="approved-execution-projection:" + "d" * 64,
+        changed_scope_fingerprint=CONTRACT,
+        allowed_files=("scripts/agent_os_issue_acceptance/merge_authorization.py",),
+        forbidden_paths=(".github/workflows/**",),
+        required_tests=("python -m pytest tests/agent_os_issue_acceptance/test_merge_authorization.py -q",),
+        required_check_evidence=(_check(), _aggregate_check()),
+        review_evidence=_review(),
+        pr_metadata_sha256=_fingerprint("", ""),
+        closure_admission_ids=(),
+        draft_ready_state="ready",
+    )
+    from scripts.agent_os_issue_acceptance.merge_authorization import (
+        MergeAuthorizationRecord as _Record,
+        pr_metadata_fingerprint,
+    )
+    pending = _Record(
+        schema_version=MERGE_AUTHORIZATION_SCHEMA_VERSION,
+        authorization_id="", authorization_revision="",
+        revision_number=1, previous_revision=None,
+        state=MergeAuthorizationState.PENDING, binding=binding,
+        authorizer_id="repository-owner", decision_id="merge-request",
+        decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
+        supersedes_authorization_id=None, revoked_authorization_id=None,
+        consumed_observation_id=None, emergency_override_reason=None,
+        emergency_override_audit_location=None, reason_codes=(),
+    )
+    authorized = record_merge_authorization_decision(
+        pending, state="authorized", decision_id="merge-authorized",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+    )
+    return authorized
+
+
 def test_public_schema_state_and_canonical_end_to_end_path():
+    # Schema 1.1 is historical-only; 1.2 is the current authority (#3734).
     assert MERGE_AUTHORIZATION_SCHEMA_VERSION == "1.1"
+    assert MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION == "1.2"
     assert MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION == "1.0"
     assert tuple(item.value for item in MergeAuthorizationState) == (
         "pending", "authorized", "rejected", "expired", "invalidated",
@@ -302,14 +357,15 @@ def test_public_schema_state_and_canonical_end_to_end_path():
     authorized, bundle = _authorized()
     result = _evaluate(authorized, bundle)
     assert result.status == "applicable" and result.merge_authorized
-    assert authorized.binding.approval_applicability_identity == approval_applicability_identity(bundle[1])
-    assert authorized.binding.approved_execution_projection_id == bundle[2].projection_id
+    assert authorized.schema_version == "1.2"
+    assert type(authorized.binding) is MergeAuthorizationBindingV2
+    assert not hasattr(authorized.binding, "approval_id")
 
 
 def test_determinism_immutability_and_content_bound_evidence():
-    bundle = _bundle()
+    bundle = None
     assert _candidate(bundle) == _candidate(bundle)
-    authorized, _ = _authorized(bundle)
+    authorized, _ = _authorized()
     assert authorized.authorization_id == _candidate(bundle).authorization_id
     with pytest.raises(FrozenInstanceError):
         authorized.state = MergeAuthorizationState.REJECTED
@@ -320,99 +376,6 @@ def test_determinism_immutability_and_content_bound_evidence():
     assert _pr(bundle, required_checks=(check, extra)) == _pr(bundle, required_checks=(extra, check))
 
 
-def test_fabricated_applicability_and_recomputed_forged_projection_fail():
-    bundle = _bundle()
-    approval, applicability, projection, proposal, issueplan, repository = bundle
-    fabricated = replace(applicability, current_proposal_id="draft-task-proposal:" + "f" * 64)
-    with pytest.raises(ValueError, match="approval.changed"):
-        build_merge_authorization_candidate(
-            approval, fabricated, projection, _pr(bundle),
-            current_proposal=proposal, current_issueplan_evidence=issueplan,
-            current_repository_state_evidence=repository,
-            authorizer_id="repository-owner", decision_id="fabricated",
-            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
-        )
-    forged = replace(projection, projection_id="", tested_repository_sha="e" * 40)
-    forged_pr = _pr(bundle, head_sha="e" * 40, required_checks=(_check(tested_sha="e" * 40),))
-    with pytest.raises(ValueError, match="projection.changed"):
-        build_merge_authorization_candidate(
-            approval, applicability, forged, forged_pr,
-            current_proposal=proposal, current_issueplan_evidence=issueplan,
-            current_repository_state_evidence=repository,
-            authorizer_id="repository-owner", decision_id="forged",
-            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
-        )
-
-
-@pytest.mark.parametrize("change", [
-    {"proposal_id": "draft-task-proposal:" + "f" * 64},
-    {"repository": "other/repo"}, {"base_branch": "release"},
-    {"evaluated_repository_sha": "e" * 40},
-    {"source_snapshot_fingerprint": "e" * 64},
-    {"scanner_result_fingerprint": "e" * 64},
-    {"implementation_contract_fingerprint": "e" * 64},
-    {"allowed_files": ("other.py",)}, {"forbidden_paths": ("secrets/**",)},
-    {"required_tests": ("other-test",)},
-])
-def test_copied_approval_ids_do_not_transfer_through_self_consistent_projection(change):
-    bundle = _bundle()
-    forged = replace(bundle[2], projection_id="", **change)
-    with pytest.raises(ValueError, match="projection.changed"):
-        build_merge_authorization_candidate(
-            bundle[0], bundle[1], forged, _pr(bundle),
-            current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
-            current_repository_state_evidence=bundle[5],
-            authorizer_id="repository-owner", decision_id="forged-projection",
-            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
-        )
-
-
-def test_changed_nodes_and_cohorts_do_not_transfer():
-    bundle = _bundle()
-    forged = replace(
-        bundle[2], projection_id="", supplied_node_ids=("issue-999",),
-        cohort_summaries=(HandoffCohort(
-            node_ids=("issue-999",), classification="parallel-candidate",
-            reason_codes=("covered-no-deterministic-conflict",),
-        ),),
-    )
-    with pytest.raises(ValueError, match="projection.changed"):
-        build_merge_authorization_candidate(
-            bundle[0], bundle[1], forged, _pr(bundle),
-            current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
-            current_repository_state_evidence=bundle[5],
-            authorizer_id="repository-owner", decision_id="forged-nodes",
-            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
-        )
-
-
-def test_expiry_is_mandatory_bounded_by_approval_and_exact_at_evaluation():
-    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
-    with pytest.raises(ValueError, match="requires expires_at"):
-        _candidate(bundle, expires_at=None)
-    with pytest.raises(ValueError, match="cannot outlive approval"):
-        _candidate(bundle, expires_at="2026-07-26T14:55:00Z")
-    candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
-    authorized = record_merge_authorization_decision(
-        candidate, state="authorized", decision_id="authorized",
-        authorizer_id="repository-owner", decision_at="2026-07-26T14:49:59Z",
-    )
-    assert _evaluate(authorized, bundle, at="2026-07-26T14:49:59Z").status == "applicable"
-    at = _evaluate(authorized, bundle, at="2026-07-26T14:50:00Z")
-    assert at.status == "stale" and "approval.expired" in at.reason_codes
-
-
-def test_candidate_and_decision_at_approval_expiry_fail():
-    bundle = _bundle(approval_expires=CANDIDATE)
-    with pytest.raises(ValueError, match="canonical eligible evidence"):
-        _candidate(bundle, expires_at=CANDIDATE)
-    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
-    candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
-    with pytest.raises(ValueError, match="before expires_at"):
-        record_merge_authorization_decision(
-            candidate, state="authorized", decision_id="late",
-            authorizer_id="repository-owner", decision_at="2026-07-26T14:50:00Z",
-        )
 
 
 def test_observation_returns_linked_consumed_successor_and_prevents_replay():
@@ -439,8 +402,10 @@ def test_observation_returns_linked_consumed_successor_and_prevents_replay():
         )
 
 
-def test_observation_rejects_expired_approval_and_mismatched_method():
-    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
+def test_observation_rejects_expired_authorization_and_mismatched_method():
+    # Native 1.2 has no approval expiry; the binding expiry is the
+    # merge authorization's own expires_at (#3734).
+    bundle = None
     candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
     authorized = record_merge_authorization_decision(
         candidate, state="authorized", decision_id="authorized",
@@ -473,7 +438,10 @@ def test_observation_rejects_expired_approval_and_mismatched_method():
 ])
 def test_non_success_check_states_remain_distinct(state, status, reason):
     authorized, bundle = _authorized()
-    result = _evaluate(authorized, bundle, _pr(bundle, required_checks=(_check(state=state),)))
+    # Keep the authoritative aggregate in the evaluation evidence so the
+    # result classifies the non-success check itself, not a missing
+    # required check (native 1.2 binding comparison, #3734).
+    result = _evaluate(authorized, bundle, _pr(bundle, required_checks=(_check(state=state), _aggregate_check())))
     assert result.status == status and reason in result.reason_codes
 
 
@@ -495,9 +463,10 @@ def test_material_pr_drift_fails_closed(change, reason):
 
 
 def test_missing_check_and_duplicate_reason_inputs_are_stable():
-    bundle = _bundle()
+    bundle = None
     candidate = _candidate(bundle, pr=_pr(bundle, required_checks=(
         _check(), _check(context="Navigation Registry Offline Tests"),
+        _aggregate_check(),
     )))
     authorized = record_merge_authorization_decision(
         candidate, state="authorized", decision_id="authorized",
@@ -630,8 +599,8 @@ def test_invalidated_preserves_revocation_and_consumed_preserves_observation():
     assert invalidated.revoked_authorization_id == invalidated.authorization_id
     assert "authorization.invalidated" in invalidated.reason_codes
 
-    bundle = _bundle()
-    authorized, _ = _authorized(bundle)
+    bundle = None
+    authorized, _ = _authorized()
     _, consumed = record_merge_execution_observation(
         authorized, _evaluate(authorized, bundle), _pr(bundle),
         observed_merge_commit_sha=MERGE, observed_actor_id="repository-owner",
@@ -677,8 +646,8 @@ def test_no_non_authorized_state_reports_merge_authorized():
 
 
 def test_applicability_cannot_ignore_contradictory_record_local_reasons():
-    bundle = _bundle()
-    authorized, _ = _authorized(bundle)
+    bundle = None
+    authorized, _ = _authorized()
     assert _evaluate(authorized, bundle).merge_authorized is True
     # Controlled hostile boundary: inject reasons past the corrected
     # constructor without adding any production construction path.
@@ -717,8 +686,8 @@ def test_exception_details_never_propagate_message_text():
     assert detail == "current-evidence:ValueError"
     assert "SENTINELSECRET" not in detail
 
-    bundle = _bundle()
-    authorized, _ = _authorized(bundle)
+    bundle = None
+    authorized, _ = _authorized()
     object.__setattr__(authorized, "reason_codes", ("checks.failed",))
     result = _evaluate(authorized, bundle)
     assert all("SENTINELSECRET" not in item for item in result.details)
@@ -762,11 +731,11 @@ def test_2337_ready_state_exact_head_aggregate_failure_blocks_merge():
 
 def test_2337_sibling_validation_plan_success_does_not_offset_aggregate_failure():
     """A green sibling check cannot rescue a failing required aggregate."""
-    bundle = _bundle()
+    bundle = None
     green_plan = _check(context=_PLAN_CHECK)
     green_aggregate = _check(context=_AGGREGATE_CHECK)
     authorized = record_merge_authorization_decision(
-        _candidate(bundle, pr=_pr(bundle, required_checks=(green_plan, green_aggregate))),
+        _candidate(bundle, pr=_pr(bundle, required_checks=(green_plan, green_aggregate, _aggregate_check()))),
         state="authorized",
         decision_id="merge-authorized",
         authorizer_id="repository-owner",
@@ -882,14 +851,14 @@ def _closing_pr(bundle=None, body=_PR_3156_BODY, title="", admissions=(), **chan
 
 def test_3157_unauthorized_github_effective_closing_reference_blocks_candidate():
     """The verbatim #3156/#2772 shape cannot produce a merge candidate."""
-    bundle = _bundle()
+    bundle = None
     with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
         _candidate(bundle, pr=_closing_pr(bundle))
 
 
 def test_3157_unauthorized_closing_reference_detail_names_offending_reference():
     """The blocking reason names the exact offending closing reference."""
-    bundle = _bundle()
+    bundle = None
     try:
         _candidate(bundle, pr=_closing_pr(bundle))
     except ValueError as exc:
@@ -903,7 +872,7 @@ def test_3157_unauthorized_closing_reference_detail_names_offending_reference():
 
 def test_3157_authorized_closing_target_passes_admission():
     """A closing reference covered by canonical admission evidence still merges."""
-    bundle = _bundle()
+    bundle = None
     admission_2772 = _closure_admission(2772)
     pr = _closing_pr(bundle, admissions=(admission_2772,))
     record = _candidate(bundle, pr=pr)
@@ -919,7 +888,7 @@ def test_3157_authorized_closing_target_passes_admission():
 
 def test_3157_non_closing_prose_passes_admission():
     """Part of / Refs-only prose carries no closing references and passes."""
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(bundle, body="Part of #3157. Refs #3157.")
     _candidate(bundle, pr=pr)
 
@@ -935,14 +904,14 @@ def test_3157_closing_reference_added_after_authorization_blocks():
 
 def test_3590_canonical_qualified_closing_reference_blocks_candidate():
     """``Closes <canonical>#N`` is detected (not raised) and still blocks merge."""
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(bundle, body="Closes Blummer92/agent-os#2772")
     with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
         _candidate(bundle, pr=pr)
 
 
 def test_3590_canonical_qualified_closing_reference_matches_its_admission():
-    bundle = _bundle()
+    bundle = None
     admission_2772 = _closure_admission(2772)
     pr = _closing_pr(
         bundle, body="Closes Blummer92/agent-os#2772", admissions=(admission_2772,)
@@ -993,7 +962,7 @@ def test_3157_legacy_binding_shape_is_rejected():
 
 def test_3157_closure_admissions_require_canonical_evidence():
     """Raw target strings can never stand in for canonical admission evidence."""
-    bundle = _bundle()
+    bundle = None
     admission_2772 = _closure_admission(2772)
     with pytest.raises(TypeError, match="IssueClosureAdmission"):
         _pr(bundle, closure_admissions=("#2772",))
@@ -1018,7 +987,7 @@ def test_3157_closure_admissions_require_canonical_evidence():
 
 def test_3157_cross_repository_admission_does_not_authorize():
     """An admission for another repository never authorizes the canonical target."""
-    bundle = _bundle()
+    bundle = None
     foreign = _closure_admission(2772, repository="other/repo")
     assert foreign.target == "other/repo#2772"
     with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
@@ -1026,7 +995,7 @@ def test_3157_cross_repository_admission_does_not_authorize():
 
 
 def test_3157_title_closing_reference_blocks_when_unauthorized():
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(bundle, body="Part of #3157.", title="Resolves #42")
     with pytest.raises(ValueError, match="pull-request.unauthorized-closing-reference"):
         _candidate(bundle, pr=pr)
@@ -1034,7 +1003,7 @@ def test_3157_title_closing_reference_blocks_when_unauthorized():
 
 def test_3157_metadata_fingerprint_is_content_bound():
     """The single title/body fingerprint is derived, verified, and sensitive."""
-    bundle = _bundle()
+    bundle = None
     pr = _pr(bundle, pr_title="title", pr_body="body")
     assert pr.pr_metadata_sha256 == merge_authorization.pr_metadata_fingerprint(
         "title", "body"
@@ -1065,7 +1034,7 @@ def test_3157_metadata_fingerprint_is_content_bound():
 def test_2991_dual_authorized_closing_targets_block_merge():
     """The #2990 shape cannot produce a merge candidate: both #2989 (the
     prerequisite fix) and #2854 (the parent task) claimed as implemented."""
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(
         bundle,
         body="Fixes #2989\n\nFixes #2854",
@@ -1077,7 +1046,7 @@ def test_2991_dual_authorized_closing_targets_block_merge():
 
 def test_2991_dual_closing_targets_detail_names_both_issues():
     """The blocking detail names the exact offending closing references."""
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(
         bundle,
         body="Fixes #2989\n\nFixes #2854",
@@ -1096,7 +1065,7 @@ def test_2991_dual_closing_targets_detail_names_both_issues():
 
 def test_2991_single_implemented_issue_plus_dependency_linkage_merges():
     """The fixed shape: #2989 implemented, #2854 linked as consumer evidence."""
-    bundle = _bundle()
+    bundle = None
     admission_2989 = _closure_admission(2989)
     pr = _closing_pr(
         bundle,
@@ -1117,7 +1086,7 @@ _CLOSES_3246 = "Closes #3246"
 
 
 def test_3246_closing_reference_blocks_without_matching_admission_with_named_reason():
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(bundle, body=_CLOSES_3246)  # otherwise valid: checks success, review clear
     assert all(check.state == "success" for check in pr.required_checks)
     with pytest.raises(ValueError) as excinfo:
@@ -1128,7 +1097,7 @@ def test_3246_closing_reference_blocks_without_matching_admission_with_named_rea
 
 
 def test_3246_matching_admission_is_the_only_difference_that_permits_closure():
-    bundle = _bundle()
+    bundle = None
     admission = _closure_admission(3246)
     assert admission.target == "#3246"
     pr_without = _closing_pr(bundle, body=_CLOSES_3246)
@@ -1144,7 +1113,7 @@ def test_3246_matching_admission_is_the_only_difference_that_permits_closure():
 
 
 def test_3246_admission_for_another_issue_does_not_authorize_closure():
-    bundle = _bundle()
+    bundle = None
     other_issue = _closure_admission(3126)  # same repository, different issue
     pr = _closing_pr(bundle, body=_CLOSES_3246, admissions=(other_issue,))
     with pytest.raises(ValueError) as excinfo:
@@ -1153,7 +1122,7 @@ def test_3246_admission_for_another_issue_does_not_authorize_closure():
 
 
 def test_3246_non_closing_linkage_is_permitted_while_acceptance_is_unresolved():
-    bundle = _bundle()
+    bundle = None
     pr = _closing_pr(bundle, body="Refs #3246. Part of #3246.")
     record = _candidate(bundle, pr=pr)
     assert record.binding.closure_admission_ids == ()
@@ -1175,7 +1144,7 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
         serialize_merge_authorization_record,
     )
 
-    pr = _pr(_bundle(), required_checks=(
+    pr = _pr(None, required_checks=(
         _check(),
         _check(context="agent-os/authoritative-aggregate"),
     ))
@@ -1214,13 +1183,13 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
 
     with pytest.raises(ValueError, match="authoritative aggregate"):
         build_merge_authorization_candidate_from_pr(
-            _pr(_bundle()),
+            _pr(None, required_checks=(_check(),)),
             authorizer_id="Blummer92",
             decision_id="missing-aggregate",
             decision_at=CANDIDATE,
             expires_at=MERGE_EXPIRES,
         )
-    drift = _pr(_bundle(), head_sha="f" * 40,
+    drift = _pr(None, head_sha="f" * 40,
                 required_checks=(_check(tested_sha="f" * 40),))
     stale = evaluate_merge_authorization_applicability(
         authorized, drift, evaluated_at="2026-07-26T14:40:00Z",
@@ -1251,7 +1220,7 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
         replace(authorized, schema_version="1.1",
                 authorization_id="", authorization_revision="")
     with pytest.raises(ValueError, match="schema/binding"):
-        replace(_authorized()[0], schema_version="1.2",
+        replace(_historical_authorized(), schema_version="1.2",
                 authorization_id="", authorization_revision="")
 
 
@@ -1261,10 +1230,19 @@ def test_v11_historical_records_remain_readable_not_native_authority():
         serialize_merge_authorization_record,
     )
 
-    historical, _ = _authorized()
+    historical = _historical_authorized()
     assert historical.schema_version == "1.1"
     restored = reconstruct_merge_authorization_record(
         serialize_merge_authorization_record(historical)
     )
     assert restored == historical
     assert hasattr(restored.binding, "approval_id")
+    # Historical readability is not authority: the canonical evaluator
+    # must refuse a 1.1 record even when its binding matches live PR
+    # evidence exactly (#3734).
+    result = evaluate_merge_authorization_applicability(
+        historical, _pr(None), evaluated_at="2026-07-26T14:40:00Z",
+    )
+    assert result.status == "invalid"
+    assert result.merge_authorized is False
+    assert "version.unsupported" in result.reason_codes

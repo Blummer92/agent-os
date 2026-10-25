@@ -11,8 +11,8 @@ from scripts.agent_os_issue_acceptance.merge_admission_actions import (
     evaluate_merge_admission_transport,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (
-    MERGE_AUTHORIZATION_SCHEMA_VERSION,
-    MergeAuthorizationBinding,
+    MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
+    MergeAuthorizationBindingV2,
     MergeAuthorizationRecord,
     MergeAuthorizationState,
     MergeCheckEvidence,
@@ -97,11 +97,6 @@ def make_binding(**overrides):
         target_base_branch="main",
         base_sha_or_evidence_id="b" * 40,
         permitted_merge_method="merge",
-        approval_id="approval:" + "a" * 64,
-        approval_revision="approval-revision:" + "b" * 64,
-        approval_applicability_identity="approval-applicability:" + "c" * 64,
-        approval_expires_at=None,
-        approved_execution_projection_id="approved-execution-projection:" + "d" * 64,
         changed_scope_fingerprint="e" * 64,
         allowed_files=(),
         forbidden_paths=(),
@@ -117,13 +112,13 @@ def make_binding(**overrides):
         draft_ready_state="ready",
     )
     values.update(overrides)
-    return MergeAuthorizationBinding(**values)
+    return MergeAuthorizationBindingV2(**values)
 
 
 def authorized_record(*, binding=None, decision_at="2026-10-19T18:00:00Z",
                       expires_at="2026-10-19T23:00:00Z", emergency=None):
     pending = MergeAuthorizationRecord(
-        schema_version=MERGE_AUTHORIZATION_SCHEMA_VERSION,
+        schema_version=MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
         authorization_id="",
         authorization_revision="",
         revision_number=1,
@@ -351,7 +346,7 @@ def test_binding_reason_mapping_matches_canonical():
 
 def test_binding_field_coverage_partitions_canonical_binding():
     from dataclasses import fields as dataclass_fields
-    declared = {f.name for f in dataclass_fields(mauth.MergeAuthorizationBinding)}
+    declared = {f.name for f in dataclass_fields(mauth.MergeAuthorizationBindingV2)}
     assert (set(actions._LIVE_BINDING_FIELDS)
             | set(actions._NON_RECOMPUTABLE_BINDING_FIELDS)) == declared
     assert not (set(actions._LIVE_BINDING_FIELDS)
@@ -367,7 +362,7 @@ def test_many_comments_still_reach_canonical_source_bounds():
 def test_expired_revision_is_reported_not_current():
     pending = authorized_record().binding  # reuse binding only
     expired_pending = MergeAuthorizationRecord(
-        schema_version=MERGE_AUTHORIZATION_SCHEMA_VERSION,
+        schema_version=MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
         authorization_id="", authorization_revision="",
         revision_number=1, previous_revision=None,
         state=MergeAuthorizationState.PENDING, binding=pending,

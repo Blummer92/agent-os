@@ -104,11 +104,33 @@ that unresolved review threads equal zero.
 
 Historical schema **1.1** records reconstruct and serialize under their
 unchanged schema and identity rules. They are not migrated into schema 1.2
-authority and cannot authorize current merge dispatch. The previous
-planning-approval-driven producer/evaluator remains solely for historical
-compatibility and related legacy tests; the current dispatch path uses the
-same canonical merge authorization evaluator's native 1.2 branch and does not
-reacquire or reconstruct a generic planning approval triple.
+authority and cannot authorize current merge dispatch. The schema 1.1
+candidate producer and evaluator branch were deleted in this change: no
+active 1.1 creation or evaluation caller remains, and the canonical
+evaluator returns `invalid` / `version.unsupported` for any 1.1 record.
+Shared planning approval records, evaluators, and projections are untouched
+and remain available for their own planning consumers; they are not merge
+authority. The current dispatch path uses the canonical merge authorization
+evaluator's native 1.2 branch and does not reacquire or reconstruct a
+generic planning approval triple.
+
+**Owner-provenance boundary (S2).** The merge source reader applies two
+negative filters, and neither is positive proof of owner performance. A
+trusted record comment posted through a GitHub App
+(`performed_via_github_app` present, e.g. a connector app) is refused as
+`source.app-performed-record` even when the displayed author is the owner:
+live comments on this PR displayed owner authorship while performed by an
+agent connector. A trusted record carrying an agent-attribution footer
+(e.g. Claude Code) is refused as `source.trusted-record-malformed`: footers
+are no longer stripped from merge authorization parsing, because stripping
+erases in-band agent-generation evidence. Conversely, a comment posted with
+the owner's PAT or OAuth token by an agent carries no app evidence and no
+footer, and is indistinguishable from an owner-typed comment by any
+provider field the reader can see. Positive owner provenance therefore
+remains a **security blocker** for a GitHub-comment-only merge workflow:
+an owner merge decision must additionally be attested through a channel
+that proves human origin (the runtime approval card bound to exact merge
+parameters), not through a comment record alone.
 
 The workflow remains read-only. Producing an admission receipt is **not** a
 merge, and a production merge executor consuming an exact-head receipt is
@@ -148,8 +170,9 @@ requirement is introduced.
 ## Files and ownership
 
 - `merge_authorization.py`: retains historical schema 1.1 record
-  reconstruction while adding the native schema 1.2 binding, candidate
-  construction and canonical direct applicability.
+  reconstruction and serialization only; the 1.1 candidate producer and
+  evaluator branch are deleted. It carries the native schema 1.2 binding,
+  candidate construction and canonical direct applicability.
 - `merge_applicability.py`: verifies actual GitHub scope, checks, reviews,
   GraphQL review-thread completeness and the owner-authored merge record.
 - `merge_admission_actions.py`: remains the non-authorizing candidate

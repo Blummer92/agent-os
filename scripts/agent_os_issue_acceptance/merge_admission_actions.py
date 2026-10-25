@@ -1,17 +1,16 @@
 """Read-only fixed merge-admission ingress consumer (#3463).
 
 Reacquires the live PR and complete trusted PR-conversation authorization source,
-then reconciles every canonically recomputable ``MergeAuthorizationBinding``
+then reconciles every canonically recomputable ``MergeAuthorizationBindingV2``
 field of each trusted AUTHORIZED record against live GitHub evidence.
 
 It deliberately does not synthesize approval records and never invokes the
 GitHub merge API. Fields the consumer cannot recompute from live reads
-(approval/projection identities, file-scope contract, check/review evidence,
-closure admissions) are carried from the record's own trusted binding and are
-reported as not independently verified: the canonical applicability evaluator
+(file-scope contract, check/review evidence, closure admissions) are
+carried from the record's own trusted binding and are reported as not
+independently verified: the canonical applicability evaluator
 (``evaluate_merge_authorization_applicability``) needs separately acquired
-typed approval/projection/currentness evidence, not guesses from green CI or
-prose. A positive source record is therefore a *candidate*, never merge
+typed currentness evidence, not guesses from green CI or prose. A positive source record is therefore a *candidate*, never merge
 admission. ``merge_authorized`` is always ``False`` in every receipt this
 module emits. The positive-admission consumer is separate:
 ``merge_applicability.evaluate_merge_dispatch_applicability`` takes this
@@ -37,13 +36,14 @@ from pathlib import Path
 from typing import Any
 
 from .merge_authorization import (
-    MergeAuthorizationBinding,
+    MergeAuthorizationBindingV2,
     MergeAuthorizationRecord,
     pr_metadata_fingerprint,
 )
 from .merge_authorization_source import (
     MergeAuthorizationCommentSnapshot,
     MergeAuthorizationSourceSnapshot,
+    github_comment_snapshot,
     reacquire_merge_authorization_source,
 )
 
@@ -54,9 +54,10 @@ _ALLOWED_METHODS = frozenset({"merge", "squash", "rebase"})
 _TRANSPORT_REASON = "accepted-merge-admission-envelope"
 
 # Binding fields the consumer can recompute from live GitHub PR reads. Every
-# other MergeAuthorizationBinding field is decision-time trusted evidence the
-# consumer must not fabricate; those fields are reported as not independently
-# verified (see _NON_RECOMPUTABLE_BINDING_FIELDS).
+# other MergeAuthorizationBindingV2 field is decision-time trusted evidence
+# the consumer must not fabricate; those fields are reported as not
+# independently verified (see _NON_RECOMPUTABLE_BINDING_FIELDS). Schema 1.1
+# approval fields were removed here with 1.1 evaluation (#3734).
 _LIVE_BINDING_FIELDS = (
     "repository",
     "pull_request_number",
@@ -68,11 +69,6 @@ _LIVE_BINDING_FIELDS = (
     "draft_ready_state",
 )
 _NON_RECOMPUTABLE_BINDING_FIELDS = (
-    "approval_id",
-    "approval_revision",
-    "approval_applicability_identity",
-    "approval_expires_at",
-    "approved_execution_projection_id",
     "changed_scope_fingerprint",
     "allowed_files",
     "forbidden_paths",
@@ -98,11 +94,11 @@ _BINDING_FIELD_REASONS = {
 
 def _check_binding_contract() -> None:
     """Fail fast if the canonical binding contract drifts from this consumer."""
-    declared = {field.name for field in _dataclass_fields(MergeAuthorizationBinding)}
+    declared = {field.name for field in _dataclass_fields(MergeAuthorizationBindingV2)}
     covered = set(_LIVE_BINDING_FIELDS) | set(_NON_RECOMPUTABLE_BINDING_FIELDS)
     if covered != declared:
         raise ValueError(
-            "merge-admission binding coverage drifted from MergeAuthorizationBinding: "
+            "merge-admission binding coverage drifted from MergeAuthorizationBindingV2: "
             f"missing={sorted(declared - covered)} extra={sorted(covered - declared)}"
         )
     if set(_BINDING_FIELD_REASONS) != set(_LIVE_BINDING_FIELDS):
@@ -235,14 +231,12 @@ class _GitHubSource:
         self.owner_login = owner_login
 
     def read_merge_authorization_source(self, repository: str, pr_number: int):
-        comments: list[MergeAuthorizationCommentSnapshot] = []
-        for comment in self.repo.get_issue(pr_number).get_comments():
-            comments.append(MergeAuthorizationCommentSnapshot(
-                comment_id=comment.id,
-                author_login=comment.user.login,
-                created_at=comment.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                body=comment.body or "",
-            ))
+        # Shared extraction point with merge_applicability; see
+        # merge_authorization_source.github_comment_snapshot.
+        comments: list[MergeAuthorizationCommentSnapshot] = [
+            github_comment_snapshot(comment)
+            for comment in self.repo.get_issue(pr_number).get_comments()
+        ]
         return MergeAuthorizationSourceSnapshot(
             repository=repository,
             pr_number=pr_number,

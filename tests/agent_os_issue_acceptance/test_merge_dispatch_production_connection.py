@@ -38,7 +38,7 @@ _spec.loader.exec_module(_tdispatch)
 
 
 def _client_and_transport(**transport_changes):
-    bundle = _tdispatch._tauth._bundle()
+    bundle = None  # native 1.2: no planning bundle supplies merge authority
     record = _tdispatch._authorized_record(bundle)
     pr = _tdispatch._PR()
     comments = _tdispatch._comments_for(bundle, record)

@@ -39,6 +39,7 @@ from .merge_authorization_source import (
     MergeAuthorizationCommentSnapshot,
     MergeAuthorizationSourceSnapshot,
     MergeAuthorizationSourceTransport,
+    github_comment_snapshot,
     reacquire_merge_authorization_source,
 )
 
@@ -70,14 +71,13 @@ class _GitHubCommentSource:
         self.owner_login = owner_login
 
     def _read(self, repository: str, pr_number: int, snapshot_cls: Any, comment_cls: Any) -> Any:
-        comments: list[Any] = []
-        for comment in self.repo.get_issue(pr_number).get_comments():
-            comments.append(comment_cls(
-                comment_id=comment.id,
-                author_login=comment.user.login,
-                created_at=comment.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                body=comment.body or "",
-            ))
+        # Single shared extraction point (merge_authorization_source.
+        # github_comment_snapshot) so app-performance evidence is
+        # captured identically here and in merge admission.
+        comments = [
+            github_comment_snapshot(comment)
+            for comment in self.repo.get_issue(pr_number).get_comments()
+        ]
         return snapshot_cls(
             repository=repository,
             pr_number=pr_number,

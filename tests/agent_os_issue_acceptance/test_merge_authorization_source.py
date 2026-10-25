@@ -13,6 +13,7 @@ from scripts.agent_os_issue_acceptance.merge_authorization_source import (
     MergeAuthorizationCommentSnapshot,
     MergeAuthorizationSourceSnapshot,
     MergeAuthorizationSourceStatus,
+    github_comment_snapshot,
     reacquire_merge_authorization_source,
     serialize_merge_authorization_comment,
 )
@@ -87,6 +88,51 @@ def test_non_owner_record_cannot_create_authority():
     assert result.records == ()
 
 
+def test_app_performed_owner_comment_cannot_authorize():
+    """S2 (#3734, live-verified): PR #3734 comments 6400749120 and
+    6400951989 display author Blummer92 yet carry
+    performed_via_github_app.slug == "chatgpt-codex-connector". An
+    owner-login record performed through an app must fail closed,
+    even when its revision chain is otherwise complete."""
+    record, _ = _authorized()
+    pending = comment(_pending_for(record), cid=0)
+    authorized = MergeAuthorizationCommentSnapshot(
+        comment_id=1,
+        author_login="Blummer92",
+        created_at="2026-07-26T14:31:00Z",
+        body=serialize_merge_authorization_comment(record),
+        performed_via_github_app_slug="chatgpt-codex-connector",
+    )
+    result = reacquire_merge_authorization_source(
+        transport=Transport(snapshot(pending, authorized)),
+        repository="blummer92/agent-os",
+        pr_number=630,
+    )
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.app-performed-record",)
+    assert result.records == ()
+
+
+def test_github_comment_snapshot_captures_app_performance():
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+
+    def fake(app):
+        comment = SimpleNamespace(
+            id=7,
+            user=SimpleNamespace(login="Blummer92"),
+            created_at=datetime(2026, 7, 26, 14, 31, tzinfo=timezone.utc),
+            body="body",
+        )
+        if app is not None:
+            comment.performed_via_github_app = app
+        return comment
+
+    assert github_comment_snapshot(fake(SimpleNamespace(slug="chatgpt-codex-connector"))).performed_via_github_app_slug == "chatgpt-codex-connector"
+    assert github_comment_snapshot(fake(SimpleNamespace())).performed_via_github_app_slug == "app-performed"
+    assert github_comment_snapshot(fake(None)).performed_via_github_app_slug is None
+
+
 def test_incomplete_source_fails_closed():
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
@@ -154,20 +200,22 @@ def _footed_comment(record, footer=_CLAUDE_CODE_ATTRIBUTION_FOOTER, *, cid=1, au
     )
 
 
-def test_exact_connector_footer_is_stripped_and_record_reads_back_canonically():
+def test_exact_connector_footer_is_rejected_not_stripped():
+    """S2 (#3734): a Claude Code footer is agent-generation evidence.
+
+    Stripping it would erase that evidence and promote an agent-generated
+    comment into owner authority. Footer-bearing trusted records now
+    fail closed as malformed; a direct owner decision carries no footer.
+    """
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
         transport=Transport(snapshot(comment(_pending_for(record), cid=0), _footed_comment(record))),
         repository="blummer92/agent-os",
         pr_number=630,
     )
-    assert result.status is MergeAuthorizationSourceStatus.CURRENT
-    assert result.records == (record,)
-    assert result.source_comment_ids == (0, 1)
-    # round-trip: the parsed record serializes to the exact canonical body
-    assert serialize_merge_authorization_comment(result.records[0]) == (
-        serialize_merge_authorization_comment(record)
-    )
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.trusted-record-malformed",)
+    assert result.records == ()
 
 
 _LEGACY_CLAUDE_CODE_FOOTER = (
@@ -175,18 +223,19 @@ _LEGACY_CLAUDE_CODE_FOOTER = (
 )
 
 
-def test_legacy_connector_footer_is_stripped_like_approval_source():
-    """Footer parity (#3730 follow-up): approval_source accepts the bare
-    footer, so a merge-authorization record posted with it must read back
-    here too; mixed doubled footers still fail closed."""
+def test_legacy_connector_footer_is_rejected_like_other_footers():
+    """S2 (#3734): the bare Claude Code footer is rejected for the same
+    reason as the /code footer -- approval_source parity does not apply
+    to merge authorization, whose provenance bar is owner-direct."""
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
         transport=Transport(snapshot(comment(_pending_for(record), cid=0), _footed_comment(record, _LEGACY_CLAUDE_CODE_FOOTER))),
         repository="blummer92/agent-os",
         pr_number=630,
     )
-    assert result.status is MergeAuthorizationSourceStatus.CURRENT
-    assert result.records == (record,)
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.trusted-record-malformed",)
+    assert result.records == ()
     for footer in (
         _LEGACY_CLAUDE_CODE_FOOTER + _CLAUDE_CODE_ATTRIBUTION_FOOTER,
         _CLAUDE_CODE_ATTRIBUTION_FOOTER + _LEGACY_CLAUDE_CODE_FOOTER,

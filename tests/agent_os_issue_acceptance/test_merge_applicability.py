@@ -22,21 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
     MergeCheckEvidence,
     MergeReviewEvidence,
-    approval_applicability_identity,
-    build_merge_authorization_candidate,
     record_merge_authorization_decision,
-    serialize_approval_applicability_result,
-    serialize_approval_record,
-    serialize_approved_execution_projection,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization_source import (  # noqa: E402
     serialize_merge_authorization_comment,
-)
-from scripts.agent_os_issue_acceptance.approval_source import (  # noqa: E402
-    APPLICABILITY_MARKER,
-    APPROVAL_MARKER,
-    PROJECTION_MARKER,
-    serialize_approval_comment,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
     build_merge_authorization_candidate_from_pr,
@@ -65,34 +54,6 @@ TITLE, BODY = "Merge the thing", "Body text"
 BODY_SHA = sha256(BODY.encode("utf-8")).hexdigest()
 
 
-def _timed_bundle(decision_at, expires_at, eval_at):
-    handoff = _tauth._handoff()
-    issueplan = _tauth._issueplan(handoff)
-    repository = _tauth._repo()
-    proposals = _tauth.build_draft_task_proposals(
-        handoff, issueplan, repository, created_at="2026-07-26T14:00:00Z"
-    )
-    proposal = proposals.proposals[0]
-    candidate = _tauth.build_approval_candidate(
-        proposal, issueplan, repository,
-        approval_kind=_tauth.ApprovalKind.IMPLEMENTATION,
-        authorizer_id="operator-requester", decision_id="approval-request",
-        decision_at="2026-07-26T14:00:00Z", expires_at=expires_at,
-    )
-    approval = _tauth.record_approval_decision(
-        candidate, state=_tauth.ApprovalState.APPROVED,
-        decision_id="approval-decision", authorizer_id="repository-owner",
-        decision_at=decision_at,
-    )
-    applicability = _tauth.evaluate_approval_applicability(
-        approval, proposal, issueplan, repository, evaluated_at=eval_at
-    )
-    assert applicability.status == "applicable"
-    projection_result = _tauth.build_approved_execution_projection(
-        proposal, approval, applicability, issueplan, repository, projected_at=eval_at
-    )
-    assert projection_result.status == "complete"
-    return approval, applicability, projection_result.projection, proposal, issueplan, repository
 
 
 ALLOWED_FILE = "scripts/agent_os_issue_acceptance/merge_authorization.py"
@@ -315,13 +276,12 @@ def _pending_for(record):
 
 
 def _comments_for(bundle, record, start=11):
-    approval, applicability, projection = bundle[0], bundle[1], bundle[2]
+    # Native 1.2 dispatch needs only the merge authorization chain;
+    # planning approval/applicability/projection comments are not
+    # consulted (#3734). `bundle` is accepted for call-site compatibility.
     return [
-        _Comment(start, serialize_approval_comment(APPROVAL_MARKER, serialize_approval_record(approval))),
-        _Comment(start + 1, serialize_approval_comment(APPLICABILITY_MARKER, serialize_approval_applicability_result(applicability))),
-        _Comment(start + 2, serialize_approval_comment(PROJECTION_MARKER, serialize_approved_execution_projection(projection))),
-        _Comment(start + 3, serialize_merge_authorization_comment(_pending_for(record))),
-        _Comment(start + 4, serialize_merge_authorization_comment(record)),
+        _Comment(start, serialize_merge_authorization_comment(_pending_for(record))),
+        _Comment(start + 1, serialize_merge_authorization_comment(record)),
     ]
 
 
@@ -342,7 +302,7 @@ def _transport(**changes):
 
 def _run(bundle=None, record=None, pr=None, comments=None, transport=None,
          evaluated_at=NOW, commit=None):
-    bundle = bundle or _tauth._bundle()
+    bundle = bundle
     record = record or _authorized_record(bundle)
     pr = pr or _PR()
     comments = comments if comments is not None else _comments_for(bundle, record)
@@ -430,7 +390,7 @@ def test_unauthorized_closing_reference_body_change_blocked():
     # already blocks on the metadata binding drift, before any canonical
     # step. The canonical evaluator independently refuses the same drift
     # (see test_merge_proposal.test_unauthorized_closing_reference_and_dual_claim_block).
-    bundle = _tauth._bundle()
+    bundle = None
     body = "Fixes #999"
     receipt = _run(
         bundle=bundle, pr=_PR(body=body),
@@ -455,11 +415,7 @@ def test_expired_authorization_blocked():
     # The canonical producer forbids an authorization that outlives its
     # approval, so expiry is exercised at the authorization layer: both the
     # record and its approval are past expiry at evaluation time.
-    bundle = _timed_bundle(
-        decision_at="2026-07-26T14:10:00Z",
-        expires_at="2026-07-26T14:45:00Z",
-        eval_at="2026-07-26T14:20:00Z",
-    )
+    bundle = None  # native 1.2: record expiry alone governs
     record = _authorized_record(
         bundle, decision_at="2026-07-26T14:30:00Z",
         expires_at="2026-07-26T14:44:00Z",
@@ -471,7 +427,7 @@ def test_expired_authorization_blocked():
 
 
 def test_planning_approval_artifacts_are_not_required_for_v2():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     comments = [
         _Comment(10, serialize_merge_authorization_comment(_pending_for(record))),
@@ -484,8 +440,8 @@ def test_planning_approval_artifacts_are_not_required_for_v2():
 
 
 def test_foreign_planning_approval_is_not_merge_authority():
-    bundle = _tauth._bundle()
-    other = _tauth._bundle(approval_expires="2026-07-26T17:00:00Z")
+    bundle = None
+    other = None
     record = _authorized_record(bundle)
     comments = _comments_for(other, record)
     receipt = _run(bundle=other, record=record, comments=comments)
@@ -572,7 +528,7 @@ def test_draft_drift_blocked():
 
 
 def test_invalidated_record_blocks_replay():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     invalidated = _tauth.record_merge_authorization_decision(
         record, state=_tauth.MergeAuthorizationState.INVALIDATED,
@@ -627,7 +583,7 @@ def test_missing_graphql_review_thread_capability_fails_closed():
         def get_repo(self, name):
             return self._repo
 
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     client = _RestOnlyClient(_Repo(_PR(), _comments_for(bundle, record)))
     receipt = evaluate_merge_dispatch_applicability(
@@ -638,7 +594,7 @@ def test_missing_graphql_review_thread_capability_fails_closed():
 
 
 def test_unresolved_thread_blocks_even_with_approved_head():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     client = _Client(
         _Repo(_PR(), _comments_for(bundle, record)),
@@ -673,7 +629,7 @@ def test_malformed_review_thread_page_fails_closed(invalid_page):
 
 
 def test_forbidden_path_rechecked_even_when_authorized_fingerprint_matches():
-    bundle = _tauth._bundle()
+    bundle = None
     original = _authorized_record(bundle)
     # The record is content-addressed and trusted, but its own forbidden
     # contract was not enforced at admission time. Current scope did not drift.
@@ -721,7 +677,7 @@ def test_correct_context_from_wrong_app_is_not_authority():
 
 
 def test_forged_aggregate_commit_status_is_not_authority():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     commit = _Commit(
         runs=[_CheckRun("CI", "success")],
@@ -738,7 +694,7 @@ def test_forged_aggregate_commit_status_is_not_authority():
 
 
 def test_missing_live_aggregate_blocks():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     client = _Client(_Repo(
         _PR(), _comments_for(bundle, record),
@@ -774,7 +730,7 @@ def test_latest_commit_status_failure_overrides_old_success():
 
 def test_extra_authorized_allowlist_paths_are_not_drift():
     from dataclasses import replace
-    bundle = _tauth._bundle()
+    bundle = None
     original = _authorized_record(bundle)
     binding = replace(original.binding, allowed_files=(
         ALLOWED_FILE, "scripts/also-authorized.py",
