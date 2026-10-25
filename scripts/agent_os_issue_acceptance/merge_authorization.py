@@ -35,6 +35,8 @@ from .parse_pr import (
 
 MERGE_AUTHORIZATION_SCHEMA_VERSION = "1.1"  # historical reader/writer
 MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION = "1.2"  # merge-specific authority
+AUTHORITATIVE_AGGREGATE_CONTEXT = "agent-os/authoritative-aggregate"
+AUTHORITATIVE_AGGREGATE_APP_IDENTITY = "github-actions"
 MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION = "1.0"
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -852,6 +854,8 @@ def build_merge_authorization_candidate_from_pr(
         raise ValueError("merge candidate requires eligible PR: " + ",".join(sorted(reasons)))
     if not pr.required_checks:
         raise ValueError("merge candidate requires required-check evidence")
+    if not _native_aggregate_present(pr):
+        raise ValueError("merge candidate requires trusted authoritative aggregate")
     decision_time = _timestamp(decision_at, "decision_at")
     expiry = _timestamp(expires_at, "expires_at")
     if decision_time >= expiry:
@@ -1055,6 +1059,8 @@ def evaluate_merge_authorization_applicability(
             reasons.update(_record_local_reasons(authorization))
             if not current_pr.required_checks:
                 reasons.add("checks.missing")
+            if not _native_aggregate_present(current_pr):
+                reasons.add("checks.authoritative-aggregate-missing")
             if len(current_pr.required_checks) < len(
                 authorization.binding.required_check_evidence
             ):
@@ -1587,6 +1593,24 @@ def _eligibility_reasons(
         )
     return reasons, details
 
+
+
+def _native_aggregate_present(pr: PullRequestMergeEvidence) -> bool:
+    """A native merge candidate must bind the unique exact-head aggregate.
+
+    The dispatch consumer additionally verifies the live GitHub status creator;
+    this pure function cannot authenticate externally supplied check evidence.
+    """
+    aggregate = [
+        check for check in pr.required_checks
+        if check.context == AUTHORITATIVE_AGGREGATE_CONTEXT
+    ]
+    return (
+        len(aggregate) == 1
+        and aggregate[0].app_identity == AUTHORITATIVE_AGGREGATE_APP_IDENTITY
+        and aggregate[0].tested_sha == pr.head_sha
+        and aggregate[0].state == "success"
+    )
 
 
 def _current_merge_binding(
