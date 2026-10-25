@@ -117,6 +117,40 @@ A `blocked` receipt, or any receipt with reason codes, is never
 authorization. Reusing a receipt after expiry, or after its record was
 consumed, superseded, revoked, or invalidated, is forbidden.
 
+## Native merge-specific authorization (schema 1.2)
+
+The merge-dispatch consumer accepts only current, trusted owner-authored
+`agent-os-merge-authorization/v1` comments containing a schema **1.2**
+merge-specific authorization record. A schema 1.2 binding no longer includes
+planning approval IDs/revisions, applicability identities, approval expiry or
+an approved execution projection ID. Its authority instead comes from the
+authenticated repository-owner PR conversation, exact current authorization
+revision, owner decision identity and content-bound current PR evidence.
+
+`build_merge_authorization_candidate_from_pr` creates a **PENDING**
+schema 1.2 candidate from typed PR evidence and an explicitly supplied owner
+decision; it does not authenticate authorship or publish authority. Existing
+`record_merge_authorization_decision` transitions still require an explicit
+decision and retain expiry, revocation, replacement and consumption rules.
+Dispatch must reacquire the trusted owner-authored record and independently
+validate exact head/base, changed files, forbidden paths, required checks,
+review status and all GitHub GraphQL review-thread pages. If GraphQL review
+thread evidence is missing or incomplete, dispatch blocks; it never assumes
+that unresolved review threads equal zero.
+
+Historical schema **1.1** records reconstruct and serialize under their
+unchanged schema and identity rules. They are not migrated into schema 1.2
+authority and cannot authorize current merge dispatch. The previous
+planning-approval-driven producer/evaluator remains solely for historical
+compatibility and related legacy tests; the current dispatch path uses the
+same canonical merge authorization evaluator's native 1.2 branch and does not
+reacquire or reconstruct a generic planning approval triple.
+
+The workflow remains read-only. Producing an admission receipt is **not** a
+merge, and a production merge executor consuming an exact-head receipt is
+not established by this repository refactor. No new owner approval
+requirement is introduced.
+
 ## What this does not do (explicitly out of scope)
 
 - **No authenticated producer posting path.** How an owner decision becomes
