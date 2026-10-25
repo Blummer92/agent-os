@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from scripts.agent_os_issue_acceptance.merge_authorization import (
     MergeAuthorizationState,
@@ -15,7 +16,7 @@ from scripts.agent_os_issue_acceptance.merge_authorization_source import (
     reacquire_merge_authorization_source,
     serialize_merge_authorization_comment,
 )
-from tests.agent_os_issue_acceptance.test_merge_authorization import _authorized
+from tests.agent_os_issue_acceptance.test_merge_authorization import _authorized, _candidate
 
 
 class Transport:
@@ -46,6 +47,12 @@ def comment(record, *, cid=1, author="Blummer92"):
     )
 
 
+def _pending_for(record):
+    pending = _candidate()
+    assert pending.authorization_revision == record.previous_revision
+    return pending
+
+
 def test_merge_authorization_transport_round_trip_is_identity_stable():
     record, _ = _authorized()
     rebuilt = reconstruct_merge_authorization_record(
@@ -59,14 +66,14 @@ def test_merge_authorization_transport_round_trip_is_identity_stable():
 def test_owner_authored_authorized_record_is_current():
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
-        transport=Transport(snapshot(comment(record))),
+        transport=Transport(snapshot(comment(_pending_for(record), cid=0), comment(record))),
         repository="blummer92/agent-os",
         pr_number=630,
         expected_authorization_id=record.authorization_id,
     )
     assert result.status is MergeAuthorizationSourceStatus.CURRENT
     assert result.records == (record,)
-    assert result.source_comment_ids == (1,)
+    assert result.source_comment_ids == (0, 1)
 
 
 def test_non_owner_record_cannot_create_authority():
@@ -104,7 +111,7 @@ def test_consumed_latest_revision_is_not_current():
         decision_at="2026-07-26T14:35:00Z",
     )
     result = reacquire_merge_authorization_source(
-        transport=Transport(snapshot(comment(record), comment(consumed, cid=2))),
+        transport=Transport(snapshot(comment(_pending_for(record), cid=0), comment(record), comment(consumed, cid=2))),
         repository="blummer92/agent-os",
         pr_number=630,
     )
@@ -126,7 +133,7 @@ def test_conflicting_same_revision_fails_closed():
         body=body,
     )
     result = reacquire_merge_authorization_source(
-        transport=Transport(snapshot(comment(record), forged)),
+        transport=Transport(snapshot(comment(_pending_for(record), cid=0), comment(record), forged)),
         repository="blummer92/agent-os",
         pr_number=630,
     )
@@ -150,13 +157,13 @@ def _footed_comment(record, footer=_CLAUDE_CODE_ATTRIBUTION_FOOTER, *, cid=1, au
 def test_exact_connector_footer_is_stripped_and_record_reads_back_canonically():
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
-        transport=Transport(snapshot(_footed_comment(record))),
+        transport=Transport(snapshot(comment(_pending_for(record), cid=0), _footed_comment(record))),
         repository="blummer92/agent-os",
         pr_number=630,
     )
     assert result.status is MergeAuthorizationSourceStatus.CURRENT
     assert result.records == (record,)
-    assert result.source_comment_ids == (1,)
+    assert result.source_comment_ids == (0, 1)
     # round-trip: the parsed record serializes to the exact canonical body
     assert serialize_merge_authorization_comment(result.records[0]) == (
         serialize_merge_authorization_comment(record)
@@ -174,7 +181,7 @@ def test_legacy_connector_footer_is_stripped_like_approval_source():
     here too; mixed doubled footers still fail closed."""
     record, _ = _authorized()
     result = reacquire_merge_authorization_source(
-        transport=Transport(snapshot(_footed_comment(record, _LEGACY_CLAUDE_CODE_FOOTER))),
+        transport=Transport(snapshot(comment(_pending_for(record), cid=0), _footed_comment(record, _LEGACY_CLAUDE_CODE_FOOTER))),
         repository="blummer92/agent-os",
         pr_number=630,
     )
@@ -223,3 +230,85 @@ def test_footed_non_owner_comment_still_cannot_authorize():
     )
     assert result.status is MergeAuthorizationSourceStatus.BLOCKED
     assert result.records == ()
+
+def test_missing_predecessor_refuses_authorization():
+    record, _ = _authorized()
+    result = reacquire_merge_authorization_source(
+        transport=Transport(snapshot(comment(record))),
+        repository="blummer92/agent-os", pr_number=630,
+    )
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("authorization.chain-invalid",)
+
+
+def test_revision_gap_and_wrong_predecessor_fail_closed():
+    record, _ = _authorized()
+    pending = _pending_for(record)
+    gap = replace(
+        record, revision_number=3, authorization_revision="",
+        previous_revision=record.authorization_revision,
+        decision_at="2026-07-26T14:35:00Z",
+    )
+    wrong = replace(
+        record, authorization_revision="",
+        previous_revision="merge-authorization-revision:" + "1" * 64,
+    )
+    for later in (gap, wrong):
+        result = reacquire_merge_authorization_source(
+            transport=Transport(snapshot(comment(pending), comment(later, cid=2))),
+            repository="blummer92/agent-os", pr_number=630,
+        )
+        assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+        assert result.reason_codes == ("authorization.chain-invalid",)
+
+
+def test_invalidated_authorization_cannot_be_revived():
+    record, _ = _authorized()
+    from scripts.agent_os_issue_acceptance.merge_authorization import record_merge_authorization_decision
+    invalidated = record_merge_authorization_decision(
+        record, state="invalidated", decision_id="revoke",
+        authorizer_id="repository-owner", decision_at="2026-07-26T14:35:00Z",
+    )
+    forged = replace(
+        invalidated, authorization_revision="", revision_number=4,
+        previous_revision=invalidated.authorization_revision,
+        state=MergeAuthorizationState.AUTHORIZED,
+        revoked_authorization_id=None, reason_codes=(),
+        decision_at="2026-07-26T14:36:00Z",
+    )
+    result = reacquire_merge_authorization_source(
+        transport=Transport(snapshot(
+            comment(_pending_for(record)), comment(record, cid=2),
+            comment(invalidated, cid=3), comment(forged, cid=4),
+        )), repository="blummer92/agent-os", pr_number=630,
+    )
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("authorization.chain-invalid",)
+
+
+def test_consumed_authorization_cannot_be_revived():
+    record, _ = _authorized()
+    consumed = replace(
+        record, authorization_revision="", revision_number=3,
+        previous_revision=record.authorization_revision,
+        state=MergeAuthorizationState.CONSUMED,
+        decision_id="merge-observation", authorizer_id="repository-owner",
+        decision_at="2026-07-26T14:35:00Z",
+        consumed_observation_id="merge-execution-observation:" + "e" * 64,
+        reason_codes=("authorization.consumed",),
+    )
+    forged = replace(
+        consumed, authorization_revision="", revision_number=4,
+        previous_revision=consumed.authorization_revision,
+        state=MergeAuthorizationState.AUTHORIZED,
+        consumed_observation_id=None, reason_codes=(),
+        decision_at="2026-07-26T14:36:00Z",
+    )
+    result = reacquire_merge_authorization_source(
+        transport=Transport(snapshot(
+            comment(_pending_for(record)), comment(record, cid=2),
+            comment(consumed, cid=3), comment(forged, cid=4),
+        )), repository="blummer92/agent-os", pr_number=630,
+    )
+    assert result.status is MergeAuthorizationSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("authorization.chain-invalid",)
