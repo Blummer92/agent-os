@@ -1175,7 +1175,10 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
         serialize_merge_authorization_record,
     )
 
-    pr = _pr(_bundle())
+    pr = _pr(_bundle(), required_checks=(
+        _check(),
+        _check(context="agent-os/authoritative-aggregate"),
+    ))
     pending = build_merge_authorization_candidate_from_pr(
         pr,
         authorizer_id="Blummer92",
@@ -1208,6 +1211,15 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
     assert expired.merge_authorized is False
     assert "authorization.expired" in expired.reason_codes
 
+
+    with pytest.raises(ValueError, match="authoritative aggregate"):
+        build_merge_authorization_candidate_from_pr(
+            _pr(_bundle()),
+            authorizer_id="Blummer92",
+            decision_id="missing-aggregate",
+            decision_at=CANDIDATE,
+            expires_at=MERGE_EXPIRES,
+        )
     drift = _pr(_bundle(), head_sha="f" * 40,
                 required_checks=(_check(tested_sha="f" * 40),))
     stale = evaluate_merge_authorization_applicability(
