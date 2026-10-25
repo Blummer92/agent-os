@@ -98,6 +98,7 @@ MERGE_AUTHORIZATION_REASON_CODES = frozenset(
         "authorization.rejected",
         "authorization.revoked",
         "authorization.superseded",
+        "checks.authoritative-aggregate-missing",
         "checks.cancelled",
         "checks.changed",
         "checks.failed",
