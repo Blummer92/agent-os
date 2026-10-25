@@ -580,7 +580,10 @@ def test_invalidated_record_blocks_replay():
         decision_at="2026-07-26T15:00:00Z",
         reason_codes=("authorization.revoked",),
     )
-    comments = _comments_for(bundle, invalidated)
+    # Include the pending and authorized predecessors, then the terminal
+    # invalidation. A terminal record cannot stand alone as a valid chain.
+    comments = _comments_for(bundle, record)
+    comments.append(_Comment(16, serialize_merge_authorization_comment(invalidated)))
     receipt = _run(bundle=bundle, record=invalidated, comments=comments)
     assert receipt["dispatch_checks_passed"] is False
     assert "merge-dispatch-blocked-by-admission" in receipt["reason_codes"]
@@ -675,11 +678,17 @@ def test_forbidden_path_rechecked_even_when_authorized_fingerprint_matches():
     # The record is content-addressed and trusted, but its own forbidden
     # contract was not enforced at admission time. Current scope did not drift.
     forbidden_binding = replace(original.binding, forbidden_paths=("scripts/*",))
-    record = replace(
-        original, binding=forbidden_binding,
+    pending = replace(
+        _pending_for(original), binding=forbidden_binding,
         authorization_id="", authorization_revision="",
     )
-    client = _Client(_Repo(_PR(), _comments_for(bundle, record)))
+    record = record_merge_authorization_decision(
+        pending, state=_tauth.MergeAuthorizationState.AUTHORIZED,
+        decision_id="authz-decision", authorizer_id=OWNER,
+        decision_at=pending.decision_at,
+    )
+    comments = _comments_for(bundle, record)
+    client = _Client(_Repo(_PR(), comments))
     receipt = evaluate_merge_dispatch_applicability(
         _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
     )
@@ -770,9 +779,14 @@ def test_extra_authorized_allowlist_paths_are_not_drift():
     binding = replace(original.binding, allowed_files=(
         ALLOWED_FILE, "scripts/also-authorized.py",
     ))
-    record = replace(
-        original, binding=binding,
+    pending = replace(
+        _pending_for(original), binding=binding,
         authorization_id="", authorization_revision="",
+    )
+    record = record_merge_authorization_decision(
+        pending, state=_tauth.MergeAuthorizationState.AUTHORIZED,
+        decision_id="authz-decision", authorizer_id=OWNER,
+        decision_at=pending.decision_at,
     )
     receipt = _run(bundle=bundle, record=record)
     assert receipt["merge_authorized"] is True
