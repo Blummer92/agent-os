@@ -477,6 +477,16 @@ jobs:
                 --governed-workflow-id "$governed_workflow_id" \
                 --owner-login "${GITHUB_REPOSITORY%%/*}" \
                 --service-actor 'chatgpt-codex-connector[bot]'
+              # QA F1: the dispatch module rejects fork PRs; give the
+              # ingress branch its own validation-side counterpart without
+              # changing direct owner dispatch, which has no fork check.
+              head_repo="$(
+                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name'
+              )"
+              if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+                echo "Ingress recovery rejects fork pull requests" >&2
+                exit 1
+              fi
             fi
 
             # Count immutable GitHub workflow-run records, including

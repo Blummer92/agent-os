@@ -17,6 +17,7 @@ from workflow_scheduler.governance.ready_recovery_dispatch import (
     compute_receipt_id,
     correlate_run,
     execute_dispatch,
+    recovery_dispatch_inputs,
     recovery_run_title,
     select_duplicate_run,
     verify_pr_state,
@@ -243,6 +244,29 @@ def test_correlate_run_requires_exactly_one_run_in_window() -> None:
         exclude_run_ids=frozenset({101}),
     )
     assert outcome == "run-not-found" and found is None
+
+
+def test_recovery_dispatch_inputs_are_all_stringified() -> None:
+    inputs = recovery_dispatch_inputs(
+        pr_number=3723,
+        expected_head_sha=HEAD_SHA,
+        expected_workflow_sha=WORKFLOW_SHA,
+        expected_main_sha=MAIN_SHA,
+        source_validation_run_id=SOURCE_RUN_ID,
+        ingress_run_id=INGRESS_RUN_ID,
+        ingress_trigger_id=TRIGGER_ID,
+    )
+    assert inputs == {
+        "pr_number": "3723",
+        "expected_head_sha": HEAD_SHA,
+        "ready_recovery": "true",
+        "expected_workflow_sha": WORKFLOW_SHA,
+        "expected_main_sha": MAIN_SHA,
+        "source_validation_run_id": str(SOURCE_RUN_ID),
+        "ingress_run_id": str(INGRESS_RUN_ID),
+        "ingress_trigger_id": TRIGGER_ID,
+    }
+    assert all(type(value) is str for value in inputs.values())
 
 
 # --- execute_dispatch -------------------------------------------------------

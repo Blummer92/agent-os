@@ -469,6 +469,35 @@ def execute_dispatch(
     return _finalize_receipt(receipt)
 
 
+def recovery_dispatch_inputs(
+    *,
+    pr_number: int,
+    expected_head_sha: str,
+    expected_workflow_sha: str,
+    expected_main_sha: str,
+    source_validation_run_id: int,
+    ingress_run_id: int,
+    ingress_trigger_id: str,
+) -> dict:
+    """The exact workflow_dispatch inputs for a ready-recovery dispatch.
+
+    Every value is stringified, matching the proven draft-validation
+    convention: the boolean-typed workflow input accepts "true", and a
+    JSON boolean through PyGithub serialization is unproven (QA F3).
+    """
+    return {
+        "pr_number": str(pr_number),
+        "expected_head_sha": expected_head_sha,
+        # Stringified like every other input; see the docstring.
+        "ready_recovery": "true",
+        "expected_workflow_sha": expected_workflow_sha,
+        "expected_main_sha": expected_main_sha,
+        "source_validation_run_id": str(source_validation_run_id),
+        "ingress_run_id": str(ingress_run_id),
+        "ingress_trigger_id": ingress_trigger_id,
+    }
+
+
 class _PyGithubClient:
     """Thin PyGithub-backed client; the only place network calls live."""
 
@@ -544,16 +573,15 @@ class _PyGithubClient:
     ) -> None:
         created = self._workflow.create_dispatch(
             "main",
-            {
-                "pr_number": str(pr_number),
-                "expected_head_sha": expected_head_sha,
-                "ready_recovery": True,
-                "expected_workflow_sha": expected_workflow_sha,
-                "expected_main_sha": expected_main_sha,
-                "source_validation_run_id": str(source_validation_run_id),
-                "ingress_run_id": str(ingress_run_id),
-                "ingress_trigger_id": ingress_trigger_id,
-            },
+            recovery_dispatch_inputs(
+                pr_number=pr_number,
+                expected_head_sha=expected_head_sha,
+                expected_workflow_sha=expected_workflow_sha,
+                expected_main_sha=expected_main_sha,
+                source_validation_run_id=source_validation_run_id,
+                ingress_run_id=ingress_run_id,
+                ingress_trigger_id=ingress_trigger_id,
+            ),
         )
         if not created:
             raise RuntimeError("workflow dispatch was not accepted")

@@ -44,6 +44,9 @@ alone:
   Forged, stale, mismatched, duplicated, or unavailable evidence fails
   closed. Direct owner dispatch is unchanged; supplying ingress inputs
   never upgrades it, and no blanket service-actor admission exists.
+- Fork pull requests are rejected on both sides: the ingress dispatch
+  and the validation-side ingress check both require the PR head to
+  live in the same repository.
 
 The workflow-wide concurrency group keeps manual runs distinct
 before admission, using their unique GitHub run IDs.

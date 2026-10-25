@@ -81,6 +81,9 @@ def test_validation_candidate_step_carries_ingress_env_and_verification() -> Non
     assert "--governed-workflow-id" in body
     assert "--validation-run-id" in body
     assert "agent-os-ready-recovery-" in body
+    # QA F1: the ingress branch carries its own fork check, without
+    # changing direct owner dispatch.
+    assert "Ingress recovery rejects fork pull requests" in body
 
 
 def test_ingress_verification_checkout_is_scoped_to_ingress_dispatches() -> None:
