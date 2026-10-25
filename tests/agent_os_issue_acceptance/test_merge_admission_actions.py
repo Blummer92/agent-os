@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import datetime
 
 from scripts.agent_os_issue_acceptance import merge_admission_actions as actions
@@ -175,9 +176,24 @@ def owner_comment(record, comment_id=777001):
     )
 
 
+def _pending_for(record):
+    pending = replace(
+        record, authorization_revision="", revision_number=1,
+        previous_revision=None, state=MergeAuthorizationState.PENDING,
+        decision_id="decision-1", reason_codes=(), details=(),
+    )
+    assert pending.authorization_revision == record.previous_revision
+    return pending
+
+
 def check_with_records(records, *, repo_kwargs=None, evaluated_at=NOW, filler=0):
     comments = [FakeComment(900000 + i, "Blummer92", f"filler {i}") for i in range(filler)]
-    comments += [owner_comment(record, 777001 + i) for i, record in enumerate(records)]
+    history = []
+    for record in records:
+        if record.state is MergeAuthorizationState.AUTHORIZED and record.revision_number == 2:
+            history.append(_pending_for(record))
+        history.append(record)
+    comments += [owner_comment(record, 777001 + i) for i, record in enumerate(history)]
     repo = RecordRepo(comments, **(repo_kwargs or {}))
     return evaluate_merge_admission_transport(
         trigger(), repository=REPO, github_client=FakeClient(repo),
@@ -366,7 +382,7 @@ def test_expired_revision_is_reported_not_current():
         decision_id="d2", authorizer_id="Blummer92",
         decision_at="2026-10-19T19:00:00Z",
     )
-    receipt = check_with_records([expired])
+    receipt = check_with_records([expired_pending, expired])
     assert "authorization.consumed-or-not-current" in receipt["reason_codes"]
     assert receipt["merge_authorized"] is False
 
@@ -380,7 +396,8 @@ def test_emergency_override_is_surfaced_not_authorized():
 
 
 def test_evaluated_at_defaults_to_utc_now():
-    comments = [owner_comment(authorized_record(expires_at="2030-01-01T00:00:00Z"))]
+    record = authorized_record(expires_at="2030-01-01T00:00:00Z")
+    comments = [owner_comment(_pending_for(record)), owner_comment(record, 777002)]
     repo = RecordRepo(comments)
     receipt = evaluate_merge_admission_transport(
         trigger(), repository=REPO, github_client=FakeClient(repo))
