@@ -39,6 +39,7 @@ from scripts.agent_os_issue_acceptance.approval_source import (  # noqa: E402
     serialize_approval_comment,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
+    build_merge_authorization_candidate_from_pr,
     changed_scope_fingerprint,
     pr_metadata_fingerprint,
 )
@@ -99,7 +100,6 @@ ALLOWED_FILE = "scripts/agent_os_issue_acceptance/merge_authorization.py"
 
 def _authorized_record(bundle, decision_at="2026-07-26T14:30:00Z",
                        expires_at="2026-07-26T15:30:00Z", **changes):
-    approval, applicability, projection = bundle[0], bundle[1], bundle[2]
     scope = changed_scope_fingerprint([(ALLOWED_FILE, FILE_SHA)])
     values = dict(
         repository=REPO, pull_request_number=PR_NUMBER, head_sha=HEAD,
@@ -118,17 +118,14 @@ def _authorized_record(bundle, decision_at="2026-07-26T14:30:00Z",
     )
     values.update(changes)
     evidence = _tauth._pr(bundle, **values)
-    candidate = build_merge_authorization_candidate(
-        approval, applicability, projection, evidence,
-        current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
-        current_repository_state_evidence=bundle[5],
-        authorizer_id="repository-owner", decision_id="merge-request",
+    candidate = build_merge_authorization_candidate_from_pr(
+        evidence,
+        authorizer_id=OWNER, decision_id="merge-request",
         decision_at=decision_at, expires_at=expires_at,
-        permitted_merge_method="squash",
     )
     return record_merge_authorization_decision(
         candidate, state=_tauth.MergeAuthorizationState.AUTHORIZED,
-        decision_id="authz-decision", authorizer_id="repository-owner",
+        decision_id="authz-decision", authorizer_id=OWNER,
         decision_at=decision_at,
     )
 
@@ -335,8 +332,7 @@ def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     assert receipt["merge_authorized"] is True
     assert receipt["reason_codes"] == []
     assert receipt["verified"] == [
-        "transport-and-record", "approval-source-current",
-        "approval-binding-linkage", "file-scope",
+        "transport-and-record", "native-merge-record", "file-scope",
         "checks", "reviews", "review-threads", "lifecycle-admission",
         "canonical-applicability",
     ]
@@ -348,7 +344,6 @@ def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     assert canonical["merge_authorized"] is True
     assert canonical["changed_bindings"] == []
     assert canonical["reason_codes"] == []
-    assert canonical["proposal_id"].startswith("merge-proposal:")
     assert canonical["authorization_id"] == receipt["authorization_id"]
     assert receipt["expected_head_sha"] == HEAD
     assert receipt["authorization_expires_at"] is not None
@@ -446,24 +441,24 @@ def test_expired_authorization_blocked():
     assert "authorization.expired" in receipt["reason_codes"]
 
 
-def test_missing_approval_artifacts_blocked():
+def test_planning_approval_artifacts_are_not_required_for_v2():
     bundle = _tauth._bundle()
     record = _authorized_record(bundle)
     comments = [_Comment(11, serialize_merge_authorization_comment(record))]
     receipt = _run(bundle=bundle, record=record, comments=comments)
-    assert receipt["dispatch_checks_passed"] is False
-    assert "approval-source-not-current" in receipt["reason_codes"]
-    assert "approval.absent" in receipt["reason_codes"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["merge_authorized"] is True
+    assert receipt["reason_codes"] == []
 
 
-def test_approval_id_mismatch_blocked():
+def test_foreign_planning_approval_is_not_merge_authority():
     bundle = _tauth._bundle()
     other = _tauth._bundle(approval_expires="2026-07-26T17:00:00Z")
     record = _authorized_record(bundle)
     comments = _comments_for(other, record)
     receipt = _run(bundle=other, record=record, comments=comments)
-    assert receipt["dispatch_checks_passed"] is False
-    assert "approval-source-not-current" in receipt["reason_codes"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["merge_authorized"] is True
 
 
 def test_failed_check_blocked():
