@@ -1011,7 +1011,7 @@ jobs:
       - name: Upload advisory evidence
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jscpd-advisory-${{ github.event.pull_request.number }}
           path: tmp/jscpd-advisory/
@@ -1041,7 +1041,7 @@ jobs:
       - name: Upload advisory evidence
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pyan3-advisory-${{ github.event.pull_request.number }}
           path: tmp/pyan3-advisory/
