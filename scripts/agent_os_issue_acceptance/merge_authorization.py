@@ -34,7 +34,8 @@ from .parse_pr import (
     unauthorized_closing_targets,
 )
 
-MERGE_AUTHORIZATION_SCHEMA_VERSION = "1.1"
+MERGE_AUTHORIZATION_SCHEMA_VERSION = "1.1"  # historical reader/writer
+MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION = "1.2"  # merge-specific authority
 MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION = "1.0"
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -454,6 +455,65 @@ class MergeAuthorizationBinding:
             raise ValueError("draft_ready_state is unsupported")
 
 
+
+@dataclass(frozen=True, slots=True)
+class MergeAuthorizationBindingV2:
+    """Merge-specific binding without task-planning approval representations.
+
+    Historical v1.1 bindings use MergeAuthorizationBinding unchanged. The new
+    schema deliberately has no generic approval ID, applicability, or execution
+    projection field; owner authority comes from the authenticated PR comment
+    carrying the merge authorization record and its exact current revision.
+    """
+
+    repository: str
+    pull_request_number: int
+    exact_head_sha: str
+    target_base_branch: str
+    base_sha_or_evidence_id: str
+    permitted_merge_method: str
+    changed_scope_fingerprint: str
+    allowed_files: tuple[str, ...]
+    forbidden_paths: tuple[str, ...]
+    required_tests: tuple[str, ...]
+    required_check_evidence: tuple[MergeCheckEvidence, ...]
+    review_evidence: MergeReviewEvidence
+    pr_metadata_sha256: str
+    closure_admission_ids: tuple[str, ...]
+    draft_ready_state: Literal["draft", "ready"]
+
+    def __post_init__(self) -> None:
+        _repository(self.repository)
+        _positive_int(self.pull_request_number, "pull_request_number")
+        _sha40(self.exact_head_sha, "exact_head_sha")
+        _text(self.target_base_branch, "target_base_branch")
+        _base_identity(self.base_sha_or_evidence_id)
+        if self.permitted_merge_method not in _MERGE_METHODS:
+            raise ValueError("unsupported permitted_merge_method")
+        _sha256(self.changed_scope_fingerprint, "changed_scope_fingerprint")
+        object.__setattr__(
+            self, "allowed_files", _strings(self.allowed_files, "allowed_files")
+        )
+        object.__setattr__(
+            self, "forbidden_paths", _strings(self.forbidden_paths, "forbidden_paths")
+        )
+        object.__setattr__(
+            self, "required_tests", _strings(self.required_tests, "required_tests")
+        )
+        object.__setattr__(
+            self, "required_check_evidence", _checks(self.required_check_evidence)
+        )
+        if not isinstance(self.review_evidence, MergeReviewEvidence):
+            raise TypeError("review_evidence must be MergeReviewEvidence")
+        _sha256(self.pr_metadata_sha256, "pr_metadata_sha256")
+        object.__setattr__(
+            self, "closure_admission_ids",
+            _closure_admission_ids(self.closure_admission_ids),
+        )
+        if self.draft_ready_state not in {"draft", "ready"}:
+            raise ValueError("draft_ready_state is unsupported")
+
+
 @dataclass(frozen=True, slots=True)
 class MergeAuthorizationRecord:
     schema_version: str
@@ -462,7 +522,7 @@ class MergeAuthorizationRecord:
     revision_number: int
     previous_revision: str | None
     state: MergeAuthorizationState
-    binding: MergeAuthorizationBinding
+    binding: MergeAuthorizationBinding | MergeAuthorizationBindingV2
     authorizer_id: str
     decision_id: str
     decision_at: str
@@ -478,12 +538,17 @@ class MergeAuthorizationRecord:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if self.schema_version != MERGE_AUTHORIZATION_SCHEMA_VERSION:
-            raise ValueError("unsupported merge-authorization schema version")
+        valid_contract = (
+            self.schema_version == MERGE_AUTHORIZATION_SCHEMA_VERSION
+            and type(self.binding) is MergeAuthorizationBinding
+        ) or (
+            self.schema_version == MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION
+            and type(self.binding) is MergeAuthorizationBindingV2
+        )
+        if not valid_contract:
+            raise ValueError("merge-authorization schema/binding version mismatch")
         if not isinstance(self.state, MergeAuthorizationState):
             raise TypeError("state must use MergeAuthorizationState")
-        if not isinstance(self.binding, MergeAuthorizationBinding):
-            raise TypeError("binding must be MergeAuthorizationBinding")
         _positive_int(self.revision_number, "revision_number")
         _text(self.authorizer_id, "authorizer_id")
         _text(self.decision_id, "decision_id")
@@ -492,7 +557,7 @@ class MergeAuthorizationRecord:
         if decision_time >= expiry_time and self.state is not MergeAuthorizationState.EXPIRED:
             raise ValueError("non-expiry decision must occur before expires_at")
         approval_expiry = _optional_timestamp(
-            self.binding.approval_expires_at, "approval_expires_at"
+            getattr(self.binding, "approval_expires_at", None), "approval_expires_at"
         )
         if approval_expiry is not None and expiry_time > approval_expiry:
             raise ValueError("merge authorization cannot outlive approval")
@@ -808,7 +873,7 @@ def build_merge_authorization_candidate(
     if decision_time >= expiry_time:
         raise ValueError("merge authorization must expire after candidate decision")
     approval_expiry = _optional_timestamp(
-        binding.approval_expires_at, "approval_expires_at"
+        getattr(binding, "approval_expires_at", None), "approval_expires_at"
     )
     if approval_expiry is not None:
         if decision_time >= approval_expiry:
@@ -850,6 +915,88 @@ def build_merge_authorization_candidate(
     )
 
 
+
+def build_merge_authorization_candidate_from_pr(
+    pull_request_evidence: PullRequestMergeEvidence,
+    *,
+    authorizer_id: str,
+    decision_id: str,
+    decision_at: str,
+    expires_at: str,
+    supersedes: MergeAuthorizationRecord | None = None,
+) -> MergeAuthorizationRecord:
+    """Prepare a v1.2 candidate from exact PR evidence and an owner decision.
+
+    This pure constructor does not authenticate its caller or publish authority.
+    Only an owner-authored record reacquired from the trusted GitHub comment
+    source can authorize dispatch. A pending candidate is never authority.
+    """
+    pr = _verified(pull_request_evidence, PullRequestMergeEvidence)
+    reasons, details = _eligibility_reasons(pr)
+    if reasons:
+        raise ValueError("merge candidate requires eligible PR: " + ",".join(sorted(reasons)))
+    if not pr.required_checks:
+        raise ValueError("merge candidate requires required-check evidence")
+    decision_time = _timestamp(decision_at, "decision_at")
+    expiry = _timestamp(expires_at, "expires_at")
+    if decision_time >= expiry:
+        raise ValueError("merge authorization must expire after owner decision")
+    _text(authorizer_id, "authorizer_id")
+    _text(decision_id, "decision_id")
+    prior_id = None
+    if supersedes is not None:
+        prior = _verified(supersedes, MergeAuthorizationRecord)
+        if prior.state not in {
+            MergeAuthorizationState.REJECTED,
+            MergeAuthorizationState.EXPIRED,
+            MergeAuthorizationState.INVALIDATED,
+            MergeAuthorizationState.CONSUMED,
+            MergeAuthorizationState.SUPERSEDED,
+        }:
+            raise ValueError("replacement requires terminal prior authorization")
+        if decision_time < _timestamp(prior.decision_at, "prior decision_at"):
+            raise ValueError("replacement cannot predate prior authorization")
+        prior_id = prior.authorization_id
+    binding = MergeAuthorizationBindingV2(
+        repository=pr.repository,
+        pull_request_number=pr.pull_request_number,
+        exact_head_sha=pr.head_sha,
+        target_base_branch=pr.base_branch,
+        base_sha_or_evidence_id=pr.base_sha_or_evidence_id,
+        permitted_merge_method=pr.proposed_merge_method,
+        changed_scope_fingerprint=pr.changed_scope_fingerprint,
+        allowed_files=pr.allowed_files,
+        forbidden_paths=pr.forbidden_paths,
+        required_tests=pr.required_tests,
+        required_check_evidence=pr.required_checks,
+        review_evidence=pr.review_evidence,
+        pr_metadata_sha256=pr.pr_metadata_sha256,
+        closure_admission_ids=tuple(
+            sorted(admission.admission.result_id for admission in pr.closure_admissions)
+        ),
+        draft_ready_state="draft" if pr.draft else "ready",
+    )
+    return MergeAuthorizationRecord(
+        schema_version=MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
+        authorization_id="",
+        authorization_revision="",
+        revision_number=1,
+        previous_revision=None,
+        state=MergeAuthorizationState.PENDING,
+        binding=binding,
+        authorizer_id=authorizer_id,
+        decision_id=decision_id,
+        decision_at=decision_at,
+        expires_at=expires_at,
+        supersedes_authorization_id=prior_id,
+        revoked_authorization_id=None,
+        consumed_observation_id=None,
+        emergency_override_reason=None,
+        emergency_override_audit_location=None,
+        reason_codes=(),
+    )
+
+
 def record_merge_authorization_decision(
     current: MergeAuthorizationRecord,
     *,
@@ -885,7 +1032,7 @@ def record_merge_authorization_decision(
         raise ValueError("decision revisions cannot move backward in time")
     expiry_time = _timestamp(current.expires_at, "expires_at")
     approval_expiry = _optional_timestamp(
-        current.binding.approval_expires_at, "approval_expires_at"
+        getattr(current.binding, "approval_expires_at", None), "approval_expires_at"
     )
     if target is MergeAuthorizationState.EXPIRED:
         if decision_time < expiry_time:
@@ -1077,7 +1224,7 @@ def record_merge_execution_observation(
     if observed_time >= _timestamp(authorization.expires_at, "expires_at"):
         raise ValueError("merge observation cannot consume expired authorization")
     approval_expiry = _optional_timestamp(
-        authorization.binding.approval_expires_at, "approval_expires_at"
+        getattr(authorization.binding, "approval_expires_at", None), "approval_expires_at"
     )
     if approval_expiry is not None and observed_time >= approval_expiry:
         raise ValueError("merge observation cannot consume expired approval")
@@ -1693,10 +1840,39 @@ def _eligibility_reasons(
     return reasons, details
 
 
+
+def _current_merge_binding(
+    pr: PullRequestMergeEvidence,
+    prior: MergeAuthorizationBindingV2,
+) -> MergeAuthorizationBindingV2:
+    """Rebind current PR facts to the exact owner-authorized v1.2 scope."""
+    return MergeAuthorizationBindingV2(
+        repository=pr.repository,
+        pull_request_number=pr.pull_request_number,
+        exact_head_sha=pr.head_sha,
+        target_base_branch=pr.base_branch,
+        base_sha_or_evidence_id=pr.base_sha_or_evidence_id,
+        permitted_merge_method=pr.proposed_merge_method,
+        changed_scope_fingerprint=pr.changed_scope_fingerprint,
+        allowed_files=pr.allowed_files,
+        forbidden_paths=prior.forbidden_paths,
+        required_tests=prior.required_tests,
+        required_check_evidence=pr.required_checks,
+        review_evidence=pr.review_evidence,
+        pr_metadata_sha256=pr.pr_metadata_sha256,
+        closure_admission_ids=tuple(
+            sorted(admission.admission.result_id for admission in pr.closure_admissions)
+        ),
+        draft_ready_state="draft" if pr.draft else "ready",
+    )
+
+
 def _binding_from_pr_and_record(
     pr: PullRequestMergeEvidence,
-    prior: MergeAuthorizationBinding,
-) -> MergeAuthorizationBinding:
+    prior: MergeAuthorizationBinding | MergeAuthorizationBindingV2,
+) -> MergeAuthorizationBinding | MergeAuthorizationBindingV2:
+    if type(prior) is MergeAuthorizationBindingV2:
+        return _current_merge_binding(pr, prior)
     return MergeAuthorizationBinding(
         repository=pr.repository,
         pull_request_number=pr.pull_request_number,
@@ -1724,13 +1900,15 @@ def _binding_from_pr_and_record(
 
 
 def _changed_bindings(
-    prior: MergeAuthorizationBinding,
-    current: MergeAuthorizationBinding,
+    prior: MergeAuthorizationBinding | MergeAuthorizationBindingV2,
+    current: MergeAuthorizationBinding | MergeAuthorizationBindingV2,
 ) -> tuple[str, ...]:
+    if type(prior) is not type(current):
+        raise ValueError("merge authorization binding version changed")
     return tuple(
         sorted(
             item.name
-            for item in fields(MergeAuthorizationBinding)
+            for item in fields(type(prior))
             if getattr(prior, item.name) != getattr(current, item.name)
         )
     )
