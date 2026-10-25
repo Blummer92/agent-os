@@ -8,7 +8,7 @@ runs, in process and without mocks for the canonical evaluator:
 2. ``merge_applicability`` on the SAME transport and the SAME fake GitHub
    surface returns an applicable dispatch receipt with
    ``merge_authorized is True`` only because the canonical evaluator
-   returned applicable for a typed ``MergeProposal``.
+   returned applicable for the native merge-specific v1.2 record.
 3. A transport the candidate step blocks (wrong merge method) is blocked
    by dispatch too, with canonical applicability NOT evaluated — the
    dispatch consumer cannot bypass its own front door.
@@ -72,7 +72,6 @@ def test_production_sequence_candidate_then_dispatch_reaches_canonical():
     assert canonical["merge_authorized"] is True
     assert canonical["changed_bindings"] == []
     assert canonical["reason_codes"] == []
-    assert canonical["proposal_id"].startswith("merge-proposal:")
     # The dispatch receipt carries the candidate receipt it started from,
     # bound to the same authorization and the same exact head.
     assert dispatch["admission_receipt"]["authorization_id"] == candidate["authorization_id"]
