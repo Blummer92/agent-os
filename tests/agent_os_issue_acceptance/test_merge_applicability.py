@@ -304,13 +304,24 @@ class _Client:
         return self._repo
 
 
+def _pending_for(record):
+    pending = replace(
+        record, authorization_revision="", revision_number=1,
+        previous_revision=None, state=_tauth.MergeAuthorizationState.PENDING,
+        decision_id="merge-request", reason_codes=(), details=(),
+    )
+    assert pending.authorization_revision == record.previous_revision
+    return pending
+
+
 def _comments_for(bundle, record, start=11):
     approval, applicability, projection = bundle[0], bundle[1], bundle[2]
     return [
         _Comment(start, serialize_approval_comment(APPROVAL_MARKER, serialize_approval_record(approval))),
         _Comment(start + 1, serialize_approval_comment(APPLICABILITY_MARKER, serialize_approval_applicability_result(applicability))),
         _Comment(start + 2, serialize_approval_comment(PROJECTION_MARKER, serialize_approved_execution_projection(projection))),
-        _Comment(start + 3, serialize_merge_authorization_comment(record)),
+        _Comment(start + 3, serialize_merge_authorization_comment(_pending_for(record))),
+        _Comment(start + 4, serialize_merge_authorization_comment(record)),
     ]
 
 
@@ -462,7 +473,10 @@ def test_expired_authorization_blocked():
 def test_planning_approval_artifacts_are_not_required_for_v2():
     bundle = _tauth._bundle()
     record = _authorized_record(bundle)
-    comments = [_Comment(11, serialize_merge_authorization_comment(record))]
+    comments = [
+        _Comment(10, serialize_merge_authorization_comment(_pending_for(record))),
+        _Comment(11, serialize_merge_authorization_comment(record)),
+    ]
     receipt = _run(bundle=bundle, record=record, comments=comments)
     assert receipt["dispatch_checks_passed"] is True
     assert receipt["merge_authorized"] is True
