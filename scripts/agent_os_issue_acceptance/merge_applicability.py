@@ -147,41 +147,107 @@ def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str 
     return payload
 
 
-def _live_check_states(commit: Any) -> dict[str, str]:
-    """Worst-state-wins rollup of check runs and commit statuses per context.
+_GITHUB_ACTIONS_BOT_ID = 41898282
 
-    A context counts as ``"success"`` only when every observed check run and
-    status for that context is a success. A success commit status must never
-    mask a failing check run (or vice versa): any non-success observation
-    fails the context closed. Severity order for the rolled-up state is
-    failure > cancelled > pending > unknown > skipped; only ``"success"``
-    satisfies a required check.
+
+def _status_identity(status: Any) -> str | None:
+    """Identify the actual commit-status author, never the saved binding."""
+    creator = getattr(status, "creator", None)
+    if creator is None:
+        return None
+    login = getattr(creator, "login", None)
+    user_id = getattr(creator, "id", None)
+    if login == "github-actions[bot]" and user_id == _GITHUB_ACTIONS_BOT_ID:
+        return "github-actions"
+    if not isinstance(login, str) or not login:
+        return None
+    if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
+        return None
+    return login
+
+
+def _check_run_identity(run: Any) -> str | None:
+    app = getattr(run, "app", None)
+    slug = getattr(app, "slug", None) if app is not None else None
+    app_id = getattr(app, "id", None) if app is not None else None
+    if not isinstance(slug, str) or not slug:
+        return None
+    if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id <= 0:
+        return None
+    if slug == "github-actions" and app_id != 15368:
+        return None
+    return slug
+
+
+def _latest_evidence(commit: Any) -> dict[str, tuple[str, str | None, bool]]:
+    """Use latest-per-context status and check-run records, with live origin.
+
+    GitHub's commit-status listing is newest-first; explicit status IDs
+    govern ordering when available. Neither historical failures nor historical
+    successes can mask the latest status. A check run and commit status sharing
+    a name must independently succeed with the same verified publisher.
+    The final boolean records whether a real commit status was observed.
     """
-    observed: dict[str, list[str]] = {}
+    runs: dict[str, tuple[int | None, str, str | None]] = {}
+    statuses: dict[str, tuple[int | None, str, str | None]] = {}
     for run in commit.get_check_runs():
+        context = getattr(run, "name", None)
+        if not isinstance(context, str) or not context:
+            raise ValueError("check-run context unavailable")
+        raw_id = getattr(run, "id", None)
+        run_id = raw_id if type(raw_id) is int and raw_id > 0 else None
         conclusion = getattr(run, "conclusion", None)
-        observed.setdefault(run.name, []).append(
-            _CHECK_RUN_STATES.get(conclusion, "pending" if conclusion is None else "unknown")
+        state = _CHECK_RUN_STATES.get(
+            conclusion, "pending" if conclusion is None else "unknown"
         )
+        prior = runs.get(context)
+        if prior is None or (
+            run_id is not None and prior[0] is not None and run_id > prior[0]
+        ):
+            runs[context] = (run_id, state, _check_run_identity(run))
+        elif run_id is None or prior[0] is None or run_id == prior[0]:
+            runs[context] = (run_id, "unknown", None)
+
     for status in commit.get_statuses():
-        observed.setdefault(status.context, []).append(
-            _COMMIT_STATUS_STATES.get(status.state, "unknown")
-        )
-    # "success" ranks below every non-success state here: the all-success
-    # case is handled by the branch above, so reaching max() with a
-    # "success" observation present means the context is NOT all-success
-    # and must fail closed (never roll up to "success", never order-dependent).
-    severity = {
-        "failure": 4, "cancelled": 3, "pending": 2, "unknown": 1,
-        "skipped": 0, "success": -1,
-    }
-    rolled: dict[str, str] = {}
-    for context, states in observed.items():
-        if states and all(state == "success" for state in states):
-            rolled[context] = "success"
+        context = getattr(status, "context", None)
+        if not isinstance(context, str) or not context:
+            raise ValueError("commit-status context unavailable")
+        raw_id = getattr(status, "id", None)
+        status_id = raw_id if type(raw_id) is int and raw_id > 0 else None
+        state = _COMMIT_STATUS_STATES.get(getattr(status, "state", None), "unknown")
+        prior = statuses.get(context)
+        if prior is None or (
+            status_id is not None and prior[0] is not None and status_id > prior[0]
+        ):
+            statuses[context] = (status_id, state, _status_identity(status))
+        # No IDs: the GitHub API orders statuses newest first, so retain first.
+        elif status_id is not None and prior[0] is None:
+            # Cannot reliably compare an identified status with an unidentified one.
+            statuses[context] = (None, "unknown", None)
+
+    result: dict[str, tuple[str, str | None, bool]] = {}
+    for context in set(runs) | set(statuses):
+        run = runs.get(context)
+        status = statuses.get(context)
+        if run is not None and status is not None:
+            if (
+                run[1] == status[1] == "success"
+                and run[2] is not None and run[2] == status[2]
+            ):
+                result[context] = ("success", run[2], True)
+            else:
+                result[context] = ("unknown", None, True)
+        elif run is not None:
+            result[context] = (run[1], run[2], False)
         else:
-            rolled[context] = max(states, key=lambda state: severity.get(state, 1))
-    return rolled
+            assert status is not None
+            result[context] = (status[1], status[2], True)
+    return result
+
+
+def _live_check_states(commit: Any) -> dict[str, str]:
+    """Compatibility projection of the latest verified evidence states."""
+    return {context: evidence[0] for context, evidence in _latest_evidence(commit)}
 
 
 _REVIEW_THREAD_QUERY = """
@@ -346,14 +412,32 @@ def evaluate_merge_dispatch_applicability(
         verified.append("file-scope")
 
         # Live checks for the exact head.
-        check_states = _live_check_states(repo.get_commit(head))
+        from .merge_authorization import (
+            AUTHORITATIVE_AGGREGATE_CONTEXT,
+            AUTHORITATIVE_AGGREGATE_APP_IDENTITY,
+        )
+        live_checks = _latest_evidence(repo.get_commit(head))
         check_failures: list[str] = []
+        required_contexts = [
+            required.context for required in record.binding.required_check_evidence
+        ]
+        if required_contexts.count(AUTHORITATIVE_AGGREGATE_CONTEXT) != 1:
+            check_failures.append("checks.authoritative-aggregate-missing")
         for required in record.binding.required_check_evidence:
-            state = check_states.get(required.context)
-            if state is None:
+            observation = live_checks.get(required.context)
+            if observation is None:
                 check_failures.append("checks.missing")
-            elif state != "success":
+                continue
+            state, publisher, is_commit_status = observation
+            if state != "success":
                 check_failures.append("checks.changed")
+            if publisher is None or publisher != required.app_identity:
+                check_failures.append("checks.publisher-unverifiable")
+            if required.context == AUTHORITATIVE_AGGREGATE_CONTEXT and (
+                not is_commit_status
+                or publisher != AUTHORITATIVE_AGGREGATE_APP_IDENTITY
+            ):
+                check_failures.append("checks.authoritative-aggregate-unverifiable")
         if check_failures:
             return _receipt(**{**base_kwargs, "reason_codes": sorted(set(check_failures))})
         verified.append("checks")
@@ -431,10 +515,10 @@ def evaluate_merge_dispatch_applicability(
         live_check_evidence = tuple(
             MergeCheckEvidence(
                 context=required.context,
-                app_identity=required.app_identity,
+                app_identity=live_checks[required.context][1],
                 tested_sha=head,
                 evidence_id="",
-                state=check_states[required.context],
+                state=live_checks[required.context][0],
             )
             for required in record.binding.required_check_evidence
         )
@@ -448,7 +532,7 @@ def evaluate_merge_dispatch_applicability(
             ready_for_review=not pr.draft,
             proposed_merge_method=base.get("expected_method"),
             changed_scope_fingerprint=live_scope,
-            allowed_files=tuple(sorted(paths)),
+            allowed_files=record.binding.allowed_files,
             forbidden_paths=record.binding.forbidden_paths,
             required_tests=record.binding.required_tests,
             required_checks=live_check_evidence,
