@@ -490,14 +490,8 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
         page_id = notion_id(row.get("id"))
         page = _execute_read(adapter, "get_page", page_id=page_id)
         schema = _execute_read(adapter, "get_data_source", data_source_id=source_id)
-        reviewed = next(
-            reviewed_catalog.entry_for(k)["properties"]
-            for k in reviewed_catalog.LESSONS
-            if reviewed_catalog.entry_for(k)["target_lesson_id"] == lesson_id
-        )
         inspected = inspect_target(
             page, schema, source_id=source_id, lesson_id=lesson_id,
-            reviewed_properties=reviewed,
         )
         if inspected["page_id"] != page_id:
             raise WriteBlocked("page-identity-mismatch")
