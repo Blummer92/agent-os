@@ -156,7 +156,7 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping, *,
 
 
 def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
-                   lesson_id: str, reviewed_properties: Mapping) -> dict[str, object]:
+                   lesson_id: str) -> dict[str, object]:
     """Pure current-target evidence; shared writer checks, never mutation."""
     import re
     from datetime import datetime
@@ -168,7 +168,7 @@ def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
         "Surface Before Work?": "checkbox",
         "Source Link": WRITABLE_TYPES["Source Link"],
     }
-    _check_schema(schema, source_id, reviewed_properties, extra_types=inspected_fields)
+    _check_schema(schema, source_id, {}, extra_types={**WRITABLE_TYPES, **inspected_fields})
     page_id = _page(page, source_id)
     if LESSON_ID.fullmatch(lesson_id) is None or _lesson_id(page) != lesson_id:
         raise WriteBlocked("lesson-identity-mismatch")
