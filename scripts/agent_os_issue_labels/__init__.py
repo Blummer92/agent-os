@@ -18,6 +18,10 @@ from .pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
+from .pr_branch_refresh_authorization_renderer import (
+    render_refresh_authorization_comment,
+    render_refresh_authorization_comment_from_mapping,
+)
 from .pr_branch_refresh_authorization_source import (
     AUTHORIZATION_MARKER,
     RECEIPT_MARKER,
@@ -89,6 +93,8 @@ __all__ = [
     "lifecycle_invocation_reasons",
     "plan_label_application",
     "reacquire_refresh_authorization_source",
+    "render_refresh_authorization_comment",
+    "render_refresh_authorization_comment_from_mapping",
     "reconcile_pull_request_batch",
     "reconcile_pull_request_labels",
     "reconcile_pull_request_lifecycle",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import datetime
 
 from scripts.agent_os_issue_acceptance import merge_admission_actions as actions
@@ -10,8 +11,8 @@ from scripts.agent_os_issue_acceptance.merge_admission_actions import (
     evaluate_merge_admission_transport,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (
-    MERGE_AUTHORIZATION_SCHEMA_VERSION,
-    MergeAuthorizationBinding,
+    MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
+    MergeAuthorizationBindingV2,
     MergeAuthorizationRecord,
     MergeAuthorizationState,
     MergeCheckEvidence,
@@ -96,11 +97,6 @@ def make_binding(**overrides):
         target_base_branch="main",
         base_sha_or_evidence_id="b" * 40,
         permitted_merge_method="merge",
-        approval_id="approval:" + "a" * 64,
-        approval_revision="approval-revision:" + "b" * 64,
-        approval_applicability_identity="approval-applicability:" + "c" * 64,
-        approval_expires_at=None,
-        approved_execution_projection_id="approved-execution-projection:" + "d" * 64,
         changed_scope_fingerprint="e" * 64,
         allowed_files=(),
         forbidden_paths=(),
@@ -116,13 +112,13 @@ def make_binding(**overrides):
         draft_ready_state="ready",
     )
     values.update(overrides)
-    return MergeAuthorizationBinding(**values)
+    return MergeAuthorizationBindingV2(**values)
 
 
 def authorized_record(*, binding=None, decision_at="2026-10-19T18:00:00Z",
                       expires_at="2026-10-19T23:00:00Z", emergency=None):
     pending = MergeAuthorizationRecord(
-        schema_version=MERGE_AUTHORIZATION_SCHEMA_VERSION,
+        schema_version=MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
         authorization_id="",
         authorization_revision="",
         revision_number=1,
@@ -175,9 +171,24 @@ def owner_comment(record, comment_id=777001):
     )
 
 
+def _pending_for(record):
+    pending = replace(
+        record, authorization_revision="", revision_number=1,
+        previous_revision=None, state=MergeAuthorizationState.PENDING,
+        decision_id="decision-1", reason_codes=(), details=(),
+    )
+    assert pending.authorization_revision == record.previous_revision
+    return pending
+
+
 def check_with_records(records, *, repo_kwargs=None, evaluated_at=NOW, filler=0):
     comments = [FakeComment(900000 + i, "Blummer92", f"filler {i}") for i in range(filler)]
-    comments += [owner_comment(record, 777001 + i) for i, record in enumerate(records)]
+    history = []
+    for record in records:
+        if record.state is MergeAuthorizationState.AUTHORIZED and record.revision_number == 2:
+            history.append(_pending_for(record))
+        history.append(record)
+    comments += [owner_comment(record, 777001 + i) for i, record in enumerate(history)]
     repo = RecordRepo(comments, **(repo_kwargs or {}))
     return evaluate_merge_admission_transport(
         trigger(), repository=REPO, github_client=FakeClient(repo),
@@ -272,7 +283,8 @@ def test_fully_matching_record_yields_non_authorizing_candidate_receipt():
     assert receipt["side_effects_performed"] is False
     contract = receipt["host_dispatch_contract"]
     assert contract["consumer"].startswith("chatgpt-github-connector")
-    assert "receipt.merge_authorized is true" in contract["merge_dispatch_allowed_only_when_all_true"]
+    assert "receipt.status == 'awaiting-human-attestation'" in contract["merge_dispatch_allowed_only_when_all_true"]
+    assert any("fresh per-call runtime human approval card was tapped" in item for item in contract["merge_dispatch_allowed_only_when_all_true"])
 
 
 def test_expired_record_is_rejected_not_matched():
@@ -335,7 +347,7 @@ def test_binding_reason_mapping_matches_canonical():
 
 def test_binding_field_coverage_partitions_canonical_binding():
     from dataclasses import fields as dataclass_fields
-    declared = {f.name for f in dataclass_fields(mauth.MergeAuthorizationBinding)}
+    declared = {f.name for f in dataclass_fields(mauth.MergeAuthorizationBindingV2)}
     assert (set(actions._LIVE_BINDING_FIELDS)
             | set(actions._NON_RECOMPUTABLE_BINDING_FIELDS)) == declared
     assert not (set(actions._LIVE_BINDING_FIELDS)
@@ -351,7 +363,7 @@ def test_many_comments_still_reach_canonical_source_bounds():
 def test_expired_revision_is_reported_not_current():
     pending = authorized_record().binding  # reuse binding only
     expired_pending = MergeAuthorizationRecord(
-        schema_version=MERGE_AUTHORIZATION_SCHEMA_VERSION,
+        schema_version=MERGE_AUTHORIZATION_CURRENT_SCHEMA_VERSION,
         authorization_id="", authorization_revision="",
         revision_number=1, previous_revision=None,
         state=MergeAuthorizationState.PENDING, binding=pending,
@@ -366,7 +378,7 @@ def test_expired_revision_is_reported_not_current():
         decision_id="d2", authorizer_id="Blummer92",
         decision_at="2026-10-19T19:00:00Z",
     )
-    receipt = check_with_records([expired])
+    receipt = check_with_records([expired_pending, expired])
     assert "authorization.consumed-or-not-current" in receipt["reason_codes"]
     assert receipt["merge_authorized"] is False
 
@@ -380,7 +392,8 @@ def test_emergency_override_is_surfaced_not_authorized():
 
 
 def test_evaluated_at_defaults_to_utc_now():
-    comments = [owner_comment(authorized_record(expires_at="2030-01-01T00:00:00Z"))]
+    record = authorized_record(expires_at="2030-01-01T00:00:00Z")
+    comments = [owner_comment(_pending_for(record)), owner_comment(record, 777002)]
     repo = RecordRepo(comments)
     receipt = evaluate_merge_admission_transport(
         trigger(), repository=REPO, github_client=FakeClient(repo))

@@ -36,16 +36,21 @@ def test_ready_admission_job_has_no_write_steps_or_generic_execution():
 
 
 ORIGINAL_JOBS = ["ingress", "refresh_pr", "ready_admission", "merge_admission"]
-# #2410: the only additional jobs authorized in this workflow.
+# #2410: additional jobs authorized in this workflow: the two
+# draft-validation jobs plus the confined Ready-recovery job below. The
+# Ready-recovery job is owner-authorized (Option B) and is the only newly
+# authorized Actions-write holder besides the draft-validation dispatch
+# job; it is recognized here by exact name, never by a broad allowance.
 DRAFT_VALIDATION_JOBS = ["draft_validation_dispatch", "draft_validation_receipt"]
+READY_RECOVERY_JOBS = ["ready_recovery_dispatch"]
 
 
 def test_existing_jobs_unchanged_in_shape():
     jobs = list(_workflow()["jobs"])
     # The original four jobs are preserved, in order and first.
     assert jobs[: len(ORIGINAL_JOBS)] == ORIGINAL_JOBS
-    # Exactly the two authorized #2410 jobs follow; any other job fails closed.
-    assert jobs[len(ORIGINAL_JOBS):] == DRAFT_VALIDATION_JOBS
+    # Exactly the authorized #2410 jobs follow, in order; any other job fails closed.
+    assert jobs[len(ORIGINAL_JOBS):] == DRAFT_VALIDATION_JOBS + READY_RECOVERY_JOBS
 
 
 def test_draft_validation_dispatch_job_has_only_the_bounded_permissions():
@@ -82,7 +87,7 @@ def test_draft_validation_jobs_also_admit_the_service_actor():
 
 def test_no_other_job_admits_the_service_actor():
     for name, job in _workflow()["jobs"].items():
-        if name in DRAFT_VALIDATION_JOBS:
+        if name in DRAFT_VALIDATION_JOBS + READY_RECOVERY_JOBS:
             continue
         assert SERVICE_ACTOR_ID not in yaml.safe_dump(job), name
         assert "chatgpt-codex-connector" not in yaml.safe_dump(job), name
@@ -101,9 +106,13 @@ def test_draft_validation_parse_steps_scope_the_service_actor():
 
 
 def test_only_the_dispatch_job_can_hold_actions_write():
+    # Exactly two jobs hold actions: write: the draft-validation dispatch
+    # job and the confined Ready-recovery dispatch job. Every other job
+    # holding it fails this test; the allowlist is by exact name only.
+    actions_write_holders = {"draft_validation_dispatch", "ready_recovery_dispatch"}
     for name, job in _workflow()["jobs"].items():
         grants = job.get("permissions", {})
-        if name == "draft_validation_dispatch":
+        if name in actions_write_holders:
             continue
         assert not (isinstance(grants, dict) and grants.get("actions") == "write"), name
 
@@ -119,3 +128,52 @@ def test_draft_validation_jobs_do_not_persist_checkout_credentials():
         assert checkouts, name
         for step in checkouts:
             assert step.get("with", {}).get("persist-credentials") is False, name
+
+
+def test_ready_recovery_dispatch_job_has_only_the_bounded_permissions():
+    job = _workflow()["jobs"]["ready_recovery_dispatch"]
+    assert job["permissions"] == {
+        "actions": "write", "contents": "read", "pull-requests": "read"}
+
+
+def test_ready_recovery_dispatch_job_is_main_only_and_fixed_form():
+    job = _workflow()["jobs"]["ready_recovery_dispatch"]
+    condition = job["if"]
+    assert "github.event.issue.pull_request == null" in condition
+    assert "github.ref == 'refs/heads/main'" in condition
+    assert "github.event.comment.user.id == 32861845" in condition
+    assert f"github.event.comment.user.id == {SERVICE_ACTOR_ID}" in condition
+    assert "startsWith(github.event.comment.body, '/agent-os recover-ready ')" in condition
+
+
+def test_ready_recovery_parse_step_scopes_the_service_actor():
+    # The parser flag is what confines the app identity to recover-ready;
+    # the Ready-recovery job must pass it, must NOT use the validate-draft
+    # admission flag, and no other job may pass the recover-ready flag.
+    for name, job in _workflow()["jobs"].items():
+        text = yaml.safe_dump(job)
+        if name in READY_RECOVERY_JOBS:
+            assert "--ready-recovery-service-actor" in text, name
+            assert "chatgpt-codex-connector[bot]" in text, name
+            assert "--draft-validation-service-actor" not in text, name
+        else:
+            assert "--ready-recovery-service-actor" not in text, name
+
+
+def test_ready_recovery_dispatch_job_does_not_persist_checkout_credentials():
+    # The Ready-recovery job holds actions: write; its checkout must not
+    # leave the job token in .git/config for a later-installed dependency
+    # to read. Same rule as the draft-validation dispatch job.
+    for name in READY_RECOVERY_JOBS:
+        checkouts = [
+            step for step in _workflow()["jobs"][name]["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        assert checkouts, name
+        for step in checkouts:
+            assert step.get("with", {}).get("persist-credentials") is False, name
+
+
+def test_generic_ingress_job_excludes_recover_ready():
+    ingress_condition = _workflow()["jobs"]["ingress"]["if"]
+    assert "!startsWith(github.event.comment.body, '/agent-os recover-ready')" in ingress_condition
