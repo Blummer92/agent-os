@@ -494,7 +494,6 @@ def _verify_post_merge_observation(
         or type(raw.get("merged_at")) is not str
         or not raw["merged_at"]
         or raw.get("merge_commit_sha") != observation.observed_merge_commit_sha
-        or raw.get("draft") is not False
     ):
         raise ValueError("merge-observation.pr-not-verified-merged")
     # The merge-module observation is evidence, not a host-authenticated
