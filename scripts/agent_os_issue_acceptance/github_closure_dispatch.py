@@ -513,7 +513,10 @@ def _verify_post_merge_observation(
     linkage = parse_linked_issue_result(body, title)
     target = decision.issue_number
     if linkage.status is LinkedIssueParseStatus.RESOLVED:
-        if linkage.issue_number != target or linkage.bare_references:
+        if (
+            linkage.issue_number != target
+            or any(ref.issue_number != target for ref in linkage.bare_references)
+        ):
             # A closing directive for one issue cannot silently absorb other
             # issue references. Investigate ambiguous lineage first.
             raise ValueError("merge-observation.pr-linkage-ambiguous")
