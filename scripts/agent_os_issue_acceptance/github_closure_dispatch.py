@@ -500,7 +500,11 @@ def _dry_run_outcomes(
             outcomes.append(
                 {
                     "issue_number": issue_number,
-                    "status": "already-closed" if verified else status,
+                    "status": (
+                        "already-closed"
+                        if verified and status == "closed-verified"
+                        else status
+                    ),
                     "reason_codes": list(reasons),
                     "readback_verified": verified,
                     "receipt_id": None,
