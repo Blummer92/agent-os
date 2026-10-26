@@ -56,6 +56,21 @@ _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
 
+def _reviewed_inspection_requests() -> dict[str, str]:
+    """Only reviewed, non-null Lesson ID targets can acquire an inspect slug."""
+    targets: dict[str, str] = {}
+    for reviewed_id in reviewed_catalog.LESSONS:
+        target = reviewed_catalog.entry_for(reviewed_id)["target_lesson_id"]
+        if target is not None:
+            if LESSON_ID.fullmatch(target) is None:
+                raise NotionReadRequestError("invalid reviewed lesson target")
+            request_id = f"verify-{target.lower()}-current-revision"
+            if request_id in targets and targets[request_id] != target:
+                raise NotionReadRequestError("ambiguous reviewed lesson target")
+            targets[request_id] = target
+    return targets
+
+
 def _verification_request_spec(
     request_id: str | None,
 ) -> tuple[int, str, tuple[str, ...]] | None:
@@ -446,21 +461,6 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
         "gce_invoked": False,
         "generated_at": generated_at,
     }
-
-
-def _reviewed_inspection_requests() -> dict[str, str]:
-    """Only reviewed, non-null Lesson ID targets can acquire an inspect slug."""
-    targets: dict[str, str] = {}
-    for reviewed_id in reviewed_catalog.LESSONS:
-        target = reviewed_catalog.entry_for(reviewed_id)["target_lesson_id"]
-        if target is not None:
-            if LESSON_ID.fullmatch(target) is None:
-                raise NotionReadRequestError("invalid reviewed lesson target")
-            request_id = f"verify-{target.lower()}-current-revision"
-            if request_id in targets and targets[request_id] != target:
-                raise NotionReadRequestError("ambiguous reviewed lesson target")
-            targets[request_id] = target
-    return targets
 
 
 def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
