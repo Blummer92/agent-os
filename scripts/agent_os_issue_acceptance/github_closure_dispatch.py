@@ -16,8 +16,8 @@ Transport is an injected callable::
     request(method, path, body) -> (status: int, payload: dict)
 
 so every behaviour below is testable without network access. The default
-factory :func:`github_api_transport` builds that callable over stdlib
-urllib. Candidate issues come only from the caller-supplied manifest --
+factory :func:`github_api_transport` uses the canonical GitHub client and
+request helper, without a second HTTP implementation. Candidate issues come only from the caller-supplied manifest --
 a finite, explicit set -- never from population enumeration.
 
 Writer contract (exactly the fixed host dispatch contract): PATCH the
@@ -54,10 +54,13 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any
+
+from github import Github
+
+from scripts.agent_os_github_issue_provider.auth import build_token_client
+from scripts.agent_os_github_issue_provider.request import GitHubRequestError, request_json
 
 from .closure_admission_actions import (
     ClosureAcceptanceEvidence,
@@ -153,53 +156,46 @@ def _label_names(raw_labels: object) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-def github_api_transport(
-    token: str | None, api_base: str = "https://api.github.com"
-) -> Transport:
-    """Build the default stdlib-urllib transport for one host session.
+def github_api_transport(token: str | None) -> Transport:
+    """Adapt the canonical GitHub requester to the closure transport contract.
 
-    ``token`` is supplied by the caller (the CLI reads it from the
-    environment); when it is ``None`` no Authorization header is sent.
-    HTTP errors are returned as ``(status, payload)`` so the reader and
-    writer can classify them; transport-level failures (``URLError`` and
-    friends) propagate for the caller to classify.
+    Shared auth/request modules own credentials, HTTP encoding, and low-level
+    errors. Writes use one attempt and never retry an uncertain result.
+    Anonymous dry runs retain read-only access without credentials.
     """
-
-    base = api_base.rstrip("/")
+    client = (
+        build_token_client(
+            {"GITHUB_TOKEN": token},
+            user_agent="agent-os-closure-dispatch",
+        )
+        if token
+        else Github(
+            retry=None,
+            lazy=False,
+            user_agent="agent-os-closure-dispatch",
+        )
+    )
 
     def request(
         method: str, path: str, body: dict[str, object] | None
     ) -> tuple[int, Any]:
-        data = None
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "agent-os-closure-dispatch",
-        }
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(
-            base + path, data=data, headers=headers, method=method
-        )
         try:
-            with urllib.request.urlopen(req) as response:
-                raw = response.read()
-                return response.status, _decode_json(raw)
-        except urllib.error.HTTPError as exc:
-            return exc.code, _decode_json(exc.read())
+            response = request_json(
+                client,
+                method,
+                path,
+                input_payload=body,
+                max_attempts=1,
+            )
+            return 200, response.payload
+        except GitHubRequestError as exc:
+            if type(exc.status) is int:
+                return exc.status, {}
+            if exc.kind == "transport-unavailable":
+                raise ConnectionError("github-transport-unavailable") from exc
+            raise RuntimeError(f"github-transport-failed:{exc.kind}") from exc
 
     return request
-
-
-def _decode_json(raw: bytes) -> Any:
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return {}
 
 
 class GitHubClosureReader:
@@ -545,7 +541,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
     """CLI entry point. Returns a process exit code; prints one JSON object.
 
     ``transport`` is a test seam only: when supplied, it replaces the
-    urllib transport (and the live token check is skipped, since the
+    canonical GitHub transport (and the live token check is skipped, since the
     injected transport is the test's credential surface). In production
     use it is always ``None``.
     """
