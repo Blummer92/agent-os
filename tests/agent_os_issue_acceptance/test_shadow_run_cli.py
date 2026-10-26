@@ -714,20 +714,21 @@ def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_
     assert section["execution_authorized"] is False
     assert section["side_effects_performed"] is False
     (jscpd_source, pyan_source) = section["sources"]
-    # Provenance preserved exactly, including pyan truncation.
-    assert jscpd_source["tool"] == "jscpd"
-    assert jscpd_source["schema"] == "agent-os-jscpd-advisory/1"
-    assert jscpd_source["version"] == "4.0.5"
-    assert jscpd_source["head_sha"] == _SHA
-    assert jscpd_source["candidate_count"] == 1
-    assert jscpd_source["truncated"] is False
-    assert jscpd_source["state"] == "ok"
-    assert pyan_source["tool"] == "pyan3"
-    assert pyan_source["schema"] == "agent-os-pyan3-advisory/1"
-    assert pyan_source["version"] == "2.9.0"
-    assert pyan_source["head_sha"] == _SHA
-    assert pyan_source["truncated"] is True
-    assert pyan_source["state"] == "ok"
+    # Assert the exact typed provenance contract for both producers.
+    for source, expected in (
+        (jscpd_source, {
+            "tool": "jscpd", "schema": "agent-os-jscpd-advisory/1",
+            "version": "4.0.5", "head_sha": _SHA,
+            "candidate_count": 1, "truncated": False, "state": "ok",
+        }),
+        (pyan_source, {
+            "tool": "pyan3", "schema": "agent-os-pyan3-advisory/1",
+            "version": "2.9.0", "head_sha": _SHA,
+            "truncated": True, "state": "ok",
+        }),
+    ):
+        for key, value in expected.items():
+            assert type(source[key]) is type(value) and source[key] == value, key
     # Findings intact with original file/line, never selection input.
     (clone,) = jscpd_source["findings"]
     assert clone["kind"] == "textual-clone"
@@ -847,6 +848,95 @@ def test_cli_scanner_advisory_out_of_scope_findings_are_annotated_not_hidden(
     (finding,) = source["findings"]
     assert finding["out_of_scope"] is True
     assert source["out_of_scope_findings"] == 1
+
+
+
+def test_cli_scanner_producer_error_is_nonfatal_and_non_authorizing(monkeypatch, tmp_path) -> None:
+    artifact = _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()])
+    artifact["status"] = "scanner-error"
+    path = _write_artifact(tmp_path, "producer-error.json", artifact)
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(path),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["status"] == "scanner-error"
+    assert source["state"] == "scanner-error"
+    assert source["findings"] == []
+    assert source["selection_input"] is False
+    assert source["execution_authorized"] is False
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+
+def test_cli_scanner_bad_json_and_io_errors_preserve_failure_detail(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{", encoding="utf-8")
+    denied = tmp_path / "denied.json"
+    original_read_text = Path.read_text
+
+    def read_text_with_denial(path, *args, **kwargs):
+        if path == denied:
+            raise OSError("simulated advisory read error")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text_with_denial)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(malformed),
+        "--scanner-evidence", str(denied),
+    )
+    assert code == 0
+    bad_json, io_error = record["scanner_advisory"]["sources"]
+    for source in (bad_json, io_error):
+        assert source["state"] == source["status"] == "scanner-error"
+        assert source["findings"] == []
+        assert source["failure_detail"]
+    assert "JSONDecodeError" in bad_json["failure_detail"]
+    assert "OSError: simulated advisory read error" in io_error["failure_detail"]
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["zero_mutation_verification"]["http_write_requests"] == 0
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_shadow_workflow_supplies_same_checkout_scanners_and_shows_advisories() -> None:
+    """Structural wiring guard; live Actions consumption is verified separately."""
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    produce = next(i for i, step in enumerate(steps)
+                   if step.get("name") == "Generate same-revision scanner advisories")
+    consume = next(i for i, step in enumerate(steps)
+                   if step.get("name") == "Run Agent OS shadow navigation")
+    assert produce < consume
+    producer = steps[produce]["run"]
+    assert 'git rev-parse HEAD' in producer
+    assert 'scripts.jscpd_advisory' in producer
+    assert 'scripts.pyan3_advisory' in producer
+    assert '--sha "$source_sha"' in producer
+    with_args = steps[consume]["with"]
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/agent-os-shadow-navigation/action.yml").read_text()
+    )
+    for name in ("scanner_evidence_jscpd", "scanner_evidence_pyan3"):
+        assert name in with_args
+        assert name in action["inputs"]
+        assert "--scanner-evidence" in action["runs"]["steps"][0]["run"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    assert 'report.get("scanner_advisory")' in summary["run"]
+    assert 'source["state"]' in summary["run"]
 
 
 def test_scanner_advisory_loader_rejects_unsupported_schema() -> None:

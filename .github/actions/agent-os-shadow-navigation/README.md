@@ -23,10 +23,21 @@ closures, or any external-system write.
 - `narrowing_criterion` — required when `candidates` is supplied.
 - `explicit_order` — optional explicit request order inside the candidate set.
 - `mission_id` — optional finite-mission evidence-ledger identifier.
+- `scanner_evidence_jscpd` and `scanner_evidence_pyan3` — optional
+  filesystem paths to existing producer JSON artifacts. The workflow supplies
+  these automatically from the same checked-out revision.
 
 The output `report_path` points to the generated JSON experiment record.
 
 ## Scanner advisory evidence (#3429, record-only)
+
+The workflow runs the existing pinned jscpd (#3688) and pyan3 (#3689)
+producers against its checked-out Git revision, then passes both generated
+JSON paths to the composite action and the existing CLI. This avoids
+cross-workflow PR-head artifacts, expiry-dependent supply, and extra storage.
+A failure to install or start a scanner becomes `unavailable`; a producer's
+own non-`ok` status becomes `scanner-error`. The CLI verifies artifact SHA
+against the live main revision, preserving `stale` if main changes during the run.
 
 The CLI accepts a repeatable `--scanner-evidence PATH` flag, one advisory
 producer JSON per flag (`jscpd-advisory.json` from #3688 or
@@ -67,9 +78,23 @@ reader, or the evidence-ledger inputs digest, and it never changes a
 selection outcome or reason code. Candidate population completeness and
 fail-closed selection are unchanged: missing `primary_claims` or
 `approval_applicability` still fail closed with their named reasons.
-Reviewed deletion or consolidation candidates go to the existing #1729
-Wire-or-Retire audit; this section does not authorize, perform, or
-recommend any deletion by itself.
+Potential retirement candidates may be proposed to #1729 for owner review;
+no #1729 scanner intake is established or implied. This section does not
+authorize, perform, or recommend deletion.
+
+## Actual GSA / QA review handoff
+
+For each real shadow run, open the existing Actions job summary's **Scanner
+advisory** table and the uploaded `shadow-navigation-report.json` artifact
+in the same run (seven-day retention). Record the run URL, checkout SHA,
+each source's `head_sha`, `status`, `state`, candidate and loaded counts,
+truncation, scope, and any errors in the existing GSA implementation or
+QA review packet. QA must compare these against the saved §14 JSON rather
+than inferring success from a green workflow conclusion. An absent or stale
+source cannot be cited as current. GSA may review file/line pointers as
+engineering hypotheses, not as deletion approvals. This is the prescribed
+review procedure; actual consumption is not proven until a reviewer retrieves
+and cites a real run.
 
 The repository workflow `.github/workflows/agent-os-shadow-navigation.yml`
 provides the installable manual GitHub Actions entry point and publishes both a

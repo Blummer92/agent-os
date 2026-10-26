@@ -767,17 +767,19 @@ def _load_scanner_advisory(
     return section
 
 
-def _unavailable_scanner_advisory(path: str) -> dict[str, object]:
-    """Section for a missing artifact: explicit absence, not zero findings."""
-    return {
+def _unavailable_scanner_advisory(
+    path: str, *, status: str = "unavailable", failure_detail: str | None = None
+) -> dict[str, object]:
+    """Explicit absent/error section, never misreported as zero findings."""
+    section: dict[str, object] = {
         "source": Path(path).name,
         "tool": None,
         "schema": None,
         "version": None,
         "head_sha": None,
         "scope": [],
-        "status": "unavailable",
-        "state": "unavailable",
+        "status": status,
+        "state": status,
         "candidate_count": None,
         "truncated": None,
         "findings": [],
@@ -786,6 +788,9 @@ def _unavailable_scanner_advisory(path: str) -> dict[str, object]:
         "execution_authorized": False,
         "side_effects_performed": False,
     }
+    if failure_detail is not None:
+        section["failure_detail"] = failure_detail
+    return section
 
 
 def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> dict[str, object]:
@@ -1293,12 +1298,11 @@ def main(argv: list[str] | None = None) -> int:
             scanner_sources.append(_unavailable_scanner_advisory(evidence_path))
         except (ValueError, OSError) as exc:
             scanner_sources.append(
-                {
-                    **_unavailable_scanner_advisory(evidence_path),
-                    "status": "scanner-error",
-                    "state": "scanner-error",
-                    "failure_detail": f"{type(exc).__name__}: {exc}"[:240],
-                }
+                _unavailable_scanner_advisory(
+                    evidence_path,
+                    status="scanner-error",
+                    failure_detail=f"{type(exc).__name__}: {exc}"[:240],
+                )
             )
     scanner_advisory_section: dict[str, object] | None = None
     if args.scanner_evidence is not None:
