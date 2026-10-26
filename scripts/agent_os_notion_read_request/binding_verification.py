@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from datetime import datetime
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -28,8 +30,8 @@ from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
 from scripts.agent_os_notion_lessons_write import catalog as reviewed_catalog
-from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID
-from scripts.agent_os_notion_lessons_write.writer import inspect_target, _single, _lesson_id
+from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID, WRITABLE_TYPES
+from scripts.agent_os_notion_lessons_write.writer import _single, _lesson_id, _page, _check_schema, _values
 from scripts.agent_os_notion_lessons_write.admission import WriteBlocked, notion_id
 
 VERIFICATION_REQUEST_ID = "verify-photography-foundations-bindings"
@@ -490,11 +492,48 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
         page_id = notion_id(row.get("id"))
         page = _execute_read(adapter, "get_page", page_id=page_id)
         schema = _execute_read(adapter, "get_data_source", data_source_id=source_id)
-        inspected = inspect_target(
-            page, schema, source_id=source_id, lesson_id=lesson_id,
-        )
-        if inspected["page_id"] != page_id:
-            raise WriteBlocked("page-identity-mismatch")
+        _page(page, notion_id(source_id), page_id)
+        if _lesson_id(page) != lesson_id:
+            raise WriteBlocked("lesson-identity-mismatch")
+        _check_schema(schema, notion_id(source_id), {}, extra_types={
+            **WRITABLE_TYPES, "Surface Before Work?": "checkbox",
+        })
+        props = page.get("properties")
+        if not isinstance(props, Mapping):
+            raise WriteBlocked("malformed-page-properties")
+        for name, kind in (("Status", "select"), ("Surface Before Work?", "checkbox")):
+            if not isinstance(props.get(name), Mapping) or props[name].get("type") != kind:
+                raise WriteBlocked("page-property-type-mismatch")
+        status = props["Status"].get("select")
+        if status is not None and (
+            not isinstance(status, Mapping) or type(status.get("name")) is not str
+            or not status["name"]
+        ):
+            raise WriteBlocked("malformed-protected-status")
+        surface = props["Surface Before Work?"].get("checkbox")
+        if type(surface) is not bool:
+            raise WriteBlocked("malformed-protected-surface")
+        link = _values(page, ("Source Link",))["Source Link"]
+        if link is not None and type(link) is not str:
+            raise WriteBlocked("malformed-source-link")
+        revision = page["last_edited_time"]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision):
+            raise WriteBlocked("writer-incompatible-revision")
+        try:
+            datetime.fromisoformat(revision.replace("Z", "+00:00"))
+        except ValueError:
+            raise WriteBlocked("writer-incompatible-revision") from None
+        inspected = {
+            "lesson_id": lesson_id,
+            "page_id": page_id,
+            "data_source_id": notion_id(source_id),
+            "source_revision": revision,
+            "status": status["name"] if status is not None else None,
+            "surface_before_work": surface,
+            "source_link_present": bool(link),
+            "schema_verified": True,
+            "verification_state": "verified-current",
+        }
     except WriteBlocked as exc:
         raise NotionReadRequestError(str(exc)) from None
     return {
