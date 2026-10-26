@@ -679,7 +679,8 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
-        LL93_REVISION_VERIFICATION_REQUEST_ID,
+        "verify-ll-87-current-revision",
+        "verify-ll-93-current-revision",
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
@@ -813,7 +814,12 @@ class ReviewedAdapter:
             output = {"id": SOURCE, "archived": False,
                       "properties": {k: {"type": v} for k, v in types.items()}}
         elif action == "query_data_source":
-            rows = [] if self.missing else [{"id": PAGE}]
+            rows = [] if self.missing else [{
+                "id": PAGE, "archived": self.archived,
+                "last_edited_time": self.revision,
+                "parent": {"type": "data_source_id", "data_source_id": PAGE if self.wrong_parent else SOURCE},
+                "properties": {"Lesson ID": {"type": "unique_id", "unique_id": {"number": self.number, "prefix": "LL"}}},
+            }]
             if self.duplicate:
                 rows.append({"id": "cccccccc-cccc-cccc-cccc-cccccccccccc"})
             output = {"results": rows, "has_more": False}
@@ -845,11 +851,13 @@ def test_third_synthetic_reviewed_entry_needs_no_dispatch_branch(monkeypatch):
     entries["synthetic-reviewed"] = MappingProxyType({
         "target_lesson_id": "LL-123", "properties": MappingProxyType({"Guardrail": "Synthetic"})})
     monkeypatch.setattr(catalog, "LESSONS", MappingProxyType(entries))
-    monkeypatch.setattr(bv, "LESSONS", catalog.LESSONS)
-    assert "verify-ll-123-current-revision" in bv._reviewed_inspection_requests()
+    assert "verify-ll-123-current-revision" in bv._binding_verification_request_ids()
     result = bv.verify_reviewed_lesson_revision(
         ReviewedAdapter(123), request_id="verify-ll-123-current-revision", generated_at="synthetic")
     assert result["lesson"]["lesson_id"] == "LL-123"
+    assert bv.admit_binding_verification_request(
+        transport(request_id="verify-ll-123-current-revision", issue_number=3418),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)["status"] == "admitted"
 
 
 @pytest.mark.parametrize("issue", [1, 3417, 3418])
@@ -871,14 +879,14 @@ def test_unreviewed_lesson_refused(request_id):
 
 
 @pytest.mark.parametrize("kwargs,match", [
-    ({"missing": True}, "missing or ambiguous"),
-    ({"duplicate": True}, "missing or ambiguous"),
+    ({"missing": True}, "reviewed-lesson-missing"),
+    ({"duplicate": True}, "ambiguous-lesson"),
     ({"archived": True}, "inactive-page"),
     ({"wrong_parent": True}, "page-destination-mismatch"),
     ({"schema_mismatch": True}, "live-schema-drift"),
     ({"revision": ""}, "page-revision-required"),
     ({"revision": "not-a-timestamp"}, "writer-incompatible-revision"),
-    ({"number": 87}, "lesson-identity-mismatch"),
+    ({"number": 87}, "query-identity-mismatch"),
 ])
 def test_reviewed_inspection_fails_closed(kwargs, match):
     with pytest.raises(NotionReadRequestError, match=match):
