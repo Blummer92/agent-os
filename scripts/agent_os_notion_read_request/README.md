@@ -111,17 +111,22 @@ curriculum/asset requests can execute.
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
 
-## Fixed LL-93 current-revision read (#3418)
+## Reviewed Lessons Learned current-revision inspection (#3418)
 
-`verify-ll93-current-revision` (issue #3418 only) is one fixed binding-verification
-request: it reads the fixed LL-93 page by id (even while `Surface Before Work?` is
-false), proves Lesson ID `LL-93`, derives the parent data source live, checks the
-relevant schema types, and projects only `source_revision` (page `last_edited_time`),
-`status`, `surface_before_work`, `source_link_present` and identity fields. It
-returns no guidance text and performs no Notion write. The revision is the value the
-#3417 writer's expected-revision guard consumes; the writer's field set, stale-revision
-refusal and readback are unchanged. No workflow edit: the existing finite
-`BINDING_VERIFICATION_REQUEST_IDS` routing picks it up.
+The existing binding-verification ingress derives finite
+`verify-ll-<number>-current-revision` slugs from reviewed writer-catalog entries
+with a non-null `target_lesson_id`. For example, LL-87 and LL-93 use the
+same read-only implementation. A new reviewed target requires no Python dispatch
+branch. Owner-authored, first-attempt requests may originate on any ordinary
+non-PR repository issue. Unreviewed IDs are rejected before credential access.
+
+The canonical Lessons Learned anchor verifies the current destination; a
+unique bounded Lesson ID query finds the target, then an exact page read and
+schema read verify identity, parent, archive state, protected values and a
+writer-compatible current revision. Surface Before Work? is observed, never an
+inspection eligibility gate. The result contains bounded identity, revision,
+state and verification fields only; no narrative, raw properties, or write
+operation. This does not grant CKR6 eligibility or a Notion mutation.
 
 ## Fixed destination verification
 
