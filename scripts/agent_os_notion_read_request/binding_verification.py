@@ -27,7 +27,8 @@ from agent_os_notion_binding import NotionBindingError, build_read_task, new_rea
 from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
-from scripts.agent_os_notion_lessons_write.catalog import LESSONS, LESSON_ID, entry_for
+from scripts.agent_os_notion_lessons_write import catalog as reviewed_catalog
+from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID
 from scripts.agent_os_notion_lessons_write.writer import inspect_target
 from scripts.agent_os_notion_lessons_write.admission import WriteBlocked, notion_id
 
@@ -450,8 +451,8 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
 def _reviewed_inspection_requests() -> dict[str, str]:
     """Only reviewed, non-null Lesson ID targets can acquire an inspect slug."""
     targets: dict[str, str] = {}
-    for reviewed_id in LESSONS:
-        target = entry_for(reviewed_id)["target_lesson_id"]
+    for reviewed_id in reviewed_catalog.LESSONS:
+        target = reviewed_catalog.entry_for(reviewed_id)["target_lesson_id"]
         if target is not None:
             if LESSON_ID.fullmatch(target) is None:
                 raise NotionReadRequestError("invalid reviewed lesson target")
