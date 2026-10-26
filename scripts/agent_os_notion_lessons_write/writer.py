@@ -153,6 +153,77 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
             raise WriteBlocked("descriptive-option-not-in-live-schema")
 
 
+def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
+                   lesson_id: str) -> dict[str, object]:
+    """Pure read-only inspection, using the writer's existing identity/schema rules.
+
+    The resulting exact revision is suitable for the existing owner-authorized
+    update admission; this helper does not grant or attempt an update.
+    """
+    import re
+    from datetime import datetime
+
+    normalized_source = notion_id(source_id)
+    _check_schema(schema, normalized_source, {})
+    page_id = _page(page, normalized_source)
+    if LESSON_ID.fullmatch(lesson_id) is None or _lesson_id(page) != lesson_id:
+        raise WriteBlocked("lesson-identity-mismatch")
+
+    declared = schema.get("properties", {})
+    required_types = {
+        **WRITABLE_TYPES,
+        "Lesson ID": "unique_id",
+        "Status": "select",
+        "Surface Before Work?": "checkbox",
+    }
+    if not isinstance(declared, Mapping) or any(
+        not isinstance(declared.get(name), Mapping)
+        or declared[name].get("type") != kind
+        for name, kind in required_types.items()
+    ):
+        raise WriteBlocked("live-schema-drift")
+
+    fields = page.get("properties")
+    if not isinstance(fields, Mapping):
+        raise WriteBlocked("malformed-page-properties")
+    for name in ("Lesson ID", "Status", "Surface Before Work?", "Source Link"):
+        field = fields.get(name)
+        if not isinstance(field, Mapping) or field.get("type") != required_types[name]:
+            raise WriteBlocked("page-property-type-mismatch")
+    selection = fields["Status"].get("select")
+    if selection is not None and (
+        not isinstance(selection, Mapping) or
+        type(selection.get("name")) is not str or not selection["name"]
+    ):
+        raise WriteBlocked("malformed-protected-status")
+    surface = fields["Surface Before Work?"].get("checkbox")
+    if type(surface) is not bool:
+        raise WriteBlocked("malformed-protected-surface")
+    source_link = fields["Source Link"].get("url")
+    if source_link is not None and type(source_link) is not str:
+        raise WriteBlocked("malformed-source-link")
+
+    revision = page["last_edited_time"]
+    # Match the exact timestamp grammar accepted by admission.admit for updates.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision) is None:
+        raise WriteBlocked("writer-incompatible-revision")
+    try:
+        datetime.fromisoformat(revision.replace("Z", "+00:00"))
+    except ValueError:
+        raise WriteBlocked("writer-incompatible-revision") from None
+    return {
+        "lesson_id": lesson_id,
+        "page_id": page_id,
+        "data_source_id": normalized_source,
+        "source_revision": revision,
+        "status": selection["name"] if selection is not None else None,
+        "surface_before_work": surface,
+        "source_link_present": bool(source_link),
+        "schema_verified": True,
+        "verification_state": "verified-current",
+    }
+
+
 def execute(request: AdmittedRequest, client) -> dict:
     """Consume owner admission under the existing policy, never infer authority."""
     result = {
