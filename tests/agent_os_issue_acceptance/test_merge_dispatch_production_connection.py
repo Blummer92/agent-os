@@ -6,9 +6,10 @@ runs, in process and without mocks for the canonical evaluator:
 1. ``merge_admission_actions`` (candidate front door) on a fixed transport
    returns a blocked candidate receipt with ``merge_authorized is False``.
 2. ``merge_applicability`` on the SAME transport and the SAME fake GitHub
-   surface returns an applicable dispatch receipt with
-   ``merge_authorized is True`` only because the canonical evaluator
-   returned applicable for a typed ``MergeProposal``.
+   surface returns a content-passing dispatch receipt (status
+   awaiting-human-attestation, merge_authorized False) because the
+   canonical evaluator returned applicable for the native merge-specific
+   v1.2 record -- content admission only, never human-origin authority.
 3. A transport the candidate step blocks (wrong merge method) is blocked
    by dispatch too, with canonical applicability NOT evaluated — the
    dispatch consumer cannot bypass its own front door.
@@ -38,7 +39,7 @@ _spec.loader.exec_module(_tdispatch)
 
 
 def _client_and_transport(**transport_changes):
-    bundle = _tdispatch._tauth._bundle()
+    bundle = None  # native 1.2: no planning bundle supplies merge authority
     record = _tdispatch._authorized_record(bundle)
     pr = _tdispatch._PR()
     comments = _tdispatch._comments_for(bundle, record)
@@ -61,10 +62,10 @@ def test_production_sequence_candidate_then_dispatch_reaches_canonical():
         transport, repository=_tdispatch.REPO, github_client=client,
         evaluated_at=_tdispatch.NOW,
     )
-    assert dispatch["status"] == "applicable"
-    assert dispatch["merge_authorized"] is True
+    assert dispatch["status"] == "awaiting-human-attestation"
+    assert dispatch["merge_authorized"] is False
     assert dispatch["dispatch_checks_passed"] is True
-    assert dispatch["reason_codes"] == []
+    assert dispatch["reason_codes"] == ["human-origin-attestation-required"]
     assert dispatch["canonical_applicability_evaluated"] is True
     canonical = dispatch["canonical_applicability_result"]
     assert canonical is not None
@@ -72,7 +73,6 @@ def test_production_sequence_candidate_then_dispatch_reaches_canonical():
     assert canonical["merge_authorized"] is True
     assert canonical["changed_bindings"] == []
     assert canonical["reason_codes"] == []
-    assert canonical["proposal_id"].startswith("merge-proposal:")
     # The dispatch receipt carries the candidate receipt it started from,
     # bound to the same authorization and the same exact head.
     assert dispatch["admission_receipt"]["authorization_id"] == candidate["authorization_id"]

@@ -9,6 +9,7 @@ merge_authorized false, and no case in this file performs a merge.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 import sys
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -21,28 +22,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
     MergeCheckEvidence,
     MergeReviewEvidence,
-    approval_applicability_identity,
-    build_merge_authorization_candidate,
     record_merge_authorization_decision,
-    serialize_approval_applicability_result,
-    serialize_approval_record,
-    serialize_approved_execution_projection,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization_source import (  # noqa: E402
     serialize_merge_authorization_comment,
 )
-from scripts.agent_os_issue_acceptance.approval_source import (  # noqa: E402
-    APPLICABILITY_MARKER,
-    APPROVAL_MARKER,
-    PROJECTION_MARKER,
-    serialize_approval_comment,
-)
 from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
+    build_merge_authorization_candidate_from_pr,
     changed_scope_fingerprint,
     pr_metadata_fingerprint,
 )
 from scripts.agent_os_issue_acceptance.merge_applicability import (  # noqa: E402
     evaluate_merge_dispatch_applicability,
+    _unresolved_review_threads,
 )
 
 _HERE = Path(__file__).parent
@@ -62,34 +54,6 @@ TITLE, BODY = "Merge the thing", "Body text"
 BODY_SHA = sha256(BODY.encode("utf-8")).hexdigest()
 
 
-def _timed_bundle(decision_at, expires_at, eval_at):
-    handoff = _tauth._handoff()
-    issueplan = _tauth._issueplan(handoff)
-    repository = _tauth._repo()
-    proposals = _tauth.build_draft_task_proposals(
-        handoff, issueplan, repository, created_at="2026-07-26T14:00:00Z"
-    )
-    proposal = proposals.proposals[0]
-    candidate = _tauth.build_approval_candidate(
-        proposal, issueplan, repository,
-        approval_kind=_tauth.ApprovalKind.IMPLEMENTATION,
-        authorizer_id="operator-requester", decision_id="approval-request",
-        decision_at="2026-07-26T14:00:00Z", expires_at=expires_at,
-    )
-    approval = _tauth.record_approval_decision(
-        candidate, state=_tauth.ApprovalState.APPROVED,
-        decision_id="approval-decision", authorizer_id="repository-owner",
-        decision_at=decision_at,
-    )
-    applicability = _tauth.evaluate_approval_applicability(
-        approval, proposal, issueplan, repository, evaluated_at=eval_at
-    )
-    assert applicability.status == "applicable"
-    projection_result = _tauth.build_approved_execution_projection(
-        proposal, approval, applicability, issueplan, repository, projected_at=eval_at
-    )
-    assert projection_result.status == "complete"
-    return approval, applicability, projection_result.projection, proposal, issueplan, repository
 
 
 ALLOWED_FILE = "scripts/agent_os_issue_acceptance/merge_authorization.py"
@@ -97,16 +61,21 @@ ALLOWED_FILE = "scripts/agent_os_issue_acceptance/merge_authorization.py"
 
 def _authorized_record(bundle, decision_at="2026-07-26T14:30:00Z",
                        expires_at="2026-07-26T15:30:00Z", **changes):
-    approval, applicability, projection = bundle[0], bundle[1], bundle[2]
     scope = changed_scope_fingerprint([(ALLOWED_FILE, FILE_SHA)])
     values = dict(
         repository=REPO, pull_request_number=PR_NUMBER, head_sha=HEAD,
         base_branch="main", base_sha_or_evidence_id=BASE, draft=False,
         ready_for_review=True, proposed_merge_method="squash",
         changed_scope_fingerprint=scope,
-        required_checks=(MergeCheckEvidence(
-            context="CI", app_identity="github-actions",
-            tested_sha=HEAD, evidence_id="", state="success"),),
+        required_checks=(
+            MergeCheckEvidence(
+                context="CI", app_identity="github-actions",
+                tested_sha=HEAD, evidence_id="", state="success"),
+            MergeCheckEvidence(
+                context="agent-os/authoritative-aggregate",
+                app_identity="github-actions",
+                tested_sha=HEAD, evidence_id="", state="success"),
+        ),
         review_evidence=MergeReviewEvidence(
             blocking_review_present=False, unresolved_conversation_count=0,
             exact_head_reviewed=True),
@@ -116,17 +85,14 @@ def _authorized_record(bundle, decision_at="2026-07-26T14:30:00Z",
     )
     values.update(changes)
     evidence = _tauth._pr(bundle, **values)
-    candidate = build_merge_authorization_candidate(
-        approval, applicability, projection, evidence,
-        current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
-        current_repository_state_evidence=bundle[5],
-        authorizer_id="repository-owner", decision_id="merge-request",
+    candidate = build_merge_authorization_candidate_from_pr(
+        evidence,
+        authorizer_id=OWNER, decision_id="merge-request",
         decision_at=decision_at, expires_at=expires_at,
-        permitted_merge_method="squash",
     )
     return record_merge_authorization_decision(
         candidate, state=_tauth.MergeAuthorizationState.AUTHORIZED,
-        decision_id="authz-decision", authorizer_id="repository-owner",
+        decision_id="authz-decision", authorizer_id=OWNER,
         decision_at=decision_at,
     )
 
@@ -152,15 +118,23 @@ class _File:
 
 
 class _CheckRun:
-    def __init__(self, name, conclusion):
+    def __init__(self, name, conclusion, app_slug="github-actions",
+                 app_id=15368, run_id=100):
         self.name = name
         self.conclusion = conclusion
+        self.app = type("App", (), {"slug": app_slug, "id": app_id})()
+        self.id = run_id
 
 
 class _Status:
-    def __init__(self, context, state):
+    def __init__(self, context, state, creator="github-actions[bot]",
+                 creator_id=41898282, status_id=100):
         self.context = context
         self.state = state
+        self.id = status_id
+        self.creator = type("Creator", (), {
+            "login": creator, "id": creator_id
+        })()
 
 
 class _Commit:
@@ -233,12 +207,16 @@ class _Owner:
 
 
 class _Repo:
-    def __init__(self, pr, comments, commit=None):
+    def __init__(self, pr, comments, commit=None, include_aggregate=True):
         self.owner = _Owner(OWNER)
         self._pr = pr
         self._comments = comments
-        self._commit = commit or _Commit(
-            runs=[_CheckRun("CI", "success")])
+        self._commit = commit or _Commit(runs=[_CheckRun("CI", "success")])
+        if include_aggregate:
+            self._commit._statuses = [
+                *_Commit(statuses=self._commit._statuses).get_statuses(),
+                _Status("agent-os/authoritative-aggregate", "success"),
+            ]
 
     def get_pull(self, number):
         assert number == PR_NUMBER
@@ -253,22 +231,57 @@ class _Repo:
         return self._commit
 
 
+class _Requester:
+    def __init__(self, pages=None):
+        self.pages = pages if pages is not None else [[{"isResolved": True}]]
+        self.calls = []
+
+    def graphql_query(self, query, variables):
+        self.calls.append(variables)
+        index = 0 if variables["cursor"] is None else int(variables["cursor"])
+        if index >= len(self.pages):
+            raise ValueError("missing review-thread page")
+        data = {
+            "data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "nodes": self.pages[index],
+                    "pageInfo": {
+                        "hasNextPage": index < len(self.pages) - 1,
+                        "endCursor": str(index + 1) if index < len(self.pages) - 1 else None,
+                    },
+                },
+            }}},
+        }
+        return {}, data
+
+
 class _Client:
-    def __init__(self, repo):
+    def __init__(self, repo, requester=None):
         self._repo = repo
+        self.requester = requester or _Requester()
 
     def get_repo(self, name):
         assert name == REPO
         return self._repo
 
 
+def _pending_for(record):
+    pending = replace(
+        record, authorization_revision="", revision_number=1,
+        previous_revision=None, state=_tauth.MergeAuthorizationState.PENDING,
+        decision_id="merge-request", reason_codes=(), details=(),
+    )
+    assert pending.authorization_revision == record.previous_revision
+    return pending
+
+
 def _comments_for(bundle, record, start=11):
-    approval, applicability, projection = bundle[0], bundle[1], bundle[2]
+    # Native 1.2 dispatch needs only the merge authorization chain;
+    # planning approval/applicability/projection comments are not
+    # consulted (#3734). `bundle` is accepted for call-site compatibility.
     return [
-        _Comment(start, serialize_approval_comment(APPROVAL_MARKER, serialize_approval_record(approval))),
-        _Comment(start + 1, serialize_approval_comment(APPLICABILITY_MARKER, serialize_approval_applicability_result(applicability))),
-        _Comment(start + 2, serialize_approval_comment(PROJECTION_MARKER, serialize_approved_execution_projection(projection))),
-        _Comment(start + 3, serialize_merge_authorization_comment(record)),
+        _Comment(start, serialize_merge_authorization_comment(_pending_for(record))),
+        _Comment(start + 1, serialize_merge_authorization_comment(record)),
     ]
 
 
@@ -289,7 +302,7 @@ def _transport(**changes):
 
 def _run(bundle=None, record=None, pr=None, comments=None, transport=None,
          evaluated_at=NOW, commit=None):
-    bundle = bundle or _tauth._bundle()
+    bundle = bundle
     record = record or _authorized_record(bundle)
     pr = pr or _PR()
     comments = comments if comments is not None else _comments_for(bundle, record)
@@ -304,13 +317,12 @@ def _run(bundle=None, record=None, pr=None, comments=None, transport=None,
 def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     receipt = _run()
     assert receipt["dispatch_checks_passed"] is True
-    assert receipt["status"] == "applicable"
-    assert receipt["merge_authorized"] is True
-    assert receipt["reason_codes"] == []
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
     assert receipt["verified"] == [
-        "transport-and-record", "approval-source-current",
-        "approval-binding-linkage", "file-scope",
-        "checks", "reviews", "lifecycle-admission",
+        "transport-and-record", "native-merge-record", "file-scope",
+        "checks", "reviews", "review-threads", "lifecycle-admission",
         "canonical-applicability",
     ]
     assert receipt["missing_interfaces"] == []
@@ -321,7 +333,6 @@ def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     assert canonical["merge_authorized"] is True
     assert canonical["changed_bindings"] == []
     assert canonical["reason_codes"] == []
-    assert canonical["proposal_id"].startswith("merge-proposal:")
     assert canonical["authorization_id"] == receipt["authorization_id"]
     assert receipt["expected_head_sha"] == HEAD
     assert receipt["authorization_expires_at"] is not None
@@ -379,7 +390,7 @@ def test_unauthorized_closing_reference_body_change_blocked():
     # already blocks on the metadata binding drift, before any canonical
     # step. The canonical evaluator independently refuses the same drift
     # (see test_merge_proposal.test_unauthorized_closing_reference_and_dual_claim_block).
-    bundle = _tauth._bundle()
+    bundle = None
     body = "Fixes #999"
     receipt = _run(
         bundle=bundle, pr=_PR(body=body),
@@ -404,11 +415,7 @@ def test_expired_authorization_blocked():
     # The canonical producer forbids an authorization that outlives its
     # approval, so expiry is exercised at the authorization layer: both the
     # record and its approval are past expiry at evaluation time.
-    bundle = _timed_bundle(
-        decision_at="2026-07-26T14:10:00Z",
-        expires_at="2026-07-26T14:45:00Z",
-        eval_at="2026-07-26T14:20:00Z",
-    )
+    bundle = None  # native 1.2: record expiry alone governs
     record = _authorized_record(
         bundle, decision_at="2026-07-26T14:30:00Z",
         expires_at="2026-07-26T14:44:00Z",
@@ -419,24 +426,29 @@ def test_expired_authorization_blocked():
     assert "authorization.expired" in receipt["reason_codes"]
 
 
-def test_missing_approval_artifacts_blocked():
-    bundle = _tauth._bundle()
+def test_planning_approval_artifacts_are_not_required_for_v2():
+    bundle = None
     record = _authorized_record(bundle)
-    comments = [_Comment(11, serialize_merge_authorization_comment(record))]
+    comments = [
+        _Comment(10, serialize_merge_authorization_comment(_pending_for(record))),
+        _Comment(11, serialize_merge_authorization_comment(record)),
+    ]
     receipt = _run(bundle=bundle, record=record, comments=comments)
-    assert receipt["dispatch_checks_passed"] is False
-    assert "approval-source-not-current" in receipt["reason_codes"]
-    assert "approval.absent" in receipt["reason_codes"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
 
 
-def test_approval_id_mismatch_blocked():
-    bundle = _tauth._bundle()
-    other = _tauth._bundle(approval_expires="2026-07-26T17:00:00Z")
+def test_foreign_planning_approval_is_not_merge_authority():
+    bundle = None
+    other = None
     record = _authorized_record(bundle)
     comments = _comments_for(other, record)
     receipt = _run(bundle=other, record=record, comments=comments)
-    assert receipt["dispatch_checks_passed"] is False
-    assert "approval-source-not-current" in receipt["reason_codes"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
 
 
 def test_failed_check_blocked():
@@ -504,11 +516,20 @@ def test_blocking_review_blocked():
     assert receipt["reason_codes"] == ["review.changed"]
 
 
-def test_dismissed_head_approval_blocked():
+def test_missing_head_approval_not_blocking():
+    # #3463 reviewer correction: APPROVED-at-head state is recorded,
+    # not gated. A COMMENTED-only review set (no APPROVED review at the
+    # head) must not block dispatch when no review is blocking and no
+    # thread is unresolved; owner approval is the execution-time card
+    # tap, not a review record.
     pr = _PR(_reviews=[_Review("COMMENTED", HEAD)])
     receipt = _run(pr=pr)
-    assert receipt["dispatch_checks_passed"] is False
-    assert receipt["reason_codes"] == ["review.changed"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    canonical = receipt["canonical_applicability_result"]
+    assert canonical["status"] == "applicable"
+    assert canonical["changed_bindings"] == []
+    assert canonical["reason_codes"] == []
 
 
 def test_draft_drift_blocked():
@@ -518,7 +539,7 @@ def test_draft_drift_blocked():
 
 
 def test_invalidated_record_blocks_replay():
-    bundle = _tauth._bundle()
+    bundle = None
     record = _authorized_record(bundle)
     invalidated = _tauth.record_merge_authorization_decision(
         record, state=_tauth.MergeAuthorizationState.INVALIDATED,
@@ -526,7 +547,10 @@ def test_invalidated_record_blocks_replay():
         decision_at="2026-07-26T15:00:00Z",
         reason_codes=("authorization.revoked",),
     )
-    comments = _comments_for(bundle, invalidated)
+    # Include the pending and authorized predecessors, then the terminal
+    # invalidation. A terminal record cannot stand alone as a valid chain.
+    comments = _comments_for(bundle, record)
+    comments.append(_Comment(16, serialize_merge_authorization_comment(invalidated)))
     receipt = _run(bundle=bundle, record=invalidated, comments=comments)
     assert receipt["dispatch_checks_passed"] is False
     assert "merge-dispatch-blocked-by-admission" in receipt["reason_codes"]
@@ -559,6 +583,86 @@ def test_repeated_evaluation_is_idempotent():
     assert first["reason_codes"] == second["reason_codes"]
 
 
+
+# Security regression checks: absence of positive review-thread evidence is
+# never equivalent to zero unresolved threads.
+def test_missing_graphql_review_thread_capability_fails_closed():
+    class _RestOnlyClient:
+        def __init__(self, repo):
+            self._repo = repo
+
+        def get_repo(self, name):
+            return self._repo
+
+    bundle = None
+    record = _authorized_record(bundle)
+    client = _RestOnlyClient(_Repo(_PR(), _comments_for(bundle, record)))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["review.threads-unverifiable"]
+
+
+def test_unresolved_thread_blocks_even_with_approved_head():
+    bundle = None
+    record = _authorized_record(bundle)
+    client = _Client(
+        _Repo(_PR(), _comments_for(bundle, record)),
+        requester=_Requester([[{"isResolved": False}]]),
+    )
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["review.unresolved"]
+
+
+def test_review_threads_use_every_page():
+    requester = _Requester([
+        [{"isResolved": True}],
+        [{"isResolved": False}, {"isResolved": True}],
+    ])
+    client = _Client(_Repo(_PR(), []), requester=requester)
+    assert _unresolved_review_threads(client, REPO, PR_NUMBER) == 1
+    assert [call["cursor"] for call in requester.calls] == [None, "1"]
+
+
+@pytest.mark.parametrize("invalid_page", [
+    [{"isResolved": "false"}],
+    [None],
+    [{"unexpected": True}],
+])
+def test_malformed_review_thread_page_fails_closed(invalid_page):
+    client = _Client(_Repo(_PR(), []), requester=_Requester([invalid_page]))
+    with pytest.raises(ValueError):
+        _unresolved_review_threads(client, REPO, PR_NUMBER)
+
+
+def test_forbidden_path_rechecked_even_when_authorized_fingerprint_matches():
+    bundle = None
+    original = _authorized_record(bundle)
+    # The record is content-addressed and trusted, but its own forbidden
+    # contract was not enforced at admission time. Current scope did not drift.
+    forbidden_binding = replace(original.binding, forbidden_paths=("scripts/*",))
+    pending = replace(
+        _pending_for(original), binding=forbidden_binding,
+        authorization_id="", authorization_revision="",
+    )
+    record = record_merge_authorization_decision(
+        pending, state=_tauth.MergeAuthorizationState.AUTHORIZED,
+        decision_id="authz-decision", authorizer_id=OWNER,
+        decision_at=pending.decision_at,
+    )
+    comments = _comments_for(bundle, record)
+    client = _Client(_Repo(_PR(), comments))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "contract.forbidden-paths-changed" in receipt["reason_codes"]
+
+
 class TestChangedScopeFingerprint:
     def test_deterministic_and_order_independent(self):
         left = changed_scope_fingerprint([("b.py", "a" * 40), ("a.py", "b" * 40)])
@@ -573,3 +677,92 @@ class TestChangedScopeFingerprint:
     def test_empty_rejected(self):
         with pytest.raises(ValueError):
             changed_scope_fingerprint([])
+
+
+# Native schema 1.2 adversarial checks: the old source only checked names.
+def test_correct_context_from_wrong_app_is_not_authority():
+    receipt = _run(commit=_Commit(
+        runs=[_CheckRun("CI", "success", app_slug="untrusted-app")]))
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
+
+
+def test_forged_aggregate_commit_status_is_not_authority():
+    bundle = None
+    record = _authorized_record(bundle)
+    commit = _Commit(
+        runs=[_CheckRun("CI", "success")],
+        statuses=[_Status("agent-os/authoritative-aggregate", "success",
+                          creator="mallory", creator_id=999)],
+    )
+    client = _Client(_Repo(_PR(), _comments_for(bundle, record),
+                           commit=commit, include_aggregate=False))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
+
+
+def test_missing_live_aggregate_blocks():
+    bundle = None
+    record = _authorized_record(bundle)
+    client = _Client(_Repo(
+        _PR(), _comments_for(bundle, record),
+        commit=_Commit(runs=[_CheckRun("CI", "success")]),
+        include_aggregate=False,
+    ))
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO, github_client=client, evaluated_at=NOW,
+    )
+    assert receipt["merge_authorized"] is False
+    assert "checks.missing" in receipt["reason_codes"]
+
+
+def test_latest_commit_status_overrides_old_failure():
+    from scripts.agent_os_issue_acceptance.merge_applicability import _latest_evidence
+    commit = _Commit(statuses=[
+        _Status("agent-os/authoritative-aggregate", "success", status_id=3),
+        _Status("agent-os/authoritative-aggregate", "failure", status_id=2),
+    ])
+    assert _latest_evidence(commit)["agent-os/authoritative-aggregate"] == (
+        "success", "github-actions", True,
+    )
+
+
+def test_latest_commit_status_failure_overrides_old_success():
+    from scripts.agent_os_issue_acceptance.merge_applicability import _latest_evidence
+    commit = _Commit(statuses=[
+        _Status("agent-os/authoritative-aggregate", "failure", status_id=3),
+        _Status("agent-os/authoritative-aggregate", "success", status_id=2),
+    ])
+    assert _latest_evidence(commit)["agent-os/authoritative-aggregate"][0] == "failure"
+
+
+def test_extra_authorized_allowlist_paths_are_not_drift():
+    from dataclasses import replace
+    bundle = None
+    original = _authorized_record(bundle)
+    binding = replace(original.binding, allowed_files=(
+        ALLOWED_FILE, "scripts/also-authorized.py",
+    ))
+    pending = replace(
+        _pending_for(original), binding=binding,
+        authorization_id="", authorization_revision="",
+    )
+    record = record_merge_authorization_decision(
+        pending, state=_tauth.MergeAuthorizationState.AUTHORIZED,
+        decision_id="authz-decision", authorizer_id=OWNER,
+        decision_at=pending.decision_at,
+    )
+    receipt = _run(bundle=bundle, record=record)
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
+
+
+def test_missing_publisher_fails_closed():
+    receipt = _run(commit=_Commit(
+        runs=[_CheckRun("CI", "success", app_slug=None)]))
+    assert receipt["merge_authorized"] is False
+    assert "checks.publisher-unverifiable" in receipt["reason_codes"]
