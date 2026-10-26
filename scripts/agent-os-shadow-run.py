@@ -150,6 +150,9 @@ from scripts.agent_os_candidate_packet_live_input import (  # noqa: E402
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
 )
+from scripts.agent_os_pr_remediation.ci_evidence_recovery import (  # noqa: E402
+    sanitize_actionable_failure,
+)
 
 _API = "https://api.github.com"
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
@@ -611,6 +614,83 @@ SCANNER_ADVISORY_SCHEMAS = {
     "agent-os-pyan3-advisory/1": "pyan3",
 }
 
+#: Scanner-advisory input bounds (#3429 repair). Genuine producer JSON is
+#: tens of kilobytes and both producers already cap candidates at 100 in
+#: JSON, so the loader cap below is a no-op for genuine output and a
+#: deterministic first-N truncation for crafted oversized input. Anything
+#: larger than the byte cap is a scanner-error, never loaded unbounded.
+SCANNER_ADVISORY_MAX_BYTES = 1_048_576
+SCANNER_ADVISORY_MAX_FINDINGS = 100
+
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w/])/[^\s\"')\]]+|(?<![\w\\])[A-Za-z]:\\[^\s\"')\]]+"
+)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _is_safe_repo_path(value: object) -> bool:
+    """True for a repository-relative path safe to publish.
+
+    Absolute host paths, drive paths, ``..`` escapes, empty components,
+    and control characters are never safe: an untrusted artifact must not
+    leak a runner's filesystem layout into a published record or summary.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if _CONTROL_RE.search(value):
+        return False
+    if value.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    return all(part not in ("", "..") for part in value.split("/"))
+
+
+def _safe_scope(scope: list) -> list[str]:
+    """Keep only publishable repository-relative scope entries."""
+    safe: list[str] = []
+    for entry in scope:
+        if not isinstance(entry, str):
+            continue
+        entry = entry.strip().rstrip("/")
+        if _is_safe_repo_path(entry):
+            safe.append(entry)
+    return safe
+
+
+def _safe_display_text(value: object, *, max_len: int = 128) -> str | None:
+    """Public-safe display text, or None when nothing publishable remains.
+
+    Reuses the existing ``sanitize_actionable_failure`` secret/control
+    handling (credential-like patterns redacted, control characters
+    replaced) and bounds the result; it never returns raw input.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        text = sanitize_actionable_failure(value)
+    except Exception:
+        text = _CONTROL_RE.sub("", value)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    return text[:max_len] if text else None
+
+
+def _safe_failure_detail(exc: BaseException) -> str:
+    """Public-safe failure text: type name plus redacted detail.
+
+    Absolute host paths are replaced before secret redaction, so an
+    OSError filename or a credential-like fragment can never reach a
+    published record, summary, or uploaded report. Bounded to 240 chars.
+    """
+    raw = _ABSOLUTE_PATH_RE.sub("[path]", f"{type(exc).__name__}: {exc}")
+    try:
+        text = sanitize_actionable_failure(raw)
+    except Exception:
+        text = type(exc).__name__
+    return text[:240]
+
+
+def _safe_int(value: object) -> int | None:
+    return value if type(value) is int else None
+
 _JSCPD_CLONE_NOTE = (
     "Textual similarity only; not semantic equivalence. "
     "Do not infer that the two fragments share a responsibility."
@@ -676,7 +756,25 @@ def _normalize_scanner_advisory(
         or not isinstance(candidates, list)
     ):
         raise ValueError("scanner advisory artifact is missing required fields")
+    safe_head_sha = _safe_display_text(head_sha, max_len=128)
+    if safe_head_sha is None:
+        raise ValueError("scanner advisory artifact has an invalid head SHA")
+    scope = _safe_scope(scope)
+    version = _safe_display_text(raw.get("version"), max_len=128)
+    candidate_count = (
+        raw.get("candidate_count")
+        if type(raw.get("candidate_count")) is int and raw.get("candidate_count") >= 0
+        else len(candidates)
+    )
+    truncated_flag = raw.get("truncated", raw.get("candidates_truncated"))
+    truncated = bool(truncated_flag) if isinstance(truncated_flag, bool) else False
+    truncated = (
+        truncated
+        or candidate_count > len(candidates)
+        or len(candidates) > SCANNER_ADVISORY_MAX_FINDINGS
+    )
     findings: list[dict[str, object]] = []
+    excluded = 0
     if tool == "jscpd":
         for clone in candidates:
             if not isinstance(clone, dict):
@@ -687,18 +785,25 @@ def _normalize_scanner_advisory(
                 raise ValueError("jscpd candidate is missing file records")
             first_name = first.get("name")
             second_name = second.get("name")
+            if not _is_safe_repo_path(first_name) or not _is_safe_repo_path(
+                second_name
+            ):
+                # Unsafe paths are excluded from published findings, not
+                # annotated: an absolute host path must never be published.
+                excluded += 1
+                continue
             findings.append(
                 {
                     "kind": "textual-clone",
                     "selection_input": False,
                     "first_file": first_name,
-                    "first_start_line": first.get("start"),
-                    "first_end_line": first.get("end"),
+                    "first_start_line": _safe_int(first.get("start")),
+                    "first_end_line": _safe_int(first.get("end")),
                     "second_file": second_name,
-                    "second_start_line": second.get("start"),
-                    "second_end_line": second.get("end"),
-                    "lines": clone.get("lines"),
-                    "tokens": clone.get("tokens"),
+                    "second_start_line": _safe_int(second.get("start")),
+                    "second_end_line": _safe_int(second.get("end")),
+                    "lines": _safe_int(clone.get("lines")),
+                    "tokens": _safe_int(clone.get("tokens")),
                     "out_of_scope": (
                         _scanner_file_out_of_scope(first_name, scope)
                         or _scanner_file_out_of_scope(second_name, scope)
@@ -711,13 +816,16 @@ def _normalize_scanner_advisory(
             if not isinstance(candidate, dict):
                 raise ValueError("pyan3 candidate must be an object")
             file_name = candidate.get("file")
+            if not _is_safe_repo_path(file_name):
+                excluded += 1
+                continue
             findings.append(
                 {
                     "kind": "potentially-disconnected",
                     "selection_input": False,
-                    "function": candidate.get("id"),
+                    "function": _safe_display_text(candidate.get("id"), max_len=512),
                     "file": file_name,
-                    "line": candidate.get("line"),
+                    "line": _safe_int(candidate.get("line")),
                     "out_of_scope": _scanner_file_out_of_scope(file_name, scope),
                     "note": _PYAN_CANDIDATE_NOTE,
                 }
@@ -725,23 +833,26 @@ def _normalize_scanner_advisory(
     if status != "ok":
         state = "scanner-error"
         findings = []
+        excluded = 0
     elif head_sha != source_revision:
         state = "stale"
-    elif not findings:
+    elif not findings and excluded == 0:
         state = "ok-zero-findings"
     else:
         state = "ok"
+    findings = findings[:SCANNER_ADVISORY_MAX_FINDINGS]
     return {
         "tool": tool,
         "schema": schema,
-        "version": raw.get("version"),
-        "head_sha": head_sha,
+        "version": version,
+        "head_sha": safe_head_sha,
         "scope": list(scope),
         "status": status,
         "state": state,
-        "candidate_count": raw.get("candidate_count"),
-        "truncated": raw.get("truncated", raw.get("candidates_truncated")),
+        "candidate_count": candidate_count,
+        "truncated": truncated,
         "findings": findings,
+        "excluded_findings": excluded,
         "out_of_scope_findings": sum(
             1 for finding in findings if finding.get("out_of_scope") is True
         ),
@@ -760,10 +871,15 @@ def _load_scanner_advisory(
     ``unavailable`` section; malformed content raises ValueError so the
     caller can record a ``scanner-error`` section. The run itself never
     fails on an advisory artifact: the flag is advisory by design.
+    Oversized artifacts are rejected before parsing, never loaded
+    unbounded.
     """
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = Path(path).read_bytes()
+    if len(data) > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    raw = json.loads(data.decode("utf-8"))
     section = _normalize_scanner_advisory(raw, source_revision=source_revision)
-    section["source"] = Path(path).name
+    section["source"] = _safe_display_text(Path(path).name, max_len=128) or "advisory"
     return section
 
 
@@ -772,7 +888,7 @@ def _unavailable_scanner_advisory(
 ) -> dict[str, object]:
     """Explicit absent/error section, never misreported as zero findings."""
     section: dict[str, object] = {
-        "source": Path(path).name,
+        "source": _safe_display_text(Path(path).name, max_len=128) or "advisory",
         "tool": None,
         "schema": None,
         "version": None,
@@ -1301,7 +1417,7 @@ def main(argv: list[str] | None = None) -> int:
                 _unavailable_scanner_advisory(
                     evidence_path,
                     status="scanner-error",
-                    failure_detail=f"{type(exc).__name__}: {exc}"[:240],
+                    failure_detail=_safe_failure_detail(exc),
                 )
             )
     scanner_advisory_section: dict[str, object] | None = None
