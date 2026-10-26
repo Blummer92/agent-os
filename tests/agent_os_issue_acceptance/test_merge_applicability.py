@@ -516,11 +516,20 @@ def test_blocking_review_blocked():
     assert receipt["reason_codes"] == ["review.changed"]
 
 
-def test_dismissed_head_approval_blocked():
+def test_missing_head_approval_not_blocking():
+    # #3463 reviewer correction: APPROVED-at-head state is recorded,
+    # not gated. A COMMENTED-only review set (no APPROVED review at the
+    # head) must not block dispatch when no review is blocking and no
+    # thread is unresolved; owner approval is the execution-time card
+    # tap, not a review record.
     pr = _PR(_reviews=[_Review("COMMENTED", HEAD)])
     receipt = _run(pr=pr)
-    assert receipt["dispatch_checks_passed"] is False
-    assert receipt["reason_codes"] == ["review.changed"]
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    canonical = receipt["canonical_applicability_result"]
+    assert canonical["status"] == "applicable"
+    assert canonical["changed_bindings"] == []
+    assert canonical["reason_codes"] == []
 
 
 def test_draft_drift_blocked():

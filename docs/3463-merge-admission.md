@@ -171,23 +171,23 @@ re-prompt on any parameter change. One tap must never serve a different
 parameter set or a second merge. Production merge execution remains
 unwired; this change activates no executor.
 
-**Reviewer eligibility, assessed separately (rule NOT changed).** Why
-exact-head approval requires an external reviewer in a one-owner repo:
-the canonical evaluator treats `exact_head_reviewed` as an APPROVED
-review at the exact head (dispatch builds it as `approved_at_head`, and
-the evaluator blocks with `review.head-stale` when false), while GitHub
-forbids pull request authors from approving their own pull requests.
-Agent PRs are authored by the owner account, so the owner cannot supply
-that approval and no other collaborator exists -- owner-only admission
-through this path is impossible. GitHub's own Protect-main ruleset does
-not require it (required approving review count is 0; it requires thread
-resolution and the authoritative aggregate check). Smallest safe rule
-recommended for a separate owner decision: decouple exact-head review
-from the GitHub APPROVED state -- require no CHANGES_REQUESTED review,
-zero unresolved threads, substantive independent QA on the exact head
-plus aggregate CI green, and the owner's runtime card tap as the owner's
-approval -- while preserving blocking-review and thread protections.
-Until that decision is given, the current rule stands unchanged.
+**Reviewer eligibility (rule changed: exact-head review decoupled from
+APPROVED state).** GitHub forbids pull request authors from approving
+their own pull requests, and agent PRs are authored by the owner
+account, so an APPROVED-at-head requirement made owner-only admission
+impossible while adding no protection beyond the gates below. GitHub's
+own Protect-main ruleset does not require it (required approving review
+count is 0; it requires thread resolution and the authoritative
+aggregate check). The rule is now: no CHANGES_REQUESTED review, zero
+unresolved review threads, substantive independent QA on the exact head
+plus aggregate CI green, and the owner's fresh runtime card tap as the
+owner's approval at execution. Blocking-review and thread protections
+are preserved: a blocking review appearing, or an unresolved thread
+count changing, still fails dispatch and evaluation. `exact_head_reviewed`
+remains in the evidence schema as a truthful audit record of whether an
+APPROVED review existed at the head, but it no longer gates admission
+and its drift no longer stales a binding. No new approval representation
+was added; the card tap is the owner's approval, not a record.
 
 The workflow remains read-only. Producing an admission receipt is **not** a
 merge, and a production merge executor consuming an exact-head receipt is

@@ -501,8 +501,14 @@ def evaluate_merge_dispatch_applicability(
         review_evidence = record.binding.review_evidence
         if blocking != review_evidence.blocking_review_present:
             return _receipt(**{**base_kwargs, "reason_codes": ["review.changed"]})
-        if review_evidence.exact_head_reviewed != approved_at_head:
-            return _receipt(**{**base_kwargs, "reason_codes": ["review.changed"]})
+        # No gate on APPROVED-at-head drift (#3463 reviewer correction):
+        # `approved_at_head` is still recorded truthfully in the PR
+        # evidence below, but its presence or absence no longer blocks
+        # dispatch. GitHub forbids authors from approving their own PRs,
+        # so the owner account can never supply it; the live review
+        # gates are blocking-review drift (above) and unresolved
+        # threads (below), with owner approval supplied by the fresh
+        # runtime card tap at execution.
         # Only the complete GraphQL review-thread connection can establish
         # that there are no unresolved conversations. A REST review list
         # alone cannot establish thread resolution.

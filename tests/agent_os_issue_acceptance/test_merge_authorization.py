@@ -462,6 +462,33 @@ def test_material_pr_drift_fails_closed(change, reason):
     assert not result.merge_authorized and reason in result.reason_codes
 
 
+def test_head_approval_state_is_recorded_not_gated():
+    # #3463 reviewer correction: APPROVED-at-head state neither gates
+    # admission nor stales a binding, in either drift direction. The
+    # live gates that remain are blocking reviews and unresolved
+    # threads (pinned below).
+    authorized, bundle = _authorized()
+    result = _evaluate(
+        authorized, bundle,
+        _pr(bundle, review_evidence=_review(exact_head_reviewed=False)),
+    )
+    assert result.status == "applicable" and result.merge_authorized
+    assert "review.changed" not in result.changed_bindings
+    assert "review.head-stale" not in result.reason_codes
+    authorized_no_approval, _ = _authorized(
+        pr=_pr(bundle, review_evidence=_review(exact_head_reviewed=False)),
+    )
+    result = _evaluate(authorized_no_approval, bundle)
+    assert result.status == "applicable" and result.merge_authorized
+    assert "review.changed" not in result.changed_bindings
+    blocked, _ = _authorized()
+    result = _evaluate(
+        blocked, bundle,
+        _pr(bundle, review_evidence=_review(unresolved_conversation_count=1)),
+    )
+    assert not result.merge_authorized and "review.unresolved" in result.reason_codes
+
+
 def test_missing_check_and_duplicate_reason_inputs_are_stable():
     bundle = None
     candidate = _candidate(bundle, pr=_pr(bundle, required_checks=(

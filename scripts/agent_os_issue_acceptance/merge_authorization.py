@@ -1243,8 +1243,17 @@ def _eligibility_reasons(
         reasons.add("review.blocked")
     if pr.review_evidence.unresolved_conversation_count:
         reasons.add("review.unresolved")
-    if not pr.review_evidence.exact_head_reviewed:
-        reasons.add("review.head-stale")
+    # No `review.head-stale` gate: exact-head review is decoupled from the
+    # GitHub APPROVED state (#3463 reviewer correction). GitHub forbids
+    # authors from approving their own pull requests, and agent PRs are
+    # authored by the owner account, so an APPROVED-at-head requirement
+    # makes owner-only admission impossible while adding no protection
+    # beyond the gates above. `exact_head_reviewed` remains in the
+    # evidence schema as a truthful audit record (whether an APPROVED
+    # review existed at the head), but it no longer gates admission.
+    # Owner approval for a merge is the fresh runtime per-call approval
+    # card tap at execution, and exact-head evidence is independent QA
+    # plus the authoritative aggregate check, both enforced elsewhere.
     for check in pr.required_checks:
         if check.tested_sha != pr.head_sha:
             reasons.add("checks.changed")
@@ -1378,13 +1387,28 @@ def _changed_bindings(
 ) -> tuple[str, ...]:
     if type(prior) is not type(current):
         raise ValueError("merge authorization binding version changed")
-    return tuple(
-        sorted(
-            item.name
-            for item in fields(type(prior))
-            if getattr(prior, item.name) != getattr(current, item.name)
-        )
-    )
+    changed = []
+    for item in fields(type(prior)):
+        old, new = getattr(prior, item.name), getattr(current, item.name)
+        if item.name == "review_evidence":
+            # APPROVED-at-head state is recorded, not gated (#3463
+            # reviewer correction): only blocking-review presence and
+            # unresolved-thread count drift change the binding. An
+            # APPROVED review appearing or disappearing at the head
+            # does not by itself stale an authorization.
+            old_gate = (
+                old.blocking_review_present,
+                old.unresolved_conversation_count,
+            )
+            new_gate = (
+                new.blocking_review_present,
+                new.unresolved_conversation_count,
+            )
+            if old_gate != new_gate:
+                changed.append(item.name)
+        elif old != new:
+            changed.append(item.name)
+    return tuple(sorted(changed))
 
 
 def _binding_reasons(changed: Iterable[str]) -> set[str]:
