@@ -127,14 +127,16 @@ def _find_lesson_id(client, source_id: str, lesson_id: str) -> Mapping | None:
     return row
 
 
-def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
+def _check_schema(schema: object, source_id: str, lesson: Mapping, *,
+                  extra_types: Mapping | None = None) -> None:
     if not isinstance(schema, Mapping) or notion_id(schema.get("id")) != source_id:
         raise WriteBlocked("schema-destination-mismatch")
     if any(schema.get(key) is True for key in ("archived", "is_archived", "in_trash")):
         raise WriteBlocked("inactive-data-source")
     raw = schema.get("properties", {})
     expected = {**{name: WRITABLE_TYPES[name] for name in lesson},
-                "Lesson ID": "unique_id", "Status": "select"}
+                "Lesson ID": "unique_id", "Status": "select",
+                **(extra_types or {})}
     if not isinstance(raw, Mapping) or any(
         not isinstance(raw.get(name), Mapping) or raw[name].get("type") != kind
         for name, kind in expected.items()
@@ -154,57 +156,44 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
 
 
 def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
-                   lesson_id: str) -> dict[str, object]:
-    """Pure read-only inspection, using the writer's existing identity/schema rules.
-
-    The resulting exact revision is suitable for the existing owner-authorized
-    update admission; this helper does not grant or attempt an update.
-    """
+                   lesson_id: str, reviewed_properties: Mapping) -> dict[str, object]:
+    """Pure current-target evidence; shared writer checks, never mutation."""
     import re
     from datetime import datetime
 
-    normalized_source = notion_id(source_id)
-    _check_schema(schema, normalized_source, {})
-    page_id = _page(page, normalized_source)
-    if LESSON_ID.fullmatch(lesson_id) is None or _lesson_id(page) != lesson_id:
-        raise WriteBlocked("lesson-identity-mismatch")
-
-    declared = schema.get("properties", {})
-    required_types = {
-        **WRITABLE_TYPES,
-        "Lesson ID": "unique_id",
+    source_id = notion_id(source_id)
+    # The writer owns the source/schema and reviewed-field option checks.
+    inspected_fields = {
         "Status": "select",
         "Surface Before Work?": "checkbox",
+        "Source Link": WRITABLE_TYPES["Source Link"],
     }
-    if not isinstance(declared, Mapping) or any(
-        not isinstance(declared.get(name), Mapping)
-        or declared[name].get("type") != kind
-        for name, kind in required_types.items()
-    ):
-        raise WriteBlocked("live-schema-drift")
+    _check_schema(schema, source_id, reviewed_properties, extra_types=inspected_fields)
+    page_id = _page(page, source_id)
+    if LESSON_ID.fullmatch(lesson_id) is None or _lesson_id(page) != lesson_id:
+        raise WriteBlocked("lesson-identity-mismatch")
 
     fields = page.get("properties")
     if not isinstance(fields, Mapping):
         raise WriteBlocked("malformed-page-properties")
-    for name in ("Lesson ID", "Status", "Surface Before Work?", "Source Link"):
+    for name, kind in inspected_fields.items():
         field = fields.get(name)
-        if not isinstance(field, Mapping) or field.get("type") != required_types[name]:
+        if not isinstance(field, Mapping) or field.get("type") != kind:
             raise WriteBlocked("page-property-type-mismatch")
-    selection = fields["Status"].get("select")
-    if selection is not None and (
-        not isinstance(selection, Mapping) or
-        type(selection.get("name")) is not str or not selection["name"]
+    status = fields["Status"].get("select")
+    if status is not None and (
+        not isinstance(status, Mapping)
+        or type(status.get("name")) is not str or not status["name"]
     ):
         raise WriteBlocked("malformed-protected-status")
     surface = fields["Surface Before Work?"].get("checkbox")
     if type(surface) is not bool:
         raise WriteBlocked("malformed-protected-surface")
-    source_link = fields["Source Link"].get("url")
-    if source_link is not None and type(source_link) is not str:
+    link = fields["Source Link"].get("url")
+    if link is not None and type(link) is not str:
         raise WriteBlocked("malformed-source-link")
 
     revision = page["last_edited_time"]
-    # Match the exact timestamp grammar accepted by admission.admit for updates.
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision) is None:
         raise WriteBlocked("writer-incompatible-revision")
     try:
@@ -214,11 +203,11 @@ def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
     return {
         "lesson_id": lesson_id,
         "page_id": page_id,
-        "data_source_id": normalized_source,
+        "data_source_id": source_id,
         "source_revision": revision,
-        "status": selection["name"] if selection is not None else None,
+        "status": status["name"] if status is not None else None,
         "surface_before_work": surface,
-        "source_link_present": bool(source_link),
+        "source_link_present": bool(link),
         "schema_verified": True,
         "verification_state": "verified-current",
     }
