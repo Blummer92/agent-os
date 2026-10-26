@@ -707,7 +707,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
         try:
             observation = _load_merge_observation(args.merge_observation)
             _verify_post_merge_observation(observation, requests, live_transport)
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
             print(f"merge observation error: {exc}", file=sys.stderr)
             return 2
     if args.live:
