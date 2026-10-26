@@ -476,3 +476,18 @@ def test_reader_rejects_pull_request_payload_directly():
     reader = GitHubClosureReader(fake)
     with pytest.raises(ValueError):
         reader.read_issue_readback(REPO, 151)
+
+def test_dry_run_preserves_stale_ready_label_reconciliation(tmp_path, capsys):
+    """An already-closed issue with a stale Ready label is not fully reconciled."""
+    fake = FakeGitHub()
+    fake.add(152, state="closed", state_reason="completed", labels=["status:ready"])
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest(request_dict(152))), encoding="utf-8"
+    )
+    assert main(["--manifest", str(manifest_path)], transport=fake) == 0
+    outcome = json.loads(capsys.readouterr().out)["outcomes"][0]
+    assert outcome["status"] == "closed-verified-label-reconciliation-required"
+    assert outcome["readback_verified"] is True
+    assert "closure.stale-ready-label-present" in outcome["reason_codes"]
+    assert fake.patch_calls == []
