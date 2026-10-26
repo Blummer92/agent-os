@@ -111,6 +111,18 @@ curriculum/asset requests can execute.
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
 
+## Fixed LL-93 current-revision read (#3418)
+
+`verify-ll93-current-revision` (issue #3418 only) is one fixed binding-verification
+request: it reads the fixed LL-93 page by id (even while `Surface Before Work?` is
+false), proves Lesson ID `LL-93`, derives the parent data source live, checks the
+relevant schema types, and projects only `source_revision` (page `last_edited_time`),
+`status`, `surface_before_work`, `source_link_present` and identity fields. It
+returns no guidance text and performs no Notion write. The revision is the value the
+#3417 writer's expected-revision guard consumes; the writer's field set, stale-revision
+refusal and readback are unchanged. No workflow edit: the existing finite
+`BINDING_VERIFICATION_REQUEST_IDS` routing picks it up.
+
 ## Fixed destination verification
 
 Issue #2871 adds one finite governance read for #249:

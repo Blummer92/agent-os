@@ -44,6 +44,10 @@ CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 LESSONS_LEARNED_VERIFICATION_REQUEST_ID = "verify-lessons-learned-binding"
 LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER = 2854
 LESSONS_LEARNED_REFERENCE_PAGE_ID = "3c67ac78-3131-8130-94dd-da66213ca42b"
+LL93_REVISION_VERIFICATION_REQUEST_ID = "verify-ll93-current-revision"
+LL93_REVISION_VERIFICATION_ISSUE_NUMBER = 3418
+LL93_PAGE_ID = "3f17ac78-3131-81c5-ba2f-f2c98de26ed4"
+LL93_LESSON_NUMBER = 93
 TEACHER_MODELING_VERIFICATION_REQUEST_ID = "verify-teacher-modeling-binding"
 TEACHER_MODELING_VERIFICATION_ISSUE_NUMBER = 2816
 TEACHER_MODELING_CANDIDATE_DATA_SOURCE_ID = "e4a9f806-88ea-4487-aaea-ce6c2af72aab"
@@ -64,6 +68,12 @@ def _verification_request_spec(
     if request_id == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
         return (
             LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
+            "lessons-learned",
+            ("get_page", "get_data_source"),
+        )
+    if request_id == LL93_REVISION_VERIFICATION_REQUEST_ID:
+        return (
+            LL93_REVISION_VERIFICATION_ISSUE_NUMBER,
             "lessons-learned",
             ("get_page", "get_data_source"),
         )
@@ -104,6 +114,7 @@ def _binding_verification_request_ids() -> tuple[str, ...]:
     candidates = [
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        LL93_REVISION_VERIFICATION_REQUEST_ID,
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         *(
             f"verify-{unit.canonical_unit_key}-binding"
@@ -441,6 +452,100 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
     }
 
 
+_LL93_SCHEMA_TYPES = {
+    "Lesson ID": "unique_id",
+    "Status": "select",
+    "Surface Before Work?": "checkbox",
+    "Source Link": "url",
+    "Area": "select",
+    "Learning Type": "select",
+    "Applies To": "multi_select",
+}
+
+
+def _select_name(prop: object) -> str | None:
+    value = prop.get("select") if isinstance(prop, Mapping) else None
+    name = value.get("name") if isinstance(value, Mapping) else None
+    return name if isinstance(name, str) and name else None
+
+
+def verify_ll93_current_revision(adapter: object, *, generated_at: str) -> dict[str, object]:
+    """Read the fixed LL-93 page's current revision and protected fields, read-only.
+
+    Reads the page by its fixed id regardless of ``Surface Before Work?`` (a
+    disabled lesson stays readable), proves its Lesson ID, derives the parent
+    data source live and checks the relevant schema types, then projects only
+    a finite bounded record. No lesson guidance text, no write, no activation.
+    """
+
+    page = _execute_read(adapter, "get_page", page_id=LL93_PAGE_ID)
+    if _normalize_notion_id(page.get("id")) != _normalize_notion_id(LL93_PAGE_ID):
+        raise NotionReadRequestError("LL-93 page identity mismatch")
+    if page.get("archived") is True or page.get("in_trash") is True:
+        raise NotionReadRequestError("LL-93 page is archived or trashed")
+    revision = page.get("last_edited_time")
+    if not isinstance(revision, str) or not revision.strip():
+        raise NotionReadRequestError("LL-93 current revision is missing")
+    properties = page.get("properties")
+    if not isinstance(properties, Mapping):
+        raise NotionReadRequestError("LL-93 properties are missing")
+    lesson_id = properties.get("Lesson ID")
+    unique = lesson_id.get("unique_id") if isinstance(lesson_id, Mapping) else None
+    if (
+        not isinstance(unique, Mapping)
+        or unique.get("number") != LL93_LESSON_NUMBER
+        or unique.get("prefix") != "LL"
+    ):
+        raise NotionReadRequestError("LL-93 lesson identity mismatch")
+    surface = properties.get("Surface Before Work?")
+    surface_value = surface.get("checkbox") if isinstance(surface, Mapping) else None
+    if type(surface_value) is not bool:
+        raise NotionReadRequestError("LL-93 Surface Before Work? is malformed")
+    parent = page.get("parent")
+    data_source_id = parent.get("data_source_id") if isinstance(parent, Mapping) else None
+    if not isinstance(data_source_id, str) or not data_source_id.strip():
+        raise NotionReadRequestError("LL-93 parent data-source identity is missing")
+
+    source = _execute_read(adapter, "get_data_source", data_source_id=data_source_id.strip())
+    if _normalize_notion_id(source.get("id")) != _normalize_notion_id(data_source_id):
+        raise NotionReadRequestError("LL-93 data-source identity mismatch")
+    if source.get("archived") is True or source.get("in_trash") is True:
+        raise NotionReadRequestError("LL-93 data source is archived or trashed")
+    schema = source.get("properties")
+    if not isinstance(schema, Mapping):
+        raise NotionReadRequestError("LL-93 data-source schema is missing")
+    for name, expected_type in _LL93_SCHEMA_TYPES.items():
+        declared = schema.get(name)
+        if not isinstance(declared, Mapping) or declared.get("type") != expected_type:
+            raise NotionReadRequestError(f"LL-93 schema property {name!r} is not {expected_type}")
+
+    source_link = properties.get("Source Link")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": LL93_REVISION_VERIFICATION_REQUEST_ID,
+        "dispatch_status": "completed",
+        "dispatch_reason": "ll93-current-revision-verification-complete",
+        "ll93": {
+            "lesson_id": "LL-93",
+            "page_id": LL93_PAGE_ID,
+            "data_source_id": data_source_id.strip(),
+            "source_revision": revision.strip(),
+            "status": _select_name(properties.get("Status")),
+            "surface_before_work": surface_value,
+            "source_link_present": bool(
+                isinstance(source_link, Mapping) and source_link.get("url")
+            ),
+            "schema_verified": True,
+            "verification_state": "verified-current",
+        },
+        "notion_writes_performed": False,
+        "drive_writes_performed": False,
+        "classroom_artifact_writes_performed": False,
+        "gce_invoked": False,
+        "generated_at": generated_at,
+    }
+
+
 def verify_teacher_modeling_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
     """Freshly verify the one fixed Teacher Modeling source candidate without promoting it."""
 
@@ -553,6 +658,8 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_live_bindings(adapter, generated_at=args.generated_at)
         elif admission.get("request_id") == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
             result = verify_lessons_learned_binding(adapter, generated_at=args.generated_at)
+        elif admission.get("request_id") == LL93_REVISION_VERIFICATION_REQUEST_ID:
+            result = verify_ll93_current_revision(adapter, generated_at=args.generated_at)
         elif admission.get("request_id") == TEACHER_MODELING_VERIFICATION_REQUEST_ID:
             result = verify_teacher_modeling_binding(adapter, generated_at=args.generated_at)
         else:
@@ -590,6 +697,9 @@ __all__ = [
     "CANDY_BRANDING_TITLE",
     "CANDY_BRANDING_UNIT_KEY",
     "CANDY_BRANDING_VERIFICATION_REQUEST_ID",
+    "LL93_PAGE_ID",
+    "LL93_REVISION_VERIFICATION_ISSUE_NUMBER",
+    "LL93_REVISION_VERIFICATION_REQUEST_ID",
     "LESSONS_LEARNED_REFERENCE_PAGE_ID",
     "LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER",
     "LESSONS_LEARNED_VERIFICATION_REQUEST_ID",
@@ -603,6 +713,7 @@ __all__ = [
     "verify_additional_unit_binding",
     "verify_candy_branding_binding",
     "verify_lessons_learned_binding",
+    "verify_ll93_current_revision",
     "verify_teacher_modeling_binding",
     "verify_live_bindings",
 ]

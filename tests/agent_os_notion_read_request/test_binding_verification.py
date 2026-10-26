@@ -18,6 +18,9 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     CANDY_BRANDING_TITLE,
     CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
     CANDY_BRANDING_VERIFICATION_REQUEST_ID,
+    LL93_PAGE_ID,
+    LL93_REVISION_VERIFICATION_ISSUE_NUMBER,
+    LL93_REVISION_VERIFICATION_REQUEST_ID,
     LESSONS_LEARNED_REFERENCE_PAGE_ID,
     LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
     LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
@@ -32,6 +35,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     verify_additional_unit_binding,
     verify_candy_branding_binding,
     verify_lessons_learned_binding,
+    verify_ll93_current_revision,
     verify_live_bindings,
     verify_teacher_modeling_binding,
 )
@@ -678,6 +682,7 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        LL93_REVISION_VERIFICATION_REQUEST_ID,
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
@@ -758,3 +763,95 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(tmp_path, 
     assert evidence["drive_writes_performed"] is False
     assert evidence["classroom_artifact_writes_performed"] is False
     assert evidence["gce_invoked"] is False
+
+
+REVISION = "2026-10-06T23:07:00.000Z"
+
+
+class LL93Adapter:
+    def __init__(self, *, number=93, prefix="LL", page_id=LL93_PAGE_ID, surface=False,
+                 archived=False, schema_type="checkbox", revision=REVISION, returned_source_id=None):
+        self.calls = []
+        self.number, self.prefix, self.page_id = number, prefix, page_id
+        self.surface, self.archived, self.revision = surface, archived, revision
+        self.schema_type, self.returned_source_id = schema_type, returned_source_id
+
+    def execute(self, task):
+        self.calls.append(dict(task.payload))
+        action = task.payload["action"]
+        if action == "get_page":
+            return {"status": "success", "output": {
+                "id": self.page_id, "archived": self.archived, "in_trash": False,
+                "last_edited_time": self.revision,
+                "parent": {"type": "data_source_id", "data_source_id": "lessons-source"},
+                "properties": {
+                    "Lesson ID": {"type": "unique_id", "unique_id": {"prefix": self.prefix, "number": self.number}},
+                    "Status": {"type": "select", "select": None},
+                    "Surface Before Work?": {"type": "checkbox", "checkbox": self.surface},
+                    "Source Link": {"type": "url", "url": None},
+                    "Lesson Learned": {"type": "title", "title": [{"plain_text": "SECRET GUIDANCE"}]},
+                },
+            }}
+        if action == "get_data_source":
+            types = {"Lesson ID": "unique_id", "Status": "select", "Surface Before Work?": self.schema_type,
+                     "Source Link": "url", "Area": "select", "Learning Type": "select", "Applies To": "multi_select"}
+            return {"status": "success", "output": {
+                "id": self.returned_source_id or "lessons-source", "archived": False, "in_trash": False,
+                "properties": {k: {"type": v} for k, v in types.items()}}}
+        raise AssertionError(action)
+
+
+def test_ll93_revision_request_is_finite_and_read_only() -> None:
+    decision = admit_binding_verification_request(
+        transport(request_id=LL93_REVISION_VERIFICATION_REQUEST_ID,
+                  issue_number=LL93_REVISION_VERIFICATION_ISSUE_NUMBER),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)
+    assert decision["status"] == "admitted"
+    assert decision["allowed_read_actions"] == ["get_page", "get_data_source"]
+    assert decision["write_allowed"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+@pytest.mark.parametrize("issue", [3417, 2283, 1])
+def test_ll93_revision_request_rejects_wrong_issue(issue) -> None:
+    decision = admit_binding_verification_request(
+        transport(request_id=LL93_REVISION_VERIFICATION_REQUEST_ID, issue_number=issue),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)
+    assert decision["status"] == "rejected"
+    assert decision["secret_dispatch_authorized"] is False
+
+
+def test_ll93_revision_rejects_other_request_ids_and_lessons() -> None:
+    for request_id in ("verify-ll91-current-revision", "verify-ll67-current-revision"):
+        decision = admit_binding_verification_request(
+            transport(request_id=request_id, issue_number=3418),
+            expected_repository=REPOSITORY, expected_actor=ACTOR)
+        assert decision["status"] == "rejected"
+
+
+def test_ll93_revision_reads_disabled_lesson_and_projects_bounded_record() -> None:
+    adapter = LL93Adapter(surface=False)
+    evidence = verify_ll93_current_revision(adapter, generated_at="run:3418")
+    assert [c["action"] for c in adapter.calls] == ["get_page", "get_data_source"]
+    assert adapter.calls[0]["page_id"] == LL93_PAGE_ID
+    assert evidence["ll93"] == {
+        "lesson_id": "LL-93", "page_id": LL93_PAGE_ID, "data_source_id": "lessons-source",
+        "source_revision": REVISION, "status": None, "surface_before_work": False,
+        "source_link_present": False, "schema_verified": True, "verification_state": "verified-current",
+    }
+    assert "SECRET GUIDANCE" not in json.dumps(evidence)
+    assert evidence["notion_writes_performed"] is False
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({"page_id": "3f17ac78-3131-81c5-ba2f-000000000000"}, "page identity mismatch"),
+    ({"number": 91}, "lesson identity mismatch"),
+    ({"prefix": "lesson"}, "lesson identity mismatch"),
+    ({"archived": True}, "archived or trashed"),
+    ({"revision": ""}, "revision is missing"),
+    ({"schema_type": "rich_text"}, "is not checkbox"),
+    ({"returned_source_id": "other"}, "data-source identity mismatch"),
+])
+def test_ll93_revision_fails_closed(kwargs, match) -> None:
+    with pytest.raises(NotionReadRequestError, match=match):
+        verify_ll93_current_revision(LL93Adapter(**kwargs), generated_at="run:3418")
