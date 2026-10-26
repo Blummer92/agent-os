@@ -1234,3 +1234,166 @@ def test_cli_scanner_hostile_status_cannot_forge_summary_lines(tmp_path) -> None
         line.startswith(b"## FORGED")
         for line in raw.split(b"\n")
     )
+
+
+def test_cli_scanner_deeply_nested_json_is_scanner_error(
+    monkeypatch, tmp_path
+) -> None:
+    """D8: a deeply nested artifact under the byte cap must not escape
+    advisory handling. The JSON parser raises RecursionError on it;
+    _load converts that to the existing ValueError mechanism, so main()
+    records scanner-error and the run still succeeds with selection,
+    ledger, and zero-mutation outputs unchanged."""
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    nested = tmp_path / "nested.json"
+    nested.write_text("[" * 12000 + "]" * 12000, encoding="utf-8")
+    assert nested.stat().st_size < cli.SCANNER_ADVISORY_MAX_BYTES
+    with pytest.raises(ValueError, match="nesting limit"):
+        cli._load_scanner_advisory(str(nested), source_revision=_SHA)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(nested),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == source["status"] == "scanner-error"
+    assert source["findings"] == []
+    assert "ValueError" in source["failure_detail"]
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["zero_mutation_verification"]["http_write_requests"] == 0
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_cli_scanner_provenance_paths_cannot_be_published(
+    monkeypatch, tmp_path
+) -> None:
+    """D9: head_sha is validated against the producer SHA contract
+    (full lowercase 40-hex, or the producers' "unavailable" fallback);
+    free-text provenance fields redact absolute host paths instead of
+    publishing them. Verified in the normalized JSON and through the
+    actual published workflow-summary renderer."""
+    # Valid provenance passes unchanged, including the producers'
+    # "unavailable" fallback (which can never equal a live revision,
+    # so it renders stale, never current).
+    valid = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+        source_revision=_SHA,
+    )
+    assert valid["head_sha"] == _SHA
+    assert valid["state"] == "ok-zero-findings"
+    fallback = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha="unavailable", candidates=[], truncated=False),
+        source_revision=_SHA,
+    )
+    assert fallback["head_sha"] == "unavailable"
+    assert fallback["state"] == "stale"
+    # Invalid SHAs carrying host paths are rejected, not published.
+    for bad_sha in (
+        "/home/runner/private-tenant/config.json",
+        "C:\\Users\\tenant\\config.json",
+    ):
+        with pytest.raises(ValueError, match="invalid head SHA"):
+            cli._normalize_scanner_advisory(
+                _pyan_artifact(head_sha=bad_sha, candidates=[], truncated=False),
+                source_revision=_SHA,
+            )
+    # Versions carrying host paths are redacted to a placeholder;
+    # normal producer versions pass through untouched.
+    for hostile_version in (
+        "/home/runner/private-tenant/config.json",
+        "C:\\Users\\tenant\\config.json",
+    ):
+        source = cli._normalize_scanner_advisory(
+            _pyan_artifact(
+                head_sha=_SHA, candidates=[], truncated=False,
+            ) | {"version": hostile_version},
+            source_revision=_SHA,
+        )
+        assert source["version"] == "[path]"
+        assert "/home/runner" not in json.dumps(source)
+        assert "private-tenant" not in json.dumps(source)
+        assert "C:\\Users" not in json.dumps(source)
+    assert cli._normalize_scanner_advisory(
+        _jscpd_artifact(head_sha=_SHA, clones=[]), source_revision=_SHA
+    )["version"] == "4.0.5"
+    assert cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+        source_revision=_SHA,
+    )["version"] == "2.9.0"
+
+    # Published-summary proof: render the redacted record through the
+    # live workflow snippet and inspect raw bytes.
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    hostile_source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+        | {"version": "/home/runner/private-tenant/config.json"},
+        source_revision=_SHA,
+    )
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [hostile_source]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_bytes(b"")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    raw = summary_path.read_bytes()
+    assert b"/home/runner" not in raw
+    assert b"private-tenant" not in raw
+
+
+def test_cli_scanner_oversized_scope_entries_are_bounded() -> None:
+    """Long-scope hardening: a single repository-relative scope entry
+    far beyond any legitimate repo path is dropped, while legitimate
+    entries (including one exactly at the cap) still pass, so the
+    published summary join cannot be inflated by one entry."""
+    legit = "scripts/agent_os_issue_acceptance"
+    at_cap = "d/" + "a" * 510
+    over_cap = "d/" + "a" * 511
+    assert len(at_cap) == 512 and len(over_cap) == 513
+    source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+        | {"scope": [legit, "x" * 70000, at_cap, over_cap]},
+        source_revision=_SHA,
+    )
+    assert source["scope"] == [legit, at_cap]
+    assert len(", ".join(source["scope"])) < 1000
