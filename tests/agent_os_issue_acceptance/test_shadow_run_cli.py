@@ -879,6 +879,7 @@ def test_cli_scanner_bad_json_and_io_errors_preserve_failure_detail(
     malformed = tmp_path / "malformed.json"
     malformed.write_text("{", encoding="utf-8")
     denied = tmp_path / "denied.json"
+    denied.write_text("{}", encoding="utf-8")
     original_read_bytes = Path.read_bytes
 
     def read_bytes_with_denial(path, *args, **kwargs):
@@ -1060,6 +1061,7 @@ def test_cli_scanner_failure_details_exclude_host_paths_and_secrets(
 
     request = _request_file(tmp_path, kind="issue", resource_id="90")
     denied = tmp_path / "denied.json"
+    denied.write_text("{}", encoding="utf-8")
     original_read_bytes = Path.read_bytes
 
     def read_bytes_with_denial(path, *args, **kwargs):
@@ -1157,3 +1159,78 @@ def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_pat
     assert "scripts/agent_os_issue_acceptance" in rendered
     assert not any(line.startswith("## injected") for line in rendered.splitlines())
     assert "### Scanner advisory" in rendered
+
+
+def test_cli_scanner_hostile_status_cannot_forge_summary_lines(tmp_path) -> None:
+    """QA catch: `status` used to publish verbatim into the record and
+    the workflow summary, so a crafted status carrying CR could forge
+    markdown lines. Status now gets the same display sanitization as
+    version/head_sha, and a sanitized non-ok status renders
+    scanner-error, never ok."""
+    artifact = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    artifact["status"] = "scanner-error\r## FORGED LINE | x"
+    source = cli._normalize_scanner_advisory(artifact, source_revision=_SHA)
+    assert "\r" not in source["status"] and "\n" not in source["status"]
+    assert source["status"].startswith("scanner-error")
+    assert source["status"] == "scanner-error ## FORGED LINE | x"
+    assert source["state"] == "scanner-error"
+
+    clean = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    clean["status"] = "ok"
+    assert cli._normalize_scanner_advisory(
+        clean, source_revision=_SHA
+    )["state"] == "ok-zero-findings"
+
+    # Snippet-level proof: render the loader-produced hostile-status
+    # record through the live workflow snippet and inspect raw bytes,
+    # since text-mode reads translate CR away and would mask the defect.
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [source]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_bytes(b"")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    raw = summary_path.read_bytes()
+    assert b"\r" not in raw
+    assert not any(
+        line.startswith(b"## FORGED")
+        for line in raw.split(b"\n")
+    )
