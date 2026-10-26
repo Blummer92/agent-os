@@ -621,6 +621,15 @@ SCANNER_ADVISORY_SCHEMAS = {
 #: larger than the byte cap is a scanner-error, never loaded unbounded.
 SCANNER_ADVISORY_MAX_BYTES = 1_048_576
 SCANNER_ADVISORY_MAX_FINDINGS = 100
+# Producer head-SHA contract: `git rev-parse HEAD` output, i.e. the same
+# full lowercase 40-hex SHA rule as approval_records._SHA40_RE, plus the
+# producers' own "unavailable" fallback when git cannot run. Anything else
+# is invalid provenance, never current evidence.
+_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
+# Scope entries are repository-relative paths; a single entry has no
+# legitimate reason to approach this length, and an unbounded entry
+# inflates the published summary join.
+SCANNER_SCOPE_MAX_ENTRY_CHARS = 512
 
 _ABSOLUTE_PATH_RE = re.compile(
     r"(?<![\w/])/[^\s\"')\]]+|(?<![\w\\])[A-Za-z]:\\[^\s\"')\]]+"
@@ -651,6 +660,8 @@ def _safe_scope(scope: list) -> list[str]:
         if not isinstance(entry, str):
             continue
         entry = entry.strip().rstrip("/")
+        if len(entry) > SCANNER_SCOPE_MAX_ENTRY_CHARS:
+            continue
         if _is_safe_repo_path(entry):
             safe.append(entry)
     return safe
@@ -661,10 +672,13 @@ def _safe_display_text(value: object, *, max_len: int = 128) -> str | None:
 
     Reuses the existing ``sanitize_actionable_failure`` secret/control
     handling (credential-like patterns redacted, control characters
-    replaced) and bounds the result; it never returns raw input.
+    replaced) and bounds the result; absolute host paths are replaced
+    with a placeholder first, so a free-text provenance field can never
+    publish a runner's filesystem layout. It never returns raw input.
     """
     if not isinstance(value, str) or not value.strip():
         return None
+    value = _ABSOLUTE_PATH_RE.sub("[path]", value)
     try:
         text = sanitize_actionable_failure(value)
     except Exception:
@@ -732,12 +746,13 @@ def _normalize_scanner_advisory(
     ``side_effects_performed: False``.
 
     States, in precedence order: ``scanner-error`` (wrong schema/tool,
-    missing status/head SHA, or malformed candidate list), ``stale``
-    (head SHA differs from the run's live source revision — findings are
-    kept but marked stale, never cited as current), ``ok-zero-findings``
-    (a successful scan that found nothing, distinct from failure), else
-    ``ok``. Raises ValueError on malformed input; callers map that to a
-    ``scanner-error`` section so a bad artifact can never crash the run.
+    missing or invalid status/head SHA, or malformed candidate list),
+    ``stale`` (head SHA differs from the run's live source revision —
+    findings are kept but marked stale, never cited as current),
+    ``ok-zero-findings`` (a successful scan that found nothing, distinct
+    from failure), else ``ok``. Raises ValueError on malformed input;
+    callers map that to a ``scanner-error`` section so a bad artifact
+    can never crash the run.
     """
     if not isinstance(raw, dict):
         raise ValueError("scanner advisory artifact must be a JSON object")
@@ -758,7 +773,16 @@ def _normalize_scanner_advisory(
     ):
         raise ValueError("scanner advisory artifact is missing required fields")
     safe_head_sha = _safe_display_text(head_sha, max_len=128)
-    if safe_head_sha is None:
+    # Head SHA is validated against the producer contract (full
+    # lowercase 40-hex commit SHA, or the producers' "unavailable"
+    # fallback), not merely display-sanitized: an absolute host path or
+    # any other non-SHA string must never be published as provenance,
+    # and invalid provenance must never be mistaken for current evidence
+    # — it maps to scanner-error, with findings cleared, via ValueError.
+    if safe_head_sha is None or (
+        safe_head_sha != "unavailable"
+        and not _HEAD_SHA_RE.fullmatch(safe_head_sha)
+    ):
         raise ValueError("scanner advisory artifact has an invalid head SHA")
     scope = _safe_scope(scope)
     version = _safe_display_text(raw.get("version"), max_len=128)
@@ -841,7 +865,7 @@ def _normalize_scanner_advisory(
         state = "scanner-error"
         findings = []
         excluded = 0
-    elif head_sha != source_revision:
+    elif safe_head_sha != source_revision:
         state = "stale"
     elif not findings and excluded == 0:
         state = "ok-zero-findings"
@@ -876,10 +900,12 @@ def _load_scanner_advisory(
 
     FileNotFoundError propagates so the caller can record an
     ``unavailable`` section; malformed content raises ValueError so the
-    caller can record a ``scanner-error`` section. The run itself never
-    fails on an advisory artifact: the flag is advisory by design.
-    Oversized artifacts are rejected before parsing, never loaded
-    unbounded.
+    caller can record a ``scanner-error`` section. That includes parser
+    recursion failure on deeply nested input: RecursionError is converted
+    to ValueError at this boundary, so it takes the same nonfatal path.
+    The run itself never fails on an advisory artifact: the flag is
+    advisory by design. Oversized artifacts are rejected before parsing,
+    never loaded unbounded.
     """
     artifact_path = Path(path)
     if artifact_path.stat().st_size > SCANNER_ADVISORY_MAX_BYTES:
@@ -887,7 +913,12 @@ def _load_scanner_advisory(
     data = artifact_path.read_bytes()
     if len(data) > SCANNER_ADVISORY_MAX_BYTES:
         raise ValueError("scanner advisory artifact exceeds size limit")
-    raw = json.loads(data.decode("utf-8"))
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except RecursionError as exc:
+        raise ValueError(
+            "scanner advisory artifact exceeds parser nesting limit"
+        ) from exc
     section = _normalize_scanner_advisory(raw, source_revision=source_revision)
     section["source"] = _safe_display_text(Path(path).name, max_len=128) or "advisory"
     return section
