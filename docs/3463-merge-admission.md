@@ -126,11 +126,68 @@ are no longer stripped from merge authorization parsing, because stripping
 erases in-band agent-generation evidence. Conversely, a comment posted with
 the owner's PAT or OAuth token by an agent carries no app evidence and no
 footer, and is indistinguishable from an owner-typed comment by any
-provider field the reader can see. Positive owner provenance therefore
-remains a **security blocker** for a GitHub-comment-only merge workflow:
-an owner merge decision must additionally be attested through a channel
-that proves human origin (the runtime approval card bound to exact merge
-parameters), not through a comment record alone.
+provider field the reader can see.
+
+**S2 resolution by owner decision (2026-10-25): the runtime human
+approval card is the required human-origin attestation.** The
+merge-authorization record remains an auditable representation only; it
+does not independently establish human-origin authority. The dispatch
+receipt enforces this: a content-passing result has status
+`awaiting-human-attestation` with `merge_authorized` false and reason
+`human-origin-attestation-required`, plus a `human_origin_attestation`
+section naming the exact binding the card must cover (repository, PR
+number, head SHA, base branch and SHA, merge method, authorization
+identity and revision, scope fingerprint). No repository receipt ever
+carries `merge_authorized=true` or human-origin attestation anymore.
+
+**What the card actually exposes (audited, not assumed).** The approval
+card is invisible to the agent and cannot be tapped or described by it.
+A granted call's tool result carries only an approved/declined status --
+no attestation id, no signature, no hash of the approved parameters.
+The host-side approval history records an approval id, the invoked
+command and parameters, request/decision timestamps, and a one-hour card
+expiry, but that history is not queryable by a GitHub Actions executor
+and carries no signature either. No standing merge grant exists (verified
+against the live grant list at decision time). Consequence: the card is a
+genuine enforcement gate **at the merge call itself** (the host observes
+the tap before executing an `mcp.write` merge call), but it exposes **no
+verifiable attestation evidence to a repository-side or Actions-side
+verifier**. Any executor that is not the host-gated merge call must not
+be activated until the platform supplies a signed attestation receipt
+(grant id, timestamp, hash of approved parameters) verifiable by that
+executor -- that is the precise capability boundary and the platform
+handoff below. No token, approval object, service, or framework was
+invented to paper over it; the binding parameters are existing receipt
+fields, and there is deliberately no repository API that accepts an
+attestation input (an agent cannot inject one).
+
+**Executor rules (not activated by this change).** An executor may merge
+only when BOTH hold: (a) a dispatch receipt with status
+`awaiting-human-attestation`, `dispatch_checks_passed` true, and a
+canonical result of `applicable` for the exact parameters; and (b) a
+fresh per-call runtime approval card tap for exactly the receipt's
+`human_origin_attestation.binding`, with no standing merge grant and a
+re-prompt on any parameter change. One tap must never serve a different
+parameter set or a second merge. Production merge execution remains
+unwired; this change activates no executor.
+
+**Reviewer eligibility, assessed separately (rule NOT changed).** Why
+exact-head approval requires an external reviewer in a one-owner repo:
+the canonical evaluator treats `exact_head_reviewed` as an APPROVED
+review at the exact head (dispatch builds it as `approved_at_head`, and
+the evaluator blocks with `review.head-stale` when false), while GitHub
+forbids pull request authors from approving their own pull requests.
+Agent PRs are authored by the owner account, so the owner cannot supply
+that approval and no other collaborator exists -- owner-only admission
+through this path is impossible. GitHub's own Protect-main ruleset does
+not require it (required approving review count is 0; it requires thread
+resolution and the authoritative aggregate check). Smallest safe rule
+recommended for a separate owner decision: decouple exact-head review
+from the GitHub APPROVED state -- require no CHANGES_REQUESTED review,
+zero unresolved threads, substantive independent QA on the exact head
+plus aggregate CI green, and the owner's runtime card tap as the owner's
+approval -- while preserving blocking-review and thread protections.
+Until that decision is given, the current rule stands unchanged.
 
 The workflow remains read-only. Producing an admission receipt is **not** a
 merge, and a production merge executor consuming an exact-head receipt is

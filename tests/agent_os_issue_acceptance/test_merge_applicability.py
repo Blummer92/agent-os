@@ -317,9 +317,9 @@ def _run(bundle=None, record=None, pr=None, comments=None, transport=None,
 def test_all_verifiable_checks_pass_authorizes_via_canonical_applicability():
     receipt = _run()
     assert receipt["dispatch_checks_passed"] is True
-    assert receipt["status"] == "applicable"
-    assert receipt["merge_authorized"] is True
-    assert receipt["reason_codes"] == []
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
     assert receipt["verified"] == [
         "transport-and-record", "native-merge-record", "file-scope",
         "checks", "reviews", "review-threads", "lifecycle-admission",
@@ -435,8 +435,9 @@ def test_planning_approval_artifacts_are_not_required_for_v2():
     ]
     receipt = _run(bundle=bundle, record=record, comments=comments)
     assert receipt["dispatch_checks_passed"] is True
-    assert receipt["merge_authorized"] is True
-    assert receipt["reason_codes"] == []
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
 
 
 def test_foreign_planning_approval_is_not_merge_authority():
@@ -446,7 +447,8 @@ def test_foreign_planning_approval_is_not_merge_authority():
     comments = _comments_for(other, record)
     receipt = _run(bundle=other, record=record, comments=comments)
     assert receipt["dispatch_checks_passed"] is True
-    assert receipt["merge_authorized"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
 
 
 def test_failed_check_blocked():
@@ -745,8 +747,9 @@ def test_extra_authorized_allowlist_paths_are_not_drift():
         decision_at=pending.decision_at,
     )
     receipt = _run(bundle=bundle, record=record)
-    assert receipt["merge_authorized"] is True
-    assert receipt["reason_codes"] == []
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
 
 
 def test_missing_publisher_fails_closed():

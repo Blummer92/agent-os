@@ -283,7 +283,8 @@ def test_fully_matching_record_yields_non_authorizing_candidate_receipt():
     assert receipt["side_effects_performed"] is False
     contract = receipt["host_dispatch_contract"]
     assert contract["consumer"].startswith("chatgpt-github-connector")
-    assert "receipt.merge_authorized is true" in contract["merge_dispatch_allowed_only_when_all_true"]
+    assert "receipt.status == 'awaiting-human-attestation'" in contract["merge_dispatch_allowed_only_when_all_true"]
+    assert any("fresh per-call runtime human approval card was tapped" in item for item in contract["merge_dispatch_allowed_only_when_all_true"])
 
 
 def test_expired_record_is_rejected_not_matched():

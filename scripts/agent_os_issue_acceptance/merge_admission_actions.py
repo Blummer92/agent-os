@@ -110,26 +110,42 @@ _check_binding_contract()
 _HOST_DISPATCH_CONTRACT = {
     "schema_version": "1.0",
     "consumer": "chatgpt-github-connector (issue #2340 owns the mutation-dispatch seam)",
+    # S2 human-origin trust boundary (owner decision 2026-10-25): a
+    # dispatch receipt alone never authorizes a merge. Execution requires
+    # BOTH content admission (this contract's receipt conditions) AND a
+    # fresh runtime human approval card tap for exactly the receipt's
+    # human_origin_attestation.binding parameters. The repository never
+    # observes the card, so no repository receipt ever carries
+    # merge_authorized=true or human-origin attestation.
     "merge_dispatch_allowed_only_when_all_true": [
-        "receipt.status == 'applicable'",
-        "receipt.merge_authorized is true",
+        "receipt.status == 'awaiting-human-attestation'",
+        "receipt.dispatch_checks_passed is true",
+        "receipt.canonical_applicability_result.status == 'applicable'",
         "receipt.authorization_id names a trusted owner-authored "
         "agent-os-merge-authorization/v1 record still current at dispatch time",
         "receipt.expected_head_sha equals the live PR head SHA reacquired at dispatch time",
         "receipt.authorization_expires_at is in the future at dispatch time",
         "the native merge call carries expected_head_sha == receipt.expected_head_sha",
+        "a fresh per-call runtime human approval card was tapped for exactly "
+        "receipt.human_origin_attestation.binding (repository, PR number, head SHA, "
+        "base branch and SHA, merge method, authorization identity, scope fingerprint), "
+        "with no standing merge grant and a re-prompt on any parameter change",
     ],
     "forbidden": [
-        "treating a 'blocked' receipt, or any receipt with reason codes, as authorization",
+        "treating a dispatch receipt alone, a GitHub comment, an owner-login match, "
+        "PAT/OAuth authorship, or an agent-written declaration as merge authority",
+        "treating a 'blocked' receipt as authorization",
         "merging when receipt.observed_head_sha != receipt.expected_head_sha",
         "reusing a receipt after its authorization_expires_at",
         "reusing a receipt whose authorization record was consumed, superseded, "
         "revoked, or invalidated after the receipt was produced",
+        "reusing one approval-card tap for a different parameter set or a second merge",
     ],
-    "note": "This consumer never emits merge_authorized=true. A host-dispatchable "
-    "applicable receipt is produced by merge_applicability.py, which "
-    "delegates to the canonical native v1.2 merge evaluator "
-    "(see the #3463 change request for issue #2340).",
+    "note": "This consumer never emits merge_authorized=true, and neither does "
+    "merge_applicability.py: a content-passing dispatch receipt has status "
+    "awaiting-human-attestation with merge_authorized false. The merge "
+    "decision itself lives at the executor, gated by the runtime approval "
+    "card (see the #3463 change request for issue #2340).",
 }
 
 

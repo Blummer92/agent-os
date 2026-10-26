@@ -93,6 +93,34 @@ class _GitHubCommentSource:
 
 
 
+# S2 human-origin trust boundary (issue #3463, owner decision 2026-10-25).
+# The runtime human approval card is the ONLY accepted human-origin
+# attestation for a production merge. Repository evaluation never observes
+# that card: the card is invisible to the agent, its tool result carries
+# only an approved/declined status with no attestation id, signature, or
+# parameter hash, and no standing merge grant exists. A dispatch receipt
+# therefore always reports human-origin attestation as required-but-not-
+# observed, and never emits merge_authorized=true on record evidence
+# alone. An executor may merge only when BOTH hold: (a) this receipt
+# shows content admission passed (status awaiting-human-attestation,
+# dispatch_checks_passed true, canonical result applicable), and (b) a
+# fresh per-call approval card was tapped for exactly the binding
+# parameters below, with no standing grant and a re-prompt on any
+# parameter change. A GitHub comment, owner-login match, PAT/OAuth
+# authorship, or agent-written declaration is never a substitute.
+HUMAN_ORIGIN_MECHANISM = "runtime-human-approval-card"
+HUMAN_ORIGIN_REASON = "human-origin-attestation-required"
+
+
+def _human_origin_attestation(binding: dict[str, object] | None) -> dict[str, object]:
+    return {
+        "status": "required-not-observed",
+        "mechanism": HUMAN_ORIGIN_MECHANISM,
+        "binding": binding,
+        "observed_by_repository": False,
+    }
+
+
 def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str | None,
              expected_head_sha: str | None, expected_method: str | None,
              observed_head_sha: str | None, observed_base_sha: str | None,
@@ -108,7 +136,8 @@ def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str 
              merge_authorized: bool = False,
              canonical_applicability_evaluated: bool = False,
              canonical_applicability_result: dict[str, object] | None = None,
-             authorization_expires_at: str | None = None) -> dict[str, object]:
+             authorization_expires_at: str | None = None,
+             human_origin_binding: dict[str, object] | None = None) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": "1.0",
         "operation": "merge-dispatch-applicability",
@@ -133,6 +162,7 @@ def _receipt(*, repository: str, pr_number: int | None, logical_trigger_id: str 
         "admission_receipt": admission_receipt,
         "status": status,
         "merge_authorized": merge_authorized,
+        "human_origin_attestation": _human_origin_attestation(human_origin_binding),
         "canonical_applicability_evaluated": canonical_applicability_evaluated,
         "canonical_applicability_result": canonical_applicability_result,
         "authorization_expires_at": authorization_expires_at,
@@ -312,7 +342,14 @@ def evaluate_merge_dispatch_applicability(
     github_client: Any,
     evaluated_at: str | None = None,
 ) -> dict[str, object]:
-    """Full dispatch-time verification. Never authorizes a merge."""
+    """Full dispatch-time verification. Never authorizes a merge.
+
+    Content admission and human-origin attestation are separate verdicts:
+    this function can establish the first and never the second. A
+    content-passing result therefore has status
+    "awaiting-human-attestation" with merge_authorized False, never
+    "applicable" with merge_authorized True.
+    """
     now_text = evaluated_at or admission._utcnow()
     now = admission._parse_timestamp(now_text)
     base_kwargs = dict(
@@ -322,7 +359,7 @@ def evaluate_merge_dispatch_applicability(
         authorization_revision=None, approval_id=None, approval_revision=None,
         dispatch_checks_passed=False, verified=[], reason_codes=[],
         missing_interfaces=[], lifecycle_mutation_authorization=None,
-        lifecycle_snapshot_notes=[],
+        lifecycle_snapshot_notes=[], human_origin_binding=None,
     )
     if now is None:
         return _receipt(**{**base_kwargs, "reason_codes": ["evaluator-clock-malformed"]})
@@ -371,7 +408,18 @@ def evaluate_merge_dispatch_applicability(
         record: MergeAuthorizationRecord = records[0]
         base_kwargs.update(authorization_id=record.authorization_id,
                            authorization_revision=record.authorization_revision,
-                           authorization_expires_at=record.expires_at)
+                           authorization_expires_at=record.expires_at,
+                           human_origin_binding={
+                               "repository": repository,
+                               "pr_number": pr.number,
+                               "head_sha": base_kwargs["expected_head_sha"],
+                               "base_branch": pr.base.ref,
+                               "base_sha": pr.base.sha,
+                               "merge_method": base_kwargs["expected_method"],
+                               "authorization_id": record.authorization_id,
+                               "authorization_revision": record.authorization_revision,
+                               "changed_scope_fingerprint": record.binding.changed_scope_fingerprint,
+                           })
 
         # Only native v1.2 merge records may authorize new dispatches.
         # Historical 1.1 records remain readable, but their planning-named
@@ -561,16 +609,22 @@ def evaluate_merge_dispatch_applicability(
         }
         verified.append("canonical-applicability")
         if canonical.status == "applicable" and canonical.merge_authorized:
+            # Content admission passed. This is NOT merge authorization:
+            # the merge-authorization record is an auditable representation
+            # only, and human-origin attestation (a fresh runtime approval
+            # card tap for exactly human_origin_binding) is still required
+            # at the executor. No repository evaluation can supply it, so
+            # merge_authorized stays False here by construction.
             return _receipt(
                 **{**base_kwargs,
                    "dispatch_checks_passed": True,
                    "verified": verified,
-                   "reason_codes": [],
+                   "reason_codes": [HUMAN_ORIGIN_REASON],
                    "missing_interfaces": [],
                    "lifecycle_mutation_authorization": lifecycle_authorization.to_dict(),
                    "lifecycle_snapshot_notes": notes,
-                   "status": "applicable",
-                   "merge_authorized": True,
+                   "status": "awaiting-human-attestation",
+                   "merge_authorized": False,
                    "canonical_applicability_evaluated": True,
                    "canonical_applicability_result": canonical_result},
             )
