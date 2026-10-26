@@ -565,3 +565,113 @@ def test_canonical_github_transport_preserves_error_classification(monkeypatch):
     fail("internal-error", None)
     with pytest.raises(RuntimeError, match="github-transport-failed:internal-error"):
         request("GET", "/repos/Blummer92/agent-os/issues/200", None)
+
+def merge_observation(issue=200):
+    from scripts.agent_os_issue_acceptance.merge_authorization import (
+        MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION,
+        MergeExecutionObservation,
+    )
+    return MergeExecutionObservation(
+        schema_version=MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION,
+        observation_id="",
+        authorization_id="merge-authorization:" + "a" * 64,
+        authorization_revision="merge-authorization-revision:" + "b" * 64,
+        repository=REPO,
+        pull_request_number=500,
+        observed_head_sha="c" * 40,
+        observed_base_identity="d" * 40,
+        observed_merge_method="squash",
+        observed_merge_commit_sha="e" * 40,
+        observed_actor_id="repository-owner",
+        observed_at="2026-10-26T18:00:00Z",
+        audit_location="https://github.com/Blummer92/agent-os/pull/500",
+        linked_issue_closure_observed=False,
+    )
+
+
+def post_merge_fake(issue=200, *, merged=True, body=None, head=None):
+    fake = FakeGitHub()
+    fake.add(issue)
+    observation = merge_observation(issue)
+    original = fake.__call__
+    def transport(method, path, payload):
+        if method == "GET" and path == f"/repos/{REPO}/pulls/500":
+            return 200, {
+                "number": 500,
+                "state": "closed" if merged else "open",
+                "merged": merged,
+                "merged_at": "2026-10-26T18:00:00Z" if merged else None,
+                "merge_commit_sha": "e" * 40,
+                "head": {"sha": head or "c" * 40},
+                "base": {"ref": "main", "repo": {"full_name": REPO}},
+                "title": "Closure integration",
+                "body": body if body is not None else f"Fixes #{issue}",
+            }
+        return original(method, path, payload)
+    return fake, observation, transport
+
+
+def test_verified_merge_observation_consumed_by_existing_closure_batch():
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake()
+    result = run_post_merge_closure_dispatch(
+        observation, manifest(request_dict(200)), transport
+    )
+    assert result[0]["status"] == "closed-verified"
+    assert result[0]["merge_observation_id"] == observation.observation_id
+    assert result[0]["merge_commit_sha"] == observation.observed_merge_commit_sha
+    assert len(fake.patch_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("merged", "body", "head"),
+    [
+        (False, None, None),
+        (True, "Fixes #201", None),
+        (True, "Unlinked pull request", None),
+        (True, None, "f" * 40),
+        (True, "Fixes #200 and #201", None),
+    ],
+)
+def test_post_merge_refuses_unverified_merge_or_lineage(merged, body, head):
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake(
+        merged=merged, body=body, head=head
+    )
+    with pytest.raises(ValueError, match="merge-observation"):
+        run_post_merge_closure_dispatch(
+            observation, manifest(request_dict(200)), transport
+        )
+    assert fake.patch_calls == []
+
+
+def test_verified_merge_does_not_bypass_independent_closure_admission():
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake()
+    outcomes = run_post_merge_closure_dispatch(
+        observation,
+        manifest(request_dict(200, decision_recorded=False)),
+        transport,
+    )
+    assert outcomes[0]["status"] == "blocked"
+    assert fake.patch_calls == []
+
+
+def test_nonclosing_declared_linkage_requires_exact_issue():
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake(
+        body="Part of #200\n\nNon-closing: #200"
+    )
+    result = run_post_merge_closure_dispatch(
+        observation, manifest(request_dict(200)), transport
+    )
+    assert result[0]["status"] == "closed-verified"
+    assert len(fake.patch_calls) == 1
