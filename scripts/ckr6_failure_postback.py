@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
-"""Stdlib-only CKR6 infrastructure-failure result postback (#3691).
+"""Stdlib-only fallback postback for CKR6 infrastructure failures (#3691).
 
-The CKR6 bridge (``agent_os_execution_service.ckr6_github_bridge``) posts a
-bounded result comment for every request it can classify or execute, and
-converts envelope errors into bounded ``rejected`` receipts. It cannot report
-failures that happen *before* it runs -- checkout, Python setup, or the pip
-install of the Agent OS runtime itself -- because the workflow's ``execute``
-job is skipped when ``classify`` fails, and its postback step imports the
-very package whose installation may have failed (live proof: run
-39665727697, where a missing ``agent-os-navigation-registry`` distribution
-failed classification and no result comment was ever posted).
-
-This reporter closes exactly that hole. The workflow's ``report-failure``
-job runs it when the ``classify`` or ``execute`` job fails. It deliberately
-imports only the Python standard library and no project package, so it works
-precisely when the runtime installation did not. It validates the same
-ingress identity the bridge validates (repository, issue-not-PR, authorized
-actor, exact command prefix), then posts the bridge's existing bounded
-fallback result -- ``status: manual-review``,
-``reason_codes: ["ckr6-result-unavailable"]``, every authority flag false --
-under the canonical ``agent-os-ckr6-result:v1`` marker, correlated with
-``request_comment_id`` and deduplicated per request, mirroring
-``ckr6_github_bridge.postback_result_comment`` semantics. It creates no
-CKR6 decision, no execution authority, and no other GitHub write.
+Independent of the installable CKR6 bridge; preserves its canonical
+non-authorizing result and request-comment correlation.
 """
 
 from __future__ import annotations
@@ -55,11 +35,7 @@ def _canonical_result_json(payload: Mapping[str, object]) -> str:
 
 
 def fallback_result(repository: str, issue_number: int) -> dict[str, object]:
-    """Bounded manual-review result when no CKR6 result evidence exists.
-
-    Mirrors ``ckr6_github_bridge._fallback_result`` field-for-field: the
-    host must receive an explicit terminal signal rather than silence.
-    """
+    """Match the bridge's non-authorizing fallback result exactly."""
     return {
         "operation": "unknown",
         "repository": repository,
@@ -105,14 +81,7 @@ def parse_result_comment(body: object) -> dict[str, object]:
 def validate_event(
     event: Mapping[str, object], *, expected_repository: str, allowed_actor: str
 ) -> tuple[int, int, str]:
-    """Return (issue_number, request_comment_id, comment_created_at).
-
-    Applies the same ingress identity checks as the bridge's
-    ``envelope_from_event``: event repository must match, the comment must
-    be on an issue (not a pull request), the actor must be the authorized
-    owner, and the body must carry the exact CKR6 command prefix. Raises
-    ValueError on any mismatch; nothing is posted for ineligible events.
-    """
+    """Validate owner-only issue-comment ingress; return correlation metadata."""
     if not isinstance(event, Mapping):
         raise TypeError("event must be a mapping")
     repository = event.get("repository")
@@ -148,27 +117,29 @@ def _request_json(request: urllib.request.Request) -> object:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _github_request(url: str, token: str, *, body: str | None = None) -> urllib.request.Request:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer " + token,
+        "User-Agent": "agent-os-ckr6-failure-postback",
+    }
+    if body is None:
+        return urllib.request.Request(url, headers=headers, method="GET")
+    headers["Content-Type"] = "application/json"
+    return urllib.request.Request(
+        url, data=json.dumps({"body": body}).encode("utf-8"),
+        headers=headers, method="POST",
+    )
+
+
 def _existing_result_comment(
     target: str, since: str, request_comment_id: int, token: str
 ) -> int | None:
-    """Return an already-posted result comment id for this request, if any.
-
-    Bounded to one page of comments created since the request. Lookup
-    failure is not evidence of absence: the caller still posts, preferring
-    a duplicate receipt over silence (bridge semantics).
-    """
+    """Bounded existing-result lookup; on lookup failure preserve bridge semantics."""
     if not since:
         return None
     query = urllib.parse.urlencode({"since": since, "per_page": 100})
-    request = urllib.request.Request(
-        f"{target}?{query}",
-        method="GET",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer " + token,
-            "User-Agent": "agent-os-ckr6-failure-postback",
-        },
-    )
+    request = _github_request(f"{target}?{query}", token)
     try:
         comments = _request_json(request)
     except Exception:
@@ -195,12 +166,7 @@ def post_failure_result(
     api_url: str,
     token: str,
 ) -> dict[str, object]:
-    """Validate the event and post exactly one correlated fallback result.
-
-    Fail-closed: validation errors and transport errors raise instead of
-    reporting a posted result. The token is never logged or embedded in
-    returned evidence.
-    """
+    """Post or deduplicate the bounded fallback; never expose the token."""
     if type(api_url) is not str or not api_url.startswith("https://"):
         raise ValueError("api_url must be an https URL")
     if type(token) is not str or not token:
@@ -213,17 +179,7 @@ def post_failure_result(
     target = f"{api_url.rstrip('/')}/repos/{repository}/issues/{issue_number}/comments"
     existing = _existing_result_comment(target, created_at, request_comment_id, token)
     if existing is None:
-        request = urllib.request.Request(
-            target,
-            data=json.dumps({"body": body}).encode("utf-8"),
-            method="POST",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer " + token,
-                "Content-Type": "application/json",
-                "User-Agent": "agent-os-ckr6-failure-postback",
-            },
-        )
+        request = _github_request(target, token, body=body)
         try:
             posted = _request_json(request)
         except Exception as exc:
@@ -243,9 +199,7 @@ def post_failure_result(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--event", required=True, help="Path to the GitHub event payload JSON"
-    )
+    parser.add_argument("--event", required=True, help="Path to the GitHub event payload JSON")
     parser.add_argument("--repository", required=True)
     parser.add_argument("--allowed-actor", required=False, default="Blummer92")
     parser.add_argument(
