@@ -55,6 +55,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import fields
 from typing import Any
 
 from github import Github
@@ -73,6 +74,9 @@ from .closure_admission_actions import (
 )
 from .lifecycle_mutation_authorization import LifecycleOwnerDecision
 from .lifecycle_mutation_guard import LifecycleStateSnapshot
+from .merge_authorization import MergeExecutionObservation
+from .models import LinkedIssueParseStatus
+from .parse_pr import parse_linked_issue_result
 
 __all__ = [
     "GitHubClosureReader",
@@ -81,6 +85,7 @@ __all__ = [
     "github_api_transport",
     "load_closure_manifest",
     "run_closure_dispatch",
+    "run_post_merge_closure_dispatch",
     "main",
 ]
 
@@ -451,6 +456,113 @@ def run_closure_dispatch(
     return [_outcome_dict(outcome) for outcome in outcomes]
 
 
+def _verify_post_merge_observation(
+    observation: MergeExecutionObservation,
+    requests: tuple[IssueClosureRequest, ...],
+    transport: Transport,
+) -> None:
+    """Correlate canonical merge-module evidence with a fresh merged PR.
+
+    Merge evidence is a routing prerequisite, never closure authority.
+    A single observed PR must have exactly one unambiguous linked issue in
+    the canonical PR parser before the separately gated closure batch runs.
+    """
+    if type(observation) is not MergeExecutionObservation:
+        raise TypeError("merge observation must be canonical MergeExecutionObservation")
+    # Check content identity rather than treating a supplied hash as authority.
+    observation.__post_init__()
+    if len(requests) != 1:
+        raise ValueError("post-merge dispatch requires exactly one issue request")
+    decision = requests[0].decision
+    if decision.repository != observation.repository:
+        raise ValueError("merge-observation.repository-mismatch")
+    if decision.issue_number is None:
+        raise ValueError("merge-observation.issue-number-missing")
+
+    path = (
+        f"/repos/{observation.repository}/pulls/"
+        f"{observation.pull_request_number}"
+    )
+    status, raw = transport("GET", path, None)
+    if status != 200 or type(raw) is not dict:
+        raise ValueError("merge-observation.pr-readback-unavailable")
+    if (
+        type(raw.get("number")) is not int
+        or raw["number"] != observation.pull_request_number
+        or raw.get("state") != "closed"
+        or raw.get("merged") is not True
+        or type(raw.get("merged_at")) is not str
+        or not raw["merged_at"]
+        or raw.get("merge_commit_sha") != observation.observed_merge_commit_sha
+    ):
+        raise ValueError("merge-observation.pr-not-verified-merged")
+    head = raw.get("head")
+    base = raw.get("base")
+    if (
+        type(head) is not dict
+        or head.get("sha") != observation.observed_head_sha
+        or type(base) is not dict
+        or base.get("ref") != "main"
+        or type(base.get("repo")) is not dict
+        or base["repo"].get("full_name") != observation.repository
+    ):
+        raise ValueError("merge-observation.pr-identity-mismatch")
+    title, body = raw.get("title"), raw.get("body")
+    if type(title) is not str or type(body) is not str:
+        raise ValueError("merge-observation.pr-linkage-unavailable")
+    linkage = parse_linked_issue_result(body, title)
+    target = decision.issue_number
+    if linkage.status is LinkedIssueParseStatus.RESOLVED:
+        if linkage.issue_number != target or linkage.bare_references:
+            # A closing directive for one issue cannot silently absorb other
+            # issue references. Investigate ambiguous lineage first.
+            raise ValueError("merge-observation.pr-linkage-ambiguous")
+    elif linkage.status is LinkedIssueParseStatus.INFORMATIONAL:
+        if {ref.issue_number for ref in linkage.bare_references} != {target}:
+            raise ValueError("merge-observation.pr-linkage-ambiguous")
+    else:
+        raise ValueError("merge-observation.pr-linkage-not-admitted")
+
+
+def run_post_merge_closure_dispatch(
+    observation: MergeExecutionObservation,
+    manifest: Mapping[str, object] | tuple[IssueClosureRequest, ...],
+    transport: Transport,
+) -> list[dict[str, object]]:
+    """Consume the existing merge observation and governed closure batch.
+
+    Fresh GitHub merged-PR readback binds the observation to the exact
+    issue. Closure is still refused unless the *independent* owner decision,
+    satisfaction, QA, and fresh issue admission permit it. There is no merge
+    or issue-write authority in the observation.
+    """
+    requests = (
+        load_closure_manifest(manifest)
+        if isinstance(manifest, Mapping)
+        else manifest
+    )
+    _verify_post_merge_observation(observation, requests, transport)
+    outcomes = run_closure_dispatch(requests, transport)
+    return [
+        {
+            **outcome,
+            "merge_observation_id": observation.observation_id,
+            "merge_commit_sha": observation.observed_merge_commit_sha,
+        }
+        for outcome in outcomes
+    ]
+
+
+def _load_merge_observation(path: str) -> MergeExecutionObservation:
+    """Read one canonical merge-execution observation; reject extra fields."""
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    allowed = {field.name for field in fields(MergeExecutionObservation) if field.init}
+    if type(payload) is not dict or set(payload) != allowed:
+        raise ValueError("merge observation fields are invalid")
+    return MergeExecutionObservation(**payload)
+
+
 def _dry_run_outcomes(
     requests: tuple[IssueClosureRequest, ...], reader: GitHubClosureReader
 ) -> list[dict[str, object]]:
@@ -551,6 +663,10 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
     )
     parser.add_argument("--manifest", required=True, help="Path to the JSON manifest.")
     parser.add_argument(
+        "--merge-observation",
+        help="Canonical merge-module observation JSON. Requires verified merged-PR readback.",
+    )
+    parser.add_argument(
         "--token-env",
         default="GITHUB_TOKEN",
         help="Environment variable holding the GitHub token (live mode only).",
@@ -583,11 +699,32 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
     else:
         token = os.environ.get(args.token_env) if transport is None else None
     live_transport = transport if transport is not None else github_api_transport(token)
+    observation = None
+    if args.merge_observation is not None:
+        try:
+            observation = _load_merge_observation(args.merge_observation)
+            _verify_post_merge_observation(observation, requests, live_transport)
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"merge observation error: {exc}", file=sys.stderr)
+            return 2
     if args.live:
-        outcomes = run_closure_dispatch(requests, live_transport)
+        outcomes = (
+            run_post_merge_closure_dispatch(observation, requests, live_transport)
+            if observation is not None
+            else run_closure_dispatch(requests, live_transport)
+        )
     else:
-        # Dry run: a reader only. No writer is constructed, no PATCH issued.
+        # Dry run: no writer constructed, regardless of merge observation.
         outcomes = _dry_run_outcomes(requests, GitHubClosureReader(live_transport))
+    if observation is not None:
+        outcomes = [
+            {
+                **outcome,
+                "merge_observation_id": observation.observation_id,
+                "merge_commit_sha": observation.observed_merge_commit_sha,
+            }
+            for outcome in outcomes
+        ] if not args.live else outcomes
     print(json.dumps({"live": bool(args.live), "outcomes": outcomes}, sort_keys=True))
     return 0
 
