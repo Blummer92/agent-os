@@ -9,6 +9,8 @@ the read-only client shape, the #3329 production evidence reader wiring
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -877,14 +879,14 @@ def test_cli_scanner_bad_json_and_io_errors_preserve_failure_detail(
     malformed = tmp_path / "malformed.json"
     malformed.write_text("{", encoding="utf-8")
     denied = tmp_path / "denied.json"
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
 
-    def read_text_with_denial(path, *args, **kwargs):
+    def read_bytes_with_denial(path, *args, **kwargs):
         if path == denied:
             raise OSError("simulated advisory read error")
-        return original_read_text(path, *args, **kwargs)
+        return original_read_bytes(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", read_text_with_denial)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_with_denial)
     code, record = _run_cli(
         monkeypatch, tmp_path, "--request-interpretation", str(request),
         "--scanner-evidence", str(malformed),
@@ -945,3 +947,203 @@ def test_scanner_advisory_loader_rejects_unsupported_schema() -> None:
             {"schema": "agent-os-jscpd-advisory/9", "tool": "jscpd"},
             source_revision=_SHA,
         )
+
+
+def test_cli_scanner_adversarial_values_are_excluded_or_sanitized() -> None:
+    """#3429 repair: untrusted artifact values can never reach a record.
+
+    Numeric scope entries are dropped (previously they crashed the
+    workflow summary join); absolute, traversal, and drive paths are
+    excluded from findings (not merely annotated); credential-like and
+    control-character content in display fields is redacted/flattened;
+    non-integer line values become None instead of published verbatim.
+    """
+    artifact = _pyan_artifact(
+        head_sha=_SHA,
+        candidates=[
+            _pyan_candidate(),
+            {"id": "abs.fn", "kind": "function",
+             "file": "/home/runner/.ssh/id_rsa", "line": 1},
+            {"id": "esc.fn", "kind": "function",
+             "file": "../escape.py", "line": 2},
+            {"id": "win.fn", "kind": "function",
+             "file": "C:\\Users\\runner\\secret.py", "line": 3},
+            {"id": "badline.fn", "kind": "function",
+             "file": "scripts/agent_os_issue_acceptance/a.py", "line": "12; x"},
+        ],
+        truncated=False,
+    )
+    artifact["scope"] = [123, "scripts/agent_os_issue_acceptance", "/etc", "../escape"]
+    artifact["version"] = "2.9.0\r\n| token=abc123secret"
+    source = cli._normalize_scanner_advisory(artifact, source_revision=_SHA)
+    assert source["scope"] == ["scripts/agent_os_issue_acceptance"]
+    assert ", ".join(source["scope"]) == "scripts/agent_os_issue_acceptance"
+    assert [f["file"] for f in source["findings"]] == [
+        "scripts/agent_os_issue_acceptance/merge_producer.py",
+        "scripts/agent_os_issue_acceptance/a.py",
+    ]
+    assert source["excluded_findings"] == 3
+    assert source["state"] == "ok"
+    assert "\r" not in source["version"] and "\n" not in source["version"]
+    assert "abc123secret" not in source["version"]
+    assert source["findings"][1]["line"] is None
+    assert source["selection_input"] is False
+    assert source["execution_authorized"] is False
+    assert source["side_effects_performed"] is False
+
+    clone_artifact = _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()])
+    clone_artifact["candidates"][0]["firstFile"]["name"] = "/tmp/host.py"
+    clone_source = cli._normalize_scanner_advisory(
+        clone_artifact, source_revision=_SHA
+    )
+    assert clone_source["findings"] == []
+    assert clone_source["excluded_findings"] == 1
+
+
+def test_cli_scanner_oversized_input_and_candidate_truncation_are_bounded(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 repair: oversized artifacts fail advisory-only; candidate
+    lists truncate deterministically to the configured limit while the
+    original count and truncation state stay truthful."""
+    many = [
+        {"id": f"mod.fn{i}", "kind": "function",
+         "file": "scripts/agent_os_issue_acceptance/a.py", "line": i}
+        for i in range(150)
+    ]
+    source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=many, truncated=False),
+        source_revision=_SHA,
+    )
+    assert len(source["findings"]) == cli.SCANNER_ADVISORY_MAX_FINDINGS
+    assert source["truncated"] is True
+    assert source["candidate_count"] == 150
+
+    lying = _pyan_artifact(head_sha=_SHA, candidates=many[:2], truncated=False)
+    lying["candidate_count"] = 999999
+    lying_source = cli._normalize_scanner_advisory(lying, source_revision=_SHA)
+    assert lying_source["truncated"] is True
+    assert lying_source["candidate_count"] == 999999
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_text(" " * (cli.SCANNER_ADVISORY_MAX_BYTES + 10), encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        cli._load_scanner_advisory(str(oversized), source_revision=_SHA)
+
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(oversized),
+    )
+    assert code == 0
+    (oversized_source,) = record["scanner_advisory"]["sources"]
+    assert oversized_source["state"] == oversized_source["status"] == "scanner-error"
+    assert oversized_source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+
+def test_cli_scanner_failure_details_exclude_host_paths_and_secrets(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 repair: failure details carry type + redacted detail only;
+    absolute host paths and credential-like fragments never publish."""
+    detail = cli._safe_failure_detail(
+        OSError(13, "Permission denied", "/home/runner/token.json")
+    )
+    assert "/home/runner" not in detail
+    assert "[path]" in detail
+    secret_detail = cli._safe_failure_detail(
+        ValueError("token=abc123secret and ghp_1234567890abcdefghij")
+    )
+    assert "abc123secret" not in secret_detail
+    assert "ghp_1234567890abcdefghij" not in secret_detail
+
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    denied = tmp_path / "denied.json"
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes_with_denial(path, *args, **kwargs):
+        if path == denied:
+            raise OSError(13, "Permission denied", "/home/runner/secret.json")
+        return original_read_bytes(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_with_denial)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(denied),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "scanner-error"
+    assert "/home/runner" not in source["failure_detail"]
+    assert source["selection_input"] is False
+
+
+def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_path) -> None:
+    """#3429 repair: the published summary cell coerces types, strips
+    control characters (including CR), and redacts credential-like
+    fragments, even for a record that bypassed loader sanitization."""
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [{
+            "tool": None,
+            "source": "evil.json",
+            "status": "scanner-error",
+            "state": "scanner-error",
+            "head_sha": "a" * 40,
+            "candidate_count": 1,
+            "findings": [],
+            "truncated": False,
+            "out_of_scope_findings": 0,
+            "version": "1.0\r## injected heading",
+            "scope": [123, "scripts/agent_os_issue_acceptance"],
+            "failure_detail": "boom token=abc123secret at /home/runner/x.json",
+        }]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text("", encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    rendered = summary_path.read_text(encoding="utf-8")
+    assert "\r" not in rendered
+    assert "/home/runner" not in rendered
+    assert "abc123secret" not in rendered
+    assert "123" in rendered
+    assert not any(line.startswith("## injected") for line in rendered.splitlines())
+    assert "### Scanner advisory" in rendered
