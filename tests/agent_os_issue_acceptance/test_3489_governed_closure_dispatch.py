@@ -675,3 +675,46 @@ def test_nonclosing_declared_linkage_requires_exact_issue():
     )
     assert result[0]["status"] == "closed-verified"
     assert len(fake.patch_calls) == 1
+
+def test_post_merge_cli_dry_run_preserves_no_write(tmp_path, capsys):
+    from dataclasses import fields
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import main
+
+    fake, observation, transport = post_merge_fake()
+    observation_path = tmp_path / "merge.json"
+    observation_path.write_text(
+        json.dumps({
+            field.name: getattr(observation, field.name)
+            for field in fields(observation)
+            if field.init
+        }),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest(request_dict(200))), encoding="utf-8"
+    )
+    assert main(
+        [
+            "--manifest", str(manifest_path),
+            "--merge-observation", str(observation_path),
+        ],
+        transport=transport,
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["live"] is False
+    assert payload["outcomes"][0]["status"] == "would-close"
+    assert payload["outcomes"][0]["merge_observation_id"] == observation.observation_id
+    assert fake.patch_calls == []
+
+
+def test_post_merge_observation_rejects_wrong_issue_manifest():
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake()
+    with pytest.raises(ValueError, match="merge-observation.pr-linkage-ambiguous"):
+        run_post_merge_closure_dispatch(
+            observation, manifest(request_dict(201)), transport
+        )
+    assert fake.patch_calls == []
