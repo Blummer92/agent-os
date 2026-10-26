@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -213,39 +212,32 @@ def post_failure_result(
     body = serialize_result_comment(result, request_comment_id=request_comment_id)
     target = f"{api_url.rstrip('/')}/repos/{repository}/issues/{issue_number}/comments"
     existing = _existing_result_comment(target, created_at, request_comment_id, token)
-    if existing is not None:
-        return {
-            "issue_number": issue_number,
-            "request_comment_id": request_comment_id,
-            "posted_comment_id": existing,
-            "result_status": result["status"],
-            "deduplicated": True,
-        }
-    request = urllib.request.Request(
-        target,
-        data=json.dumps({"body": body}).encode("utf-8"),
-        method="POST",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-            "User-Agent": "agent-os-ckr6-failure-postback",
-        },
-    )
-    try:
-        posted = _request_json(request)
-    except Exception as exc:
-        raise RuntimeError(
-            f"CKR6 failure postback failed: {type(exc).__name__}"
-        ) from exc
-    if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
-        raise RuntimeError("CKR6 failure postback returned an unexpected response")
+    if existing is None:
+        request = urllib.request.Request(
+            target,
+            data=json.dumps({"body": body}).encode("utf-8"),
+            method="POST",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
+                "User-Agent": "agent-os-ckr6-failure-postback",
+            },
+        )
+        try:
+            posted = _request_json(request)
+        except Exception as exc:
+            raise RuntimeError(
+                f"CKR6 failure postback failed: {type(exc).__name__}"
+            ) from exc
+        if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
+            raise RuntimeError("CKR6 failure postback returned an unexpected response")
     return {
         "issue_number": issue_number,
         "request_comment_id": request_comment_id,
-        "posted_comment_id": posted["id"],
+        "posted_comment_id": existing if existing is not None else posted["id"],
         "result_status": result["status"],
-        "deduplicated": False,
+        "deduplicated": existing is not None,
     }
 
 
