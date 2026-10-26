@@ -604,6 +604,190 @@ def _parse_issue_list(raw: str | None, name: str) -> tuple[int, ...] | None:
 RECORD_ONLY_LINEAGE_LIMIT = 25
 
 
+#: Producer schemas the scanner-advisory loader accepts, mapped to tools.
+#: Anything else is a scanner-error, never silently reinterpreted (#3429).
+SCANNER_ADVISORY_SCHEMAS = {
+    "agent-os-jscpd-advisory/1": "jscpd",
+    "agent-os-pyan3-advisory/1": "pyan3",
+}
+
+_JSCPD_CLONE_NOTE = (
+    "Textual similarity only; not semantic equivalence. "
+    "Do not infer that the two fragments share a responsibility."
+)
+_PYAN_CANDIDATE_NOTE = (
+    "No resolved static caller in scope; not proof of runtime "
+    "unreachability. Check tests, __all__, decorators, workflow YAML, "
+    "and MCP registrations before any deletion judgment."
+)
+
+
+def _scanner_file_out_of_scope(file_name: object, scope: list[str]) -> bool:
+    """True when a finding file lies outside the producer's declared scope.
+
+    Scope blindness must stay visible: a finding in an unscanned package
+    (for example the Notion packages, which neither advisory producer
+    covers) is annotated, never reported as "no findings" for that package.
+    """
+    if not isinstance(file_name, str) or not file_name:
+        return True
+    return not any(
+        file_name == entry or file_name.startswith(entry.rstrip("/") + "/")
+        for entry in scope
+        if isinstance(entry, str) and entry
+    )
+
+
+def _normalize_scanner_advisory(
+    raw: object, *, source_revision: str
+) -> dict[str, object]:
+    """Normalize one advisory producer JSON into a record-only section.
+
+    Provenance is preserved verbatim (tool, schema, version, head SHA,
+    scope, candidate count, truncation flags); findings are reshaped only
+    into a common kind/file/line form. Nothing here is selection input:
+    every finding carries ``selection_input: False``, and the section
+    itself carries ``execution_authorized: False`` and
+    ``side_effects_performed: False``.
+
+    States, in precedence order: ``scanner-error`` (wrong schema/tool,
+    missing status/head SHA, or malformed candidate list), ``stale``
+    (head SHA differs from the run's live source revision — findings are
+    kept but marked stale, never cited as current), ``ok-zero-findings``
+    (a successful scan that found nothing, distinct from failure), else
+    ``ok``. Raises ValueError on malformed input; callers map that to a
+    ``scanner-error`` section so a bad artifact can never crash the run.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("scanner advisory artifact must be a JSON object")
+    schema = raw.get("schema")
+    tool = SCANNER_ADVISORY_SCHEMAS.get(schema) if isinstance(schema, str) else None
+    if tool is None or raw.get("tool") != tool:
+        raise ValueError("scanner advisory artifact has an unsupported schema/tool")
+    status = raw.get("status")
+    head_sha = raw.get("head_sha")
+    scope = raw.get("scope")
+    candidates = raw.get("candidates")
+    if (
+        not isinstance(status, str)
+        or not isinstance(head_sha, str)
+        or not head_sha
+        or not isinstance(scope, list)
+        or not isinstance(candidates, list)
+    ):
+        raise ValueError("scanner advisory artifact is missing required fields")
+    findings: list[dict[str, object]] = []
+    if tool == "jscpd":
+        for clone in candidates:
+            if not isinstance(clone, dict):
+                raise ValueError("jscpd candidate must be an object")
+            first = clone.get("firstFile") or {}
+            second = clone.get("secondFile") or {}
+            if not isinstance(first, dict) or not isinstance(second, dict):
+                raise ValueError("jscpd candidate is missing file records")
+            first_name = first.get("name")
+            second_name = second.get("name")
+            findings.append(
+                {
+                    "kind": "textual-clone",
+                    "selection_input": False,
+                    "first_file": first_name,
+                    "first_start_line": first.get("start"),
+                    "first_end_line": first.get("end"),
+                    "second_file": second_name,
+                    "second_start_line": second.get("start"),
+                    "second_end_line": second.get("end"),
+                    "lines": clone.get("lines"),
+                    "tokens": clone.get("tokens"),
+                    "out_of_scope": (
+                        _scanner_file_out_of_scope(first_name, scope)
+                        or _scanner_file_out_of_scope(second_name, scope)
+                    ),
+                    "note": _JSCPD_CLONE_NOTE,
+                }
+            )
+    else:  # pyan3
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("pyan3 candidate must be an object")
+            file_name = candidate.get("file")
+            findings.append(
+                {
+                    "kind": "potentially-disconnected",
+                    "selection_input": False,
+                    "function": candidate.get("id"),
+                    "file": file_name,
+                    "line": candidate.get("line"),
+                    "out_of_scope": _scanner_file_out_of_scope(file_name, scope),
+                    "note": _PYAN_CANDIDATE_NOTE,
+                }
+            )
+    if status != "ok":
+        state = "scanner-error"
+        findings = []
+    elif head_sha != source_revision:
+        state = "stale"
+    elif not findings:
+        state = "ok-zero-findings"
+    else:
+        state = "ok"
+    return {
+        "tool": tool,
+        "schema": schema,
+        "version": raw.get("version"),
+        "head_sha": head_sha,
+        "scope": list(scope),
+        "status": status,
+        "state": state,
+        "candidate_count": raw.get("candidate_count"),
+        "truncated": raw.get("truncated", raw.get("candidates_truncated")),
+        "findings": findings,
+        "out_of_scope_findings": sum(
+            1 for finding in findings if finding.get("out_of_scope") is True
+        ),
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _load_scanner_advisory(
+    path: str, *, source_revision: str
+) -> dict[str, object]:
+    """Load one producer JSON file into a normalized advisory section.
+
+    FileNotFoundError propagates so the caller can record an
+    ``unavailable`` section; malformed content raises ValueError so the
+    caller can record a ``scanner-error`` section. The run itself never
+    fails on an advisory artifact: the flag is advisory by design.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    section = _normalize_scanner_advisory(raw, source_revision=source_revision)
+    section["source"] = Path(path).name
+    return section
+
+
+def _unavailable_scanner_advisory(path: str) -> dict[str, object]:
+    """Section for a missing artifact: explicit absence, not zero findings."""
+    return {
+        "source": Path(path).name,
+        "tool": None,
+        "schema": None,
+        "version": None,
+        "head_sha": None,
+        "scope": [],
+        "status": "unavailable",
+        "state": "unavailable",
+        "candidate_count": None,
+        "truncated": None,
+        "findings": [],
+        "out_of_scope_findings": 0,
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
 def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> dict[str, object]:
     """Acquire lineage for candidates the selector never reached (#3441).
 
@@ -653,6 +837,7 @@ def _build_experiment_record(
     ledger_entries: tuple[dict[str, object], ...] = (),
     evidence_gap_reason: str | None = None,
     lifecycle_acquisition: Mapping[str, object] | None = None,
+    scanner_advisory: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     # The selector result is the single source for the narrowing actually
     # applied: the operator-declared criterion on the manual path, or the
@@ -784,6 +969,15 @@ def _build_experiment_record(
         "lifecycle_stage_acquisition": (
             None if lifecycle_acquisition is None else dict(lifecycle_acquisition)
         ),
+        # 14. scanner advisory evidence (#3429): jscpd/pyan3 producer findings
+        # loaded after selection, for this record only. Additive and
+        # non-authorizing; None when no --scanner-evidence flag was given.
+        # It is never supplied to the selector, the evidence reader, or the
+        # evidence-ledger inputs digest, and it never changes a selection
+        # outcome or reason code.
+        "scanner_advisory": (
+            None if scanner_advisory is None else dict(scanner_advisory)
+        ),
     }
 
 
@@ -825,6 +1019,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="UTC timestamp %%Y-%%m-%%dT%%H:%%M:%%SZ (default: now)",
     )
     parser.add_argument("--output", default=None, help="record path (default: stdout)")
+    parser.add_argument(
+        "--scanner-evidence",
+        default=None,
+        action="append",
+        metavar="PATH",
+        help=(
+            "path to an advisory producer JSON (jscpd-advisory.json or "
+            "pyan3-advisory.json); repeatable, one producer per flag. "
+            "Loaded after selection for the record only; never selection "
+            "input. Absent flag means the scanner_advisory section is None."
+        ),
+    )
     parser.add_argument(
         "--mission-id",
         default=None,
@@ -1072,6 +1278,36 @@ def main(argv: list[str] | None = None) -> int:
         actor="agent-os-shadow-run/phase0",
     )
 
+    # #3429 record-only scanner advisory: loaded only after selection has
+    # returned, so findings can never influence it. A missing artifact
+    # records "unavailable" and malformed content records "scanner-error";
+    # neither fails the run, because the flag is advisory by design. The
+    # section is deliberately excluded from the ledger inputs digest above.
+    scanner_sources: list[dict[str, object]] = []
+    for evidence_path in args.scanner_evidence or ():
+        try:
+            scanner_sources.append(
+                _load_scanner_advisory(evidence_path, source_revision=source_revision)
+            )
+        except FileNotFoundError:
+            scanner_sources.append(_unavailable_scanner_advisory(evidence_path))
+        except (ValueError, OSError) as exc:
+            scanner_sources.append(
+                {
+                    **_unavailable_scanner_advisory(evidence_path),
+                    "status": "scanner-error",
+                    "state": "scanner-error",
+                    "failure_detail": f"{type(exc).__name__}: {exc}"[:240],
+                }
+            )
+    scanner_advisory_section: dict[str, object] | None = None
+    if args.scanner_evidence is not None:
+        scanner_advisory_section = {
+            "sources": scanner_sources,
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        }
+
     record = _build_experiment_record(
         repository=args.repository,
         retrieved_at=retrieved_at,
@@ -1103,6 +1339,7 @@ def main(argv: list[str] | None = None) -> int:
             "execution_authorized": False,
             "side_effects_performed": False,
         },
+        scanner_advisory=scanner_advisory_section,
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"

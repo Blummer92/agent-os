@@ -606,3 +606,252 @@ def test_cli_forwards_the_parsed_association_policy_to_the_acquirer(
     assert code == 0
     assert record is not None
     assert seen == [expected]
+
+
+# ---------------------------------------------------------------------------
+# #3429 record-only scanner advisory: producer JSON -> shadow record section.
+# Fixtures replicate the exact producer schemas (verified against real
+# jscpd/pyan3 outputs regenerated on main d32c9b71: jscpd ok/35 clones,
+# pyan ok/126 candidates with candidates_truncated true); the live
+# producer-to-CLI run is proven separately in the PR/QA evidence, not by
+# making this focused suite depend on npx/pip downloads.
+# ---------------------------------------------------------------------------
+
+
+def _jscpd_artifact(*, head_sha: str, clones: list) -> dict:
+    return {
+        "schema": "agent-os-jscpd-advisory/1",
+        "status": "ok",
+        "head_sha": head_sha,
+        "tool": "jscpd",
+        "version": "4.0.5",
+        "scope": [
+            "scripts/agent_os_issue_acceptance",
+            "08_Tooling/agent-os-execution-service/src",
+        ],
+        "candidate_count": len(clones),
+        "candidates": clones,
+        "truncated": False,
+    }
+
+
+def _jscpd_clone() -> dict:
+    return {
+        "firstFile": {
+            "name": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+            "start": 10,
+            "end": 25,
+        },
+        "secondFile": {
+            "name": "scripts/agent_os_issue_acceptance/merge_applicability.py",
+            "start": 40,
+            "end": 55,
+        },
+        "format": "python",
+        "lines": 16,
+        "tokens": 60,
+    }
+
+
+def _pyan_artifact(*, head_sha: str, candidates: list, truncated: bool) -> dict:
+    return {
+        "schema": "agent-os-pyan3-advisory/1",
+        "status": "ok",
+        "head_sha": head_sha,
+        "tool": "pyan3",
+        "version": "2.9.0",
+        "scope": [
+            "scripts/agent_os_issue_acceptance",
+            "08_Tooling/agent-os-execution-service/src",
+        ],
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "candidates_truncated": truncated,
+    }
+
+
+def _pyan_candidate() -> dict:
+    return {
+        "id": "scripts.agent_os_issue_acceptance.merge_producer.produce_merge_authorization",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_producer.py",
+        "line": 12,
+    }
+
+
+def _write_artifact(tmp_path: Path, name: str, payload: dict) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_selection(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 acceptance: scanner findings reach the record; selection is identical.
+
+    Real producer output (regenerated on main, see PR evidence) has the
+    same schema, provenance fields, and truncation semantics as these
+    fixtures; the fixtures exist so this suite never depends on npx/pip.
+    """
+    jscpd = _write_artifact(
+        tmp_path, "jscpd-advisory.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()]),
+    )
+    pyan = _write_artifact(
+        tmp_path, "pyan3-advisory.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[_pyan_candidate()], truncated=True),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path,
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(jscpd),
+        "--scanner-evidence", str(pyan),
+    )
+    assert code == 0
+    section = record["scanner_advisory"]
+    assert section["execution_authorized"] is False
+    assert section["side_effects_performed"] is False
+    (jscpd_source, pyan_source) = section["sources"]
+    # Provenance preserved exactly, including pyan truncation.
+    assert jscpd_source["tool"] == "jscpd"
+    assert jscpd_source["schema"] == "agent-os-jscpd-advisory/1"
+    assert jscpd_source["version"] == "4.0.5"
+    assert jscpd_source["head_sha"] == _SHA
+    assert jscpd_source["candidate_count"] == 1
+    assert jscpd_source["truncated"] is False
+    assert jscpd_source["state"] == "ok"
+    assert pyan_source["tool"] == "pyan3"
+    assert pyan_source["schema"] == "agent-os-pyan3-advisory/1"
+    assert pyan_source["version"] == "2.9.0"
+    assert pyan_source["head_sha"] == _SHA
+    assert pyan_source["truncated"] is True
+    assert pyan_source["state"] == "ok"
+    # Findings intact with original file/line, never selection input.
+    (clone,) = jscpd_source["findings"]
+    assert clone["kind"] == "textual-clone"
+    assert clone["first_file"] == "scripts/agent_os_issue_acceptance/merge_admission_actions.py"
+    assert clone["first_start_line"] == 10
+    assert clone["second_file"] == "scripts/agent_os_issue_acceptance/merge_applicability.py"
+    assert clone["lines"] == 16
+    assert clone["selection_input"] is False
+    assert "not semantic equivalence" in clone["note"]
+    (candidate,) = pyan_source["findings"]
+    assert candidate["kind"] == "potentially-disconnected"
+    assert candidate["function"] == "scripts.agent_os_issue_acceptance.merge_producer.produce_merge_authorization"
+    assert candidate["file"] == "scripts/agent_os_issue_acceptance/merge_producer.py"
+    assert candidate["line"] == 12
+    assert candidate["selection_input"] is False
+    assert "not proof of runtime unreachability" in candidate["note"]
+    # Selection is identical to a control run without --scanner-evidence:
+    # still fail-closed on the missing primary-claim/approval inputs, no
+    # SELECTED, and the ledger inputs digest is unchanged (the section is
+    # not a ledger input).
+    _, control = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+    assert "shadow-selection.candidate-evidence-incomplete" in record["deterministic_selector_result"]["reason_codes"]
+    assert record["candidate_population"] == control["candidate_population"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["lifecycle_stage_acquisition"] == control["lifecycle_stage_acquisition"]
+    zero = record["zero_mutation_verification"]
+    assert zero["http_write_requests"] == 0
+    assert zero["github_mutations"] == 0
+    (client,) = _FakeLiveClient.instances
+    assert client.write_requests == 0
+    # No flag means the section is None, exactly like §13's convention.
+    assert control["scanner_advisory"] is None
+
+
+def test_cli_scanner_advisory_stale_error_unavailable_and_zero_states(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+
+    stale = _write_artifact(
+        tmp_path, "stale.json",
+        _jscpd_artifact(head_sha="a" * 40, clones=[_jscpd_clone()]),
+    )
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(stale),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "stale"
+    assert source["head_sha"] == "a" * 40
+    assert len(source["findings"]) == 1  # kept, marked stale, never current
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"schema": "unknown/9", "tool": "jscpd"}), encoding="utf-8")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(bad),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "scanner-error"
+    assert source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(tmp_path / "missing.json"),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "unavailable"
+    assert source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    empty = _write_artifact(
+        tmp_path, "empty.json", _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+    )
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(empty),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "ok-zero-findings"  # distinct from unavailable/error
+
+
+def test_cli_scanner_advisory_out_of_scope_findings_are_annotated_not_hidden(
+    monkeypatch, tmp_path
+) -> None:
+    """#3736 guard: Notion files are outside producer scope, so a finding
+    there must read as out-of-scope, never as 'no findings' for that package."""
+    pyan = _write_artifact(
+        tmp_path, "pyan3-advisory.json",
+        _pyan_artifact(
+            head_sha=_SHA,
+            candidates=[{
+                "id": "scripts.agent_os_notion_read_request.binding_verification.inspect",
+                "kind": "function",
+                "file": "scripts/agent_os_notion_read_request/binding_verification.py",
+                "line": 100,
+            }],
+            truncated=False,
+        ),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(pyan),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "ok"
+    (finding,) = source["findings"]
+    assert finding["out_of_scope"] is True
+    assert source["out_of_scope_findings"] == 1
+
+
+def test_scanner_advisory_loader_rejects_unsupported_schema() -> None:
+    with pytest.raises(ValueError, match="unsupported schema/tool"):
+        cli._normalize_scanner_advisory(
+            {"schema": "agent-os-jscpd-advisory/9", "tool": "jscpd"},
+            source_revision=_SHA,
+        )
