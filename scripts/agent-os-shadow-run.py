@@ -723,8 +723,9 @@ def _normalize_scanner_advisory(
 ) -> dict[str, object]:
     """Normalize one advisory producer JSON into a record-only section.
 
-    Provenance is preserved verbatim (tool, schema, version, head SHA,
-    scope, candidate count, truncation flags); findings are reshaped only
+    Provenance is preserved (tool, schema, version, head SHA,
+    scope, candidate count, truncation flags) after display
+    sanitization of free-text fields; findings are reshaped only
     into a common kind/file/line form. Nothing here is selection input:
     every finding carries ``selection_input: False``, and the section
     itself carries ``execution_authorized: False`` and
@@ -761,6 +762,12 @@ def _normalize_scanner_advisory(
         raise ValueError("scanner advisory artifact has an invalid head SHA")
     scope = _safe_scope(scope)
     version = _safe_display_text(raw.get("version"), max_len=128)
+    # Status is published verbatim into the record artifact and the
+    # workflow summary, so it gets the same treatment as every other
+    # display field: a hostile status must never carry CR/LF or markup
+    # into a published surface. A status that sanitizes to nothing, or
+    # that is not exactly "ok" after sanitizing, renders scanner-error.
+    status = _safe_display_text(status, max_len=64) or "scanner-error"
     candidate_count = (
         raw.get("candidate_count")
         if type(raw.get("candidate_count")) is int and raw.get("candidate_count") >= 0
@@ -874,7 +881,10 @@ def _load_scanner_advisory(
     Oversized artifacts are rejected before parsing, never loaded
     unbounded.
     """
-    data = Path(path).read_bytes()
+    artifact_path = Path(path)
+    if artifact_path.stat().st_size > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    data = artifact_path.read_bytes()
     if len(data) > SCANNER_ADVISORY_MAX_BYTES:
         raise ValueError("scanner advisory artifact exceeds size limit")
     raw = json.loads(data.decode("utf-8"))
