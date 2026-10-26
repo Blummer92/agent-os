@@ -599,6 +599,7 @@ def post_merge_fake(issue=200, *, merged=True, body=None, head=None):
             return 200, {
                 "number": 500,
                 "state": "closed" if merged else "open",
+                "draft": False,
                 "merged": merged,
                 "merged_at": "2026-10-26T18:00:00Z" if merged else None,
                 "merge_commit_sha": "e" * 40,
