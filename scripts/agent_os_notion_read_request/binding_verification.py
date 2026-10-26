@@ -29,7 +29,7 @@ from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
 from scripts.agent_os_notion_lessons_write import catalog as reviewed_catalog
 from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID
-from scripts.agent_os_notion_lessons_write.writer import inspect_target
+from scripts.agent_os_notion_lessons_write.writer import inspect_target, _single, _lesson_id
 from scripts.agent_os_notion_lessons_write.admission import WriteBlocked, notion_id
 
 VERIFICATION_REQUEST_ID = "verify-photography-foundations-bindings"
@@ -478,21 +478,27 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
         filter={"property": "Lesson ID", "unique_id": {"equals": number}},
         page_size=2, max_pages=1, max_results=2,
     )
-    rows = output.get("results")
-    if output.get("has_more") is not False or not isinstance(rows, list) or len(rows) != 1:
-        raise NotionReadRequestError("reviewed lesson missing or ambiguous")
-    row = rows[0]
-    if not isinstance(row, Mapping):
-        raise NotionReadRequestError("malformed reviewed lesson")
-    page_id = row.get("id")
     try:
-        page_id = notion_id(page_id)
-    except WriteBlocked:
-        raise NotionReadRequestError("invalid reviewed lesson page identity") from None
-    page = _execute_read(adapter, "get_page", page_id=page_id)
-    schema = _execute_read(adapter, "get_data_source", data_source_id=source_id)
-    try:
-        inspected = inspect_target(page, schema, source_id=source_id, lesson_id=lesson_id)
+        # Reuse the writer's finite single-result and Lesson-ID checks.
+        # The query projection may be partial; it must carry writer-required
+        # identity, destination and revision evidence before it is trusted.
+        row = _single(output, notion_id(source_id))
+        if row is None:
+            raise WriteBlocked("reviewed-lesson-missing")
+        if _lesson_id(row) != lesson_id:
+            raise WriteBlocked("query-identity-mismatch")
+        page_id = notion_id(row.get("id"))
+        page = _execute_read(adapter, "get_page", page_id=page_id)
+        schema = _execute_read(adapter, "get_data_source", data_source_id=source_id)
+        reviewed = next(
+            reviewed_catalog.entry_for(k)["properties"]
+            for k in reviewed_catalog.LESSONS
+            if reviewed_catalog.entry_for(k)["target_lesson_id"] == lesson_id
+        )
+        inspected = inspect_target(
+            page, schema, source_id=source_id, lesson_id=lesson_id,
+            reviewed_properties=reviewed,
+        )
         if inspected["page_id"] != page_id:
             raise WriteBlocked("page-identity-mismatch")
     except WriteBlocked as exc:
