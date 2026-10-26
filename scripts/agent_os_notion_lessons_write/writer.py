@@ -155,64 +155,6 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping, *,
             raise WriteBlocked("descriptive-option-not-in-live-schema")
 
 
-def inspect_target(page: Mapping, schema: Mapping, *, source_id: str,
-                   lesson_id: str) -> dict[str, object]:
-    """Pure current-target evidence; shared writer checks, never mutation."""
-    import re
-    from datetime import datetime
-
-    source_id = notion_id(source_id)
-    # The writer owns the source/schema and reviewed-field option checks.
-    inspected_fields = {
-        "Status": "select",
-        "Surface Before Work?": "checkbox",
-        "Source Link": WRITABLE_TYPES["Source Link"],
-    }
-    _check_schema(schema, source_id, {}, extra_types={**WRITABLE_TYPES, **inspected_fields})
-    page_id = _page(page, source_id)
-    if LESSON_ID.fullmatch(lesson_id) is None or _lesson_id(page) != lesson_id:
-        raise WriteBlocked("lesson-identity-mismatch")
-
-    fields = page.get("properties")
-    if not isinstance(fields, Mapping):
-        raise WriteBlocked("malformed-page-properties")
-    for name, kind in inspected_fields.items():
-        field = fields.get(name)
-        if not isinstance(field, Mapping) or field.get("type") != kind:
-            raise WriteBlocked("page-property-type-mismatch")
-    status = fields["Status"].get("select")
-    if status is not None and (
-        not isinstance(status, Mapping)
-        or type(status.get("name")) is not str or not status["name"]
-    ):
-        raise WriteBlocked("malformed-protected-status")
-    surface = fields["Surface Before Work?"].get("checkbox")
-    if type(surface) is not bool:
-        raise WriteBlocked("malformed-protected-surface")
-    link = fields["Source Link"].get("url")
-    if link is not None and type(link) is not str:
-        raise WriteBlocked("malformed-source-link")
-
-    revision = page["last_edited_time"]
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision) is None:
-        raise WriteBlocked("writer-incompatible-revision")
-    try:
-        datetime.fromisoformat(revision.replace("Z", "+00:00"))
-    except ValueError:
-        raise WriteBlocked("writer-incompatible-revision") from None
-    return {
-        "lesson_id": lesson_id,
-        "page_id": page_id,
-        "data_source_id": source_id,
-        "source_revision": revision,
-        "status": status["name"] if status is not None else None,
-        "surface_before_work": surface,
-        "source_link_present": bool(link),
-        "schema_verified": True,
-        "verification_state": "verified-current",
-    }
-
-
 def execute(request: AdmittedRequest, client) -> dict:
     """Consume owner admission under the existing policy, never infer authority."""
     result = {
