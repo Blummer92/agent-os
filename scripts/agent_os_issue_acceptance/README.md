@@ -290,6 +290,28 @@ names the native GitHub MCP `issue_write` tool (`update`, `state=closed`,
 I/O and its receipt fixes `closure_performed: False` — closure is proven only
 by post-dispatch canonical readback.
 
+Production reader/writer for the batch (`github_closure_dispatch.py`, #3728
+correction): the batch's reader/writer protocols previously had only test
+fakes in production. This module supplies the production pair —
+`GitHubClosureReader` (fresh single-issue GET, canonical
+`github-issue-v1` provider revision, issue-only snapshot with
+`review_state="unknown"`) and `GitHubClosureWriter` (exactly the fixed
+close payload, uncertain-write semantics, never retries) — wired by
+`run_closure_dispatch` and, for the post-merge case, by
+`run_post_merge_closure_dispatch`, which corroborates a host-supplied
+`MergeExecutionObservation` against a fresh merged-PR readback before the
+batch runs. It deliberately provides NO manifest format, CLI, or file
+loader: the module authenticates nothing, and its caller — a trusted host
+session — must have reacquired the owner decision and independent QA
+evidence from trusted sources before constructing `IssueClosureRequest`
+objects. A caller-authored manifest must never become an authority source.
+The writer performs no label cleanup and no evidence comment; a closed
+issue retaining `status:ready` is flagged
+`closed-verified-label-reconciliation-required`, so that leg of #3489
+requirement 3 remains open work, not a claimed success. No workflow, MCP
+publication, or automatic post-merge trigger invokes this module; that host
+continuation is a separate authorization.
+
 Trust-boundary repairs (#3690):
 
 - The receipt id is an unkeyed content hash, so it authenticates nothing. The

@@ -1,15 +1,65 @@
-"""Production GitHub adapter for governed issue closure (#3489).
+"""Production GitHub reader/writer for the governed closure batch (#3489).
 
-This is the missing production caller for the existing closure machinery.
-``run_closure_batch`` (approval domain) already defines the full governed
-sequence -- finite candidate set, satisfaction and independent-acceptance
-checks, owner-authorization admission, fresh-read verification, dispatch,
-canonical readback, reconciliation, continuation past blocked items -- but
-it had no production reader or writer: its protocols were implemented only
-by test fakes, and the MCP closure tools are pure projections that perform
-no GitHub I/O. This module supplies the live adapter, in the reporting
-domain (reporting may import approval), without touching any approval
-contract, authorization model, or evaluator.
+This module supplies the one production implementation of the
+``ClosureIssueReader`` / ``ClosureIssueWriter`` protocols that the existing
+``run_closure_batch`` (approval domain) already defines. Until this module,
+those protocols were implemented only by test fakes, while the MCP closure
+tools are pure projections that perform no GitHub I/O. This module changes
+neither: admission, receipt verification, satisfaction, and lifecycle
+evaluation are imported unchanged from ``closure_admission_actions``.
+
+TRUST BOUNDARY — read this before calling anything here. This module
+authenticates nothing. It takes ``tuple[IssueClosureRequest, ...]`` objects
+from its caller, exactly as the MCP admit/verify tools take request objects
+from the host. The caller — a trusted host session, e.g. the GitHub Service
+Agent session acting under runtime approval for the write — must have
+reacquired the owner decision and the independent QA evidence from their
+trusted sources (owner-authored records, QA artifacts) before constructing
+those objects. There is deliberately NO manifest format, NO CLI, and NO
+file loader in this module: a previous revision accepted a JSON manifest
+carrying ``decision_recorded`` / ``authorizer_id`` / ``evaluator_id`` /
+``evidence_id`` / ``verdict`` as caller strings, and the canonical producer
+checks only that ``decision_recorded`` is True and that evaluator differs
+from authorizer — so any manifest author could manufacture apparently valid
+owner authorization and independent QA evidence. That surface is deleted,
+not repaired: a caller-authored file must never become an authority source.
+
+The same boundary applies to merge evidence. ``run_post_merge_closure_dispatch``
+takes a ``MergeExecutionObservation`` object from the host that observed the
+merge; it never loads one from a file. The observation itself is corroborated
+against a fresh merged-PR readback (head, merge commit, actor when GitHub
+supplies one, base, and PR-to-issue linkage) before the batch runs, and merge
+evidence is a routing prerequisite only: closure still requires the
+independent owner decision, satisfaction, QA, and fresh issue admission
+inside ``run_closure_batch``. A head-bound QA record cannot be honoured by
+the issue-only reader below (its snapshot carries no PR head), and fails
+closed by the canonical ADV-2 rule — that is the intended behaviour, not a
+gap to paper over with a caller-supplied head.
+
+Reader honesty. The reader performs one fresh GET of a single issue and
+builds an ISSUE-ONLY snapshot: ``pull_request_number`` / ``source_head`` /
+``base_head`` are None, ``pr_state`` is ``"none"``, ``merged`` is False, and
+``review_state`` is ``"unknown"`` — the value the snapshot type provides for
+unobserved review state. An issue-only read cannot claim ``"clear"``.
+The observed revision is the CANONICAL provider revision
+(``github-issue-v1:<sha256>`` from
+``agent_os_github_issue_provider.revision.issue_source_revision``), so any
+change to the canonical payload fields (title, state, body, timestamps,
+labels, reason) moves the revision and the batch's verification gate fails
+closed. A payload carrying a ``pull_request`` key is a pull request, not an
+issue, and is rejected.
+
+Writer contract (exactly the fixed host dispatch contract): PATCH the issue
+with ``{"state": "closed", "state_reason": "completed"}`` and nothing else.
+A lost or ambiguous write response is reported as ``ClosureWriteUncertain``
+so the batch reconciles through its canonical readback instead of retrying
+blindly; an exact failure is a ``RuntimeError`` carrying the status, never a
+false success. The writer never retries, and it performs NO label cleanup
+and NO evidence comment: the batch flags a closed issue retaining
+``status:ready`` as ``closed-verified-label-reconciliation-required`` instead
+of editing labels here. That label/comment leg of #3489 requirement 3 remains
+open work for a separately admitted label/comment writer; it is not claimed
+here.
 
 Transport is an injected callable::
 
@@ -17,62 +67,28 @@ Transport is an injected callable::
 
 so every behaviour below is testable without network access. The default
 factory :func:`github_api_transport` uses the canonical GitHub client and
-request helper, without a second HTTP implementation. Candidate issues come only from the caller-supplied manifest --
-a finite, explicit set -- never from population enumeration.
-
-Writer contract (exactly the fixed host dispatch contract): PATCH the
-issue with ``{"state": "closed", "state_reason": "completed"}`` and
-nothing else. A lost or ambiguous write response is reported as
-:class:`ClosureWriteUncertain` so the batch reconciles through its
-canonical readback instead of retrying blindly; an exact failure (4xx
-and other non-5xx statuses) is a ``RuntimeError`` carrying the status,
-never a false success. The writer never retries.
-
-Reader contract: every read is a fresh GET of the single issue. A payload
-carrying a ``pull_request`` key is a pull request, not an issue, and is
-rejected with ``ValueError`` so the batch blocks rather than closing a
-PR. Labels are included in full; any label outside the canonical label
-shape fails closed with ``ValueError`` instead of being silently dropped.
-The observed revision is content-addressed over the closure-relevant
-fields, so it is identical across the batch's initial and fresh reads
-when nothing changed (the verification gate then passes) and any
-closure-relevant change fails the gate closed, as designed.
-
-CLI: ``main`` reads a manifest, and writes only with ``--live``. Without
-``--live`` it performs a dry run -- one fresh readback plus
-``evaluate_issue_closure`` per issue -- and never constructs a writer.
-The token is read only from the environment variable named by
-``--token-env`` (default ``GITHUB_TOKEN``); it is never read from a file.
-With ``--live`` and no token, the CLI exits 2 before any GitHub call.
+request helper, without a second HTTP implementation.
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
-import os
 import re
-import sys
-from collections.abc import Callable, Mapping
-from dataclasses import fields
+from collections.abc import Callable
 from typing import Any
 
 from github import Github
 
 from scripts.agent_os_github_issue_provider.auth import build_token_client
 from scripts.agent_os_github_issue_provider.request import GitHubRequestError, request_json
+from scripts.agent_os_github_issue_provider.revision import issue_source_revision
 
 from .closure_admission_actions import (
-    ClosureAcceptanceEvidence,
     ClosureIssueReadback,
     ClosureWriteUncertain,
     IssueClosureRequest,
-    classify_closure_readback,
-    evaluate_issue_closure,
     run_closure_batch,
 )
-from .lifecycle_mutation_authorization import LifecycleOwnerDecision
 from .lifecycle_mutation_guard import LifecycleStateSnapshot
 from .merge_authorization import MergeExecutionObservation
 from .models import LinkedIssueParseStatus
@@ -83,63 +99,15 @@ __all__ = [
     "GitHubClosureWriter",
     "Transport",
     "github_api_transport",
-    "load_closure_manifest",
     "run_closure_dispatch",
     "run_post_merge_closure_dispatch",
-    "main",
 ]
 
 # Callable transport: (method, path, body) -> (HTTP status, JSON payload).
 Transport = Callable[[str, str, dict[str, object] | None], tuple[int, Any]]
 
 _LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$")
-_MANIFEST_KEYS = frozenset(
-    {
-        "repository",
-        "issue_number",
-        "authorizer_id",
-        "decision_id",
-        "decision_recorded",
-        "evaluator_id",
-        "evidence_id",
-        "verdict",
-    }
-)
-_MANIFEST_OPTIONAL_KEYS = frozenset(
-    {
-        "acceptance_issue_number",
-        "acceptance_validated_head_sha",
-        "satisfaction",
-    }
-)
-_ACCEPTANCE_VERDICTS = frozenset({"pass", "fail", "missing"})
 _CLOSE_PAYLOAD: dict[str, object] = {"state": "closed", "state_reason": "completed"}
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
-
-
-def _revision(
-    *,
-    repository: str,
-    issue_number: int,
-    issue_state: str,
-    state_reason: str | None,
-    lifecycle_labels: tuple[str, ...],
-    issue_body_digest: str,
-) -> str:
-    core = {
-        "repository": repository,
-        "issue_number": issue_number,
-        "issue_state": issue_state,
-        "state_reason": state_reason or "",
-        "lifecycle_labels": sorted(lifecycle_labels),
-        "issue_body_digest": issue_body_digest,
-    }
-    return "github-issue:" + hashlib.sha256(
-        _canonical_json(core).encode("utf-8")
-    ).hexdigest()
 
 
 def _label_names(raw_labels: object) -> tuple[str, ...]:
@@ -204,7 +172,11 @@ def github_api_transport(token: str | None) -> Transport:
 
 
 class GitHubClosureReader:
-    """Live GitHub reader implementing the closure reader protocol."""
+    """Live GitHub reader implementing the closure reader protocol.
+
+    Issue-only: see the module trust-boundary note for why the snapshot
+    carries no PR state and ``review_state="unknown"``.
+    """
 
     def __init__(self, request: Transport) -> None:
         self._request = request
@@ -243,6 +215,10 @@ class GitHubClosureReader:
         raw_reason = payload.get("state_reason")
         if raw_reason is not None and type(raw_reason) is not str:
             raise ValueError("issue state_reason must be a string or null")
+        # Canonical provider revision: missing canonical fields fail closed
+        # here (ValueError from issue_source_revision) instead of silently
+        # producing a weaker, adapter-local revision.
+        observed_revision = issue_source_revision(payload)
         snapshot = LifecycleStateSnapshot(
             repository=repository,
             issue_number=issue_number,
@@ -252,17 +228,10 @@ class GitHubClosureReader:
             pr_state="none",
             merged=False,
             issue_state=issue_state,
-            review_state="clear",
+            review_state="unknown",
             unresolved_threads=0,
             lifecycle_labels=labels,
-            observed_revision=_revision(
-                repository=repository,
-                issue_number=issue_number,
-                issue_state=issue_state,
-                state_reason=raw_reason,
-                lifecycle_labels=labels,
-                issue_body_digest=body_digest,
-            ),
+            observed_revision=observed_revision,
         )
         return snapshot, body_digest, raw_reason
 
@@ -325,99 +294,6 @@ class GitHubClosureWriter:
         raise RuntimeError(f"github-issue-close-failed:{status}")
 
 
-def _exact_str(value: object, name: str) -> str:
-    if type(value) is not str or not value:
-        raise TypeError(f"{name} must be a non-empty built-in string")
-    return value
-
-
-def _exact_positive_int(value: object, name: str) -> int:
-    # type(...) is int, not isinstance: a bool is not an issue number.
-    if type(value) is not int or value < 1:
-        raise TypeError(f"{name} must be a positive built-in integer")
-    return value
-
-
-def load_closure_manifest(mapping: Mapping[str, object]) -> tuple[IssueClosureRequest, ...]:
-    """Strictly load a manifest mapping into the finite closure set.
-
-    The manifest is exactly ``{"requests": [...]}``; each request carries
-    exactly the required keys plus the optional acceptance/satisfaction
-    keys. Anything else -- extra keys, bool-as-int, duplicate issue
-    numbers, an empty set -- raises ``TypeError``/``ValueError`` and the
-    CLI exits 2 without touching GitHub.
-    """
-    if not isinstance(mapping, Mapping):
-        raise TypeError("closure manifest must be a mapping")
-    if set(mapping) != {"requests"}:
-        raise ValueError("closure manifest must carry exactly the 'requests' key")
-    raw_requests = mapping["requests"]
-    if type(raw_requests) is not list or not raw_requests:
-        raise ValueError("closure manifest requests must be a non-empty list")
-    requests: list[IssueClosureRequest] = []
-    seen: set[int] = set()
-    for raw in raw_requests:
-        if not isinstance(raw, Mapping):
-            raise TypeError("closure request must be a mapping")
-        keys = set(raw)
-        if not keys <= (_MANIFEST_KEYS | _MANIFEST_OPTIONAL_KEYS):
-            raise ValueError("closure request carries unsupported keys")
-        if not _MANIFEST_KEYS <= keys:
-            raise ValueError("closure request is missing required keys")
-        repository = _exact_str(raw["repository"], "repository")
-        issue_number = _exact_positive_int(raw["issue_number"], "issue_number")
-        if issue_number in seen:
-            raise ValueError("closure manifest contains a duplicate issue")
-        seen.add(issue_number)
-        authorizer_id = _exact_str(raw["authorizer_id"], "authorizer_id")
-        decision_id = _exact_str(raw["decision_id"], "decision_id")
-        if type(raw["decision_recorded"]) is not bool:
-            raise TypeError("decision_recorded must be a built-in bool")
-        decision_recorded = raw["decision_recorded"]
-        evaluator_id = _exact_str(raw["evaluator_id"], "evaluator_id")
-        evidence_id = _exact_str(raw["evidence_id"], "evidence_id")
-        verdict = raw["verdict"]
-        if type(verdict) is not str or verdict not in _ACCEPTANCE_VERDICTS:
-            raise ValueError("acceptance verdict is unsupported")
-        acceptance_issue_number = raw.get("acceptance_issue_number")
-        if acceptance_issue_number is not None:
-            acceptance_issue_number = _exact_positive_int(
-                acceptance_issue_number, "acceptance_issue_number"
-            )
-        acceptance_head = raw.get("acceptance_validated_head_sha")
-        if acceptance_head is not None:
-            acceptance_head = _exact_str(
-                acceptance_head, "acceptance_validated_head_sha"
-            )
-        satisfaction = raw.get("satisfaction")
-        if satisfaction is not None and not isinstance(satisfaction, Mapping):
-            raise TypeError("satisfaction must be a mapping or absent")
-        decision = LifecycleOwnerDecision(
-            repository=repository,
-            issue_number=issue_number,
-            pull_request_number=None,
-            requested_mutations=("close-issue",),
-            authorizer_id=authorizer_id,
-            decision_id=decision_id,
-            decision_recorded=decision_recorded,
-        )
-        acceptance = ClosureAcceptanceEvidence(
-            verdict=verdict,  # type: ignore[arg-type]
-            evidence_id=evidence_id,
-            evaluator_id=evaluator_id,
-            issue_number=acceptance_issue_number,
-            validated_head_sha=acceptance_head,
-        )
-        requests.append(
-            IssueClosureRequest(
-                decision=decision,
-                acceptance=acceptance,
-                satisfaction=satisfaction,  # type: ignore[arg-type]
-            )
-        )
-    return tuple(requests)
-
-
 def _outcome_dict(outcome: object) -> dict[str, object]:
     receipt = getattr(outcome, "receipt", None)
     receipt_id = None
@@ -433,21 +309,21 @@ def _outcome_dict(outcome: object) -> dict[str, object]:
 
 
 def run_closure_dispatch(
-    manifest: Mapping[str, object] | tuple[IssueClosureRequest, ...],
+    requests: tuple[IssueClosureRequest, ...],
     transport: Transport,
 ) -> list[dict[str, object]]:
-    """Run the live governed closure batch for a loaded manifest.
+    """Run the live governed closure batch for trusted caller requests.
 
-    ``manifest`` is either the tuple returned by
-    :func:`load_closure_manifest` or a raw mapping to load first. The
-    batch itself -- admission, verification, dispatch, readback,
-    continuation past blocked items -- is entirely ``run_closure_batch``;
-    this function only supplies it with the production reader and writer.
+    ``requests`` must be ``IssueClosureRequest`` objects the trusted host
+    caller built from owner decisions and independent QA evidence it
+    reacquired from trusted sources. This function accepts no manifest,
+    file, or CLI input: see the module trust-boundary note. The batch
+    itself — admission, verification, dispatch, readback, continuation past
+    blocked items — is entirely ``run_closure_batch``; this function only
+    supplies it with the production reader and writer.
     """
-    if isinstance(manifest, Mapping):
-        requests = load_closure_manifest(manifest)
-    else:
-        requests = manifest
+    if type(requests) is not tuple:
+        raise TypeError("closure requests must be an exact tuple")
     outcomes = run_closure_batch(
         requests,
         reader=GitHubClosureReader(transport),
@@ -535,7 +411,7 @@ def _verify_post_merge_observation(
 
 def run_post_merge_closure_dispatch(
     observation: MergeExecutionObservation,
-    manifest: Mapping[str, object] | tuple[IssueClosureRequest, ...],
+    requests: tuple[IssueClosureRequest, ...],
     transport: Transport,
 ) -> list[dict[str, object]]:
     """Consume the existing merge observation and governed closure batch.
@@ -545,11 +421,8 @@ def run_post_merge_closure_dispatch(
     satisfaction, QA, and fresh issue admission permit it. There is no merge
     or issue-write authority in the observation.
     """
-    requests = (
-        load_closure_manifest(manifest)
-        if isinstance(manifest, Mapping)
-        else manifest
-    )
+    if type(requests) is not tuple:
+        raise TypeError("closure requests must be an exact tuple")
     _verify_post_merge_observation(observation, requests, transport)
     outcomes = run_closure_dispatch(requests, transport)
     return [
@@ -560,183 +433,3 @@ def run_post_merge_closure_dispatch(
         }
         for outcome in outcomes
     ]
-
-
-def _load_merge_observation(path: str) -> MergeExecutionObservation:
-    """Read one canonical merge-execution observation; reject extra fields."""
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
-    allowed = {field.name for field in fields(MergeExecutionObservation) if field.init}
-    if type(payload) is not dict or set(payload) != allowed:
-        raise ValueError("merge observation fields are invalid")
-    return MergeExecutionObservation(**payload)
-
-
-def _dry_run_outcomes(
-    requests: tuple[IssueClosureRequest, ...], reader: GitHubClosureReader
-) -> list[dict[str, object]]:
-    """Dry-run evaluation: readback + admission only, never a writer."""
-    outcomes: list[dict[str, object]] = []
-    for request in requests:
-        decision = request.decision
-        issue_number = decision.issue_number
-        assert issue_number is not None
-        repository = decision.repository
-        try:
-            readback = reader.read_issue_readback(repository, issue_number)
-        except Exception:
-            outcomes.append(
-                {
-                    "issue_number": issue_number,
-                    "status": "blocked",
-                    "reason_codes": ["closure.evidence-unavailable"],
-                    "readback_verified": False,
-                    "receipt_id": None,
-                }
-            )
-            continue
-        snapshot = readback.snapshot
-        if snapshot.repository != repository or snapshot.issue_number != issue_number:
-            outcomes.append(
-                {
-                    "issue_number": issue_number,
-                    "status": "blocked",
-                    "reason_codes": ["closure.readback-identity-mismatch"],
-                    "readback_verified": False,
-                    "receipt_id": None,
-                }
-            )
-            continue
-        if snapshot.issue_state == "closed":
-            status, reasons, verified = classify_closure_readback(
-                issue_closed=True,
-                state_reason=readback.state_reason,
-                lifecycle_labels=snapshot.lifecycle_labels,
-                wrote=False,
-            )
-            outcomes.append(
-                {
-                    "issue_number": issue_number,
-                    "status": (
-                        "already-closed"
-                        if verified and status == "closed-verified"
-                        else status
-                    ),
-                    "reason_codes": list(reasons),
-                    "readback_verified": verified,
-                    "receipt_id": None,
-                }
-            )
-            continue
-        if readback.state_reason is not None:
-            outcomes.append(
-                {
-                    "issue_number": issue_number,
-                    "status": "readback-inconsistent",
-                    "reason_codes": ["closure.readback-inconsistent"],
-                    "readback_verified": False,
-                    "receipt_id": None,
-                }
-            )
-            continue
-        receipt = evaluate_issue_closure(
-            request,
-            snapshot,
-            current_issue_body_digest=readback.issue_body_digest,
-        )
-        outcomes.append(
-            {
-                "issue_number": issue_number,
-                "status": "would-close"
-                if receipt["admitted"] is True
-                else "blocked",
-                "reason_codes": list(receipt["reason_codes"]),  # type: ignore[arg-type]
-                "readback_verified": False,
-                "receipt_id": receipt["receipt_id"],
-            }
-        )
-    return outcomes
-
-
-def main(argv: list[str] | None = None, *, transport: Transport | None = None) -> int:
-    """CLI entry point. Returns a process exit code; prints one JSON object.
-
-    ``transport`` is a test seam only: when supplied, it replaces the
-    canonical GitHub transport (and the live token check is skipped, since the
-    injected transport is the test's credential surface). In production
-    use it is always ``None``.
-    """
-    parser = argparse.ArgumentParser(
-        prog="github_closure_dispatch",
-        description="Governed GitHub issue closure dispatch (#3489).",
-    )
-    parser.add_argument("--manifest", required=True, help="Path to the JSON manifest.")
-    parser.add_argument(
-        "--merge-observation",
-        help="Canonical merge-module observation JSON. Requires verified merged-PR readback.",
-    )
-    parser.add_argument(
-        "--token-env",
-        default="GITHUB_TOKEN",
-        help="Environment variable holding the GitHub token (live mode only).",
-    )
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Actually dispatch closures. Without this flag, dry-run only.",
-    )
-    args = parser.parse_args(argv)
-    try:
-        with open(args.manifest, encoding="utf-8") as handle:
-            raw_manifest = json.load(handle)
-    except (OSError, ValueError) as exc:
-        print(f"manifest error: {exc}", file=sys.stderr)
-        return 2
-    try:
-        requests = load_closure_manifest(raw_manifest)
-    except (TypeError, ValueError) as exc:
-        print(f"manifest error: {exc}", file=sys.stderr)
-        return 2
-    if args.live and transport is None:
-        token = os.environ.get(args.token_env)
-        if not token:
-            print(
-                f"live mode requires a token in ${args.token_env}",
-                file=sys.stderr,
-            )
-            return 2
-    else:
-        token = os.environ.get(args.token_env) if transport is None else None
-    live_transport = transport if transport is not None else github_api_transport(token)
-    observation = None
-    if args.merge_observation is not None:
-        try:
-            observation = _load_merge_observation(args.merge_observation)
-            _verify_post_merge_observation(observation, requests, live_transport)
-        except (OSError, ValueError, TypeError, RuntimeError) as exc:
-            print(f"merge observation error: {exc}", file=sys.stderr)
-            return 2
-    if args.live:
-        outcomes = (
-            run_post_merge_closure_dispatch(observation, requests, live_transport)
-            if observation is not None
-            else run_closure_dispatch(requests, live_transport)
-        )
-    else:
-        # Dry run: no writer constructed, regardless of merge observation.
-        outcomes = _dry_run_outcomes(requests, GitHubClosureReader(live_transport))
-    if observation is not None:
-        outcomes = [
-            {
-                **outcome,
-                "merge_observation_id": observation.observation_id,
-                "merge_commit_sha": observation.observed_merge_commit_sha,
-            }
-            for outcome in outcomes
-        ] if not args.live else outcomes
-    print(json.dumps({"live": bool(args.live), "outcomes": outcomes}, sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

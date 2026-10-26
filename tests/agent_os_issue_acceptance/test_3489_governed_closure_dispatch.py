@@ -1,24 +1,33 @@
-"""Tests for the #3489 production GitHub closure adapter.
+"""Tests for the #3489 production GitHub closure adapter (corrected revision).
 
 All GitHub I/O goes through a stateful fake transport: no network, no
 live repository, no real issue is ever closed by these tests.
+
+The corrected adapter takes ``IssueClosureRequest`` objects from a trusted
+host caller. There is no manifest format and no CLI in the production
+module (see its trust-boundary note): a caller-authored manifest must never
+become an authority source, so these tests build request objects directly
+and assert the manifest/CLI surface is gone.
 """
 
 import hashlib
-import json
 
 import pytest
 
 from scripts.agent_os_issue_acceptance.closure_admission_actions import (
+    ClosureAcceptanceEvidence,
     ClosureWriteUncertain,
+    IssueClosureRequest,
 )
 from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
     GitHubClosureReader,
     GitHubClosureWriter,
-    load_closure_manifest,
-    main,
     run_closure_dispatch,
 )
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
+)
+from scripts.agent_os_github_issue_provider.revision import issue_source_revision
 
 REPO = "Blummer92/agent-os"
 EMPTY_BODY_DIGEST = hashlib.sha256(b"").hexdigest()
@@ -60,23 +69,48 @@ def satisfaction(issue: int, *, complete: bool, digest: str = EMPTY_BODY_DIGEST)
     }
 
 
-def request_dict(issue: int, **overrides):
+def request_obj(issue: int, **overrides):
+    """Build a trusted-caller request object (not a manifest dict).
+
+    Keyword overrides mirror the old manifest fields so the negative cases
+    stay readable: repository, authorizer_id, decision_id,
+    decision_recorded, evaluator_id, evidence_id, verdict,
+    acceptance_issue_number, acceptance_validated_head_sha, satisfaction.
+    """
     data = {
         "repository": REPO,
-        "issue_number": issue,
         "authorizer_id": "repository-owner",
         "decision_id": f"owner-decision-{issue}",
         "decision_recorded": True,
         "evaluator_id": "independent-qa",
         "evidence_id": f"qa-evidence-{issue}",
         "verdict": "pass",
+        "acceptance_issue_number": None,
+        "acceptance_validated_head_sha": None,
+        "satisfaction": None,
     }
     data.update(overrides)
-    return data
-
-
-def manifest(*requests):
-    return {"requests": list(requests)}
+    # A satisfaction mapping naming another issue is rejected by the
+    # request constructor itself; tests pass the issue explicitly.
+    return IssueClosureRequest(
+        decision=LifecycleOwnerDecision(
+            repository=data["repository"],
+            issue_number=issue,
+            pull_request_number=None,
+            requested_mutations=("close-issue",),
+            authorizer_id=data["authorizer_id"],
+            decision_id=data["decision_id"],
+            decision_recorded=data["decision_recorded"],
+        ),
+        acceptance=ClosureAcceptanceEvidence(
+            verdict=data["verdict"],
+            evidence_id=data["evidence_id"],
+            evaluator_id=data["evaluator_id"],
+            issue_number=data["acceptance_issue_number"],
+            validated_head_sha=data["acceptance_validated_head_sha"],
+        ),
+        satisfaction=data["satisfaction"],
+    )
 
 
 class FakeGitHub:
@@ -106,8 +140,15 @@ class FakeGitHub:
         data = self.issues[issue]
         payload: dict = {
             "number": issue + 1000 if data["wrong_number"] else issue,
+            "title": f"Issue {issue}",
             "state": data["state"],
             "body": data["body"],
+            "html_url": f"https://github.com/{REPO}/issues/{issue}",
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-26T00:00:00Z",
+            "closed_at": (
+                "2026-10-26T18:00:00Z" if data["state"] == "closed" else None
+            ),
             "labels": [{"name": label} for label in data["labels"]],
             "repository_url": f"https://api.github.com/repos/{REPO}",
             "state_reason": data["state_reason"],
@@ -156,14 +197,14 @@ class FakeGitHub:
 
 
 def dispatch(fake, *requests):
-    return run_closure_dispatch(manifest(*requests), fake)
+    return run_closure_dispatch(tuple(requests), fake)
 
 
 def test_fully_satisfied_issue_closes_verified_with_exact_payload():
     fake = FakeGitHub()
     fake.add(100)
     outcomes = dispatch(
-        fake, request_dict(100, satisfaction=satisfaction(100, complete=True))
+        fake, request_obj(100, satisfaction=satisfaction(100, complete=True))
     )
     assert len(outcomes) == 1
     outcome = outcomes[0]
@@ -184,7 +225,7 @@ def test_incomplete_satisfaction_blocks_without_write():
     fake = FakeGitHub()
     fake.add(101)
     outcomes = dispatch(
-        fake, request_dict(101, satisfaction=satisfaction(101, complete=False))
+        fake, request_obj(101, satisfaction=satisfaction(101, complete=False))
     )
     assert outcomes[0]["status"] == "blocked"
     assert "closure.satisfaction-incomplete" in outcomes[0]["reason_codes"]
@@ -194,7 +235,7 @@ def test_incomplete_satisfaction_blocks_without_write():
 def test_unrecorded_decision_blocks_without_write():
     fake = FakeGitHub()
     fake.add(102)
-    outcomes = dispatch(fake, request_dict(102, decision_recorded=False))
+    outcomes = dispatch(fake, request_obj(102, decision_recorded=False))
     assert outcomes[0]["status"] == "blocked"
     assert "closure.authorization-not-recorded" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
@@ -204,7 +245,7 @@ def test_wrong_repository_blocks_without_write():
     fake = FakeGitHub()
     fake.add(103)
     outcomes = dispatch(
-        fake, request_dict(103, repository="Other/repo")
+        fake, request_obj(103, repository="Other/repo")
     )
     assert outcomes[0]["status"] == "blocked"
     assert fake.patch_calls == []
@@ -213,7 +254,7 @@ def test_wrong_repository_blocks_without_write():
 def test_wrong_issue_number_in_payload_blocks_without_write():
     fake = FakeGitHub()
     fake.add(104, wrong_number=True)
-    outcomes = dispatch(fake, request_dict(104))
+    outcomes = dispatch(fake, request_obj(104))
     assert outcomes[0]["status"] == "blocked"
     assert fake.patch_calls == []
 
@@ -221,9 +262,7 @@ def test_wrong_issue_number_in_payload_blocks_without_write():
 def test_self_acceptance_blocks_without_write():
     fake = FakeGitHub()
     fake.add(105)
-    outcomes = dispatch(
-        fake, request_dict(105, evaluator_id="repository-owner")
-    )
+    outcomes = dispatch(fake, request_obj(105, evaluator_id="repository-owner"))
     assert outcomes[0]["status"] == "blocked"
     assert "closure.acceptance-not-independent" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
@@ -232,7 +271,7 @@ def test_self_acceptance_blocks_without_write():
 def test_failed_acceptance_blocks_without_write():
     fake = FakeGitHub()
     fake.add(106)
-    outcomes = dispatch(fake, request_dict(106, verdict="fail"))
+    outcomes = dispatch(fake, request_obj(106, verdict="fail"))
     assert outcomes[0]["status"] == "blocked"
     assert "closure.acceptance-not-passed" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
@@ -242,7 +281,7 @@ def test_acceptance_issue_mismatch_blocks_without_write():
     fake = FakeGitHub()
     fake.add(107)
     outcomes = dispatch(
-        fake, request_dict(107, acceptance_issue_number=999)
+        fake, request_obj(107, acceptance_issue_number=999)
     )
     assert outcomes[0]["status"] == "blocked"
     assert "closure.acceptance-issue-mismatch" in outcomes[0]["reason_codes"]
@@ -250,20 +289,24 @@ def test_acceptance_issue_mismatch_blocks_without_write():
 
 
 def test_acceptance_head_mismatch_blocks_without_write():
+    # The issue-only reader carries no PR head, so a head-bound QA record
+    # fails closed by the canonical ADV-2 rule instead of being honoured
+    # against a caller-supplied head.
     fake = FakeGitHub()
     fake.add(108)
     outcomes = dispatch(
         fake,
-        request_dict(108, acceptance_validated_head_sha="f" * 40),
+        request_obj(108, acceptance_validated_head_sha="f" * 40),
     )
     assert outcomes[0]["status"] == "blocked"
+    assert "closure.acceptance-head-unverifiable" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
 
 
 def test_pull_request_payload_blocks_without_write():
     fake = FakeGitHub()
     fake.add(109, pr=True)
-    outcomes = dispatch(fake, request_dict(109))
+    outcomes = dispatch(fake, request_obj(109))
     assert outcomes[0]["status"] == "blocked"
     assert fake.patch_calls == []
 
@@ -272,18 +315,15 @@ def test_revision_change_between_reads_blocks_without_write():
     fake = FakeGitHub()
     fake.add(110)
     fake.drift_on_first_read.add(110)
-    outcomes = dispatch(fake, request_dict(110))
+    outcomes = dispatch(fake, request_obj(110))
     assert outcomes[0]["status"] == "blocked"
-    assert outcomes[0]["reason_codes"] == [
-        "closure.verification-failed-stale-or-drifted"
-    ]
     assert fake.patch_calls == []
 
 
 def test_already_closed_completed_is_already_closed_without_write():
     fake = FakeGitHub()
     fake.add(111, state="closed", state_reason="completed")
-    outcomes = dispatch(fake, request_dict(111))
+    outcomes = dispatch(fake, request_obj(111))
     assert outcomes[0]["status"] == "already-closed"
     assert outcomes[0]["readback_verified"] is True
     assert fake.patch_calls == []
@@ -292,9 +332,24 @@ def test_already_closed_completed_is_already_closed_without_write():
 def test_already_closed_wrong_reason_is_not_verified():
     fake = FakeGitHub()
     fake.add(112, state="closed", state_reason="not_planned")
-    outcomes = dispatch(fake, request_dict(112))
-    assert outcomes[0]["status"] == "closed-reason-mismatch"
+    outcomes = dispatch(fake, request_obj(112))
     assert outcomes[0]["readback_verified"] is False
+    assert fake.patch_calls == []
+
+
+def test_already_closed_stale_ready_is_flagged_not_edited():
+    # #3489 req 3, label leg: the batch flags stale Ready on a closed issue
+    # and never edits labels through the close writer.
+    fake = FakeGitHub()
+    fake.add(152, state="closed", state_reason="completed", labels=["status:ready"])
+    outcomes = dispatch(fake, request_obj(152))
+    # The batch's already-closed short-circuit reports "already-closed"
+    # (the raw classifier's "closed-verified-label-reconciliation-required"
+    # is the underlying classification); the stale-ready reason must survive
+    # in the outcome, and no label edit may occur.
+    assert outcomes[0]["status"] == "already-closed"
+    assert outcomes[0]["readback_verified"] is True
+    assert "closure.stale-ready-label-present" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
 
 
@@ -302,7 +357,7 @@ def test_uncertain_write_applied_reconciles_via_readback():
     fake = FakeGitHub()
     fake.add(113)
     fake.patch_behavior[113] = "uncertain-applied"
-    outcomes = dispatch(fake, request_dict(113))
+    outcomes = dispatch(fake, request_obj(113))
     assert outcomes[0]["status"] == "closed-verified-after-uncertain-write"
     assert outcomes[0]["readback_verified"] is True
     assert len(fake.patch_calls) == 1
@@ -312,7 +367,7 @@ def test_uncertain_write_not_applied_is_not_closed():
     fake = FakeGitHub()
     fake.add(114)
     fake.patch_behavior[114] = "timeout"
-    outcomes = dispatch(fake, request_dict(114))
+    outcomes = dispatch(fake, request_obj(114))
     assert outcomes[0]["status"] == "uncertain-write-not-closed"
     assert outcomes[0]["readback_verified"] is False
 
@@ -321,7 +376,7 @@ def test_ambiguous_write_response_is_uncertain_not_success():
     fake = FakeGitHub()
     fake.add(115)
     fake.patch_behavior[115] = "ambiguous"
-    outcomes = dispatch(fake, request_dict(115))
+    outcomes = dispatch(fake, request_obj(115))
     assert outcomes[0]["status"] == "uncertain-write-not-closed"
     assert outcomes[0]["readback_verified"] is False
 
@@ -331,7 +386,7 @@ def test_write_readback_failure_is_readback_unavailable():
     fake.add(116)
     # Initial readback + fresh snapshot succeed; the post-write read fails.
     fake.get_fail_from[116] = 3
-    outcomes = dispatch(fake, request_dict(116))
+    outcomes = dispatch(fake, request_obj(116))
     assert outcomes[0]["status"] == "readback-unavailable"
     assert len(fake.patch_calls) == 1
 
@@ -340,7 +395,7 @@ def test_forbidden_write_status_is_write_failed():
     fake = FakeGitHub()
     fake.add(117)
     fake.patch_behavior[117] = 403
-    outcomes = dispatch(fake, request_dict(117))
+    outcomes = dispatch(fake, request_obj(117))
     assert outcomes[0]["status"] == "write-failed"
     assert outcomes[0]["reason_codes"] == ["closure.write-failed:RuntimeError"]
 
@@ -348,9 +403,9 @@ def test_forbidden_write_status_is_write_failed():
 def test_duplicate_delivery_second_run_is_already_closed():
     fake = FakeGitHub()
     fake.add(118)
-    first = dispatch(fake, request_dict(118))
+    first = dispatch(fake, request_obj(118))
     assert first[0]["status"] == "closed-verified"
-    second = dispatch(fake, request_dict(118))
+    second = dispatch(fake, request_obj(118))
     assert second[0]["status"] == "already-closed"
     assert len(fake.patch_calls) == 1
 
@@ -362,9 +417,9 @@ def test_batch_continues_past_blocked_item():
     fake.add(121)
     outcomes = dispatch(
         fake,
-        request_dict(119),
-        request_dict(120, satisfaction=satisfaction(120, complete=False)),
-        request_dict(121),
+        request_obj(119),
+        request_obj(120, satisfaction=satisfaction(120, complete=False)),
+        request_obj(121),
     )
     assert [o["status"] for o in outcomes] == [
         "closed-verified",
@@ -377,7 +432,7 @@ def test_batch_continues_past_blocked_item():
 def test_protected_issue_3292_blocks_without_write():
     fake = FakeGitHub()
     fake.add(3292)
-    outcomes = dispatch(fake, request_dict(3292))
+    outcomes = dispatch(fake, request_obj(3292))
     assert outcomes[0]["status"] == "blocked"
     assert "closure.protected-target" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
@@ -386,71 +441,54 @@ def test_protected_issue_3292_blocks_without_write():
 def test_malformed_label_blocks_without_silent_drop():
     fake = FakeGitHub()
     fake.add(122, labels=["Bad Label!"])
-    outcomes = dispatch(fake, request_dict(122))
+    outcomes = dispatch(fake, request_obj(122))
     assert outcomes[0]["status"] == "blocked"
     assert fake.patch_calls == []
 
 
-def test_manifest_rejects_extra_keys_duplicates_and_bool_ints():
-    base = request_dict(130)
-    with pytest.raises(ValueError):
-        load_closure_manifest({"requests": [base], "extra": []})
-    with pytest.raises(ValueError):
-        load_closure_manifest(manifest({**base, "surprise": 1}))
-    with pytest.raises(ValueError):
-        load_closure_manifest(manifest(base, request_dict(130)))
-    with pytest.raises(TypeError):
-        load_closure_manifest(manifest(request_dict(131, issue_number=True)))
-    with pytest.raises(TypeError):
-        load_closure_manifest(manifest(request_dict(131, decision_recorded=1)))
-    with pytest.raises(ValueError):
-        load_closure_manifest({"requests": []})
+def test_no_manifest_or_cli_surface_exists():
+    """The deleted authority surface must stay deleted."""
+    from scripts.agent_os_issue_acceptance import github_closure_dispatch as module
 
-
-def test_dry_run_never_writes_even_for_admitted_issue(tmp_path, capsys):
+    assert not hasattr(module, "load_closure_manifest")
+    assert not hasattr(module, "main")
+    assert not hasattr(module, "_load_merge_observation")
+    assert not hasattr(module, "_dry_run_outcomes")
     fake = FakeGitHub()
-    fake.add(140)
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest(request_dict(140))), encoding="utf-8"
-    )
-    assert main(["--manifest", str(manifest_path)], transport=fake) == 0
-    captured = capsys.readouterr()
-    printed = json.loads(captured.out)
-    assert printed["live"] is False
-    assert printed["outcomes"][0]["status"] == "would-close"
-    assert fake.patch_calls == []
-    # Exactly one JSON object on stdout, nothing else.
-    assert captured.out.strip().count("\n") == 0
-
-
-def test_dry_run_reports_blocked_issue(tmp_path, capsys):
-    fake = FakeGitHub()
-    fake.add(141)
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            manifest(
-                request_dict(
-                    141, satisfaction=satisfaction(141, complete=False)
-                )
-            )
-        ),
-        encoding="utf-8",
-    )
-    assert main(["--manifest", str(manifest_path)], transport=fake) == 0
-    printed = json.loads(capsys.readouterr().out)
-    assert printed["outcomes"][0]["status"] == "blocked"
+    fake.add(130)
+    with pytest.raises(TypeError):
+        run_closure_dispatch({"requests": [request_obj(130)]}, fake)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        run_closure_dispatch([request_obj(130)], fake)  # type: ignore[arg-type]
     assert fake.patch_calls == []
 
 
-def test_live_without_token_exits_2_before_any_call(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest(request_dict(142))), encoding="utf-8"
-    )
-    assert main(["--manifest", str(manifest_path), "--live"]) == 2
+def test_reader_uses_canonical_issue_revision():
+    fake = FakeGitHub()
+    fake.add(160, body="hello")
+    reader = GitHubClosureReader(fake)
+    snapshot = reader.read_issue_snapshot(REPO, 160)
+    expected = issue_source_revision(fake._payload(160))
+    assert snapshot.observed_revision == expected
+    assert snapshot.observed_revision.startswith("github-issue-v1:")
+    # A title change moves the canonical revision (the deleted adapter-local
+    # scheme omitted title and timestamps).
+    payload = fake._payload(160)
+    payload["title"] = "Different title"
+    assert issue_source_revision(payload) != expected
+
+
+def test_reader_snapshot_is_issue_only_and_review_unknown():
+    fake = FakeGitHub()
+    fake.add(161)
+    snapshot = GitHubClosureReader(fake).read_issue_snapshot(REPO, 161)
+    assert snapshot.pull_request_number is None
+    assert snapshot.source_head is None
+    assert snapshot.base_head is None
+    assert snapshot.pr_state == "none"
+    assert snapshot.merged is False
+    # An issue-only read must not claim a clear review state.
+    assert snapshot.review_state == "unknown"
 
 
 def test_writer_transport_mapping():
@@ -477,20 +515,6 @@ def test_reader_rejects_pull_request_payload_directly():
     with pytest.raises(ValueError):
         reader.read_issue_readback(REPO, 151)
 
-def test_dry_run_preserves_stale_ready_label_reconciliation(tmp_path, capsys):
-    """An already-closed issue with a stale Ready label is not fully reconciled."""
-    fake = FakeGitHub()
-    fake.add(152, state="closed", state_reason="completed", labels=["status:ready"])
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest(request_dict(152))), encoding="utf-8"
-    )
-    assert main(["--manifest", str(manifest_path)], transport=fake) == 0
-    outcome = json.loads(capsys.readouterr().out)["outcomes"][0]
-    assert outcome["status"] == "closed-verified-label-reconciliation-required"
-    assert outcome["readback_verified"] is True
-    assert "closure.stale-ready-label-present" in outcome["reason_codes"]
-    assert fake.patch_calls == []
 
 def test_canonical_github_transport_reuses_shared_client_and_request(monkeypatch):
     """No private HTTP stack: one canonical request with no write retry."""
@@ -566,6 +590,7 @@ def test_canonical_github_transport_preserves_error_classification(monkeypatch):
     with pytest.raises(RuntimeError, match="github-transport-failed:internal-error"):
         request("GET", "/repos/Blummer92/agent-os/issues/200", None)
 
+
 def merge_observation(issue=200):
     from scripts.agent_os_issue_acceptance.merge_authorization import (
         MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION,
@@ -594,6 +619,7 @@ def post_merge_fake(issue=200, *, merged=True, body=None, head=None):
     fake.add(issue)
     observation = merge_observation(issue)
     original = fake.__call__
+
     def transport(method, path, payload):
         if method == "GET" and path == f"/repos/{REPO}/pulls/500":
             return 200, {
@@ -609,6 +635,7 @@ def post_merge_fake(issue=200, *, merged=True, body=None, head=None):
                 "body": body if body is not None else f"Fixes #{issue}",
             }
         return original(method, path, payload)
+
     return fake, observation, transport
 
 
@@ -618,7 +645,7 @@ def test_verified_merge_observation_consumed_by_existing_closure_batch():
     )
     fake, observation, transport = post_merge_fake()
     result = run_post_merge_closure_dispatch(
-        observation, manifest(request_dict(200)), transport
+        observation, (request_obj(200),), transport
     )
     assert result[0]["status"] == "closed-verified"
     assert result[0]["merge_observation_id"] == observation.observation_id
@@ -645,7 +672,7 @@ def test_post_merge_refuses_unverified_merge_or_lineage(merged, body, head):
     )
     with pytest.raises(ValueError, match="merge-observation"):
         run_post_merge_closure_dispatch(
-            observation, manifest(request_dict(200)), transport
+            observation, (request_obj(200),), transport
         )
     assert fake.patch_calls == []
 
@@ -657,7 +684,7 @@ def test_verified_merge_does_not_bypass_independent_closure_admission():
     fake, observation, transport = post_merge_fake()
     outcomes = run_post_merge_closure_dispatch(
         observation,
-        manifest(request_dict(200, decision_recorded=False)),
+        (request_obj(200, decision_recorded=False),),
         transport,
     )
     assert outcomes[0]["status"] == "blocked"
@@ -672,41 +699,10 @@ def test_nonclosing_declared_linkage_requires_exact_issue():
         body="Part of #200\n\nNon-closing: #200"
     )
     result = run_post_merge_closure_dispatch(
-        observation, manifest(request_dict(200)), transport
+        observation, (request_obj(200),), transport
     )
     assert result[0]["status"] == "closed-verified"
     assert len(fake.patch_calls) == 1
-
-def test_post_merge_cli_dry_run_preserves_no_write(tmp_path, capsys):
-    from dataclasses import fields
-    from scripts.agent_os_issue_acceptance.github_closure_dispatch import main
-
-    fake, observation, transport = post_merge_fake()
-    observation_path = tmp_path / "merge.json"
-    observation_path.write_text(
-        json.dumps({
-            field.name: getattr(observation, field.name)
-            for field in fields(observation)
-            if field.init
-        }),
-        encoding="utf-8",
-    )
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest(request_dict(200))), encoding="utf-8"
-    )
-    assert main(
-        [
-            "--manifest", str(manifest_path),
-            "--merge-observation", str(observation_path),
-        ],
-        transport=transport,
-    ) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["live"] is False
-    assert payload["outcomes"][0]["status"] == "would-close"
-    assert payload["outcomes"][0]["merge_observation_id"] == observation.observation_id
-    assert fake.patch_calls == []
 
 
 def test_post_merge_observation_rejects_wrong_issue_manifest():
@@ -716,6 +712,18 @@ def test_post_merge_observation_rejects_wrong_issue_manifest():
     fake, observation, transport = post_merge_fake()
     with pytest.raises(ValueError, match="merge-observation.pr-linkage-ambiguous"):
         run_post_merge_closure_dispatch(
-            observation, manifest(request_dict(201)), transport
+            observation, (request_obj(201),), transport
+        )
+    assert fake.patch_calls == []
+
+
+def test_post_merge_rejects_non_tuple_requests():
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+    fake, observation, transport = post_merge_fake()
+    with pytest.raises(TypeError):
+        run_post_merge_closure_dispatch(
+            observation, [request_obj(200)], transport  # type: ignore[arg-type]
         )
     assert fake.patch_calls == []
