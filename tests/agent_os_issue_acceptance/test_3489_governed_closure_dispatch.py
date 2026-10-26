@@ -491,3 +491,77 @@ def test_dry_run_preserves_stale_ready_label_reconciliation(tmp_path, capsys):
     assert outcome["readback_verified"] is True
     assert "closure.stale-ready-label-present" in outcome["reason_codes"]
     assert fake.patch_calls == []
+
+def test_canonical_github_transport_reuses_shared_client_and_request(monkeypatch):
+    """No private HTTP stack: one canonical request with no write retry."""
+    from scripts.agent_os_issue_acceptance import github_closure_dispatch as module
+
+    seen = []
+
+    def fake_client(environment, *, user_agent):
+        seen.append(("client", dict(environment), user_agent))
+        return object()
+
+    def fake_request(client, method, path, **kwargs):
+        seen.append(("request", method, path, kwargs))
+        return type("Result", (), {"payload": {"state": "closed"}})()
+
+    monkeypatch.setattr(module, "build_token_client", fake_client)
+    monkeypatch.setattr(module, "request_json", fake_request)
+    request = module.github_api_transport("example-token")
+    status, payload = request(
+        "PATCH",
+        "/repos/Blummer92/agent-os/issues/200",
+        {"state": "closed", "state_reason": "completed"},
+    )
+    assert (status, payload) == (200, {"state": "closed"})
+    assert seen[0] == (
+        "client",
+        {"GITHUB_TOKEN": "example-token"},
+        "agent-os-closure-dispatch",
+    )
+    assert seen[1][1:3] == (
+        "PATCH",
+        "/repos/Blummer92/agent-os/issues/200",
+    )
+    assert seen[1][3]["max_attempts"] == 1
+    assert seen[1][3]["input_payload"] == {
+        "state": "closed",
+        "state_reason": "completed",
+    }
+
+
+def test_canonical_github_transport_preserves_error_classification(monkeypatch):
+    from scripts.agent_os_issue_acceptance import github_closure_dispatch as module
+    from scripts.agent_os_github_issue_provider.request import (
+        GitHubRequestAttempt,
+        GitHubRequestError,
+    )
+
+    monkeypatch.setattr(module, "build_token_client", lambda *args, **kwargs: object())
+    request = module.github_api_transport("example-token")
+
+    def fail(kind, status):
+        def perform(*args, **kwargs):
+            raise GitHubRequestError(
+                kind,
+                status=status,
+                attempts=(GitHubRequestAttempt(1, kind),),
+            )
+        monkeypatch.setattr(module, "request_json", perform)
+
+    fail("http-error", 403)
+    assert request("GET", "/repos/Blummer92/agent-os/issues/200", None) == (403, {})
+    fail("http-error", 503)
+    with pytest.raises(ClosureWriteUncertain):
+        GitHubClosureWriter(request).close_issue(
+            REPO, 200, state_reason="completed"
+        )
+    fail("transport-unavailable", None)
+    with pytest.raises(ClosureWriteUncertain):
+        GitHubClosureWriter(request).close_issue(
+            REPO, 200, state_reason="completed"
+        )
+    fail("internal-error", None)
+    with pytest.raises(RuntimeError, match="github-transport-failed:internal-error"):
+        request("GET", "/repos/Blummer92/agent-os/issues/200", None)
