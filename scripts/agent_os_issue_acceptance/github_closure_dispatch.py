@@ -496,6 +496,12 @@ def _verify_post_merge_observation(
         or raw.get("merge_commit_sha") != observation.observed_merge_commit_sha
     ):
         raise ValueError("merge-observation.pr-not-verified-merged")
+    # The merge-module observation is evidence, not a host-authenticated
+    # receipt. A fresh PR readback must corroborate every observable binding.
+    if raw.get("merged_by") is not None:
+        actor = raw["merged_by"]
+        if type(actor) is not dict or actor.get("login") != observation.observed_actor_id:
+            raise ValueError("merge-observation.actor-mismatch")
     head = raw.get("head")
     base = raw.get("base")
     if (
