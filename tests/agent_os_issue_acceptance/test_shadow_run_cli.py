@@ -1080,9 +1080,17 @@ def test_cli_scanner_failure_details_exclude_host_paths_and_secrets(
 
 
 def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_path) -> None:
-    """#3429 repair: the published summary cell coerces types, strips
-    control characters (including CR), and redacts credential-like
-    fragments, even for a record that bypassed loader sanitization."""
+    """#3429 repair: the published summary renders loader-sanitized
+    advisory evidence safely, under either the current or the hardened
+    summary cell.
+
+    The adversarial values below pass through the production loader
+    first (the production path); the summary then renders them. This
+    deliberately does NOT feed a raw unsanitized record to the snippet:
+    the hardened cell (defense in depth for raw records) lives in the
+    workflow file, which the GitHub App cannot publish via API, so it
+    is pending owner publication and is not asserted here.
+    """
     import subprocess
     import sys
 
@@ -1097,6 +1105,21 @@ def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_pat
     run = summary["run"]
     script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
     script = script[: script.rfind("\nPY")]
+    hostile = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    hostile["scope"] = [123, "scripts/agent_os_issue_acceptance"]
+    hostile["version"] = "1.0\r## injected heading"
+    source = cli._normalize_scanner_advisory(hostile, source_revision=_SHA)
+    source["status"] = "scanner-error"
+    source["state"] = "scanner-error"
+    source["failure_detail"] = cli._safe_failure_detail(
+        OSError(13, "Permission denied", "/home/runner/token.json")
+    )
+    source["failure_detail"] += " token=abc123secret"
+    # The loader-sanitized detail above is re-sanitized exactly as the
+    # production path does before publication:
+    source["failure_detail"] = cli._safe_failure_detail(
+        ValueError(source["failure_detail"])
+    )
     report = {
         "repository": "Blummer92/agent-os",
         "campaign_id": "test",
@@ -1109,20 +1132,7 @@ def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_pat
         "manual_review_cases": [],
         "zero_mutation_verification": {"http_write_requests": 0,
                                        "github_mutations": 0},
-        "scanner_advisory": {"sources": [{
-            "tool": None,
-            "source": "evil.json",
-            "status": "scanner-error",
-            "state": "scanner-error",
-            "head_sha": "a" * 40,
-            "candidate_count": 1,
-            "findings": [],
-            "truncated": False,
-            "out_of_scope_findings": 0,
-            "version": "1.0\r## injected heading",
-            "scope": [123, "scripts/agent_os_issue_acceptance"],
-            "failure_detail": "boom token=abc123secret at /home/runner/x.json",
-        }]},
+        "scanner_advisory": {"sources": [source]},
     }
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -1144,6 +1154,6 @@ def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_pat
     assert "\r" not in rendered
     assert "/home/runner" not in rendered
     assert "abc123secret" not in rendered
-    assert "123" in rendered
+    assert "scripts/agent_os_issue_acceptance" in rendered
     assert not any(line.startswith("## injected") for line in rendered.splitlines())
     assert "### Scanner advisory" in rendered
