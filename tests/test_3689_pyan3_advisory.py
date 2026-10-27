@@ -13,9 +13,20 @@ from scripts.pyan3_advisory import (
     VERSION,
     _classify,
     _import_cycles,
+    _safe_detail,
     _strongly_connected,
     scan,
 )
+
+
+def test_safe_detail_redacts_host_paths_and_secrets() -> None:
+    detail = _safe_detail(
+        OSError(13, "Permission denied", "/home/runner/token.json")
+    )
+    assert "/home/runner" not in detail
+    assert "[path]" in detail
+    secret = _safe_detail(ValueError("token=abc123secret"))
+    assert "abc123secret" not in secret
 
 
 class _FakeNode:
