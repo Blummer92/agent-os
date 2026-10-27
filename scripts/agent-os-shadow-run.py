@@ -893,6 +893,117 @@ def _normalize_scanner_advisory(
     }
 
 
+
+def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Group exact location overlaps for GSA/QA review, never for selection.
+
+    A filename match is not an overlap. Scanner outputs have no canonical
+    issue-link evidence: every group is explicitly unlinked. No group grants
+    deletion, implementation, issue creation, or retirement authority.
+    The original source findings remain untouched in the record.
+    """
+    entries: list[dict[str, object]] = []
+    for source_index, source in enumerate(sources):
+        findings = source.get("findings", [])
+        if not isinstance(findings, list):
+            continue
+        for finding_index, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            spans: list[tuple[str, int, int]] = []
+            if finding.get("kind") == "textual-clone":
+                for prefix in ("first", "second"):
+                    path = finding.get(f"{prefix}_file")
+                    start = finding.get(f"{prefix}_start_line")
+                    end = finding.get(f"{prefix}_end_line")
+                    if (_is_safe_repo_path(path) and type(start) is int
+                            and type(end) is int and 0 < start <= end):
+                        spans.append((path, start, end))
+            elif finding.get("kind") == "potentially-disconnected":
+                path = finding.get("file")
+                line = finding.get("line")
+                if _is_safe_repo_path(path) and type(line) is int and line > 0:
+                    spans.append((path, line, line))
+            # Keep unlocatable findings visible as individual review entries.
+            entries.append({
+                "source_index": source_index,
+                "finding_index": finding_index,
+                "tool": source.get("tool"),
+                "head_sha": source.get("head_sha"),
+                "state": source.get("state"),
+                "truncated": source.get("truncated") is True,
+                "out_of_scope": finding.get("out_of_scope") is True,
+                "locations": tuple(sorted(set(spans))),
+            })
+
+    parents = list(range(len(entries)))
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            index = parents[index]
+        return index
+
+    for i, left in enumerate(entries):
+        for j in range(i + 1, len(entries)):
+            right = entries[j]
+            # Never combine evidence across different revisions or states.
+            if (left["head_sha"] != right["head_sha"]
+                    or left["state"] != right["state"]):
+                continue
+            if any(
+                a_path == b_path and a_start <= b_end and b_start <= a_end
+                for a_path, a_start, a_end in left["locations"]
+                for b_path, b_start, b_end in right["locations"]
+            ):
+                parents[root(j)] = root(i)
+
+    buckets: dict[int, list[dict[str, object]]] = {}
+    for i, entry in enumerate(entries):
+        buckets.setdefault(root(i), []).append(entry)
+    ordered = sorted(
+        buckets.values(),
+        key=lambda members: (
+            min((location for e in members for location in e["locations"]),
+                default=("", 0, 0)),
+            min((e["head_sha"] or "" for e in members)),
+            min((e["source_index"], e["finding_index"]) for e in members),
+        ),
+    )
+    groups: list[dict[str, object]] = []
+    for members in ordered:
+        refs = sorted(
+            ({"source_index": e["source_index"], "finding_index": e["finding_index"]}
+             for e in members),
+            key=lambda e: (e["source_index"], e["finding_index"]),
+        )
+        locations = sorted({loc for e in members for loc in e["locations"]})
+        groups.append({
+            "review_id": f"scanner-review-{len(groups) + 1:03d}",
+            "finding_refs": refs,
+            "locations": [
+                {"file": path, "start_line": start, "end_line": end}
+                for path, start, end in locations
+            ],
+            "source_shas": sorted({e["head_sha"] for e in members
+                                   if isinstance(e["head_sha"], str)}),
+            "states": sorted({e["state"] for e in members
+                              if isinstance(e["state"], str)}),
+            "truncated": any(e["truncated"] for e in members),
+            "out_of_scope": any(e["out_of_scope"] for e in members),
+            "issue_linkage": {
+                "status": "unlinked",
+                "issue_number": None,
+                "reason": "scanner-findings-do-not-prove-canonical-issue-identity",
+            },
+            "engineering_review": "manual-review",
+            "retirement_review_owner": "#1729",
+            "selection_input": False,
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        })
+    return groups
+
+
 def _load_scanner_advisory(
     path: str, *, source_revision: str
 ) -> dict[str, object]:
@@ -1465,6 +1576,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.scanner_evidence is not None:
         scanner_advisory_section = {
             "sources": scanner_sources,
+            "review_groups": _scanner_review_groups(scanner_sources),
             "execution_authorized": False,
             "side_effects_performed": False,
         }
