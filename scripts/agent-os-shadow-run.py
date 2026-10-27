@@ -910,20 +910,26 @@ def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, o
         for finding_index, finding in enumerate(findings):
             if not isinstance(finding, dict):
                 continue
-            spans: list[tuple[str, int, int]] = []
+            # Both producer formats use the same path/range validation.
             if finding.get("kind") == "textual-clone":
-                for prefix in ("first", "second"):
-                    path = finding.get(f"{prefix}_file")
-                    start = finding.get(f"{prefix}_start_line")
-                    end = finding.get(f"{prefix}_end_line")
-                    if (_is_safe_repo_path(path) and type(start) is int
-                            and type(end) is int and 0 < start <= end):
-                        spans.append((path, start, end))
+                candidates = [
+                    (finding.get(f"{side}_file"),
+                     finding.get(f"{side}_start_line"),
+                     finding.get(f"{side}_end_line"))
+                    for side in ("first", "second")
+                ]
             elif finding.get("kind") == "potentially-disconnected":
-                path = finding.get("file")
-                line = finding.get("line")
-                if _is_safe_repo_path(path) and type(line) is int and line > 0:
-                    spans.append((path, line, line))
+                candidates = [(finding.get("file"), finding.get("line"), finding.get("line"))]
+            else:
+                candidates = []
+            locations = tuple(sorted({
+                (path, start, end)
+                for path, start, end in candidates
+                if _is_safe_repo_path(path)
+                and type(start) is int
+                and type(end) is int
+                and 0 < start <= end
+            }))
             # Keep unlocatable findings visible as individual review entries.
             entries.append({
                 "source_index": source_index,
@@ -933,7 +939,7 @@ def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, o
                 "state": source.get("state"),
                 "truncated": source.get("truncated") is True,
                 "out_of_scope": finding.get("out_of_scope") is True,
-                "locations": tuple(sorted(set(spans))),
+                "locations": locations,
             })
 
     parents = list(range(len(entries)))
