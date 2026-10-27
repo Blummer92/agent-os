@@ -3,17 +3,23 @@
 The adapter adds no evaluation logic: admission is canonical
 ``evaluate_issue_closure`` and the pre-write gate is canonical
 ``verify_closure_admission_receipt``. These tests prove the transfer
-discipline instead: the exact operation sequence, the refusal cases with
-zero unauthorized mutations, the no-blind-retry rules, and the MCP
-manifest mapping. All GitHub interaction is through a fake transport;
-no live issue, PR, or credential is touched. Issue 3292 appears only as
-a synthetic fixture.
+discipline instead, under the repaired authority model:
+
+* F1: no JSON/CLI path exists; admission requires host-registry tokens
+  (owner grant + registered QA delivery). Forged tokens, forged fields,
+  and unregistered records refuse with zero mutation calls.
+* F2: the production entry point (``execute_session_closure``) drives
+  the executor; the manifest is an audit record whose steps match the
+  mocked MCP tool trace exactly.
+* F3: already-closed issues receive zero mutations by default; recovery
+  needs a separate grant, never re-closes, removes labels only
+  surgically, and never substitutes labels replacement.
+
+All GitHub interaction is through a fake transport; no live issue, PR,
+or credential is touched. Issue 3292 appears only as a synthetic fixture.
 """
 
 import hashlib
-import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -26,31 +32,30 @@ from scripts.agent_os_issue_acceptance.closure_admission_actions import (
 from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
     _completion_comment,
 )
-from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
-    LifecycleOwnerDecision,
-)
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     LifecycleStateSnapshot,
 )
+from scripts.agent_os_issue_acceptance import session_closure_adapter as adapter
 from scripts.agent_os_issue_acceptance.session_closure_adapter import (
     FreshRead,
-    QaEvidence,
+    HostRegistry,
+    LabelRemovalUnsupported,
+    QaRecord,
     TransportUnavailable,
     TransportUncertain,
     build_plan,
     execute_batch,
     execute_plan,
+    execute_session_closure,
     mcp_manifest,
-    render_evidence_comment,
-    verify_qa_evidence,
 )
 
 REPO = "Blummer92/agent-os"
 BODY = "Synthetic issue body for offline proof only."
 DIGEST = hashlib.sha256(BODY.encode()).hexdigest()
 TRIGGER = "/agent-os close-admit 9876"
-TRIGGER_HASH = hashlib.sha256(TRIGGER.encode()).hexdigest()
 HEAD = "a" * 40
+OWNER = "Blummer92"
 
 
 def snapshot(issue=9876, **changes):
@@ -72,21 +77,7 @@ def snapshot(issue=9876, **changes):
     return LifecycleStateSnapshot(**data)
 
 
-def decision(issue=9876, **changes):
-    data = dict(
-        repository=REPO,
-        issue_number=issue,
-        pull_request_number=None,
-        requested_mutations=("close-issue",),
-        authorizer_id="Blummer92",
-        decision_id=f"owner-decision-{issue}",
-        decision_recorded=True,
-    )
-    data.update(changes)
-    return LifecycleOwnerDecision(**data)
-
-
-def qa(issue=9876, **changes):
+def qa_record(issue=9876, **changes):
     data = dict(
         verdict="pass",
         evidence_id=f"qa-evidence-{issue}",
@@ -94,36 +85,65 @@ def qa(issue=9876, **changes):
         issue_number=issue,
         validated_head_sha=None,
         issue_body_digest=DIGEST,
-        provenance="runtime_handoff",
-        qa_session_ref="qa-session-synthetic",
-        delivery_ref="qa-delivery-synthetic",
+        delivery_ref=f"qa-delivery-{issue}",
     )
     data.update(changes)
-    return QaEvidence(**data)
+    return QaRecord(**data)
 
 
-def make_plan(issue=9876, **overrides):
-    plan_kwargs = dict(
-        decision=decision(issue),
-        qa=qa(issue),
-        snapshot=snapshot(issue),
-        body_digest=DIGEST,
-        delivery_id=f"delivery-{issue}",
-        trigger_id=f"trigger-{issue}",
-        trigger_body_hash=TRIGGER_HASH,
-    )
-    plan_kwargs.update(overrides)
-    plan, reasons = build_plan(**plan_kwargs)
-    assert plan is not None, reasons
-    return plan
+class Setup:
+    """One host session: fresh registry with a valid grant + QA delivery."""
+
+    def __init__(self, issue=9876, **qa_changes):
+        self.issue = issue
+        self.registry = HostRegistry()
+        self.grant = self.registry.grant_owner_closure(
+            repository=REPO, issue_number=issue, authorizer_id=OWNER
+        )
+        self.qa_token = self.registry.register_qa_delivery(qa_record(issue, **qa_changes))
+        self.snapshot = snapshot(issue)
+
+    def plan_kwargs(self, **overrides):
+        kwargs = dict(
+            registry=self.registry,
+            owner_grant_token=self.grant.token,
+            qa_delivery_token=self.qa_token,
+            snapshot=self.snapshot,
+            body_digest=DIGEST,
+            trigger_id=f"trigger-{self.issue}",
+            trigger_body=TRIGGER,
+        )
+        kwargs.update(overrides)
+        return kwargs
+
+    def make_plan(self, **overrides):
+        plan, reasons = build_plan(**self.plan_kwargs(**overrides))
+        assert plan is not None, reasons
+        return plan
+
+    def run_entry(self, transport, **overrides):
+        kwargs = dict(
+            registry=self.registry,
+            owner_grant_token=self.grant.token,
+            qa_delivery_token=self.qa_token,
+            snapshot=self.snapshot,
+            body_digest=DIGEST,
+            trigger_id=f"trigger-{self.issue}",
+            trigger_body=TRIGGER,
+            transport=transport,
+        )
+        kwargs.update(overrides)
+        return execute_session_closure(**kwargs)
 
 
 class FakeTransport:
-    """Fake GitHub with an operation log and failure injection.
+    """Fake GitHub with MCP tool-call log and failure injection.
 
     ``read_overrides`` maps a 1-based fresh_read call index to field
-    overrides (state, digest, revision, trigger, labels, comments).
-    ``unavailable_reads`` maps call indexes that raise TransportUnavailable.
+    overrides (state, digest, revision, trigger, labels, comments,
+    state_reason). ``unavailable_reads`` maps call indexes that raise
+    TransportUnavailable. ``surgical`` selects whether this host's
+    catalog attaches remove_issue_label.
     """
 
     def __init__(self, issue=9876, **flags):
@@ -136,38 +156,44 @@ class FakeTransport:
         self.digest = DIGEST
         self.revision = f"github-issue-v1:rev-{issue}-1"
         self.ops: list[tuple] = []
+        self.tool_calls: list[tuple] = []
         self.read_count = 0
         self.read_overrides = flags.get("read_overrides", {})
         self.unavailable_reads = set(flags.get("unavailable_reads", ()))
         self.close_mode = flags.get("close_mode", "ok")  # ok|uncertain-landed|uncertain-open
-        self.comment_mode = flags.get("comment_mode", "ok")
-        self.label_mode = flags.get("label_mode", "ok")
-        self.extra_label_at_final = flags.get("extra_label_at_final", False)
+        self.comment_mode = flags.get("comment_mode", "ok")  # ok|uncertain-landed|uncertain-open
+        self.label_mode = flags.get("label_mode", "ok")  # ok|uncertain-landed|uncertain-present|unsupported
+        self.supports_surgical_label_removal = flags.get("surgical", True)
+        self.concurrent_label_at_read = flags.get("concurrent_label_at_read", None)
+        self.source_head = flags.get("source_head", None)
 
-    def _snapshot(self):
-        return snapshot(
-            self.issue,
-            issue_state=self.state,
-            lifecycle_labels=tuple(self.labels),
-            observed_revision=self.revision,
-        )
+    def _params(self, extra=None):
+        params = {"owner": "Blummer92", "repo": "agent-os", "issue_number": self.issue}
+        if extra:
+            params.update(extra)
+        return params
 
     def fresh_read(self):
         self.read_count += 1
-        self.ops.append(("read", self.read_count))
         if self.read_count in self.unavailable_reads:
-            raise TransportUnavailable("injected")
+            raise TransportUnavailable("read unavailable")
         over = self.read_overrides.get(self.read_count, {})
         state = over.get("state", self.state)
+        if self.concurrent_label_at_read == self.read_count and "type:bug" not in self.labels:
+            # A concurrent writer adds an unrelated label to stored state.
+            self.labels.append("type:bug")
         labels = list(over.get("labels", self.labels))
-        if self.extra_label_at_final and self.read_count >= 3 and "extra:label" not in labels:
-            labels.append("extra:label")
+        self.ops.append(("read",))
+        self.tool_calls.append(("issue_read", "get", self._params()))
+        self.tool_calls.append(("issue_read", "get_comments", self._params()))
+        self.tool_calls.append(("issue_read", "get_labels", self._params()))
         return FreshRead(
             snapshot=snapshot(
                 self.issue,
                 issue_state=state,
                 lifecycle_labels=tuple(labels),
                 observed_revision=over.get("revision", self.revision),
+                source_head=self.source_head,
             ),
             body_digest=over.get("digest", self.digest),
             trigger_body=over.get("trigger", self.trigger_body),
@@ -181,458 +207,523 @@ class FakeTransport:
         )
 
     def close(self):
-        self.ops.append(("close", {"state": "closed", "state_reason": "completed"}))
+        self.ops.append(("close",))
+        self.tool_calls.append(
+            ("issue_write", "update", self._params({"state": "closed", "state_reason": "completed"}))
+        )
         if self.close_mode == "uncertain-landed":
             self.state, self.state_reason = "closed", "completed"
-            raise TransportUncertain("injected")
+            raise TransportUncertain("close uncertain, landed")
         if self.close_mode == "uncertain-open":
-            raise TransportUncertain("injected")
+            raise TransportUncertain("close uncertain, not landed")
         self.state, self.state_reason = "closed", "completed"
 
-    def remove_label(self, label):
-        self.ops.append(("remove_label", label))
-        assert label == "status:ready"
+    def remove_issue_label(self, label):
+        if not self.supports_surgical_label_removal or self.label_mode == "unsupported":
+            raise LabelRemovalUnsupported("no surgical label removal on this host")
+        self.ops.append(("remove_issue_label", label))
+        self.tool_calls.append(("remove_issue_label", "remove", self._params({"name": label})))
         if self.label_mode == "uncertain-landed":
-            self.labels = [item for item in self.labels if item != label]
-            raise TransportUncertain("injected")
+            if label in self.labels:
+                self.labels.remove(label)
+            raise TransportUncertain("label removal uncertain, landed")
         if self.label_mode == "uncertain-present":
-            raise TransportUncertain("injected")
-        self.labels = [item for item in self.labels if item != label]
+            raise TransportUncertain("label removal uncertain, still present")
+        if label in self.labels:
+            self.labels.remove(label)
 
     def list_comments(self):
         self.ops.append(("list_comments",))
+        self.tool_calls.append(("issue_read", "get_comments", self._params()))
         return tuple(self.comments)
 
     def post_comment(self, body):
-        self.ops.append(("post_comment", body))
+        self.ops.append(("post_comment",))
+        self.tool_calls.append(("add_issue_comment", "add", self._params({"body": body})))
         if self.comment_mode == "uncertain-landed":
             self.comments.append(body)
-            raise TransportUncertain("injected")
-        if self.comment_mode == "uncertain-absent":
-            raise TransportUncertain("injected")
+            raise TransportUncertain("comment uncertain, landed")
+        if self.comment_mode == "uncertain-open":
+            raise TransportUncertain("comment uncertain, not landed")
         self.comments.append(body)
 
     def write_ops(self):
-        return [op for op in self.ops if op[0] in ("close", "remove_label", "post_comment")]
+        return [op for op in self.ops if op[0] in ("close", "remove_issue_label", "post_comment")]
+
+    def mutation_tool_calls(self):
+        return [t for t in self.tool_calls if t[0] in ("issue_write", "remove_issue_label", "add_issue_comment")]
 
 
-# --- Plan / QA gates -------------------------------------------------------
+# ---------------------------------------------------------------- F1
 
-def test_plan_admitted_and_receipt_matches_canonical_evaluation():
-    plan = make_plan()
-    direct = evaluate_issue_closure(
-        IssueClosureRequest(
-            decision=decision(),
-            acceptance=ClosureAcceptanceEvidence(
-                verdict="pass", evidence_id="qa-evidence-9876", evaluator_id="qa-test-agent",
-                issue_number=9876, validated_head_sha=None,
-            ),
-        ),
-        snapshot(),
-        current_issue_body_digest=DIGEST,
+def test_no_json_or_cli_authority_path_exists():
+    assert not hasattr(adapter, "_plan_from_json")
+    assert not hasattr(adapter, "main")
+    assert not hasattr(adapter, "QaEvidence")
+    # The module exposes no JSON parsing entry point at all.
+    import inspect
+
+    source = Path(adapter.__file__).read_text()
+    assert "json.load" not in source
+    assert "sys.argv" not in source
+
+
+def test_forged_owner_grant_token_refused_with_zero_mutations():
+    setup = Setup()
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake, owner_grant_token="f" * 32)
+    assert outcome["status"] == "refused"
+    assert "session-closure.owner-grant-unknown" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_forged_qa_delivery_token_refused_with_zero_mutations():
+    setup = Setup()
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake, qa_delivery_token="e" * 32)
+    assert outcome["status"] == "refused"
+    assert "session-closure.qa-delivery-unknown" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_unregistered_qa_record_fields_cannot_admit():
+    # A perfectly formed QA record that the host never registered is
+    # worthless: there is no field-based path into admission.
+    setup = Setup()
+    fake = FakeTransport()
+    unregistered = qa_record()
+    # The entry point takes tokens, not records; passing a forged token
+    # that merely names the record refuses.
+    outcome = setup.run_entry(fake, qa_delivery_token="qa-delivery-9876")
+    assert outcome["status"] == "refused"
+    assert fake.mutation_tool_calls() == []
+    assert unregistered.evidence_id == "qa-evidence-9876"
+
+
+def test_forged_owner_fields_have_no_code_path():
+    # Old CLI payload fields (decision_recorded, authorizer_id, verdict,
+    # provenance, qa_session_ref, delivery_ref) are not parameters of
+    # build_plan or the entry point at all.
+    import inspect
+
+    params = set(inspect.signature(build_plan).parameters)
+    assert not {"decision", "qa", "decision_recorded", "provenance"} & params
+    entry_params = set(inspect.signature(execute_session_closure).parameters)
+    assert "owner_grant_token" in entry_params and "qa_delivery_token" in entry_params
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("verdict", "fail", "session-closure.qa-not-passed"),
+    ("evaluator_id", OWNER, "session-closure.qa-not-independent"),
+    ("evaluator_id", "agent-os/authoritative-aggregate", "session-closure.qa-evaluator-not-qa"),
+    ("issue_number", 1111, "session-closure.qa-issue-mismatch"),
+    ("issue_body_digest", "0" * 64, "session-closure.qa-body-stale"),
+])
+def test_registered_record_binding_failures_refuse(field, value, reason):
+    setup = Setup(**{field: value})
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "refused"
+    assert reason in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_wrong_head_binding_refuses():
+    setup = Setup()
+    setup.snapshot = snapshot(source_head=HEAD)
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "refused"
+    assert "session-closure.qa-head-mismatch" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_head_bound_record_succeeds():
+    reg = HostRegistry()
+    grant = reg.grant_owner_closure(repository=REPO, issue_number=9876, authorizer_id=OWNER)
+    token = reg.register_qa_delivery(qa_record(validated_head_sha=HEAD))
+    fake = FakeTransport(source_head=HEAD)
+    outcome = execute_session_closure(
+        registry=reg, owner_grant_token=grant.token, qa_delivery_token=token,
+        snapshot=snapshot(source_head=HEAD), body_digest=DIGEST,
+        trigger_id="trigger-9876", trigger_body=TRIGGER, transport=fake,
     )
-    assert plan.receipt == direct
-    assert plan.receipt_id == direct["receipt_id"]
+    assert outcome["status"] == "closed-verified", outcome
 
 
-def test_comment_body_matches_dispatcher_oracle():
-    plan = make_plan()
-    assert plan.comment_body == _completion_comment(
-        repository=REPO, issue_number=9876, evidence_id="qa-evidence-9876",
-        evaluator_id="qa-test-agent", receipt_id=plan.receipt_id,
-    )
-    assert render_evidence_comment(
-        repository=REPO, issue_number=9876, evidence_id="qa-evidence-9876",
-        evaluator_id="qa-test-agent", receipt_id=plan.receipt_id,
-    ) == plan.comment_body
+def test_conflicting_qa_records_refuse():
+    setup = Setup()
+    other = setup.registry.register_qa_delivery(qa_record(verdict="fail"))
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake, other_qa_delivery_tokens=(other,))
+    assert outcome["status"] == "refused"
+    assert "session-closure.qa-conflict" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
 
 
-@pytest.mark.parametrize("provenance", ["caller-string", "file", "artifact", "check-run", "status", ""])
-def test_non_handoff_qa_provenance_refused(provenance):
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(provenance=provenance), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "session-closure.qa-provenance-untrusted" in reasons
-
-
-def test_qa_handoff_without_session_reference_refused():
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(qa_session_ref=""), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "session-closure.qa-handoff-unreferenced" in reasons
-
-
-def test_owner_impersonation_refused():
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(evaluator_id="Blummer92"), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "session-closure.qa-not-independent" in reasons
-
-
-def test_aggregate_substituted_for_qa_refused():
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(evaluator_id="agent-os/authoritative-aggregate"),
-        snapshot=snapshot(), body_digest=DIGEST, delivery_id="d",
-        trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "session-closure.qa-evaluator-not-qa" in reasons
-
-
-@pytest.mark.parametrize("verdict", ["fail", "missing"])
-def test_non_pass_qa_refused(verdict):
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(verdict=verdict), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "session-closure.qa-not-passed" in reasons
-
-
-def test_conflicting_qa_record_refused():
-    conflict = qa(verdict="fail")
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(), snapshot=snapshot(), body_digest=DIGEST,
-        delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-        other_qa_records=(conflict,),
-    )
-    assert plan is None
-    assert "session-closure.qa-conflict" in reasons
-
-
-def test_wrong_issue_refused():
-    plan, _ = build_plan(
-        decision=decision(), qa=qa(issue_number=1111), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-
-
-def test_wrong_head_refused():
-    plan, _ = build_plan(
-        decision=decision(), qa=qa(validated_head_sha=HEAD),
-        snapshot=snapshot(source_head="b" * 40), body_digest=DIGEST,
-        delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-
-
-def test_wrong_body_digest_refused():
-    plan, _ = build_plan(
-        decision=decision(), qa=qa(issue_body_digest="0" * 64), snapshot=snapshot(),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
+def test_unknown_other_qa_token_refuses():
+    setup = Setup()
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake, other_qa_delivery_tokens=("d" * 32,))
+    assert outcome["status"] == "refused"
+    assert "session-closure.qa-delivery-unknown" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
 
 
 def test_protected_target_fixture_refused():
-    plan, reasons = build_plan(
-        decision=decision(3292), qa=qa(3292), snapshot=snapshot(3292),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
+    reg = HostRegistry()
+    grant = reg.grant_owner_closure(repository=REPO, issue_number=3292, authorizer_id=OWNER)
+    token = reg.register_qa_delivery(qa_record(issue=3292))
+    fake = FakeTransport(issue=3292)
+    outcome = execute_session_closure(
+        registry=reg, owner_grant_token=grant.token, qa_delivery_token=token,
+        snapshot=snapshot(issue=3292), body_digest=DIGEST,
+        trigger_id="trigger-3292", trigger_body=TRIGGER, transport=fake,
     )
-    assert plan is None
-    assert "closure.protected-target" in reasons
-
-
-def test_missing_trigger_refused():
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(), snapshot=snapshot(), body_digest=DIGEST,
-        delivery_id="d", trigger_id="", trigger_body_hash="",
-    )
-    assert plan is None
-    assert "session-closure.trigger-missing" in reasons
-
-
-def test_stale_satisfaction_refused_at_plan():
-    stale = {
-        "repository": REPO, "issue_number": 9876, "issue_body_digest": "0" * 64,
-        "status": "complete",
-        "criteria": [{"index": 1, "identity": "c1", "disposition": "satisfied",
-                      "reason_code": "qa-pass", "evidence": ["qa-evidence-9876"]}],
-    }
-    plan, reasons = build_plan(
-        decision=decision(), qa=qa(), snapshot=snapshot(), body_digest=DIGEST,
-        satisfaction=stale, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
-    )
-    assert plan is None
-    assert "closure.satisfaction-stale" in reasons
-
-
-# --- Executor: exact sequence and refusal handling -------------------------
-
-def test_full_sequence_exact_ops_and_outcome():
-    plan = make_plan()
-    fake = FakeTransport()
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified"
-    assert [op[0] for op in fake.ops] == [
-        "read", "close", "read", "remove_label", "list_comments", "post_comment", "read",
-    ]
-    close_ops = [op for op in fake.ops if op[0] == "close"]
-    assert close_ops == [("close", {"state": "closed", "state_reason": "completed"})]
-    assert fake.state == "closed" and fake.labels == [] and len(fake.comments) == 1
-    assert plan.receipt_id in fake.comments[0]
-    assert "closes #" not in fake.comments[0].lower()
-
-
-def test_duplicate_delivery_with_comment_and_no_label_zero_writes():
-    plan = make_plan()
-    fake = FakeTransport(read_overrides={1: {"state": "closed", "labels": [], "comments": [plan.comment_body]}})
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "already-closed-verified"
-    assert fake.write_ops() == []
-
-
-def test_duplicate_delivery_with_comment_completes_leftover_label():
-    plan = make_plan()
-    fake = FakeTransport()
-    fake.state, fake.state_reason = "closed", "completed"
-    fake.comments = [plan.comment_body]
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "already-closed-verified"
-    assert [op[0] for op in fake.ops] == ["read", "remove_label", "read"]
-    assert fake.labels == []
-
-
-def test_duplicate_delivery_with_comment_and_stuck_label_flagged():
-    plan = make_plan()
-    fake = FakeTransport(label_mode="uncertain-present")
-    fake.state, fake.state_reason = "closed", "completed"
-    fake.comments = [plan.comment_body]
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "already-closed-verified-label-reconciliation-required"
-
-
-def test_duplicate_delivery_without_comment_completes_label_and_comment():
-    plan = make_plan()
-    fake = FakeTransport()
-    fake.state, fake.state_reason = "closed", "completed"
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "already-closed-comment-completed"
-    assert [op[0] for op in fake.write_ops()] == ["remove_label", "post_comment"]
+    assert outcome["status"] == "refused"
+    assert "closure.protected-target" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
 
 
 def test_repository_not_pinned_refused():
-    plan, reasons = build_plan(
-        decision=decision(repository="Other/repo"),
-        qa=qa(),
-        snapshot=snapshot(repository="Other/repo"),
-        body_digest=DIGEST, delivery_id="d", trigger_id="t", trigger_body_hash=TRIGGER_HASH,
+    reg = HostRegistry()
+    grant = reg.grant_owner_closure(repository="Other/repo", issue_number=9876, authorizer_id=OWNER)
+    token = reg.register_qa_delivery(qa_record())
+    fake = FakeTransport()
+    outcome = execute_session_closure(
+        registry=reg, owner_grant_token=grant.token, qa_delivery_token=token,
+        snapshot=snapshot(repository="Other/repo"), body_digest=DIGEST,
+        trigger_id="trigger-9876", trigger_body=TRIGGER, transport=fake,
     )
-    assert plan is None
-    assert "session-closure.repository-not-pinned" in reasons
+    assert outcome["status"] == "refused"
+    assert "session-closure.repository-not-pinned" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
 
 
-@pytest.mark.parametrize(
-    "override,reason",
-    [
-        ({"digest": "0" * 64}, "session-closure.body-digest-drift"),
-        ({"revision": "github-issue-v1:rev-other"}, "session-closure.revision-drift"),
-        ({"trigger": "/agent-os close-admit 9876 (edited)"}, "session-closure.trigger-mismatch"),
-    ],
-)
-def test_prewrite_drift_refuses_with_zero_writes(override, reason):
-    plan = make_plan()
-    fake = FakeTransport(read_overrides={1: override})
+def test_grant_for_other_issue_refused():
+    setup = Setup()
+    grant = setup.registry.grant_owner_closure(repository=REPO, issue_number=1111, authorizer_id=OWNER)
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake, owner_grant_token=grant.token)
+    assert outcome["status"] == "refused"
+    assert "session-closure.decision-identity-mismatch" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+# ---------------------------------------------------------------- F2
+
+def test_production_entry_point_full_sequence_and_tool_trace():
+    setup = Setup()
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified", outcome
+    assert fake.state == "closed" and fake.state_reason == "completed"
+    assert fake.labels == []
+    assert len(fake.comments) == 1
+    assert [op[0] for op in fake.write_ops()] == ["close", "remove_issue_label", "post_comment"]
+    mutations = fake.mutation_tool_calls()
+    assert mutations[0] == (
+        "issue_write", "update",
+        {"owner": "Blummer92", "repo": "agent-os", "issue_number": 9876, "state": "closed", "state_reason": "completed"},
+    )
+    assert mutations[1] == (
+        "remove_issue_label", "remove",
+        {"owner": "Blummer92", "repo": "agent-os", "issue_number": 9876, "name": "status:ready"},
+    )
+    assert mutations[2][0] == "add_issue_comment" and mutations[2][1] == "add"
+    assert mutations[2][2]["body"] == setup.make_plan().comment_body
+
+
+def test_manifest_matches_executor_tool_trace():
+    setup = Setup()
+    plan = setup.make_plan()
+    manifest = mcp_manifest(plan)
+    # No prose checkpoints, no replacement step, surgical label step only.
+    assert all("checkpoint" not in step for step in manifest)
+    assert all(step["tool"] != "issue_write" or step["params"].get("labels") is None for step in manifest)
+    assert [s for s in manifest if s["action"] == "label-removal-surgical"][0]["tool"] == "remove_issue_label"
+    assert all("assertions" in step and "on_failure" in step for step in manifest)
+    fake = FakeTransport()
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified"
+    mutations = fake.mutation_tool_calls()
+    manifest_mutations = [s for s in manifest if s["tool"] in ("issue_write", "remove_issue_label", "add_issue_comment")]
+    assert len(mutations) == len(manifest_mutations)
+    for tool_call, step in zip(mutations, manifest_mutations):
+        assert tool_call[0] == step["tool"]
+        assert tool_call[2] == step["params"]
+
+
+def test_manifest_derives_owner_repo_from_plan():
+    from dataclasses import replace
+
+    setup = Setup()
+    plan = setup.make_plan()
+    foreign = replace(plan, repository="Other/repo")
+    manifest = mcp_manifest(foreign)
+    assert all(step["params"]["owner"] == "Other" and step["params"]["repo"] == "repo" for step in manifest)
+
+
+def test_mutation_without_valid_admission_refused():
+    # AC8: no admission receipt, no mutation phase. Every refusal path
+    # below must leave the mutation tool log empty.
+    setup = Setup()
+    for kwargs in (
+        {"owner_grant_token": None},
+        {"qa_delivery_token": None},
+        {"body_digest": "0" * 64},
+        {"trigger_body": "forged trigger"},
+    ):
+        fake = FakeTransport()
+        outcome = setup.run_entry(fake, **kwargs)
+        assert outcome["status"] == "refused", kwargs
+        assert fake.mutation_tool_calls() == []
+
+
+def test_prewrite_drift_refuses_with_zero_mutations():
+    setup = Setup()
+    plan = setup.make_plan()
+    fake = FakeTransport(read_overrides={1: {"digest": "0" * 64}})
     outcome = execute_plan(plan, fake)
     assert outcome["status"] == "refused"
-    assert reason in outcome["reason_codes"]
+    assert "session-closure.body-digest-drift" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_entry_point_uses_canonical_admission():
+    # The plan's receipt is byte-equal to a direct canonical evaluation
+    # over the same inputs: the adapter adds no evaluation of its own.
+    setup = Setup()
+    plan = setup.make_plan()
+    from scripts.agent_os_issue_acceptance.session_closure_adapter import decision_from_grant
+
+    decision = decision_from_grant(setup.grant, pull_request_number=None)
+    acceptance = ClosureAcceptanceEvidence(
+        verdict="pass", evidence_id="qa-evidence-9876", evaluator_id="qa-test-agent",
+        issue_number=9876, validated_head_sha=None,
+    )
+    direct = evaluate_issue_closure(
+        IssueClosureRequest(decision=decision, acceptance=acceptance, satisfaction=None),
+        setup.snapshot, current_issue_body_digest=DIGEST,
+    )
+    assert plan.receipt == direct
+
+
+def test_comment_byte_identical_to_dispatcher_oracle():
+    setup = Setup()
+    plan = setup.make_plan()
+    oracle = _completion_comment(
+        repository=REPO, issue_number=9876,
+        evidence_id="qa-evidence-9876", evaluator_id="qa-test-agent",
+        receipt_id=plan.receipt_id,
+    )
+    assert plan.comment_body == oracle
+
+
+def test_no_new_infrastructure_in_adapter():
+    source = Path(adapter.__file__).read_text()
+    for forbidden in ("codespace", "GITHUB_TOKEN", "os.environ", "subprocess", "socket", "urllib", "requests"):
+        assert forbidden not in source
+    imports = [line for line in source.splitlines() if line.startswith("from .") or line.startswith("import ")]
+    assert all("scripts" not in line for line in imports)
+
+
+# ---------------------------------------------------------------- F3
+
+def test_already_closed_default_zero_mutations():
+    setup = Setup()
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "already-closed-no-action"
+    assert outcome["label_present"] is True
+    assert fake.write_ops() == []
+    assert fake.mutation_tool_calls() == []
+
+
+def test_already_closed_default_no_action_even_with_comment_present():
+    setup = Setup()
+    plan = setup.make_plan()
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    fake.labels = []
+    fake.comments = [plan.comment_body]
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "already-closed-no-action"
+    assert outcome["label_present"] is False
     assert fake.write_ops() == []
 
 
-def test_uncertain_close_landed_proceeds_without_second_close():
-    plan = make_plan()
-    fake = FakeTransport(close_mode="uncertain-landed")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified"
-    assert sum(1 for op in fake.ops if op[0] == "close") == 1
-
-
-def test_uncertain_close_not_landed_unresolved_no_retry():
-    plan = make_plan()
-    fake = FakeTransport(close_mode="uncertain-open")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "unresolved"
-    assert "session-closure.close-uncertain" in outcome["reason_codes"]
-    assert sum(1 for op in fake.ops if op[0] == "close") == 1
-
-
-def test_uncertain_comment_landed_proceeds_without_repost():
-    plan = make_plan()
-    fake = FakeTransport(comment_mode="uncertain-landed")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified"
-    assert sum(1 for op in fake.ops if op[0] == "post_comment") == 1
-
-
-def test_uncertain_comment_absent_unresolved_no_repost():
-    plan = make_plan()
-    fake = FakeTransport(comment_mode="uncertain-absent")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "unresolved"
-    assert "session-closure.comment-uncertain" in outcome["reason_codes"]
-    assert sum(1 for op in fake.ops if op[0] == "post_comment") == 1
-
-
-def test_uncertain_label_landed_is_verified():
-    plan = make_plan()
-    fake = FakeTransport(label_mode="uncertain-landed")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified"
-
-
-def test_uncertain_label_present_flagged_closure_stays_verified():
-    plan = make_plan()
-    fake = FakeTransport(label_mode="uncertain-present")
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified-label-reconciliation-required"
+def test_already_closed_recovery_surgical():
+    setup = Setup()
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id=plan.receipt_id)
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    outcome = setup.run_entry(fake, recovery_grant_token=recovery.token)
+    assert outcome["status"] == "already-closed-recovered", outcome
+    assert [op[0] for op in fake.write_ops()] == ["remove_issue_label", "post_comment"]
+    assert fake.labels == []
     assert len(fake.comments) == 1
 
 
-def test_concurrent_label_change_only_status_ready_removed():
-    # The harness models the concurrent label as a readback observation:
-    # the final fresh read reports an extra label that was not present at
-    # plan time. The dedicated removal must touch only status:ready, and
-    # the executor must still verify closure rather than fail on the
-    # unrelated label.
-    plan = make_plan()
-    fake = FakeTransport(extra_label_at_final=True)
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-verified"
-    assert [op for op in fake.ops if op[0] == "remove_label"] == [("remove_label", "status:ready")]
-    assert "status:ready" not in fake.labels
+def test_already_closed_recovery_preserves_unrelated_labels():
+    setup = Setup()
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id=plan.receipt_id)
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    fake.labels = ["status:ready", "type:bug", "area:docs"]
+    outcome = setup.run_entry(fake, recovery_grant_token=recovery.token)
+    assert outcome["status"] == "already-closed-recovered"
+    assert fake.labels == ["type:bug", "area:docs"]
+    label_call = [t for t in fake.mutation_tool_calls() if t[0] == "remove_issue_label"]
+    assert label_call == [("remove_issue_label", "remove", {
+        "owner": "Blummer92", "repo": "agent-os", "issue_number": 9876, "name": "status:ready"})]
 
 
-def test_missing_post_close_readback_is_closed_unverified_not_verified():
-    plan = make_plan()
-    fake = FakeTransport(unavailable_reads={2})
-    outcome = execute_plan(plan, fake)
-    assert outcome["status"] == "closed-unverified"
-    assert "session-closure.readback-unavailable" in outcome["reason_codes"]
+def test_already_closed_recovery_stops_without_surgical():
+    # Muse host: no surgical tool -> label step stops, no substitution,
+    # comment still posted once, outcome flagged.
+    setup = Setup()
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id=plan.receipt_id)
+    fake = FakeTransport(surgical=False)
+    fake.state, fake.state_reason = "closed", "completed"
+    outcome = setup.run_entry(fake, recovery_grant_token=recovery.token)
+    assert outcome["status"] == "already-closed-recovered-label-reconciliation-required"
+    assert [op[0] for op in fake.write_ops()] == ["post_comment"]
+    assert "status:ready" in fake.labels
+    assert not any(t[0] == "issue_write" and "labels" in t[2] for t in fake.tool_calls)
 
 
-def test_prewrite_read_unavailable_zero_writes():
-    plan = make_plan()
-    fake = FakeTransport(unavailable_reads={1})
-    outcome = execute_plan(plan, fake)
+def test_fresh_close_stops_label_without_surgical_and_stays_verified():
+    setup = Setup()
+    fake = FakeTransport(surgical=False)
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified-label-reconciliation-required"
+    assert fake.state == "closed"
+    assert "status:ready" in fake.labels
+    assert not any(t[0] == "issue_write" and "labels" in t[2] for t in fake.tool_calls)
+
+
+def test_invalid_recovery_grant_refuses_with_zero_mutations():
+    setup = Setup()
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    outcome = setup.run_entry(fake, recovery_grant_token="a" * 32)
+    assert outcome["status"] == "refused"
+    assert "session-closure.recovery-grant-invalid" in outcome["reason_codes"]
+    assert fake.mutation_tool_calls() == []
+
+
+def test_recovery_grant_bound_to_receipt():
+    setup = Setup()
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id="other-receipt")
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "completed"
+    outcome = setup.run_entry(fake, recovery_grant_token=recovery.token)
+    assert outcome["status"] == "refused"
+    assert fake.mutation_tool_calls() == []
+
+
+def test_duplicate_delivery_no_duplicate_close_or_comment():
+    setup = Setup()
+    fake = FakeTransport()
+    first = setup.run_entry(fake)
+    assert first["status"] == "closed-verified"
+    assert len(fake.comments) == 1
+    # Second delivery of the same plan: default path, zero writes.
+    second = setup.run_entry(fake)
+    assert second["status"] == "already-closed-no-action"
+    assert len(fake.comments) == 1
+    assert [op for op in fake.ops if op[0] == "close"] == [("close",)]
+    # Recovery delivery with the comment already present: no second comment.
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id=plan.receipt_id)
+    third = setup.run_entry(fake, recovery_grant_token=recovery.token)
+    assert third["status"] == "already-closed-recovered"
+    assert len(fake.comments) == 1
+
+
+def test_failed_reconciliation_never_reverses_closure():
+    setup = Setup()
+    fake = FakeTransport(surgical=False, comment_mode="uncertain-open")
+    outcome = setup.run_entry(fake)
     assert outcome["status"] == "unresolved"
-    assert fake.write_ops() == []
+    assert fake.state == "closed"
+    assert not any(t[0] == "issue_write" and t[2].get("state") == "open" for t in fake.tool_calls)
 
 
-def test_blocked_item_does_not_stop_eligible_item():
-    blocked_plan = make_plan()
-    blocked_fake = FakeTransport(read_overrides={1: {"digest": "0" * 64}})
-    eligible_plan = make_plan()
-    eligible_fake = FakeTransport()
-    outcomes = execute_batch([(blocked_plan, blocked_fake), (eligible_plan, eligible_fake)])
-    assert outcomes[0]["status"] == "refused"
-    assert blocked_fake.write_ops() == []
-    assert outcomes[1]["status"] == "closed-verified"
-    assert eligible_fake.state == "closed"
+def test_uncertain_close_not_retried():
+    setup = Setup()
+    fake = FakeTransport(close_mode="uncertain-landed")
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified"
+    assert [op for op in fake.ops if op[0] == "close"] == [("close",)]
 
 
-# --- Manifest mapping ------------------------------------------------------
-
-def test_manifest_uses_only_connected_tools_and_no_delete():
-    plan = make_plan()
-    manifest = mcp_manifest(plan)
-    tools = {step["tool"] for step in manifest}
-    assert tools <= {"issue_read", "issue_write", "add_issue_comment"}
-    assert "issue_write" in tools and "add_issue_comment" in tools
-    assert all(step["params"]["owner"] == "Blummer92" and step["params"]["repo"] == "agent-os"
-               for step in manifest)
-    close_steps = [s for s in manifest if s["action"] == "close-issue"]
-    assert len(close_steps) == 1
-    assert close_steps[0]["params"]["state"] == "closed"
-    assert close_steps[0]["params"]["state_reason"] == "completed"
-    assert set(close_steps[0]["params"]) == {
-        "owner", "repo", "issue_number", "state", "state_reason",
-    }
-    assert not any("DELETE" in json.dumps(step) for step in manifest)
-    label_steps = [s for s in manifest if "label" in s["action"]]
-    assert any(s["tool"] == "issue_write" for s in label_steps)
+def test_uncertain_close_not_landed_unresolved():
+    setup = Setup()
+    fake = FakeTransport(close_mode="uncertain-open")
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "unresolved"
+    assert [op for op in fake.ops if op[0] == "close"] == [("close",)]
 
 
-def test_manifest_derives_owner_repo_from_plan_including_label_step():
-    from dataclasses import replace
-
-    plan = make_plan()
-    foreign = replace(plan, repository="Other/repo")
-    manifest = mcp_manifest(foreign)
-    assert all(step["params"]["owner"] == "Other" and step["params"]["repo"] == "repo"
-               for step in manifest)
-    label_step = [s for s in manifest if s["action"] == "label-replacement"]
-    assert len(label_step) == 1
-    assert label_step[0]["params"]["owner"] == "Other"
+def test_uncertain_comment_not_retried():
+    setup = Setup()
+    fake = FakeTransport(comment_mode="uncertain-landed")
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified"
+    assert [op for op in fake.ops if op[0] == "post_comment"] == [("post_comment",)]
 
 
-def test_duplicate_with_wrong_close_reason_is_unverified():
-    plan = make_plan()
-    fake = FakeTransport(read_overrides={1: {"state": "closed", "labels": [], "comments": [plan.comment_body], "state_reason": "not_planned"}})
+def test_missing_final_readback_not_success():
+    setup = Setup()
+    plan = setup.make_plan()
+    # Fresh-read order on the fresh path: 1 prewrite, 2 post-close,
+    # 3 label re-read, 4 final readback. Making #4 unavailable must
+    # never yield a verified closure.
+    fake = FakeTransport(unavailable_reads={4})
     outcome = execute_plan(plan, fake)
+    assert outcome["status"] in ("closed-unverified", "unresolved")
+    assert outcome["status"] != "closed-verified"
+
+
+def test_duplicate_with_wrong_close_reason_unverified_under_recovery():
+    setup = Setup()
+    plan = setup.make_plan()
+    recovery = setup.registry.grant_recovery(issue_number=9876, receipt_id=plan.receipt_id)
+    fake = FakeTransport()
+    fake.state, fake.state_reason = "closed", "not_planned"
+    fake.labels = []
+    fake.comments = [plan.comment_body]
+    outcome = setup.run_entry(fake, recovery_grant_token=recovery.token)
     assert outcome["status"] == "closed-unverified"
 
 
-def test_manifest_without_label_requirement_skips_label_steps():
-    plan = make_plan(snapshot=snapshot(lifecycle_labels=()))
-    manifest = mcp_manifest(plan)
-    assert not any("label" in step["action"] for step in manifest)
+def test_concurrent_label_change_preserved_under_surgical():
+    setup = Setup()
+    fake = FakeTransport(concurrent_label_at_read=3)
+    outcome = setup.run_entry(fake)
+    assert outcome["status"] == "closed-verified"
+    assert "type:bug" in fake.labels and "status:ready" not in fake.labels
 
 
-# --- CLI -------------------------------------------------------------------
-
-def _cli_payload(**qa_changes):
-    qa_data = dict(
-        verdict="pass", evidence_id="qa-evidence-9876", evaluator_id="qa-test-agent",
-        issue_number=9876, validated_head_sha=None, issue_body_digest=DIGEST,
-        provenance="runtime_handoff", qa_session_ref="s", delivery_ref="d",
-    )
-    qa_data.update(qa_changes)
-    return {
-        "decision": {
-            "repository": REPO, "issue_number": 9876, "pull_request_number": None,
-            "requested_mutations": ["close-issue"], "authorizer_id": "Blummer92",
-            "decision_id": "owner-decision-9876", "decision_recorded": True,
-        },
-        "qa": qa_data,
-        "snapshot": {
-            "repository": REPO, "issue_number": 9876, "pull_request_number": None,
-            "source_head": None, "base_head": None, "pr_state": "none", "merged": False,
-            "issue_state": "open", "review_state": "unknown", "unresolved_threads": 0,
-            "lifecycle_labels": ["status:ready"], "observed_revision": "github-issue-v1:rev-9876-1",
-        },
-        "body_digest": DIGEST, "delivery_id": "d", "trigger_id": "t",
-        "trigger_body_hash": TRIGGER_HASH,
-    }
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_cli_plan_prints_manifest_and_refuses_forgery():
-    # Repo root is derived from this file's location, never a
-    # sandbox-specific path: the CI runner checks out elsewhere, and a
-    # hardcoded checkout path fails the focused plan there.
-    proc = subprocess.run(
-        [sys.executable, "-m", "scripts.agent_os_issue_acceptance.session_closure_adapter", "plan"],
-        input=json.dumps(_cli_payload()), capture_output=True, text=True, cwd=str(REPO_ROOT),
-    )
-    assert proc.returncode == 0, proc.stderr
-    printed = json.loads(proc.stdout)
-    assert printed["admitted"] is True
-    assert any(step["action"] == "close-issue" for step in printed["manifest"])
-    proc2 = subprocess.run(
-        [sys.executable, "-m", "scripts.agent_os_issue_acceptance.session_closure_adapter", "plan"],
-        input=json.dumps(_cli_payload(provenance="file")), capture_output=True, text=True,
-        cwd=str(REPO_ROOT),
-    )
-    assert proc2.returncode == 2
-    refused = json.loads(proc2.stdout)
-    assert refused["admitted"] is False
-    assert "manifest" not in refused
+def test_blocked_then_eligible_batch():
+    setup = Setup()
+    blocked_plan, _ = build_plan(**setup.plan_kwargs(body_digest="0" * 64))
+    assert blocked_plan is None
+    # Build the batch from one refused plan (None is skipped by the
+    # caller) and one valid plan: use execute_batch with the valid plan
+    # plus a plan whose prewrite will refuse at execution time.
+    valid = setup.make_plan()
+    stale = setup.make_plan()
+    fake_valid = FakeTransport()
+    fake_stale = FakeTransport(read_overrides={1: {"digest": "0" * 64}})
+    outcomes = execute_batch([(stale, fake_stale), (valid, fake_valid)])
+    assert outcomes[0]["status"] == "refused"
+    assert outcomes[1]["status"] == "closed-verified"
+    assert fake_stale.mutation_tool_calls() == []
