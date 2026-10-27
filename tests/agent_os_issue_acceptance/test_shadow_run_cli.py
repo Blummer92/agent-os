@@ -767,6 +767,98 @@ def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_
     assert control["scanner_advisory"] is None
 
 
+
+def test_cli_scanner_review_groups_are_deterministic_and_non_authorizing(
+    monkeypatch, tmp_path
+) -> None:
+    """Same-line overlap groups review pointers, never source findings or selection."""
+    clone = _jscpd_clone()
+    matching = {
+        "id": "example.registered_entrypoint",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+        "line": 12,
+    }
+    unrelated = {
+        "id": "example.unrelated_public_api",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+        "line": 200,
+    }
+    jscpd = _write_artifact(
+        tmp_path, "review-jscpd.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[clone, clone]),
+    )
+    pyan = _write_artifact(
+        tmp_path, "review-pyan.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[matching, unrelated], truncated=False),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    args = (
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(jscpd),
+        "--scanner-evidence", str(pyan),
+    )
+    code, record = _run_cli(monkeypatch, tmp_path, *args)
+    assert code == 0
+    advisory = record["scanner_advisory"]
+    assert [len(s["findings"]) for s in advisory["sources"]] == [2, 2]
+    groups = advisory["review_groups"]
+    assert len(groups) == 2
+    overlap = next(g for g in groups if len(g["finding_refs"]) == 3)
+    assert overlap["finding_refs"] == [
+        {"source_index": 0, "finding_index": 0},
+        {"source_index": 0, "finding_index": 1},
+        {"source_index": 1, "finding_index": 0},
+    ]
+    for group in groups:
+        assert group["issue_linkage"] == {
+            "status": "unlinked",
+            "issue_number": None,
+            "reason": "scanner-findings-do-not-prove-canonical-issue-identity",
+        }
+        assert group["engineering_review"] == "manual-review"
+        assert group["selection_input"] is False
+        assert group["execution_authorized"] is False
+        assert group["side_effects_performed"] is False
+    _, repeat = _run_cli(monkeypatch, tmp_path, *args)
+    assert repeat["scanner_advisory"]["review_groups"] == groups
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["candidate_population"] == control["candidate_population"]
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_cli_scanner_review_groups_do_not_merge_stale_with_current(
+    monkeypatch, tmp_path
+) -> None:
+    """Identical spans from different revisions cannot become one current claim."""
+    clone = _jscpd_clone()
+    stale = _write_artifact(
+        tmp_path, "review-stale.json",
+        _jscpd_artifact(head_sha="a" * 40, clones=[clone]),
+    )
+    current = _write_artifact(
+        tmp_path, "review-current.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[clone]),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path,
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(stale),
+        "--scanner-evidence", str(current),
+    )
+    assert code == 0
+    groups = record["scanner_advisory"]["review_groups"]
+    assert len(groups) == 2
+    assert sorted(g["states"] for g in groups) == [["ok"], ["stale"]]
+    assert all(len(g["finding_refs"]) == 1 for g in groups)
+
+
 def test_cli_scanner_advisory_stale_error_unavailable_and_zero_states(
     monkeypatch, tmp_path
 ) -> None:
