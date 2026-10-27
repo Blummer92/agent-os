@@ -77,6 +77,39 @@ HOST_DISPATCH_CONTRACT = {
     "readback": "canonical-issue-read",
 }
 
+# The fixed post-close reconciliation contract (#3489 requirement 3). The
+# host consumer performs exactly these steps after the close step above,
+# and only for an item this run freshly closed and read back as verified.
+# It mirrors ``github_closure_dispatch._reconcile_closed_items`` step for
+# step, so a host executing this contract and the dispatcher running with
+# a GitHub transport perform the same mutations in the same order. The
+# label is removed only when the batch flagged it stale; the comment body
+# is deterministic verified facts only, carries no closing keyword and no
+# other issue reference; a reconciliation failure never reverses a
+# verified closure, never retries, and never stops the next item.
+POST_CLOSE_RECONCILIATION_CONTRACT = {
+    "scope": "freshly-closed-verified-only",
+    "label": "status:ready",
+    "label_removal_condition": "closure.stale-ready-label-present",
+    "comment_fields": (
+        "repository",
+        "issue_number",
+        "closed-completed-state",
+        "acceptance_evidence_id",
+        "acceptance_evaluator_id",
+        "admission_receipt_id",
+    ),
+    "comment_forbidden_substrings": ("closes #", "fixes #", "resolves #"),
+    "readback": "canonical-issue-read",
+    "readback_requirements": (
+        "closed",
+        "completed",
+        "label-absent",
+        "comment-present-by-receipt-id",
+    ),
+    "failure": "closure-stays-verified-no-retry-next-item-continues",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ClosureAcceptanceEvidence:
@@ -332,8 +365,20 @@ def _receipt(
         # verifier and the QA judgment, exactly as for the other
         # caller-bound core fields.
         core["satisfaction"] = satisfaction
+    # The reconciliation contract is carried on the receipt but deliberately
+    # kept OUTSIDE the hashed core: adding it to the core changed every
+    # receipt id and broke the #3680 byte-identity goldens, while the
+    # verify gate's direct equality check below already refuses a tampered
+    # or missing contract even when the receipt id is recomputed. The
+    # contract's ``admission_receipt_id`` field names the receipt id of
+    # the admission this execution discharges: the host's verified receipt
+    # id for a host execution, the batch receipt id for a dispatcher
+    # execution. The two agree only when the host snapshot is the canonical
+    # reader-constructed live snapshot; a host must verify comment presence
+    # by its own verified receipt id, never by assuming the ids match.
     return {
         **core,
+        "post_close_reconciliation_contract": dict(POST_CLOSE_RECONCILIATION_CONTRACT),
         "receipt_id": _receipt_id(core),
         "closure_performed": False,
         "merge_authorized": False,
@@ -614,6 +659,9 @@ def verify_closure_admission_receipt(
         "closure_performed",
         "merge_authorized",
         "side_effects_performed",
+        # Carried on the receipt but outside the hashed core (see _receipt):
+        # allowed here, and bound by the direct equality check below.
+        "post_close_reconciliation_contract",
     }
     trusted: _SatisfactionSnapshot | None = None
     if satisfaction is not None:
@@ -712,6 +760,8 @@ def verify_closure_admission_receipt(
     if receipt.get("acceptance_evidence_id") != acceptance.evidence_id:
         return False
     if receipt.get("host_dispatch_contract") != HOST_DISPATCH_CONTRACT:
+        return False
+    if receipt.get("post_close_reconciliation_contract") != POST_CLOSE_RECONCILIATION_CONTRACT:
         return False
     admission = evaluate_lifecycle_mutation(
         authorization, fresh_snapshot, CLOSE_ISSUE_MUTATION
