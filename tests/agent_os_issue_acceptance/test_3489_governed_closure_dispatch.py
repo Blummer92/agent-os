@@ -114,15 +114,21 @@ def request_obj(issue: int, **overrides):
 
 
 class FakeGitHub:
-    """Stateful fake GitHub API: GET reads, PATCH closes, nothing else."""
+    """Stateful fake GitHub API: GET reads, PATCH closes, DELETE labels,
+    POST comments, and GET comments for requirement 3 reconciliation."""
 
     def __init__(self):
         self.issues: dict[int, dict] = {}
+        self.comments: dict[int, list[str]] = {}
         self.patch_calls: list[tuple[str, str, dict]] = []
+        self.delete_calls: list[tuple[str, str]] = []
+        self.post_calls: list[tuple[str, str, dict]] = []
         self.get_counts: dict[int, int] = {}
         self.patch_behavior: dict[int, object] = {}
         self.get_fail_from: dict[int, int] = {}
         self.drift_on_first_read: set[int] = set()
+        self.delete_behavior: dict[int, object] = {}
+        self.post_behavior: dict[int, object] = {}
 
     def add(self, issue: int, **kw):
         data = {
@@ -159,6 +165,34 @@ class FakeGitHub:
 
     def __call__(self, method, path, body):
         parts = path.strip("/").split("/")
+        if "comments" in parts:
+            issue = int(parts[parts.index("comments") - 1])
+            if method == "GET":
+                return 200, [{"body": c} for c in self.comments.get(issue, [])]
+            if method == "POST":
+                self.post_calls.append((method, path, body))
+                behavior = self.post_behavior.get(issue)
+                if behavior == "timeout":
+                    raise TimeoutError("connection timed out")
+                if type(behavior) is int:
+                    return behavior, {}
+                self.comments.setdefault(issue, []).append(body["body"])
+                return 201, {"body": body["body"]}
+            raise AssertionError(f"unexpected method {method} for comments")
+        if "labels" in parts:
+            issue = int(parts[parts.index("labels") - 1])
+            label = parts[-1]
+            if method == "DELETE":
+                self.delete_calls.append((method, path))
+                behavior = self.delete_behavior.get(issue)
+                if behavior == "timeout":
+                    raise TimeoutError("connection timed out")
+                if type(behavior) is int:
+                    return behavior, {}
+                if issue in self.issues and label in self.issues[issue]["labels"]:
+                    self.issues[issue]["labels"].remove(label)
+                return 200, [{"name": l} for l in self.issues.get(issue, {}).get("labels", [])]
+            raise AssertionError(f"unexpected method {method} for labels")
         issue = int(parts[-1])
         if method == "GET":
             count = self.get_counts.get(issue, 0) + 1
