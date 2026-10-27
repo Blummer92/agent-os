@@ -50,16 +50,23 @@ closed. A payload carrying a ``pull_request`` key is a pull request, not an
 issue, and is rejected.
 
 Writer contract (exactly the fixed host dispatch contract): PATCH the issue
-with ``{"state": "closed", "state_reason": "completed"}`` and nothing else.
-A lost or ambiguous write response is reported as ``ClosureWriteUncertain``
-so the batch reconciles through its canonical readback instead of retrying
-blindly; an exact failure is a ``RuntimeError`` carrying the status, never a
-false success. The writer never retries, and it performs NO label cleanup
-and NO evidence comment: the batch flags a closed issue retaining
-``status:ready`` as ``closed-verified-label-reconciliation-required`` instead
-of editing labels here. That label/comment leg of #3489 requirement 3 remains
-open work for a separately admitted label/comment writer; it is not claimed
-here.
+with ``{"state": "closed", "state_reason": "completed"}`` and nothing else
+for the close itself. A lost or ambiguous write response is reported as
+``ClosureWriteUncertain`` so the batch reconciles through its canonical
+readback instead of retrying blindly; an exact failure is a ``RuntimeError``
+carrying the status, never a false success. The writer never retries.
+Requirement 3 reconciliation is a separate, post-close phase in
+``run_closure_dispatch`` only, and only for items this batch freshly
+closed and verified: it removes exactly the ``status:ready`` label when
+the verified readback still carries it, posts one deterministic evidence
+comment built only from verified facts (repository, issue, completed
+reason, acceptance evidence id and evaluator, admission receipt id — no
+closing keyword, no host-invented prose), and then re-reads the issue to
+verify the label is gone and the comment is present. Any reconciliation
+failure keeps the verified closure outcome but records a distinct
+``closed-verified-reconciliation-failed`` status; it never retries, never
+touches any other label, and never reconciles an already-closed item,
+whose batch path carries no admission receipt for this run.
 
 Transport is an injected callable::
 
@@ -293,6 +300,181 @@ class GitHubClosureWriter:
             raise ClosureWriteUncertain(f"github-issue-close-uncertain:{status}")
         raise RuntimeError(f"github-issue-close-failed:{status}")
 
+    def remove_label(
+        self, repository: str, issue_number: int, *, label: str
+    ) -> None:
+        if label != "status:ready":
+            raise ValueError("closure writer only removes the status:ready label")
+        try:
+            status, _payload = self._request(
+                "DELETE",
+                f"/repos/{repository}/issues/{issue_number}/labels/{label}",
+                None,
+            )
+        except OSError as exc:
+            raise ClosureWriteUncertain(
+                f"github-issue-label-remove-uncertain:{type(exc).__name__}"
+            ) from exc
+        if status in (200, 204, 404):
+            # 404 means the label is already gone: the reconciliation goal
+            # is achieved. The post-phase re-read still verifies this.
+            return None
+        if 500 <= status <= 599:
+            raise ClosureWriteUncertain(
+                f"github-issue-label-remove-uncertain:{status}"
+            )
+        raise RuntimeError(f"github-issue-label-remove-failed:{status}")
+
+    def list_comment_bodies(
+        self, repository: str, issue_number: int
+    ) -> list[str]:
+        status, payload = self._request(
+            "GET",
+            f"/repos/{repository}/issues/{issue_number}/comments",
+            None,
+        )
+        if status != 200 or not isinstance(payload, list):
+            raise RuntimeError("comment readback unavailable")
+        return [
+            item.get("body")
+            for item in payload
+            if isinstance(item, dict) and isinstance(item.get("body"), str)
+        ]
+
+    def post_comment(
+        self, repository: str, issue_number: int, *, body: str
+    ) -> None:
+        if type(body) is not str or not body.strip():
+            raise ValueError("evidence comment body must be a non-empty string")
+        if "closes #" in body.lower() or "fixes #" in body.lower() or "resolves #" in body.lower():
+            raise ValueError("evidence comment must not carry a closing keyword")
+        try:
+            status, _payload = self._request(
+                "POST",
+                f"/repos/{repository}/issues/{issue_number}/comments",
+                {"body": body},
+            )
+        except OSError as exc:
+            raise ClosureWriteUncertain(
+                f"github-issue-comment-uncertain:{type(exc).__name__}"
+            ) from exc
+        if status in (200, 201):
+            return None
+        if 500 <= status <= 599:
+            raise ClosureWriteUncertain(f"github-issue-comment-uncertain:{status}")
+        raise RuntimeError(f"github-issue-comment-failed:{status}")
+
+
+def _completion_comment(
+    *,
+    repository: str,
+    issue_number: int,
+    evidence_id: str,
+    evaluator_id: str,
+    receipt_id: str | None,
+) -> str:
+    # Deterministic, verified-facts-only body. No closing keyword, no
+    # host-invented claim about scope, and no other issue reference.
+    return (
+        "Governed closure verified.\n"
+        f"Repository: {repository}\n"
+        f"Issue: {issue_number}\n"
+        "State: closed, reason completed.\n"
+        f"Acceptance evidence: {evidence_id} (evaluator {evaluator_id}).\n"
+        f"Admission receipt: {receipt_id or 'unavailable'}.\n"
+        "Verified by canonical post-write readback."
+    )
+
+
+def _reconcile_closed_items(
+    *,
+    requests: tuple[IssueClosureRequest, ...],
+    outcomes: object,
+    reader: GitHubClosureReader,
+    writer: GitHubClosureWriter,
+) -> list[dict[str, object]]:
+    """Post-close requirement 3 reconciliation for freshly closed items.
+
+    Only items whose batch outcome starts with ``closed-verified`` and is
+    readback-verified are eligible: those are the items this run admitted,
+    verified, closed, and read back. Already-closed, blocked, and failed
+    items are returned unchanged, and a reconciliation failure on one item
+    never stops the next item. No step here retries.
+    """
+    by_issue = {item.decision.issue_number: item for item in requests}
+    reconciled: list[dict[str, object]] = []
+    for outcome in outcomes:  # type: ignore[attr-defined]
+        record = _outcome_dict(outcome)
+        status = str(record["status"])
+        if not status.startswith("closed-verified") or not record["readback_verified"]:
+            record["label_reconciled"] = False
+            record["evidence_comment_posted"] = False
+            reconciled.append(record)
+            continue
+        request = by_issue.get(outcome.issue_number)  # type: ignore[attr-defined]
+        if request is None:
+            record["label_reconciled"] = False
+            record["evidence_comment_posted"] = False
+            reconciled.append(record)
+            continue
+        repository = request.decision.repository
+        issue_number = request.decision.issue_number
+        assert issue_number is not None
+        stale_ready = "closure.stale-ready-label-present" in outcome.reason_codes  # type: ignore[attr-defined]
+        try:
+            if stale_ready:
+                writer.remove_label(repository, issue_number, label="status:ready")
+            writer.post_comment(
+                repository,
+                issue_number,
+                body=_completion_comment(
+                    repository=repository,
+                    issue_number=issue_number,
+                    evidence_id=request.acceptance.evidence_id,
+                    evaluator_id=request.acceptance.evaluator_id,
+                    receipt_id=record["receipt_id"] if isinstance(record["receipt_id"], str) else None,
+                ),
+            )
+            after = reader.read_issue_readback(repository, issue_number)
+            if after.snapshot.issue_state != "closed" or after.state_reason != "completed":
+                raise RuntimeError("reconciliation readback no longer closed-completed")
+            if stale_ready and "status:ready" in after.snapshot.lifecycle_labels:
+                raise RuntimeError("reconciliation readback still carries status:ready")
+            if not stale_ready and "status:ready" in after.snapshot.lifecycle_labels:
+                # A label that appeared between reads is not silently ignored.
+                raise RuntimeError("reconciliation readback carries status:ready")
+            # Verify the posted comment is present by receipt id, when known.
+            receipt_id = record["receipt_id"]
+            if isinstance(receipt_id, str):
+                bodies = writer.list_comment_bodies(repository, issue_number)
+                if receipt_id not in " ".join(bodies):
+                    raise RuntimeError("reconciliation comment not found in readback")
+            # After successful reconciliation the label requirement is
+            # discharged: the status no longer claims it is required.
+            record["status"] = (
+                status.replace("-label-reconciliation-required", "")
+                if stale_ready
+                else status
+            )
+            record["label_reconciled"] = stale_ready
+            record["evidence_comment_posted"] = True
+            reasons = list(record["reason_codes"])
+            if stale_ready and "closure.label-reconciled" not in reasons:
+                reasons.append("closure.label-reconciled")
+            if "closure.evidence-comment-posted" not in reasons:
+                reasons.append("closure.evidence-comment-posted")
+            record["reason_codes"] = reasons
+        except Exception as exc:
+            # Closure itself stays verified; only reconciliation failed.
+            record["status"] = "closed-verified-reconciliation-failed"
+            record["label_reconciled"] = False
+            record["evidence_comment_posted"] = False
+            reasons = list(record["reason_codes"])
+            reasons.append(f"closure.reconciliation-failed:{type(exc).__name__}")
+            record["reason_codes"] = reasons
+        reconciled.append(record)
+    return reconciled
+
 
 def _outcome_dict(outcome: object) -> dict[str, object]:
     receipt = getattr(outcome, "receipt", None)
@@ -320,16 +502,23 @@ def run_closure_dispatch(
     file, or CLI input: see the module trust-boundary note. The batch
     itself — admission, verification, dispatch, readback, continuation past
     blocked items — is entirely ``run_closure_batch``; this function only
-    supplies it with the production reader and writer.
+    supplies it with the production reader and writer, then runs the
+    requirement 3 reconciliation phase for freshly closed items only.
+    A reconciliation failure on one item never stops the next item, and
+    never un-verifies its closure.
     """
     if type(requests) is not tuple:
         raise TypeError("closure requests must be an exact tuple")
+    reader = GitHubClosureReader(transport)
+    writer = GitHubClosureWriter(transport)
     outcomes = run_closure_batch(
         requests,
-        reader=GitHubClosureReader(transport),
-        writer=GitHubClosureWriter(transport),
+        reader=reader,
+        writer=writer,
     )
-    return [_outcome_dict(outcome) for outcome in outcomes]
+    return _reconcile_closed_items(
+        requests=requests, outcomes=outcomes, reader=reader, writer=writer
+    )
 
 
 def _verify_post_merge_observation(

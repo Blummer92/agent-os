@@ -305,11 +305,16 @@ loader: the module authenticates nothing, and its caller — a trusted host
 session — must have reacquired the owner decision and independent QA
 evidence from trusted sources before constructing `IssueClosureRequest`
 objects. A caller-authored manifest must never become an authority source.
-The writer performs no label cleanup and no evidence comment; a closed
-issue retaining `status:ready` is flagged
-`closed-verified-label-reconciliation-required`, so that leg of #3489
-requirement 3 remains open work, not a claimed success. No workflow, MCP
-publication, or automatic post-merge trigger invokes this module; that host
+Requirement 3 reconciliation is a post-close phase in `run_closure_dispatch`
+only, for items this batch freshly closed and verified: it removes exactly
+`status:ready` when the verified readback still carries it, posts one
+deterministic evidence comment built only from verified facts (no closing
+keyword), and re-reads to verify the label is gone and the comment is
+present. A reconciliation failure keeps the verified closure but records
+`closed-verified-reconciliation-failed` and never stops the next item.
+Already-closed items are never reconciled here, because their batch path
+carries no admission receipt for this run. No workflow, MCP publication,
+or automatic post-merge trigger invokes this module; that host
 continuation is a separate authorization.
 
 Trust-boundary repairs (#3690):
