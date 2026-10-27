@@ -96,6 +96,37 @@ engineering hypotheses, not as deletion approvals. This is the prescribed
 review procedure; actual consumption is not proven until a reviewer retrieves
 and cites a real run.
 
+## Grouped engineering review pointers
+
+The experiment record's §14 `scanner_advisory.review_groups` is a
+**read-only engineering review index**. It groups findings only when their
+repository-relative file and line ranges actually overlap and their source
+revisions and currentness states match. Groups retain references to every
+original `sources[source_index].findings[finding_index]` entry: no scanner
+evidence is discarded or used to change issue selection or the ledger.
+Different files, non-overlapping lines, or different revisions stay separate.
+An unavailable or failed scanner produces no invented findings.
+
+Each review group contains a stable run-local `review_id`, location spans,
+source SHA/currentness, truncation and scope flags, and an `issue_linkage`
+disposition. Raw scanner evidence **cannot prove canonical issue identity**;
+groups therefore remain `unlinked` with `issue_number: null` until an
+independent authorized issue-identity source establishes otherwise.
+Do not infer a verified link from a matching path, function name, or a
+GitHub PR closing-reference parser. No `verified` or `ambiguous` issue
+association is claimed by this record-only implementation.
+
+**GSA/QA review procedure:** Download the run's JSON report and inspect
+`scanner_advisory.review_groups`. For one group, follow each `finding_refs`
+index to the original source finding, check the actual source code and its
+public/dynamic registrations, and record in the existing implementation/QA
+packet the run URL, SHA, group ID, source finding pointers, reuse/extend/
+investigate/reject judgment, and rationale. Mark stale, truncated,
+out-of-scope, or unlinked findings as requiring manual review. No review
+decision is automatically published or consumed by an execution engine.
+Retirement candidates require the independent #1729/#2502 process.
+
+
 The repository workflow `.github/workflows/agent-os-shadow-navigation.yml`
 provides the installable manual GitHub Actions entry point and publishes both a
 job summary and a retained JSON artifact.
