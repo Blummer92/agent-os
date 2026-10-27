@@ -1489,3 +1489,151 @@ def test_cli_scanner_oversized_scope_entries_are_bounded() -> None:
     )
     assert source["scope"] == [legit, at_cap]
     assert len(", ".join(source["scope"])) < 1000
+
+
+def _review_source(*, head_sha: str | None, state: str | None, findings: list) -> dict:
+    return {
+        "head_sha": head_sha,
+        "state": state,
+        "truncated": False,
+        "findings": findings,
+    }
+
+
+def _pyan_finding(*, file: str | None, line, out_of_scope: bool = False) -> dict:
+    return {
+        "kind": "potentially-disconnected",
+        "file": file,
+        "line": line,
+        "out_of_scope": out_of_scope,
+    }
+
+
+def test_cli_scanner_review_groups_geometry_is_exact() -> None:
+    """Grouping geometry, pinned at the unit level so each rule has
+    exactly one witness: overlap groups, adjacency does not,
+    boundary-touching does, transitive chains collapse, and file,
+    SHA, and state boundaries are never crossed."""
+    sha_a, sha_b = "a" * 40, "b" * 40
+
+    def groups_for(*sources: dict) -> list:
+        return cli._scanner_review_groups(list(sources))
+
+    def span(start: int, end: int) -> dict:
+        return {
+            "kind": "textual-clone",
+            "first_file": "a.py", "first_start_line": start, "first_end_line": end,
+            "second_file": "a.py", "second_start_line": start, "second_end_line": end,
+        }
+
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(15, 25)],
+    ))) == 1
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(21, 30)],
+    ))) == 2
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(20, 30)],
+    ))) == 1
+    transitive = groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(18, 28), span(26, 36)],
+    ))
+    assert len(transitive) == 1
+    assert len(transitive[0]["finding_refs"]) == 3
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20),
+                  {**span(10, 20), "first_file": "b.py",
+                   "second_file": "b.py"}],
+    ))) == 2
+    assert len(groups_for(
+        _review_source(head_sha=sha_a, state="ok",
+                       findings=[span(10, 20)]),
+        _review_source(head_sha=sha_b, state="ok",
+                       findings=[span(10, 20)]),
+    )) == 2
+    assert len(groups_for(
+        _review_source(head_sha=sha_a, state="stale",
+                       findings=[span(10, 20)]),
+        _review_source(head_sha=sha_a, state="ok",
+                       findings=[span(10, 20)]),
+    )) == 2
+    # Determinism: the same input regroups byte-identically.
+    repeated = _review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(18, 28), span(26, 36)],
+    )
+    assert groups_for(repeated) == groups_for(repeated)
+
+
+def test_cli_scanner_review_groups_keep_unlocatable_findings_separate() -> None:
+    """Invalid or missing locations never invent an overlap: each
+    unlocatable finding is its own review group, explicitly unlinked
+    and manual-review, and a locatable finding never absorbs one."""
+    source = _review_source(
+        head_sha="a" * 40, state="ok",
+        findings=[
+            _pyan_finding(file=None, line=5),
+            _pyan_finding(file="a.py", line="not-a-line"),
+            {"kind": "unknown", "file": "a.py", "line": 5},
+            {"kind": "textual-clone",
+             "first_file": "a.py", "first_start_line": 20, "first_end_line": 10,
+             "second_file": "a.py", "second_start_line": 20, "second_end_line": 10},
+            _pyan_finding(file="a.py", line=0),
+            _pyan_finding(file="a.py", line=12),
+        ],
+    )
+    groups = cli._scanner_review_groups([source])
+    assert len(groups) == 6
+    unlocatable = [g for g in groups if g["locations"] == []]
+    assert len(unlocatable) == 5
+    assert all(len(g["finding_refs"]) == 1 for g in unlocatable)
+    for group in groups:
+        assert group["issue_linkage"]["status"] == "unlinked"
+        assert group["engineering_review"] == "manual-review"
+        assert group["selection_input"] is False
+
+
+def test_cli_scanner_review_groups_ignore_failed_sources_but_keep_entrypoint_manual(
+    monkeypatch, tmp_path
+) -> None:
+    """Scanner failures, missing artifacts, and truncation states stay
+    distinguishable in sources while contributing no review groups;
+    a dynamic/public entrypoint in a valid source is grouped only as a
+    manual-review pointer, never as safe to delete."""
+    valid = _write_artifact(
+        tmp_path, "review-valid.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[
+            {"id": "example.registered_entrypoint", "kind": "function",
+             "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+             "line": 12},
+        ], truncated=True),
+    )
+    bad = tmp_path / "review-bad.json"
+    bad.write_text(json.dumps({"schema": "unknown/9", "tool": "pyan3"}), encoding="utf-8")
+    missing = tmp_path / "review-missing.json"
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(valid),
+        "--scanner-evidence", str(bad),
+        "--scanner-evidence", str(missing),
+    )
+    assert code == 0
+    sources = record["scanner_advisory"]["sources"]
+    assert [s["state"] for s in sources] == ["ok", "scanner-error", "unavailable"]
+    groups = record["scanner_advisory"]["review_groups"]
+    assert len(groups) == 1
+    assert groups[0]["finding_refs"] == [{"source_index": 0, "finding_index": 0}]
+    assert groups[0]["truncated"] is True
+    assert groups[0]["engineering_review"] == "manual-review"
+    assert groups[0]["retirement_review_owner"] == "#1729"
+    assert groups[0]["selection_input"] is False
+    assert groups[0]["execution_authorized"] is False
+    assert groups[0]["side_effects_performed"] is False
+    assert "safe" not in json.dumps(groups)
+    assert "delet" not in json.dumps(groups).lower()
