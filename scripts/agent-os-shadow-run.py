@@ -910,31 +910,31 @@ def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, o
         for finding_index, finding in enumerate(findings):
             if not isinstance(finding, dict):
                 continue
-            # Both producer formats use the same path/range validation.
-            if finding.get("kind") == "textual-clone":
-                candidates = [
-                    (finding.get(f"{side}_file"),
-                     finding.get(f"{side}_start_line"),
-                     finding.get(f"{side}_end_line"))
-                    for side in ("first", "second")
-                ]
-            elif finding.get("kind") == "potentially-disconnected":
-                candidates = [(finding.get("file"), finding.get("line"), finding.get("line"))]
+            # One path/range validation for both producer formats:
+            # a clone contributes both spans, a disconnected candidate
+            # contributes its single line as a span.
+            kind = finding.get("kind")
+            if kind == "textual-clone":
+                candidates = (
+                    (finding.get("first_file"), finding.get("first_start_line"), finding.get("first_end_line")),
+                    (finding.get("second_file"), finding.get("second_start_line"), finding.get("second_end_line")),
+                )
+            elif kind == "potentially-disconnected":
+                line = finding.get("line")
+                candidates = ((finding.get("file"), line, line),)
             else:
-                candidates = []
+                candidates = ()
             locations = tuple(sorted({
-                (path, start, end)
-                for path, start, end in candidates
-                if _is_safe_repo_path(path)
-                and type(start) is int
-                and type(end) is int
-                and 0 < start <= end
+                loc for loc in candidates
+                if _is_safe_repo_path(loc[0])
+                and type(loc[1]) is int
+                and type(loc[2]) is int
+                and 0 < loc[1] <= loc[2]
             }))
             # Keep unlocatable findings visible as individual review entries.
             entries.append({
                 "source_index": source_index,
                 "finding_index": finding_index,
-                "tool": source.get("tool"),
                 "head_sha": source.get("head_sha"),
                 "state": source.get("state"),
                 "truncated": source.get("truncated") is True,
@@ -977,11 +977,8 @@ def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, o
     )
     groups: list[dict[str, object]] = []
     for members in ordered:
-        refs = sorted(
-            ({"source_index": e["source_index"], "finding_index": e["finding_index"]}
-             for e in members),
-            key=lambda e: (e["source_index"], e["finding_index"]),
-        )
+        # Members are already in ref order (buckets append in entry order).
+        refs = [{"source_index": e["source_index"], "finding_index": e["finding_index"]} for e in members]
         locations = sorted({loc for e in members for loc in e["locations"]})
         groups.append({
             "review_id": f"scanner-review-{len(groups) + 1:03d}",
