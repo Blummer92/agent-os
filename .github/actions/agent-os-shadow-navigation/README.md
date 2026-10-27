@@ -23,8 +23,78 @@ closures, or any external-system write.
 - `narrowing_criterion` — required when `candidates` is supplied.
 - `explicit_order` — optional explicit request order inside the candidate set.
 - `mission_id` — optional finite-mission evidence-ledger identifier.
+- `scanner_evidence_jscpd` and `scanner_evidence_pyan3` — optional
+  filesystem paths to existing producer JSON artifacts. The workflow supplies
+  these automatically from the same checked-out revision.
 
 The output `report_path` points to the generated JSON experiment record.
+
+## Scanner advisory evidence (#3429, record-only)
+
+The workflow runs the existing pinned jscpd (#3688) and pyan3 (#3689)
+producers against its checked-out Git revision, then passes both generated
+JSON paths to the composite action and the existing CLI. This avoids
+cross-workflow PR-head artifacts, expiry-dependent supply, and extra storage.
+A failure to install or start a scanner becomes `unavailable`; a producer's
+own non-`ok` status becomes `scanner-error`. The CLI verifies artifact SHA
+against the live main revision, preserving `stale` if main changes during the run.
+
+The CLI accepts a repeatable `--scanner-evidence PATH` flag, one advisory
+producer JSON per flag (`jscpd-advisory.json` from #3688 or
+`pyan3-advisory.json` from #3689). Artifacts are loaded **after selection
+has returned** and rendered as an additive §14 `scanner_advisory` section in
+the experiment record. Absent flags mean the section is `None`.
+
+Provenance is preserved verbatim per source: tool, schema, version, head
+SHA, scope, candidate count, and truncation flags. Each finding carries
+`selection_input: false`, and the section carries
+`execution_authorized: false` and `side_effects_performed: false`.
+
+Section states, in precedence order:
+
+- `ok` — successful scan, head SHA equals the run's live source revision.
+- `ok-zero-findings` — successful scan with no findings; distinct from
+  failure and from absence.
+- `stale` — head SHA differs from the run's source revision; findings are
+  kept but marked stale and must never be cited as current.
+- `scanner-error` — unsupported schema/tool, malformed content, or a
+  producer `status` other than `ok`; no findings are reported.
+- `unavailable` — the artifact file is missing; the run still succeeds,
+  because the flag is advisory by design.
+
+Findings are advisory engineering context, never authority:
+
+- jscpd clones are textual similarity only, not semantic equivalence.
+- pyan3 candidates have no resolved static caller in scope, which is not
+  proof of runtime unreachability; check tests, `__all__`, decorators,
+  workflow YAML, and MCP registrations before any deletion judgment.
+- A finding whose file lies outside the producer's declared scope is
+  annotated `out_of_scope: true` (for example, Notion packages are not
+  covered by either producer) — that means "not scanned," never "no
+  duplication."
+
+The section is never supplied to the selector, the candidate-evidence
+reader, or the evidence-ledger inputs digest, and it never changes a
+selection outcome or reason code. Candidate population completeness and
+fail-closed selection are unchanged: missing `primary_claims` or
+`approval_applicability` still fail closed with their named reasons.
+Potential retirement candidates may be proposed to #1729 for owner review;
+no #1729 scanner intake is established or implied. This section does not
+authorize, perform, or recommend deletion.
+
+## Actual GSA / QA review handoff
+
+For each real shadow run, open the existing Actions job summary's **Scanner
+advisory** table and the uploaded `shadow-navigation-report.json` artifact
+in the same run (seven-day retention). Record the run URL, checkout SHA,
+each source's `head_sha`, `status`, `state`, candidate and loaded counts,
+truncation, scope, and any errors in the existing GSA implementation or
+QA review packet. QA must compare these against the saved §14 JSON rather
+than inferring success from a green workflow conclusion. An absent or stale
+source cannot be cited as current. GSA may review file/line pointers as
+engineering hypotheses, not as deletion approvals. This is the prescribed
+review procedure; actual consumption is not proven until a reviewer retrieves
+and cites a real run.
 
 The repository workflow `.github/workflows/agent-os-shadow-navigation.yml`
 provides the installable manual GitHub Actions entry point and publishes both a

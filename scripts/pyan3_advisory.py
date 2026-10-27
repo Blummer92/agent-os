@@ -12,8 +12,32 @@ import ast
 from collections import defaultdict
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
+
+from scripts.agent_os_pr_remediation.ci_evidence_recovery import (
+    sanitize_actionable_failure,
+)
+
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w/])/[^\s\"')\]]+|(?<![\w\\])[A-Za-z]:\\[^\s\"')\]]+"
+)
+
+
+def _safe_detail(exc: BaseException) -> str:
+    """Public-safe producer failure text: no host paths, no raw secrets.
+
+    Reuses the existing ``sanitize_actionable_failure`` handling; the
+    producer log line and the JSON ``detail`` field both carry only this
+    text, never the raw exception.
+    """
+    raw = _ABSOLUTE_PATH_RE.sub("[path]", f"{type(exc).__name__}: {exc}")
+    try:
+        text = sanitize_actionable_failure(raw)
+    except Exception:
+        text = type(exc).__name__
+    return text[:240]
 
 SCOPE = ("scripts/agent_os_issue_acceptance", "08_Tooling/agent-os-execution-service/src")
 VERSION = "2.9.0"
@@ -281,7 +305,7 @@ def scan(root: Path, output: Path, *, sha: str | None = None, scope: tuple[str, 
             call_cycles = _strongly_connected(call_graph)[:MAX_CYCLES]
             candidates, test_only, decorated_excluded = _classify(nodes, edges)
         except Exception as exc:  # scanner failure is evidence, never fatal
-            status, detail = "scanner-error", f"{type(exc).__name__}: {exc}"
+            status, detail = "scanner-error", _safe_detail(exc)
             nodes, edges, unresolved = [], [], []
     evidence = {
         "schema": "agent-os-pyan3-advisory/1",

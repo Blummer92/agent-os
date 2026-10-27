@@ -9,6 +9,8 @@ the read-only client shape, the #3329 production evidence reader wiring
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -606,3 +608,792 @@ def test_cli_forwards_the_parsed_association_policy_to_the_acquirer(
     assert code == 0
     assert record is not None
     assert seen == [expected]
+
+
+# ---------------------------------------------------------------------------
+# #3429 record-only scanner advisory: producer JSON -> shadow record section.
+# Fixtures replicate the exact producer schemas (verified against real
+# jscpd/pyan3 outputs regenerated on main d32c9b71: jscpd ok/35 clones,
+# pyan ok/126 candidates with candidates_truncated true); the live
+# producer-to-CLI run is proven separately in the PR/QA evidence, not by
+# making this focused suite depend on npx/pip downloads.
+# ---------------------------------------------------------------------------
+
+
+def _jscpd_artifact(*, head_sha: str, clones: list) -> dict:
+    return {
+        "schema": "agent-os-jscpd-advisory/1",
+        "status": "ok",
+        "head_sha": head_sha,
+        "tool": "jscpd",
+        "version": "4.0.5",
+        "scope": [
+            "scripts/agent_os_issue_acceptance",
+            "08_Tooling/agent-os-execution-service/src",
+        ],
+        "candidate_count": len(clones),
+        "candidates": clones,
+        "truncated": False,
+    }
+
+
+def _jscpd_clone() -> dict:
+    return {
+        "firstFile": {
+            "name": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+            "start": 10,
+            "end": 25,
+        },
+        "secondFile": {
+            "name": "scripts/agent_os_issue_acceptance/merge_applicability.py",
+            "start": 40,
+            "end": 55,
+        },
+        "format": "python",
+        "lines": 16,
+        "tokens": 60,
+    }
+
+
+def _pyan_artifact(*, head_sha: str, candidates: list, truncated: bool) -> dict:
+    return {
+        "schema": "agent-os-pyan3-advisory/1",
+        "status": "ok",
+        "head_sha": head_sha,
+        "tool": "pyan3",
+        "version": "2.9.0",
+        "scope": [
+            "scripts/agent_os_issue_acceptance",
+            "08_Tooling/agent-os-execution-service/src",
+        ],
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "candidates_truncated": truncated,
+    }
+
+
+def _pyan_candidate() -> dict:
+    return {
+        "id": "scripts.agent_os_issue_acceptance.merge_producer.produce_merge_authorization",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_producer.py",
+        "line": 12,
+    }
+
+
+def _write_artifact(tmp_path: Path, name: str, payload: dict) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_selection(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 acceptance: scanner findings reach the record; selection is identical.
+
+    Real producer output (regenerated on main, see PR evidence) has the
+    same schema, provenance fields, and truncation semantics as these
+    fixtures; the fixtures exist so this suite never depends on npx/pip.
+    """
+    jscpd = _write_artifact(
+        tmp_path, "jscpd-advisory.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()]),
+    )
+    pyan = _write_artifact(
+        tmp_path, "pyan3-advisory.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[_pyan_candidate()], truncated=True),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path,
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(jscpd),
+        "--scanner-evidence", str(pyan),
+    )
+    assert code == 0
+    section = record["scanner_advisory"]
+    assert section["execution_authorized"] is False
+    assert section["side_effects_performed"] is False
+    (jscpd_source, pyan_source) = section["sources"]
+    # Assert the exact typed provenance contract for both producers.
+    for source, expected in (
+        (jscpd_source, {
+            "tool": "jscpd", "schema": "agent-os-jscpd-advisory/1",
+            "version": "4.0.5", "head_sha": _SHA,
+            "candidate_count": 1, "truncated": False, "state": "ok",
+        }),
+        (pyan_source, {
+            "tool": "pyan3", "schema": "agent-os-pyan3-advisory/1",
+            "version": "2.9.0", "head_sha": _SHA,
+            "truncated": True, "state": "ok",
+        }),
+    ):
+        for key, value in expected.items():
+            assert type(source[key]) is type(value) and source[key] == value, key
+    # Findings intact with original file/line, never selection input.
+    (clone,) = jscpd_source["findings"]
+    assert clone["kind"] == "textual-clone"
+    assert clone["first_file"] == "scripts/agent_os_issue_acceptance/merge_admission_actions.py"
+    assert clone["first_start_line"] == 10
+    assert clone["second_file"] == "scripts/agent_os_issue_acceptance/merge_applicability.py"
+    assert clone["lines"] == 16
+    assert clone["selection_input"] is False
+    assert "not semantic equivalence" in clone["note"]
+    (candidate,) = pyan_source["findings"]
+    assert candidate["kind"] == "potentially-disconnected"
+    assert candidate["function"] == "scripts.agent_os_issue_acceptance.merge_producer.produce_merge_authorization"
+    assert candidate["file"] == "scripts/agent_os_issue_acceptance/merge_producer.py"
+    assert candidate["line"] == 12
+    assert candidate["selection_input"] is False
+    assert "not proof of runtime unreachability" in candidate["note"]
+    # Selection is identical to a control run without --scanner-evidence:
+    # still fail-closed on the missing primary-claim/approval inputs, no
+    # SELECTED, and the ledger inputs digest is unchanged (the section is
+    # not a ledger input).
+    _, control = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+    assert "shadow-selection.candidate-evidence-incomplete" in record["deterministic_selector_result"]["reason_codes"]
+    assert record["candidate_population"] == control["candidate_population"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["lifecycle_stage_acquisition"] == control["lifecycle_stage_acquisition"]
+    zero = record["zero_mutation_verification"]
+    assert zero["http_write_requests"] == 0
+    assert zero["github_mutations"] == 0
+    (client,) = _FakeLiveClient.instances
+    assert client.write_requests == 0
+    # No flag means the section is None, exactly like §13's convention.
+    assert control["scanner_advisory"] is None
+
+
+def test_cli_scanner_advisory_stale_error_unavailable_and_zero_states(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+
+    stale = _write_artifact(
+        tmp_path, "stale.json",
+        _jscpd_artifact(head_sha="a" * 40, clones=[_jscpd_clone()]),
+    )
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(stale),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "stale"
+    assert source["head_sha"] == "a" * 40
+    assert len(source["findings"]) == 1  # kept, marked stale, never current
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"schema": "unknown/9", "tool": "jscpd"}), encoding="utf-8")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(bad),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "scanner-error"
+    assert source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(tmp_path / "missing.json"),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "unavailable"
+    assert source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+    empty = _write_artifact(
+        tmp_path, "empty.json", _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+    )
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(empty),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "ok-zero-findings"  # distinct from unavailable/error
+
+
+def test_cli_scanner_advisory_out_of_scope_findings_are_annotated_not_hidden(
+    monkeypatch, tmp_path
+) -> None:
+    """#3736 guard: Notion files are outside producer scope, so a finding
+    there must read as out-of-scope, never as 'no findings' for that package."""
+    pyan = _write_artifact(
+        tmp_path, "pyan3-advisory.json",
+        _pyan_artifact(
+            head_sha=_SHA,
+            candidates=[{
+                "id": "scripts.agent_os_notion_read_request.binding_verification.inspect",
+                "kind": "function",
+                "file": "scripts/agent_os_notion_read_request/binding_verification.py",
+                "line": 100,
+            }],
+            truncated=False,
+        ),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(pyan),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "ok"
+    (finding,) = source["findings"]
+    assert finding["out_of_scope"] is True
+    assert source["out_of_scope_findings"] == 1
+
+
+
+def test_cli_scanner_producer_error_is_nonfatal_and_non_authorizing(monkeypatch, tmp_path) -> None:
+    artifact = _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()])
+    artifact["status"] = "scanner-error"
+    path = _write_artifact(tmp_path, "producer-error.json", artifact)
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(path),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["status"] == "scanner-error"
+    assert source["state"] == "scanner-error"
+    assert source["findings"] == []
+    assert source["selection_input"] is False
+    assert source["execution_authorized"] is False
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+
+def test_cli_scanner_bad_json_and_io_errors_preserve_failure_detail(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{", encoding="utf-8")
+    denied = tmp_path / "denied.json"
+    denied.write_text("{}", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes_with_denial(path, *args, **kwargs):
+        if path == denied:
+            raise OSError("simulated advisory read error")
+        return original_read_bytes(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_with_denial)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(malformed),
+        "--scanner-evidence", str(denied),
+    )
+    assert code == 0
+    bad_json, io_error = record["scanner_advisory"]["sources"]
+    for source in (bad_json, io_error):
+        assert source["state"] == source["status"] == "scanner-error"
+        assert source["findings"] == []
+        assert source["failure_detail"]
+    assert "JSONDecodeError" in bad_json["failure_detail"]
+    assert "OSError: simulated advisory read error" in io_error["failure_detail"]
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["zero_mutation_verification"]["http_write_requests"] == 0
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_shadow_workflow_supplies_same_checkout_scanners_and_shows_advisories() -> None:
+    """Structural wiring guard; live Actions consumption is verified separately."""
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    produce = next(i for i, step in enumerate(steps)
+                   if step.get("name") == "Generate same-revision scanner advisories")
+    consume = next(i for i, step in enumerate(steps)
+                   if step.get("name") == "Run Agent OS shadow navigation")
+    assert produce < consume
+    producer = steps[produce]["run"]
+    assert 'git rev-parse HEAD' in producer
+    assert 'scripts.jscpd_advisory' in producer
+    assert 'scripts.pyan3_advisory' in producer
+    assert '--sha "$source_sha"' in producer
+    with_args = steps[consume]["with"]
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/agent-os-shadow-navigation/action.yml").read_text()
+    )
+    for name in ("scanner_evidence_jscpd", "scanner_evidence_pyan3"):
+        assert name in with_args
+        assert name in action["inputs"]
+        assert "--scanner-evidence" in action["runs"]["steps"][0]["run"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    assert 'report.get("scanner_advisory")' in summary["run"]
+    assert 'source["state"]' in summary["run"]
+
+
+def test_scanner_advisory_loader_rejects_unsupported_schema() -> None:
+    with pytest.raises(ValueError, match="unsupported schema/tool"):
+        cli._normalize_scanner_advisory(
+            {"schema": "agent-os-jscpd-advisory/9", "tool": "jscpd"},
+            source_revision=_SHA,
+        )
+
+
+def test_cli_scanner_adversarial_values_are_excluded_or_sanitized() -> None:
+    """#3429 repair: untrusted artifact values can never reach a record.
+
+    Numeric scope entries are dropped (previously they crashed the
+    workflow summary join); absolute, traversal, and drive paths are
+    excluded from findings (not merely annotated); credential-like and
+    control-character content in display fields is redacted/flattened;
+    non-integer line values become None instead of published verbatim.
+    """
+    artifact = _pyan_artifact(
+        head_sha=_SHA,
+        candidates=[
+            _pyan_candidate(),
+            {"id": "abs.fn", "kind": "function",
+             "file": "/home/runner/.ssh/id_rsa", "line": 1},
+            {"id": "esc.fn", "kind": "function",
+             "file": "../escape.py", "line": 2},
+            {"id": "win.fn", "kind": "function",
+             "file": "C:\\Users\\runner\\secret.py", "line": 3},
+            {"id": "badline.fn", "kind": "function",
+             "file": "scripts/agent_os_issue_acceptance/a.py", "line": "12; x"},
+        ],
+        truncated=False,
+    )
+    artifact["scope"] = [123, "scripts/agent_os_issue_acceptance", "/etc", "../escape"]
+    artifact["version"] = "2.9.0\r\n| token=abc123secret"
+    source = cli._normalize_scanner_advisory(artifact, source_revision=_SHA)
+    assert source["scope"] == ["scripts/agent_os_issue_acceptance"]
+    assert ", ".join(source["scope"]) == "scripts/agent_os_issue_acceptance"
+    assert [f["file"] for f in source["findings"]] == [
+        "scripts/agent_os_issue_acceptance/merge_producer.py",
+        "scripts/agent_os_issue_acceptance/a.py",
+    ]
+    assert source["excluded_findings"] == 3
+    assert source["state"] == "ok"
+    assert "\r" not in source["version"] and "\n" not in source["version"]
+    assert "abc123secret" not in source["version"]
+    assert source["findings"][1]["line"] is None
+    assert source["selection_input"] is False
+    assert source["execution_authorized"] is False
+    assert source["side_effects_performed"] is False
+
+    clone_artifact = _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()])
+    clone_artifact["candidates"][0]["firstFile"]["name"] = "/tmp/host.py"
+    clone_source = cli._normalize_scanner_advisory(
+        clone_artifact, source_revision=_SHA
+    )
+    assert clone_source["findings"] == []
+    assert clone_source["excluded_findings"] == 1
+
+
+def test_cli_scanner_oversized_input_and_candidate_truncation_are_bounded(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 repair: oversized artifacts fail advisory-only; candidate
+    lists truncate deterministically to the configured limit while the
+    original count and truncation state stay truthful."""
+    many = [
+        {"id": f"mod.fn{i}", "kind": "function",
+         "file": "scripts/agent_os_issue_acceptance/a.py", "line": i}
+        for i in range(150)
+    ]
+    source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=many, truncated=False),
+        source_revision=_SHA,
+    )
+    assert len(source["findings"]) == cli.SCANNER_ADVISORY_MAX_FINDINGS
+    assert source["truncated"] is True
+    assert source["candidate_count"] == 150
+
+    lying = _pyan_artifact(head_sha=_SHA, candidates=many[:2], truncated=False)
+    lying["candidate_count"] = 999999
+    lying_source = cli._normalize_scanner_advisory(lying, source_revision=_SHA)
+    assert lying_source["truncated"] is True
+    assert lying_source["candidate_count"] == 999999
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_text(" " * (cli.SCANNER_ADVISORY_MAX_BYTES + 10), encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        cli._load_scanner_advisory(str(oversized), source_revision=_SHA)
+
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(oversized),
+    )
+    assert code == 0
+    (oversized_source,) = record["scanner_advisory"]["sources"]
+    assert oversized_source["state"] == oversized_source["status"] == "scanner-error"
+    assert oversized_source["findings"] == []
+    assert record["deterministic_selector_result"]["status"] == "no-selection"
+
+
+def test_cli_scanner_failure_details_exclude_host_paths_and_secrets(
+    monkeypatch, tmp_path
+) -> None:
+    """#3429 repair: failure details carry type + redacted detail only;
+    absolute host paths and credential-like fragments never publish."""
+    detail = cli._safe_failure_detail(
+        OSError(13, "Permission denied", "/home/runner/token.json")
+    )
+    assert "/home/runner" not in detail
+    assert "[path]" in detail
+    secret_detail = cli._safe_failure_detail(
+        ValueError("token=abc123secret and ghp_1234567890abcdefghij")
+    )
+    assert "abc123secret" not in secret_detail
+    assert "ghp_1234567890abcdefghij" not in secret_detail
+
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    denied = tmp_path / "denied.json"
+    denied.write_text("{}", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes_with_denial(path, *args, **kwargs):
+        if path == denied:
+            raise OSError(13, "Permission denied", "/home/runner/secret.json")
+        return original_read_bytes(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes_with_denial)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(denied),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == "scanner-error"
+    assert "/home/runner" not in source["failure_detail"]
+    assert source["selection_input"] is False
+
+
+def test_shadow_summary_renders_adversarial_advisory_safely(monkeypatch, tmp_path) -> None:
+    """#3429 repair: the published summary renders loader-sanitized
+    advisory evidence safely, under either the current or the hardened
+    summary cell.
+
+    The adversarial values below pass through the production loader
+    first (the production path); the summary then renders them. This
+    deliberately does NOT feed a raw unsanitized record to the snippet:
+    the hardened cell (defense in depth for raw records) lives in the
+    workflow file, which the GitHub App cannot publish via API, so it
+    is pending owner publication and is not asserted here.
+    """
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    hostile = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    hostile["scope"] = [123, "scripts/agent_os_issue_acceptance"]
+    hostile["version"] = "1.0\r## injected heading"
+    source = cli._normalize_scanner_advisory(hostile, source_revision=_SHA)
+    source["status"] = "scanner-error"
+    source["state"] = "scanner-error"
+    source["failure_detail"] = cli._safe_failure_detail(
+        OSError(13, "Permission denied", "/home/runner/token.json")
+    )
+    source["failure_detail"] += " token=abc123secret"
+    # The loader-sanitized detail above is re-sanitized exactly as the
+    # production path does before publication:
+    source["failure_detail"] = cli._safe_failure_detail(
+        ValueError(source["failure_detail"])
+    )
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [source]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text("", encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    rendered = summary_path.read_text(encoding="utf-8")
+    assert "\r" not in rendered
+    assert "/home/runner" not in rendered
+    assert "abc123secret" not in rendered
+    assert "scripts/agent_os_issue_acceptance" in rendered
+    assert not any(line.startswith("## injected") for line in rendered.splitlines())
+    assert "### Scanner advisory" in rendered
+
+
+def test_cli_scanner_hostile_status_cannot_forge_summary_lines(tmp_path) -> None:
+    """QA catch: `status` used to publish verbatim into the record and
+    the workflow summary, so a crafted status carrying CR could forge
+    markdown lines. Status now gets the same display sanitization as
+    version/head_sha, and a sanitized non-ok status renders
+    scanner-error, never ok."""
+    artifact = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    artifact["status"] = "scanner-error\r## FORGED LINE | x"
+    source = cli._normalize_scanner_advisory(artifact, source_revision=_SHA)
+    assert "\r" not in source["status"] and "\n" not in source["status"]
+    assert source["status"].startswith("scanner-error")
+    assert source["status"] == "scanner-error ## FORGED LINE | x"
+    assert source["state"] == "scanner-error"
+
+    clean = _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+    clean["status"] = "ok"
+    assert cli._normalize_scanner_advisory(
+        clean, source_revision=_SHA
+    )["state"] == "ok-zero-findings"
+
+    # Snippet-level proof: render the loader-produced hostile-status
+    # record through the live workflow snippet and inspect raw bytes,
+    # since text-mode reads translate CR away and would mask the defect.
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [source]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_bytes(b"")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    raw = summary_path.read_bytes()
+    assert b"\r" not in raw
+    assert not any(
+        line.startswith(b"## FORGED")
+        for line in raw.split(b"\n")
+    )
+
+
+def test_cli_scanner_deeply_nested_json_is_scanner_error(
+    monkeypatch, tmp_path
+) -> None:
+    """D8: a deeply nested artifact under the byte cap must not escape
+    advisory handling. The JSON parser raises RecursionError on it;
+    _load converts that to the existing ValueError mechanism, so main()
+    records scanner-error and the run still succeeds with selection,
+    ledger, and zero-mutation outputs unchanged."""
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    nested = tmp_path / "nested.json"
+    nested.write_text("[" * 12000 + "]" * 12000, encoding="utf-8")
+    assert nested.stat().st_size < cli.SCANNER_ADVISORY_MAX_BYTES
+    with pytest.raises(ValueError, match="nesting limit"):
+        cli._load_scanner_advisory(str(nested), source_revision=_SHA)
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(nested),
+    )
+    assert code == 0
+    (source,) = record["scanner_advisory"]["sources"]
+    assert source["state"] == source["status"] == "scanner-error"
+    assert source["findings"] == []
+    assert "ValueError" in source["failure_detail"]
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    assert record["evidence_ledger"] == control["evidence_ledger"]
+    assert record["zero_mutation_verification"]["http_write_requests"] == 0
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_cli_scanner_provenance_paths_cannot_be_published(
+    monkeypatch, tmp_path
+) -> None:
+    """D9: head_sha is validated against the producer SHA contract
+    (full lowercase 40-hex, or the producers' "unavailable" fallback);
+    free-text provenance fields redact absolute host paths instead of
+    publishing them. Verified in the normalized JSON and through the
+    actual published workflow-summary renderer."""
+    # Valid provenance passes unchanged, including the producers'
+    # "unavailable" fallback (which can never equal a live revision,
+    # so it renders stale, never current).
+    valid = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+        source_revision=_SHA,
+    )
+    assert valid["head_sha"] == _SHA
+    assert valid["state"] == "ok-zero-findings"
+    fallback = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha="unavailable", candidates=[], truncated=False),
+        source_revision=_SHA,
+    )
+    assert fallback["head_sha"] == "unavailable"
+    assert fallback["state"] == "stale"
+    # Invalid SHAs carrying host paths are rejected, not published.
+    for bad_sha in (
+        "/home/runner/private-tenant/config.json",
+        "C:\\Users\\tenant\\config.json",
+    ):
+        with pytest.raises(ValueError, match="invalid head SHA"):
+            cli._normalize_scanner_advisory(
+                _pyan_artifact(head_sha=bad_sha, candidates=[], truncated=False),
+                source_revision=_SHA,
+            )
+    # Versions carrying host paths are redacted to a placeholder;
+    # normal producer versions pass through untouched.
+    for hostile_version in (
+        "/home/runner/private-tenant/config.json",
+        "C:\\Users\\tenant\\config.json",
+    ):
+        source = cli._normalize_scanner_advisory(
+            _pyan_artifact(
+                head_sha=_SHA, candidates=[], truncated=False,
+            ) | {"version": hostile_version},
+            source_revision=_SHA,
+        )
+        assert source["version"] == "[path]"
+        assert "/home/runner" not in json.dumps(source)
+        assert "private-tenant" not in json.dumps(source)
+        assert "C:\\Users" not in json.dumps(source)
+    assert cli._normalize_scanner_advisory(
+        _jscpd_artifact(head_sha=_SHA, clones=[]), source_revision=_SHA
+    )["version"] == "4.0.5"
+    assert cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False),
+        source_revision=_SHA,
+    )["version"] == "2.9.0"
+
+    # Published-summary proof: render the redacted record through the
+    # live workflow snippet and inspect raw bytes.
+    import subprocess
+    import sys
+
+    import yaml
+
+    flow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/agent-os-shadow-navigation.yml").read_text()
+    )
+    steps = flow["jobs"]["shadow-navigation"]["steps"]
+    summary = next(step for step in steps
+                   if step.get("name") == "Publish shadow-navigation summary")
+    run = summary["run"]
+    script = run[run.index("python - <<'PY'") + len("python - <<'PY'\n"):]
+    script = script[: script.rfind("\nPY")]
+    hostile_source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+        | {"version": "/home/runner/private-tenant/config.json"},
+        source_revision=_SHA,
+    )
+    report = {
+        "repository": "Blummer92/agent-os",
+        "campaign_id": "test",
+        "population_receipt": {"scan_complete": True, "scan_item_count": 1,
+                               "scan_page_count": 1},
+        "candidate_population": {"candidate_issue_numbers": []},
+        "deterministic_selector_result": {"status": "no-selection",
+                                          "selected_issue_number": None,
+                                          "reason_codes": []},
+        "manual_review_cases": [],
+        "zero_mutation_verification": {"http_write_requests": 0,
+                                       "github_mutations": 0},
+        "scanner_advisory": {"sources": [hostile_source]},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_bytes(b"")
+    env = dict(os.environ)
+    env.update({
+        "SHADOW_REPORT": str(report_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "SHADOW_RUN_URL": "https://example.invalid/runs/1",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
+    script_path = tmp_path / "summary_snippet.py"
+    script_path.write_text(script, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script_path)], env=env,
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, proc.stderr
+    raw = summary_path.read_bytes()
+    assert b"/home/runner" not in raw
+    assert b"private-tenant" not in raw
+
+
+def test_cli_scanner_oversized_scope_entries_are_bounded() -> None:
+    """Long-scope hardening: a single repository-relative scope entry
+    far beyond any legitimate repo path is dropped, while legitimate
+    entries (including one exactly at the cap) still pass, so the
+    published summary join cannot be inflated by one entry."""
+    legit = "scripts/agent_os_issue_acceptance"
+    at_cap = "d/" + "a" * 510
+    over_cap = "d/" + "a" * 511
+    assert len(at_cap) == 512 and len(over_cap) == 513
+    source = cli._normalize_scanner_advisory(
+        _pyan_artifact(head_sha=_SHA, candidates=[], truncated=False)
+        | {"scope": [legit, "x" * 70000, at_cap, over_cap]},
+        source_revision=_SHA,
+    )
+    assert source["scope"] == [legit, at_cap]
+    assert len(", ".join(source["scope"])) < 1000

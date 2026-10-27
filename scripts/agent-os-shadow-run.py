@@ -150,6 +150,9 @@ from scripts.agent_os_candidate_packet_live_input import (  # noqa: E402
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
 )
+from scripts.agent_os_pr_remediation.ci_evidence_recovery import (  # noqa: E402
+    sanitize_actionable_failure,
+)
 
 _API = "https://api.github.com"
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
@@ -604,6 +607,349 @@ def _parse_issue_list(raw: str | None, name: str) -> tuple[int, ...] | None:
 RECORD_ONLY_LINEAGE_LIMIT = 25
 
 
+#: Producer schemas the scanner-advisory loader accepts, mapped to tools.
+#: Anything else is a scanner-error, never silently reinterpreted (#3429).
+SCANNER_ADVISORY_SCHEMAS = {
+    "agent-os-jscpd-advisory/1": "jscpd",
+    "agent-os-pyan3-advisory/1": "pyan3",
+}
+
+#: Scanner-advisory input bounds (#3429 repair). Genuine producer JSON is
+#: tens of kilobytes and both producers already cap candidates at 100 in
+#: JSON, so the loader cap below is a no-op for genuine output and a
+#: deterministic first-N truncation for crafted oversized input. Anything
+#: larger than the byte cap is a scanner-error, never loaded unbounded.
+SCANNER_ADVISORY_MAX_BYTES = 1_048_576
+SCANNER_ADVISORY_MAX_FINDINGS = 100
+# Producer head-SHA contract: `git rev-parse HEAD` output, i.e. the same
+# full lowercase 40-hex SHA rule as approval_records._SHA40_RE, plus the
+# producers' own "unavailable" fallback when git cannot run. Anything else
+# is invalid provenance, never current evidence.
+_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
+# Scope entries are repository-relative paths; a single entry has no
+# legitimate reason to approach this length, and an unbounded entry
+# inflates the published summary join.
+SCANNER_SCOPE_MAX_ENTRY_CHARS = 512
+
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w/])/[^\s\"')\]]+|(?<![\w\\])[A-Za-z]:\\[^\s\"')\]]+"
+)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _is_safe_repo_path(value: object) -> bool:
+    """True for a repository-relative path safe to publish.
+
+    Absolute host paths, drive paths, ``..`` escapes, empty components,
+    and control characters are never safe: an untrusted artifact must not
+    leak a runner's filesystem layout into a published record or summary.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if _CONTROL_RE.search(value):
+        return False
+    if value.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    return all(part not in ("", "..") for part in value.split("/"))
+
+
+def _safe_scope(scope: list) -> list[str]:
+    """Keep only publishable repository-relative scope entries."""
+    safe: list[str] = []
+    for entry in scope:
+        if not isinstance(entry, str):
+            continue
+        entry = entry.strip().rstrip("/")
+        if len(entry) > SCANNER_SCOPE_MAX_ENTRY_CHARS:
+            continue
+        if _is_safe_repo_path(entry):
+            safe.append(entry)
+    return safe
+
+
+def _safe_display_text(value: object, *, max_len: int = 128) -> str | None:
+    """Public-safe display text, or None when nothing publishable remains.
+
+    Reuses the existing ``sanitize_actionable_failure`` secret/control
+    handling (credential-like patterns redacted, control characters
+    replaced) and bounds the result; absolute host paths are replaced
+    with a placeholder first, so a free-text provenance field can never
+    publish a runner's filesystem layout. It never returns raw input.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = _ABSOLUTE_PATH_RE.sub("[path]", value)
+    try:
+        text = sanitize_actionable_failure(value)
+    except Exception:
+        text = _CONTROL_RE.sub("", value)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    return text[:max_len] if text else None
+
+
+def _safe_failure_detail(exc: BaseException) -> str:
+    """Public-safe failure text: type name plus redacted detail.
+
+    Absolute host paths are replaced before secret redaction, so an
+    OSError filename or a credential-like fragment can never reach a
+    published record, summary, or uploaded report. Bounded to 240 chars.
+    """
+    raw = _ABSOLUTE_PATH_RE.sub("[path]", f"{type(exc).__name__}: {exc}")
+    try:
+        text = sanitize_actionable_failure(raw)
+    except Exception:
+        text = type(exc).__name__
+    return text[:240]
+
+
+def _safe_int(value: object) -> int | None:
+    return value if type(value) is int else None
+
+_JSCPD_CLONE_NOTE = (
+    "Textual similarity only; not semantic equivalence. "
+    "Do not infer that the two fragments share a responsibility."
+)
+_PYAN_CANDIDATE_NOTE = (
+    "No resolved static caller in scope; not proof of runtime "
+    "unreachability. Check tests, __all__, decorators, workflow YAML, "
+    "and MCP registrations before any deletion judgment."
+)
+
+
+def _scanner_file_out_of_scope(file_name: object, scope: list[str]) -> bool:
+    """True when a finding file lies outside the producer's declared scope.
+
+    Scope blindness must stay visible: a finding in an unscanned package
+    (for example the Notion packages, which neither advisory producer
+    covers) is annotated, never reported as "no findings" for that package.
+    """
+    if not isinstance(file_name, str) or not file_name:
+        return True
+    return not any(
+        file_name == entry or file_name.startswith(entry.rstrip("/") + "/")
+        for entry in scope
+        if isinstance(entry, str) and entry
+    )
+
+
+def _normalize_scanner_advisory(
+    raw: object, *, source_revision: str
+) -> dict[str, object]:
+    """Normalize one advisory producer JSON into a record-only section.
+
+    Provenance is preserved (tool, schema, version, head SHA,
+    scope, candidate count, truncation flags) after display
+    sanitization of free-text fields; findings are reshaped only
+    into a common kind/file/line form. Nothing here is selection input:
+    every finding carries ``selection_input: False``, and the section
+    itself carries ``execution_authorized: False`` and
+    ``side_effects_performed: False``.
+
+    States, in precedence order: ``scanner-error`` (wrong schema/tool,
+    missing or invalid status/head SHA, or malformed candidate list),
+    ``stale`` (head SHA differs from the run's live source revision —
+    findings are kept but marked stale, never cited as current),
+    ``ok-zero-findings`` (a successful scan that found nothing, distinct
+    from failure), else ``ok``. Raises ValueError on malformed input;
+    callers map that to a ``scanner-error`` section so a bad artifact
+    can never crash the run.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("scanner advisory artifact must be a JSON object")
+    schema = raw.get("schema")
+    tool = SCANNER_ADVISORY_SCHEMAS.get(schema) if isinstance(schema, str) else None
+    if tool is None or raw.get("tool") != tool:
+        raise ValueError("scanner advisory artifact has an unsupported schema/tool")
+    status = raw.get("status")
+    head_sha = raw.get("head_sha")
+    scope = raw.get("scope")
+    candidates = raw.get("candidates")
+    if (
+        not isinstance(status, str)
+        or not isinstance(head_sha, str)
+        or not head_sha
+        or not isinstance(scope, list)
+        or not isinstance(candidates, list)
+    ):
+        raise ValueError("scanner advisory artifact is missing required fields")
+    safe_head_sha = _safe_display_text(head_sha, max_len=128)
+    # Head SHA is validated against the producer contract (full
+    # lowercase 40-hex commit SHA, or the producers' "unavailable"
+    # fallback), not merely display-sanitized: an absolute host path or
+    # any other non-SHA string must never be published as provenance,
+    # and invalid provenance must never be mistaken for current evidence
+    # — it maps to scanner-error, with findings cleared, via ValueError.
+    if safe_head_sha is None or (
+        safe_head_sha != "unavailable"
+        and not _HEAD_SHA_RE.fullmatch(safe_head_sha)
+    ):
+        raise ValueError("scanner advisory artifact has an invalid head SHA")
+    scope = _safe_scope(scope)
+    version = _safe_display_text(raw.get("version"), max_len=128)
+    # Status is published verbatim into the record artifact and the
+    # workflow summary, so it gets the same treatment as every other
+    # display field: a hostile status must never carry CR/LF or markup
+    # into a published surface. A status that sanitizes to nothing, or
+    # that is not exactly "ok" after sanitizing, renders scanner-error.
+    status = _safe_display_text(status, max_len=64) or "scanner-error"
+    candidate_count = (
+        raw.get("candidate_count")
+        if type(raw.get("candidate_count")) is int and raw.get("candidate_count") >= 0
+        else len(candidates)
+    )
+    truncated_flag = raw.get("truncated", raw.get("candidates_truncated"))
+    truncated = bool(truncated_flag) if isinstance(truncated_flag, bool) else False
+    truncated = (
+        truncated
+        or candidate_count > len(candidates)
+        or len(candidates) > SCANNER_ADVISORY_MAX_FINDINGS
+    )
+    findings: list[dict[str, object]] = []
+    excluded = 0
+    if tool == "jscpd":
+        for clone in candidates:
+            if not isinstance(clone, dict):
+                raise ValueError("jscpd candidate must be an object")
+            first = clone.get("firstFile") or {}
+            second = clone.get("secondFile") or {}
+            if not isinstance(first, dict) or not isinstance(second, dict):
+                raise ValueError("jscpd candidate is missing file records")
+            first_name = first.get("name")
+            second_name = second.get("name")
+            if not _is_safe_repo_path(first_name) or not _is_safe_repo_path(
+                second_name
+            ):
+                # Unsafe paths are excluded from published findings, not
+                # annotated: an absolute host path must never be published.
+                excluded += 1
+                continue
+            findings.append(
+                {
+                    "kind": "textual-clone",
+                    "selection_input": False,
+                    "first_file": first_name,
+                    "first_start_line": _safe_int(first.get("start")),
+                    "first_end_line": _safe_int(first.get("end")),
+                    "second_file": second_name,
+                    "second_start_line": _safe_int(second.get("start")),
+                    "second_end_line": _safe_int(second.get("end")),
+                    "lines": _safe_int(clone.get("lines")),
+                    "tokens": _safe_int(clone.get("tokens")),
+                    "out_of_scope": (
+                        _scanner_file_out_of_scope(first_name, scope)
+                        or _scanner_file_out_of_scope(second_name, scope)
+                    ),
+                    "note": _JSCPD_CLONE_NOTE,
+                }
+            )
+    else:  # pyan3
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("pyan3 candidate must be an object")
+            file_name = candidate.get("file")
+            if not _is_safe_repo_path(file_name):
+                excluded += 1
+                continue
+            findings.append(
+                {
+                    "kind": "potentially-disconnected",
+                    "selection_input": False,
+                    "function": _safe_display_text(candidate.get("id"), max_len=512),
+                    "file": file_name,
+                    "line": _safe_int(candidate.get("line")),
+                    "out_of_scope": _scanner_file_out_of_scope(file_name, scope),
+                    "note": _PYAN_CANDIDATE_NOTE,
+                }
+            )
+    if status != "ok":
+        state = "scanner-error"
+        findings = []
+        excluded = 0
+    elif safe_head_sha != source_revision:
+        state = "stale"
+    elif not findings and excluded == 0:
+        state = "ok-zero-findings"
+    else:
+        state = "ok"
+    findings = findings[:SCANNER_ADVISORY_MAX_FINDINGS]
+    return {
+        "tool": tool,
+        "schema": schema,
+        "version": version,
+        "head_sha": safe_head_sha,
+        "scope": list(scope),
+        "status": status,
+        "state": state,
+        "candidate_count": candidate_count,
+        "truncated": truncated,
+        "findings": findings,
+        "excluded_findings": excluded,
+        "out_of_scope_findings": sum(
+            1 for finding in findings if finding.get("out_of_scope") is True
+        ),
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _load_scanner_advisory(
+    path: str, *, source_revision: str
+) -> dict[str, object]:
+    """Load one producer JSON file into a normalized advisory section.
+
+    FileNotFoundError propagates so the caller can record an
+    ``unavailable`` section; malformed content raises ValueError so the
+    caller can record a ``scanner-error`` section. That includes parser
+    recursion failure on deeply nested input: RecursionError is converted
+    to ValueError at this boundary, so it takes the same nonfatal path.
+    The run itself never fails on an advisory artifact: the flag is
+    advisory by design. Oversized artifacts are rejected before parsing,
+    never loaded unbounded.
+    """
+    artifact_path = Path(path)
+    if artifact_path.stat().st_size > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    data = artifact_path.read_bytes()
+    if len(data) > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except RecursionError as exc:
+        raise ValueError(
+            "scanner advisory artifact exceeds parser nesting limit"
+        ) from exc
+    section = _normalize_scanner_advisory(raw, source_revision=source_revision)
+    section["source"] = _safe_display_text(Path(path).name, max_len=128) or "advisory"
+    return section
+
+
+def _unavailable_scanner_advisory(
+    path: str, *, status: str = "unavailable", failure_detail: str | None = None
+) -> dict[str, object]:
+    """Explicit absent/error section, never misreported as zero findings."""
+    section: dict[str, object] = {
+        "source": _safe_display_text(Path(path).name, max_len=128) or "advisory",
+        "tool": None,
+        "schema": None,
+        "version": None,
+        "head_sha": None,
+        "scope": [],
+        "status": status,
+        "state": status,
+        "candidate_count": None,
+        "truncated": None,
+        "findings": [],
+        "out_of_scope_findings": 0,
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if failure_detail is not None:
+        section["failure_detail"] = failure_detail
+    return section
+
+
 def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> dict[str, object]:
     """Acquire lineage for candidates the selector never reached (#3441).
 
@@ -653,6 +999,7 @@ def _build_experiment_record(
     ledger_entries: tuple[dict[str, object], ...] = (),
     evidence_gap_reason: str | None = None,
     lifecycle_acquisition: Mapping[str, object] | None = None,
+    scanner_advisory: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     # The selector result is the single source for the narrowing actually
     # applied: the operator-declared criterion on the manual path, or the
@@ -784,6 +1131,15 @@ def _build_experiment_record(
         "lifecycle_stage_acquisition": (
             None if lifecycle_acquisition is None else dict(lifecycle_acquisition)
         ),
+        # 14. scanner advisory evidence (#3429): jscpd/pyan3 producer findings
+        # loaded after selection, for this record only. Additive and
+        # non-authorizing; None when no --scanner-evidence flag was given.
+        # It is never supplied to the selector, the evidence reader, or the
+        # evidence-ledger inputs digest, and it never changes a selection
+        # outcome or reason code.
+        "scanner_advisory": (
+            None if scanner_advisory is None else dict(scanner_advisory)
+        ),
     }
 
 
@@ -825,6 +1181,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="UTC timestamp %%Y-%%m-%%dT%%H:%%M:%%SZ (default: now)",
     )
     parser.add_argument("--output", default=None, help="record path (default: stdout)")
+    parser.add_argument(
+        "--scanner-evidence",
+        default=None,
+        action="append",
+        metavar="PATH",
+        help=(
+            "path to an advisory producer JSON (jscpd-advisory.json or "
+            "pyan3-advisory.json); repeatable, one producer per flag. "
+            "Loaded after selection for the record only; never selection "
+            "input. Absent flag means the scanner_advisory section is None."
+        ),
+    )
     parser.add_argument(
         "--mission-id",
         default=None,
@@ -1072,6 +1440,35 @@ def main(argv: list[str] | None = None) -> int:
         actor="agent-os-shadow-run/phase0",
     )
 
+    # #3429 record-only scanner advisory: loaded only after selection has
+    # returned, so findings can never influence it. A missing artifact
+    # records "unavailable" and malformed content records "scanner-error";
+    # neither fails the run, because the flag is advisory by design. The
+    # section is deliberately excluded from the ledger inputs digest above.
+    scanner_sources: list[dict[str, object]] = []
+    for evidence_path in args.scanner_evidence or ():
+        try:
+            scanner_sources.append(
+                _load_scanner_advisory(evidence_path, source_revision=source_revision)
+            )
+        except FileNotFoundError:
+            scanner_sources.append(_unavailable_scanner_advisory(evidence_path))
+        except (ValueError, OSError) as exc:
+            scanner_sources.append(
+                _unavailable_scanner_advisory(
+                    evidence_path,
+                    status="scanner-error",
+                    failure_detail=_safe_failure_detail(exc),
+                )
+            )
+    scanner_advisory_section: dict[str, object] | None = None
+    if args.scanner_evidence is not None:
+        scanner_advisory_section = {
+            "sources": scanner_sources,
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        }
+
     record = _build_experiment_record(
         repository=args.repository,
         retrieved_at=retrieved_at,
@@ -1103,6 +1500,7 @@ def main(argv: list[str] | None = None) -> int:
             "execution_authorized": False,
             "side_effects_performed": False,
         },
+        scanner_advisory=scanner_advisory_section,
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"
