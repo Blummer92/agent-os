@@ -89,7 +89,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
     ),
     (
         "mode",
-        frozenset({"executor_route", "operating_mode"}),
+        frozenset({"executor_route", "operating_mode", "session_closure_adapter"}),
         (),
     ),
     (

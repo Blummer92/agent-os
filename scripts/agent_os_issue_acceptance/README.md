@@ -353,6 +353,58 @@ Trust-boundary repairs (#3690):
 - `classify_closure_readback` is the single closure-readback rule, shared by
   the batch and the lane post-PR readback proof below.
 
+Session-executed production caller (`session_closure_adapter.py`, #3489):
+the executable host is a connected GitHub Service Agent session (Muse
+session: sandbox Python plus native GitHub MCP tools under per-call
+runtime approval). The single production entry point is
+`execute_session_closure`: it resolves the host's registrations, builds
+a plan through canonical `evaluate_issue_closure` plus receipt
+verification against the plan snapshot, verifies it against a fresh
+read with `verify_prewrite`, and executes through the transport
+protocol. There is NO JSON or CLI path into admission: no
+caller-supplied field can produce a plan, because no code path reads
+such fields. Authority comes only from `HostRegistry` tokens the host
+itself minted — an `OwnerGrant` (owner authorization for one finite
+closure) and a registered `QaRecord` (a genuine independent QA
+execution received through a runtime-delivered handoff). The record
+used for admission is the registered record, never caller fields, and
+its bindings (issue, head when applicable, body digest) are re-verified
+against fresh state; forged tokens, unregistered records, wrong
+issue/head/digest, conflicts, and self-acceptance all refuse with zero
+mutations. The canonical decision object is constructed from the grant
+(`decision_recorded` is set by host construction, never read from
+input). Unlike the canonical evaluator, which tolerates unbound
+records, this caller requires bound QA. Canonical receipt verification
+binds a supplied body digest only to a trusted satisfaction record, so
+the adapter binds the digest to the issue itself by equality between
+plan-time and pre-write fresh reads; any drift refuses with zero
+mutations. A plan also requires an owner trigger (id plus body, hashed
+internally, never a caller-supplied hash), re-verified at pre-write, so
+an edited trigger refuses. `mcp_manifest` is a derived audit record
+whose steps carry machine assertions mirroring the executor's gates;
+it is never executed by interpretation. The transport maps exactly to
+connected tools: fresh read = `issue_read` get + get_comments +
+get_labels; close = `issue_write` update with ONLY state + state_reason;
+comment list = `issue_read` get_comments; comment post =
+`add_issue_comment`; label removal = surgical `remove_issue_label`
+when the host's transport supports it. An already-closed issue receives
+ZERO mutations by default (`already-closed-no-action`, reporting only
+whether `status:ready` is still present); label or comment mutations on
+an already-closed issue require a separate recovery grant bound to that
+issue and receipt, and the recovery path never re-closes. The connected
+Muse catalog (49 tools, verified live) has NO label-delete tool, so on
+this host the label step STOPS with a flagged outcome
+(`closed-verified-label-reconciliation-required`) and no mutation;
+full-labels replacement is NOT in the production path at all — the old
+G2 replacement-semantics gate is retired by removal, not by proof. The
+G1 gate persists as a host read obligation: fresh reads must carry the
+canonical revision fields or the run refuses rather than inventing a
+revision. No workflow change, token, scheduler, queue, database,
+evaluator, dispatcher, or QA identity is introduced; live closure still
+requires a separate owner authorization naming the issue, and live
+acceptance is proven only by canonical readback on that closure, not by
+this adapter's tests.
+
 ## Canonical lifecycle-stage acquisition (#3433)
 
 `lifecycle_stage_acquisition.py` is a deterministic, pure-local evaluator that
