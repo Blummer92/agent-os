@@ -14,6 +14,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -611,10 +612,16 @@ def _cli_payload(**qa_changes):
     }
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def test_cli_plan_prints_manifest_and_refuses_forgery():
+    # Repo root is derived from this file's location, never a
+    # sandbox-specific path: the CI runner checks out elsewhere, and a
+    # hardcoded checkout path fails the focused plan there.
     proc = subprocess.run(
         [sys.executable, "-m", "scripts.agent_os_issue_acceptance.session_closure_adapter", "plan"],
-        input=json.dumps(_cli_payload()), capture_output=True, text=True, cwd="/tmp/agent-os-fresh",
+        input=json.dumps(_cli_payload()), capture_output=True, text=True, cwd=str(REPO_ROOT),
     )
     assert proc.returncode == 0, proc.stderr
     printed = json.loads(proc.stdout)
@@ -623,7 +630,7 @@ def test_cli_plan_prints_manifest_and_refuses_forgery():
     proc2 = subprocess.run(
         [sys.executable, "-m", "scripts.agent_os_issue_acceptance.session_closure_adapter", "plan"],
         input=json.dumps(_cli_payload(provenance="file")), capture_output=True, text=True,
-        cwd="/tmp/agent-os-fresh",
+        cwd=str(REPO_ROOT),
     )
     assert proc2.returncode == 2
     refused = json.loads(proc2.stdout)
