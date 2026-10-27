@@ -34,6 +34,9 @@ from agent_os_execution_service.shadow_issue_selection import (  # noqa: E402
     ShadowIssueSelectionResult,
     ShadowSelectionStatus,
 )
+from agent_os_execution_service.evidence_ledger import (  # noqa: E402
+    EvidenceLedgerEntry,
+)
 
 
 def _fail_closed_result() -> ShadowIssueSelectionResult:
@@ -420,6 +423,39 @@ def _run_cli(monkeypatch, tmp_path: Path, *extra: str) -> tuple[int, dict | None
     return code, record
 
 
+def _assert_ledgers_equal_except_recording_time(first, second) -> None:
+    """Compare two evidence ledgers across independent CLI runs.
+
+    ``recorded_at`` is wall-clock time at second resolution, and
+    ``entry_digest`` binds it, so full ledger equality is timing-flaky
+    whenever two runs straddle a second boundary (the #3738 intermittent
+    failure: only those two fields differed, inputs_digest identical).
+    Exclude only those two run-specific fields from cross-run equality,
+    and instead validate each entry's cryptographic digest independently:
+    ``EvidenceLedgerEntry.from_dict`` recomputes ``entry_digest`` and
+    raises on any mismatch, so a tampered or drifted entry still fails.
+    Chain linkage is checked explicitly (genesis ``previous_digest`` is
+    empty, each later entry binds its predecessor's ``entry_digest``).
+    """
+    assert len(first) == len(second)
+    for ledger in (first, second):
+        previous = ""
+        for entry in ledger:
+            # Independent digest validation (raises on mismatch).
+            EvidenceLedgerEntry.from_dict(entry)
+            assert entry["previous_digest"] == previous
+            previous = entry["entry_digest"]
+    for left, right in zip(first, second):
+        assert left["inputs_digest"] == right["inputs_digest"]
+        stripped_left = {
+            k: v for k, v in left.items() if k not in ("recorded_at", "entry_digest")
+        }
+        stripped_right = {
+            k: v for k, v in right.items() if k not in ("recorded_at", "entry_digest")
+        }
+        assert stripped_left == stripped_right
+
+
 def test_cli_consumes_canonical_cohort_admission_end_to_end(monkeypatch, tmp_path) -> None:
     request = _request_file(tmp_path, kind="issue", resource_id="90")
     code, record = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
@@ -756,7 +792,9 @@ def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_
     assert record["deterministic_selector_result"]["status"] == "no-selection"
     assert "shadow-selection.candidate-evidence-incomplete" in record["deterministic_selector_result"]["reason_codes"]
     assert record["candidate_population"] == control["candidate_population"]
-    assert record["evidence_ledger"] == control["evidence_ledger"]
+    _assert_ledgers_equal_except_recording_time(
+        record["evidence_ledger"], control["evidence_ledger"]
+    )
     assert record["lifecycle_stage_acquisition"] == control["lifecycle_stage_acquisition"]
     zero = record["zero_mutation_verification"]
     assert zero["http_write_requests"] == 0
@@ -765,6 +803,169 @@ def test_cli_scanner_advisory_section_consumes_producer_output_without_changing_
     assert client.write_requests == 0
     # No flag means the section is None, exactly like §13's convention.
     assert control["scanner_advisory"] is None
+
+
+def test_cli_evidence_ledger_comparison_survives_recording_second_boundary(
+    monkeypatch, tmp_path
+) -> None:
+    """#3738 regression: ledger comparison survives different recording seconds.
+
+    Forces the two runs onto different wall-clock seconds via a controlled
+    clock, so the old full-equality assertion deterministically fails
+    (recorded_at and its derived entry_digest differ) while the repaired
+    comparison passes: inputs_digest unchanged, every other field equal,
+    and each entry's digest independently valid.
+    """
+    import datetime as _real_datetime
+
+    class _ControlledDateTime(_real_datetime.datetime):
+        current = _real_datetime.datetime(
+            2026, 10, 27, 12, 0, 0, tzinfo=_real_datetime.timezone.utc
+        )
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    class _FakeDatetimeModule:
+        datetime = _ControlledDateTime
+        timezone = _real_datetime.timezone
+
+    monkeypatch.setattr(cli, "_datetime", _FakeDatetimeModule)
+    jscpd = _write_artifact(
+        tmp_path,
+        "jscpd-advisory.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[_jscpd_clone()]),
+    )
+    pyan = _write_artifact(
+        tmp_path,
+        "pyan3-advisory.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[_pyan_candidate()], truncated=True),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    args = (
+        "--request-interpretation",
+        str(request),
+        "--scanner-evidence",
+        str(jscpd),
+        "--scanner-evidence",
+        str(pyan),
+    )
+    _ControlledDateTime.current = _real_datetime.datetime(
+        2026, 10, 27, 12, 0, 0, tzinfo=_real_datetime.timezone.utc
+    )
+    code, record = _run_cli(monkeypatch, tmp_path, *args)
+    assert code == 0
+    _ControlledDateTime.current = _real_datetime.datetime(
+        2026, 10, 27, 12, 0, 1, tzinfo=_real_datetime.timezone.utc
+    )
+    _, control = _run_cli(monkeypatch, tmp_path, "--request-interpretation", str(request))
+    # The boundary was actually exercised: these two fields differ.
+    (entry,) = record["evidence_ledger"]
+    (control_entry,) = control["evidence_ledger"]
+    assert entry["recorded_at"] != control_entry["recorded_at"]
+    assert entry["entry_digest"] != control_entry["entry_digest"]
+    # Old assertion fails deterministically under the forced boundary.
+    assert record["evidence_ledger"] != control["evidence_ledger"]
+    # Repaired comparison passes without weakening the ledger contract.
+    _assert_ledgers_equal_except_recording_time(
+        record["evidence_ledger"], control["evidence_ledger"]
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+
+
+
+def test_cli_scanner_review_groups_are_deterministic_and_non_authorizing(
+    monkeypatch, tmp_path
+) -> None:
+    """Same-line overlap groups review pointers, never source findings or selection."""
+    clone = _jscpd_clone()
+    matching = {
+        "id": "example.registered_entrypoint",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+        "line": 12,
+    }
+    unrelated = {
+        "id": "example.unrelated_public_api",
+        "kind": "function",
+        "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+        "line": 200,
+    }
+    jscpd = _write_artifact(
+        tmp_path, "review-jscpd.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[clone, clone]),
+    )
+    pyan = _write_artifact(
+        tmp_path, "review-pyan.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[matching, unrelated], truncated=False),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    args = (
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(jscpd),
+        "--scanner-evidence", str(pyan),
+    )
+    code, record = _run_cli(monkeypatch, tmp_path, *args)
+    assert code == 0
+    advisory = record["scanner_advisory"]
+    assert [len(s["findings"]) for s in advisory["sources"]] == [2, 2]
+    groups = advisory["review_groups"]
+    assert len(groups) == 2
+    overlap = next(g for g in groups if len(g["finding_refs"]) == 3)
+    assert overlap["finding_refs"] == [
+        {"source_index": 0, "finding_index": 0},
+        {"source_index": 0, "finding_index": 1},
+        {"source_index": 1, "finding_index": 0},
+    ]
+    for group in groups:
+        assert group["issue_linkage"] == {
+            "status": "unlinked",
+            "issue_number": None,
+            "reason": "scanner-findings-do-not-prove-canonical-issue-identity",
+        }
+        assert group["engineering_review"] == "manual-review"
+        assert group["selection_input"] is False
+        assert group["execution_authorized"] is False
+        assert group["side_effects_performed"] is False
+    _, repeat = _run_cli(monkeypatch, tmp_path, *args)
+    assert repeat["scanner_advisory"]["review_groups"] == groups
+    _, control = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request)
+    )
+    assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
+    _assert_ledgers_equal_except_recording_time(
+        record["evidence_ledger"], control["evidence_ledger"]
+    )
+    assert record["candidate_population"] == control["candidate_population"]
+    assert record["zero_mutation_verification"]["github_mutations"] == 0
+
+
+def test_cli_scanner_review_groups_do_not_merge_stale_with_current(
+    monkeypatch, tmp_path
+) -> None:
+    """Identical spans from different revisions cannot become one current claim."""
+    clone = _jscpd_clone()
+    stale = _write_artifact(
+        tmp_path, "review-stale.json",
+        _jscpd_artifact(head_sha="a" * 40, clones=[clone]),
+    )
+    current = _write_artifact(
+        tmp_path, "review-current.json",
+        _jscpd_artifact(head_sha=_SHA, clones=[clone]),
+    )
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path,
+        "--request-interpretation", str(request),
+        "--scanner-evidence", str(stale),
+        "--scanner-evidence", str(current),
+    )
+    assert code == 0
+    groups = record["scanner_advisory"]["review_groups"]
+    assert len(groups) == 2
+    assert sorted(g["states"] for g in groups) == [["ok"], ["stale"]]
+    assert all(len(g["finding_refs"]) == 1 for g in groups)
 
 
 def test_cli_scanner_advisory_stale_error_unavailable_and_zero_states(
@@ -905,7 +1106,9 @@ def test_cli_scanner_bad_json_and_io_errors_preserve_failure_detail(
         monkeypatch, tmp_path, "--request-interpretation", str(request)
     )
     assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
-    assert record["evidence_ledger"] == control["evidence_ledger"]
+    _assert_ledgers_equal_except_recording_time(
+        record["evidence_ledger"], control["evidence_ledger"]
+    )
     assert record["zero_mutation_verification"]["http_write_requests"] == 0
     assert record["zero_mutation_verification"]["github_mutations"] == 0
 
@@ -1263,7 +1466,9 @@ def test_cli_scanner_deeply_nested_json_is_scanner_error(
         monkeypatch, tmp_path, "--request-interpretation", str(request)
     )
     assert record["deterministic_selector_result"] == control["deterministic_selector_result"]
-    assert record["evidence_ledger"] == control["evidence_ledger"]
+    _assert_ledgers_equal_except_recording_time(
+        record["evidence_ledger"], control["evidence_ledger"]
+    )
     assert record["zero_mutation_verification"]["http_write_requests"] == 0
     assert record["zero_mutation_verification"]["github_mutations"] == 0
 
@@ -1397,3 +1602,151 @@ def test_cli_scanner_oversized_scope_entries_are_bounded() -> None:
     )
     assert source["scope"] == [legit, at_cap]
     assert len(", ".join(source["scope"])) < 1000
+
+
+def _review_source(*, head_sha: str | None, state: str | None, findings: list) -> dict:
+    return {
+        "head_sha": head_sha,
+        "state": state,
+        "truncated": False,
+        "findings": findings,
+    }
+
+
+def _pyan_finding(*, file: str | None, line, out_of_scope: bool = False) -> dict:
+    return {
+        "kind": "potentially-disconnected",
+        "file": file,
+        "line": line,
+        "out_of_scope": out_of_scope,
+    }
+
+
+def test_cli_scanner_review_groups_geometry_is_exact() -> None:
+    """Grouping geometry, pinned at the unit level so each rule has
+    exactly one witness: overlap groups, adjacency does not,
+    boundary-touching does, transitive chains collapse, and file,
+    SHA, and state boundaries are never crossed."""
+    sha_a, sha_b = "a" * 40, "b" * 40
+
+    def groups_for(*sources: dict) -> list:
+        return cli._scanner_review_groups(list(sources))
+
+    def span(start: int, end: int) -> dict:
+        return {
+            "kind": "textual-clone",
+            "first_file": "a.py", "first_start_line": start, "first_end_line": end,
+            "second_file": "a.py", "second_start_line": start, "second_end_line": end,
+        }
+
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(15, 25)],
+    ))) == 1
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(21, 30)],
+    ))) == 2
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(20, 30)],
+    ))) == 1
+    transitive = groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(18, 28), span(26, 36)],
+    ))
+    assert len(transitive) == 1
+    assert len(transitive[0]["finding_refs"]) == 3
+    assert len(groups_for(_review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20),
+                  {**span(10, 20), "first_file": "b.py",
+                   "second_file": "b.py"}],
+    ))) == 2
+    assert len(groups_for(
+        _review_source(head_sha=sha_a, state="ok",
+                       findings=[span(10, 20)]),
+        _review_source(head_sha=sha_b, state="ok",
+                       findings=[span(10, 20)]),
+    )) == 2
+    assert len(groups_for(
+        _review_source(head_sha=sha_a, state="stale",
+                       findings=[span(10, 20)]),
+        _review_source(head_sha=sha_a, state="ok",
+                       findings=[span(10, 20)]),
+    )) == 2
+    # Determinism: the same input regroups byte-identically.
+    repeated = _review_source(
+        head_sha=sha_a, state="ok",
+        findings=[span(10, 20), span(18, 28), span(26, 36)],
+    )
+    assert groups_for(repeated) == groups_for(repeated)
+
+
+def test_cli_scanner_review_groups_keep_unlocatable_findings_separate() -> None:
+    """Invalid or missing locations never invent an overlap: each
+    unlocatable finding is its own review group, explicitly unlinked
+    and manual-review, and a locatable finding never absorbs one."""
+    source = _review_source(
+        head_sha="a" * 40, state="ok",
+        findings=[
+            _pyan_finding(file=None, line=5),
+            _pyan_finding(file="a.py", line="not-a-line"),
+            {"kind": "unknown", "file": "a.py", "line": 5},
+            {"kind": "textual-clone",
+             "first_file": "a.py", "first_start_line": 20, "first_end_line": 10,
+             "second_file": "a.py", "second_start_line": 20, "second_end_line": 10},
+            _pyan_finding(file="a.py", line=0),
+            _pyan_finding(file="a.py", line=12),
+        ],
+    )
+    groups = cli._scanner_review_groups([source])
+    assert len(groups) == 6
+    unlocatable = [g for g in groups if g["locations"] == []]
+    assert len(unlocatable) == 5
+    assert all(len(g["finding_refs"]) == 1 for g in unlocatable)
+    for group in groups:
+        assert group["issue_linkage"]["status"] == "unlinked"
+        assert group["engineering_review"] == "manual-review"
+        assert group["selection_input"] is False
+
+
+def test_cli_scanner_review_groups_ignore_failed_sources_but_keep_entrypoint_manual(
+    monkeypatch, tmp_path
+) -> None:
+    """Scanner failures, missing artifacts, and truncation states stay
+    distinguishable in sources while contributing no review groups;
+    a dynamic/public entrypoint in a valid source is grouped only as a
+    manual-review pointer, never as safe to delete."""
+    valid = _write_artifact(
+        tmp_path, "review-valid.json",
+        _pyan_artifact(head_sha=_SHA, candidates=[
+            {"id": "example.registered_entrypoint", "kind": "function",
+             "file": "scripts/agent_os_issue_acceptance/merge_admission_actions.py",
+             "line": 12},
+        ], truncated=True),
+    )
+    bad = tmp_path / "review-bad.json"
+    bad.write_text(json.dumps({"schema": "unknown/9", "tool": "pyan3"}), encoding="utf-8")
+    missing = tmp_path / "review-missing.json"
+    request = _request_file(tmp_path, kind="issue", resource_id="90")
+    code, record = _run_cli(
+        monkeypatch, tmp_path, "--request-interpretation", str(request),
+        "--scanner-evidence", str(valid),
+        "--scanner-evidence", str(bad),
+        "--scanner-evidence", str(missing),
+    )
+    assert code == 0
+    sources = record["scanner_advisory"]["sources"]
+    assert [s["state"] for s in sources] == ["ok", "scanner-error", "unavailable"]
+    groups = record["scanner_advisory"]["review_groups"]
+    assert len(groups) == 1
+    assert groups[0]["finding_refs"] == [{"source_index": 0, "finding_index": 0}]
+    assert groups[0]["truncated"] is True
+    assert groups[0]["engineering_review"] == "manual-review"
+    assert groups[0]["retirement_review_owner"] == "#1729"
+    assert groups[0]["selection_input"] is False
+    assert groups[0]["execution_authorized"] is False
+    assert groups[0]["side_effects_performed"] is False
+    assert "safe" not in json.dumps(groups)
+    assert "delet" not in json.dumps(groups).lower()
