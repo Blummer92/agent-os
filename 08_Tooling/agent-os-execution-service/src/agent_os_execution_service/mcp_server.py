@@ -30,6 +30,7 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
 )
 from scripts.agent_os_issue_acceptance.closure_admission_actions import (
     HOST_DISPATCH_CONTRACT as CLOSURE_HOST_DISPATCH_CONTRACT,
+    POST_CLOSE_RECONCILIATION_CONTRACT,
     ClosureAcceptanceEvidence,
     IssueClosureRequest,
     evaluate_issue_closure,
@@ -863,6 +864,7 @@ def _refused_closure_projection(
         "reason_codes": list(reason_codes),
         "next_action": next_action,
         "host_dispatch_contract": None,
+        "post_close_reconciliation_contract": None,
         "closure_performed": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
@@ -958,7 +960,12 @@ def verify_agent_os_issue_closure_admission_tool(
     issue-update operation (ChatGPT connector `update_issue`; GitHub MCP
     `issue_write`) with method=update, state=closed, state_reason=completed,
     followed by canonical readback of the exact repository, issue number,
-    closed state, and completed reason.
+    closed state, and completed reason, and then by the fixed post-close
+    reconciliation contract (#3489 requirement 3): remove exactly
+    ``status:ready`` only when the batch flagged it stale, post the
+    deterministic evidence comment, and re-read to verify label absence
+    and comment presence by receipt id. A reconciliation failure never
+    reverses a verified closure and never stops the next batch item.
 
     `satisfaction` (#3690 ADV-6/ADV-7) is the satisfaction record the host
     reacquired independently of the receipt. The receipt id is an unkeyed
@@ -1025,6 +1032,9 @@ def verify_agent_os_issue_closure_admission_tool(
             }
             if verified
             else None
+        ),
+        "post_close_reconciliation_contract": (
+            dict(POST_CLOSE_RECONCILIATION_CONTRACT) if verified else None
         ),
         "closure_performed": False,
         "github_writes_authorized": False,

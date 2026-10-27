@@ -725,7 +725,8 @@ def test_packet_without_satisfaction_is_byte_identical_in_shape():
         "admitted", "reason_codes", "authorization_id",
         "admission_result_id", "snapshot_id",
         "acceptance_evidence_id",
-        "host_dispatch_contract", "next_action", "receipt_id",
+        "host_dispatch_contract", "post_close_reconciliation_contract",
+        "next_action", "receipt_id",
         "closure_performed", "merge_authorized", "side_effects_performed",
     }
 

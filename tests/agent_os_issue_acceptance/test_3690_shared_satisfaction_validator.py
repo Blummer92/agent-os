@@ -167,21 +167,27 @@ def test_receipt_with_reconciliation_block_never_verifies():
 # ---------------------------------------------------------------------------
 
 _CLOSURE_GOLDEN = {
+    # Receipt ids are unchanged from pre-consolidation: the hashed core
+    # excludes the reconciliation contract. Whole-receipt digests below
+    # were re-recorded for #3489 because the receipt now also carries
+    # post_close_reconciliation_contract; stripping that one field from a
+    # receipt reproduces the old digest exactly, so the re-recording
+    # records only the added field, not a changed id or core.
     "none": (
         "closure-admission-receipt:4e5923c98a0baf93f44c1a663e613e02afe67f88b59c3525d0b8cabf9efaf1e1",
-        "c56c70d0d04f6168d6258af484d8c9ff65d54562af729e084470e22c1aaa20a9",
+        "400c3f606b64e2429339432748bacb8a22460f28bfe8d3733c3785a03cfe9ae1",
     ),
     "complete": (
         "closure-admission-receipt:72c2c0cc4472c9d249f0d664421d9f1fde3b17abcb9829ec76a557602882cafa",
-        "9c3a20f85456790a4e48d0fcb6c20bc274d99e02187b186dccf9f32744435f16",
+        "d370afe3cec51a56c6eb3c15453fe379c26b647849f7667fd2b594f4de359758",
     ),
     "incomplete": (
         "closure-admission-receipt:c9592f86e252dab767164e1d8419c39900b3907aeb0b89d27da6d55793a06ecb",
-        "6dc5ba8f25752a0ab8ee0e3cd69926cc924574b901b8c2b4a52c4d7629f9f502",
+        "63ef9cb90aa729d5c1f96ca1c922fc4540ab129ad62419573bdec2d54628862a",
     ),
     "manual-review-empty": (
         "closure-admission-receipt:335532da59a4721d639b48c514ed6771a0f491046f990c3c88b308123d1ff480",
-        "5e532f7bdc8ef580ebf77a04079cae9ecc9e901dbe40f0f1a946ae4136636710",
+        "1004b26e93a306755cfe2763a69bc6068bd82494c743909ab2d60d7f9f99334f",
     ),
 }
 
