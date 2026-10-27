@@ -353,6 +353,40 @@ Trust-boundary repairs (#3690):
 - `classify_closure_readback` is the single closure-readback rule, shared by
   the batch and the lane post-PR readback proof below.
 
+Session-executed production caller (`session_closure_adapter.py`, #3489):
+the executable host is a connected GitHub Service Agent session (Muse
+session: sandbox Python plus native GitHub MCP tools under per-call
+runtime approval). The session builds a plan with `build_plan` (QA
+verification, then canonical `evaluate_issue_closure`, then receipt
+verification against the plan snapshot), verifies it against a fresh read
+with `verify_prewrite`, and executes the resulting `mcp_manifest`
+verbatim via `issue_read` / `issue_write` / `add_issue_comment` — the
+only tools the manifest names. `execute_plan` is the same sequence
+against an injected transport and is the offline proof path; it is not
+a second evaluator or dispatcher. QA evidence is accepted only with
+runtime-handoff provenance (a verdict that reached the session through
+a runtime-delivered QA/Test Agent handoff, with session and delivery
+references); caller strings, report files, artifacts, check runs,
+statuses, and reviews are refused as QA, as are denylisted machine
+identities (including the authoritative-aggregate context) and any
+evaluator equal to the authorizer. Unlike the canonical evaluator,
+which tolerates unbound records, this caller requires bound QA (issue,
+head when applicable, body digest). Canonical receipt verification
+binds a supplied body digest only to a trusted satisfaction record, so
+the adapter binds the digest to the issue itself by equality between
+plan-time and pre-write fresh reads; any drift refuses with zero
+mutations. A plan also requires an owner trigger (id plus body hash),
+re-verified at pre-write, so an edited trigger refuses. The connected
+catalog has no label-delete tool, so the dedicated label-removal
+operation maps in the manifest to labels re-read, `issue_write` labels
+replacement, and labels readback, with an abort-if-changed checkpoint;
+replacement semantics are live canary gate G2, and an unverifiable label
+step reports reconciliation-required, never success. No workflow change,
+token, scheduler, queue, database, evaluator, dispatcher, or QA identity
+is introduced; live closure still requires a separate owner
+authorization naming the issue, and live acceptance is proven only by
+canonical readback on that closure, not by this adapter's tests.
+
 ## Canonical lifecycle-stage acquisition (#3433)
 
 `lifecycle_stage_acquisition.py` is a deterministic, pure-local evaluator that
