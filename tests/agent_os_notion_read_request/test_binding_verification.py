@@ -772,7 +772,7 @@ PAGE = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 class ReviewedAdapter:
     def __init__(self, number=93, *, missing=False, duplicate=False,
                  archived=False, wrong_parent=False, schema_mismatch=False,
-                 revision=REVISION, surface=False):
+                 revision=REVISION, surface=False, source_link=None):
         self.calls = []
         self.number = number
         self.missing = missing
@@ -782,6 +782,7 @@ class ReviewedAdapter:
         self.schema_mismatch = schema_mismatch
         self.revision = revision
         self.surface = surface
+        self.source_link = source_link
 
     def execute(self, task):
         call = dict(task.payload)
@@ -800,7 +801,7 @@ class ReviewedAdapter:
                               "Lesson ID": {"type": "unique_id", "unique_id": {"number": self.number, "prefix": "LL"}},
                               "Status": {"type": "select", "select": None},
                               "Surface Before Work?": {"type": "checkbox", "checkbox": self.surface},
-                              "Source Link": {"type": "url", "url": None},
+                              "Source Link": {"type": "url", "url": self.source_link},
                               "Lesson Learned": {"type": "title", "title": [{"plain_text": "SECRET GUIDANCE"}]},
                           }}
         elif action == "get_data_source":
@@ -838,7 +839,7 @@ def test_reviewed_lesson_inspection_reuses_implementation(number):
     assert result["lesson"]["source_revision"] == REVISION
     assert result["lesson"]["surface_before_work"] is False
     assert [c["action"] for c in adapter.calls] == [
-        "get_page", "get_data_source", "query_data_source", "get_page", "get_data_source"]
+        "get_page", "get_data_source", "query_data_source", "get_page"]
     assert "SECRET GUIDANCE" not in json.dumps(result)
     assert result["notion_writes_performed"] is False
 
@@ -893,3 +894,19 @@ def test_reviewed_inspection_fails_closed(kwargs, match):
         verify_reviewed_lesson_revision(
             ReviewedAdapter(**kwargs), request_id="verify-ll-93-current-revision",
             generated_at="test")
+
+
+@pytest.mark.parametrize("source_link,present,format_valid", [
+    (None, False, False),
+    ("https://example.com/anything", True, False),
+    ("https://github.com/Blummer92/agent-os/issues/3305", True, True),
+])
+def test_reviewed_lesson_source_link_format_is_not_provenance(source_link, present, format_valid):
+    result = verify_reviewed_lesson_revision(
+        ReviewedAdapter(93, source_link=source_link),
+        request_id="verify-ll-93-current-revision", generated_at="test")
+    assert result["lesson"]["source_link_present"] is present
+    assert result["lesson"]["source_link_format_valid"] is format_valid
+    if source_link is not None:
+        assert source_link not in json.dumps(result)
+    assert result["notion_writes_performed"] is False

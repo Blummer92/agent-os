@@ -30,7 +30,7 @@ from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
 from scripts.agent_os_notion_lessons_write import catalog as reviewed_catalog
-from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID, WRITABLE_TYPES
+from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID, SOURCE_LINK, WRITABLE_TYPES
 from scripts.agent_os_notion_lessons_write.writer import _single, _lesson_id, _page, _check_schema, _values
 from scripts.agent_os_notion_lessons_write.admission import WriteBlocked, notion_id
 
@@ -427,8 +427,8 @@ def _verified_database(
     }
 
 
-def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
-    """Live-verify the current Lessons Learned data-source identity from one known record."""
+def _verified_lessons_learned_source(adapter: object) -> tuple[str, Mapping[str, Any]]:
+    """Verify the current Lessons Learned anchor and schema exactly once."""
 
     page = _execute_read(adapter, "get_page", page_id=LESSONS_LEARNED_REFERENCE_PAGE_ID)
     if _normalize_notion_id(page.get("id")) != _normalize_notion_id(LESSONS_LEARNED_REFERENCE_PAGE_ID):
@@ -448,6 +448,12 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
     if source.get("archived") is True or source.get("in_trash") is True:
         raise NotionReadRequestError("Lessons Learned data source is archived or trashed")
 
+    return data_source_id.strip(), source
+
+
+def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
+    """Live-verify the current Lessons Learned data-source identity from one known record."""
+    data_source_id, _ = _verified_lessons_learned_source(adapter)
     return {
         "schema_version": SCHEMA_VERSION,
         "request_id": LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
@@ -472,8 +478,7 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
     if lesson_id is None:
         raise NotionReadRequestError("unreviewed lesson inspection request")
     # Derive and check the canonical destination using the existing anchor.
-    anchor = verify_lessons_learned_binding(adapter, generated_at=generated_at)
-    source_id = anchor["lessons_learned"]["data_source_id"]
+    source_id, schema = _verified_lessons_learned_source(adapter)
     number = int(LESSON_ID.fullmatch(lesson_id).group(1))
     output = _execute_read(
         adapter, "query_data_source", data_source_id=source_id,
@@ -491,7 +496,6 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
             raise WriteBlocked("query-identity-mismatch")
         page_id = notion_id(row.get("id"))
         page = _execute_read(adapter, "get_page", page_id=page_id)
-        schema = _execute_read(adapter, "get_data_source", data_source_id=source_id)
         _page(page, notion_id(source_id), page_id)
         if _lesson_id(page) != lesson_id:
             raise WriteBlocked("lesson-identity-mismatch")
@@ -531,6 +535,7 @@ def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
             "status": status["name"] if status is not None else None,
             "surface_before_work": surface,
             "source_link_present": bool(link),
+            "source_link_format_valid": bool(link and SOURCE_LINK.fullmatch(link)),
             "schema_verified": True,
             "verification_state": "verified-current",
         }

@@ -126,7 +126,10 @@ schema read verify identity, parent, archive state, protected values and a
 writer-compatible current revision. Surface Before Work? is observed, never an
 inspection eligibility gate. The result contains bounded identity, revision,
 state and verification fields only; no narrative, raw properties, or write
-operation. This does not grant CKR6 eligibility or a Notion mutation.
+operation. Source Link presence and writer-approved GitHub URL format are
+reported separately; format is not proof of live provenance or CKR6 eligibility.
+The canonical source schema is fetched once per inspection. No Notion write
+or activation authority is created.
 
 ## Fixed destination verification
 
