@@ -315,7 +315,20 @@ present. A reconciliation failure keeps the verified closure but records
 Already-closed items are never reconciled here, because their batch path
 carries no admission receipt for this run. No workflow, MCP publication,
 or automatic post-merge trigger invokes this module; that host
-continuation is a separate authorization.
+continuation is a separate authorization. The same reconciliation is
+bound into the host path: `POST_CLOSE_RECONCILIATION_CONTRACT` is part
+of the admission receipt core and is checked by
+`verify_closure_admission_receipt`, and the MCP verify tool returns it
+alongside the close contract only after affirmative verification, so a
+host executing the verified contracts performs exactly the dispatcher's
+post-close steps. The execution service itself remains read-only
+(`github_writes_authorized: False`): it names the contracts, it does not
+perform the writes, and a tampered or missing reconciliation contract
+fails verification. Native ChatGPT cannot execute this path today
+because the MCP service is not attached there (#3559); the attached
+GitHub Service Agent session (native GitHub MCP, per-call approval) is
+the executable host path, and it must execute both contracts, in order,
+for each verified item in the finite authorized batch.
 
 Trust-boundary repairs (#3690):
 
