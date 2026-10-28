@@ -158,3 +158,34 @@ def test_m02_path_segment_bypass_lines_are_not_validation_commands(line):
 ])
 def test_m02_filename_topic_controls_still_count(line):
     assert has_validation_command(line) is True
+
+
+# --- Mutation survivors M10 and M07 (campaign 2026-10-28, source e05c3b6b) ---
+
+@_pytest.mark.parametrize("body", [
+    # Another repository's #3506 beside this repository's: the directive
+    # declares bare numbers only, so the parser still reports INFORMATIONAL.
+    "## Linked issue\n\nPart of #3506 and Other/repo#3506\n\nNon-closing: #3506\n",
+    "## Linked issue\n\nPart of Other/repo#3506 and #3506\n\nNon-closing: #3506\n",
+    "## Linked issue\n\nPart of Other/repo#3506\n\nNon-closing: #3506\n",
+])
+def test_report_only_number_never_projects_an_external_repository_issue(body):
+    """M10: with the target guard removed these returned 3506 and fetched the wrong issue."""
+    result = parse_linked_issue_result(body)
+    assert result.status == LinkedIssueParseStatus.INFORMATIONAL
+    assert any(candidate.repository is not None for candidate in result.bare_references)
+    assert report_only_issue_number(result) is None
+
+@_pytest.mark.parametrize("body", [
+    "- pytest was not run for this docs-only change\n- python -m pytest tests/agent_os_issue_acceptance -q\n",
+    "pytest has not been run yet\n./scripts/validate-all.sh\n",
+    "- [ ] pytest was skipped\n- [x] pytest tests/ -q\n",
+])
+def test_a_genuine_command_after_a_negated_line_still_counts(body):
+    """M07: stopping at the first negated line hid a real command on a later line."""
+    assert has_validation_command(body) is True
+
+def test_only_negated_or_prose_lines_do_not_count_across_lines():
+    """Control: scanning on past a negated line must not turn non-performance into evidence."""
+    body = "- pytest was not run\n- pytest documentation was reviewed\nNo tests ran.\n"
+    assert has_validation_command(body) is False

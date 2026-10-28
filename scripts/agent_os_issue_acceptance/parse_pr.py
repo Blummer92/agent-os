@@ -562,13 +562,9 @@ def report_only_issue_number(result: LinkedIssueParseResult) -> int | None:
         return result.issue_number
     if result.status != LinkedIssueParseStatus.INFORMATIONAL:
         return None
-    targets = {
-        candidate.issue_number
-        for candidate in result.bare_references
-        if candidate.repository is None
-    }
-    if len(targets) != 1:
-        return None
     if any(candidate.repository is not None for candidate in result.bare_references):
+        return None
+    targets = {candidate.issue_number for candidate in result.bare_references}
+    if len(targets) != 1:
         return None
     return next(iter(targets))
