@@ -1273,3 +1273,32 @@ def test_v11_historical_records_remain_readable_not_native_authority():
     assert result.status == "invalid"
     assert result.merge_authorized is False
     assert "version.unsupported" in result.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 finish campaign (Workstream D): Draft/Ready isolation.
+#
+# Pre-existing coverage: draft=True/ready=False is rejected by eligibility
+# ("pull-request.draft") and draft=False/ready=True is the eligible shape
+# (positive applicable cases). The two contradictory shapes had NO test:
+# PullRequestMergeEvidence construction requires exactly one of draft /
+# ready_for_review to be true, so both are rejected at construction, not
+# by eligibility. This test pins that construction guard, so removing it
+# is detected even though eligibility would still reject both shapes for
+# a different reason. Blocking-review and unresolved-thread isolation are
+# already covered (review.blocked / review.unresolved and the
+# applicability blocking-review / unresolved-thread tests) and are not
+# duplicated here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"draft": True, "ready_for_review": True},
+        {"draft": False, "ready_for_review": False},
+    ],
+)
+def test_contradictory_draft_ready_states_are_rejected_at_construction(change):
+    with pytest.raises(ValueError, match="exactly one Draft/Ready state must be true"):
+        _pr(**change)
