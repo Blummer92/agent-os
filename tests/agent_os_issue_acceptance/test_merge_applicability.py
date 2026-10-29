@@ -766,3 +766,120 @@ def test_missing_publisher_fails_closed():
         runs=[_CheckRun("CI", "success", app_slug=None)]))
     assert receipt["merge_authorized"] is False
     assert "checks.publisher-unverifiable" in receipt["reason_codes"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 finish campaign (Workstream B2): duplicate check-run ordering.
+#
+# The pre-existing file tested latest *commit-status* ordering and single
+# check-run vs status combinations, but never multiple check runs sharing
+# one context. _latest_evidence selects by check-run ID (max wins, ties or
+# missing IDs collapse to "unknown"), never by list position. Each case
+# below is run in both API iteration orders where order could matter, so a
+# last-element-wins mutant is detected by the reversed-order case.
+# ---------------------------------------------------------------------------
+
+
+def _duplicate_check_runs(runs):
+    from scripts.agent_os_issue_acceptance.merge_applicability import (
+        _latest_evidence,
+    )
+
+    return _latest_evidence(_Commit(runs=runs))
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [_CheckRun("CI", "failure", run_id=10), _CheckRun("CI", "success", run_id=20)],
+        [_CheckRun("CI", "success", run_id=20), _CheckRun("CI", "failure", run_id=10)],
+    ],
+)
+def test_duplicate_check_runs_newer_success_wins_regardless_of_order(runs):
+    assert _duplicate_check_runs(runs)["CI"] == ("success", "github-actions", False)
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [_CheckRun("CI", "success", run_id=10), _CheckRun("CI", "failure", run_id=20)],
+        [_CheckRun("CI", "failure", run_id=20), _CheckRun("CI", "success", run_id=10)],
+    ],
+)
+def test_duplicate_check_runs_newer_failure_wins_regardless_of_order(runs):
+    assert _duplicate_check_runs(runs)["CI"] == ("failure", "github-actions", False)
+
+
+def test_duplicate_check_runs_skipped_and_pending_do_not_mask_latest():
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "skipped", run_id=10), _CheckRun("CI", "success", run_id=20)]
+    )["CI"][0] == "success"
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "success", run_id=10), _CheckRun("CI", "skipped", run_id=20)]
+    )["CI"][0] == "skipped"
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "success", run_id=10), _CheckRun("CI", None, run_id=20)]
+    )["CI"][0] == "pending"
+
+
+def test_duplicate_check_runs_missing_or_equal_ids_are_unknown_not_success():
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "success", run_id=None), _CheckRun("CI", "failure", run_id=None)]
+    )["CI"][0] == "unknown"
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "success", run_id=20), _CheckRun("CI", "failure", run_id=20)]
+    )["CI"][0] == "unknown"
+    assert _duplicate_check_runs(
+        [_CheckRun("CI", "success", run_id=None), _CheckRun("CI", "failure", run_id=20)]
+    )["CI"][0] == "unknown"
+
+
+def test_duplicate_check_runs_newer_success_from_other_publisher_is_recorded():
+    result = _duplicate_check_runs(
+        [
+            _CheckRun("CI", "failure", run_id=10),
+            _CheckRun("CI", "success", app_slug="other-app", app_id=999, run_id=20),
+        ]
+    )["CI"]
+    assert result == ("success", "other-app", False)
+
+
+def test_duplicate_check_runs_run_status_publisher_disagreement_is_unknown():
+    from scripts.agent_os_issue_acceptance.merge_applicability import (
+        _latest_evidence,
+    )
+
+    commit = _Commit(
+        runs=[_CheckRun("CI", "success", run_id=20)],
+        statuses=[_Status("CI", "success", creator="other[bot]", creator_id=1)],
+    )
+    assert _latest_evidence(commit)["CI"][0] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [_CheckRun("CI", "failure", run_id=10), _CheckRun("CI", "success", run_id=20)],
+        [_CheckRun("CI", "success", run_id=20), _CheckRun("CI", "failure", run_id=10)],
+    ],
+)
+def test_duplicate_check_runs_downstream_dispatch_uses_latest_success(runs):
+    receipt = _run(commit=_Commit(runs=runs))
+    assert receipt["dispatch_checks_passed"] is True
+    assert receipt["status"] == "awaiting-human-attestation"
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["human-origin-attestation-required"]
+
+
+def test_duplicate_check_runs_downstream_dispatch_blocks_latest_failure():
+    receipt = _run(
+        commit=_Commit(
+            runs=[
+                _CheckRun("CI", "success", run_id=10),
+                _CheckRun("CI", "failure", run_id=20),
+            ]
+        )
+    )
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert "checks.changed" in receipt["reason_codes"]
