@@ -1,0 +1,352 @@
+# TEMPORARY -- issue #3691 isolated acceptance; never merge to main.
+# Push-triggered only on the fixed temporary branch. NO workflow_dispatch.
+name: "TEMP #3691 CKR6 isolated failure acceptance"
+
+on:
+  push:
+    branches:
+      - test/3691-ckr6-isolated-acceptance
+    paths:
+      - .github/workflows/ckr6-3691-isolated-acceptance.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ckr6-3691-isolated-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: Create synthetic-only acceptance issue and input markers
+    if: ${{ github.repository == 'Blummer92/agent-os' && github.ref == 'refs/heads/test/3691-ckr6-isolated-acceptance' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      issue_number: ${{ steps.seed.outputs.issue_number }}
+    steps:
+      - name: Prepare real GitHub marker IDs and transparently synthetic CKR6 events
+        id: seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ckr6-3691"
+          title="TEMP CKR6 #3691 isolated acceptance - run ${GITHUB_RUN_ID}"
+          body='TEST ARTIFACT ONLY for issue #3691. This issue is not an implementation issue. GitHub Actions creates harmless NON-COMMAND marker comments; the isolated harness then constructs synthetic owner-shaped CKR6 events in memory from their real GitHub comment IDs and timestamps. Neither marker comment executes the production CKR6 ingress. Do not use these synthetic events as proof that an owner really posted a CKR6 command. No issue closure or other production mutation is authorized. Retain for QA until explicitly approved cleanup.'
+          issue_number="$(gh api --method POST "repos/$GH_REPO/issues" -f title="$title" -f body="$body" --jq '.number')"
+          test -n "$issue_number"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+          export ISSUE_NUMBER="$issue_number"
+          for case_id in classify execute; do
+            marker="ISOLATED #3691 noncommand marker for $case_id; run ${GITHUB_RUN_ID}; do not interpret as an owner CKR6 request."
+            gh api --method POST "repos/$GH_REPO/issues/$issue_number/comments" -f body="$marker" > "$RUNNER_TEMP/ckr6-3691/${case_id}-marker.json"
+          done
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'ckr6-3691'
+          repo=os.environ['GH_REPO']
+          issue=int(os.environ['ISSUE_NUMBER'])
+          for case in ('classify','execute'):
+              marker=json.loads((root/f'{case}-marker.json').read_text())
+              assert isinstance(marker['id'],int) and marker['id']>0
+              assert marker.get('created_at')
+              assert marker['issue_url'].endswith(f'/issues/{issue}')
+              event={
+                  'repository':{'full_name':repo},
+                  'issue':{'number':issue},
+                  'comment':{
+                      'id':marker['id'],
+                      'created_at':marker['created_at'],
+                      'body':'/agent-os ckr6 {"operation":"issue-start","repository":"'+repo+'","issue_number":'+str(issue)+',"task_reference":"synthetic-3691-'+case+'"}',
+                      'user':{'login':'Blummer92'},
+                  },
+                  'synthetic_acceptance_fixture':{
+                      'source_marker_actual_author':marker['user']['login'],
+                      'source_marker_id':marker['id'],
+                      'owner_login_synthetic':True,
+                      'command_body_synthetic':True,
+                      'case':case,
+                      'run_id':os.environ['GITHUB_RUN_ID'],
+                  },
+              }
+              (root/f'{case}-event.json').write_text(json.dumps(event,sort_keys=True),encoding='utf-8')
+          PY
+          echo "### Isolated CKR6 #3691 synthetic test issue" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/$GH_REPO/issues/$issue_number" >> "$GITHUB_STEP_SUMMARY"
+          echo "Marker IDs and dates are genuine; event command body and allowed actor are SYNTHETIC." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691/
+          retention-days: 3
+          if-no-files-found: error
+
+  classify-failure:
+    name: Intentionally fail upstream classify simulation
+    needs: seed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Controlled pre-bridge startup failure -- test only
+        run: |
+          echo 'INTENTIONAL synthetic classify infrastructure failure for #3691'
+          exit 71
+
+  classify-success:
+    name: Simulate successful classify before execute failure
+    needs: seed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ordinary classify success (isolated test only)
+        run: echo 'Synthetic classify stage succeeded before execute failure'
+
+  execute-failure:
+    name: Intentionally fail upstream execute simulation
+    needs: classify-success
+    runs-on: ubuntu-latest
+    steps:
+      - name: Controlled execute infrastructure failure -- test only
+        run: |
+          echo 'INTENTIONAL synthetic execute infrastructure failure for #3691'
+          exit 72
+
+  report-classify:
+    name: Real merged reporter after simulated classify failure
+    needs: [seed, classify-failure]
+    if: ${{ always() && needs.seed.result == 'success' && needs.classify-failure.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: Post real bounded fallback with real merged stdlib reporter
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$RUNNER_TEMP/ckr6-3691/classify-event.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --api-url "$GITHUB_API_URL"
+
+  report-execute:
+    name: Real merged reporter after simulated execute failure
+    needs: [seed, classify-success, execute-failure]
+    if: ${{ always() && needs.seed.result == 'success' && needs.classify-success.result == 'success' && needs.execute-failure.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: Post real bounded fallback with real merged stdlib reporter
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$RUNNER_TEMP/ckr6-3691/execute-event.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --api-url "$GITHUB_API_URL"
+
+  replay-classify:
+    name: Check idempotent replay of classify receipt
+    needs: [seed, report-classify]
+    if: ${{ always() && needs.seed.result == 'success' && needs.report-classify.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: The same request must deduplicate without a second comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$RUNNER_TEMP/ckr6-3691/classify-event.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --api-url "$GITHUB_API_URL" > "$RUNNER_TEMP/replay.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          data=json.loads((Path(os.environ['RUNNER_TEMP'])/'replay.json').read_text())
+          assert data['deduplicated'] is True, data
+          assert isinstance(data['posted_comment_id'],int)
+          print('Classify replay deduplicated receipt ID:',data['posted_comment_id'])
+          PY
+
+  replay-execute:
+    name: Check idempotent replay of execute receipt
+    needs: [seed, report-execute]
+    if: ${{ always() && needs.seed.result == 'success' && needs.report-execute.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: The same request must deduplicate without a second comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$RUNNER_TEMP/ckr6-3691/execute-event.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --api-url "$GITHUB_API_URL" > "$RUNNER_TEMP/replay.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          data=json.loads((Path(os.environ['RUNNER_TEMP'])/'replay.json').read_text())
+          assert data['deduplicated'] is True, data
+          assert isinstance(data['posted_comment_id'],int)
+          print('Execute replay deduplicated receipt ID:',data['posted_comment_id'])
+          PY
+
+  negative-controls:
+    name: Reject unauthorised / malformed events before any HTTP
+    needs: seed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: Negative events never reach the real GitHub API
+        run: |
+          python - <<'PY'
+          import copy,importlib.util,json,os,urllib.request
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('ckr6_failure_postback',Path('scripts/ckr6_failure_postback.py'))
+          mod=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          event=json.loads((Path(os.environ['RUNNER_TEMP'])/'ckr6-3691/classify-event.json').read_text())
+          bad=[]
+          e=copy.deepcopy(event);e['comment']['user']['login']='untrusted';bad.append(('unauthorized actor',e))
+          e=copy.deepcopy(event);e['comment']['body']='CKR6 near miss';bad.append(('non-command',e))
+          e=copy.deepcopy(event);e['issue']['pull_request']={'url':'fake'};bad.append(('PR comment',e))
+          e=copy.deepcopy(event);e['repository']['full_name']='other/repo';bad.append(('repository mismatch',e))
+          def no_http(*args,**kwargs):raise AssertionError('HTTP attempt on rejected input')
+          urllib.request.urlopen=no_http
+          for title,b in bad:
+              try:
+                  mod.post_failure_result(event=b,repository='Blummer92/agent-os',allowed_actor='Blummer92',api_url='https://api.github.com',token='fake-not-real')
+              except ValueError:
+                  print('PASS:',title)
+              else:
+                  raise AssertionError('Rejected event was accepted: '+title)
+          PY
+
+  verify:
+    name: Independently read back real synthetic-issue receipts
+    needs: [seed, classify-failure, execute-failure, report-classify, report-execute, replay-classify, replay-execute, negative-controls]
+    if: ${{ always() && needs.seed.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckr6-3691-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr6-3691
+      - name: Fetch actual GitHub comment IDs and reject duplicate or unauthorized receipts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TEST_ISSUE: ${{ needs.seed.outputs.issue_number }}
+          REPORT_CLASSIFY: ${{ needs.report-classify.result }}
+          REPORT_EXECUTE: ${{ needs.report-execute.result }}
+          REPLAY_CLASSIFY: ${{ needs.replay-classify.result }}
+          REPLAY_EXECUTE: ${{ needs.replay-execute.result }}
+          NEGATIVE_CONTROLS: ${{ needs.negative-controls.result }}
+        run: |
+          python - <<'PY'
+          import json,os,urllib.request
+          from pathlib import Path
+          expected=['REPORT_CLASSIFY','REPORT_EXECUTE','REPLAY_CLASSIFY','REPLAY_EXECUTE','NEGATIVE_CONTROLS']
+          for name in expected:
+              assert os.environ[name]=='success',f'{name} not successful: {os.environ[name]}'
+          repo=os.environ['GITHUB_REPOSITORY']
+          issue=int(os.environ['TEST_ISSUE'])
+          root=Path(os.environ['RUNNER_TEMP'])/'ckr6-3691'
+          events={k:json.loads((root/f'{k}-event.json').read_text()) for k in ('classify','execute')}
+          marker='<!-- agent-os-ckr6-result:v1 -->\n'
+          url=f'https://api.github.com/repos/{repo}/issues/{issue}/comments?per_page=100'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],'Accept':'application/vnd.github+json'})
+          with urllib.request.urlopen(req,timeout=30) as resp: comments=json.load(resp)
+          assert isinstance(comments,list) and len(comments)<100,'Readback absent or truncated'
+          lookup={c['id']:c for c in comments}
+          receipts=[]
+          for c in comments:
+              if str(c.get('body','')).startswith(marker):
+                  payload=json.loads(c['body'][len(marker):])
+                  receipts.append((c,payload))
+          assert len(receipts)==2, f'exactly two synthetic receipts required, observed {len(receipts)}'
+          ids=set()
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as summary:
+              summary.write(f'## #3691 isolated acceptance (synthetic inputs)\nTest issue: https://github.com/{repo}/issues/{issue}\n\n')
+              summary.write('| Scenario | Source marker comment | Receipt comment | Result |\n|---|---:|---:|---|\n')
+              for case,e in events.items():
+                  request_id=e['comment']['id']
+                  assert request_id in lookup,'Real source marker missing'
+                  assert not str(lookup[request_id]['body']).startswith('/agent-os ckr6'),'Marker unexpectedly triggered production ingress'
+                  assert e['synthetic_acceptance_fixture']['owner_login_synthetic'] is True
+                  match=[(c,p) for c,p in receipts if p.get('request_comment_id')==request_id]
+                  assert len(match)==1,(case,'receipt count',len(match))
+                  c,p=match[0]
+                  assert c['id'] not in ids
+                  ids.add(c['id'])
+                  assert p.get('status')=='manual-review'
+                  assert p.get('reason_codes')==['ckr6-result-unavailable']
+                  assert p.get('issue_number')==issue and p.get('repository')==repo
+                  for flag in ('mutation_admissible','execution_authorized','github_writes_authorized','merge_authorized','closure_authorized','side_effects_performed'):
+                      assert p.get(flag) is False,(case,flag)
+                  summary.write(f'| {case} (synthetic event) | {request_id} | {c["id"]} | PASS |\n')
+                  print('PASS',case,'request',request_id,'receipt',c['id'])
+              summary.write('\nThe event command text and owner-login field were SYNTHETIC; original marker comment IDs, timestamps, receipt posts and Github Actions job results are real. This does not prove owner-issued production ingress. Jobs intentionally failing in classify-failure and execute-failure are expected. QA must independently read back results.\n')
+          PY
