@@ -84,6 +84,77 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(client.calls, [])
 
 
+
+class EvidenceCampaignCatalogTests(unittest.TestCase):
+    """October 29 reviewed evidence drafts: catalog only, no Notion effects."""
+
+    def test_four_bounded_reviewed_entries_match_intended_targets(self):
+        from scripts.agent_os_notion_lessons_write.catalog import (
+            TEST_DETECTION_REQUEST_ID, MERGE_ACCEPTANCE_REQUEST_ID,
+            LL10_FIXTURE_REQUEST_ID, LL18_METRIC_REQUEST_ID, validate_entry,
+        )
+        expected = (
+            (TEST_DETECTION_REQUEST_ID, None),
+            (MERGE_ACCEPTANCE_REQUEST_ID, None),
+            (LL10_FIXTURE_REQUEST_ID, 'LL-10'),
+            (LL18_METRIC_REQUEST_ID, 'LL-18'),
+        )
+        for request_id, target in expected:
+            with self.subTest(request_id=request_id):
+                self.assertEqual(target_for(request_id), target)
+                self.assertIs(validate_entry(LESSONS[request_id]), LESSONS[request_id])
+                values = lesson_for(request_id)
+                self.assertFalse(PROTECTED_FIELDS & set(values))
+                self.assertTrue(all(len(value) <= 512 for value in values.values()
+                                    if isinstance(value, str)))
+                self.assertEqual(set(values) & {'Status', 'Surface Before Work?'}, set())
+        self.assertNotIn('ll-93-ckr6-path-proof-2026-10-29', LESSONS)
+
+    def test_new_lessons_remain_creates_with_source_provenance(self):
+        from scripts.agent_os_notion_lessons_write.catalog import (
+            TEST_DETECTION_REQUEST_ID, MERGE_ACCEPTANCE_REQUEST_ID,
+        )
+        for request_id, issue in ((TEST_DETECTION_REQUEST_ID, '3506'),
+                                  (MERGE_ACCEPTANCE_REQUEST_ID, '3691')):
+            with self.subTest(request_id=request_id):
+                self.assertIsNone(target_for(request_id))
+                self.assertEqual(lesson_for(request_id)['Source Link'],
+                                 'https://github.com/Blummer92/agent-os/issues/' + issue)
+                cmd = '/agent-os notion-write ' + request_id
+                admitted = admit(event(cmd, number=3418), **CONTEXT)
+                self.assertEqual((admitted.request_id, admitted.expected_lesson_id),
+                                 (request_id, None))
+                with self.assertRaises(WriteBlocked):
+                    admit(event(cmd + ' LL-93 2026-10-06T23:07:00.000Z'), **CONTEXT)
+
+    def test_refinements_are_revision_bound_and_narrative_only(self):
+        from scripts.agent_os_notion_lessons_write.catalog import (
+            LL10_FIXTURE_REQUEST_ID, LL18_METRIC_REQUEST_ID,
+        )
+        for request_id, lesson_id in ((LL10_FIXTURE_REQUEST_ID, 'LL-10'),
+                                      (LL18_METRIC_REQUEST_ID, 'LL-18')):
+            with self.subTest(request_id=request_id):
+                values = lesson_for(request_id)
+                self.assertEqual(set(values), {'What To Do Next Time', 'Guardrail'})
+                command = ('/agent-os notion-write ' + request_id + ' ' + lesson_id
+                           + ' 2026-10-29T10:00:00.000Z')
+                admitted = admit(event(command, number=3418), **CONTEXT)
+                self.assertEqual((admitted.expected_lesson_id, admitted.expected_revision),
+                                 (lesson_id, '2026-10-29T10:00:00.000Z'))
+                with self.assertRaises(WriteBlocked):
+                    admit(event(command.replace(lesson_id, 'LL-93')), **CONTEXT)
+
+    def test_reviewed_entries_cannot_mutate_activation_fields(self):
+        from scripts.agent_os_notion_lessons_write.catalog import (
+            TEST_DETECTION_REQUEST_ID, MERGE_ACCEPTANCE_REQUEST_ID,
+            LL10_FIXTURE_REQUEST_ID, LL18_METRIC_REQUEST_ID,
+        )
+        for request_id in (TEST_DETECTION_REQUEST_ID, MERGE_ACCEPTANCE_REQUEST_ID,
+                           LL10_FIXTURE_REQUEST_ID, LL18_METRIC_REQUEST_ID):
+            with self.subTest(request_id=request_id):
+                self.assertFalse(PROTECTED_FIELDS & set(properties(request_id)))
+
+
 class ConsumerTests(unittest.TestCase):
     def row(self):
         row = page()
