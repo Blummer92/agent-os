@@ -18,6 +18,7 @@ from typing import Mapping
 COMMAND_PREFIX = "/agent-os ckr6 "
 CKR6_RESULT_MARKER = "<!-- agent-os-ckr6-result:v1 -->"
 MAX_COMMENT_BYTES = 16 * 1024
+COMMENTS_PAGE_SIZE = 100
 
 
 def _canonical_result_json(payload: Mapping[str, object]) -> str:
@@ -134,18 +135,25 @@ def _github_request(url: str, token: str, *, body: str | None = None) -> urllib.
 
 def _existing_result_comment(
     target: str, since: str, request_comment_id: int, token: str
-) -> int | None:
-    """Bounded existing-result lookup; on lookup failure preserve bridge semantics."""
+) -> tuple[int | None, str | None]:
+    """Return ``(existing result comment id, None)`` or ``(None, reason)``.
+
+    ``(None, None)`` means absence was proven. A reason means it could not be:
+    the caller still posts (the bridge's rule -- a duplicate, non-authorizing
+    receipt is preferable to leaving the requester without a result) and then
+    fails the job visibly. Exactly-once is not claimed: lookup-then-post is not
+    atomic.
+    """
     if not since:
-        return None
-    query = urllib.parse.urlencode({"since": since, "per_page": 100})
+        return None, "request created_at missing"
+    query = urllib.parse.urlencode({"since": since, "per_page": COMMENTS_PAGE_SIZE})
     request = _github_request(f"{target}?{query}", token)
     try:
         comments = _request_json(request)
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, f"lookup failed: {type(exc).__name__}"
     if type(comments) is not list:
-        return None
+        return None, "lookup returned an unexpected response"
     for item in comments:
         if not isinstance(item, Mapping) or type(item.get("id")) is not int:
             continue
@@ -154,8 +162,10 @@ def _existing_result_comment(
         except (TypeError, ValueError):
             continue
         if parsed.get("request_comment_id") == request_comment_id:
-            return item["id"]
-    return None
+            return item["id"], None
+    if len(comments) >= COMMENTS_PAGE_SIZE:
+        return None, "lookup may be truncated"
+    return None, None
 
 
 def post_failure_result(
@@ -177,7 +187,7 @@ def post_failure_result(
     result = fallback_result(repository, issue_number)
     body = serialize_result_comment(result, request_comment_id=request_comment_id)
     target = f"{api_url.rstrip('/')}/repos/{repository}/issues/{issue_number}/comments"
-    existing = _existing_result_comment(target, created_at, request_comment_id, token)
+    existing, uncertain = _existing_result_comment(target, created_at, request_comment_id, token)
     if existing is None:
         request = _github_request(target, token, body=body)
         try:
@@ -188,6 +198,10 @@ def post_failure_result(
             ) from exc
         if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
             raise RuntimeError("CKR6 failure postback returned an unexpected response")
+        if uncertain:
+            raise RuntimeError(
+                f"CKR6 failure postback posted comment {posted['id']} without verified dedupe: {uncertain}"
+            )
     return {
         "issue_number": issue_number,
         "request_comment_id": request_comment_id,

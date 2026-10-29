@@ -74,15 +74,18 @@ class _Response:
 class _Transport:
     """Fake urlopen: records requests, serves canned GET comments, POST ids."""
 
-    def __init__(self, existing_comments=(), post_id=6328164937, fail_post=False):
-        self.existing = list(existing_comments)
+    def __init__(self, existing_comments=(), post_id=6328164937, fail_post=False, fail_get=False):
+        self.existing = existing_comments if isinstance(existing_comments, dict) else list(existing_comments)
         self.post_id = post_id
         self.fail_post = fail_post
+        self.fail_get = fail_get
         self.requests = []
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
         if request.get_method() == "GET":
+            if self.fail_get:
+                raise urllib.error.URLError("simulated lookup failure")
             return _Response(self.existing)
         if self.fail_post:
             raise urllib.error.URLError("simulated transport failure")
@@ -296,6 +299,69 @@ def test_github_transport_failure_raises(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake)
     with pytest.raises(RuntimeError, match="failure postback failed"):
         _post(fake)
+
+
+# --- Uncertain dedupe: post (never leave the requester without a result), then fail visibly ----
+#
+# The bridge prefers a duplicate, non-authorizing receipt over silence when the
+# existing-result lookup is uncertain. The reporter follows that rule and then
+# raises, so the uncertainty shows as a red job rather than a quiet success.
+# Exactly-once is not claimed: lookup-then-post is not atomic.
+
+
+def _unrelated_comments(count):
+    return [{"id": 9000 + n, "body": "an ordinary comment"} for n in range(count)]
+
+
+@pytest.mark.parametrize(
+    ("fake_kwargs", "reason"),
+    [
+        ({"fail_get": True}, "lookup failed: URLError"),
+        ({"existing_comments": {"message": "Bad credentials"}}, "lookup returned an unexpected response"),
+        ({"existing_comments": _unrelated_comments(100)}, "lookup may be truncated"),
+    ],
+    ids=["get-raises", "non-list-response", "full-page-without-match"],
+)
+def test_uncertain_dedupe_posts_exactly_once_then_fails_visibly(monkeypatch, fake_kwargs, reason):
+    fake = _Transport(**fake_kwargs)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError) as raised:
+        _post(fake)
+    assert str(raised.value) == (
+        f"CKR6 failure postback posted comment 6328164937 without verified dedupe: {reason}"
+    )
+    assert len(fake.posts) == 1
+
+
+@pytest.mark.parametrize("created_at", [None, "", 20261021])
+def test_missing_request_timestamp_posts_without_a_lookup_then_fails_visibly(transport, created_at):
+    with pytest.raises(RuntimeError) as raised:
+        _post(transport, event=_event(created_at=created_at))
+    assert str(raised.value).endswith("without verified dedupe: request created_at missing")
+    assert [r.get_method() for r in transport.requests] == ["POST"]
+
+
+def test_uncertain_dedupe_with_a_failing_post_reports_the_transport_failure(monkeypatch):
+    fake = _Transport(fail_get=True, fail_post=True)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError, match="failure postback failed"):
+        _post(fake)
+
+
+def test_healthy_empty_lookup_posts_exactly_once_after_one_read(transport):
+    outcome = _post(transport)
+    assert [r.get_method() for r in transport.requests] == ["GET", "POST"]
+    assert outcome["deduplicated"] is False
+
+
+def test_a_match_on_a_partial_page_deduplicates_without_posting(monkeypatch):
+    body = bridge.serialize_ckr6_result_comment(
+        bridge._fallback_result(REPOSITORY, ISSUE_NUMBER), request_comment_id=REQUEST_COMMENT_ID
+    )
+    fake = _Transport(existing_comments=[*_unrelated_comments(99), {"id": 7002, "body": body}])
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    assert _post(fake)["posted_comment_id"] == 7002
+    assert fake.posts == []
 
 
 # --- Install independence: stdlib only, importable in isolation -------------

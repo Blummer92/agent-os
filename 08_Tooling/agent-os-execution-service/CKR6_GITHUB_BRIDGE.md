@@ -74,7 +74,10 @@ only, so other actors cannot cause receipts. Postback is idempotent per request:
 when a result comment for the same `request_comment_id` already exists (bounded
 lookup of comments created since the request), a rerun does not post another.
 A failed lookup still posts, because a duplicate receipt is preferable to
-silence.
+silence. The infrastructure-failure reporter then also exits non-zero (a missing
+or oversized lookup, a non-list response or an absent `created_at` count as a
+failed lookup), so the run is red while the requester still receives a receipt.
+Exactly-once is not claimed: lookup-then-post is not atomic.
 
 Host-owned remainder: the host route that appends the footer is outside this
 repository. Hosts should post machine command comments without appended text;
