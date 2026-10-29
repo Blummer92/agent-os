@@ -65,3 +65,17 @@ fresh preflight
 ```
 
 Do not manufacture a production workload solely to prove this sequence.
+
+## Inspection-only provider inventory (#3512)
+
+The fixed `/agent-os inspect-runtime` ingress may read bounded cloud identity,
+instance, disk, network, snapshot and image metadata without a RUNNING guest.
+These provider-only reads do not START the VM and do not use SSH. Guest runtime,
+sudo and host-local retirement inspection remain gated on a RUNNING VM; an
+unavailable guest is reported as UNKNOWN with a non-authorizing reason.
+
+An unsuccessful snapshot/image read does not erase independently validated
+earlier provider observations. Missing disk auto-delete settings, invalid
+resource identity bindings, or unobserved resource classes remain explicitly
+UNKNOWN. Neither an observed cloud section nor a successful repository test
+proves deletion safety, grants stop permission, or authorizes retirement.
