@@ -1251,6 +1251,34 @@ def test_v12_native_authorization_roundtrip_and_direct_applicability():
                 authorization_id="", authorization_revision="")
 
 
+def test_wrong_publisher_aggregate_cannot_mint_candidate():
+    # M5 regression: a successful exact-head authoritative aggregate supplied
+    # by an untrusted publisher must be refused by candidate construction.
+    # The pre-existing missing-aggregate case covers absence, not a wrong
+    # publisher, so it cannot detect removal of the publisher-identity check.
+    with pytest.raises(ValueError, match="trusted authoritative aggregate"):
+        build_merge_authorization_candidate_from_pr(
+            _pr(None, required_checks=(_check(), _aggregate_check(app_identity="rogue-app"))),
+            authorizer_id="Blummer92",
+            decision_id="wrong-publisher-aggregate",
+            decision_at=CANDIDATE,
+            expires_at=MERGE_EXPIRES,
+        )
+
+
+def test_valid_record_against_wrong_publisher_evidence_keeps_aggregate_reason():
+    # A valid record evaluated against current evidence whose aggregate
+    # publisher is wrong must stay non-applicable with the authoritative
+    # aggregate reason preserved, not a generic changed-binding refusal alone.
+    authorized, _ = _authorized()
+    result = _evaluate(
+        authorized,
+        pr=_pr(None, required_checks=(_check(), _aggregate_check(app_identity="rogue-app"))),
+    )
+    assert result.merge_authorized is False
+    assert "checks.authoritative-aggregate-missing" in result.reason_codes
+
+
 def test_v11_historical_records_remain_readable_not_native_authority():
     from scripts.agent_os_issue_acceptance.merge_authorization import (
         reconstruct_merge_authorization_record,
