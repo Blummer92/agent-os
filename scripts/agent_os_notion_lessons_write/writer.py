@@ -127,14 +127,16 @@ def _find_lesson_id(client, source_id: str, lesson_id: str) -> Mapping | None:
     return row
 
 
-def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
+def _check_schema(schema: object, source_id: str, lesson: Mapping, *,
+                  extra_types: Mapping | None = None) -> None:
     if not isinstance(schema, Mapping) or notion_id(schema.get("id")) != source_id:
         raise WriteBlocked("schema-destination-mismatch")
     if any(schema.get(key) is True for key in ("archived", "is_archived", "in_trash")):
         raise WriteBlocked("inactive-data-source")
     raw = schema.get("properties", {})
     expected = {**{name: WRITABLE_TYPES[name] for name in lesson},
-                "Lesson ID": "unique_id", "Status": "select"}
+                "Lesson ID": "unique_id", "Status": "select",
+                **(extra_types or {})}
     if not isinstance(raw, Mapping) or any(
         not isinstance(raw.get(name), Mapping) or raw[name].get("type") != kind
         for name, kind in expected.items()

@@ -32,6 +32,7 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     verify_additional_unit_binding,
     verify_candy_branding_binding,
     verify_lessons_learned_binding,
+    verify_reviewed_lesson_revision,
     verify_live_bindings,
     verify_teacher_modeling_binding,
 )
@@ -678,6 +679,8 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
     assert BINDING_VERIFICATION_REQUEST_IDS == (
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        "verify-ll-87-current-revision",
+        "verify-ll-93-current-revision",
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
@@ -758,3 +761,152 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(tmp_path, 
     assert evidence["drive_writes_performed"] is False
     assert evidence["classroom_artifact_writes_performed"] is False
     assert evidence["gce_invoked"] is False
+
+
+REVISION = "2026-10-06T23:07:00.000Z"
+ANCHOR = "3c67ac78-3131-8130-94dd-da66213ca42b"
+SOURCE = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+PAGE = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+
+class ReviewedAdapter:
+    def __init__(self, number=93, *, missing=False, duplicate=False,
+                 archived=False, wrong_parent=False, schema_mismatch=False,
+                 revision=REVISION, surface=False, source_link=None):
+        self.calls = []
+        self.number = number
+        self.missing = missing
+        self.duplicate = duplicate
+        self.archived = archived
+        self.wrong_parent = wrong_parent
+        self.schema_mismatch = schema_mismatch
+        self.revision = revision
+        self.surface = surface
+        self.source_link = source_link
+
+    def execute(self, task):
+        call = dict(task.payload)
+        self.calls.append(call)
+        action = call["action"]
+        if action == "get_page":
+            if call["page_id"] == ANCHOR:
+                output = {"id": ANCHOR, "archived": False,
+                          "parent": {"data_source_id": SOURCE}}
+            else:
+                output = {"id": PAGE, "archived": self.archived,
+                          "last_edited_time": self.revision,
+                          "parent": {"type": "data_source_id",
+                                     "data_source_id": PAGE if self.wrong_parent else SOURCE},
+                          "properties": {
+                              "Lesson ID": {"type": "unique_id", "unique_id": {"number": self.number, "prefix": "LL"}},
+                              "Status": {"type": "select", "select": None},
+                              "Surface Before Work?": {"type": "checkbox", "checkbox": self.surface},
+                              "Source Link": {"type": "url", "url": self.source_link},
+                              "Lesson Learned": {"type": "title", "title": [{"plain_text": "SECRET GUIDANCE"}]},
+                          }}
+        elif action == "get_data_source":
+            types = {"Lesson ID": "unique_id", "Status": "select",
+                     "Surface Before Work?": "checkbox", "Source Link": "url",
+                     "Lesson Learned": "title", "What Happened": "rich_text",
+                     "What To Do Next Time": "rich_text", "Guardrail": "rich_text",
+                     "Area": "select", "Learning Type": "select", "Applies To": "multi_select"}
+            if self.schema_mismatch:
+                types["Surface Before Work?"] = "rich_text"
+            output = {"id": SOURCE, "archived": False,
+                      "properties": {k: {"type": v} for k, v in types.items()}}
+        elif action == "query_data_source":
+            rows = [] if self.missing else [{
+                "id": PAGE, "archived": self.archived,
+                "last_edited_time": self.revision,
+                "parent": {"type": "data_source_id", "data_source_id": PAGE if self.wrong_parent else SOURCE},
+                "properties": {"Lesson ID": {"type": "unique_id", "unique_id": {"number": self.number, "prefix": "LL"}}},
+            }]
+            if self.duplicate:
+                rows.append({"id": "cccccccc-cccc-cccc-cccc-cccccccccccc"})
+            output = {"results": rows, "has_more": False}
+        else:
+            raise AssertionError("write method reached: " + action)
+        return {"status": "success", "output": output}
+
+
+@pytest.mark.parametrize("number", [87, 93])
+def test_reviewed_lesson_inspection_reuses_implementation(number):
+    adapter = ReviewedAdapter(number, surface=False)
+    result = verify_reviewed_lesson_revision(
+        adapter, request_id=f"verify-ll-{number}-current-revision",
+        generated_at="run:test")
+    assert result["lesson"]["lesson_id"] == f"LL-{number}"
+    assert result["lesson"]["source_revision"] == REVISION
+    assert result["lesson"]["surface_before_work"] is False
+    assert [c["action"] for c in adapter.calls] == [
+        "get_page", "get_data_source", "query_data_source", "get_page"]
+    assert "SECRET GUIDANCE" not in json.dumps(result)
+    assert result["notion_writes_performed"] is False
+
+
+def test_third_synthetic_reviewed_entry_needs_no_dispatch_branch(monkeypatch):
+    from types import MappingProxyType
+    from scripts.agent_os_notion_lessons_write import catalog
+    from scripts.agent_os_notion_read_request import binding_verification as bv
+    entries = dict(catalog.LESSONS)
+    entries["synthetic-reviewed"] = MappingProxyType({
+        "target_lesson_id": "LL-123", "properties": MappingProxyType({"Guardrail": "Synthetic"})})
+    monkeypatch.setattr(catalog, "LESSONS", MappingProxyType(entries))
+    assert "verify-ll-123-current-revision" in bv._binding_verification_request_ids()
+    result = bv.verify_reviewed_lesson_revision(
+        ReviewedAdapter(123), request_id="verify-ll-123-current-revision", generated_at="synthetic")
+    assert result["lesson"]["lesson_id"] == "LL-123"
+    assert bv.admit_binding_verification_request(
+        transport(request_id="verify-ll-123-current-revision", issue_number=3418),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)["status"] == "admitted"
+
+
+@pytest.mark.parametrize("issue", [1, 3417, 3418])
+def test_reviewed_inspection_admits_ordinary_issue(issue):
+    decision = admit_binding_verification_request(
+        transport(request_id="verify-ll-93-current-revision", issue_number=issue),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)
+    assert decision["status"] == "admitted"
+    assert decision["write_allowed"] is False
+    assert decision["notion_write_reachable"] is False
+
+
+@pytest.mark.parametrize("request_id", ["verify-ll-91-current-revision", "verify-ll-67-current-revision"])
+def test_unreviewed_lesson_refused(request_id):
+    decision = admit_binding_verification_request(
+        transport(request_id=request_id, issue_number=3418),
+        expected_repository=REPOSITORY, expected_actor=ACTOR)
+    assert decision["status"] == "rejected"
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({"missing": True}, "reviewed-lesson-missing"),
+    ({"duplicate": True}, "ambiguous-lesson"),
+    ({"archived": True}, "inactive-page"),
+    ({"wrong_parent": True}, "page-destination-mismatch"),
+    ({"schema_mismatch": True}, "live-schema-drift"),
+    ({"revision": ""}, "page-revision-required"),
+    ({"revision": "not-a-timestamp"}, "writer-incompatible-revision"),
+    ({"number": 87}, "query-identity-mismatch"),
+])
+def test_reviewed_inspection_fails_closed(kwargs, match):
+    with pytest.raises(NotionReadRequestError, match=match):
+        verify_reviewed_lesson_revision(
+            ReviewedAdapter(**kwargs), request_id="verify-ll-93-current-revision",
+            generated_at="test")
+
+
+@pytest.mark.parametrize("source_link,present,format_valid", [
+    (None, False, False),
+    ("https://example.com/anything", True, False),
+    ("https://github.com/Blummer92/agent-os/issues/3305", True, True),
+])
+def test_reviewed_lesson_source_link_format_is_not_provenance(source_link, present, format_valid):
+    result = verify_reviewed_lesson_revision(
+        ReviewedAdapter(93, source_link=source_link),
+        request_id="verify-ll-93-current-revision", generated_at="test")
+    assert result["lesson"]["source_link_present"] is present
+    assert result["lesson"]["source_link_format_valid"] is format_valid
+    if source_link is not None:
+        assert source_link not in json.dumps(result)
+    assert result["notion_writes_performed"] is False
