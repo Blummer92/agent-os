@@ -11,6 +11,10 @@ import re
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
+TEST_DETECTION_REQUEST_ID = "ll-new-test-detection-proof-2026-10-29"
+MERGE_ACCEPTANCE_REQUEST_ID = "ll-new-merge-is-not-acceptance-2026-10-29"
+LL10_FIXTURE_REQUEST_ID = "ll-10-single-fault-fixtures-2026-10-29"
+LL18_METRIC_REQUEST_ID = "ll-18-metric-integrity-2026-10-29"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -82,6 +86,48 @@ LESSONS = MappingProxyType({
             "Learning Type": "Mistake",
             "Applies To": ("Notion",),
             "Source Link": "https://github.com/Blummer92/agent-os/issues/3305",
+        }),
+    }),
+    # #3418 October 29 evidence campaign; reviewed proposals, inert until owner write.
+    TEST_DETECTION_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Lesson Learned": "A passing or mapped test is not proof it detects the protected regression",
+            "What Happened": "Oct 28-29 2026 mutation runs: M07 and M10 in parse_pr.py survived the 76-test #3506 file that exercised both functions; PR #3742 added 7 cases that kill each (3 failures). On main bb43fc08, removing timed_out, cancelled and action_required from validation-currentness failure conclusions, or letting the oldest duplicate check run win in merge applicability, still passed every collected test in tests/agent_os_issue_acceptance and tests/agent_os_remote_validation.",
+            "What To Do Next Time": "For each guard you add or change, write a single-fault case that asserts its exact reason code. Then remove the guard and confirm that named test fails at the exact SHA; record mutant, SHA and killing test. Classify each mutant: killed, survived, downstream-guarded, or unverified. Treat coverage, static links and duplicate-looking tests as candidates; never delete one without comparing unique detection.",
+            "Guardrail": "Test execution, coverage, static test links and green CI never prove detection. Call a guard protected only when a recorded test fails for its mutant at the exact SHA. A downstream safeguard does not close a gap at the producer boundary.",
+            "Area": "Testing",
+            "Learning Type": "Testing lesson",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3506",
+        }),
+    }),
+    # #3418 October 29 evidence campaign; reviewed proposals, inert until owner write.
+    MERGE_ACCEPTANCE_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Lesson Learned": "A merged PR with green CI is delivery evidence, not acceptance",
+            "What Happened": "Oct 2026: PRs #3693, #3742, #3728, #3739, #3737, #3738 and #3723 merged with exact-head aggregate PASS while their issues stayed open for a live receipt, post-merge mutant rerun, closure canary or acceptance admission. Before PR #3708 (57cedc86, merged 2026-10-22), report-only Issue Acceptance jobs, e.g. on #3511, #3703, #3671 and #3658, logged 'Overall result: fail' then exited 0, so the check showed green while its verdict was FAIL.",
+            "What To Do Next Time": "Track each acceptance criterion with its own evidence: code merged, exact-head CI, independent QA at the final head, post-merge or live execution, and authorized closure. Read the checker verdict, not the job colour; WARN and MANUAL_REVIEW exit 0 by design. Keep the issue open and name the missing evidence. An open issue alone does not mean the fix failed.",
+            "Guardrail": "Never report an issue accepted or fixed because its PR merged or a report-only job is green. Each criterion without its own evidence stays NOT_VERIFIED.",
+            "Area": "Governance",
+            "Learning Type": "Mistake",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3691",
+        }),
+    }),
+    # #3418 October 29 evidence campaign; reviewed proposals, inert until owner write.
+    LL10_FIXTURE_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": "LL-10",
+        "properties": MappingProxyType({
+            "What To Do Next Time": "Define the adversarial matrix before implementation and make ambiguity, contradictions, malformed or oversized inputs, distinct-but-similar cases, and no-change outcomes first-class fixtures. Treat the happy path as only one case in the contract. Give every guard one single-fault case that asserts its exact reason code, and cover each terminal value the code branches on, such as timed_out, cancelled and action_required.",
+            "Guardrail": "Characterize current behavior and protect failure, ambiguity, boundedness, and no-side-effect paths with deterministic fixtures before changing automation behavior. Multi-fault cases and prefix-only assertions cannot show which guard fired, so they hide guard removal.",
+        }),
+    }),
+    # #3418 October 29 evidence campaign; reviewed proposals, inert until owner write.
+    LL18_METRIC_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": "LL-18",
+        "properties": MappingProxyType({
+            "What To Do Next Time": "Bind completeness to the requested scope, pagination state, repository identity, and exact revision. Require positive terminal pagination proof; incomplete, unknown, moved, or partial retrieval must remain explicit and fail closed/manual review. Before using a count or rate, check that the stated total equals its listed parts under one population definition and that the sample is representative.",
+            "Guardrail": "One valid page is not a complete scan. Never promote partial or unknown pagination evidence to complete repository state. A total that disagrees with its parts, or mixes event types under one label, stays manual review and is not decision evidence.",
         }),
     }),
 })

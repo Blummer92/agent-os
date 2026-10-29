@@ -59,11 +59,18 @@ sharing, deletion/archive, bulk or scheduled operation is admitted. Existing
 `NOTION_TOKEN` and `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID` are reused without
 permission changes.
 
-Registered entries: `ckr6-execution-path-2026-10-05` (create; the LL-93 canary
-narrative) and `ll-93-descriptive-metadata-2026-10-08` (update of LL-93:
-Area=Governance, Learning Type=Mistake, Applies To=Notion, Source Link=#3305).
-Executing the latter still requires the owner's per-action command and does not
-set Status or Surface Before Work?.
+Registered catalog entries include the LL-93 canary narrative
+(`ckr6-execution-path-2026-10-05`), the LL-93 descriptive metadata update
+(`ll-93-descriptive-metadata-2026-10-08`), and the LL-87 guardrail update
+(`ll-87-guardrail-refinement-2026-10-10`). The October 29 evidence campaign
+adds two **create** entries (`ll-new-test-detection-proof-2026-10-29` and
+`ll-new-merge-is-not-acceptance-2026-10-29`) and two **narrative-only update**
+entries (`ll-10-single-fault-fixtures-2026-10-29` and
+`ll-18-metric-integrity-2026-10-29`). LL-93 narrative refinement is excluded
+pending its second independent QA review. Catalog registration does not itself
+authorize or perform a Notion write. Every write still requires its own current
+owner command and exact readback; Status and Surface Before Work? remain separate
+owner decisions.
 
 ## Execution and failure behavior
 
