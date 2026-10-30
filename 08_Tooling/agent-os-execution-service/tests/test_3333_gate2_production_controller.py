@@ -1016,6 +1016,177 @@ def test_bound_controller_fails_closed_before_dispatch(tmp_path, monkeypatch, re
     assert not receipts_dir.exists() or list(receipts_dir.iterdir()) == []
 
 
+# ---------------------------------------------------------------------------
+# F1 (independent QA): controller identity guards, pinned directly.
+#
+# The earlier bound tests prove the factory binds the right record, and the
+# wrong-SHA test proves the envelope SHA guard through the admitted comment.
+# They do not prove the controller's OWN re-verification of the handoff,
+# repository, and issue identities: a record that diverges only inside the
+# factory's return value would fail earlier in the factory (or not at all)
+# and never reach the controller guard. These tests therefore start from a
+# real bound bootstrap (real store, real factory, real loaders -- the
+# binding is proved first by ``_build_bound_bootstrap`` succeeding), then
+# diverge exactly one identity dimension in the factory's return value and
+# stub only that return value. The controller guard is then the only layer
+# that can produce ``handoff-envelope-mismatch``: if it is removed or
+# weakened, the drive stub is called and the test fails. The same pattern
+# pins the two surviving mutations Claude reported: the
+# ``runtime_request is None`` check (without it, the controller crashes
+# with ``unexpected-controller-error`` instead of failing closed) and the
+# provider-clock consistency check (without it, a divergent provider clock
+# silently reaches dispatch).
+# ---------------------------------------------------------------------------
+
+
+def _real_bound_bootstrap(bound: dict) -> object:
+    """Build the real bootstrap first, so divergence is deliberate, not fake."""
+    bootstrap = _build_bound_bootstrap(bound["envelope"], bound["configuration"])
+    assert bootstrap.runtime_request is not None
+    return bootstrap
+
+
+def _run_controller_with_bootstrap(tmp_path, monkeypatch, bound, bootstrap) -> tuple[list, object]:
+    """Run the controller with the factory return stubbed to ``bootstrap``."""
+    import agent_os_execution_service.gate2_production_controller as controller_module
+
+    monkeypatch.setattr(
+        controller_module,
+        "build_production_host_bootstrap_for_handoff",
+        lambda handoff, configuration=None: bootstrap,
+    )
+    path = _write_event(tmp_path, _bound_event(bound))
+    calls: list = []
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        run_gate2_fixed_pilot_controller(
+            event_path=path,
+            environ=bound["environ"],
+            drive=lambda envelope, bs: calls.append(envelope) or _completed_receipt(),
+            resolve_selection=lambda: _selection(_BOUND_CODESPACE),
+        )
+    return calls, excinfo.value
+
+
+def _divergent_request_bootstrap(bound, monkeypatch, **descriptor_overrides) -> object:
+    """Real bootstrap whose runtime-request descriptor diverges in one field.
+
+    ``descriptor_id`` is content-addressed, so it is passed empty and the
+    constructor recomputes a consistent ID for the divergent content. The
+    request itself is then copied bypassing its constructor, because
+    ``RuntimeExecutionRequest.__post_init__`` validates descriptor bindings
+    and would reject the divergent descriptor before the controller ever
+    sees it. That validation is a different layer; the point here is that
+    even a record that reaches the controller with a wrong identity must
+    be caught by the controller's own guard, not by an earlier constructor.
+
+    Paired-guard isolation: in production the provider's descriptor loader
+    returns the request's descriptor whenever the request handoff matches,
+    so the request-level and provider-level guards are paired and would
+    both fire on this divergence. To pin the request-level guard *alone*,
+    the providers installed here use the store-backed loader -- the
+    fallback path that runs when the request handoff differs -- so the
+    provider-level guard passes and only the request-level guard can
+    reject the run. Removing that guard must therefore let the drive stub
+    run and fail the test.
+    """
+    import dataclasses
+    from dataclasses import replace
+
+    from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
+        load_invocation_descriptor,
+    )
+
+    bootstrap = _real_bound_bootstrap(bound)
+    request = bootstrap.runtime_request
+    descriptor = replace(request.invocation_descriptor, descriptor_id="", **descriptor_overrides)
+    divergent_request = object.__new__(type(request))
+    for field in dataclasses.fields(request):
+        value = descriptor if field.name == "invocation_descriptor" else getattr(request, field.name)
+        object.__setattr__(divergent_request, field.name, value)
+    divergent_bootstrap = replace(bootstrap, runtime_request=divergent_request)
+    store_root = bound["configuration"].checkpoint_store_root
+    store_providers = replace(
+        bootstrap.admission_providers(),
+        descriptor_loader=lambda hid: load_invocation_descriptor(store_root, hid),
+    )
+    monkeypatch.setattr(ProductionHostBootstrap, "admission_providers", lambda self: store_providers)
+    return divergent_bootstrap
+
+
+def _divergent_providers_bootstrap(bound, monkeypatch, *, evaluated_at=None, **descriptor_overrides) -> object:
+    """Real bootstrap whose admission providers diverge in exactly one way.
+
+    ``admission_providers`` is a method, not a field, so the divergent
+    providers are installed with a class-level monkeypatch (restored by
+    pytest after the test). The runtime-request descriptor stays correct,
+    so the request-level guard passes and only the provider-level guard
+    can reject the run.
+    """
+    from dataclasses import replace
+
+    bootstrap = _real_bound_bootstrap(bound)
+    providers = bootstrap.admission_providers()
+    if evaluated_at is not None:
+        providers = replace(providers, evaluated_at=evaluated_at)
+    if descriptor_overrides:
+        real_loader = providers.descriptor_loader
+        real_descriptor = real_loader(bound["handoff"].handoff_id)
+        divergent = replace(real_descriptor, descriptor_id="", **descriptor_overrides)
+        providers = replace(providers, descriptor_loader=lambda hid: divergent)
+    monkeypatch.setattr(ProductionHostBootstrap, "admission_providers", lambda self: providers)
+    return bootstrap
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"handoff_id": "executor-handoff:" + "b" * 64}, id="handoff"),
+        pytest.param({"repository": "Blummer92/other-repo"}, id="repository"),
+        pytest.param({"issue_number": 9999}, id="issue"),
+        pytest.param({"source_sha": "c" * 40}, id="sha"),
+    ],
+)
+def test_controller_guard_rejects_divergent_runtime_request_identity(tmp_path, monkeypatch, overrides) -> None:
+    """F1: the controller's request-level identity guard, reached directly."""
+    bound = _bound_store(tmp_path, monkeypatch)
+    bootstrap = _divergent_request_bootstrap(bound, monkeypatch, **overrides)
+    calls, error = _run_controller_with_bootstrap(tmp_path, monkeypatch, bound, bootstrap)
+    assert error.reason == "handoff-envelope-mismatch"
+    assert calls == []
+    receipts_dir = bound["store"] / "invocations" / "receipts"
+    assert not receipts_dir.exists() or list(receipts_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"evaluated_at": "2030-01-01T00:00:00Z"}, id="provider-clock"),
+        pytest.param({"handoff_id": "executor-handoff:" + "b" * 64}, id="provider-handoff"),
+        pytest.param({"repository": "Blummer92/other-repo"}, id="provider-repository"),
+        pytest.param({"issue_number": 9999}, id="provider-issue"),
+        pytest.param({"source_sha": "c" * 40}, id="provider-sha"),
+    ],
+)
+def test_controller_guard_rejects_divergent_provider_identity_or_clock(tmp_path, monkeypatch, kwargs) -> None:
+    """F1: the controller's provider-level identity/clock guard, reached directly."""
+    bound = _bound_store(tmp_path, monkeypatch)
+    bootstrap = _divergent_providers_bootstrap(bound, monkeypatch, **kwargs)
+    calls, error = _run_controller_with_bootstrap(tmp_path, monkeypatch, bound, bootstrap)
+    assert error.reason == "handoff-envelope-mismatch"
+    assert calls == []
+
+
+def test_controller_guard_fails_closed_on_missing_runtime_request(tmp_path, monkeypatch) -> None:
+    """F1 surviving mutation: a None runtime request must fail closed, not crash."""
+    from dataclasses import replace
+
+    bound = _bound_store(tmp_path, monkeypatch)
+    bootstrap = replace(_real_bound_bootstrap(bound), runtime_request=None)
+    calls, error = _run_controller_with_bootstrap(tmp_path, monkeypatch, bound, bootstrap)
+    assert error.reason == "bound-evidence-unavailable"
+    assert calls == []
+
+
 def test_bound_controller_refuses_wrong_codespace_and_active_lease(tmp_path, monkeypatch) -> None:
     """Pre-bootstrap host gates still block the bound path before any dispatch."""
     bound = _bound_store(tmp_path, monkeypatch)
