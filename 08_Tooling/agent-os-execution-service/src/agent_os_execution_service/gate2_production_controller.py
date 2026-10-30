@@ -11,15 +11,18 @@ ordering over already-shipped components:
   authorization is never invented;
 - ``load_production_host_configuration`` binds the four ``AGENT_OS_*`` paths,
   fail-closed on any missing binding;
-- ``build_host_github_read_transport_from_environment`` supplies the one
-  read-only host transport satisfying both the single-issue and the
-  execution-authorization-source protocols (#1319);
-- ``LiveRepositoryEvidenceReader()`` is the truthful always-``UNAVAILABLE``
-  #1155 reader until structured evidence is supplied through the canonical
-  AOS-GCE2F owners; the bootstrap deliberately supplies no default evidence
-  source;
-- ``build_subprocess_verifier_runner`` is the canonical repository-state
-  verifier runner;
+- ``build_production_host_bootstrap_for_handoff`` (the existing
+  governed-resume factory, #1217/#1319) supplies the one read-only host
+  transport, the handoff-bound runtime request, and a
+  ``LiveRepositoryEvidenceReader`` carrying real canonical evidence
+  (dependency readiness + rebuilt advisory validation, #1185/#1197).
+  The controller no longer builds an empty, always-``UNAVAILABLE`` reader
+  on its production path: an unbound reader cannot reconstruct an
+  admissible candidate, so the bound factory binding is the production
+  default, and the envelope's handoff/repository/issue/SHA are re-verified
+  against the bound descriptor before any dispatch;
+- the factory supplies the canonical repository-state verifier runner
+  (``build_subprocess_verifier_runner``) inside the bound bootstrap;
 - ``build_production_host_bootstrap`` composes the ``ProductionHostBootstrap``
   whose ``admission_providers()`` bind the descriptor loader, current
   resolver, host-local lease observer, and host clock;
@@ -73,9 +76,10 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
     admit_issue_comment_event,
 )
 
-from .host_github_read_transport import (
-    HostGitHubTransportUnavailable,
-    build_host_github_read_transport_from_environment,
+from .host_github_read_transport import HostGitHubTransportUnavailable
+from .production_governed_resume_factory import (
+    ProductionGovernedResumeFactoryError,
+    build_production_host_bootstrap_for_handoff,
 )
 from .production_host_bootstrap import (
     VERIFIER_RELATIVE_PATH,
@@ -83,7 +87,6 @@ from .production_host_bootstrap import (
     ProductionHostBootstrapError,
     ProductionHostConfiguration,
     build_production_host_bootstrap,
-    build_subprocess_verifier_runner,
     load_production_host_configuration,
 )
 from .production_host_composition import read_canonical_codespace_selection
@@ -299,25 +302,77 @@ def _fail_on_active_leases(lease_directory: Path) -> None:
             raise Gate2ControllerError("conflicting-active-lease", entry.name)
 
 
-def _default_transports() -> tuple[Any, Any, Any, Any]:
-    """Build the production transports. Fail closed on missing credential."""
-    try:
-        host_transport = build_host_github_read_transport_from_environment()
-    except HostGitHubTransportUnavailable as exc:
-        raise Gate2ControllerError(
-            "github-read-credential-unavailable",
-            "GITHUB_TOKEN or GH_TOKEN must be set (Gate 4)",
-        ) from exc
-    from scripts.agent_os_candidate_packet_live_input import (
-        LiveRepositoryEvidenceReader,
-    )
+def _build_bound_bootstrap(
+    envelope: dict[str, Any],
+    configuration: ProductionHostConfiguration,
+) -> ProductionHostBootstrap:
+    """Build the production bootstrap bound to the admitted envelope.
 
-    return (
-        host_transport,  # issue_transport (read-only SingleIssueTransport)
-        host_transport,  # authorization_transport (same #1319 dual-protocol object)
-        LiveRepositoryEvidenceReader(),  # truthful always-UNAVAILABLE #1155 reader
-        build_subprocess_verifier_runner(),
-    )
+    The factory loads the immutable handoff's runtime request, descriptor,
+    and restart capsule from the same checkpoint store, verifies they bind
+    the same subject, loads dependency readiness, and rebuilds the advisory
+    validation result into a bound ``LiveRepositoryEvidenceReader``. This
+    function then re-verifies the envelope itself against that bound
+    record: a syntactically accepted comment naming a different handoff,
+    repository, issue, or SHA than the durable record must not become an
+    admitted candidate, and a missing or inconsistent record must fail
+    here, before any dispatch or receipt. Expired evidence is not
+    admitted either, but at the next layer: the bound reader returns
+    UNAVAILABLE for it, and reconstruction therefore refuses admission;
+    this binding function does not itself claim a candidate is admitted.
+    """
+    handoff = envelope.get("codespace_implementation_handoff_id_or_none")
+    sha = envelope.get("codespace_implementation_sha_or_none")
+    if type(handoff) is not str or _HANDOFF.fullmatch(handoff) is None:
+        raise Gate2ControllerError("receipt-identity-invalid", "handoff")
+    if type(sha) is not str or _SHA40.fullmatch(sha) is None:
+        raise Gate2ControllerError("receipt-identity-invalid", "sha")
+    try:
+        bootstrap = build_production_host_bootstrap_for_handoff(
+            handoff, configuration=configuration
+        )
+    except ProductionGovernedResumeFactoryError as exc:
+        # Preserve the Gate 4 credential and host-configuration reasons
+        # the old production path reported, instead of collapsing them
+        # into generic bound evidence.
+        cause = exc.__cause__
+        while cause is not None:
+            if isinstance(cause, HostGitHubTransportUnavailable):
+                raise Gate2ControllerError(
+                    "github-read-credential-unavailable",
+                    "GITHUB_TOKEN or GH_TOKEN must be set (Gate 4)",
+                ) from exc
+            if isinstance(cause, ProductionHostBootstrapError):
+                raise cause
+            cause = cause.__cause__
+        raise Gate2ControllerError("bound-evidence-unavailable") from exc
+    request = bootstrap.runtime_request
+    if request is None:
+        raise Gate2ControllerError("bound-evidence-unavailable", "no runtime request")
+    descriptor = request.invocation_descriptor
+    if (
+        descriptor.handoff_id != handoff
+        or descriptor.repository != REPOSITORY
+        or descriptor.issue_number != ISSUE_NUMBER
+        or descriptor.source_sha != sha
+    ):
+        raise Gate2ControllerError("handoff-envelope-mismatch")
+    try:
+        providers = bootstrap.admission_providers()
+        bound_descriptor = providers.descriptor_loader(handoff)
+    except ProductionHostBootstrapError:
+        raise
+    except Exception as exc:
+        raise Gate2ControllerError("bound-evidence-unavailable") from exc
+    if (
+        providers.evaluated_at != bootstrap.evaluated_at
+        or bound_descriptor.handoff_id != handoff
+        or bound_descriptor.repository != REPOSITORY
+        or bound_descriptor.issue_number != ISSUE_NUMBER
+        or bound_descriptor.source_sha != sha
+    ):
+        raise Gate2ControllerError("handoff-envelope-mismatch")
+    return bootstrap
 
 
 def _build_bootstrap(
@@ -440,13 +495,15 @@ def run_gate2_fixed_pilot_controller(
     ``event_path`` is the owner's issue-comment event document (the
     per-invocation CURRENT authorization comment). ``drive``,
     ``resolve_selection``, and ``build_transports`` are dependency-injection
-    seams for offline tests; production callers leave them unset.
+    seams for offline tests; production callers leave them unset, and
+    unset ``build_transports`` now means the bound factory bootstrap
+    (never an empty evidence reader). A test-supplied ``build_transports``
+    still exercises the old bootstrap composition path in isolation; it
+    is not the production path, and the bound-path integration tests
+    prove the production default separately.
     """
     source = os.environ if environ is None else environ
     invoke = drive if drive is not None else drive_fixed_codespace_pilot_on_host
-    make_transports = (
-        build_transports if build_transports is not None else _default_transports
-    )
 
     try:
         envelope = _admit_envelope(_read_event_document(Path(event_path)))
@@ -456,7 +513,10 @@ def run_gate2_fixed_pilot_controller(
             resolve_selection=resolve_selection, environ=source
         )
         _fail_on_active_leases(configuration.lease_directory)
-        bootstrap = _build_bootstrap(make_transports(), configuration)
+        if build_transports is not None:
+            bootstrap = _build_bootstrap(build_transports(), configuration)
+        else:
+            bootstrap = _build_bound_bootstrap(envelope, configuration)
         # The receipts directory is ensured BEFORE the pilot drives: the fixed
         # probe consumes a governed invocation, so its receipt must have a
         # durable home before any execution occurs. A post-drive failure here
