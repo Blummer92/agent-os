@@ -225,17 +225,20 @@ def test_correlate_run_requires_exactly_one_run_in_window() -> None:
         [run()], title=TITLE, expected_workflow_sha=WORKFLOW_SHA, dispatched_at=NOW
     )
     assert outcome == "correlated" and found is not None and found.run_id == 101
-    for candidate, label in (
-        ([], "none"),
-        ([run(), run(run_id=102)], "ambiguous"),
-        ([run(created_at=NOW - timedelta(minutes=5))], "stale"),
-        ([run(title="other")], "wrong title"),
-        ([run(head_sha=OTHER_SHA)], "wrong workflow sha"),
+    # Exact outcomes, not merely non-correlation: an ambiguous pair must
+    # report run-ambiguous, never run-not-found (the two reasons are
+    # distinct downstream: ambiguous means extra polling, not a missing run).
+    for candidate, expected, label in (
+        ([], "run-not-found", "none"),
+        ([run(), run(run_id=102)], "run-ambiguous", "ambiguous"),
+        ([run(created_at=NOW - timedelta(minutes=5))], "run-not-found", "stale"),
+        ([run(title="other")], "run-not-found", "wrong title"),
+        ([run(head_sha=OTHER_SHA)], "run-not-found", "wrong workflow sha"),
     ):
         outcome, found = correlate_run(
             candidate, title=TITLE, expected_workflow_sha=WORKFLOW_SHA, dispatched_at=NOW
         )
-        assert (outcome, found) != ("correlated", found) or found is None, label
+        assert (outcome, found) == (expected, None), label
     outcome, found = correlate_run(
         [run()],
         title=TITLE,

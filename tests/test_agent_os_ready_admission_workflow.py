@@ -136,6 +136,21 @@ def test_ready_recovery_dispatch_job_has_only_the_bounded_permissions():
         "actions": "write", "contents": "read", "pull-requests": "read"}
 
 
+def test_ready_recovery_dispatch_job_is_issue_only_and_invokes_governed_ingress():
+    # Moved from tests/test_2410_ready_recovery_ingress_workflow.py
+    # (test_ready_recovery_job_is_confined_to_one_actions_write_job) when
+    # that file's overlapping governed-workflow checks were consolidated:
+    # these are the step/condition checks the strong file did not already
+    # cover. Permissions, main-only/fixed-form, service-actor scoping and
+    # checkout-credential checks remain in the neighbouring tests above.
+    job = _workflow()["jobs"]["ready_recovery_dispatch"]
+    assert "github.event.issue.pull_request == null" in job["if"]
+    step_text = "\n".join(str(step) for step in job["steps"])
+    assert "github_issue_comment_ingress" in step_text
+    assert "ready_recovery_dispatch" in step_text
+    assert "agent-os-ready-recovery-" in step_text
+
+
 def test_ready_recovery_dispatch_job_is_main_only_and_fixed_form():
     job = _workflow()["jobs"]["ready_recovery_dispatch"]
     condition = job["if"]
