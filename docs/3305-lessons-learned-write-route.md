@@ -65,6 +65,35 @@ Area=Governance, Learning Type=Mistake, Applies To=Notion, Source Link=#3305).
 Executing the latter still requires the owner's per-action command and does not
 set Status or Surface Before Work?.
 
+## #3690 continuation consumer lesson candidate (2026-10-30)
+
+The reviewed catalog request `continuation-live-consumer-2026-10-30` records
+previously merged continuation repairs (#2175, #2213, #2263, #2494, #3670)
+and exact-main October 30 test outcomes: 109 focused, 12 reconstructed and
+30 MCP integration tests passed. The nested 52-test regression execution
+overlaps the other checks and is not counted as distinct test coverage.
+Native ChatGPT structured-payload consumption, next-dispatch and asynchronous
+re-entry remain unverified; current `chatgpt-governance` publication excludes
+the continuation tools. Existing #3559 owns any separately authorized host
+attachment/allowlist expansion; this lesson does not authorize one.
+
+This is one **create proposal**, not a new Notion lesson until a current owner
+command completes with exact Notion readback. The existing writer checks the
+exact title for duplicates; semantically similar or retitled lessons require
+human reconciliation rather than automatic creation. Do not run the command
+until this catalog revision is merged and the owner explicitly invokes it:
+
+```text
+/agent-os notion-write continuation-live-consumer-2026-10-30
+```
+
+The entry supplies only four narrative fields, Area, Learning Type and the
+canonical #3690 Source Link. It deliberately omits `Status`,
+`Surface Before Work?` and unverified live multi-select options. Catalog
+registration, the command and persistence do not activate CKR6 eligibility.
+The current lesson identity/revision must be obtained from live readback
+before any follow-up, with independent QA and no duplicate writes.
+
 ## Execution and failure behavior
 
 The workflow accepts only created owner comments on ordinary issues, serializes the
