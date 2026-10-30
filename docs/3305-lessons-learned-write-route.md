@@ -69,9 +69,10 @@ set Status or Surface Before Work?.
 
 The reviewed catalog request `continuation-live-consumer-2026-10-30` records
 previously merged continuation repairs (#2175, #2213, #2263, #2494, #3670)
-and exact-main October 30 test outcomes: 109 focused, 12 reconstructed and
-30 MCP integration tests passed. The nested 52-test regression execution
-overlaps the other checks and is not counted as distinct test coverage.
+and owner-reported October 30 Cloud Shell test outcomes on main bb43fc08:
+109 focused, 12 reconstructed and 30 MCP integration tests passed. The nested
+52-test regression execution overlaps the other checks; independent QA did not
+reproduce these different-head test runs. These are not exact-PR-head test results.
 Native ChatGPT structured-payload consumption, next-dispatch and asynchronous
 re-entry remain unverified; current `chatgpt-governance` publication excludes
 the continuation tools. Existing #3559 owns any separately authorized host
