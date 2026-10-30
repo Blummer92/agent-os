@@ -93,11 +93,12 @@ LESSONS = MappingProxyType({
             "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
             "What Happened": (
                 "Agent OS repaired continuation boundaries in merged PRs #2175 (Claude Stop hook), "
-                "#2213 (MCP call reachability), #2263 (false stall), #2494 (batch cursor), and "
-                "#3670 (missing MCP payloads). On 2026-10-30, 109 focused, 12 reconstructed "
-                "and 30 MCP tests passed at main bb43fc08; native ChatGPT next-dispatch "
-                "remained unverified. Its approved five-tool MCP publication profile "
-                "excludes both continuation tools."
+                "#2213 (MCP reachability), #2263 (false stall), #2494 (batch cursor), and "
+                "#3670 (missing MCP payloads). Owner-reported Cloud Shell runs on "
+                "2026-10-30 at main bb43fc08: 109 focused, 12 reconstructed, and "
+                "30 MCP tests passed; QA did not independently reproduce those runs. "
+                "Native host next-dispatch remains unverified. The approved five-tool "
+                "chatgpt-governance profile excludes all continuation-named tools."
             ),
             "What To Do Next Time": (
                 "Trace producer -> canonical payload -> registered MCP tool -> approved "
