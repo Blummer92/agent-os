@@ -105,7 +105,9 @@ class ContinuationConsumerLessonCatalogTests(unittest.TestCase):
             if isinstance(value, str):
                 self.assertLessEqual(len(value), 512, name)
         self.assertIn('30 MCP tests passed', values['What Happened'])
-        self.assertIn('remained unverified', values['What Happened'])
+        self.assertIn('remains unverified', values['What Happened'])
+        self.assertIn('Owner-reported Cloud Shell runs', values['What Happened'])
+        self.assertIn('excludes all continuation-named tools', values['What Happened'])
         self.assertIn('separate owner decision', values['Guardrail'])
 
     def test_new_candidate_uses_existing_owner_comment_admission(self):
