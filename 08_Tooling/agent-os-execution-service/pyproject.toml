@@ -31,6 +31,8 @@ dependencies = [
   # ``[tool.setuptools] packages`` below: that would ship the same module from
   # two distributions.
   "instructional-workflow-contracts>=0.1.0,<0.2.0",
+  # #3308: the host reconciliation adapter imports the canonical registry classifier.
+  "agent-os-navigation-registry>=0.1.0,<0.2.0",
   "mcp>=2.3,<2.4",
 ]
 

@@ -126,6 +126,19 @@ A linked issue resolves only when exactly one unique same-repository target is i
 
 Bare references and `Addresses #...` are non-authoritative. Fenced code, inline code, blockquotes, and HTML comments are masked. Critical consumers use `parse_linked_issue_result()`; `parse_linked_issue()` remains a lossy wrapper.
 
+## Cumulative required-docs evidence (#3724)
+`build_merged_doc_evidence.py` is the read-only REST producer run by the Issue Acceptance workflow; it writes a JSON list of records (or `[]` on any failure) that the CLI passes to the `required docs` check via `--merged-docs-evidence`. It nominates merged PRs from same-repository timeline cross-references, then keeps one only when the canonical `report_only_issue_number(parse_linked_issue_result(...))` association equals the evaluated issue, its merge commit is an ancestor of the evaluated base (compare API), and at least one of its files matching a current declaration has the identical blob at the merge commit and the base. `merged_docs.py` re-validates each record offline (exact keys, types, issue, freshness against the current declarations); `checks/required_docs.py` matches the remaining files with the same `_is_covered` contract as current-PR files and reports invalid-record reason codes only with a failing result. Neither module creates readiness, merge, or closure authority.
+
+## Criterion-preservation handoff packet (#3677)
+`criterion_preservation.py` is a pure, deterministic packet surface for implementation handoffs. `parse_acceptance_criteria()` reads the checkbox criteria of an issue body's acceptance-criteria section in order, preserving each criterion's exact text; a criterion's identity is its 1-based position plus a digest of that exact text. The section heading is recognized at level 2 or 3 (`##` / `### Acceptance criteria`), with or without the `and definition of done` suffix; the section ends at the next heading of the same or a higher level, so sibling issue-form fields never become criteria; and more than one recognized heading makes the section ambiguous — it is treated as missing, and the satisfaction projection reports manual-review with the note `criteria-section-ambiguous`. `build_criterion_packet()` emits the handoff packet output — every parsed criterion with its identity — and `verify_criterion_packet()` compares a packet against the canonical issue body: a missing index is a dropped criterion, the same index with different text is a reworded criterion, and each is reported as a manual-review item for that criterion. Only a byte-exact full match verifies as `preserved`. The module performs no I/O and creates no authority.
+
+The PR template (`.github/PULL_REQUEST_TEMPLATE.md`) applies the same contract at authoring time: linkage defaults to a non-closing reference (`Part of #N`, closing opt-in only with an exact-issue closure admission), and its criterion-preservation section requires a per-criterion mapping or an explicit manual-review statement naming the unmapped criteria.
+
+## Criterion-level satisfaction projection (#3678)
+`criterion_satisfaction.py` is a pure, deterministic, report-only projection. `project_criterion_satisfaction()` maps the criteria parsed from one canonical issue body (identities from `criterion_preservation.py`) to caller-supplied evidence records and PR lineage, and gives every criterion exactly one disposition: `satisfied`, `unsatisfied`, `stale`, `missing`, `contradicted`, or `manual-review`, each with traceable evidence pointers or an explicit missing-evidence reason. Evidence accumulates across sequential linked PRs (earlier merged PRs and the one open primary PR); evidence bound to a superseded PR head or to a prior issue-body version is `stale`, disagreeing current evidence is `contradicted`, and an unparsable criterion is `manual-review`. Only a per-criterion verdict record bound to the exact issue-body version and the authoritative PR head can satisfy a criterion — merge state, CI success, and review success are `pr-signal` records and never satisfy. An issue reports complete satisfaction only when every criterion is `satisfied`. `attach_satisfaction_evidence()` registers the projection through the report's informational channel (`AcceptanceReport.informational_checks`); it never changes the overall result, blockers, or exit behavior, and it creates no authority: satisfaction output is evidence for independent QA judgment, never an admission.
+
+Its approval-domain consumers (`lifecycle_reconciliation.py`, `closure_admission_actions.py`) receive the record as a plain mapping and validate it with the one shared, standard-library-only core `satisfaction_snapshot.py` (#3690 CR-1); each consumer keeps its own identity check and uses the shared serializer with distinct output shapes (only reconciliation includes `closure_ready`).
+
 ## Public-interface policy
 Existing package exports remain supported until a separately governed compatibility migration proves removal safe. New interfaces use direct-module imports by default.
 
@@ -253,9 +266,147 @@ Seam 1, the issue-comment write boundary:
 - pre-write guard: `defect_evidence_mutation_guard.py` (#2741) admits persisting new defect/process evidence only on a target whose open state was reacquired immediately before the write. A closed target is refused fail-closed with a routing directive — `reacquire-target-state` (stale evidence), `route-to-open-owner` (open owner named), or `create-new-bug` — so evidence is never admitted onto a closed issue as its active owner; closed issues stay historical lineage only.
 - post-write readback: `comment_mutation_readback.py` (#2785). A subordinate comment write counts as persisted only after canonical readback proves the exact intended body; a provider success claim alone never proves persistence, and an uncertain response never authorizes an automatic retry, so uncertain-then-reconcile can never create a duplicate comment.
 
-Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`).
+Seam 2, the Safe Implementation Lane post-PR step: `lane_post_pr_issue_reconciliation.py` (#2791) projects the implementation issue's expected post-PR disposition (stale Ready removal, authorized close) after Draft PR readback, and proves the terminal disposition from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition, and the plan reuses the existing lifecycle-mutation vocabulary — it cannot grant merge or Ready authority (`ready_authorized: Literal[False]`). A closed issue counts as reconciled only under the shared closure-readback rule (#3690): closed with `state_reason` `completed` and no stale Ready label; a missing or other reason, a surviving Ready label, or a readback repository that differs from the plan's never reports full reconciliation.
 
 Fail-closed reasons: every seam tool is pure admission/readback composition with `side_effects_performed: False` and no GitHub write authority; uncertain or stale evidence resolves to non-terminal, non-retrying dispositions rather than optimistic success; and missing closure authority surfaces visibly as `reconcile-ready-awaiting-closure-authority` instead of silently leaving the issue looking actionable.
+
+## Governed issue-closure dispatch (#3489)
+
+`closure_admission_actions.py` supplies the previously missing production edge
+between an admitted `close-issue` lifecycle mutation and the GitHub mutation
+itself. Admission, authorization, and readback proof are unchanged and reused:
+owner decisions are bound by `lifecycle_mutation_authorization.py`, admission
+is evaluated by `lifecycle_mutation_guard.py`; post-PR lane disposition
+remains owned by `lane_post_pr_issue_reconciliation.py`, while the batch
+consumer records the canonical post-dispatch issue readback directly. The new consumer adds the closure
+analogue of the Ready host gate: `evaluate_issue_closure` builds one
+content-bound, non-performing receipt (independent acceptance checked first,
+evaluator distinct from the authorizer), `verify_closure_admission_receipt`
+recomputes the admission against a fresh snapshot immediately before dispatch
+(any drift fails closed), and `run_closure_batch` walks exactly the finite
+owner-authorized issue set through host-injected reader/writer protocols —
+per-issue blockers never stop unrelated items, an uncertain write is
+reconciled by canonical readback and never retried blindly, and an
+already-closed issue is never re-closed. The fixed host dispatch contract
+names the native GitHub MCP `issue_write` tool (`update`, `state=closed`,
+`state_reason=completed`) as the only writer; this module performs no GitHub
+I/O and its receipt fixes `closure_performed: False` — closure is proven only
+by post-dispatch canonical readback.
+
+Production reader/writer for the batch (`github_closure_dispatch.py`, #3728
+correction): the batch's reader/writer protocols previously had only test
+fakes in production. This module supplies the production pair —
+`GitHubClosureReader` (fresh single-issue GET, canonical
+`github-issue-v1` provider revision, issue-only snapshot with
+`review_state="unknown"`) and `GitHubClosureWriter` (exactly the fixed
+close payload, uncertain-write semantics, never retries) — wired by
+`run_closure_dispatch` and, for the post-merge case, by
+`run_post_merge_closure_dispatch`, which corroborates a host-supplied
+`MergeExecutionObservation` against a fresh merged-PR readback before the
+batch runs. It deliberately provides NO manifest format, CLI, or file
+loader: the module authenticates nothing, and its caller — a trusted host
+session — must have reacquired the owner decision and independent QA
+evidence from trusted sources before constructing `IssueClosureRequest`
+objects. A caller-authored manifest must never become an authority source.
+Requirement 3 reconciliation is a post-close phase in `run_closure_dispatch`
+only, for items this batch freshly closed and verified: it removes exactly
+`status:ready` when the verified readback still carries it, posts one
+deterministic evidence comment built only from verified facts (no closing
+keyword), and re-reads to verify the label is gone and the comment is
+present. A reconciliation failure keeps the verified closure but records
+`closed-verified-reconciliation-failed` and never stops the next item.
+Already-closed items are never reconciled here, because their batch path
+carries no admission receipt for this run. No workflow, MCP publication,
+or automatic post-merge trigger invokes this module; that host
+continuation is a separate authorization. The same reconciliation is
+bound into the host path: `POST_CLOSE_RECONCILIATION_CONTRACT` is part
+of the admission receipt core and is checked by
+`verify_closure_admission_receipt`, and the MCP verify tool returns it
+alongside the close contract only after affirmative verification, so a
+host executing the verified contracts performs exactly the dispatcher's
+post-close steps. The execution service itself remains read-only
+(`github_writes_authorized: False`): it names the contracts, it does not
+perform the writes, and a tampered or missing reconciliation contract
+fails verification. Native ChatGPT cannot execute this path today
+because the MCP service is not attached there (#3559); the attached
+GitHub Service Agent session (native GitHub MCP, per-call approval) is
+the executable host path, and it must execute both contracts, in order,
+for each verified item in the finite authorized batch.
+
+Trust-boundary repairs (#3690):
+
+- The receipt id is an unkeyed content hash, so it authenticates nothing. The
+  verification gate takes the satisfaction record the caller reacquired
+  independently of the receipt (`satisfaction=`) and requires the receipt's
+  block to equal it: a cited block without the trusted record, a trusted
+  record whose block was stripped, or a swapped block all fail closed. With
+  satisfaction absent on both sides the gate is unchanged (mandatory
+  satisfaction remains #3676). The gate also owns the
+  `current_issue_body_digest` check, which must match the trusted record.
+- QA evidence bound to a validated head fails closed
+  (`closure.acceptance-head-unverifiable`) against a snapshot with no
+  comparable head; unbound QA evidence for issue-only closure is unchanged.
+- `ClosureIssueReadback.issue_body_digest` lets the canonical reader report
+  the current body digest; `run_closure_batch` refuses a satisfaction record
+  bound to any other body (`closure.satisfaction-stale`). Without reader body
+  evidence, currentness is neither proven nor fabricated. The pre-dispatch
+  snapshot read carries no digest, so the reader's `observed_revision` must
+  change whenever the issue body changes; the exact snapshot binding then
+  refuses a body edited between evaluation and dispatch.
+- `classify_closure_readback` is the single closure-readback rule, shared by
+  the batch and the lane post-PR readback proof below.
+
+Session-executed production caller (`session_closure_adapter.py`, #3489):
+the executable host is a connected GitHub Service Agent session (Muse
+session: sandbox Python plus native GitHub MCP tools under per-call
+runtime approval). The single production entry point is
+`execute_session_closure`: it resolves the host's registrations, builds
+a plan through canonical `evaluate_issue_closure` plus receipt
+verification against the plan snapshot, verifies it against a fresh
+read with `verify_prewrite`, and executes through the transport
+protocol. There is NO JSON or CLI path into admission: no
+caller-supplied field can produce a plan, because no code path reads
+such fields. Authority comes only from `HostRegistry` tokens the host
+itself minted — an `OwnerGrant` (owner authorization for one finite
+closure) and a registered `QaRecord` (a genuine independent QA
+execution received through a runtime-delivered handoff). The record
+used for admission is the registered record, never caller fields, and
+its bindings (issue, head when applicable, body digest) are re-verified
+against fresh state; forged tokens, unregistered records, wrong
+issue/head/digest, conflicts, and self-acceptance all refuse with zero
+mutations. The canonical decision object is constructed from the grant
+(`decision_recorded` is set by host construction, never read from
+input). Unlike the canonical evaluator, which tolerates unbound
+records, this caller requires bound QA. Canonical receipt verification
+binds a supplied body digest only to a trusted satisfaction record, so
+the adapter binds the digest to the issue itself by equality between
+plan-time and pre-write fresh reads; any drift refuses with zero
+mutations. A plan also requires an owner trigger (id plus body, hashed
+internally, never a caller-supplied hash), re-verified at pre-write, so
+an edited trigger refuses. `mcp_manifest` is a derived audit record
+whose steps carry machine assertions mirroring the executor's gates;
+it is never executed by interpretation. The transport maps exactly to
+connected tools: fresh read = `issue_read` get + get_comments +
+get_labels; close = `issue_write` update with ONLY state + state_reason;
+comment list = `issue_read` get_comments; comment post =
+`add_issue_comment`; label removal = surgical `remove_issue_label`
+when the host's transport supports it. An already-closed issue receives
+ZERO mutations by default (`already-closed-no-action`, reporting only
+whether `status:ready` is still present); label or comment mutations on
+an already-closed issue require a separate recovery grant bound to that
+issue and receipt, and the recovery path never re-closes. The connected
+Muse catalog (49 tools, verified live) has NO label-delete tool, so on
+this host the label step STOPS with a flagged outcome
+(`closed-verified-label-reconciliation-required`) and no mutation;
+full-labels replacement is NOT in the production path at all — the old
+G2 replacement-semantics gate is retired by removal, not by proof. The
+G1 gate persists as a host read obligation: fresh reads must carry the
+canonical revision fields or the run refuses rather than inventing a
+revision. No workflow change, token, scheduler, queue, database,
+evaluator, dispatcher, or QA identity is introduced; live closure still
+requires a separate owner authorization naming the issue, and live
+acceptance is proven only by canonical readback on that closure, not by
+this adapter's tests.
 
 ## Canonical lifecycle-stage acquisition (#3433)
 
@@ -366,3 +517,10 @@ so a pull request opened after it and before the run ends is not seen (the
 default-branch check and the exact re-read bound, but do not close, that
 window). Fixture and offline tests prove the contract; live behavior is
 observed separately through the shadow CLI.
+
+## Merge evidence repairs (#3463, non-closing)
+
+- `PullRequestMergeEvidence` bounds PR title/body text at GitHub's body limit (65,536 characters, 4 UTF-8 bytes each) instead of the generic 4,096-byte text bound; it stays bounded and NUL-free. Other text fields keep the generic bound.
+- `pull-request.multiple-implemented-issues` is part of the merge-authorization reason-code vocabulary and a blocking reason, so dual implemented-issue claims produce a typed refusal.
+- Approval-comment footer normalization strips exactly one trailing Claude Code footer, either `https://claude.ai/code` (actual) or the legacy `https://claude.ai`; anything else still fails closed. The same parity holds for merge-authorization, refresh-authorization, and refresh-trigger footers, so a record accepted by one source is not rejected by another for its footer alone.
+- Production caller: the read-only `merge_admission` job in `agent-os-governed-invocation.yml` runs `merge_admission_actions` and then `merge_applicability` with the same fixed transport and publishes both receipts. That job performs no merge; a positive dispatch receipt is admission only.

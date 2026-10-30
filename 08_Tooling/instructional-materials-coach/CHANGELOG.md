@@ -1,7 +1,80 @@
 # Changelog
 
 ## Unreleased
+- Tutorial-day connection for worksheets (#3215): lesson content specs may
+  declare `prerequisite_tutorials` (tutorial ids); `tutorial_connection.py`
+  resolves them against a typed tutorial registry (Tutorial 0: Adobe
+  Express favorite-food reference setup — Text, Recommended fonts,
+  Alignment and spacing, Export) and `compose_generation_context` projects
+  the moves as context tokens plus a standard "tutorial connection"
+  section naming the transfer moves with a catch-up pointer. Unknown
+  tutorial ids fail closed; governed curriculum values win and are never
+  duplicated.
+- Main refresh for #3584 preserves slide-token location identity, rejects
+   duplicate or invalid canonical slide indices and present null headings,
+   and keeps worksheet preview imports free of provider transports.
 
+- Governed lesson-content adapter (#3582): `lesson_content_result.py`
+  consumes one #3580 `lesson-content` result (or its #2283 runner envelope)
+  into the existing `LessonContent` via `with_context_tokens`, bound to an
+  exact request, canonical unit, lesson number, and run provenance. Foreign
+  unit, wrong lesson, malformed relation, unverified/stale source, run
+  mismatch, widened authority, extra or credential-bearing keys, missing
+  required fields, empty-string vocabulary, and authored-objective conflicts
+  fail closed with explicit reason codes. Authored slides, questions, and
+  title are preserved; absent Key Vocabulary stays absent; YAML-only
+  behavior is unchanged. `worksheet_preview.py` and `imc-build
+  preview-worksheet` add an enforceable offline no-write planned-worksheet
+  preview receipt (`imc-lesson-worksheet-preview-v1`) that never requests
+  credentials, builds Google clients, renders, or claims a native or
+  classroom-ready artifact. See `docs/lesson-content-result-adapter.md`.
+- Governed lesson-content adapter hardening (#3582, #3584 repair): the
+  adapter and `preview-worksheet` CLI now fail closed on scalar authored
+  fields, unhashable sources, zero-width required text, admission or
+  envelope schema drift (admission exact-keyed, `gce_required` fail-closed),
+  display-name mismatch, case/whitespace-variant lesson identities, deeply
+  nested evidence, malformed slide structures, and unresolved
+  `{{placeholder}}` governed text. Empty authored objectives are filled only
+  under an independent authored `lesson_identity` binding exactly matching
+  the selected lesson; whitespace-only optional source fields are absent,
+  not malformed. The CLI byte bound applies to bytes actually read, and
+  malformed/null/scalar YAML fails controlled as input-unreadable.
+- Student-voice repair (#3213/#3644 R5): `student_voice.py` matching is
+  now Unicode-normalized (NFKC) and casefolded with explicit zero-width
+  separator, dash-variant, and soft-hyphen handling followed by
+  word/token-boundary detection -- never bare substring matching.
+  "Translate stage directions into a storyboard." and "Investigate rules"
+  now pass; hyphen/Unicode-dash/zero-width/split-run evasions
+  (``Heavy-modeling``, ``teacher\u200b model``) are caught. Explicit
+  declarations are canonicalized exactly like scanned copy and stay
+  bounded (known vocabulary, unique, at most 16). The pre-write screen
+  (`require_student_voice`, via `compose_governed_build_request`'s new
+  `doc_template_tokens` projection) scans only replacement values for
+  tokens the worksheet Doc template actually carries -- an unused
+  slide-only token can no longer block a Docs build, and no intended
+  worksheet content is removed. Terminal QA rechecks the persisted
+  rendered Docs text with the same vocabulary and declared exemptions
+  (`qa-teacher-voice-in-worksheet`); the declarations are bound into the
+  expectations hash so recovery cannot reuse QA across declaration sets.
+- Production wiring for the student-voice screen (#3213/#3644):
+  `build_request.compose_governed_build_request` now fails closed
+  (`StudentVoiceError`) when the planned worksheet `replaceAllText` text
+  carries teacher-guide modeling voice, before any `LiveBuildInput` is
+  returned and before any Drive write. The single seam covers both `imc
+  build` and scheduled consumers via `live_build_input_factory`. New
+  `student_voice.require_student_voice` reuses the existing vocabulary and
+  preserves the explicit-declaration escape hatch
+  (`explicit_student_copy_teacher_voice_phrases`; unknown declarations fail
+  closed).
+- Student-voice filtering for student-facing worksheets (#3213):
+  `student_voice.py` screens student copy for teacher-guide modeling voice
+  (rigor-ramp stage labels, cognitive-load jargon, teacher-phrased
+  gate/recovery rules, teacher modeling scripts) with whitespace-normalized
+  case-insensitive substring matching; the student-material PDF preview
+  fails closed on leaked teacher voice unless the caller explicitly
+  declares a known phrase via
+  `explicit_student_copy_teacher_voice_phrases`. Teacher guidance belongs
+  in the teacher guide and slide deck, never on the student sheet.
 - Terminal artifact-content QA (#3258): `artifact_content_qa.py` proves the
   persisted final artifact contains the governed required content and
   visuals, attributable to the current build and artifact state.
@@ -48,3 +121,4 @@
 - Initial release: build a Slides deck and Docs worksheet from an
   approved template pair and a lesson content YAML, via Drive
   `files.copy` plus Slides/Docs `batchUpdate` `replaceAllText`.
+

@@ -23,6 +23,12 @@ from instructional_workflow_contracts.material_requirement import (
 )
 
 from .content_spec import LessonContent
+from .tutorial_connection import (
+    TutorialConnectionError,
+    TutorialRecord,
+    resolve_tutorial,
+    tutorial_transfer_paragraph,
+)
 
 
 class GenerationContextError(ValueError):
@@ -185,6 +191,7 @@ def compose_generation_context(
                 tokens.setdefault(student_token, value)
 
     _apply_standard_worksheet_section_defaults(tokens, content)
+    _apply_tutorial_connection_defaults(tokens, content)
 
     # Keep authority evidence visible and fixed false; never infer authorization.
     tokens["context_production_authorized"] = "false"
@@ -239,6 +246,51 @@ def _default_exit_ticket(content: LessonContent) -> str:
     if question:
         return f"Exit Ticket: Looking back at today's work, {question}"
     return f"Exit Ticket: What is one choice or idea from {content.title} you can explain now?"
+
+
+_TUTORIAL_CONNECTION_TOKEN = "context_tutorial_connection"
+_TUTORIAL_CONNECTION_SOURCE_TOKEN = "context_tutorial_connection_source"
+_GOVERNED_TUTORIAL_CONNECTION_TOKEN = "curriculum_tutorial_connection"
+
+
+def _apply_tutorial_connection_defaults(
+    tokens: dict[str, str],
+    content: LessonContent,
+) -> None:
+    """Project prerequisite-tutorial transfer evidence without duplicating governed copy.
+
+    The lesson's declared prerequisite tutorials resolve against the typed
+    tutorial registry (#3215): unknown tutorial ids fail closed instead of
+    silently dropping the tutorial-day connection. Resolved moves project
+    as context tokens; the standard "tutorial connection" section names the
+    transfer moves with a catch-up pointer for students who missed the
+    tutorial, so no worksheet assumes tool fluency it never names. Current
+    curriculum evidence wins: an owner-governed tutorial-connection value
+    is reused rather than adding a second paragraph.
+    """
+    if not content.prerequisite_tutorials:
+        return
+    records: list[TutorialRecord] = []
+    for tutorial_id in content.prerequisite_tutorials:
+        try:
+            records.append(resolve_tutorial(tutorial_id))
+        except TutorialConnectionError as exc:
+            raise GenerationContextError(str(exc)) from exc
+    tokens["context_prerequisite_tutorials"] = _join(record.tutorial_id for record in records)
+    moves: list[str] = []
+    for record in records:
+        for move in record.moves:
+            if move not in moves:
+                moves.append(move)
+    tokens["context_prerequisite_tutorial_moves"] = _join(moves)
+    if _has_nonempty_token(tokens, _GOVERNED_TUTORIAL_CONNECTION_TOKEN):
+        tokens[_TUTORIAL_CONNECTION_TOKEN] = tokens[_GOVERNED_TUTORIAL_CONNECTION_TOKEN]
+        tokens[_TUTORIAL_CONNECTION_SOURCE_TOKEN] = "curriculum-governed"
+    elif not _has_nonempty_token(tokens, _TUTORIAL_CONNECTION_TOKEN):
+        tokens[_TUTORIAL_CONNECTION_TOKEN] = "\n\n".join(
+            tutorial_transfer_paragraph(record.tutorial_id) for record in records
+        )
+        tokens[_TUTORIAL_CONNECTION_SOURCE_TOKEN] = "tutorial-registry-default"
 
 
 def _has_nonempty_token(tokens: dict[str, str], token: str) -> bool:

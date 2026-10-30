@@ -28,6 +28,17 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     LifecycleStateSnapshot,
     evaluate_lifecycle_mutation,
 )
+from scripts.agent_os_issue_acceptance.closure_admission_actions import (
+    HOST_DISPATCH_CONTRACT as CLOSURE_HOST_DISPATCH_CONTRACT,
+    POST_CLOSE_RECONCILIATION_CONTRACT,
+    ClosureAcceptanceEvidence,
+    IssueClosureRequest,
+    evaluate_issue_closure,
+    verify_closure_admission_receipt,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
+)
 from scripts.agent_os_issue_labels.ready_for_review_admission import (
     evaluate_ready_for_review_admission,
 )
@@ -39,6 +50,7 @@ from scripts.agent_os_github_target_guard import (
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
+from .work_reconciliation_facade import reconcile_proposed_work_for_host
 from .governed_mutation_seams_facade import (
     evaluate_issue_comment_mutation_boundary_for_host,
     project_lane_post_pr_issue_reconciliation_for_host,
@@ -235,6 +247,12 @@ def bind_agent_os_request_interpretation_tool(request: dict[str, object]) -> dic
     }
 
 @mcp.tool()
+def reconcile_agent_os_proposed_work_tool(evidence: dict[str, object]) -> dict[str, object]:
+    """Run #3308 on host-acquired complete current evidence; never mutate."""
+    return reconcile_proposed_work_for_host(evidence)
+
+
+@mcp.tool()
 def plan_connected_issue_creation_tool(
     repository: str,
     issue_body: str,
@@ -243,8 +261,9 @@ def plan_connected_issue_creation_tool(
     distinct_repair_seam: bool = False,
     candidate_evidence: list[dict[str, object]] | None = None,
     candidate_enumeration_complete: bool = False,
+    reconciliation_evidence: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Project canonical connected-issue admission evidence without performing writes."""
+    """Project connected-issue admission, optionally gated by live #3308 evidence."""
     if canonical_issue_number is not None:
         _github_target_entry_guard(
             repository=repository,
@@ -270,7 +289,25 @@ def plan_connected_issue_creation_tool(
         )
         for item in (candidate_evidence or [])
     )
-    return plan_connected_issue_creation_for_host(
+    triage = (
+        reconcile_proposed_work_for_host(reconciliation_evidence)
+        if reconciliation_evidence is not None else None
+    )
+    if triage is not None and triage["disposition"] != "candidate-new-work":
+        return {
+            "repository": repository,
+            "create_allowed": False,
+            "next_operation": "manual-review-work-reconciliation-required",
+            "work_reconciliation": triage,
+            "reason_codes": triage["reason_codes"],
+            "implementation_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+            "closure_authorized": False,
+            "external_write_authorized": False,
+            "side_effects_performed": False,
+        }
+    result = plan_connected_issue_creation_for_host(
         repository=repository,
         issue_body=issue_body,
         duplicate_review_disposition=duplicate_review_disposition,
@@ -279,6 +316,9 @@ def plan_connected_issue_creation_tool(
         candidate_evidence=inspected,
         candidate_enumeration_complete=candidate_enumeration_complete,
     )
+    if triage is not None:
+        result["work_reconciliation"] = triage
+    return result
 
 @mcp.tool()
 def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> dict[str, object]:
@@ -713,10 +753,15 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
     closure_authorized: bool = False,
     evidence_current: bool = False,
     plan: dict[str, object] | None = None,
+    repository: str | None = None,
+    state_reason: str | None = None,
 ) -> dict[str, object]:
-    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority."""
+    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority.
+
+    `repository` and `state_reason` (#3690 ADV-5) carry the canonical issue identity and closure reason: a closed issue is reconciled only when closed as `completed` with no stale Ready label, and a readback naming a repository other than the plan's never proves reconciliation.
+    """
     _github_target_entry_guard(
-        repository=None, issue_number=issue_number, operation="read-issue"
+        repository=repository, issue_number=issue_number, operation="read-issue"
     )
     if linked_pull_request_number:
         _github_target_entry_guard(
@@ -736,24 +781,288 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
         closure_authorized=closure_authorized,
         evidence_current=evidence_current,
         plan=plan,
+        repository=repository,
+        state_reason=state_reason,
     )
+
+
+def _closure_snapshot(item: dict[str, object]) -> LifecycleStateSnapshot:
+    """Reconstruct the canonical lifecycle snapshot from host-supplied evidence.
+
+    The dataclass validates its own content digest; malformed or inconsistent
+    items raise and the closure tools fail closed.
+    """
+    return LifecycleStateSnapshot(
+        repository=item["repository"],
+        issue_number=item["issue_number"],
+        pull_request_number=item.get("pull_request_number"),
+        source_head=item.get("source_head"),
+        base_head=item.get("base_head"),
+        pr_state=item["pr_state"],
+        merged=item["merged"],
+        issue_state=item["issue_state"],
+        review_state=item["review_state"],
+        unresolved_threads=item["unresolved_threads"],
+        lifecycle_labels=tuple(item["lifecycle_labels"]),
+        observed_revision=item["observed_revision"],
+    )
+
+
+def _closure_acceptance(item: dict[str, object]) -> ClosureAcceptanceEvidence:
+    return ClosureAcceptanceEvidence(
+        verdict=item["verdict"],
+        evidence_id=item["evidence_id"],
+        evaluator_id=item["evaluator_id"],
+        issue_number=item.get("issue_number"),
+        validated_head_sha=item.get("validated_head_sha"),
+    )
+
+
+def _closure_authorization(item: dict[str, object]) -> LifecycleMutationAuthorization:
+    """Reconstruct the canonical lifecycle authorization (to_dict shape).
+
+    The dataclass recomputes its content-bound authorization id and revision;
+    a tampered or synthetic authorization raises and the verify tool fails
+    closed.
+    """
+    return LifecycleMutationAuthorization(
+        schema_version=item["schema_version"],
+        repository=item["repository"],
+        issue_number=item["issue_number"],
+        pull_request_number=item.get("pull_request_number"),
+        authorized_mutations=tuple(item["authorized_mutations"]),
+        expected_source_head=item.get("expected_source_head"),
+        expected_base_head=item.get("expected_base_head"),
+        expected_pr_state=item["expected_pr_state"],
+        expected_merged=item["expected_merged"],
+        expected_issue_state=item["expected_issue_state"],
+        expected_review_state=item["expected_review_state"],
+        expected_unresolved_threads=item["expected_unresolved_threads"],
+        expected_lifecycle_labels=tuple(item["expected_lifecycle_labels"]),
+        observed_at_revision=item["observed_at_revision"],
+        state=item["state"],
+        authorizer_id=item["authorizer_id"],
+        decision_id=item["decision_id"],
+        authorization_id=item.get("authorization_id", ""),
+        authorization_revision=item.get("authorization_revision", ""),
+    )
+
+
+def _refused_closure_projection(
+    *,
+    repository: str,
+    issue_number: int,
+    reason_codes: tuple[str, ...],
+    next_action: str,
+) -> dict[str, object]:
+    """Fail-closed closure projection: no admission, no verification, no write."""
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "admitted": False,
+        "verified": False,
+        "reason_codes": list(reason_codes),
+        "next_action": next_action,
+        "host_dispatch_contract": None,
+        "post_close_reconciliation_contract": None,
+        "closure_performed": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+@mcp.tool()
+def admit_agent_os_issue_closure_tool(
+    repository: str,
+    issue_number: int,
+    owner_decision: dict[str, object],
+    acceptance: dict[str, object],
+    snapshot: dict[str, object],
+    satisfaction: dict[str, object] | None = None,
+    current_issue_body_digest: str | None = None,
+) -> dict[str, object]:
+    """Evaluate governed issue-closure admission for one issue (#3489).
+
+    Builds the single content-bound, non-performing closure receipt through
+    the canonical `evaluate_issue_closure`: the recorded owner decision must
+    authorize exactly the close-issue mutation for this issue, the acceptance
+    evidence must be an independent pass (evaluator != authorizer), and
+    admission is bound to the exact issue and the snapshot's observed
+    revision. The receipt is returned verbatim — its exact shape is what
+    `verify_agent_os_issue_closure_admission_tool` later consumes. This tool
+    performs no GitHub write and grants no closure authority by itself.
+    """
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="update-issue"
+    )
+    try:
+        decision = LifecycleOwnerDecision(
+            repository=owner_decision["repository"],
+            issue_number=owner_decision["issue_number"],
+            requested_mutations=tuple(owner_decision["requested_mutations"]),
+            authorizer_id=owner_decision["authorizer_id"],
+            decision_id=owner_decision["decision_id"],
+            decision_recorded=owner_decision["decision_recorded"],
+            pull_request_number=owner_decision.get("pull_request_number"),
+        )
+        evidence = _closure_acceptance(acceptance)
+        snap = _closure_snapshot(snapshot)
+        request = IssueClosureRequest(
+            decision=decision, acceptance=evidence, satisfaction=satisfaction
+        )
+    except (KeyError, TypeError, ValueError):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-evidence-invalid",),
+            next_action="supply-canonical-closure-evidence",
+        )
+    if (
+        decision.repository != repository
+        or decision.issue_number != issue_number
+        or snap.repository != repository
+        or snap.issue_number != issue_number
+    ):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-target-binding-mismatch",),
+            next_action="reacquire-issue-and-reevaluate",
+        )
+    return evaluate_issue_closure(
+        request, snap, current_issue_body_digest=current_issue_body_digest
+    )
+
+
+@mcp.tool()
+def verify_agent_os_issue_closure_admission_tool(
+    repository: str,
+    issue_number: int,
+    receipt: dict[str, object],
+    authorization: dict[str, object],
+    fresh_snapshot: dict[str, object],
+    acceptance: dict[str, object],
+    current_issue_body_digest: str | None = None,
+    satisfaction: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Verify a closure-admission receipt against a fresh snapshot (#3489).
+
+    The caller-bound host gate, the closure analogue of the Ready admission
+    receipt check: it recomputes the admission outside the receipt via
+    `verify_closure_admission_receipt`. Returns verified=True only when the
+    receipt is the exact, still-current admitted closure for this issue and
+    revision — any drift, forgery, stale revision, changed labels/state,
+    non-independent or non-pass acceptance, or a protected target fails
+    closed. This tool performs no GitHub write. Only after verified=True
+    may the host perform the fixed dispatch contract: its native GitHub
+    issue-update operation (ChatGPT connector `update_issue`; GitHub MCP
+    `issue_write`) with method=update, state=closed, state_reason=completed,
+    followed by canonical readback of the exact repository, issue number,
+    closed state, and completed reason, and then by the fixed post-close
+    reconciliation contract (#3489 requirement 3): remove exactly
+    ``status:ready`` only when the batch flagged it stale, post the
+    deterministic evidence comment, and re-read to verify label absence
+    and comment presence by receipt id. A reconciliation failure never
+    reverses a verified closure and never stops the next batch item.
+
+    `satisfaction` (#3690 ADV-6/ADV-7) is the satisfaction record the host
+    reacquired independently of the receipt. The receipt id is an unkeyed
+    hash a caller can recompute, so a receipt's own satisfaction block is
+    never trusted: a receipt citing satisfaction verifies only with the
+    matching trusted record, and a supplied record verifies only a receipt
+    carrying exactly its block. `current_issue_body_digest` must then match
+    that trusted record's digest; a digest without a trusted record fails
+    closed. Both checks are owned by `verify_closure_admission_receipt`.
+    """
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="update-issue"
+    )
+    try:
+        auth = _closure_authorization(authorization)
+        snap = _closure_snapshot(fresh_snapshot)
+        evidence = _closure_acceptance(acceptance)
+    except (KeyError, TypeError, ValueError):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-verification-evidence-invalid",),
+            next_action="supply-canonical-closure-evidence",
+        )
+    if (
+        auth.repository != repository
+        or auth.issue_number != issue_number
+        or snap.repository != repository
+        or snap.issue_number != issue_number
+    ):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-target-binding-mismatch",),
+            next_action="reacquire-issue-and-reevaluate",
+        )
+    # The canonical gate owns the trusted-satisfaction binding and the
+    # body-digest currentness check; never turn missing or mismatched
+    # evidence into a verified write.
+    verified = verify_closure_admission_receipt(
+        receipt,
+        authorization=auth,
+        fresh_snapshot=snap,
+        acceptance=evidence,
+        satisfaction=satisfaction,
+        current_issue_body_digest=current_issue_body_digest,
+    )
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "admitted": verified,
+        "verified": verified,
+        "receipt_id": receipt.get("receipt_id") if isinstance(receipt, dict) else None,
+        "reason_codes": [] if verified else ["closure-admission-not-verified"],
+        "next_action": (
+            "host-close-issue-then-canonical-readback"
+            if verified
+            else "do-not-dispatch-closure-reevaluate"
+        ),
+        "host_dispatch_contract": (
+            {
+                **CLOSURE_HOST_DISPATCH_CONTRACT,
+                "chatgpt_connector_tool": "update_issue",
+            }
+            if verified
+            else None
+        ),
+        "post_close_reconciliation_contract": (
+            dict(POST_CLOSE_RECONCILIATION_CONTRACT) if verified else None
+        ),
+        "closure_performed": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
 # #3372: the ChatGPT publication profile is intentionally narrower than the
 # complete repository-local MCP registration. SDK tool removal affects both
 # tools/list and tools/call; UI-side tool toggles cannot enforce this boundary.
+# #3489: the two closure admission tools join the owner-approved published
+# surface; host attachment of the widened surface remains #3559 host work.
 _CHATGPT_PUBLICATION_PROFILE = "chatgpt-governance"
 _CHATGPT_PUBLICATION_TOOLS = frozenset(
     {
         "admit_agent_os_issue_comment_mutation_tool",
         "project_agent_os_lane_post_pr_issue_reconciliation_tool",
         "admit_agent_os_ready_for_review_tool",
+        "admit_agent_os_issue_closure_tool",
+        "verify_agent_os_issue_closure_admission_tool",
     }
 )
 
 
 def _apply_chatgpt_publication_profile(server: MCPServer) -> None:
-    """Fail closed unless this server can expose exactly the approved three tools.
+    """Fail closed unless this server can expose exactly the approved five tools.
 
     Use the supported MCP SDK list_tools/remove_tool API, before listening.
     Existing in-process contracts and the normal local registration are unchanged.

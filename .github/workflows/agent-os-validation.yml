@@ -36,6 +36,14 @@ on:
         description: "Validation Gate run with action_required and zero jobs"
         required: false
         type: string
+      ingress_run_id:
+        description: "Governed ingress run that dispatched this recovery; empty for direct owner dispatch"
+        required: false
+        type: string
+      ingress_trigger_id:
+        description: "Logical trigger id from the ingress receipt; empty for direct owner dispatch"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -233,6 +241,15 @@ jobs:
       main_health_outcome: ${{ steps.main_health.outcome }}
       main_recovery_stop_outcome: ${{ steps.main_recovery_stop.outcome }}
     steps:
+      - name: Check out workflow source for ingress verification
+        # #2410: only an ingress-origin recovery needs scripts/ before
+        # admission; every other dispatch path is unchanged and pays no
+        # checkout. The checkout ref is the dispatch ref (main), so the
+        # verifier is the same revision as the running workflow.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.ingress_run_id != '' }}
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Admit exact-head Draft final candidate
         if: ${{ github.event_name == 'workflow_dispatch' }}
         id: candidate
@@ -244,8 +261,20 @@ jobs:
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
           SOURCE_VALIDATION_RUN_ID: ${{ inputs.source_validation_run_id }}
+          INGRESS_RUN_ID: ${{ inputs.ingress_run_id }}
+          INGRESS_TRIGGER_ID: ${{ inputs.ingress_trigger_id }}
         run: |
           set -euo pipefail
+
+          # #2410 ingress inputs are optional workflow inputs: GitHub
+          # renders an unset optional input as an empty string, but an
+          # offline or dynamic harness may leave them wholly unset, which
+          # trips `set -u` at the first bare reference. Normalize both to
+          # empty here so every later reference is safe; this changes no
+          # admission semantics, because unset and empty are the same
+          # direct-owner case throughout this step.
+          INGRESS_RUN_ID="${INGRESS_RUN_ID:-}"
+          INGRESS_TRIGGER_ID="${INGRESS_TRIGGER_ID:-}"
 
           if [ "$READY_RECOVERY" != "true" ] && [ "$READY_RECOVERY" != "false" ]; then
             echo "invalid Ready-recovery flag" >&2
@@ -328,7 +357,31 @@ jobs:
               echo "Ready recovery requires an already-Ready PR" >&2
               exit 1
             fi
-            if [ "$GITHUB_ACTOR" != "${GITHUB_REPOSITORY%%/*}" ]; then
+            # #2410 ingress-origin recovery: the two correlation inputs must
+            # arrive together, the dispatch actor must be the governed
+            # ingress job's token identity, and the ingress run plus receipt
+            # are verified independently below. Supplying ingress inputs
+            # never upgrades a direct dispatch: an owner actor with ingress
+            # inputs fails the token-identity check, and a bot actor without
+            # verified ingress evidence fails the owner check.
+            if [ -n "$INGRESS_RUN_ID" ] || [ -n "$INGRESS_TRIGGER_ID" ]; then
+              if [ -z "$INGRESS_RUN_ID" ] || [ -z "$INGRESS_TRIGGER_ID" ]; then
+                echo "Ingress recovery requires both ingress run id and trigger id" >&2
+                exit 1
+              fi
+              if ! [[ "$INGRESS_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Ingress run id must be a positive integer" >&2
+                exit 1
+              fi
+              if ! [[ "$INGRESS_TRIGGER_ID" =~ ^issue-comment-trigger:[0-9a-f]{64}$ ]]; then
+                echo "Ingress trigger id has an invalid shape" >&2
+                exit 1
+              fi
+              if [ "$GITHUB_ACTOR" != "github-actions[bot]" ]; then
+                echo "Ingress recovery requires the governed ingress token identity" >&2
+                exit 1
+              fi
+            elif [ "$GITHUB_ACTOR" != "${GITHUB_REPOSITORY%%/*}" ]; then
               echo "Ready recovery requires repository-owner dispatch" >&2
               exit 1
             fi
@@ -385,6 +438,43 @@ jobs:
             if [ "$job_count" != "0" ]; then
               echo "Ready recovery source actually executed jobs" >&2
               exit 1
+            fi
+
+            # #2410 ingress-origin recovery: independently verify the trusted
+            # transport before the attempt bound is consulted. The
+            # caller-supplied run/trigger ids are correlation hints only;
+            # the run record and the receipt artifact are fetched from
+            # GitHub and re-checked by scripts/agent_os_ready_recovery_ingress.py.
+            if [ -n "$INGRESS_RUN_ID" ]; then
+              governed_workflow_id="$(
+                gh api "repos/$GITHUB_REPOSITORY/actions/workflows/agent-os-governed-invocation.yml" --jq .id
+              )"
+              if ! [[ "$governed_workflow_id" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Governed ingress workflow identity unavailable" >&2
+                exit 1
+              fi
+              # #2410 receipt-publication race (#3732): the ingress job
+              # dispatches validation before it publishes its receipt
+              # artifact, so validation may check before the evidence
+              # exists. Wait for the already-identified ingress run and
+              # its single receipt artifact with fixed bounds (300s run /
+              # 10s poll, 60s artifact / 5s poll); never dispatch while
+              # waiting. All trust checks still run in full after the
+              # evidence arrives, and the two-attempt limit is counted
+              # after this block exactly as before.
+              python3 scripts/agent_os_ready_recovery_ingress.py wait-and-verify \
+                --repository "$GITHUB_REPOSITORY" \
+                --pr-number "$PR_NUMBER" \
+                --expected-head-sha "$EXPECTED_HEAD_SHA" \
+                --expected-main-sha "$EXPECTED_MAIN_SHA" \
+                --expected-workflow-sha "$EXPECTED_WORKFLOW_SHA" \
+                --source-run-id "$SOURCE_VALIDATION_RUN_ID" \
+                --trigger-id "$INGRESS_TRIGGER_ID" \
+                --ingress-run-id "$INGRESS_RUN_ID" \
+                --validation-run-id "$GITHUB_RUN_ID" \
+                --governed-workflow-id "$governed_workflow_id" \
+                --owner-login "${GITHUB_REPOSITORY%%/*}" \
+                --service-actor 'chatgpt-codex-connector[bot]'
             fi
 
             # Count immutable GitHub workflow-run records, including
@@ -894,6 +984,69 @@ jobs:
             fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
+
+
+  jscpd-advisory:
+    name: jscpd duplicate-code advisory
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Generate report-only jscpd evidence
+        continue-on-error: true
+        run: python -m scripts.jscpd_advisory --output tmp/jscpd-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Upload advisory evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: jscpd-advisory-${{ github.event.pull_request.number }}
+          path: tmp/jscpd-advisory/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  pyan3-advisory:
+    name: pyan3 call-graph advisory
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned Pyan3
+        run: python -m pip install "pyan3==2.9.0"
+      - name: Generate report-only pyan3 evidence
+        continue-on-error: true
+        run: python -m scripts.pyan3_advisory --output tmp/pyan3-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Upload advisory evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyan3-advisory-${{ github.event.pull_request.number }}
+          path: tmp/pyan3-advisory/
+          if-no-files-found: ignore
+          retention-days: 7
 
   aggregate-gate:
     # Terminal disposition only when authoritative aggregate validation is
