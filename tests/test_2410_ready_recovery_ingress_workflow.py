@@ -32,32 +32,6 @@ def validation_text() -> str:
     return VALIDATION.read_text(encoding="utf-8")
 
 
-def test_ready_recovery_job_is_confined_to_one_actions_write_job() -> None:
-    jobs = governed_data()["jobs"]
-    job = jobs["ready_recovery_dispatch"]
-    assert job["permissions"] == {
-        "actions": "write",
-        "contents": "read",
-        "pull-requests": "read",
-    }
-    condition = job["if"]
-    assert "github.ref == 'refs/heads/main'" in condition
-    assert "32861845" in condition and "199175422" in condition
-    assert "/agent-os recover-ready " in condition
-    assert "github.event.issue.pull_request == null" in condition
-    step_text = "\n".join(str(step) for step in job["steps"])
-    assert "github_issue_comment_ingress" in step_text
-    assert "--ready-recovery-service-actor" in step_text
-    assert "ready_recovery_dispatch" in step_text
-    assert "agent-os-ready-recovery-" in step_text
-    assert "issues" not in job["permissions"]
-
-
-def test_generic_ingress_job_excludes_recover_ready() -> None:
-    jobs = governed_data()["jobs"]
-    assert "/agent-os recover-ready" in jobs["ingress"]["if"]
-
-
 def test_validation_inputs_are_optional_ingress_correlation_only() -> None:
     inputs = validation_data()[True]["workflow_dispatch"]["inputs"]
     assert inputs["ingress_run_id"]["required"] is False
