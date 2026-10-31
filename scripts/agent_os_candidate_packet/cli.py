@@ -23,11 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryEvidenceType, WorktreeState
 from scripts.agent_os_issue_acceptance import ApprovalKind, ApprovalState
+from scripts.agent_os_issue_acceptance.issueplan_current_state import (
+    project_planning_context,
+)
 
 from .approval_stage import (
     ApprovalCandidateContext,
@@ -232,24 +235,32 @@ def prepare_candidate_packet(
         ),
     )
 
-    # Pass 2: the real readiness result, with the derived context projected
-    # into IssuePlan evidence before that evidence's identity is computed.
-    readiness = prepare_issue_readiness(
-        request,
-        issue_reader,
-        repository_reader,
-        dependency_identity_evidence=dependency_identity_evidence,
-        planning_context=planning_context,
+    # Single readiness pass (#3690): the derived context is projected into
+    # the Pass 1 IssuePlan evidence, with its identity recomputed from the
+    # projected payload, instead of running the whole readiness stage a
+    # second time. The context reaches only those six IssuePlan fields;
+    # snapshot resolve, IssuePlan scan, dependency/validation evidence, and
+    # the readiness evaluation itself are context-independent, so a second
+    # pass re-read the issue, re-scanned, re-read dependency/validation
+    # evidence, and re-evaluated readiness to change one object -- and
+    # silently mixed two lineages if a live reader changed between passes.
+    # The Pass 1 status gate above already stopped source failures and
+    # incomplete evidence, so this result carries the same resolved status.
+    assert precheck.issueplan_current_state_evidence is not None
+    readiness = replace(
+        precheck,
+        issueplan_current_state_evidence=project_planning_context(
+            precheck.issueplan_current_state_evidence,
+            base_branch=planning_context.base_branch,
+            evaluated_repository_sha=planning_context.evaluated_repository_sha,
+            implementation_contract_fingerprint=(
+                planning_context.implementation_contract_fingerprint
+            ),
+            allowed_files=planning_context.allowed_files,
+            forbidden_paths=planning_context.forbidden_paths,
+            required_tests=planning_context.required_tests,
+        ),
     )
-    if readiness.status not in (
-        IssueReadinessStageStatus.READY,
-        IssueReadinessStageStatus.BLOCKED,
-        IssueReadinessStageStatus.NEEDS_DECISION,
-    ):
-        return _stopped_at_readiness(
-            readiness,
-            implementation_contract_fingerprint=implementation_contract_fingerprint,
-        )
     assert readiness.snapshot is not None
 
     planning = prepare_planning_handoff(
