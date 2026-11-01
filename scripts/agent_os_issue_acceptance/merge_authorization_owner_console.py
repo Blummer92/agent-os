@@ -31,6 +31,8 @@ from .merge_authorization import (
     MergeCheckEvidence,
     MergeReviewEvidence,
     PullRequestMergeEvidence,
+    _repository,
+    _timestamp,
     build_merge_authorization_candidate_from_pr,
     changed_scope_fingerprint,
     evaluate_merge_authorization_applicability,
@@ -38,6 +40,7 @@ from .merge_authorization import (
     reconstruct_merge_authorization_record,
 )
 from .merge_authorization_source import (
+    MAX_COMMENT_BYTES,
     MergeAuthorizationSourceStatus,
     reacquire_merge_authorization_source,
     serialize_merge_authorization_comment,
@@ -63,26 +66,28 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def timestamp(text: str) -> datetime:
-    parsed = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    return parsed
-
-
 def strict_policy(data: Any) -> dict[str, Any]:
     if type(data) is not dict or set(data) != _REQUIRED_POLICY_KEYS:
         raise ValueError("policy fields missing or unexpected")
-    if not isinstance(data["repository"], str) or data["repository"].count("/") != 1:
-        raise ValueError("repository must be owner/name")
+    _repository(data["repository"])
     if type(data["pr_number"]) is not int or data["pr_number"] < 1:
         raise ValueError("invalid PR number")
     if data["merge_method"] not in ("merge", "squash", "rebase"):
         raise ValueError("invalid merge method")
-    for key in ("allowed_files", "forbidden_paths", "required_tests", "required_check_contexts"):
+    for key in ("allowed_files", "required_tests", "required_check_contexts"):
         values = data[key]
         if type(values) is not list or not values or len(values) > _MAX_FILES or any(
             not isinstance(value, str) or not value.strip() for value in values
         ) or len(values) != len(set(values)):
             raise ValueError(f"{key} must be a nonempty, unique, bounded string list")
+    # forbidden_paths may be empty (canonical evidence allows empty lists):
+    # an empty exclusion list adds no restriction beyond allowed_files, so
+    # forcing a nonempty list would only make owners invent a pattern.
+    forbidden = data["forbidden_paths"]
+    if type(forbidden) is not list or len(forbidden) > _MAX_FILES or any(
+        not isinstance(value, str) or not value.strip() for value in forbidden
+    ) or len(forbidden) != len(set(forbidden)):
+        raise ValueError("forbidden_paths must be a unique, bounded string list")
     if AUTHORITATIVE_AGGREGATE_CONTEXT not in data["required_check_contexts"]:
         raise ValueError("authoritative aggregate must be required")
     if not isinstance(data["decision_id"], str) or not data["decision_id"].strip():
@@ -91,8 +96,7 @@ def strict_policy(data: Any) -> dict[str, Any]:
         raise ValueError("template placeholder decision identity must be replaced")
     if not isinstance(data["expires_at"], str):
         raise ValueError("expiry is missing")
-    timestamp(data["expires_at"])
-    if timestamp(data["expires_at"]) <= timestamp(utcnow()):
+    if _timestamp(data["expires_at"], "expires_at") <= _timestamp(utcnow(), "now"):
         raise ValueError("expiry must be in the future")
     return data
 
@@ -168,14 +172,18 @@ def live_evidence(client: Any, *, repository: str, pr_number: int,
             raise ValueError(f"missing/failed/unverifiable required check: {context}")
         # Publisher identity is verified by _latest_evidence either from
         # the commit-status creator or from the check-run app (github-actions
-        # requires app id 15368 there). The third tuple element only records
-        # whether a commit status was observed, so requiring it would refuse
-        # a publisher-verified check-run-only aggregate that the canonical
-        # _native_aggregate_present accepts.
+        # requires app id 15368 there). For the aggregate context the
+        # producer additionally requires a real commit status (third tuple
+        # element): the canonical evaluator accepts a publisher-verified
+        # check-run-only aggregate, but the dispatch consumer refuses it
+        # as checks.authoritative-aggregate-unverifiable, so accepting it
+        # here would mint a binding that can never dispatch. The producer
+        # is deliberately stricter than the evaluator and exactly aligned
+        # with dispatch for the aggregate.
         if context == AUTHORITATIVE_AGGREGATE_CONTEXT and (
-            item[1] != AUTHORITATIVE_AGGREGATE_APP_IDENTITY
+            item[1] != AUTHORITATIVE_AGGREGATE_APP_IDENTITY or not item[2]
         ):
-            raise ValueError("authoritative aggregate publisher is unverified")
+            raise ValueError("authoritative aggregate publisher is unverified or not a commit status")
         checks.append(MergeCheckEvidence(context=context, app_identity=item[1],
                                          tested_sha=head, evidence_id="", state="success"))
     reviews = tuple(pr.get_reviews())
@@ -220,7 +228,7 @@ def prepare(policy: dict[str, Any], client: Any) -> dict[str, Any]:
     )
     body = serialize_merge_authorization_comment(candidate)
     comment_to_record(body)
-    if len(body.encode("utf-8")) > 32 * 1024:
+    if len(body.encode("utf-8")) > MAX_COMMENT_BYTES:
         raise ValueError("authorization comment exceeds trusted source bound")
     repo = client.get_repo(policy["repository"])
     existing = reacquire_merge_authorization_source(
@@ -294,7 +302,7 @@ def decide(pending: dict[str, Any], client: Any, *, decision_id: str,
     )
     body = serialize_merge_authorization_comment(decided)
     comment_to_record(body)
-    if len(body.encode("utf-8")) > 32 * 1024:
+    if len(body.encode("utf-8")) > MAX_COMMENT_BYTES:
         raise ValueError("authorization comment exceeds trusted source bound")
     return {
         "status": "AWAITING_OWNER_PUBLICATION_AND_READBACK",

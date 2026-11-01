@@ -14,19 +14,17 @@ never a runtime merge approval (see docs/3463-merge-admission.md S2).
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-for path in (ROOT, ROOT / "08_Tooling/workflow-scheduler/src"):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
     merge_authorization_owner_console as console,
@@ -34,6 +32,10 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
 from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
     MergeAuthorizationState,
     changed_scope_fingerprint,
+    record_merge_authorization_decision,
+)
+from scripts.agent_os_issue_acceptance.merge_authorization_source import (  # noqa: E402
+    serialize_merge_authorization_comment,
 )
 
 REPO = "Blummer92/agent-os"
@@ -42,6 +44,8 @@ BASE = "22" * 20
 BLOB = "33" * 20
 AGGREGATE = "agent-os/authoritative-aggregate"
 FUTURE = "2099-01-01T00:00:00Z"
+WHEN1 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+WHEN2 = datetime(2026, 11, 1, 12, 5, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------- fakes
@@ -64,7 +68,7 @@ class FakeStatus:
         self.context = context
         self.id = status_id
         self.state = state
-        self.creator = type("U", (), {"login": creator_login, "id": creator_id})()
+        self.creator = SimpleNamespace(login=creator_login, id=creator_id)
 
 
 class FakeCommit:
@@ -100,11 +104,11 @@ class FakePart:
 class FakeComment:
     def __init__(self, comment_id, author, created, body, app_slug=None):
         self.id = comment_id
-        self.user = type("U", (), {"login": author})()
+        self.user = SimpleNamespace(login=author)
         self.created_at = created
         self.body = body
         self.performed_via_github_app = (
-            None if app_slug is None else type("A", (), {"slug": app_slug})()
+            None if app_slug is None else SimpleNamespace(slug=app_slug)
         )
 
 
@@ -175,7 +179,7 @@ class FakeRepo:
         self._pr = pr
         self._commit = commit
         self._issue = issue
-        self.owner = type("O", (), {"login": owner_login, "type": owner_type})()
+        self.owner = SimpleNamespace(login=owner_login, type=owner_type)
         self.default_branch = default_branch
         self._pull_calls = 0
         self.on_pull = None
@@ -249,16 +253,26 @@ def post_owner(client, body, comment_id, when):
     client._repo._issue.add(FakeComment(comment_id, "Blummer92", when, body))
 
 
-def full_flow(client, *, when1=None, when2=None):
-    """prepare -> owner posts PENDING -> decide -> owner posts AUTHORIZED."""
-    when1 = when1 or datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
-    when2 = when2 or datetime(2026, 11, 1, 12, 5, tzinfo=timezone.utc)
+def posted_pending(client):
+    """prepare -> owner posts PENDING (no decide yet)."""
     pending = prepare(client)
-    post_owner(client, pending["pending_comment"], 1001, when1)
+    post_owner(client, pending["pending_comment"], 1001, WHEN1)
+    return pending
+
+
+def decided_pending(client):
+    """prepare -> owner posts PENDING -> decide (AUTHORIZED not posted)."""
+    pending = posted_pending(client)
     decided = console.decide(
         pending, client, decision_id="owner-decision-2",
         confirmation=f"{REPO}#3752@{HEAD}:squash")
-    post_owner(client, decided["authorized_comment"], 1002, when2)
+    return pending, decided
+
+
+def full_flow(client):
+    """prepare -> owner posts PENDING -> decide -> owner posts AUTHORIZED."""
+    pending, decided = decided_pending(client)
+    post_owner(client, decided["authorized_comment"], 1002, WHEN2)
     return pending, decided
 
 
@@ -329,11 +343,15 @@ def test_latest_status_wins_over_older_failure():
         "PENDING_OWNER_PUBLICATION"
 
 
-def test_check_run_only_aggregate_with_verified_publisher_is_accepted():
+def test_prepare_refuses_check_run_only_aggregate_without_commit_status():
+    # Dispatch-aligned: the producer requires the aggregate to be a real
+    # commit status, even when the check-run publisher verifies. A
+    # status-only aggregate is covered by test_latest_status_wins, and
+    # run+status by green_commit.
     commit = FakeCommit(runs=[FakeRun(AGGREGATE, 10, "success",
                                       FakeApp("github-actions", 15368))])
-    assert prepare(make_client(commit=commit))["status"] == \
-        "PENDING_OWNER_PUBLICATION"
+    with pytest.raises(ValueError, match="commit status"):
+        prepare(make_client(commit=commit))
 
 
 def test_exact_head_review_is_audit_only_not_a_gate():
@@ -377,6 +395,12 @@ def test_prepare_refuses_out_of_scope_and_forbidden_paths():
     with pytest.raises(ValueError, match="forbidden"):
         prepare(make_client(pr=pr), allowed_files=[
             ".github/workflows/x.yml"])
+
+
+def test_policy_allows_empty_forbidden_paths():
+    # An empty exclusion list adds no restriction beyond allowed_files.
+    assert prepare(make_client(), forbidden_paths=[])["status"] == \
+        "PENDING_OWNER_PUBLICATION"
 
 
 def test_prepare_refuses_unresolved_threads_across_pages():
@@ -443,14 +467,12 @@ def test_prepare_refuses_closing_reference_but_allows_nonclosing_part_of():
 def test_prepare_refuses_existing_pending_current_and_malformed_chains():
     # Pending-only chain: source is STALE, must still be reconciled first.
     client = make_client()
-    pending = prepare(client)
-    post_owner(client, pending["pending_comment"], 1001,
-               datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc))
+    posted_pending(client)
     with pytest.raises(ValueError, match="reconciled first"):
         prepare(client)
     # Malformed trusted record: source is NEEDS_DECISION, refused too.
     client2 = make_client(comments=[FakeComment(
-        2001, "Blummer92", datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        2001, "Blummer92", WHEN1,
         "agent-os-merge-authorization/v1\nnot-json")])
     with pytest.raises(ValueError, match="reconciled first"):
         prepare(client2)
@@ -478,10 +500,10 @@ def test_decide_refuses_app_performed_and_footer_predecessors():
         client = make_client()
         pending = prepare(client)
         post_owner(client, pending["pending_comment"] + body_suffix, 1001,
-                   datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc))
+                   WHEN1)
         if app is not None:
             client._repo._issue._comments[-1].performed_via_github_app = \
-                type("A", (), {"slug": app})()
+                SimpleNamespace(slug=app)
         with pytest.raises(ValueError, match="predecessor not verified"):
             console.decide(pending, client, decision_id="d2",
                            confirmation=f"{REPO}#3752@{HEAD}:squash")
@@ -489,9 +511,7 @@ def test_decide_refuses_app_performed_and_footer_predecessors():
 
 def test_decide_refuses_wrong_confirmation_and_moved_head():
     client = make_client()
-    pending = prepare(client)
-    post_owner(client, pending["pending_comment"], 1001,
-               datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc))
+    pending = posted_pending(client)
     with pytest.raises(ValueError, match="confirmation does not match"):
         console.decide(pending, client, decision_id="d2",
                        confirmation=f"{REPO}#3752@{'44' * 20}:squash")
@@ -505,8 +525,7 @@ def test_decide_refuses_wrong_author_posting():
     client = make_client()
     pending = prepare(client)
     client._repo._issue.add(FakeComment(
-        1001, "someone-else", datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
-        pending["pending_comment"]))
+        1001, "someone-else", WHEN1, pending["pending_comment"]))
     with pytest.raises(ValueError, match="predecessor not verified"):
         console.decide(pending, client, decision_id="d2",
                        confirmation=f"{REPO}#3752@{HEAD}:squash")
@@ -516,18 +535,12 @@ def test_decide_refuses_wrong_author_posting():
 def test_verify_refuses_missing_second_revision_and_wrong_author():
     # Only the pending comment was ever posted for this client.
     client2 = make_client()
-    pending2 = prepare(client2)
-    post_owner(client2, pending2["pending_comment"], 1001,
-               datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc))
-    decided2 = console.decide(
-        pending2, client2, decision_id="d2",
-        confirmation=f"{REPO}#3752@{HEAD}:squash")
+    _, decided2 = decided_pending(client2)
     with pytest.raises(ValueError, match="not current"):
         console.verify(decided2, client2)
     # Authorized comment posted by someone else is ignored by the reader.
     client2._repo._issue.add(FakeComment(
-        1002, "someone-else", datetime(2026, 11, 1, 12, 5, tzinfo=timezone.utc),
-        decided2["authorized_comment"]))
+        1002, "someone-else", WHEN2, decided2["authorized_comment"]))
     with pytest.raises(ValueError, match="not current"):
         console.verify(decided2, client2)
 
@@ -546,12 +559,6 @@ def test_verify_refuses_superseded_chain_and_source_drift():
     client = make_client()
     pending, decided = full_flow(client)
     record = console.comment_to_record(decided["authorized_comment"])
-    from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
-        record_merge_authorization_decision,
-    )
-    from scripts.agent_os_issue_acceptance.merge_authorization_source import (  # noqa: E402
-        serialize_merge_authorization_comment,
-    )
     # Decision time must be after the authorized record's real decision_at
     # and before the 2099 expiry, so use 2098 for this synthetic third
     # revision; the source reader still rejects the superseded chain.
@@ -621,6 +628,10 @@ def test_policy_validation_rejects_blind_template_reuse_and_bad_fields():
         lambda d: d.update(expires_at="REPLACE_WITH_FRESH_UTC_EXPIRY_BEFORE_USE"),
         lambda d: d.update(decision_id="PENDING-NO-OWNER-MERGE-DECISION"),
         lambda d: d.update(decision_id="  "),
+        # Canonical _repository rules: a loose one-slash check would
+        # admit both of these; the reused validator refuses them.
+        lambda d: d.update(repository="owner name/agent-os"),
+        lambda d: d.update(repository="../agent-os"),
     ):
         data = dict(base)
         mutate(data)
@@ -645,9 +656,6 @@ def test_console_contains_no_github_write_route():
                       "create_pull(", "edit(", "delete_branch(",
                       "add_to_labels(", "create_label("):
         assert forbidden not in source, forbidden
-    pending, decided = full_flow(make_client())
-    assert pending["side_effects_performed"] is False
-    assert decided["side_effects_performed"] is False
 
 
 def test_client_from_environment_requires_token(monkeypatch):

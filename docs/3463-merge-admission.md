@@ -209,7 +209,11 @@ or creates a standing grant, and its payloads always carry
   candidate with the canonical constructor and serializer, and refuses
   when any trusted authorization chain already exists in the PR
   conversation (current, pending, rejected, expired, superseded, or
-  consumed chains must be reconciled first).
+  consumed chains must be reconciled first). The policy requires
+  nonempty allowed_files, required_tests, and required_check_contexts
+  (the aggregate context must be required); forbidden_paths may be
+  empty, since an empty exclusion list adds no restriction beyond
+  allowed_files.
 - `decide` refuses unless the owner has personally posted the exact
   PENDING comment and the trusted source reader has read it back as the
   sole revision of its chain, and unless fresh live evidence still
@@ -222,14 +226,15 @@ or creates a standing grant, and its payloads always carry
   `human_origin_attested=false`: a verified record is auditable
   representation only, not the runtime approval-card attestation
   required at any merge call (S2, unchanged).
-- Two fail-closed divergences the owner should know before posting.
-  First, a check-run-only aggregate passes console verification (its
-  publisher is verified through the check-run app identity), but the
-  dispatch consumer additionally requires the aggregate to be a commit
-  status and refuses a check-run-only aggregate as
-  `checks.authoritative-aggregate-unverifiable` — so confirm the
-  aggregate commit status exists before posting, or the posting is
-  wasted (never an unauthorized merge). Second, `prepare` refuses
+- Two things the owner should know before posting. First, aggregate
+  alignment: the producer requires the authoritative aggregate to be
+  a real commit status with verified publisher identity — deliberately
+  stricter than the canonical evaluator (which also accepts a
+  publisher-verified check-run-only aggregate) and exactly aligned
+  with the dispatch consumer, which refuses a check-run-only
+  aggregate as `checks.authoritative-aggregate-unverifiable`. A
+  check-run-only aggregate therefore fails `prepare` rather than
+  minting a binding that can never dispatch. Second, `prepare` refuses
   whenever any authorization chain already exists in the PR
   conversation, including a pending-only or terminally rejected one,
   and the console currently offers no supersede path: reconciling a
