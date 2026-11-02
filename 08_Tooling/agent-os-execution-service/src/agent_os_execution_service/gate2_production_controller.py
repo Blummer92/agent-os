@@ -57,6 +57,7 @@ execution controller, or the receipt framework.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -398,7 +399,14 @@ def _build_bootstrap(
 
 
 def _validate_receipt_identity(envelope: dict[str, Any], receipt: dict[str, Any]) -> None:
-    """Reject a receipt body contradicting the admitted envelope (#3333 X09)."""
+    """Reject a receipt body contradicting the admitted envelope (#3333 X09).
+
+    Identity is exact type AND value for every field: ``3333.0`` and
+    ``True`` must not compare equal to the admitted integer ``3333``
+    (Copilot R2), and a missing or non-string handoff/SHA/repository
+    must not pass. The caller must pass the authoritative admitted
+    envelope, never a driver-mutable copy (Copilot R1).
+    """
     expected = {
         "handoff_id": envelope.get("codespace_implementation_handoff_id_or_none"),
         "expected_sha": envelope.get("codespace_implementation_sha_or_none"),
@@ -406,7 +414,8 @@ def _validate_receipt_identity(envelope: dict[str, Any], receipt: dict[str, Any]
         "issue_number": envelope.get("issue_number"),
     }
     for field, value in expected.items():
-        if receipt.get(field) != value:
+        actual = receipt.get(field)
+        if type(actual) is not type(value) or actual != value:
             raise Gate2ControllerError("receipt-identity-mismatch", field)
 
 
@@ -536,7 +545,15 @@ def run_gate2_fixed_pilot_controller(
         # would lose the receipt of an already-consumed probe.
         receipts_dir = _ensure_receipts_dir(invocations_dir)
 
-        receipt = invoke(envelope, bootstrap=bootstrap)
+        # Copilot R1: the driver must never receive the authoritative
+        # envelope. It gets a deep copy, so mutating its input (including
+        # any nested value, if the ingress shape ever gains one) cannot
+        # rewrite the identity used below for validation, the receipt
+        # filename, and the receipt reference. The admitted envelope is
+        # flat scalars today (ingress ``to_dict``), so a shallow copy
+        # would suffice now; deepcopy is the smallest option that stays
+        # sound if that shape changes.
+        receipt = invoke(copy.deepcopy(envelope), bootstrap=bootstrap)
         if type(receipt) is not dict:
             raise Gate2ControllerError("driver-returned-non-mapping")
         raw_reason_codes = receipt.get("reason_codes")
