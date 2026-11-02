@@ -64,6 +64,7 @@ jobs:
       profile: ${{ steps.plan.outputs.profile }}
       plan_base64: ${{ steps.plan.outputs.plan_base64 }}
       needs_node: ${{ steps.plan.outputs.needs_node }}
+      needs_picture_perfect: ${{ steps.plan.outputs.needs_picture_perfect }}
     steps:
       - name: Check out exact pull request head
         uses: actions/checkout@v7
@@ -126,6 +127,13 @@ jobs:
           print(f"plan_base64={encoded}")
           print(
               "needs_node=" +
+              str(any(
+                  "picture-perfect-coach" in command or "node --test" in command
+                  for command in plan.commands
+              )).lower()
+          )
+          print(
+              "needs_picture_perfect=" +
               str(any("picture-perfect-coach" in command for command in plan.commands)).lower()
           )
           PY
@@ -166,7 +174,7 @@ jobs:
           cache-dependency-path: 08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json
 
       - name: Install Picture Perfect Coach dependencies
-        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_picture_perfect == 'true' }}
         working-directory: 08_Tooling/instructional-materials-coach/picture-perfect-coach
         run: npm ci
 

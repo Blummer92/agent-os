@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import MappingProxyType
 
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTION_SERVICE_SRC = ROOT / "08_Tooling/agent-os-execution-service/src"
@@ -55,6 +56,18 @@ _TEACHER_OS_COMMANDS = {
     "cd 08_Tooling/teacher-os-web && npx playwright test": ("npx", "playwright", "test"),
 }
 _CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
+
+_IMC_APPS_SCRIPT_DIR = ROOT / "08_Tooling/instructional-materials-coach"
+
+_APPS_SCRIPT_COMMANDS = MappingProxyType(
+    {
+        "cd 08_Tooling/instructional-materials-coach && node --test apps-script/test/visual-placement-transport.conformance.test.mjs": (
+            "node",
+            "--test",
+            "apps-script/test/visual-placement-transport.conformance.test.mjs",
+        ),
+    }
+)
 
 
 def _decode_plan(encoded: str) -> ValidationPlan:
@@ -131,6 +144,9 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     teacher_argv = _TEACHER_OS_COMMANDS.get(command)
     if teacher_argv is not None:
         return teacher_argv, _TEACHER_OS_DIR
+    apps_script_argv = _APPS_SCRIPT_COMMANDS.get(command)
+    if apps_script_argv is not None:
+        return apps_script_argv, _IMC_APPS_SCRIPT_DIR
     if command == _CI_VALIDATION_SELF_TEST:
         return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
