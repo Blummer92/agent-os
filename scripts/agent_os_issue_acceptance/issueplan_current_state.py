@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
@@ -376,6 +376,94 @@ def compute_issueplan_current_state_fingerprint(
             reason_codes=evidence.reason_codes,
         )
     )
+
+
+_LOWER_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _hex_digest(value: object, name: str, length: int) -> None:
+    if (
+        type(value) is not str
+        or len(value) != length
+        or not _LOWER_HEX_DIGITS.issuperset(value)
+    ):
+        raise ValueError(f"{name} must be a {length}-char lowercase hex digest")
+
+
+def project_planning_context(
+    evidence: IssuePlanCurrentStateEvidence,
+    *,
+    base_branch: str,
+    evaluated_repository_sha: str,
+    implementation_contract_fingerprint: str,
+    allowed_files: Iterable[str],
+    forbidden_paths: Iterable[str],
+    required_tests: Iterable[str],
+) -> IssuePlanCurrentStateEvidence:
+    """Return ``evidence`` with only the planning-context fields projected.
+
+    This is the #3690 single-readiness-pass consolidation: the candidate
+    packet entrypoint used to run the whole readiness stage twice -- once
+    without a planning context to derive the implementation-contract
+    fingerprint, then again with that context -- even though the context
+    reaches exactly these six fields of the IssuePlan evidence and nothing
+    else in the stage (snapshot resolve, IssuePlan scan, dependency and
+    validation evidence, and the readiness evaluation itself are all
+    context-independent). Projecting the context here, and recomputing the
+    evidence identity from the projected payload, produces exactly the
+    evidence the second full stage run produced, from the one snapshot the
+    fingerprint was derived from, instead of silently mixing two lineages
+    when a live reader changes between passes.
+
+    The input identity is verified first: an evidence object whose
+    ``evidence_id`` does not match its own recomputed fingerprint is
+    rejected rather than re-identified. The projected context is then
+    validated here -- non-empty branch, 40-char lowercase-hex repository
+    SHA, 64-char lowercase-hex contract fingerprint, and scope collections
+    that are not bare strings, bytes, or mappings (a bare string would
+    otherwise be silently split into characters by the tuple conversion)
+    -- because the evidence dataclass itself checks only that scope
+    members are non-empty strings, not these formats. The dataclass
+    constructor then re-validates scope membership and the reason-code
+    superset rule exactly as construction from the builder would. No
+    other field is changed, and no authorization, merge, closure,
+    workflow, or protected-setting value is carried or created here.
+    Note the fingerprint payload excludes ``observed_at``, so this check
+    cannot detect tampering with that field alone; that is the builder's
+    own design, and the candidate-packet caller supplies both passes from
+    the same request.
+    """
+    if not isinstance(evidence, IssuePlanCurrentStateEvidence):
+        raise TypeError("evidence must be IssuePlanCurrentStateEvidence")
+    if evidence.evidence_id != (
+        f"issueplan-current-state:{compute_issueplan_current_state_fingerprint(evidence)}"
+    ):
+        raise ValueError("evidence_id does not match evidence fingerprint")
+    _text(base_branch, "base_branch")
+    _hex_digest(evaluated_repository_sha, "evaluated_repository_sha", 40)
+    _hex_digest(
+        implementation_contract_fingerprint,
+        "implementation_contract_fingerprint",
+        64,
+    )
+    for name, values in (
+        ("allowed_files", allowed_files),
+        ("forbidden_paths", forbidden_paths),
+        ("required_tests", required_tests),
+    ):
+        if isinstance(values, (str, bytes, Mapping)):
+            raise TypeError(f"{name} must be an iterable of strings, not a scalar")
+    projected = replace(
+        evidence,
+        base_branch=base_branch,
+        evaluated_repository_sha=evaluated_repository_sha,
+        implementation_contract_fingerprint=implementation_contract_fingerprint,
+        allowed_files=tuple(allowed_files),
+        forbidden_paths=tuple(forbidden_paths),
+        required_tests=tuple(required_tests),
+    )
+    fingerprint = compute_issueplan_current_state_fingerprint(projected)
+    return replace(projected, evidence_id=f"issueplan-current-state:{fingerprint}")
 
 
 def compare_issueplan_current_state(
