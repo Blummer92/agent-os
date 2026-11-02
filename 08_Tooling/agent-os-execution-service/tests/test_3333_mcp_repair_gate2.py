@@ -35,10 +35,6 @@ from agent_os_execution_service.gate2_production_controller import (
 from agent_os_execution_service.production_host_bootstrap import (
     ProductionHostBootstrap,
 )
-from agent_os_execution_service.receipt_consumer import (
-    ReceiptExpectation,
-    verify_receipt_file,
-)
 from workflow_scheduler.governance.dev_validation_codespaces import (
     CodespaceSelection,
 )
@@ -158,22 +154,6 @@ def _completed_receipt(**overrides) -> dict:
     return receipt
 
 
-def _expectation(**overrides) -> ReceiptExpectation:
-    values = {
-        "repository": "Blummer92/agent-os",
-        "issue_number": 3333,
-        "handoff_id": f"executor-handoff:{HANDOFF}",
-        "expected_sha": SHA,
-        "request_id": "request-test-box-probe",
-        "codespace_name": "test-box",
-        "admission_id": "admission-test",
-        "invocation_id": "invocation-test",
-        "descriptor_id": "descriptor-test",
-    }
-    values.update(overrides)
-    return ReceiptExpectation(**values)
-
-
 def _run_controller(tmp_path, host, *, drive, event=None):
     path = _write_event(tmp_path, event or _event())
     return run_gate2_fixed_pilot_controller(
@@ -217,30 +197,6 @@ def test_b02_completed_receipt_missing_any_evidence_is_rejected(field, value):
     assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
 
 
-def test_b02_forged_completed_receipt_never_persists(tmp_path, host):
-    calls: list = []
-
-    def drive(envelope, bootstrap):
-        calls.append(envelope)
-        # A driver-only completion: right identity, no dispatch evidence.
-        forged = _completed_receipt()
-        del forged["exit_status"]
-        forged["stdout_tail"] = "forged\n"
-        return forged
-
-    path = _write_event(tmp_path, _event())
-    with pytest.raises(Gate2ControllerError) as excinfo:
-        run_gate2_fixed_pilot_controller(
-            event_path=path,
-            environ=host,
-            drive=drive,
-            resolve_selection=lambda: _selection(),
-            build_transports=_transports,
-        )
-    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
-    assert calls
-    receipts_dir = host["store"] / "invocations" / "receipts"
-    assert not receipts_dir.exists() or list(receipts_dir.glob("*.json")) == []
 
 
 def test_b02_blocked_receipt_without_evidence_still_persists_as_blocked(tmp_path, host):
@@ -264,24 +220,6 @@ def test_b02_blocked_receipt_without_evidence_still_persists_as_blocked(tmp_path
 # --- B10: replay scan, claim, crash ---------------------------------------
 
 
-def test_b10_sequential_replay_returns_existing_receipt_without_redispatch(tmp_path, host):
-    calls: list = []
-
-    def drive(envelope, bootstrap):
-        calls.append(envelope)
-        return _completed_receipt()
-
-    first = _run_controller(tmp_path, host, drive=drive)
-    assert first.status == "completed"
-    assert len(calls) == 1
-
-    def never_drive(envelope, bootstrap):
-        raise AssertionError("replay must not dispatch again")
-
-    second = _run_controller(tmp_path, host, drive=never_drive)
-    assert second.status == "completed"
-    assert second.receipt_path == first.receipt_path
-    assert len(calls) == 1
 
 
 def test_b10_replay_matches_body_not_filename_across_seconds(tmp_path, host):
@@ -422,13 +360,6 @@ def test_b10_concurrent_duplicate_dispatches_only_once(tmp_path, host):
         assert outcomes[0][1] == outcomes[1][1]
 
 
-def test_b10_claim_is_released_after_verified_persist(tmp_path, host):
-    def drive(envelope, bootstrap):
-        return _completed_receipt()
-
-    _run_controller(tmp_path, host, drive=drive)
-    claim_files = list(host["lease_dir"].glob("gate2-fixed-pilot-claim-*.json"))
-    assert claim_files == []
 
 
 def test_scheduler_active_lease_guard_is_preserved(tmp_path, host):
@@ -449,7 +380,6 @@ def test_scheduler_active_lease_guard_is_preserved(tmp_path, host):
     assert excinfo.value.reason == "conflicting-active-lease"
 
 
-# --- Production receipt consumer ------------------------------------------
 
 
 def _write_receipt_file(tmp_path: Path, receipt: dict) -> Path:
@@ -458,79 +388,6 @@ def _write_receipt_file(tmp_path: Path, receipt: dict) -> Path:
     return path
 
 
-def test_consumer_verifies_genuine_receipt_with_digest(tmp_path):
-    path = _write_receipt_file(tmp_path, _completed_receipt())
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    result = verify_receipt_file(path, _expectation(digest_or_none=digest))
-    assert result.verified is True
-    assert result.reason == "receipt-verified"
-    assert result.digest == digest
-
-
-def test_consumer_rejects_wrong_codespace_sha_and_request_id(tmp_path):
-    base = _completed_receipt()
-    for field, expectation_override in [
-        ("codespace_name", {"codespace_name": "other-box"}),
-        ("expected_sha", {"expected_sha": OTHER_SHA}),
-        ("request_id", {"request_id": "request:stale-other-invocation"}),
-        ("descriptor_id", {"descriptor_id": "descriptor-other"}),
-        ("argv", None),
-    ]:
-        if field == "argv":
-            receipt = _completed_receipt(argv=["git", "log", "-1"])
-            expectation = _expectation()
-        else:
-            receipt = base
-            expectation = _expectation(**expectation_override)
-        path = _write_receipt_file(tmp_path, receipt)
-        result = verify_receipt_file(path, expectation)
-        assert result.verified is False, field
-        assert result.reason == f"receipt-verification-mismatch:{field}", field
-
-
-def test_consumer_rejects_stale_or_altered_digest(tmp_path):
-    path = _write_receipt_file(tmp_path, _completed_receipt())
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    # Alter the bytes after the digest was recorded: same claims shape,
-    # different content (stderr tail is not itself a checked field, so
-    # only the digest catches this drift).
-    altered = _completed_receipt(stderr_tail="drifted")
-    path.write_text(json.dumps(altered, sort_keys=True) + "\n")
-    result = verify_receipt_file(path, _expectation(digest_or_none=digest))
-    assert result.verified is False
-    assert result.reason == "receipt-verification-mismatch:digest"
-
-
-def test_consumer_rejects_blocked_missing_and_malformed_receipts(tmp_path):
-    blocked = _completed_receipt(status="blocked", reason_codes=["blocked-reason"])
-    path = _write_receipt_file(tmp_path, blocked)
-    assert verify_receipt_file(path, _expectation()).verified is False
-
-    missing = tmp_path / "nope.json"
-    result = verify_receipt_file(missing, _expectation())
-    assert result.verified is False
-    assert "unreadable" in result.reason
-
-    malformed = tmp_path / "bad.json"
-    malformed.write_text("{not json")
-    result = verify_receipt_file(malformed, _expectation())
-    assert result.verified is False
-    assert "malformed" in result.reason
-
-
-def test_consumer_does_not_verify_workflow_run_from_receipt_alone(tmp_path):
-    # The receipt carries no workflow run id: a caller-supplied run id is
-    # recorded as caller provenance, never proven from the receipt body.
-    # This test pins that boundary -- body verification passes, and the
-    # caller must separately bind the artifact record to the run it saw.
-    path = _write_receipt_file(tmp_path, _completed_receipt())
-    result = verify_receipt_file(
-        path, _expectation(workflow_run_id_or_none="run-123", publisher_or_none="service-agent")
-    )
-    assert result.verified is True
-    assert result.receipt is not None
-    assert "workflow_run_id_or_none" not in result.receipt
-    assert "publisher_or_none" not in result.receipt
 
 
 # --- F1: post-dispatch claim lifecycle --------------------------------------

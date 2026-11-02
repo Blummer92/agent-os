@@ -745,7 +745,7 @@ def _persist_receipt_atomically(
 def _receipt_reference(
     receipt_path: Path, envelope: dict[str, Any], receipt: dict[str, Any]
 ) -> dict[str, Any]:
-    """Bounded reference for the existing authorized consumer.
+    """Bounded reference for the authorized consumer label (no verified module wired here).
 
     Carries identity and outcome only -- no stdout/stderr tails, no host
     paths beyond the receipt's own location. Publication itself stays with
@@ -866,9 +866,10 @@ def run_gate2_fixed_pilot_controller(
         # invalid reason codes) propagates WITHOUT releasing it, so the
         # outcome stays fail-closed and ambiguous rather than silently
         # cleared. The scan compares handoff + SHA + repository + issue
-        # from the receipt body; attempt is not a receipt field and the
-        # operation ID is constant for this fixed path, so neither is
-        # separately compared here.
+        # from the receipt body; attempt is not a receipt field and is
+        # not compared. The operation ID and schema version are compared
+        # by the shared completed-receipt sink the scan invokes for each
+        # matched receipt.
         rescan = _find_completed_receipt(receipts_dir, envelope, selected_name)
         if rescan is not None:
             rescan_path, rescan_receipt = rescan
