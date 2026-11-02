@@ -281,7 +281,8 @@ def test_p1_build_verified_receipt_draft_skipped_aggregate():
     jobs = [
         {"id": 7, "name": "pyan3 call-graph advisory", "conclusion": "success", "run_attempt": 1, "steps": []},
         {"id": 8, "name": "jscpd duplicate-code advisory", "conclusion": "success", "run_attempt": 1, "steps": []},
-        {"id": 9, "name": "Run validation plan", "conclusion": "skipped", "run_attempt": 1, "steps": []},
+        {"id": 9, "name": "Run validation plan", "conclusion": "success", "run_attempt": 1, "steps": []},
+        {"id": 10, "name": "Run aggregate validation", "conclusion": "skipped", "run_attempt": 1, "steps": []},
     ]
     arts = [_artifact("pyan3-advisory-3755", 11)]
     receipt = build_verified_receipt(source_run=run, jobs=jobs, artifacts=arts, downloads={"11": data}, source_attempt=1, collector_head="c" * 40, live_trigger=False)
@@ -318,3 +319,84 @@ def test_p1_wrong_attempt_junit_and_health_are_not_selected():
     receipt = build_verified_receipt(source_run=run, jobs=jobs, artifacts=arts, downloads={"31": _zip({"00.xml": xml})}, source_attempt=2, collector_head="c" * 40, live_trigger=False)
     assert receipt["streams"]["aggregate"]["classification"] == "EVIDENCE_MISSING"
     assert "junit-aggregate-1" not in receipt.get("junit", {})
+
+# #3762 Copilot review: the aggregate job is distinct from the plan job.
+def _receipt_jobs(aggregate_conclusion="skipped", aggregate_step="skipped"):
+    return [
+        {"id": 10, "name": "Run validation plan", "status": "completed",
+         "conclusion": "success", "run_attempt": 1, "steps": []},
+        {"id": 11, "name": "Run aggregate validation", "status": "completed",
+         "conclusion": aggregate_conclusion, "run_attempt": 1,
+         "steps": [{"name": "Run aggregate validation", "conclusion": aggregate_step}]},
+    ]
+
+
+def _receipt_for_aggregate(jobs, artifacts=(), downloads=None):
+    from scripts.agent_os_ci_evidence_collector import build_verified_receipt
+    run = {"id": 100, "head_sha": HEAD,
+           "path": ".github/workflows/agent-os-validation.yml", "status": "completed"}
+    return build_verified_receipt(
+        source_run=run, jobs=list(jobs), artifacts=list(artifacts),
+        downloads=downloads or {}, source_attempt=1,
+        collector_head="c" * 40, live_trigger=False,
+    )
+
+
+def test_review_3762_draft_plan_success_does_not_override_aggregate_skip():
+    xml = b'<testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase classname="c" name="n"/></testsuite></testsuites>'
+    focused = _artifact("junit-plan-focused-1", 81)
+    receipt = _receipt_for_aggregate(
+        _receipt_jobs(), [focused], {"81": _zip({"focused.xml": xml})})
+    assert receipt["streams"]["aggregate"]["classification"] == "INTENTIONALLY_DEFERRED"
+    assert "junit" not in receipt["streams"]
+
+
+def test_review_3762_focused_junit_cannot_substitute_for_missing_aggregate():
+    xml = b'<testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase classname="c" name="n"/></testsuite></testsuites>'
+    focused = _artifact("junit-plan-focused-1", 81)
+    receipt = _receipt_for_aggregate(
+        _receipt_jobs("success", "success"), [focused],
+        {"81": _zip({"focused.xml": xml})})
+    assert receipt["streams"]["aggregate"]["classification"] == "EVIDENCE_MISSING"
+    assert receipt["streams"]["junit"]["junit-plan-focused-1"]["classification"] == "EVIDENCE_VALID"
+
+
+def test_review_3762_aggregate_junit_required_and_provider_unavailable_preserved():
+    xml = b'<testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase classname="c" name="n"/></testsuite></testsuites>'
+    artifact = _artifact("junit-aggregate-1", 82)
+    jobs = _receipt_jobs("success", "success")
+    missing_download = _receipt_for_aggregate(jobs, [artifact])
+    assert missing_download["streams"]["aggregate"]["classification"] == "PROVIDER_UNAVAILABLE"
+    valid = _receipt_for_aggregate(jobs, [artifact], {"82": _zip({"aggregate.xml": xml})})
+    assert valid["streams"]["aggregate"]["classification"] == "EVIDENCE_VALID"
+    invalid = _receipt_for_aggregate(jobs, [artifact], {"82": _zip({"aggregate.xml": b"broken"})})
+    assert invalid["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
+    failed_job = _receipt_for_aggregate(
+        _receipt_jobs("failure", "failure"), [artifact], {"82": _zip({"aggregate.xml": xml})})
+    assert failed_job["streams"]["aggregate"]["classification"] == "REJECT_JOB_NOT_SUCCESS"
+
+
+def test_review_3762_zip_member_read_errors_reject_schema(monkeypatch):
+    from scripts.agent_os_ci_evidence_collector import classify_junit_artifact
+    xml = b'<testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase classname="c" name="n"/></testsuite></testsuites>'
+    zip_bytes = _zip({"aggregate.xml": xml})
+    for error in (zipfile.BadZipFile("bad member"), RuntimeError("unsupported compression"),
+                  KeyError("missing member")):
+        with monkeypatch.context() as patch:
+            def fail_read(self, name, *args, _error=error, **kwargs):
+                raise _error
+            patch.setattr(zipfile.ZipFile, "read", fail_read)
+            assert classify_junit_artifact(zip_bytes)["classification"] == "REJECT_SCHEMA"
+
+
+def test_review_3762_duplicate_or_expired_aggregate_cannot_be_green():
+    xml = b'<testsuites><testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase classname="c" name="n"/></testsuite></testsuites>'
+    zipped = _zip({"aggregate.xml": xml})
+    artifacts = [_artifact("junit-aggregate-1", 82), _artifact("junit-aggregate-1", 83)]
+    receipt = _receipt_for_aggregate(_receipt_jobs("success", "success"), artifacts,
+                                     {"82": zipped, "83": zipped})
+    assert receipt["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
+    expired = _receipt_for_aggregate(
+        _receipt_jobs("success", "success"),
+        [_artifact("junit-aggregate-1", 82, expired=True)], {"82": zipped})
+    assert expired["streams"]["aggregate"]["classification"] == "REJECT_EXPIRED"

@@ -462,15 +462,18 @@ def classify_junit_artifact(zip_bytes: bytes) -> dict:
     seen: set[str] = set()
     totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
     try:
-        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-        for member in xml_members:
-            ids, counts = validate_junit(zf.read(member))
-            if seen.intersection(ids):
-                return {"classification": "REJECT_SCHEMA"}
-            seen.update(ids)
-            for key in totals:
-                totals[key] += counts.get(key, 0)
-    except ValueError:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for member in xml_members:
+                ids, counts = validate_junit(zf.read(member))
+                if seen.intersection(ids):
+                    return {"classification": "REJECT_SCHEMA"}
+                seen.update(ids)
+                for key in totals:
+                    totals[key] += counts.get(key, 0)
+    except (ValueError, KeyError, RuntimeError, zipfile.BadZipFile, OSError):
+        # A well-formed central directory does not prove member bytes can
+        # be read. Corrupt/unsupported member data is invalid evidence,
+        # never a collector crash or an EVIDENCE_VALID receipt.
         return {"classification": "REJECT_SCHEMA"}
     return {"classification": "EVIDENCE_VALID", "node_count": len(seen), "counts": totals}
 
@@ -523,8 +526,11 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
             elif legacy_unbound(artifacts, stream, source_attempt):
                 stream_result = {**stream_result, "detail": "legacy artifact is not attempt-bound; source attempt > 1"}
         streams[stream] = stream_result
-    validate_job = job_by_name(jobs, "Run validation plan", expected_attempt=source_attempt)
-    obligation = aggregate_obligation(validate_job)
+    # The plan job runs on Draft PRs even when aggregate validation is
+    # deliberately skipped. Only the dedicated aggregate job owns the
+    # aggregate obligation, reuse decision, and completion evidence.
+    aggregate_job = job_by_name(jobs, "Run aggregate validation", expected_attempt=source_attempt)
+    obligation = aggregate_obligation(aggregate_job)
     if obligation == "deferred":
         streams["aggregate"] = {"classification": "INTENTIONALLY_DEFERRED", "job_binding": JOB_BINDING}
     elif obligation == "reused":
@@ -532,21 +538,59 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
     elif obligation == "not_applicable":
         streams["aggregate"] = {"classification": "NOT_APPLICABLE", "job_binding": JOB_BINDING}
     else:
+        # Focused evidence is diagnostic only. It can never satisfy the
+        # required authoritative aggregate stream, even when it is the
+        # only downloaded report and its JUnit contents are valid.
+        aggregate_name = f"junit-aggregate-{source_attempt}"
+        focused_name = f"junit-plan-focused-{source_attempt}"
         junit_results: dict[str, dict] = {}
+        duplicates: set[str] = set()
         for art in artifacts:
+            if not isinstance(art, dict):
+                continue
             name = str(art.get("name", ""))
-            if name in (f"junit-aggregate-{source_attempt}", f"junit-plan-focused-{source_attempt}"):
-                data = downloads.get(str(art["id"]))
-                junit_results[name] = classify_junit_artifact(data) if data is not None else {"classification": "PROVIDER_UNAVAILABLE"}
-        if not junit_results:
-            streams["aggregate"] = {"classification": "EVIDENCE_MISSING", "job_binding": JOB_BINDING}
-        elif all(r["classification"] == "EVIDENCE_VALID" for r in junit_results.values()):
-            if validate_job is not None and validate_job.get("conclusion") != "success":
-                streams["aggregate"] = {"classification": "REJECT_JOB_NOT_SUCCESS", "job_binding": JOB_BINDING}
-            else:
-                streams["aggregate"] = {"classification": "EVIDENCE_VALID", "job_binding": JOB_BINDING}
+            if name not in (aggregate_name, focused_name):
+                continue
+            if name in junit_results:
+                duplicates.add(name)
+                junit_results[name] = {"classification": "REJECT_SCHEMA"}
+                continue
+            if art.get("expired"):
+                junit_results[name] = {"classification": "REJECT_EXPIRED"}
+                continue
+            workflow_run = art.get("workflow_run") or {}
+            if workflow_run and (
+                workflow_run.get("id") != source_run_id
+                or workflow_run.get("head_sha") != source_head
+            ):
+                junit_results[name] = {"classification": "REJECT_WRONG_HEAD"}
+                continue
+            data = downloads.get(str(art.get("id")))
+            if data is None:
+                junit_results[name] = {"classification": "PROVIDER_UNAVAILABLE"}
+                continue
+            digest = art.get("digest")
+            if isinstance(digest, str) and digest.startswith("sha256:") and (
+                hashlib.sha256(data).hexdigest() != digest[len("sha256:"):]
+            ):
+                junit_results[name] = {"classification": "REJECT_DIGEST"}
+                continue
+            junit_results[name] = classify_junit_artifact(data)
+        for name in duplicates:
+            junit_results[name] = {"classification": "REJECT_SCHEMA"}
+        authoritative = junit_results.get(aggregate_name)
+        if authoritative is None:
+            classification = "EVIDENCE_MISSING"
+        elif authoritative["classification"] != "EVIDENCE_VALID":
+            # Preserve provider/download unavailability rather than
+            # relabeling it as corrupt schema. Other invalid evidence
+            # retains its explicit refusal class.
+            classification = authoritative["classification"]
+        elif aggregate_job is None or aggregate_job.get("conclusion") != "success":
+            classification = "REJECT_JOB_NOT_SUCCESS"
         else:
-            streams["aggregate"] = {"classification": "REJECT_SCHEMA", "job_binding": JOB_BINDING}
+            classification = "EVIDENCE_VALID"
+        streams["aggregate"] = {"classification": classification, "job_binding": JOB_BINDING}
         streams["junit"] = junit_results
     return {
         "schema": SCHEMA,

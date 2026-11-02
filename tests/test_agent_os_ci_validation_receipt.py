@@ -140,3 +140,28 @@ def test_unresolvable_command_is_recorded_not_dropped(monkeypatch, tmp_path: Pat
     receipt = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert receipt["commands"][1]["classification"] == "NOT_EXECUTED"
     assert receipt["commands"][1]["exit_code"] is None
+
+def test_review_3762_malformed_xml_keeps_full_command_receipts(monkeypatch, tmp_path: Path) -> None:
+    """An invalid XML report is evidence-invalid, not a receipt-writer crash."""
+    calls = []
+
+    def fake_run(argv, cwd, check, env):
+        calls.append(tuple(argv))
+        for arg in argv:
+            if isinstance(arg, str) and arg.startswith("--junitxml="):
+                Path(arg.split("=", 1)[1]).write_bytes(b"<broken")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module, "_current_head", lambda: "a" * 40)
+    monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
+    module.execute_focused(
+        _plan(["python -m pytest tests/agent_os_issue_acceptance",
+               "python -m pytest tests/agent_os_issue_acceptance"], "a" * 40),
+        expected_head_sha="a" * 40,
+    )
+    receipt = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert len(calls) == 2
+    assert receipt["selected_count"] == 2
+    assert len(receipt["commands"]) == 2
+    assert all(item["junit_counts"] is None for item in receipt["commands"])

@@ -178,7 +178,7 @@ def _junit_counts(path: Path) -> dict | None:
         from xml.etree import ElementTree as _ET
 
         root = _ET.fromstring(path.read_bytes())
-    except (OSError, ValueError):
+    except (OSError, ValueError, _ET.ParseError):
         return None
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
