@@ -84,6 +84,50 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(client.calls, [])
 
 
+
+class ContinuationConsumerLessonCatalogTests(unittest.TestCase):
+    """#3690 reviewed knowledge only: preserve one-write and activation boundaries."""
+
+    def test_reviewed_continuation_candidate_is_bounded_and_provenance_scoped(self):
+        from scripts.agent_os_notion_lessons_write.catalog import (
+            CONTINUATION_CONSUMER_REQUEST_ID, validate_entry,
+        )
+        key = CONTINUATION_CONSUMER_REQUEST_ID
+        self.assertEqual(key, 'continuation-live-consumer-2026-10-30')
+        self.assertIsNone(target_for(key))
+        self.assertIs(validate_entry(LESSONS[key]), LESSONS[key])
+        values = lesson_for(key)
+        self.assertEqual(values['Source Link'], 'https://github.com/Blummer92/agent-os/issues/3690')
+        self.assertEqual(values['Area'], 'Governance')
+        self.assertEqual(values['Learning Type'], 'Mistake')
+        self.assertFalse(PROTECTED_FIELDS & set(values))
+        for name, value in values.items():
+            if isinstance(value, str):
+                self.assertLessEqual(len(value), 512, name)
+        self.assertIn('30 MCP tests passed', values['What Happened'])
+        self.assertIn('remains unverified', values['What Happened'])
+        self.assertIn('Owner-reported Cloud Shell runs', values['What Happened'])
+        self.assertIn('excludes all continuation-named tools', values['What Happened'])
+        self.assertIn('separate owner decision', values['Guardrail'])
+
+    def test_new_candidate_uses_existing_owner_comment_admission(self):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        command = '/agent-os notion-write ' + CONTINUATION_CONSUMER_REQUEST_ID
+        request = admit(event(command, number=3417, state='closed'), **CONTEXT)
+        self.assertEqual(request.request_id, CONTINUATION_CONSUMER_REQUEST_ID)
+        self.assertEqual(request.expected_lesson_id, None)
+        with self.assertRaises(WriteBlocked):
+            admit(event(command + ' LL-93 2026-10-06T23:07:00.000Z', number=3417), **CONTEXT)
+
+    def test_reviewed_candidate_does_not_prove_notion_write_or_activation(self):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        key = CONTINUATION_CONSUMER_REQUEST_ID
+        self.assertNotIn('Status', lesson_for(key))
+        self.assertNotIn('Surface Before Work?', lesson_for(key))
+        self.assertNotIn('Applies To', lesson_for(key))
+        self.assertNotIn('Owner / Agent', lesson_for(key))
+
+
 class ConsumerTests(unittest.TestCase):
     def row(self):
         row = page()

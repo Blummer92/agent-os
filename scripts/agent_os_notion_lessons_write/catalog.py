@@ -11,6 +11,7 @@ import re
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
+CONTINUATION_CONSUMER_REQUEST_ID = "continuation-live-consumer-2026-10-30"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -82,6 +83,40 @@ LESSONS = MappingProxyType({
             "Learning Type": "Mistake",
             "Applies To": ("Notion",),
             "Source Link": "https://github.com/Blummer92/agent-os/issues/3305",
+        }),
+    }),
+    # #3690: reviewed continuation integration lesson, proposal only until
+    # an owner-issued one-time #3417 command and exact Notion readback.
+    CONTINUATION_CONSUMER_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
+            "What Happened": (
+                "Agent OS repaired continuation boundaries in merged PRs #2175 (Claude Stop hook), "
+                "#2213 (MCP reachability), #2263 (false stall), #2494 (batch cursor), and "
+                "#3670 (missing MCP payloads). Owner-reported Cloud Shell runs on "
+                "2026-10-30 at main bb43fc08: 109 focused, 12 reconstructed, and "
+                "30 MCP tests passed; QA did not independently reproduce those runs. "
+                "Native host next-dispatch remains unverified. The approved five-tool "
+                "chatgpt-governance profile excludes all continuation-named tools."
+            ),
+            "What To Do Next Time": (
+                "Trace producer -> canonical payload -> registered MCP tool -> approved "
+                "publication allowlist -> live host consumer -> next admitted dispatch -> "
+                "exact receipt. Reuse existing driver, hooks and governed ingress; repair "
+                "only the first proven disconnected boundary. Evaluate same-turn continuation "
+                "and asynchronous post-stop re-entry as separate acceptance cases."
+            ),
+            "Guardrail": (
+                "Registration, a green test, emitted agent_os_continuation or a successful "
+                "same-turn read does not prove automatic host dispatch. Do not widen the "
+                "five-tool allowlist without a separate owner decision or treat a Notion "
+                "lesson as execution authority. Keep source/head, issue/PR lineage, "
+                "currentness, bounded stops and no-duplicate-mutation checks explicit."
+            ),
+            "Area": "Governance",
+            "Learning Type": "Mistake",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
         }),
     }),
 })
