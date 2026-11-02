@@ -107,6 +107,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     preview_slides_ab.add_argument("--generated-at", required=True, help="Exact result run provenance, e.g. <run_id>:<attempt>.")
     preview_slides_ab.add_argument("--preview-out", default="", help="Optional local JSON preview receipt (evidence only; non-authorizing).")
 
+    preview_teacher_review = subparsers.add_parser(
+        "preview-teacher-review",
+        help="Offline no-write Teacher Review Preview from one canonical "
+             "imc-build-receipt-v1 record (#3570, Q2 child of #3259). Never requests "
+             "credentials or writes to Drive/Notion, and never claims classroom-ready "
+             "status: the exact label is Teacher Review Preview — Not Classroom Ready.",
+    )
+    preview_teacher_review.add_argument("--build-receipt", required=True,
+                                        help="Canonical imc-build-receipt-v1 JSON record.")
+    preview_teacher_review.add_argument("--required-visuals", required=True,
+                                        help="Canonical required visuals JSON list: each entry carries "
+                                             "role_id, slot_id, asset_id, content_identity, and optional required.")
+    preview_teacher_review.add_argument("--placement-records", required=True,
+                                        help="Verified placement-receipt JSON list (visual-placement-receipt-v1).")
+    preview_teacher_review.add_argument("--requirement-identity", required=True,
+                                        help="Canonical requirement identity JSON: requirement_id, contract_version, "
+                                             "record_revision, source_fingerprint.")
+    preview_teacher_review.add_argument("--idempotency-key", required=True,
+                                        help="Canonical idempotency key the receipt must match exactly.")
+    preview_teacher_review.add_argument("--preview-out", default="", help="Optional local JSON preview record (evidence only; non-authorizing).")
+
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
     log_lesson.add_argument("--what-happened", required=True)
@@ -581,12 +602,64 @@ def _preview_slides_ab(args: argparse.Namespace) -> int:
     return 0
 
 
+def _preview_teacher_review(args: argparse.Namespace) -> int:
+    """#3570 offline Q2 preview: no ALLOW_WRITE, credentials, Drive/Notion, or build.
+
+    Reads only the JSON files the caller supplies. An unavailable preview
+    (missing/mismatched provenance or malformed evidence) is printed as an
+    explicit refused record and exits non-zero; a produced preview exits
+    zero even when visuals are incomplete, because incompleteness is the
+    preview's content, not an error. Nothing here builds, renders, or
+    admits anything classroom-ready.
+    """
+    from .teacher_review_preview import build_teacher_review_preview
+
+    try:
+        receipt = _load_json(args.build_receipt, default=None)
+        required_visuals = _load_json(args.required_visuals, default=None)
+        placement_records = _load_json(args.placement_records, default=None)
+        requirement_identity = _load_json(args.requirement_identity, default=None)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"Teacher review preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(requirement_identity, Mapping):
+        print("Teacher review preview: blocked (requirement-identity-invalid) — "
+              "requirement identity must be a JSON object", file=sys.stderr)
+        return 1
+    preview = build_teacher_review_preview(
+        receipt,
+        idempotency_key=args.idempotency_key,
+        requirement_identity=requirement_identity,
+        required_visuals=required_visuals if isinstance(required_visuals, list) else required_visuals,
+        placement_records=placement_records if isinstance(placement_records, list) else placement_records,
+    )
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, preview)
+        except OSError as exc:
+            print(f"Teacher review preview: preview persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(preview, sort_keys=True, indent=2))
+    if preview["provenance_status"] != "available":
+        print(f"Teacher review preview: unavailable ({', '.join(preview['reason_codes'])}) — "
+              "no canonical provenance claim is made", file=sys.stderr)
+        return 1
+    incomplete = len(preview["incomplete_visuals"])
+    print(f"Teacher Review Preview — Not Classroom Ready: "
+          f"{preview['required_visual_count']} required visual(s), {incomplete} incomplete — "
+          "preview only, not classroom-ready, non-authorizing.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "preview-worksheet":
         return _preview_worksheet(args)
     if args.command == "preview-slides-ab":
         return _preview_slides_ab(args)
+    if args.command == "preview-teacher-review":
+        return _preview_teacher_review(args)
     if args.command == "log-lesson":
         path = record_lesson(LessonRecord(lesson_learned=args.title, what_happened=args.what_happened, what_to_do_next_time=args.what_to_do_next_time, guardrail=args.guardrail, severity=args.severity, learning_type=args.learning_type, source_link=args.source_link), args.lessons_dir)
         print(f"Lesson recorded: {path}")
