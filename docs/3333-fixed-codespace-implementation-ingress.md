@@ -225,6 +225,31 @@ fail closed:
 
 None of this is live acceptance.
 
+## Gate 2 bound evidence (R1, #3333)
+
+The Gate 2 production controller previously built its production bootstrap
+from an empty `LiveRepositoryEvidenceReader()`, which truthfully returned
+UNAVAILABLE for every dependency/validation read, so no real candidate could
+be reconstructed through that default path. The controller now uses the
+existing governed-resume factory binding instead:
+`build_production_host_bootstrap_for_handoff` loads the admitted handoff's
+runtime request, descriptor, and restart capsule from the same checkpoint
+store, verifies they bind the same subject, loads dependency readiness, and
+rebuilds the advisory validation result into a bound reader, then supplies
+that reader and runtime request to the existing production bootstrap.
+The controller re-verifies the envelope's handoff, repository, issue, and
+source SHA against the bound descriptor before any dispatch, shares the
+controller's host configuration, lease directory, and evaluation clock with
+the factory binding, and preserves the #3640 reason-code validation before
+receipt persistence. Missing or inconsistent records fail closed as
+`bound-evidence-unavailable` (a missing Gate 4 read credential keeps its
+`github-read-credential-unavailable` reason); expired dependency readiness
+is returned as UNAVAILABLE by the bound reader and therefore cannot be
+admitted downstream. No new evidence model, controller, registry, scheduler,
+or fallback was added, and no live host invocation, receipt return, or
+Codespace qualification is claimed by this repair. The Actions CLI still
+has no host and still returns `canonical-admission-provider-unavailable`.
+
 ## Codespaces runtime installation and host bindings (Gate 4)
 
 `.devcontainer/post-create.sh` installs the existing `agent-os-execution-service`
