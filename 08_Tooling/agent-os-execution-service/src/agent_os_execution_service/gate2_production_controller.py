@@ -460,6 +460,15 @@ def _validate_completed_dispatch_evidence(
     def _mismatch(field: str) -> Gate2ControllerError:
         return Gate2ControllerError("receipt-dispatch-evidence-mismatch", field)
 
+    # The same completed-receipt sink handles fresh dispatch and both replay
+    # scans. Refuse a different operation or receipt schema before success.
+    for field, expected in (
+        ("schema_version", RECEIPT_SCHEMA_VERSION),
+        ("operation_id", OPERATION_ID),
+    ):
+        actual = receipt.get(field)
+        if type(actual) is not str or actual != expected:
+            raise _mismatch(field)
     if type(receipt.get("exit_status")) is not int or receipt.get("exit_status") != 0:
         raise _mismatch("exit_status")
     stdout = receipt.get("stdout_tail")
@@ -533,13 +542,41 @@ def _acquire_fixed_pilot_claim(
         raise Gate2ControllerError("fixed-pilot-claim-ambiguous", path.name) from exc
     except OSError as exc:
         raise Gate2ControllerError("fixed-pilot-claim-failed", path.name) from exc
+    # An O_EXCL-created claim is ours only while its path still names the
+    # same inode as the descriptor returned by os.open. A failed setup never
+    # enters the driver, so it may be rolled back, but not by blind unlink.
+    created_stat = None
+    setup_error = None
     try:
-        os.write(fd, payload)
+        created_stat = os.fstat(fd)
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("claim write made no progress")
+            view = view[written:]
         os.fsync(fd)
     except OSError as exc:
-        raise Gate2ControllerError("fixed-pilot-claim-failed", path.name) from exc
+        setup_error = exc
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError as exc:
+            if setup_error is None:
+                setup_error = exc
+    if setup_error is not None:
+        try:
+            current_stat = path.lstat()
+            if (
+                created_stat is None
+                or (current_stat.st_dev, current_stat.st_ino)
+                != (created_stat.st_dev, created_stat.st_ino)
+            ):
+                raise Gate2ControllerError("fixed-pilot-claim-ambiguous", path.name)
+            path.unlink()
+        except OSError as exc:
+            raise Gate2ControllerError("fixed-pilot-claim-ambiguous", path.name) from exc
+        raise Gate2ControllerError("fixed-pilot-claim-failed", path.name) from setup_error
     return path
 
 

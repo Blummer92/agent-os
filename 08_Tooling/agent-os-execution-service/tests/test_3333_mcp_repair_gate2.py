@@ -1186,3 +1186,181 @@ def test_qf1_rescan_store_error_preserves_claim_without_dispatch(
     assert len(calls) == 0
     assert len(_claim_paths(host)) == 1
     assert _receipt_paths(host) == []
+
+
+# --- PR #3765 Copilot review: identity and pre-dispatch claim setup --------
+
+
+@pytest.mark.parametrize(
+    "field, invalid",
+    [
+        ("schema_version", "0.9"),
+        ("schema_version", None),
+        ("schema_version", 1.0),
+        ("operation_id", "other-operation"),
+        ("operation_id", None),
+        ("operation_id", 3333),
+    ],
+)
+def test_3765_completed_receipt_rejects_foreign_schema_or_operation(field, invalid):
+    receipt = _completed_receipt(**{field: invalid})
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _validate_completed_dispatch_evidence(_envelope(), receipt, "test-box")
+    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
+
+
+@pytest.mark.parametrize(
+    "field, invalid",
+    [
+        ("schema_version", "0.9"),
+        ("schema_version", None),
+        ("operation_id", "other-operation"),
+        ("operation_id", None),
+    ],
+)
+def test_3765_preclaim_replay_rejects_foreign_completed_receipt(
+    tmp_path, host, field, invalid
+):
+    receipts_dir = host["store"] / "invocations" / "receipts"
+    receipts_dir.mkdir(parents=True)
+    (receipts_dir / "foreign.json").write_text(
+        json.dumps(_completed_receipt(**{field: invalid}))
+    )
+    called = []
+
+    def never_drive(envelope, bootstrap):
+        called.append(envelope)
+        raise AssertionError("foreign completed receipt must not dispatch")
+
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _run_controller(tmp_path, host, drive=never_drive)
+    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
+    assert not called
+    assert _claim_paths(host) == []
+
+
+def test_3765_postclaim_rescan_rejects_foreign_completed_receipt(
+    tmp_path, host, monkeypatch
+):
+    """The QF-1 second scan must share the same schema/operation sink."""
+    real_scan = ctrl._find_completed_receipt
+    count = {"n": 0}
+
+    def inject_before_rescan(receipts_dir, envelope, codespace_name):
+        count["n"] += 1
+        if count["n"] == 2:
+            (receipts_dir / "foreign.json").write_text(
+                json.dumps(_completed_receipt(operation_id="other-operation"))
+            )
+        return real_scan(receipts_dir, envelope, codespace_name)
+
+    monkeypatch.setattr(ctrl, "_find_completed_receipt", inject_before_rescan)
+
+    def never_drive(envelope, bootstrap):
+        raise AssertionError("foreign receipt must not dispatch")
+
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _run_controller(tmp_path, host, drive=never_drive)
+    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
+    assert count["n"] == 2
+    assert len(_claim_paths(host)) == 1  # QF-1 scan error retains claim
+    assert _receipt_paths(host) == [host["store"] / "invocations" / "receipts" / "foreign.json"]
+
+
+def test_3765_fresh_wrong_operation_rejected_before_receipt_persistence(tmp_path, host):
+    calls = []
+
+    def drive(envelope, bootstrap):
+        calls.append(envelope)
+        return _completed_receipt(operation_id="other-operation")
+
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _run_controller(tmp_path, host, drive=drive)
+    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
+    assert len(calls) == 1
+    assert _receipt_paths(host) == []
+    assert len(_claim_paths(host)) == 1  # post-invoke ambiguity preserved
+
+
+@pytest.mark.parametrize("failure", ["write", "fsync"])
+def test_3765_failed_claim_setup_cleans_owned_claim_and_allows_retry(
+    tmp_path, host, monkeypatch, failure
+):
+    """O_EXCL succeeded, but driver entry has not happened; cleanup is safe."""
+    real_write = ctrl.os.write
+
+    def broken_write(fd, data):
+        real_write(fd, bytes(data[:4]))
+        raise OSError("simulated partial write failure")
+
+    def broken_fsync(fd):
+        raise OSError("simulated fsync failure")
+
+    with monkeypatch.context() as patch:
+        if failure == "write":
+            patch.setattr(ctrl.os, "write", broken_write)
+        else:
+            patch.setattr(ctrl.os, "fsync", broken_fsync)
+        with pytest.raises(Gate2ControllerError) as excinfo:
+            _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
+        assert excinfo.value.reason == "fixed-pilot-claim-failed"
+    assert _claim_paths(host) == []
+    path = _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
+    assert path.is_file()
+    path.unlink()
+
+
+def test_3765_claim_partial_successful_write_is_completed(tmp_path, host, monkeypatch):
+    real_write = ctrl.os.write
+    writes = []
+
+    def short_write(fd, data):
+        writes.append(len(data))
+        return real_write(fd, bytes(data[:5]))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ctrl.os, "write", short_write)
+        claim = _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
+    assert len(writes) > 1
+    assert json.loads(claim.read_text())["domain"] == "gate2-fixed-pilot-claim-v1"
+    claim.unlink()
+
+
+def test_3765_failed_setup_does_not_remove_replaced_claim(tmp_path, host, monkeypatch):
+    original_claim = host["lease_dir"] / (
+        f"gate2-fixed-pilot-claim-{_claim_digest(_envelope())}.json"
+    )
+
+    def swap_then_fail(fd, data):
+        ctrl.os.unlink(original_claim)
+        original_claim.write_text("other claimant")
+        raise OSError("simulated write failure after path replacement")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ctrl.os, "write", swap_then_fail)
+        with pytest.raises(Gate2ControllerError) as excinfo:
+            _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
+        assert excinfo.value.reason == "fixed-pilot-claim-ambiguous"
+    assert original_claim.read_text() == "other claimant"
+
+
+def test_3765_failed_setup_unlink_failure_preserves_ambiguous_claim(
+    tmp_path, host, monkeypatch
+):
+    claim = host["lease_dir"] / (
+        f"gate2-fixed-pilot-claim-{_claim_digest(_envelope())}.json"
+    )
+    original_unlink = Path.unlink
+
+    def reject_claim_unlink(path, *args, **kwargs):
+        if path == claim:
+            raise OSError("simulated unlink failure")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ctrl.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("fail")))
+        patch.setattr(Path, "unlink", reject_claim_unlink)
+        with pytest.raises(Gate2ControllerError) as excinfo:
+            _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
+        assert excinfo.value.reason == "fixed-pilot-claim-ambiguous"
+    assert claim.is_file()
