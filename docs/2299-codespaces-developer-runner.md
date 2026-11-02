@@ -410,3 +410,16 @@ subsequent SSH-stage timeout. A successful API authentication check **does not**
 establish SSH authorization, network connectivity, or environment health.
 The fixed `gh codespace ssh` commands and their existing timeouts remain
 unchanged. No lifecycle mutation, credential or workflow edits are included.
+
+
+## Teacher OS frontend validation (proposed, not yet runtime-qualified)
+
+The existing affected-package selector recognizes the Teacher OS web executable surface (`08_Tooling/teacher-os-web/src/`, `08_Tooling/teacher-os-web/tests/`, plus `package.json`, `package-lock.json`, `tsconfig.json`, `index.html`, `playwright.config.ts`) and selects these exact commands, bound to that directory and in this order. Documentation-only changes (e.g. `README.md`) remain static:
+
+1. `npm ci`
+2. `npm run build`
+3. `npm run test:unit`
+4. `npx playwright install chromium`
+5. `npx playwright test`
+
+The executor admits only the fixed argument vectors, not arbitrary caller commands. Selection and command admission do not prove runtime success. `npm ci` requires a genuine dependency-resolved `package-lock.json` on the Teacher OS implementation branch. Until a qualified npm registry executor generates and verifies that lockfile, this plan is **blocked**, not passing. The existing workflow's Node setup and browser dependencies must also be qualified; workflow edits remain separately authorization-gated. Actual command exit codes, stdout/stderr, exact checked-out head and browser evidence are required for QA acceptance. A passing build does not establish a working preview or production integration.

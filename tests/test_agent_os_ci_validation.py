@@ -105,3 +105,28 @@ def test_bounded_executor_does_not_admit_full_picture_perfect_package_check():
 def test_bounded_executor_fails_closed_on_unregistered_command():
     with pytest.raises(ValueError, match="not in the bounded CI executor"):
         module._resolve_command("python -c 'print(\"branch controlled\")'")
+
+
+def test_teacher_os_fixed_command_allowlist_and_working_directory():
+    expected = {
+        "npm ci": ("npm", "ci"),
+        "npm run build": ("npm", "run", "build"),
+        "npm run test:unit": ("npm", "run", "test:unit"),
+        "npx playwright install chromium": ("npx", "playwright", "install", "chromium"),
+        "npx playwright test": ("npx", "playwright", "test"),
+    }
+    for command, argv in expected.items():
+        resolved, cwd = module._resolve_command(
+            "cd 08_Tooling/teacher-os-web && " + command
+        )
+        assert resolved == argv
+        assert cwd == ROOT / "08_Tooling/teacher-os-web"
+
+
+@pytest.mark.parametrize("suffix", [
+    "npm test -- --run", "npm run arbitrary", "npm exec sh",
+    "npx playwright test --grep skip", "npm ci && echo bypass",
+])
+def test_teacher_os_rejects_unregistered_commands(suffix):
+    with pytest.raises(ValueError, match="not in the bounded CI executor"):
+        module._resolve_command("cd 08_Tooling/teacher-os-web && " + suffix)

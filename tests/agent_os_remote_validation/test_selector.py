@@ -1524,6 +1524,47 @@ def test_aggregate_prefixes_never_subsume_a_focused_rule_prefix() -> None:
     )
 
 
+TEACHER_OS_COMMANDS = tuple(sorted(
+    "cd 08_Tooling/teacher-os-web && " + command for command in (
+        "npm ci", "npm run build", "npm run test:unit",
+        "npx playwright install chromium", "npx playwright test",
+    )
+))
+
+
+@pytest.mark.parametrize("path", [
+    "08_Tooling/teacher-os-web/src/TeacherApp.tsx",
+    "08_Tooling/teacher-os-web/src/style.css",
+    "08_Tooling/teacher-os-web/src/fixtures.ts",
+    "08_Tooling/teacher-os-web/tests/teacher.spec.ts",
+    "08_Tooling/teacher-os-web/package.json",
+    "08_Tooling/teacher-os-web/tsconfig.json",
+    "08_Tooling/teacher-os-web/index.html",
+    "08_Tooling/teacher-os-web/playwright.config.ts",
+    # NOTE: package-lock.json is intentionally absent — the lockfile does not
+    # exist in the repository yet (see PR body blockers). Re-add it here and to
+    # the rule's exact_paths when the lockfile lands.
+])
+def test_teacher_os_executable_paths_select_focused_commands(path):
+    plan = _select(_input([path]))
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
+    assert validate_validation_plan(plan) == ()
+
+
+def test_teacher_os_readme_only_is_static():
+    plan = _select(_input(["08_Tooling/teacher-os-web/README.md"]))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+
+
+def test_teacher_os_mixed_readme_and_source_selects_focused():
+    plan = _select(_input([
+        "08_Tooling/teacher-os-web/README.md",
+        "08_Tooling/teacher-os-web/src/TeacherApp.tsx",
+    ]))
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
 # --- #3567: root docs/ must be classified without bypassing focused owners ---
 
 

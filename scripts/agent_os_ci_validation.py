@@ -46,6 +46,14 @@ _UI_CROSS_PLATFORM_REFERENCE_COMMANDS = {
     "cd 05_Examples/ui-cross-platform-reference && npm install": ("npm", "install"),
     "cd 05_Examples/ui-cross-platform-reference && npm test": ("npm", "test"),
 }
+_TEACHER_OS_DIR = ROOT / "08_Tooling/teacher-os-web"
+_TEACHER_OS_COMMANDS = {
+    "cd 08_Tooling/teacher-os-web && npm ci": ("npm", "ci"),
+    "cd 08_Tooling/teacher-os-web && npm run build": ("npm", "run", "build"),
+    "cd 08_Tooling/teacher-os-web && npm run test:unit": ("npm", "run", "test:unit"),
+    "cd 08_Tooling/teacher-os-web && npx playwright install chromium": ("npx", "playwright", "install", "chromium"),
+    "cd 08_Tooling/teacher-os-web && npx playwright test": ("npx", "playwright", "test"),
+}
 _CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
 
@@ -120,6 +128,9 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     ui_cross_platform_argv = _UI_CROSS_PLATFORM_REFERENCE_COMMANDS.get(command)
     if ui_cross_platform_argv is not None:
         return ui_cross_platform_argv, _UI_CROSS_PLATFORM_REFERENCE_DIR
+    teacher_argv = _TEACHER_OS_COMMANDS.get(command)
+    if teacher_argv is not None:
+        return teacher_argv, _TEACHER_OS_DIR
     if command == _CI_VALIDATION_SELF_TEST:
         return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
