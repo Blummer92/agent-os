@@ -486,6 +486,9 @@ class TestFakeAndNoopAdaptersStillWork:
         result = executor.execute(task)
 
         assert result.success is True
+        # EXP-S2: read the persisted row back, not the in-memory task input,
+        # so a fault that erases the stored task type cannot survive here.
+        assert repository.get_task(task.id).type == "read"
 
     def test_fake_success_still_uses_legacy_shape(self):
         from workflow_scheduler.adapters import FakeSuccessAdapter
