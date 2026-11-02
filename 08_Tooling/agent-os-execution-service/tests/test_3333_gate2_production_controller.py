@@ -577,6 +577,42 @@ def test_malformed_driver_reason_codes_fail_before_persistence(
     assert list(receipts_dir.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        pytest.param("handoff_id", "executor-handoff:" + "d" * 64, id="handoff"),
+        pytest.param("expected_sha", OTHER_SHA, id="sha"),
+        pytest.param("repository", "Blummer92/other-repo", id="repository"),
+        pytest.param("issue_number", 9999, id="issue"),
+    ],
+)
+def test_3333_x09_receipt_body_identity_mismatch_rejected_before_persistence(
+    tmp_path: Path, host: dict, field: str, value: object
+) -> None:
+    """#3333 X09: a receipt body contradicting the envelope must not persist.
+
+    The filename and stdout reference are envelope-bound, so only this
+    body check stops a mismatched completed receipt becoming durable.
+    """
+    receipt = _completed_receipt()
+    receipt[field] = value
+    path = _write_event(tmp_path, _event())
+
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        run_gate2_fixed_pilot_controller(
+            event_path=path,
+            environ=host,
+            drive=lambda envelope, bootstrap: receipt,
+            resolve_selection=lambda: _selection(),
+            build_transports=_transports,
+        )
+
+    assert excinfo.value.reason == "receipt-identity-mismatch"
+    receipts_dir = host["store"] / "invocations" / "receipts"
+    assert receipts_dir.is_dir()
+    assert list(receipts_dir.iterdir()) == []
+
+
 # ---------------------------------------------------------------------------
 # Bound production path (R1, #3333): real store + real factory + real
 # bootstrap. Only external surfaces are mocked: a dummy GH read token
@@ -962,7 +998,14 @@ def test_bound_controller_persists_receipt_on_bound_path(tmp_path, monkeypatch) 
         reader = bootstrap.sources.repository_reader
         assert str(reader.read_dependency_evidence(_BOUND_REPO, 3333).status) == "EvidenceStatus.RESOLVED_CLEAR"
         calls.append(envelope)
-        return _completed_receipt()
+        # A real drive receipt carries the bound envelope identity; the
+        # generic fixture handoff/SHA would now (correctly, #3333 X09) be
+        # rejected before persistence, so bind the stub receipt here.
+        return dict(
+            _completed_receipt(),
+            handoff_id=bound["handoff"].handoff_id,
+            expected_sha=_BOUND_SHA,
+        )
 
     result = run_gate2_fixed_pilot_controller(
         event_path=path,

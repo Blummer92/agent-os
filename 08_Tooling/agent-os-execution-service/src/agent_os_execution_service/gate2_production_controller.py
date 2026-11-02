@@ -397,6 +397,19 @@ def _build_bootstrap(
         raise Gate2ControllerError("host-bootstrap-failed") from exc
 
 
+def _validate_receipt_identity(envelope: dict[str, Any], receipt: dict[str, Any]) -> None:
+    """Reject a receipt body contradicting the admitted envelope (#3333 X09)."""
+    expected = {
+        "handoff_id": envelope.get("codespace_implementation_handoff_id_or_none"),
+        "expected_sha": envelope.get("codespace_implementation_sha_or_none"),
+        "repository": envelope.get("repository"),
+        "issue_number": envelope.get("issue_number"),
+    }
+    for field, value in expected.items():
+        if receipt.get(field) != value:
+            raise Gate2ControllerError("receipt-identity-mismatch", field)
+
+
 def _receipt_file_name(envelope: dict[str, Any], evaluated_at: str) -> str:
     handoff = envelope.get("codespace_implementation_handoff_id_or_none")
     sha = envelope.get("codespace_implementation_sha_or_none")
@@ -535,6 +548,7 @@ def run_gate2_fixed_pilot_controller(
                 raise Gate2ControllerError("receipt-reason-codes-invalid")
             validated_reason_codes.append(raw_reason_code)
         reason_codes = tuple(validated_reason_codes)
+        _validate_receipt_identity(envelope, receipt)
         name = _receipt_file_name(envelope, bootstrap.evaluated_at)
         receipt_path = _persist_receipt_atomically(receipts_dir, name, receipt)
     except Gate2ControllerError:
