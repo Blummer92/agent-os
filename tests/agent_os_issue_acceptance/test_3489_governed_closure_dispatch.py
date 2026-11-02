@@ -761,3 +761,100 @@ def test_post_merge_rejects_non_tuple_requests():
             observation, [request_obj(200)], transport  # type: ignore[arg-type]
         )
     assert fake.patch_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 finish campaign (Workstream A): post-merge identity guards
+# isolated through run_post_merge_closure_dispatch.
+#
+# The pre-existing post_merge_fake() PR readback carries NO "merged_by"
+# key, so the optional actor check in _verify_post_merge_observation was
+# never exercised, and merge-commit-SHA / base-identity / PR-number
+# mismatches had no post-merge test at all. Each case below mutates exactly
+# one identity binding while every other binding stays valid, and asserts
+# both the refusal and zero simulated writes (patch_calls == []).
+# ---------------------------------------------------------------------------
+
+
+def _post_merge_with_pr_overrides(**overrides):
+    """Wrap post_merge_fake() so the PR readback differs in one field."""
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
+        run_post_merge_closure_dispatch,
+    )
+
+    fake, observation, transport = post_merge_fake()
+    original = transport
+
+    def wrapped(method, path, payload):
+        status, raw = original(method, path, payload)
+        if method == "GET" and path == f"/repos/{REPO}/pulls/500" and type(raw) is dict:
+            raw = dict(raw)
+            for key, value in overrides.items():
+                if key == "base":
+                    raw["base"] = value
+                else:
+                    raw[key] = value
+        return status, raw
+
+    return fake, observation, wrapped, run_post_merge_closure_dispatch
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"merged_by": {"login": "someone-else"}}, "merge-observation.actor-mismatch"),
+        ({"merge_commit_sha": "f" * 40}, "merge-observation.pr-not-verified-merged"),
+        ({"number": 501}, "merge-observation.pr-not-verified-merged"),
+        (
+            {"base": {"ref": "release", "repo": {"full_name": REPO}}},
+            "merge-observation.pr-identity-mismatch",
+        ),
+        (
+            {"base": {"ref": "main", "repo": {"full_name": "Other/repo"}}},
+            "merge-observation.pr-identity-mismatch",
+        ),
+    ],
+)
+def test_post_merge_identity_mismatch_refuses_without_write(overrides, error):
+    fake, observation, transport, run = _post_merge_with_pr_overrides(**overrides)
+    with pytest.raises(ValueError, match=error):
+        run(observation, (request_obj(200),), transport)
+    assert fake.patch_calls == []
+
+
+def test_post_merge_matching_actor_still_closes_verified():
+    fake, observation, transport, run = _post_merge_with_pr_overrides(
+        merged_by={"login": "repository-owner"}
+    )
+    result = run(observation, (request_obj(200),), transport)
+    assert result[0]["status"] == "closed-verified"
+    assert len(fake.patch_calls) == 1
+
+
+def test_post_merge_decision_repository_mismatch_refuses_without_write():
+    fake, observation, transport, run = _post_merge_with_pr_overrides()
+    with pytest.raises(ValueError, match="merge-observation.repository-mismatch"):
+        run(observation, (request_obj(200, repository="Other/repo"),), transport)
+    assert fake.patch_calls == []
+
+
+def test_post_merge_incomplete_satisfaction_blocks_without_write():
+    fake, observation, transport, run = _post_merge_with_pr_overrides()
+    outcomes = run(
+        observation,
+        (request_obj(200, satisfaction=satisfaction(200, complete=False)),),
+        transport,
+    )
+    assert outcomes[0]["status"] == "blocked"
+    assert "closure.satisfaction-incomplete" in outcomes[0]["reason_codes"]
+    assert fake.patch_calls == []
+
+
+def test_post_merge_failed_qa_blocks_without_write():
+    fake, observation, transport, run = _post_merge_with_pr_overrides()
+    outcomes = run(
+        observation, (request_obj(200, verdict="fail"),), transport
+    )
+    assert outcomes[0]["status"] == "blocked"
+    assert "closure.acceptance-not-passed" in outcomes[0]["reason_codes"]
+    assert fake.patch_calls == []
