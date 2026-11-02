@@ -205,7 +205,10 @@ or creates a standing grant, and its payloads always carry
 - `prepare` reacquires live PR evidence (exact head/base, changed-file
   scope against an explicit owner policy, forbidden paths, the
   authoritative aggregate with verified publisher identity, blocking
-  reviews, and every GraphQL review-thread page), builds a PENDING
+  reviews, and every GraphQL review-thread page), then re-reads the PR
+  and refuses unless that second read passes the same open, unmerged,
+  Ready, mergeable, target-`main` gate and binds the same head, target
+  ref, base SHA, title, and body. It then builds a PENDING
   candidate with the canonical constructor and serializer, and refuses
   when any trusted authorization chain already exists in the PR
   conversation (current, pending, rejected, expired, superseded, or
@@ -301,9 +304,12 @@ classified in the `approval` architecture domain.
   GitHub writes, no executor, no attestation.
 - `test_merge_authorization_owner_console.py`: integration tests for the
   console against real canonical objects (full owner flow plus the
-  negative matrix: stale head/base/body/scope, wrong publisher,
+  negative matrix: stale head/base/body/scope, target-ref and lifecycle
+  drift on either PR read, wrong publisher,
   unresolved threads, blocking review, app-performed and footer
-  records, replay, supersession, expiry, and existing-chain refusal).
+  records, replay, supersession, expiry, and existing-chain refusal),
+  plus a check that a verified producer chain is accepted by the real
+  dispatch consumer on the same evidence and refused when it is not.
 - The redundant `merge_proposal.py` representation, its exclusive tests
   and the `_merge_proposal_binding` approval-triple branch were retired.
 - Shared planning approval records, evaluators, projections and Scheduler

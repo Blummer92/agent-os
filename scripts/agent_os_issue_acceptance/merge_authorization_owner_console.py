@@ -136,6 +136,20 @@ def client_from_environment() -> Any:
     return Github(token)
 
 
+def eligible_pr_identity(repo: Any, pr: Any) -> tuple[str, str, str, str, str]:
+    """Gate every PR read with the dispatch-admission lifecycle fields
+    (merge_admission_actions) and return the identity the evidence binds."""
+    if pr.state != "open" or pr.merged or pr.draft:
+        raise ValueError("PR must be open, unmerged and Ready")
+    if pr.base.ref != repo.default_branch or pr.base.ref != "main":
+        raise ValueError("target branch must be main")
+    if getattr(pr, "mergeable", None) is not True:
+        raise ValueError("GitHub has not established mergeability")
+    if not _SHA40.fullmatch(pr.head.sha) or not _SHA40.fullmatch(pr.base.sha):
+        raise ValueError("live head/base SHA missing")
+    return pr.head.sha, pr.base.ref, pr.base.sha, pr.title or "", pr.body or ""
+
+
 def live_evidence(client: Any, *, repository: str, pr_number: int,
                   method: str, allowed_files: tuple[str, ...],
                   forbidden_paths: tuple[str, ...],
@@ -146,15 +160,8 @@ def live_evidence(client: Any, *, repository: str, pr_number: int,
     if getattr(repo.owner, "type", None) != "User":
         raise ValueError("repository owner must be a verified User, not organization/bot")
     pr = repo.get_pull(pr_number)
-    if pr.state != "open" or pr.merged or pr.draft:
-        raise ValueError("PR must be open, unmerged and Ready")
-    if pr.base.ref != repo.default_branch or pr.base.ref != "main":
-        raise ValueError("target branch must be main")
-    if not getattr(pr, "mergeable", False):
-        raise ValueError("GitHub has not established mergeability")
-    head, base = pr.head.sha, pr.base.sha
-    if not _SHA40.fullmatch(head) or not _SHA40.fullmatch(base):
-        raise ValueError("live head/base SHA missing")
+    identity = eligible_pr_identity(repo, pr)
+    head, base_ref, base, title, body = identity
     changed = tuple((item.filename, item.sha) for item in pr.get_files())
     if not changed or len(changed) > _MAX_FILES:
         raise ValueError("changed-file evidence is missing or unbounded")
@@ -194,7 +201,7 @@ def live_evidence(client: Any, *, repository: str, pr_number: int,
     head_reviewed = any(review.state == "APPROVED" and review.commit_id == head for review in reviews)
     evidence = PullRequestMergeEvidence(
         repository=repository, pull_request_number=pr_number, head_sha=head,
-        base_branch=pr.base.ref, base_sha_or_evidence_id=base,
+        base_branch=base_ref, base_sha_or_evidence_id=base,
         draft=False, ready_for_review=True, proposed_merge_method=method,
         changed_scope_fingerprint=changed_scope_fingerprint(changed),
         allowed_files=allowed_files, forbidden_paths=forbidden_paths,
@@ -202,12 +209,16 @@ def live_evidence(client: Any, *, repository: str, pr_number: int,
         review_evidence=MergeReviewEvidence(
             blocking_review_present=False, unresolved_conversation_count=0,
             exact_head_reviewed=head_reviewed),
-        pr_title=pr.title or "", pr_body=pr.body or "",
+        pr_title=title, pr_body=body,
         pr_metadata_sha256="", closure_admissions=(), evidence_id="",
     )
-    # Detect head/base drift while the evidence was collected.
-    renewed = repo.get_pull(pr_number)
-    if renewed.head.sha != head or renewed.base.sha != base or (renewed.title or "") != (pr.title or "") or (renewed.body or "") != (pr.body or ""):
+    # Second, time-separated read: the renewed PR must pass the same gate
+    # and bind the same identity (target ref included), or nothing is minted.
+    try:
+        renewed = eligible_pr_identity(repo, repo.get_pull(pr_number))
+    except ValueError as exc:
+        raise ValueError(f"PR changed during evidence collection: {exc}") from exc
+    if renewed != identity:
         raise ValueError("PR changed during evidence collection")
     return evidence, repo.owner.login
 

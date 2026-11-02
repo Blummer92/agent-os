@@ -14,9 +14,11 @@ never a runtime merge approval (see docs/3463-merge-admission.md S2).
 """
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +29,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
+    merge_admission_actions as admission,
     merge_authorization_owner_console as console,
+)
+from scripts.agent_os_issue_acceptance.merge_applicability import (  # noqa: E402
+    evaluate_merge_dispatch_applicability,
 )
 from scripts.agent_os_issue_acceptance.merge_authorization import (  # noqa: E402
     MergeAuthorizationState,
@@ -140,6 +146,7 @@ class FakePR:
         self._files = list(files if files is not None
                            else [FakeFile("tests/test_a.py", BLOB)])
         self._reviews = list(reviews)
+        self.number = 3752
         self.state = "closed" if merged else "open"
         self.merged = merged
         self.draft = draft
@@ -150,6 +157,9 @@ class FakePR:
 
     def get_reviews(self):
         return list(self._reviews)
+
+    def get_labels(self):
+        return []
 
 
 class FakeRequester:
@@ -188,13 +198,11 @@ class FakeRepo:
         self._pull_calls += 1
         if self.on_pull is not None:
             self.on_pull(self._pull_calls, self._pr)
-        return FakePR(
-            head=self._pr.head.sha, base=self._pr.base.sha,
-            title=self._pr.title, body=self._pr.body,
-            files=self._pr._files, reviews=self._pr._reviews,
-            draft=self._pr.draft, merged=self._pr.merged,
-            mergeable=self._pr.mergeable,
-        )
+        # One independent snapshot per read, copying every stored field:
+        # no hand-kept field list, so base.ref or state drift is visible.
+        snapshot = copy.copy(self._pr)
+        snapshot.head, snapshot.base = copy.copy(self._pr.head), copy.copy(self._pr.base)
+        return snapshot
 
     def get_commit(self, sha):
         assert sha == self._pr.head.sha
@@ -276,6 +284,31 @@ def full_flow(client):
     return pending, decided
 
 
+def transport(body="Part of #2410"):
+    """Owner merge-admission request naming the authorized binding."""
+    return {
+        "status": "accepted", "reason": "accepted-merge-admission-envelope",
+        "repository": REPO, "issue_number": 3463, "comment_id": 101,
+        "actor": "Blummer92", "run_attempt": 1,
+        "logical_trigger_id_or_none": "issue-comment-trigger:" + "e" * 64,
+        "merge_admission_pr_number_or_none": 3752,
+        "merge_admission_head_sha_or_none": HEAD,
+        "merge_admission_body_sha256_or_none": sha256(body.encode()).hexdigest(),
+        "merge_admission_method_or_none": "squash",
+    }
+
+
+def dispatch(client):
+    """The real dispatch consumer, on the producer's own fake GitHub."""
+    return evaluate_merge_dispatch_applicability(
+        transport(), repository=REPO, github_client=client,
+        evaluated_at=console.utcnow())
+
+
+def drift_on(client, read, mutate):
+    client._repo.on_pull = lambda call, pr: mutate(pr) if call == read else None
+
+
 # ---------------------------------------------------------------- happy path
 def test_prepare_produces_pending_with_real_canonical_binding():
     client = make_client()
@@ -293,6 +326,9 @@ def test_prepare_produces_pending_with_real_canonical_binding():
     assert record.binding.permitted_merge_method == "squash"
     lines = result["pending_comment"].split("\n")
     assert len(lines) == 2 and lines[0] == "agent-os-merge-authorization/v1"
+    # Read budget: exactly one gated read plus one gated renewal, so
+    # dropping the time-separated renewal or adding reads both fail.
+    assert client._repo._pull_calls == 2
 
 
 def test_full_owner_flow_verifies_with_both_revisions_and_no_merge_authority():
@@ -416,43 +452,101 @@ def test_prepare_refuses_blocking_review_even_at_stale_commit():
         prepare(make_client(pr=pr))
 
 
-def test_prepare_refuses_draft_closed_and_unestablished_mergeability():
-    for pr in (FakePR(draft=True), FakePR(merged=True),
-               FakePR(mergeable=None), FakePR(mergeable=False)):
-        with pytest.raises(ValueError):
-            prepare(make_client(pr=pr))
+def test_fake_get_pull_exposes_target_ref_and_state_drift():
+    # Non-vacuity: the drift tests below are meaningless unless a later
+    # read really shows a retarget at the same base SHA, and a closed
+    # state independent of merged, without leaking into earlier reads.
+    repo = make_client()._repo
+    first = repo.get_pull(3752)
+    repo._pr.base.ref, repo._pr.state = "release", "closed"
+    second = repo.get_pull(3752)
+    assert (first.base.ref, first.state) == ("main", "open")
+    assert (second.base.ref, second.base.sha, second.state, second.merged) == \
+        ("release", BASE, "closed", False)
 
 
-def test_prepare_refuses_pr_changed_during_collection():
+# Field inventory from the consumer, not from the renewal predicate: each
+# drift maps to the reason the dispatch admission gate gives for the same
+# PR state, and that consumer is asserted on the same fake below.
+LIFECYCLE_DRIFT = {
+    "base-ref-same-sha": (lambda pr: setattr(pr.base, "ref", "release"),
+                          "base-not-main"),
+    "draft": (lambda pr: setattr(pr, "draft", True), "pr-not-ready"),
+    "closed-unmerged": (lambda pr: setattr(pr, "state", "closed"),
+                        "pr-not-ready"),
+    "merged": (lambda pr: pr.__dict__.update(state="closed", merged=True),
+               "pr-not-ready"),
+    "mergeable-false": (lambda pr: setattr(pr, "mergeable", False),
+                        "pr-mergeability-not-clean"),
+    "mergeable-unknown": (lambda pr: setattr(pr, "mergeable", None),
+                          "pr-mergeability-not-clean"),
+}
+
+
+@pytest.mark.parametrize("read", [1, 2], ids=["first-read", "renewal-read"])
+@pytest.mark.parametrize("name", sorted(LIFECYCLE_DRIFT))
+def test_prepare_refuses_lifecycle_drift_the_dispatch_consumer_refuses(
+        name, read):
+    mutate, consumer_reason = LIFECYCLE_DRIFT[name]
     client = make_client()
+    drift_on(client, read, mutate)
+    prefix = "changed during evidence collection: " if read == 2 else ""
+    with pytest.raises(ValueError, match=prefix + ".*(Ready|main|mergeability)"):
+        prepare(client)
+    assert client._repo._issue._comments == []
+    receipt = admission.evaluate_merge_admission_transport(
+        transport(), repository=REPO, github_client=client,
+        evaluated_at=console.utcnow())
+    assert consumer_reason in receipt["reason_codes"]
 
-    def drift(call, pr):
-        if call == 2:
-            pr.head.sha = "44" * 20
-    client._repo.on_pull = drift
+
+@pytest.mark.parametrize("mutate", [
+    lambda pr: setattr(pr.head, "sha", "44" * 20),
+    lambda pr: setattr(pr.base, "sha", "44" * 20),
+    lambda pr: setattr(pr, "title", "Edited title"),
+    lambda pr: setattr(pr, "body", "Edited body"),
+], ids=["head-sha", "base-sha", "title", "body"])
+def test_prepare_refuses_identity_drift_between_reads(mutate):
+    client = make_client()
+    drift_on(client, 2, mutate)
     with pytest.raises(ValueError, match="changed during evidence collection"):
         prepare(client)
 
 
-@pytest.mark.parametrize("field, value", [
-    ("body", "Edited body"),
-    ("base_sha", "44" * 20),
-    ("title", "Edited title"),
-])
-def test_prepare_refuses_base_body_title_drift_during_collection(field, value):
-    client = make_client()
+AGGREGATE_SHAPES = {
+    "status-and-run": (lambda repo: None, True),
+    "status-only": (lambda repo: setattr(repo, "_commit", FakeCommit(
+        statuses=green_commit()._statuses)), True),
+    "check-run-only-trusted-app": (lambda repo: setattr(
+        repo, "_commit", FakeCommit(runs=green_commit()._runs)), False),
+    "status-wrong-publisher": (lambda repo: setattr(repo, "_commit", FakeCommit(
+        statuses=[FakeStatus(AGGREGATE, 20, "success", "someone-else", 123)])),
+        False),
+    "head-moved": (lambda repo: setattr(repo._pr.head, "sha", "55" * 20),
+                   False),
+}
 
-    def drift(call, pr):
-        if call == 2:
-            if field == "base_sha":
-                pr.base.sha = value
-            elif field == "body":
-                pr.body = value
-            else:
-                pr.title = value
-    client._repo.on_pull = drift
-    with pytest.raises(ValueError, match="changed during evidence collection"):
-        prepare(client)
+
+@pytest.mark.parametrize("shape", sorted(AGGREGATE_SHAPES))
+def test_producer_verification_never_outruns_dispatch_consumer(shape):
+    # One fake GitHub, one exact-head evidence state, two components: a
+    # producer SOURCE_CURRENT verdict must be consumable by the real
+    # dispatch consumer, and a consumer refusal must be a producer refusal.
+    change, accepted = AGGREGATE_SHAPES[shape]
+    client = make_client()
+    _, decided = full_flow(client)
+    change(client._repo)
+    try:
+        producer = console.verify(decided, client)["status"] == \
+            "SOURCE_CURRENT_CONTENT_APPLICABLE"
+    except ValueError:
+        producer = False
+    receipt = dispatch(client)
+    consumer = receipt["dispatch_checks_passed"] is True and \
+        receipt["status"] == "awaiting-human-attestation"
+    assert (producer, consumer) == (accepted, accepted), receipt["reason_codes"]
+    # Content admission never substitutes for runtime human-origin approval.
+    assert receipt["merge_authorized"] is False
 
 
 def test_prepare_refuses_closing_reference_but_allows_nonclosing_part_of():
