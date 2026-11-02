@@ -151,7 +151,8 @@ def test_missing_disk_autodelete_is_unknown_instead_of_false():
     payload = instance()
     del payload["disks"][0]["autoDelete"]
     result = _collect_with_payloads(payload, host_payload())
-    assert result["cloud"] == {"status": "unknown"}
+    assert result["cloud"]["status"] == "RUNNING"
+    assert result["cloud"]["disks"][0]["auto_delete"] == "UNKNOWN"
     assert "retirement-disk-autodelete-unobserved" in result["reason_codes"]
 
 
@@ -174,3 +175,56 @@ def _collect_with_payloads(cloud, host):
         assert command == live.HOST_RETIREMENT_INVENTORY_COMMAND
         return SimpleNamespace(returncode=0, stdout=f"{live._HOST_FRAME_START}\n{json.dumps(host)}\n{live._HOST_FRAME_END}", stderr="")
     return live.collect_retirement_inventory(run, host_run)
+
+def test_snapshot_failure_preserves_cloud_sections_and_skips_host_when_unavailable():
+    calls = []
+    payload = instance()
+    payload["disks"][0]["source"] = "projects/agent-os-502614/zones/us-central1-a/disks/boot"
+    payload["disks"][1]["source"] = "projects/agent-os-502614/zones/us-central1-a/disks/data"
+
+    def run(argv, timeout=60):
+        calls.append(tuple(argv))
+        if argv[2:4] == ("instances", "describe"):
+            return completed(payload)
+        if argv[2:4] == ("snapshots", "list"):
+            return SimpleNamespace(returncode=1, stdout="", stderr="SECRET")
+        return completed([])
+
+    result = live.collect_retirement_inventory(run, None)
+    assert result["status"] == "needs-decision"
+    assert result["cloud"]["status"] == "RUNNING"
+    assert result["cloud"]["disks"][0]["source_resource"].startswith("projects/agent-os-502614/")
+    assert result["cloud"]["metadata_keys"] == ["startup-script"]
+    assert result["cloud"]["snapshots"] == "UNKNOWN"
+    assert result["cloud"]["images"] == []
+    assert result["host"] == {"status": "unknown"}
+    assert "retirement-snapshot-read-failed" in result["reason_codes"]
+    assert "retirement-host-unavailable" in result["reason_codes"]
+    assert "SECRET" not in json.dumps(result)
+    assert all("ssh" not in argv and "start" not in argv and "stop" not in argv for argv in calls)
+
+
+def test_provider_state_unknown_does_not_invent_deletion_safe_disk_identity():
+    payload = instance()
+    payload["status"] = "UNKNOWN"
+    result = _collect_with_payloads(payload, host_payload())
+    assert result["status"] == "needs-decision"
+    assert result["cloud"]["status"] == "UNKNOWN"
+    assert result["cloud"]["disks"][0]["source_resource"] == "UNKNOWN"
+    assert "retirement-disk-identity-unobserved" in result["reason_codes"]
+
+
+def test_image_failure_keeps_validated_snapshot_and_instance_evidence():
+    def run(argv, timeout=60):
+        if argv[2:4] == ("instances", "describe"):
+            return completed(instance())
+        if argv[2:4] == ("images", "list"):
+            return SimpleNamespace(returncode=1, stdout="", stderr="SECRET")
+        return completed([{"name": "snap", "sourceDisk": "projects/p/zones/z/disks/boot", "status": "READY"}])
+
+    result = live.collect_retirement_inventory(run)
+    assert result["cloud"]["snapshots"][0]["name"] == "snap"
+    assert result["cloud"]["images"] == "UNKNOWN"
+    assert result["cloud"]["networks"][0]["internal_ip"] == "10.0.0.2"
+    assert "retirement-image-read-failed" in result["reason_codes"]
+    assert result["status"] == "needs-decision"
