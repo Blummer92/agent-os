@@ -1033,8 +1033,8 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Install pinned Pyan3
-        run: python -m pip install "pyan3==2.9.0"
+      - name: Install pinned Pyan3 and PyYAML
+        run: python -m pip install "pyan3==2.9.0" "PyYAML==6.0.3"
       - name: Generate report-only pyan3 evidence
         continue-on-error: true
         run: python -m scripts.pyan3_advisory --output tmp/pyan3-advisory --sha "${{ github.event.pull_request.head.sha }}"
