@@ -539,6 +539,30 @@ def test_codespaces_identity_mismatch_preserves_remote_reason() -> None:
     assert evidence["stderr_tail"] == ""
     assert evidence["exit_code"] is None
 
+    # Copilot review #5754864655: malformed remote reason lists are wholly
+    # untrusted, not partially filtered into plausible diagnostics.
+    for malformed_reasons in (
+        ["apparently-valid", 7],
+        ["codespaces-environment-health-invalid", ""],
+        [None],
+        "codespaces-environment-health-invalid",
+    ):
+        payload["reason_codes"] = malformed_reasons
+        stdout = (
+            "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+            + json.dumps(payload)
+            + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+        )
+        rejected = run_dev_validation_over_codespaces(
+            request, codespace_name=CURRENT_NAME, run=run
+        )
+        assert rejected["status"] == "needs-decision"
+        assert rejected["reason_codes"] == [
+            "dev-validation-codespaces-evidence-identity-mismatch"
+        ]
+        assert rejected["remote_reason_codes"] == []
+        assert rejected["identity_mismatch_fields"] == ["execution_surface_id"]
+
 
 def test_codespaces_identity_mismatch_lists_each_differing_field() -> None:
     # A success-shaped payload with one wrong fixed field still rejects,

@@ -475,8 +475,9 @@ def run_dev_validation_over_codespaces(
         )
         remote_reasons = payload.get("reason_codes")
         evidence["remote_reason_codes"] = (
-            [reason for reason in remote_reasons if type(reason) is str]
+            remote_reasons
             if type(remote_reasons) is list
+            and all(type(reason) is str and reason for reason in remote_reasons)
             else []
         )
         evidence["identity_mismatch_fields"] = mismatch_fields
