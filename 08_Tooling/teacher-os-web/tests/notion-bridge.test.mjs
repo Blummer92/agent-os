@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { createBridge } from "../server/notionBridge.mjs";
+import { createBridge, runReader } from "../server/notionBridge.mjs";
 
 const UNIT = "3907ac78-3131-8132-8f84-f9fd633acba5";
 const NOW = () => new Date("2026-11-03T12:00:00Z");
@@ -61,4 +61,13 @@ test("no production source embeds curriculum content or reads a Notion credentia
     assert.doesNotMatch(text, /Photography Foundations|Graphic Design|Rule of Thirds|NOTION_TOKEN|VITE_NOTION|api\.notion\.com/i, name);
   }
   assert.throws(() => readFileSync(new URL("fixtures.ts", dir)), { code: "ENOENT" });
+});
+
+test("the real reader process is importable and, with no credential, reports not-configured", async () => {
+  const saved = process.env.NOTION_TOKEN;
+  delete process.env.NOTION_TOKEN;
+  try {
+    const body = JSON.parse(await runReader(["--generated-at", "2026-11-03T12:00:00Z", "units"]));
+    assert.deepEqual(body, { reason_code: "not-configured", result_kind: "agent-os-teacher-os-read-result", schema_version: "1.0", status: "unavailable" });
+  } finally { if (saved !== undefined) process.env.NOTION_TOKEN = saved; }
 });

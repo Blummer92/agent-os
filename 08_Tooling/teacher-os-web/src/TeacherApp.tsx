@@ -3,7 +3,6 @@ import { fetchLessons, fetchUnits, isStale, type Lesson, type LoadState, type Lo
 
 type Screen = "chat" | "preview" | "edit";
 type MessageMap = Record<string, readonly string[]>;
-type Selected = Readonly<{ key: string; lesson: Lesson; label: string }>;
 
 const NOTICE: Record<string, string> = {
   "not-configured": "The Notion connection is not configured for this server.",
@@ -31,7 +30,8 @@ export function TeacherApp() {
   const [unitId, setUnitId] = useState("");
   const [lessonIndex, setLessonIndex] = useState(0);
   const [screen, setScreen] = useState<Screen>("chat");
-  const [selected, setSelected] = useState<Selected | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
   const [reloadKey, setReloadKey] = useState(0);
@@ -43,20 +43,25 @@ export function TeacherApp() {
   const lessons = useRemote<readonly Lesson[]>(unit?.unit_id, fetchLessons, reloadKey);
   const lessonList: readonly Lesson[] = lessons.kind === "ready" ? lessons.value.data : [];
   const current = lessonList[lessonIndex] ?? lessonList[0];
-  const conversationKey = screen === "edit" && selected ? selected.key : "lesson";
+  const evidence = lessons.kind === "ready" ? lessons.value : units.kind === "ready" ? units.value : null;
+  const stale = evidence ? isStale(evidence.generatedAt, clock) : false;
+  // Derived from the current read, so a refresh can never leave a superseded lesson on screen.
+  const picked = selectedIndex === null ? undefined : lessonList[selectedIndex];
+  const selected = picked ? { key: `${unit?.unit_id}:${selectedIndex}`, lesson: picked, label: lessonLabel(picked, selectedIndex!) } : null;
+  const view: Screen = selected ? screen : "chat";
+  useEffect(() => { const t = setInterval(() => setClock(Date.now()), 30_000); return () => clearInterval(t); }, []);
+  const conversationKey = view === "edit" && selected ? selected.key : "lesson";
   const draft = drafts[conversationKey] ?? "";
   const history = messages[conversationKey] ?? [];
-  const evidence = lessons.kind === "ready" ? lessons.value : units.kind === "ready" ? units.value : null;
-  const stale = evidence ? isStale(evidence.generatedAt) : false;
 
   function lessonLabel(lesson: Lesson, index: number) { return lesson.day_lesson_number ?? `Lesson ${index + 1}`; }
-  function changeUnit(next: string) { setUnitId(next); setLessonIndex(0); setScreen("chat"); setSelected(null); }
+  function changeUnit(next: string) { setUnitId(next); setLessonIndex(0); setScreen("chat"); setSelectedIndex(null); }
   function closeAssignments() { setAssignmentOpen(false); triggerRef.current?.focus(); }
-  function enter(next: "preview" | "edit", lesson: Lesson, index: number) {
-    setSelected({ key: `${unit?.unit_id}:${index}`, lesson, label: lessonLabel(lesson, index) });
+  function enter(next: "preview" | "edit", index: number) {
+    setSelectedIndex(index);
     setScreen(next); setAssignmentOpen(false); setMenuOpen(false);
   }
-  function backToLesson() { setScreen("chat"); setSelected(null); }
+  function backToLesson() { setScreen("chat"); setSelectedIndex(null); }
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = draft.trim();
@@ -77,7 +82,7 @@ export function TeacherApp() {
     <div className="app-shell">
       <header className="app-header">
         <button className="icon-button" type="button" aria-label="Toggle recent conversations" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}>☰</button>
-        <div className="app-title"><strong>Agent OS Teacher</strong><span>{screen === "chat" ? "Lesson chat" : screen === "preview" ? "Lesson preview" : "Focused lesson chat"}</span></div>
+        <div className="app-title"><strong>Agent OS Teacher</strong><span>{view === "chat" ? "Lesson chat" : view === "preview" ? "Lesson preview" : "Focused lesson chat"}</span></div>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
       <div className="demo-banner" role="status">Read-only · lessons come from verified Notion evidence · Slides, Docs and worksheets stay in approved Google Drive folders</div>
@@ -104,17 +109,17 @@ export function TeacherApp() {
             <div className="card-meta"><span>{lessonLabel(current, lessonIndex)}</span><span>{unit?.title}</span></div>
             <h3>{current.daily_focus ?? "No daily focus recorded in Notion"}</h3>
             <p>{current.daily_learning_target ?? "No learning target recorded in Notion"}</p>
-            <div className="card-actions"><button type="button" onClick={() => enter("preview", current, lessonIndex)}>View full lesson</button><button type="button" onClick={() => enter("edit", current, lessonIndex)}>Edit in focused chat</button></div>
+            <div className="card-actions"><button type="button" onClick={() => enter("preview", lessonIndex)}>View full lesson</button><button type="button" onClick={() => enter("edit", lessonIndex)}>Edit in focused chat</button></div>
           </article>
           <div className="carousel-controls"><button type="button" disabled={lessonIndex === 0} onClick={() => setLessonIndex(v => v - 1)}>← Previous</button><span aria-live="polite">{lessonIndex + 1} of {lessonList.length}</span><button type="button" disabled={lessonIndex >= lessonList.length - 1} onClick={() => setLessonIndex(v => v + 1)}>Next →</button></div>
         </div>}
         {lessons.kind === "ready" && <p className="fine-print">{provenance(lessons.value)}</p>}
       </section>}
       <main className="main-content">
-        {screen === "chat" && <section aria-labelledby="chat-title"><h1 id="chat-title">{unit?.title ?? "Teacher OS"}</h1>
+        {view === "chat" && <section aria-labelledby="chat-title"><h1 id="chat-title">{unit?.title ?? "Teacher OS"}</h1>
           {units.kind === "ready" || units.kind === "idle" ? <p className="muted">Discuss your lesson here, or open View Assignment in the top-right corner to inspect lessons read from Notion.</p> : sourceNotice(units, "units")}
         </section>}
-        {screen === "preview" && selected && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button>
+        {view === "preview" && selected && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button>
           <p className="eyebrow">{unit?.title} · read-only Notion lesson</p><h1 id="preview-title">{selected.label}</h1>
           <dl className="sample-page">
             <dt>Daily Learning Target</dt><dd>{selected.lesson.daily_learning_target ?? "Not recorded in Notion"}</dd>
@@ -125,11 +130,11 @@ export function TeacherApp() {
           {safeUrl(selected.lesson.record_url) && <p><a href={safeUrl(selected.lesson.record_url)!} rel="noreferrer noopener" target="_blank">Open the Notion record</a></p>}
           <p className="fine-print">Slides, worksheets and other student-facing materials are not generated here; they come from approved Google Drive sources.</p>
           {lessons.kind === "ready" && <p className="fine-print">{provenance(lessons.value)}</p>}
-          <button type="button" onClick={() => enter("edit", selected.lesson, lessonList.indexOf(selected.lesson))}>Edit in focused chat</button></section>}
-        {screen === "edit" && selected && <section aria-labelledby="edit-title"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Local draft · No Notion or Drive mutation</p><h1 id="edit-title">Editing: {selected.label}</h1><div className="assistant-note"><strong>Focused chat context</strong><p>{selected.lesson.daily_focus ?? "No daily focus recorded"}. Describe a proposed revision below; the text stays local and nothing in Notion or Drive is changed.</p></div></section>}
-        {screen !== "preview" && <section aria-label="Local conversation" className="conversation">
+          <button type="button" onClick={() => enter("edit", selectedIndex!)}>Edit in focused chat</button></section>}
+        {view === "edit" && selected && <section aria-labelledby="edit-title"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Local draft · No Notion or Drive mutation</p><h1 id="edit-title">Editing: {selected.label}</h1><div className="assistant-note"><strong>Focused chat context</strong><p>{selected.lesson.daily_focus ?? "No daily focus recorded"}. Describe a proposed revision below; the text stays local and nothing in Notion or Drive is changed.</p></div></section>}
+        {view !== "preview" && <section aria-label="Local conversation" className="conversation">
           <ol aria-label="Your draft messages">{history.map((message, i) => <li key={i}>{message}</li>)}</ol>
-          <form onSubmit={submit} className="chat-form"><label htmlFor="chat-input">{screen === "edit" ? "Describe a proposed edit" : "Write a draft message"}</label><textarea id="chat-input" rows={3} value={draft} onChange={event => setDrafts(prev => ({ ...prev, [conversationKey]: event.target.value }))} placeholder="Type a message (local draft only)" /><button type="submit" disabled={!draft.trim()}>Add local message</button></form>
+          <form onSubmit={submit} className="chat-form"><label htmlFor="chat-input">{view === "edit" ? "Describe a proposed edit" : "Write a draft message"}</label><textarea id="chat-input" rows={3} value={draft} onChange={event => setDrafts(prev => ({ ...prev, [conversationKey]: event.target.value }))} placeholder="Type a message (local draft only)" /><button type="submit" disabled={!draft.trim()}>Add local message</button></form>
           <p className="fine-print">Messages are session-only and do not contact an AI service. Leaving this page or refreshing may lose them.</p>
         </section>}
       </main>

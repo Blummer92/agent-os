@@ -15,7 +15,7 @@ export function runReader(args) {
   return new Promise(resolveRun => {
     execFile(
       process.env.TEACHER_OS_PYTHON ?? "python3",
-      ["-I", "-m", "scripts.agent_os_notion_read_request.teacher_os", ...args],
+      ["-m", "scripts.agent_os_notion_read_request.teacher_os", ...args],
       {
         cwd: REPO_ROOT, timeout: 45_000, maxBuffer: 1_048_576,
         env: { ...process.env, PYTHONPATH: ["src", "08_Tooling/workflow-scheduler/src", "."].join(":") },

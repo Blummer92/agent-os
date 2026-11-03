@@ -89,7 +89,9 @@ test("negative control: with no Notion credential the real bridge reports unavai
   page.on("request", r => { if (!r.url().startsWith("http://127.0.0.1:4174/src") && !r.url().includes("@vite") && !r.url().includes("node_modules")) requests.push(new URL(r.url()).pathname); });
   await page.goto("/");
   await open(page);
-  await expect(page.getByRole("alert").first()).toContainText("Notion is unavailable");
+  // The specific reason proves the real Python reader ran and refused for lack of a credential,
+  // not merely that the bridge failed.
+  await expect(page.getByRole("alert").first()).toContainText("The Notion connection is not configured for this server");
   await expect(page.getByRole("button", { name: "View full lesson" })).toHaveCount(0);
   expect([...new Set(requests.filter(p => p.startsWith("/api/")))]).toEqual(["/api/teacher-os/units"]); // StrictMode may repeat the aborted first request
 });
