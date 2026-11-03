@@ -456,8 +456,32 @@ def run_dev_validation_over_codespaces(
         "publication_invoked": False,
         "merge_authorized": False,
     }
-    if any(payload.get(key) != value for key, value in fixed.items()):
-        return _failure(request, "dev-validation-codespaces-evidence-identity-mismatch", codespace_name)
+    mismatch_fields = sorted(
+        key for key, value in fixed.items() if payload.get(key) != value
+    )
+    if mismatch_fields:
+        # #3333/run 41659878211: the generic mismatch receipt discarded the
+        # remote payload's own reason, so a pre-surface remote failure
+        # (health, workspace, or surface gate, where the remote payload
+        # carries execution_surface_id None) was indistinguishable from a
+        # genuine field mismatch. Preserve the remote reason codes and the
+        # differing field names for diagnosis. The check itself is
+        # unchanged and still rejects: reason stays the generic mismatch,
+        # status stays needs-decision, and no remote log text is copied.
+        evidence = _failure(
+            request,
+            "dev-validation-codespaces-evidence-identity-mismatch",
+            codespace_name,
+        )
+        remote_reasons = payload.get("reason_codes")
+        evidence["remote_reason_codes"] = (
+            remote_reasons
+            if type(remote_reasons) is list
+            and all(type(reason) is str and reason for reason in remote_reasons)
+            else []
+        )
+        evidence["identity_mismatch_fields"] = mismatch_fields
+        return evidence
     if payload.get("status") not in {
         "success",
         "failure",
