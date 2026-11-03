@@ -99,6 +99,7 @@ def _admission_kwargs(**overrides):
         "review_state": "clear",
         "branch_freshness": "current",
         "mergeability": "mergeable",
+        "failed_repair_attempt_id": "pr-2281-head-a-validation-1",
     }
     value.update(overrides)
     return value

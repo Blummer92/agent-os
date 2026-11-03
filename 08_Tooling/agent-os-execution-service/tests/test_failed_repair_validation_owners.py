@@ -74,6 +74,7 @@ def _kwargs(**overrides):
         review_state="clear",
         branch_freshness="current",
         mergeability="mergeable",
+        failed_repair_attempt_id="attempt-3280",
     )
     values.update(overrides)
     return values
@@ -466,6 +467,7 @@ def _json_head(head: str, status: str, **overrides) -> dict[str, object]:
 def _json_arguments(**extra) -> dict[str, object]:
     arguments: dict[str, object] = {
         "activation_result": _activation(),
+        "failed_repair_attempt_id": "attempt-3280",
         "check_state": "red",
         "required_check_configuration_state": "current",
         "review_state": "clear",
