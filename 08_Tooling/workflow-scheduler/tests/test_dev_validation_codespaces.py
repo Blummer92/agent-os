@@ -482,6 +482,116 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
     ]
 
 
+def test_codespaces_identity_mismatch_preserves_remote_reason() -> None:
+    # #3333/run 41659878211: a remote pre-surface failure (here the
+    # environment-health gate) carries execution_surface_id None, so the
+    # fixed-field check fails. The rejection must stay fail-closed, but
+    # the remote reason and the differing field must survive in the
+    # receipt instead of being replaced by the generic reason alone.
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    payload = {
+        "schema_version": "1.0",
+        "status": "needs-decision",
+        "reason_codes": ["codespaces-environment-health-invalid"],
+        "repository": REPOSITORY,
+        "issue_number": 2931,
+        "branch": BRANCH,
+        "tested_sha": SHA,
+        "validation_id": VALIDATION_ID,
+        "request_id": request.request_id,
+        "exit_code": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "cleanup_complete": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": None,
+        "environment_health_evidence_id": None,
+    }
+    stdout = (
+        "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+    )
+
+    def run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-evidence-identity-mismatch"
+    ]
+    assert evidence["remote_reason_codes"] == ["codespaces-environment-health-invalid"]
+    assert evidence["identity_mismatch_fields"] == ["execution_surface_id"]
+    assert evidence["stdout_tail"] == ""
+    assert evidence["stderr_tail"] == ""
+    assert evidence["exit_code"] is None
+
+
+def test_codespaces_identity_mismatch_lists_each_differing_field() -> None:
+    # A success-shaped payload with one wrong fixed field still rejects,
+    # and names exactly that field plus the remote reason it carried.
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    payload = {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["validation-passed"],
+        "repository": REPOSITORY,
+        "issue_number": 2931,
+        "branch": BRANCH,
+        "tested_sha": "b" * 40,
+        "validation_id": VALIDATION_ID,
+        "request_id": request.request_id,
+        "exit_code": 0,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "cleanup_complete": True,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": CURRENT_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + ("b" * 64),
+    }
+    stdout = (
+        "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+    )
+
+    def run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-evidence-identity-mismatch"
+    ]
+    assert evidence["remote_reason_codes"] == ["validation-passed"]
+    assert evidence["identity_mismatch_fields"] == ["tested_sha"]
+
+
 def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
     workflow = (
         ROOT / ".github/workflows/agent-os-governed-invocation.yml"
