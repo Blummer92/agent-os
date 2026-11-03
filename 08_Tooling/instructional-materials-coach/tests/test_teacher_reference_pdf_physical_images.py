@@ -22,9 +22,13 @@ from PIL import Image
 from instructional_materials_coach.teacher_reference import build_worked_examples_reference
 from instructional_materials_coach.teacher_reference_pdf import render_teacher_reference_pdf
 
-pytestmark = pytest.mark.skipif(
+# Two groups. The structural tests below (raw PDF image-object count) need no external tool and
+# always run, so "images are embedded" is checked wherever the suite runs. The render tests need
+# Poppler and are skipped, with this explicit reason, where it is absent. A skipped render test is
+# NOT evidence: label PDF render results as verified only where the skip did not occur.
+needs_poppler = pytest.mark.skipif(
     shutil.which("pdfimages") is None or shutil.which("pdftoppm") is None,
-    reason="poppler-utils (pdfimages, pdftoppm) not installed; physical PDF inspection unavailable",
+    reason="poppler-utils (pdfimages, pdftoppm) not installed; rendered-page inspection unavailable",
 )
 
 COLORS = {"asset-red": (230, 20, 20), "asset-green": (20, 200, 20), "asset-blue": (20, 20, 230)}
@@ -69,6 +73,11 @@ def _reference():
     )
 
 
+def _image_objects(pdf: Path) -> int:
+    """Image XObjects in the raw PDF bytes; no external tool (always-running structural oracle)."""
+    return pdf.read_bytes().count(b"/Subtype /Image")
+
+
 def _embedded_images(pdf: Path) -> int:
     listing = subprocess.run(["pdfimages", "-list", str(pdf)], capture_output=True, text=True, check=True).stdout
     return len([line for line in listing.splitlines()[2:] if line.strip()])
@@ -92,12 +101,14 @@ def _render(tmp_path: Path, assets: dict[str, bytes]) -> Path:
     return render_teacher_reference_pdf(_reference(), tmp_path / "three.pdf", asset_content=assets)
 
 
+@needs_poppler
 def test_three_governed_images_are_physically_embedded_and_visible(tmp_path):
     pdf = _render(tmp_path, {f"drive-{asset}": _png(color) for asset, color in COLORS.items()})
     assert _embedded_images(pdf) == 3
     assert _visible_colors(pdf, tmp_path) == set(COLORS)
 
 
+@needs_poppler
 def test_a_missing_asset_changes_the_physical_artifact_not_just_the_receipt(tmp_path):
     """Negative control: with one asset's bytes absent the file really holds two images."""
     available = {f"drive-{asset}": _png(color) for asset, color in COLORS.items() if asset != "asset-green"}
@@ -107,6 +118,7 @@ def test_a_missing_asset_changes_the_physical_artifact_not_just_the_receipt(tmp_
     assert _visible_colors(pdf, tmp_path) == {"asset-red", "asset-blue"}
 
 
+@needs_poppler
 def test_a_wrong_image_for_one_role_is_visible_as_the_wrong_colour(tmp_path):
     """The red role is given green bytes: the page shows green twice and no red at all.
 
@@ -121,3 +133,22 @@ def test_a_wrong_image_for_one_role_is_visible_as_the_wrong_colour(tmp_path):
     pdf = _render(tmp_path, wrong)
     assert _embedded_images(pdf) == 3
     assert _visible_colors(pdf, tmp_path) == {"asset-green", "asset-blue"}
+
+
+def test_structural_three_governed_images_are_image_objects_in_the_file(tmp_path):
+    pdf = _render(tmp_path, {f"drive-{asset}": _png(color) for asset, color in COLORS.items()})
+    assert _image_objects(pdf) == 3
+
+
+def test_structural_a_withheld_asset_leaves_two_image_objects_while_the_header_oracle_passes(tmp_path):
+    available = {f"drive-{asset}": _png(color) for asset, color in COLORS.items() if asset != "asset-green"}
+    pdf = _render(tmp_path, available)
+    assert pdf.read_bytes().startswith(b"%PDF-")  # what the pre-existing test checked
+    assert _image_objects(pdf) == 2
+
+
+def test_structural_a_renderer_that_reuses_one_assets_bytes_does_not_yield_three_distinct_images(tmp_path):
+    # Identical bytes collapse to one XObject, so reuse of a single asset cannot look like three.
+    one = _png(COLORS["asset-red"])
+    pdf = _render(tmp_path, {f"drive-{asset}": one for asset in COLORS})
+    assert _image_objects(pdf) == 1
