@@ -191,3 +191,7 @@ Remove this package, its focused tests, its validation-profile rule, and the
 `notion-read` branches in the governed ingress and the GCE adapter. No external
 cleanup is required: no credential, workflow, Notion permission, or live read
 is created by this package.
+
+## Teacher OS read seam (#2801)
+
+`teacher_os.py` lets Teacher OS list approved units (live `canonical-unit` source, Active and not human-review) and read one unit's lessons without a per-unit catalog entry. It reuses the lazy live executor, the #2282 action bound and `execution.query_unit_lesson_records` (relation filter, completeness proof, per-record unit identity) and the 7-field lesson projection. A unit id from a caller is only used if the live verified source lists it. Failures return a closed `reason_code` (`not-configured`, `source-unverified`, `unit-not-approved`, `invalid-request`, `read-failed`) and never any provider text. Read-only; no ingress/admission transport is involved, so this caller is local to a credential-holding server process.
