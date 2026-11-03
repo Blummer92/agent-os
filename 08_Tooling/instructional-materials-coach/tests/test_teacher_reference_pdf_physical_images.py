@@ -107,12 +107,17 @@ def test_a_missing_asset_changes_the_physical_artifact_not_just_the_receipt(tmp_
     assert _visible_colors(pdf, tmp_path) == {"asset-red", "asset-blue"}
 
 
-def test_a_swapped_image_is_visible_as_the_wrong_colour(tmp_path):
-    swapped = {
-        "drive-asset-red": _png(COLORS["asset-blue"]),
+def test_a_wrong_image_for_one_role_is_visible_as_the_wrong_colour(tmp_path):
+    """The red role is given green bytes: the page shows green twice and no red at all.
+
+    Also kills a renderer that uses one asset's bytes for every preview (all three would be
+    green, so blue would vanish) -- which the missing-asset case alone cannot tell apart.
+    """
+    wrong = {
+        "drive-asset-red": _png(COLORS["asset-green"]),
         "drive-asset-green": _png(COLORS["asset-green"]),
         "drive-asset-blue": _png(COLORS["asset-blue"]),
     }
-    pdf = _render(tmp_path, swapped)
+    pdf = _render(tmp_path, wrong)
     assert _embedded_images(pdf) == 3
-    assert "asset-red" not in _visible_colors(pdf, tmp_path)
+    assert _visible_colors(pdf, tmp_path) == {"asset-green", "asset-blue"}

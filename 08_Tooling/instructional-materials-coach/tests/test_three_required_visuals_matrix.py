@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from instructional_materials_coach import visual_reuse
+from instructional_workflow_contracts.material_requirement import material_requirement_source_fingerprint
 from instructional_materials_coach.artifact_content_qa import (
     QA_STATE_ARTIFACT_INACCESSIBLE,
     QA_STATE_VERIFIED,
@@ -73,6 +74,10 @@ def _three_role_requirement():
     direction["roles"] = [
         {**base, "role_type": role, "requirement_state": "required"} for role in ROLES
     ]
+    # Editing the fixture invalidates its source fingerprint; recompute it with the canonical
+    # function, otherwise the planner stops at invalid-material-requirement and never reaches
+    # the candidate/gap logic this case is about.
+    requirement["identity"]["source_fingerprint"] = material_requirement_source_fingerprint(requirement)
     return requirement
 
 
@@ -85,11 +90,13 @@ def test_b_three_required_roles_with_zero_candidates_block_production():
         changed_dependency_keys=[],
         impact_map={},
     )
+    # Reached the real gap logic (not an invalid-requirement short circuit).
+    assert plan.outcome == "visual-gap-blocked"
     assert plan.final_production_blocked is True
     assert plan.selected_asset_ids == ()
-    # A blocked plan is the only thing that keeps an empty placement list from
-    # reaching admission as "no visuals required" (cli.py refuses on this flag).
-    assert plan.outcome != "no-visual-needed"
+    assert len(plan.image_gap_briefs) == 3  # one gap brief per required role
+    # A blocked plan is what keeps an empty placement list from reaching admission as
+    # "no visuals required" (cli.py refuses on this flag).
 
 
 # ---------------------------------------------------------------------------
