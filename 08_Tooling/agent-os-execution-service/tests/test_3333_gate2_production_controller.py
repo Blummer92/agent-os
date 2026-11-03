@@ -137,6 +137,10 @@ def _transports():
 
 
 def _completed_receipt() -> dict:
+    # A completed receipt must carry full dispatch evidence for the B02
+    # sink check: exact argv, expected SHA stdout, exit zero, no
+    # truncation, selected codespace, and invocation/descriptor identity.
+    # A fixture without these is not a faithful completed receipt.
     return {
         "schema_version": "1.0",
         "operation_id": "codespace-implementation-pilot-v1",
@@ -146,6 +150,17 @@ def _completed_receipt() -> dict:
         "issue_number": 3333,
         "handoff_id": f"executor-handoff:{HANDOFF}",
         "expected_sha": SHA,
+        "request_id": "request-test-box-probe",
+        "codespace_name": "test-box",
+        "argv": ["git", "rev-parse", "HEAD"],
+        "exit_status": 0,
+        "stdout_tail": SHA + "\n",
+        "stderr_tail": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "admission_id": "admission-test",
+        "invocation_id": "invocation-test",
+        "descriptor_id": "descriptor-test",
     }
 
 
@@ -1137,10 +1152,14 @@ def test_bound_controller_persists_receipt_on_bound_path(tmp_path, monkeypatch) 
         # A real drive receipt carries the bound envelope identity; the
         # generic fixture handoff/SHA would now (correctly, #3333 X09) be
         # rejected before persistence, so bind the stub receipt here.
+        # The B02 sink also requires stdout == expected SHA and the
+        # selected codespace, so bind those dispatch-evidence fields too.
         return dict(
             _completed_receipt(),
             handoff_id=bound["handoff"].handoff_id,
             expected_sha=_BOUND_SHA,
+            stdout_tail=_BOUND_SHA + "\n",
+            codespace_name=_BOUND_CODESPACE,
         )
 
     result = run_gate2_fixed_pilot_controller(

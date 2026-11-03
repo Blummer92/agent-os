@@ -107,6 +107,16 @@ class CodespaceDispatchOutcome:
     failures) is carried verbatim. NOT_DISPATCHED means a fail-closed junction
     stopped the attempt before any transport; ``transport_result_or_none`` is
     then None and no Codespace was contacted.
+
+    ``request_or_none`` is the canonical request id derived from the
+    TransportRequest the dispatcher actually sent (``request.request_id``,
+    computed by the transport request's own ``__post_init__`` from its
+    content). It is NOT the result's asserted id: the fixed pilot compares
+    the returned result's ``request_id`` against this carried value before
+    completed status (#3333 B01). A dispatcher that cannot supply it
+    (NOT_DISPATCHED, or a legacy fake) yields None, and the pilot must
+    fail closed with ``transport-request-unavailable`` rather than trust
+    the result's id.
     """
 
     status: DispatchStatus
@@ -116,6 +126,7 @@ class CodespaceDispatchOutcome:
     preference: GovernedRunnerPreference
     route_decision_or_none: ExecutorRouteDecision | None
     transport_result_or_none: TransportResult | None
+    request_or_none: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.status) is not DispatchStatus:
@@ -143,6 +154,10 @@ class CodespaceDispatchOutcome:
                 raise ValueError("dispatched outcomes must carry a TransportResult")
             if DispatchReason.OK not in self.reason_codes:
                 raise ValueError("dispatched outcomes must carry the ok reason")
+            if self.request_or_none is not None and (
+                type(self.request_or_none) is not str or not self.request_or_none
+            ):
+                raise ValueError("request_or_none must be a non-empty string or None")
         else:
             if result is not None:
                 raise ValueError(
@@ -291,4 +306,8 @@ def dispatch_admitted_operation_to_codespace(
         preference=preference,
         route_decision_or_none=decision,
         transport_result_or_none=result,
+        # The request id is derived from the request content itself, before
+        # the transport runs, so a result asserting a foreign id cannot
+        # pass the pilot's B01 comparison by construction of this value.
+        request_or_none=request.request_id,
     )

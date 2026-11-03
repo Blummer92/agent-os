@@ -792,7 +792,12 @@ def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(can
         codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
         evaluated_at=EVALUATED_AT,
         dispatcher=lambda **_kwargs: SimpleNamespace(
-            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+            status=DispatchStatus.DISPATCHED,
+            transport_result_or_none=transport_result,
+            # B01: the fake dispatcher binds the same request id it
+            # returns, so these tests exercise the completion check
+            # (wrong codespace / wrong argv), not the request-id gate.
+            request_or_none="request-3333-probe",
         ),
     )
     assert receipt["status"] == "blocked"
@@ -824,7 +829,12 @@ def test_receipt_reporting_a_different_argv_than_the_fixed_one_is_blocked(canoni
         codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
         evaluated_at=EVALUATED_AT,
         dispatcher=lambda **_kwargs: SimpleNamespace(
-            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+            status=DispatchStatus.DISPATCHED,
+            transport_result_or_none=transport_result,
+            # B01: the fake dispatcher binds the same request id it
+            # returns, so these tests exercise the completion check
+            # (wrong codespace / wrong argv), not the request-id gate.
+            request_or_none="request-3333-probe",
         ),
     )
     assert receipt["status"] == "blocked"
@@ -1078,10 +1088,11 @@ def test_3333_x01_wrong_actor_envelope_cannot_dispatch(canonical):
 def test_3333_x03_transport_result_request_id_matches_derivation():
     """#3333 X03 regression: the result id must equal the derived request id.
 
-    This pins the transport's own derivation only. It does NOT claim any
-    future receipt consumer verifies request_id: the pilot does not
-    currently retain the request object, so that check needs wiring when
-    a consumer is built.
+    This pins the transport's own derivation. The B01 repair additionally
+    makes the pilot compare the returned result id against the id the
+    dispatcher carried from the dispatched request (see
+    test_3333_mcp_repair_pilot.py), and the production receipt consumer
+    verifies it again against descriptor-derived identity.
     """
     request = TransportRequest(
         repository=REPO,

@@ -101,6 +101,10 @@ def _valid_transport(transport: object) -> bool:
         and type(transport.get("issue_number")) is int
         and transport.get("issue_number") == ISSUE_NUMBER
         and transport.get("actor") == "Blummer92"
+        # B04: exact integer only. ``True == 1`` and ``1.0 == 1`` in Python,
+        # so a bare equality check would admit a boolean or float attempt.
+        # The canonical ingress check stays as defense-in-depth upstream.
+        and type(transport.get("run_attempt")) is int
         and transport.get("run_attempt") == 1
         and type(transport.get("logical_trigger_id_or_none")) is str
         and transport["logical_trigger_id_or_none"].startswith("issue-comment-trigger:")
@@ -109,6 +113,29 @@ def _valid_transport(transport: object) -> bool:
         and type(transport.get("codespace_implementation_sha_or_none")) is str
         and _SHA40.fullmatch(transport["codespace_implementation_sha_or_none"]) is not None
     )
+
+
+def _bind_request_id(
+    outcome: object, result: object
+) -> tuple[str | None, str | None]:
+    """Bind a dispatch result to the request actually sent (#3333 B01).
+
+    Returns ``(canonical_request_id, failure_reason_or_none)``. The
+    canonical id is the one the dispatcher carried from the
+    TransportRequest content; it is never reconstructed here and never
+    taken from the result itself. ``None`` with
+    ``transport-request-unavailable`` means the dispatcher supplied no
+    derived id; a foreign result id yields the canonical id with
+    ``transport-request-id-mismatch`` so the receipt records the request
+    that was sent, not the foreign assertion. Extracted as a helper so
+    the comparison is unit-testable without the full admission chain.
+    """
+    derived = getattr(outcome, "request_or_none", None)
+    if derived is None:
+        return None, "transport-request-unavailable"
+    if getattr(result, "request_id", None) != derived:
+        return derived, "transport-request-id-mismatch"
+    return derived, None
 
 
 def consume_fixed_codespace_pilot(
@@ -293,7 +320,6 @@ def consume_fixed_codespace_pilot(
         receipt = _receipt("blocked", "codespace-dispatch-not-completed", envelope)
         if outcome.status is not DispatchStatus.DISPATCHED or result is None:
             return receipt
-        receipt["request_id"] = result.request_id
         receipt["codespace_name"] = result.codespace_name_or_none
         receipt["exit_status"] = result.exit_status_or_none
         receipt["stdout_tail"] = result.stdout_tail
@@ -305,6 +331,16 @@ def consume_fixed_codespace_pilot(
         receipt["started_at"] = result.started_at_or_none
         receipt["ended_at"] = result.ended_at_or_none
         receipt["duration_ms"] = result.duration_ms
+        # B01: bind the returned result to the request the dispatcher
+        # actually sent (see _bind_request_id). A foreign or missing
+        # derived id fails closed before completed status; the receipt
+        # records the canonical derived id, not the foreign assertion.
+        derived_request_id, bind_failure = _bind_request_id(outcome, result)
+        if bind_failure is not None:
+            receipt["request_id"] = derived_request_id
+            receipt.update(status="blocked", reason_codes=[bind_failure])
+            return receipt
+        receipt["request_id"] = derived_request_id
         if (
             result.exit_status_or_none == 0
             and result.stdout_tail.strip() == sha
