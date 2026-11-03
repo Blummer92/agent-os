@@ -19,12 +19,14 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .continuation_driver import (
     ContinuationDecision,
     drive_governed_continuation,
 )
 from .governed_route_preflight import (
+    GovernedRoutePreflightReason,
     GovernedRoutePreflightResult,
     GovernedRoutePreflightStatus,
     is_governed_checkout,
@@ -36,10 +38,19 @@ REPOSITORY_ENV = "AGENT_OS_EXECUTION_INTERFACE_REPOSITORY"
 
 _ISSUE_RE = re.compile(r"#(\d{1,7})(?![\w#])", re.ASCII)
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", re.ASCII)
-_REMOTE_URL_RE = re.compile(
-    r"github\.com[:/]+(?P<owner>[A-Za-z0-9_.-]+)/(?P<name>[A-Za-z0-9_.-]+?)(?:\.git)?\s*$",
-    re.ASCII,
+# GitHub remote forms only: scp-like ``git@github.com:owner/name`` and
+# ``https|ssh://[userinfo@]host[:port]/owner/name``. The URL is parsed (not
+# searched) so the real host is checked: ``github.com`` (or ``ssh.github.com`` for
+# ssh), never a look-alike host or a ``#``/``?``/``\\`` userinfo trick.
+_SCP_REMOTE_RE = re.compile(
+    r"^(?:[A-Za-z0-9_.-]+@)?github\.com:(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+    re.ASCII | re.IGNORECASE,
 )
+_REMOTE_PATH_RE = re.compile(
+    r"^/(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$", re.ASCII
+)
+_REMOTE_HOSTS = {"https": frozenset({"github.com"}), "ssh": frozenset({"github.com", "ssh.github.com"})}
+_REMOTE_PORTS = {"https": frozenset({443}), "ssh": frozenset({22, 443})}
 _LOCAL_GH_RE = re.compile(r"(?<![\w./-])gh(?![\w./-])", re.ASCII)
 _GOVERNED_MUTATION_TOOL_RE = re.compile(
     r"^(?:Bash|Edit|Write|NotebookEdit|mcp__github__.*|mcp__notion__.*|mcp__google_drive__.*|mcp__google_calendar__.*|mcp__gmail__.*)$",
@@ -49,6 +60,7 @@ _GOVERNED_MUTATION_TOOL_RE = re.compile(
 _MAX_PROMPT_BYTES = 65_536
 _MAX_COMMAND_BYTES = 16_384
 _MAX_GIT_CONFIG_BYTES = 262_144
+_MAX_GIT_POINTER_BYTES = 4_096
 MAX_CONSECUTIVE_STOP_BLOCKS = 1
 
 _INVARIANT = (
@@ -76,6 +88,31 @@ _PUBLICATION_CONTINUATION = (
 )
 
 
+_SURFACE_CAPABILITY_REASONS = frozenset(
+    {
+        GovernedRoutePreflightReason.DESCRIPTOR_STORE_NOT_CONFIGURED,
+        GovernedRoutePreflightReason.DISCOVERY_STORE_UNAVAILABLE,
+        GovernedRoutePreflightReason.DISCOVERY_DEPENDENCY_UNAVAILABLE,
+    }
+)
+_SURFACE_CAPABILITY_SCOPE = (
+    "Scope: the governed-resume route is simply unavailable on this execution "
+    "surface (capability evidence; no owner decision is requested for it). This "
+    "does not relax the fail-closed instruction above: do not fall back to local "
+    "git/gh for governed resume or publication, and it authorizes no GitHub write. "
+    "It also does not revoke authorization the owner already gave for read-only or "
+    "local worktree work; a surface with the descriptor store (for example the "
+    "fixed Codespaces route) owns governed resume."
+)
+_IDENTITY_GAP_SCOPE = (
+    "Scope: repository identity could not be established from a validated GitHub "
+    "`origin` remote (ordinary clone or linked worktree) or "
+    f"{REPOSITORY_ENV}. This is an identity gap, not a mission decision: repair the "
+    "checkout metadata, or have the owner set that variable. Never infer the repository from "
+    "a directory name or prompt text."
+)
+
+
 def extract_issue_numbers(text: object) -> tuple[int, ...]:
     if type(text) is not str:
         return ()
@@ -88,35 +125,148 @@ def extract_issue_numbers(text: object) -> tuple[int, ...]:
     return tuple(seen)
 
 
+def _read_pointer_file(path: Path) -> str | None:
+    """Read a tiny git metadata file (``.git``, ``commondir``, ``gitdir``) or fail closed."""
+    try:
+        if not path.is_file():
+            return None
+        with path.open("rb") as handle:
+            data = handle.read(_MAX_GIT_POINTER_BYTES + 1)
+        if len(data) > _MAX_GIT_POINTER_BYTES or b"\0" in data:
+            return None
+        return data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _resolve_dir(base: Path, value: str) -> Path | None:
+    target = Path(value)
+    try:
+        resolved = (target if target.is_absolute() else base / target).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_dir() else None
+
+
+def _linked_worktree_config(checkout: Path, dot_git: Path) -> Path | None:
+    """Locate the shared config of a validated ``git worktree`` checkout.
+
+    A linked worktree's ``.git`` is a one-line ``gitdir: <common>/worktrees/<id>``
+    file and ``remote.origin`` lives in the common directory. The pointer is only
+    trusted when it round-trips: the admin dir's ``commondir`` must name its own
+    grandparent and its ``gitdir`` back-link must name this checkout's ``.git``.
+    Separate-git-dir, submodule, copied, or stale pointers fail closed.
+    """
+    raw = _read_pointer_file(dot_git)
+    if raw is None:
+        return None
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) != 1 or not lines[0].startswith("gitdir:"):
+        return None
+    admin = _resolve_dir(checkout, lines[0][len("gitdir:"):].strip())
+    if admin is None or admin.parent.name != "worktrees":
+        return None
+    common = admin.parent.parent
+
+    commondir_raw = _read_pointer_file(admin / "commondir")
+    if commondir_raw is None or _resolve_dir(admin, commondir_raw.strip()) != common:
+        return None
+    backlink_raw = _read_pointer_file(admin / "gitdir")
+    if backlink_raw is None:
+        return None
+    backlink = Path(backlink_raw.strip())
+    try:
+        # Git >= 2.48 may store a path relative to the admin dir.
+        if (backlink if backlink.is_absolute() else admin / backlink).resolve(strict=True) != dot_git.resolve(strict=True):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return common / "config"
+
+
+def _git_config_path(checkout_root: Path | str) -> Path | None:
+    checkout = Path(checkout_root)
+    dot_git = checkout / ".git"
+    try:
+        if dot_git.is_dir():
+            return dot_git / "config"
+        if dot_git.is_file():
+            return _linked_worktree_config(checkout, dot_git)
+    except OSError:
+        return None
+    return None
+
+
+def _parse_github_remote(url: str) -> str | None:
+    url = url.strip()
+    if not url or any(character in url for character in "\\ \t\r\n\0"):
+        return None
+    if "://" not in url:
+        match = _SCP_REMOTE_RE.fullmatch(url)
+        candidate = match.group("path") if match else None
+    else:
+        try:
+            parts = urlsplit(url)
+            scheme = parts.scheme.lower()
+            port = parts.port
+        except ValueError:
+            return None
+        if (
+            scheme not in _REMOTE_HOSTS
+            or (parts.hostname or "") not in _REMOTE_HOSTS[scheme]
+            or (port is not None and port not in _REMOTE_PORTS[scheme])
+            or parts.query
+            or parts.fragment
+        ):
+            return None
+        match = _REMOTE_PATH_RE.fullmatch(parts.path)
+        candidate = match.group("path") if match else None
+    if candidate is None or any(part in {".", "..", ".git"} for part in candidate.split("/")):
+        return None
+    return candidate if _REPOSITORY_RE.fullmatch(candidate) else None
+
+
 def resolve_repository_identity(checkout_root: Path | str | None) -> str | None:
+    """Resolve ``owner/name`` from the checkout's ``origin`` remote, failing closed.
+
+    Supports ordinary clones (``.git`` directory) and validated linked worktrees
+    (``.git`` pointer file). Absent, malformed, unvalidated, non-GitHub, or
+    conflicting origin URLs return ``None``; the directory name is never used.
+    """
     configured = os.environ.get(REPOSITORY_ENV, "").strip()
     if configured:
         return configured if _REPOSITORY_RE.fullmatch(configured) else None
     if checkout_root is None:
         return None
+    config_path = _git_config_path(checkout_root)
+    if config_path is None:
+        return None
     try:
-        config_path = Path(checkout_root) / ".git" / "config"
         if not config_path.is_file():
             return None
-        raw = config_path.read_text(encoding="utf-8", errors="replace")[:_MAX_GIT_CONFIG_BYTES]
+        with config_path.open("rb") as handle:
+            data = handle.read(_MAX_GIT_CONFIG_BYTES + 1)
     except OSError:
         return None
+    if len(data) > _MAX_GIT_CONFIG_BYTES:
+        return None
+    raw = data.decode("utf-8", errors="replace")
 
     in_origin = False
+    candidates: set[str | None] = set()
     for line in raw.splitlines():
         stripped = line.strip()
         if stripped.startswith("["):
             in_origin = stripped.replace(" ", "").lower().startswith('[remote"origin"]')
             continue
-        if not in_origin or not stripped.lower().startswith("url"):
+        if not in_origin:
             continue
-        _, _, value = stripped.partition("=")
-        match = _REMOTE_URL_RE.search(value.strip())
-        if match is None:
-            return None
-        candidate = f"{match.group('owner')}/{match.group('name')}"
-        return candidate if _REPOSITORY_RE.fullmatch(candidate) else None
-    return None
+        key, separator, value = stripped.partition("=")
+        if separator and key.strip().lower() == "url":
+            candidates.add(_parse_github_remote(value))
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates))
 
 
 def resolve_store_root() -> str | None:
@@ -163,6 +313,11 @@ def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
             f"status=needs-decision {target} ({reasons})\n"
             "Fail closed. Do not choose a 'latest' descriptor, infer currentness from timestamps, issue status, or branch names, or silently fall back to local git/gh tooling."
         )
+        reason_set = set(result.reason_codes)
+        if reason_set and reason_set <= _SURFACE_CAPABILITY_REASONS:
+            body += f"\n{_SURFACE_CAPABILITY_SCOPE}"
+        elif reason_set == {GovernedRoutePreflightReason.REPOSITORY_IDENTITY_UNRESOLVED}:
+            body += f"\n{_IDENTITY_GAP_SCOPE}"
     return f"{header}\n{body}\n{_NON_AUTHORITY}\n{_INVARIANT}"
 
 
