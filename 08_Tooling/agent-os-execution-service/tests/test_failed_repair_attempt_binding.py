@@ -11,6 +11,7 @@ reason code, so removing a guard fails the named case (LL-10/LL-93 discipline).
 from __future__ import annotations
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from agent_os_execution_service.mcp_facade import (
     activate_agent_os_failed_repair,
@@ -274,7 +275,9 @@ def test_registered_mcp_tool_requires_the_attempt_identity():
     current = _activate("attempt-2", specialized=False)
     arguments = _tool_arguments(current, "attempt-2")
     del arguments["failed_repair_attempt_id"]
-    with pytest.raises(Exception, match="failed_repair_attempt_id"):
+    # Schema validation at the registered tool (ToolError wrapping the missing
+    # argument), not an unrelated runtime failure.
+    with pytest.raises(ToolError, match="failed_repair_attempt_id"):
         _call_registered_tool(arguments)
     import inspect
 
