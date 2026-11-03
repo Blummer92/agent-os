@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from workflow_scheduler.governance.dev_validation import (
 )
 from workflow_scheduler.governance.dev_validation_codespaces import (
     APPROVED_CODESPACE_PROFILE_ID,
+    _REMOTE_RUNNER_SOURCE,
     _RUN_TIMEOUT_SECONDS,
     resolve_current_codespace,
     run_dev_validation_over_codespaces,
@@ -314,12 +316,67 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         "-c",
         CURRENT_NAME,
     )
-    assert argv[-1] == CURRENT_NAME
-    assert argv[5:8] == ("--", "python3", "-c")
-    assert "start" not in argv
-    assert "stop" not in argv
-    assert "delete" not in argv
-    assert "export" not in argv
+    assert argv[5] == "--"
+    # #3333/#3617: the multiline runner must cross the SSH shell boundary as
+    # one safely quoted command, not as separate argv elements the remote
+    # shell re-splits (run 41633810143). This replaces the old
+    # argv[5:8] == ("--", "python3", "-c") and argv[-1] == name shape, which
+    # was the defect.
+    assert len(argv) == 7
+    remote_command = argv[6]
+    assert "\n" in remote_command  # the source is multiline, yet one shell word
+    assert shlex.split(remote_command) == [
+        "python3",
+        "-c",
+        _REMOTE_RUNNER_SOURCE,
+        REPOSITORY,
+        "2931",
+        BRANCH,
+        SHA,
+        VALIDATION_ID,
+        request.request_id,
+        CURRENT_NAME,
+    ]
+    split_command = shlex.split(remote_command)
+    assert "start" not in split_command
+    assert "stop" not in split_command
+    assert "delete" not in split_command
+    assert "export" not in split_command
+
+
+def test_ssh_remote_command_executes_through_posix_shell(monkeypatch) -> None:
+    # #3333/#3617: exercise the implementation's exact quoting through a real
+    # POSIX shell. A sentinel program proves the shell delivers the -c
+    # program intact instead of parsing its lines as shell commands.
+    sentinel = (
+        "import sys\n"
+        "sys.stdout.write('SSH_BOUNDARY_OK')\n"
+    )
+    monkeypatch.setattr(
+        "workflow_scheduler.governance.dev_validation_codespaces._REMOTE_RUNNER_SOURCE",
+        sentinel,
+    )
+    captured: dict[str, str] = {}
+
+    def run(argv, *, timeout):
+        captured["command"] = argv[6]
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    completed = subprocess.run(
+        ("sh", "-c", captured["command"]), capture_output=True, text=True, timeout=30
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "SSH_BOUNDARY_OK" in completed.stdout
+    assert "command not found" not in completed.stderr
+    assert "SyntaxError" not in completed.stderr
 
 
 def test_codespaces_ssh_failure_is_fail_closed_and_bounded() -> None:

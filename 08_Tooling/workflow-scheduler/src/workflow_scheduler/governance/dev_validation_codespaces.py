@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -371,14 +372,15 @@ def run_dev_validation_over_codespaces(
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
     try:
-        completed = run(
+        # #3333/#3617: the remote program must cross the SSH shell boundary
+        # as one safely quoted command. Passing the multiline source as
+        # separate argv elements lets the remote shell split it at newlines
+        # (Python SyntaxError, then bash parsing Python lines, as in run
+        # 41633810143). shlex.join preserves the source as the single -c
+        # argument through the remote shell, mirroring the merged discovery
+        # repair in discovery_codespaces.py.
+        remote_command = shlex.join(
             (
-                "gh",
-                "codespace",
-                "ssh",
-                "-c",
-                codespace_name,
-                "--",
                 "python3",
                 "-c",
                 _REMOTE_RUNNER_SOURCE,
@@ -389,6 +391,17 @@ def run_dev_validation_over_codespaces(
                 request.validation_id,
                 request.request_id,
                 codespace_name,
+            )
+        )
+        completed = run(
+            (
+                "gh",
+                "codespace",
+                "ssh",
+                "-c",
+                codespace_name,
+                "--",
+                remote_command,
             ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )
