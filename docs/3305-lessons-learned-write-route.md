@@ -179,9 +179,12 @@ metadata reversal, credential rotation or permission change is allowed.
 
 ## Source Link provenance corrections (#3417/#3418, 2026-11-03)
 
-Two reviewed **Source Link-only update** entries cover live lessons whose original
+Three reviewed **Source Link-only update** entries cover live lessons whose original
 GitHub incident is authenticated:
 
+- `ll-65-source-link-2026-11-03` targets LL-65 with `issues/1904`, the report of
+  duplicate aggregate validation on one PR head. Merged PR #1905 reproduces a
+  completed run followed by a second run on the same SHA.
 - `ll-66-source-link-2026-11-03` targets LL-66 with `issues/229`, the implementation
   issue for the first-match linked-issue parser defect. Merged PR #230 is its
   linked implementation.
@@ -193,9 +196,11 @@ bound to the exact current `last_edited_time` of its target, followed by the usu
 exact readback. These commands are documented here and have not been executed:
 
 ```text
+/agent-os notion-write ll-65-source-link-2026-11-03 LL-65 <exact-last-edited-time>
 /agent-os notion-write ll-66-source-link-2026-11-03 LL-66 <exact-last-edited-time>
 /agent-os notion-write ll-68-source-link-2026-11-03 LL-68 <exact-last-edited-time>
 ```
 
-LL-65 and LL-69 have no authenticated original source and are deliberately not
-registered. Status and Surface Before Work? are not part of either entry.
+LL-69 has no authenticated original source and is deliberately not registered.
+Issue #1920 documents a similar report-omission symptom but is not its original
+evidence. Status and Surface Before Work? are not part of either entry.

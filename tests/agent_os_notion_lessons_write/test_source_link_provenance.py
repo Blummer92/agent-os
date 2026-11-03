@@ -12,13 +12,20 @@ from scripts.agent_os_notion_lessons_write.catalog import (
 from scripts.agent_os_notion_lessons_write.writer import execute, properties
 from tests.agent_os_notion_lessons_write.test_writer import CONTEXT, PAGE_ID, SOURCE_ID, Client, _prop, event
 
+LL65 = "ll-65-source-link-2026-11-03"
 LL66 = "ll-66-source-link-2026-11-03"
 LL68 = "ll-68-source-link-2026-11-03"
+ISSUE_1904 = "https://github.com/Blummer92/agent-os/issues/1904"
 ISSUE_229 = "https://github.com/Blummer92/agent-os/issues/229"
 ISSUE_1602 = "https://github.com/Blummer92/agent-os/issues/1602"
+LL65_REVISION = "2026-09-07T23:09:56.000Z"
 LL66_REVISION = "2026-09-06T19:20:19.000Z"
 LL68_REVISION = "2026-09-09T01:41:21.000Z"
-PROVENANCE = ((LL66, "LL-66", ISSUE_229, LL66_REVISION), (LL68, "LL-68", ISSUE_1602, LL68_REVISION))
+PROVENANCE = (
+    (LL65, "LL-65", ISSUE_1904, LL65_REVISION),
+    (LL66, "LL-66", ISSUE_229, LL66_REVISION),
+    (LL68, "LL-68", ISSUE_1602, LL68_REVISION),
+)
 NARRATIVE = {"Lesson Learned", "What Happened", "What To Do Next Time", "Guardrail"}
 DESCRIPTIVE = {"Area", "Learning Type", "Applies To", "Source Link"}
 
@@ -121,6 +128,17 @@ class ProvenanceWriterTests(unittest.TestCase):
         self.assertEqual(client.calls.count("write"), 1)
         self.assertEqual(client.page["properties"]["Source Link"]["url"], ISSUE_229)
         self.assertEqual(_without_source_link(client.page), _without_source_link(existing))
+
+    def test_each_registered_entry_writes_only_its_source_link(self):
+        for request_id, lesson_id, url, revision in PROVENANCE:
+            with self.subTest(request_id=request_id):
+                existing = lesson_page(int(lesson_id.split("-")[1]), revision=revision)
+                client = Client(existing=existing)
+                result = execute(self.request(request_id, lesson_id, revision), client)
+                self.assertEqual((result["status"], result["lesson_id"], result["write_attempts"]),
+                                 ("persisted", lesson_id, 1))
+                self.assertEqual(client.sent, [{"Source Link": {"url": url}}])
+                self.assertEqual(_without_source_link(client.page), _without_source_link(existing))
 
     def test_stale_revision_is_refused_with_zero_writes(self):
         client = Client(existing=lesson_page(66))

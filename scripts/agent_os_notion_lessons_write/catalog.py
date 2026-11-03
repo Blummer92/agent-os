@@ -92,6 +92,16 @@ LESSONS = MappingProxyType({
             "Source Link": "https://github.com/Blummer92/agent-os/issues/1602",
         }),
     }),
+    # #3417/#3418 provenance correction (2026-11-03): Source Link-only update for
+    # LL-65. Authenticated: issue #1904 documents duplicate aggregate validation on
+    # one PR head, and merged PR #1905 reproduces a completed run followed by a second
+    # run on the same SHA. Descriptive provenance only; activation fields untouched.
+    "ll-65-source-link-2026-11-03": MappingProxyType({
+        "target_lesson_id": "LL-65",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1904",
+        }),
+    }),
     # #3417/#3418 D1: descriptive classification for the existing LL-93 page.
     # Narrative is byte-identical to the canary entry; Status and Surface Before
     # Work? are deliberately absent, so executing this never activates LL-93.
