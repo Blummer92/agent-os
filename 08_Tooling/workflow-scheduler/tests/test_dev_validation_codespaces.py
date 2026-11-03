@@ -348,7 +348,10 @@ def test_ssh_remote_command_executes_through_posix_shell(monkeypatch) -> None:
     # #3333/#3617: exercise the implementation's exact quoting through a real
     # POSIX shell. A sentinel program proves the shell delivers the -c
     # program intact instead of parsing its lines as shell commands.
-    sentinel = "import sys; sys.stdout.write('SSH_BOUNDARY_OK')"
+    sentinel = (
+        "import sys\n"
+        "sys.stdout.write('SSH_BOUNDARY_OK')\n"
+    )
     monkeypatch.setattr(
         "workflow_scheduler.governance.dev_validation_codespaces._REMOTE_RUNNER_SOURCE",
         sentinel,
