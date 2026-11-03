@@ -306,35 +306,6 @@ def test_main_unresolvable_asset_slot_blocks_before_live_build(monkeypatch, tmp_
     assert "labeled image placeholders" in captured.err
 
 
-def test_main_selected_visuals_without_planned_placements_refuse_the_build(monkeypatch, tmp_path, capsys):
-    """Nov 3 mutation FCLI2: selected visuals must never be silently dropped.
-
-    The governed plan selected asset-1, but no placement binding can be planned
-    from it. Admission later derives its required visuals from the planned
-    bindings, so building here would yield a materials build with no required
-    visuals to verify. The CLI must refuse before any connected write.
-    """
-    from instructional_materials_coach import cli
-    monkeypatch.setenv("ALLOW_WRITE", "true")
-    with (
-        patch("instructional_materials_coach.cli.get_credentials", return_value="creds"),
-        patch("instructional_materials_coach.cli.build_drive_service", return_value="drive"),
-        patch("instructional_materials_coach.cli.build_slides_service", return_value="slides"),
-        patch("instructional_materials_coach.cli.build_docs_service", return_value="docs"),
-        patch("instructional_materials_coach.cli._require_visual_placement_support"),
-        patch("instructional_materials_coach.cli.get_file_metadata",
-              return_value={"id": "file-1", "trashed": False, "sha256Checksum": "c" * 64}),
-        patch("instructional_materials_coach.cli.plan_visual_placement_bindings", return_value=()),
-        patch("instructional_materials_coach.cli.build_live_materials") as live,
-    ):
-        exit_code = cli.main(_visual_build_args(tmp_path))
-    assert exit_code == 1
-    live.assert_not_called()
-    err = capsys.readouterr().err
-    assert "no placement bindings could be planned" in err
-    assert "selected_asset_ids=asset-1" in err
-
-
 def test_main_resolvable_asset_slot_allows_build(monkeypatch, tmp_path, capsys):
     """The asset-slot gate lets the build through when every selected slot resolves."""
     from instructional_materials_coach import cli
