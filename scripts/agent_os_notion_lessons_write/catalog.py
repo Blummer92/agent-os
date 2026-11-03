@@ -73,6 +73,25 @@ LESSONS = MappingProxyType({
             "Guardrail": "If a PR description contains a GitHub closing keyword referencing an issue, merging may close that issue. When live acceptance remains, use a non-closing Part of reference and verify the PR description before merge.",
         }),
     }),
+    # #3417/#3418 provenance correction (2026-11-03): Source Link-only update for
+    # LL-66. Authenticated: issue #229 documents the first-match linked-issue parser
+    # defect that the lesson's guardrail describes. Descriptive provenance only.
+    "ll-66-source-link-2026-11-03": MappingProxyType({
+        "target_lesson_id": "LL-66",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/229",
+        }),
+    }),
+    # #3417/#3418 provenance correction (2026-11-03): Source Link-only update for
+    # LL-68. Authenticated: issue #1602 documents unrelated aggregate-validation
+    # failures on independent PRs, the incident behind the lesson's PR-scope rule.
+    # Descriptive provenance only; activation fields are never touched.
+    "ll-68-source-link-2026-11-03": MappingProxyType({
+        "target_lesson_id": "LL-68",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1602",
+        }),
+    }),
     # #3417/#3418 D1: descriptive classification for the existing LL-93 page.
     # Narrative is byte-identical to the canary entry; Status and Surface Before
     # Work? are deliberately absent, so executing this never activates LL-93.

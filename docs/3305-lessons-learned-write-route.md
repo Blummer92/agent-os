@@ -176,3 +176,26 @@ exact-head aggregate validation remains independent of focused passes.
 Leave the PR unmerged until separately authorized release. Rollback is a reviewed
 repository revert or disabling activation; no automatic Notion deletion, archive,
 metadata reversal, credential rotation or permission change is allowed.
+
+## Source Link provenance corrections (#3417/#3418, 2026-11-03)
+
+Two reviewed **Source Link-only update** entries cover live lessons whose original
+GitHub incident is authenticated:
+
+- `ll-66-source-link-2026-11-03` targets LL-66 with `issues/229`, the implementation
+  issue for the first-match linked-issue parser defect. Merged PR #230 is its
+  linked implementation.
+- `ll-68-source-link-2026-11-03` targets LL-68 with `issues/1602`, the incident of
+  unrelated aggregate-validation failures blocking independent PRs.
+
+Registration writes nothing to Notion. Each correction needs its own owner command,
+bound to the exact current `last_edited_time` of its target, followed by the usual
+exact readback. These commands are documented here and have not been executed:
+
+```text
+/agent-os notion-write ll-66-source-link-2026-11-03 LL-66 <exact-last-edited-time>
+/agent-os notion-write ll-68-source-link-2026-11-03 LL-68 <exact-last-edited-time>
+```
+
+LL-65 and LL-69 have no authenticated original source and are deliberately not
+registered. Status and Surface Before Work? are not part of either entry.
