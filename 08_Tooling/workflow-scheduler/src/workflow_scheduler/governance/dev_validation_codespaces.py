@@ -75,7 +75,10 @@ expected_request_id="dev-validation:"+hashlib.sha256(b"agent-os-dev-validation:v
 result=base("needs-decision","codespaces-host-runner-failed",repository,issue,branch,sha,validation_id,request_id)
 if repository!=REPOSITORY or issue<1 or not valid_branch or SHA40.fullmatch(sha) is None or validation_id!=VALIDATION_ID or request_id!=expected_request_id:
  result["reason_codes"]=["invalid-codespaces-host-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub selection and the fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):

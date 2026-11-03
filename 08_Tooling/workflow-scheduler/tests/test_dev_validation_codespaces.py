@@ -760,3 +760,80 @@ def test_codespaces_api_read_timeout_and_transport_error_fail_closed(monkeypatch
 
     assert resolve_current_codespace(timeout_run).reason == "codespaces-read-timeout"
     assert resolve_current_codespace(missing_cli_run).reason == "codespaces-read-transport-error"
+
+
+def test_3333_noninteractive_ssh_identity_policy_preserves_remote_gates() -> None:
+    """Execute the actual fixed remote program, not a duplicate policy model.
+
+    Force the next workspace gate to fail so neither pytest nor a worktree can
+    run; this proves an absent CODESPACE_NAME only advances to the next gate.
+    """
+    import os
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    # Preserve the real runner and real request-identity derivation, replacing
+    # only the local workspace existence probe to avoid host-dependent results.
+    remote_program = (
+        "import os\n"
+        "os.path.isdir = lambda unused: False\n"
+        + _REMOTE_RUNNER_SOURCE
+    )
+    for identity, expected in (
+        (None, "codespaces-workspace-unavailable"),
+        (CURRENT_NAME, "codespaces-workspace-unavailable"),
+        ("", "codespaces-surface-identity-mismatch"),
+        ("another-codespace", "codespaces-surface-identity-mismatch"),
+    ):
+        env = dict(os.environ)
+        env.pop("CODESPACE_NAME", None)
+        if identity is not None:
+            env["CODESPACE_NAME"] = identity
+        completed = subprocess.run(
+            (
+                "python3", "-c", remote_program,
+                REPOSITORY, "2931", BRANCH, SHA, VALIDATION_ID,
+                request.request_id, CURRENT_NAME,
+            ),
+            env=env, capture_output=True, text=True, timeout=10,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.count(
+            "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN==="
+        ) == 1
+        payload = json.loads(
+            completed.stdout.split(
+                "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===", 1
+            )[1].split(
+                "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===", 1
+            )[0].strip()
+        )
+        assert payload["reason_codes"] == [expected]
+        assert payload["status"] == "needs-decision"
+        assert payload["exit_code"] is None
+        assert payload["cleanup_complete"] is False
+        assert payload["workspace_side_effects_performed"] is False
+        assert payload["execution_authorized"] is False
+        assert payload["merge_authorized"] is False
+        assert payload["environment_health_evidence_id"] is None
+
+    # An absent environment variable must not bypass request authentication.
+    env = dict(os.environ)
+    env.pop("CODESPACE_NAME", None)
+    invalid = subprocess.run(
+        (
+            "python3", "-c", remote_program,
+            REPOSITORY, "2931", BRANCH, SHA, VALIDATION_ID,
+            "forged-request", CURRENT_NAME,
+        ),
+        env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert invalid.returncode == 0
+    assert '"invalid-codespaces-host-identity"' in invalid.stdout
+    assert '"codespaces-workspace-unavailable"' not in invalid.stdout
