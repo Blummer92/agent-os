@@ -14,6 +14,7 @@ import pytest
 from scripts.agent_os_notion_read_request import parse_catalog
 from scripts.agent_os_notion_read_request.teacher_os import (
     TeacherOsReadError,
+    _approved,
     read_unit_lessons,
     read_units,
     run,
@@ -60,6 +61,53 @@ def _lesson(unit_id, n):
     record["id"] = f"3717ac78-3131-8135-ae7c-f2ead0cf{n:04d}"
     record["properties"]["Canonical Unit"]["relation"] = [{"id": unit_id}]
     return record
+
+
+
+@pytest.mark.parametrize("review", [
+    None,
+    {"type": "checkbox", "checkbox": "false"},
+    {"type": "checkbox", "checkbox": True},
+    {"type": "rich_text", "rich_text": []},
+    {"checkbox": False},
+])
+def test_review_must_be_explicitly_unchecked(shipped_catalog, review):
+    props = {
+        "Canonical Status": {"type": "select", "select": {"name": "Active"}},
+        "Canonical Unit Name": {
+            "type": "title",
+            "title": [{"plain_text": "Zine Making"}],
+        },
+    }
+    if review is not None:
+        props["Human Review Required"] = review
+
+    assert _approved(props) is False
+    stub = Stub([{"id": UNIT_B, "properties": props}])
+    result = read_units(shipped_catalog, stub.factory, generated_at=GEN)
+    assert result["status"] == "empty"
+    assert result["units"] == []
+
+
+def test_malformed_unit_properties_are_not_approved():
+    assert _approved(None) is False
+    assert _approved([]) is False
+
+
+def test_trashed_unit_is_excluded_and_query_is_bounded(shipped_catalog):
+    from navigation_registry.connectors.curriculum_execution_surface_router import MAX_RESULTS
+
+    stub = Stub([_unit(UNIT_B, "Zine Making", in_trash=True)])
+    result = read_units(shipped_catalog, stub.factory, generated_at=GEN)
+
+    assert result["units"] == []
+    assert stub.calls == [{
+        "action": "query_data_source",
+        "data_source_id": UNIT_DS,
+        "page_size": MAX_RESULTS,
+        "max_pages": 5,
+        "max_results": MAX_RESULTS + 1,
+    }]
 
 
 def test_units_are_discovered_from_live_source_with_no_repository_unit_list(shipped_catalog) -> None:

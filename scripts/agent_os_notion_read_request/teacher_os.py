@@ -81,7 +81,11 @@ def _approved(properties: object) -> bool:
     option = status.get("select") if isinstance(status, Mapping) and status.get("type") == "select" else None
     if not isinstance(option, Mapping) or option.get("name") != UNIT_APPROVED_STATUS:
         return False
-    return not (isinstance(review, Mapping) and review.get("checkbox") is True)
+    return (
+        isinstance(review, Mapping)
+        and review.get("type") == "checkbox"
+        and review.get("checkbox") is False
+    )
 
 
 def _unit_index(binding: NotionReadSource, execute_task: Callable[[Mapping[str, object]], object]) -> list[dict[str, str]]:
