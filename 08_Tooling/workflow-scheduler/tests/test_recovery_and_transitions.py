@@ -241,6 +241,42 @@ def test_legitimate_retry_resume_and_cancel_transitions(tmp_path):
     assert repo.update_task(stale) is False
 
 
+def test_cancel_workflow_does_not_claim_claimed_task_cancelled(tmp_path):
+    # QA defect D1 reproduction: a claimed (in-flight) task must not
+    # appear in cancelled_task_ids, and the response must not be a
+    # pass claiming a full cancel.
+    cli, db = prepare(tmp_path)
+    repo = SQLiteRepository(db)
+    assert repo.try_decide_pending_approval("first", "owner", ApprovalDecision.APPROVED)
+    assert repo.try_claim_execution("first") is not None
+    assert repo.get_task("first").status == TaskStatus.RUNNING
+    response = cli.cancel_workflow("recovery", reason="stop")
+    assert response["status"] == "blocked"
+    assert "first" not in response["cancelled_task_ids"]
+    assert response["refused_task_ids"] == ["first"]
+    assert repo.get_task("first").status == TaskStatus.RUNNING
+    # The workflow itself was cancelled; only the task claim was refused.
+    assert repo.get_workflow("recovery").status.value == "cancelled"
+
+
+def test_cancel_and_pause_with_expired_lease_but_live_claim_are_refused(tmp_path):
+    # Expired lease timestamp bypasses has_active_lease, but the claim
+    # token guard must still refuse — and the caller must report it.
+    cli, db = prepare(tmp_path)
+    repo = SQLiteRepository(db)
+    assert repo.try_decide_pending_approval("first", "owner", ApprovalDecision.APPROVED)
+    assert repo.try_claim_execution("first") is not None
+    cli.executor.lease_timeout_seconds = 0
+    cancelled = cli.cancel_task("first", reason="stop")
+    assert cancelled["status"] == "blocked"
+    assert cancelled["blockers"] == ["task_update_refused"]
+    assert repo.get_task("first").status == TaskStatus.RUNNING
+    paused = cli.pause_task("first")
+    assert paused["status"] == "blocked"
+    assert paused["blockers"] == ["task_update_refused"]
+    assert repo.get_task("first").status == TaskStatus.RUNNING
+
+
 def test_multi_task_multi_approval_workflow(tmp_path):
     cli, _ = prepare(tmp_path, two_approvals=True)
     first = cli.approve("first", approver="owner")
