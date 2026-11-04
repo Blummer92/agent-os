@@ -239,6 +239,14 @@ def test_current_provenance_valid_lesson_reaches_sufficient_and_projects_handoff
     assert result.handoff_projection["known_facts"]
 
 
+def test_surface_before_work_false_survives_normalization_and_blocks_selection():
+    # Known-reference reads carry no Surface filter, so the normalized flag is the gate (#3417 D1).
+    row = live_row(properties={"Surface Before Work?": _checkbox(False)})
+    assert normalize_lesson_row(row).surface_before_work is False
+    result = orchestrate_lesson_activation(request(known_knowledge_refs=("LL-42",)), execute_read=lambda query: {"results": [row]})
+    assert result.selected_lesson_ids == ()
+
+
 def test_unverifiable_relevant_candidate_fails_closed_to_manual_review():
     row = live_row(properties={"Source Link": _url(None)})
     result = orchestrate_lesson_activation(request(), execute_read=lambda query: {"results": [row]})
