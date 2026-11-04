@@ -6,11 +6,10 @@ from the workflow text, following the refresh-job test pattern:
 
 - owner-only, issue-comment admission guard;
 - read-only job permissions (no write permission anywhere in the job);
-- candidate step first, dispatch step second, both on the SAME transport
-  file, writing distinct receipt files in the same directory;
+- one dispatch step internally performs canonical admission on the fixed transport;
 - no merge-API call in the job;
 - the summary program reports both receipts, and the artifact step
-  publishes every JSON receipt in the job directory.
+  publishes the single dispatch receipt with nested admission evidence.
 """
 import json
 import re
@@ -83,43 +82,54 @@ def test_merge_admission_job_is_owner_only_and_read_only() -> None:
     assert "workflows: write" not in job
 
 
-def test_merge_admission_job_calls_candidate_then_dispatch_on_same_transport() -> None:
+def test_merge_admission_job_uses_one_dispatch_with_internal_admission() -> None:
     job = _merge_job(WORKFLOW.read_text(encoding="utf-8"))
-    candidate = job.index("scripts.agent_os_issue_acceptance.merge_admission_actions")
-    dispatch = job.index("scripts.agent_os_issue_acceptance.merge_applicability")
-    assert candidate < dispatch, "dispatch step must run after the candidate step"
-    assert job.count(TRANSPORT) >= 2, "both steps must use the same transport file"
-    assert "--output \"$RUNNER_TEMP/agent-os-merge-admission/receipt.json\"" in job
-    assert "--output \"$RUNNER_TEMP/agent-os-merge-admission/dispatch_receipt.json\"" in job
-    # The dispatch step carries the same read-only token as the candidate
-    # step and performs no merge: no merge-API invocation pattern appears.
+    assert "python -m scripts.agent_os_issue_acceptance.merge_admission_actions" not in job
+    assert job.count("python -m scripts.agent_os_issue_acceptance.merge_applicability") == 1
+    assert job.count(TRANSPORT) >= 2
+    assert '--output "$RUNNER_TEMP/agent-os-merge-admission/dispatch_receipt.json"' in job
+    assert '--output "$RUNNER_TEMP/agent-os-merge-admission/receipt.json"' not in job
     for pattern in ("pulls.merge", ".merge(", "gh pr merge", "merge_commit_sha"):
         assert pattern not in job, pattern
     assert "GITHUB_TOKEN" in job
 
 
-def test_merge_admission_summary_reports_both_receipts(tmp_path: Path) -> None:
+def test_merge_admission_summary_reports_nested_candidate_and_dispatch(tmp_path: Path) -> None:
     candidate = {
         "status": "blocked",
         "reason_codes": ["approval-and-applicability-evidence-not-wired"],
         "authorization_source_status": "current",
     }
     dispatch = {
-        "status": "applicable",
-        "merge_authorized": True,
-        "reason_codes": [],
+        "status": "awaiting-human-attestation",
+        "merge_authorized": False,
+        "reason_codes": ["human-origin-attestation-required"],
         "canonical_applicability_evaluated": True,
+        "admission_receipt": candidate,
     }
-    summary = _render_summary(tmp_path, candidate, dispatch)
+    summary = _render_summary(tmp_path, None, dispatch)
+    assert "Candidate status: blocked" in summary
+    assert "Candidate status: blocked\n\nCandidate reasons:" in summary
+    assert r"\n" not in summary
     assert "Candidate merge authorized: False" in summary
-    assert "Dispatch merge authorized: True" in summary
+    assert "Dispatch merge authorized: False" in summary
     assert "Canonical applicability evaluated: True" in summary
     assert "performs no merge" in summary
 
 
 def test_merge_admission_summary_fails_closed_when_dispatch_receipt_missing(tmp_path: Path) -> None:
-    summary = _render_summary(tmp_path, {"status": "blocked", "reason_codes": [], "authorization_source_status": "current"}, None)
+    summary = _render_summary(tmp_path, None, None)
     assert "Dispatch evidence missing; fail closed." in summary
+
+
+def test_merge_admission_summary_rejects_missing_nested_candidate(tmp_path: Path) -> None:
+    summary = _render_summary(tmp_path, None, {
+        "status": "awaiting-human-attestation",
+        "merge_authorized": False,
+        "reason_codes": [],
+        "canonical_applicability_evaluated": True,
+    })
+    assert "Candidate evidence missing; fail closed." in summary
 
 
 def test_merge_admission_artifacts_publish_all_receipt_json() -> None:
