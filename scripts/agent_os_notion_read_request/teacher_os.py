@@ -183,7 +183,7 @@ def run(argv: list[str] | None = None, *, factory: SchedulerTaskExecutorFactory 
     lessons.add_argument("--unit-id", required=True)
     parser.add_argument("--generated-at", required=True)
     args = parser.parse_args(argv)
-    catalog = load_catalog()
+    catalog = load_catalog(sources_only=True)
     live = factory if factory is not None else build_live_notion_executor_factory()
     try:
         if args.command == "units":
