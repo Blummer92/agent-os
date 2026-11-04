@@ -117,3 +117,24 @@ def test_cli_entrypoint_runs_as_module(tmp_path):
     )
     assert done.returncode == 1
     assert json.loads(done.stdout)["state"] == "artifact-missing"
+
+
+def test_scanner_error_detail_cannot_inject_workflow_commands(tmp_path, capsys):
+    path = _write(tmp_path, status="scanner-error", detail="boom\n::warning::injected\r::set-output name=x::y")
+    state, detail = classify("jscpd", path, SHA)
+    assert state == "scanner-error" and not any(c in detail for c in "\r\n")
+    assert main(["--kind", "jscpd", "--file", str(path), "--sha", SHA]) == 1
+    stderr_lines = capsys.readouterr().err.splitlines()
+    assert len(stderr_lines) == 1 and stderr_lines[0].startswith("::error::")
+
+
+def test_sha_sharing_a_prefix_with_the_expected_head_is_stale(tmp_path):
+    expected = "a" * 40
+    evidence = tmp_path / "jscpd-advisory.json"
+    for other in (expected[:7] + "b" * 33, expected[:39] + "b"):
+        evidence.write_text(
+            json.dumps({"schema": "agent-os-jscpd-advisory/1", "tool": "jscpd", "status": "ok",
+                        "head_sha": other, "candidate_count": 1}),
+            encoding="utf-8",
+        )
+        assert classify("jscpd", evidence, expected)[0] == "stale-sha"
