@@ -17,7 +17,6 @@ import argparse
 from collections import Counter
 import json
 import os
-import re
 from typing import Iterable, Mapping
 
 from .ckr6_github_bridge import parse_ckr6_result_comment
@@ -30,6 +29,7 @@ from .lesson_learning_loop import (
 
 MAX_ISSUES = 50
 MAX_PAGES_PER_ISSUE = 10
+
 
 def derive_lesson_metrics(comments_by_issue: Mapping[int, Iterable[Mapping[str, object]]]) -> dict[str, object]:
     """Pure derivation over already-acquired issue comments."""

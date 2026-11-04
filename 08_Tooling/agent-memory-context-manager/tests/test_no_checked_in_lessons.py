@@ -1,8 +1,10 @@
 """Selection-path source holds no per-lesson identity or registry data (#1729).
 
-Lessons live only in Notion and are discovered through CKR6. The writer catalog
-(scripts/agent_os_notion_lessons_write) is out of scope here: it registers
-reviewed write authorizations, not selection data.
+Lessons live only in Notion and are discovered through CKR6. This is a tripwire
+for the identifiers and registry files that used to live here, not a proof: it
+scans .py/.json only. The writer catalog (scripts/agent_os_notion_lessons_write)
+is out of scope: it holds reviewed content awaiting owner-commanded Notion writes
+and is never read by selection.
 """
 from pathlib import Path
 import re
