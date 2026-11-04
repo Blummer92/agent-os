@@ -82,6 +82,465 @@ jobs:
               --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
               --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
 
+      # D1 (#3333): connect the fixed pilot to the trusted host. The four
+      # steps below are the only new execution path. The provider-less
+      # diagnostic above is unchanged and stays first: it can only report
+      # needs-decision, never execution. Preflight, transfer, and run are
+      # evidence steps that always exit 0 after recording a blocked
+      # record; the acceptance gate below is the single terminal boundary
+      # and the only new step that can fail the job. No step here uses
+      # continue-on-error, and no step interpolates event or comment text
+      # into any shell command: the event travels only as a copied file
+      # plus a constructed --event path, and remote paths are built only
+      # from validated numeric run/attempt values plus fixed literals.
+      - name: Preflight fixed #3333 Codespaces connection
+        id: fixed_preflight
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.is_codespace_implementation == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+          AGENT_OS_CHECKPOINT_STORE_ROOT: ${{ vars.AGENT_OS_CHECKPOINT_STORE_ROOT }}
+          AGENT_OS_REPOSITORY_ROOT: ${{ vars.AGENT_OS_REPOSITORY_ROOT }}
+          AGENT_OS_WORKSPACE_PARENT: ${{ vars.AGENT_OS_WORKSPACE_PARENT }}
+          AGENT_OS_LEASE_DIRECTORY: ${{ vars.AGENT_OS_LEASE_DIRECTORY }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/agent-os-ingress"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src python - <<'PY'
+          import json
+          import os
+          import re
+          import shlex
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          record_path = root / "gate2-transfer.json"
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          reasons: list[str] = []
+          record: dict[str, object] = {"schema_version": "1.0"}
+          try:
+              from workflow_scheduler.governance.dev_validation_codespaces import (
+                  resolve_current_codespace,
+              )
+
+              transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
+              run_id = os.environ.get("GITHUB_RUN_ID", "")
+              attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+              if re.fullmatch(r"[0-9]+", run_id) is None or re.fullmatch(r"[0-9]+", attempt) is None:
+                  reasons.append("preflight-run-identity-invalid")
+                  raise ValueError("run identity")
+              record["run_id"] = int(run_id)
+              record["attempt"] = int(attempt)
+              record["remote_dir"] = f"/tmp/agent-os-gate2-{run_id}-{attempt}"
+              if transport.get("repository") != os.environ.get("GITHUB_REPOSITORY"):
+                  reasons.append("preflight-repository-mismatch")
+              sha = transport.get("codespace_implementation_sha_or_none")
+              if type(sha) is not str or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+                  reasons.append("preflight-sha-invalid")
+                  raise ValueError("sha")
+              bindings = {
+                  name: os.environ.get(name, "")
+                  for name in (
+                      "AGENT_OS_CHECKPOINT_STORE_ROOT",
+                      "AGENT_OS_REPOSITORY_ROOT",
+                      "AGENT_OS_WORKSPACE_PARENT",
+                      "AGENT_OS_LEASE_DIRECTORY",
+                  )
+              }
+              bindings_present = all(
+                  value.strip() != "" and os.path.isabs(value) for value in bindings.values()
+              )
+              record["bindings_present"] = bindings_present
+              if not bindings_present:
+                  reasons.append("preflight-bindings-invalid")
+              selection = resolve_current_codespace()
+              selected = (
+                  selection.codespace_name
+                  if selection.selected is True
+                  and selection.state == "Available"
+                  and type(selection.codespace_name) is str
+                  and selection.codespace_name
+                  else None
+              )
+              record["selected"] = selected
+              if selected is None:
+                  reasons.append(f"preflight-selection-{selection.reason}")
+              else:
+                  main_head = subprocess.run(
+                      [
+                          "gh", "api",
+                          f"repos/{os.environ['GITHUB_REPOSITORY']}/commits/main",
+                          "--jq", ".sha",
+                      ],
+                      capture_output=True, text=True, timeout=60,
+                  )
+                  main_matches = main_head.returncode == 0 and main_head.stdout.strip() == sha
+                  record["main_head_matches"] = main_matches
+                  if not main_matches:
+                      reasons.append("preflight-main-head-mismatch")
+                  remote_head = subprocess.run(
+                      ["gh", "codespace", "ssh", "-c", selected, "--",
+                       "git -C /workspaces/agent-os rev-parse HEAD"],
+                      capture_output=True, text=True, timeout=120,
+                  )
+                  remote_matches = remote_head.returncode == 0 and remote_head.stdout.strip() == sha
+                  record["remote_head_matches"] = remote_matches
+                  if not remote_matches:
+                      reasons.append("preflight-remote-head-mismatch")
+                  identity = subprocess.run(
+                      ["gh", "codespace", "ssh", "-c", selected, "--",
+                       'printf %s "$CODESPACE_NAME"'],
+                      capture_output=True, text=True, timeout=120,
+                  )
+                  identity_ok = identity.returncode == 0 and identity.stdout == selected
+                  record["identity_present_equal"] = identity_ok
+                  if not identity_ok:
+                      reasons.append("preflight-identity-mismatch")
+                  assignments = " ".join(
+                      f"{name}={shlex.quote(value)}" for name, value in bindings.items()
+                  )
+                  pythonpath = (
+                      "/workspaces/agent-os"
+                      ":/workspaces/agent-os/08_Tooling/workflow-scheduler/src"
+                      ":/workspaces/agent-os/08_Tooling/agent-os-execution-service/src"
+                  )
+                  remote_probe = (
+                      "cd /workspaces/agent-os && "
+                      f"{assignments} PYTHONPATH={shlex.quote(pythonpath)} "
+                      "python3 -m agent_os_execution_service.gate2_production_controller "
+                      "--check-bindings"
+                  )
+                  probe = subprocess.run(
+                      ["gh", "codespace", "ssh", "-c", selected, "--", remote_probe],
+                      capture_output=True, text=True, timeout=120,
+                  )
+                  probe_valid = False
+                  try:
+                      probe_payload = json.loads(probe.stdout)
+                      probe_valid = (
+                          probe.returncode == 0
+                          and probe_payload.get("check_bindings") == "VALID"
+                      )
+                      if not probe_valid and type(probe_payload.get("reason")) is str:
+                          reasons.append(f"preflight-probe-{probe_payload['reason']}")
+                  except (json.JSONDecodeError, ValueError):
+                      reasons.append("preflight-probe-unavailable")
+                  record["probe"] = "VALID" if probe_valid else "INVALID"
+                  if not probe_valid and "preflight-probe-unavailable" not in reasons:
+                      reasons.append("preflight-probe-invalid")
+          except Exception:
+              if not reasons:
+                  reasons.append("preflight-error")
+          record["reason_codes"] = reasons
+          record["ready"] = not reasons
+          record_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+          with output_path.open("a", encoding="utf-8") as output:
+              output.write(f"ready={'true' if record['ready'] else 'false'}\n")
+              output.write(f"selected={record.get('selected') or ''}\n")
+              output.write(f"remote_dir={record.get('remote_dir') or ''}\n")
+          PY
+
+      - name: Transfer fixed #3333 event exclusively
+        id: fixed_transfer
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.is_codespace_implementation == 'true' && steps.fixed_preflight.outputs.ready == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+        run: |
+          umask 077
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          record_path = root / "gate2-transfer.json"
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          record: dict[str, object] = {"schema_version": "1.0"}
+          reason = ""
+          try:
+              record = json.loads(record_path.read_text(encoding="utf-8"))
+              if record.get("ready") is not True:
+                  reason = "transfer-preflight-not-ready"
+                  raise ValueError(reason)
+              selected = record.get("selected")
+              remote_dir = record.get("remote_dir")
+              if type(selected) is not str or not selected:
+                  reason = "transfer-selection-missing"
+                  raise ValueError(reason)
+              if (
+                  type(remote_dir) is not str
+                  or re.fullmatch(r"/tmp/agent-os-gate2-[0-9]+-[0-9]+", remote_dir) is None
+              ):
+                  reason = "transfer-remote-dir-invalid"
+                  raise ValueError(reason)
+              private_dir = Path(os.environ["RUNNER_TEMP"]) / "agent-os-gate2-private"
+              try:
+                  private_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
+              except FileExistsError:
+                  reason = "transfer-private-dir-exists"
+                  raise
+              event_src = Path(os.environ["GITHUB_EVENT_PATH"])
+              raw = event_src.read_bytes()
+              if len(raw) > 1_048_576:
+                  reason = "transfer-event-oversize"
+                  raise ValueError(reason)
+              event_sha = hashlib.sha256(raw).hexdigest()
+              staged_local = private_dir / "gate2-event.json"
+              fd = os.open(str(staged_local), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              try:
+                  os.write(fd, raw)
+              finally:
+                  os.close(fd)
+              # The remote directory is fresh per run: it must not already
+              # exist, so a pre-existing directory (or event file) can
+              # never be overwritten or silently reused.
+              mkdir = subprocess.run(
+                  ["gh", "codespace", "ssh", "-c", selected, "--",
+                   f"mkdir -m 0700 '{remote_dir}'"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              if mkdir.returncode != 0:
+                  reason = "transfer-remote-dir-exists"
+                  raise ValueError(reason)
+              cp = subprocess.run(
+                  ["gh", "codespace", "cp", "-c", selected, str(staged_local),
+                   f"remote:{remote_dir}/event.staging"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              if cp.returncode != 0:
+                  reason = "transfer-copy-failed"
+                  raise ValueError(reason)
+              guard = subprocess.run(
+                  ["gh", "codespace", "ssh", "-c", selected, "--",
+                   f"test -f '{remote_dir}/event.staging' && test ! -L '{remote_dir}/event.staging' "
+                   f"&& chmod 600 '{remote_dir}/event.staging' "
+                   f"&& sha256sum '{remote_dir}/event.staging'"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              staging_sha = guard.stdout.split()[0] if guard.stdout.split() else ""
+              if guard.returncode != 0:
+                  reason = "transfer-staging-guard-failed"
+                  raise ValueError(reason)
+              if staging_sha != event_sha:
+                  reason = "transfer-staging-sha-mismatch"
+                  raise ValueError(reason)
+              link = subprocess.run(
+                  ["gh", "codespace", "ssh", "-c", selected, "--",
+                   f"ln '{remote_dir}/event.staging' '{remote_dir}/event.json'"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              if link.returncode != 0:
+                  reason = "transfer-link-failed"
+                  raise ValueError(reason)
+              verify = subprocess.run(
+                  ["gh", "codespace", "ssh", "-c", selected, "--",
+                   f"test -f '{remote_dir}/event.json' && test ! -L '{remote_dir}/event.json' "
+                   f"&& sha256sum '{remote_dir}/event.json' "
+                   f"&& stat -c %i '{remote_dir}/event.staging' "
+                   f"&& stat -c %i '{remote_dir}/event.json'"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              # sha256sum prints "<hash>  <path>"; the two stat lines are
+              # the staging and final inode numbers, which must be equal
+              # (the link did not substitute content).
+              lines = verify.stdout.strip().splitlines()
+              if (
+                  verify.returncode != 0
+                  or len(lines) != 3
+                  or lines[0].split()[0] != event_sha
+                  or lines[1].strip() != lines[2].strip()
+              ):
+                  reason = "transfer-final-verification-failed"
+                  raise ValueError(reason)
+              record["transfer_ok"] = True
+              record["event_sha256"] = event_sha
+              record["event_bytes"] = len(raw)
+              record["staging_sha256"] = staging_sha
+              record["final_sha256"] = lines[0].split()[0]
+              record["inode_equal"] = True
+              record["reason_codes"] = []
+          except Exception:
+              if not reason:
+                  reason = "transfer-error"
+              record["transfer_ok"] = False
+              record["reason_codes"] = [reason]
+          record_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+          with output_path.open("a", encoding="utf-8") as output:
+              output.write(f"transfer_ok={'true' if record.get('transfer_ok') is True else 'false'}\n")
+          PY
+
+      - name: Run Gate 2 fixed #3333 pilot and return receipt
+        id: fixed_run
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.is_codespace_implementation == 'true' && steps.fixed_transfer.outputs.transfer_ok == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+          AGENT_OS_CHECKPOINT_STORE_ROOT: ${{ vars.AGENT_OS_CHECKPOINT_STORE_ROOT }}
+          AGENT_OS_REPOSITORY_ROOT: ${{ vars.AGENT_OS_REPOSITORY_ROOT }}
+          AGENT_OS_WORKSPACE_PARENT: ${{ vars.AGENT_OS_WORKSPACE_PARENT }}
+          AGENT_OS_LEASE_DIRECTORY: ${{ vars.AGENT_OS_LEASE_DIRECTORY }}
+        run: |
+          umask 077
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import shlex
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          record_path = root / "gate2-transfer.json"
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          record: dict[str, object] = {"schema_version": "1.0"}
+          stdout_path = root / "gate2-stdout.json"
+          stderr_path = root / "gate2-stderr.json"
+          try:
+              record = json.loads(record_path.read_text(encoding="utf-8"))
+              transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
+              if record.get("transfer_ok") is not True:
+                  raise ValueError("run-transfer-not-ok")
+              selected = record.get("selected")
+              remote_dir = record.get("remote_dir")
+              if type(selected) is not str or not selected:
+                  raise ValueError("run-selection-missing")
+              if (
+                  type(remote_dir) is not str
+                  or re.fullmatch(r"/tmp/agent-os-gate2-[0-9]+-[0-9]+", remote_dir) is None
+              ):
+                  raise ValueError("run-remote-dir-invalid")
+              bindings = {
+                  name: os.environ.get(name, "")
+                  for name in (
+                      "AGENT_OS_CHECKPOINT_STORE_ROOT",
+                      "AGENT_OS_REPOSITORY_ROOT",
+                      "AGENT_OS_WORKSPACE_PARENT",
+                      "AGENT_OS_LEASE_DIRECTORY",
+                  )
+              }
+              assignments = " ".join(
+                  f"{name}={shlex.quote(value)}" for name, value in bindings.items()
+              )
+              pythonpath = (
+                  "/workspaces/agent-os"
+                  ":/workspaces/agent-os/08_Tooling/workflow-scheduler/src"
+                  ":/workspaces/agent-os/08_Tooling/agent-os-execution-service/src"
+              )
+              remote_command = (
+                  "cd /workspaces/agent-os && "
+                  f"{assignments} PYTHONPATH={shlex.quote(pythonpath)} "
+                  "python3 -m agent_os_execution_service.gate2_production_controller "
+                  f"--event '{remote_dir}/event.json'"
+              )
+              with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+                  try:
+                      completed = subprocess.run(
+                          ["gh", "codespace", "ssh", "-c", selected, "--", remote_command],
+                          stdout=stdout_file, stderr=stderr_file, timeout=300,
+                      )
+                      run_rc = completed.returncode
+                  except subprocess.TimeoutExpired:
+                      run_rc = 124
+              record["run_rc"] = run_rc
+              record["receipt_returned"] = False
+              if run_rc == 0:
+                  reference = json.loads(stdout_path.read_text(encoding="utf-8"))
+                  receipt_path = reference.get("receipt_path")
+                  store_root = bindings["AGENT_OS_CHECKPOINT_STORE_ROOT"]
+                  if (
+                      type(reference) is not dict
+                      or set(reference.keys()) != {
+                          "schema_version", "operation_id", "repository",
+                          "issue_number", "receipt_path", "handoff_id",
+                          "expected_sha", "status", "reason_codes", "consumer",
+                      }
+                      or type(receipt_path) is not str
+                      or not receipt_path.startswith(store_root + "/invocations/receipts/")
+                      or re.fullmatch(
+                          r"fixed-head-probe-[0-9a-f]{64}-[0-9a-f]{40}-\d{8}T\d{6}Z\.json",
+                          receipt_path.rsplit("/", 1)[-1],
+                      ) is None
+                      or reference.get("handoff_id")
+                      != transport.get("codespace_implementation_handoff_id_or_none")
+                      or reference.get("expected_sha")
+                      != transport.get("codespace_implementation_sha_or_none")
+                  ):
+                      raise ValueError("run-reference-invalid")
+                  target = root / "gate2-receipt.json"
+                  staging = root / "gate2-receipt.json.staging"
+                  if target.exists() or target.is_symlink():
+                      raise ValueError("run-receipt-target-exists")
+                  cp = subprocess.run(
+                      ["gh", "codespace", "cp", "-c", selected,
+                       f"remote:{receipt_path}", str(staging)],
+                      capture_output=True, text=True, timeout=120,
+                  )
+                  if cp.returncode != 0 or not staging.is_file() or staging.is_symlink():
+                      raise ValueError("run-receipt-copy-failed")
+                  os.chmod(staging, 0o600)
+                  try:
+                      os.link(staging, target)
+                  except FileExistsError:
+                      raise ValueError("run-receipt-link-failed") from None
+                  record["receipt_returned"] = True
+                  record["receipt_path"] = receipt_path
+                  record["receipt_sha256"] = hashlib.sha256(staging.read_bytes()).hexdigest()
+              else:
+                  try:
+                      stderr_payload = json.loads(stderr_path.read_text(encoding="utf-8"))
+                      reasons = stderr_payload.get("reason_codes")
+                      record["run_reason"] = (
+                          reasons
+                          if type(reasons) is list and reasons
+                          else ["gate2-stderr-unparseable"]
+                      )
+                  except (OSError, json.JSONDecodeError, ValueError):
+                      record["run_reason"] = ["gate2-stderr-unparseable"]
+          except Exception as exc:
+              record["run_rc"] = record.get("run_rc") if type(record.get("run_rc")) is int else -1
+              record["receipt_returned"] = False
+              record["run_reason"] = [f"run-error-{type(exc).__name__}"]
+          record_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Enforce fixed #3333 pilot acceptance gate
+        id: fixed_gate
+        if: ${{ always() && steps.transport.outputs.is_codespace_implementation == 'true' && steps.host_install.outputs.requested != 'true' }}
+        run: |
+          set -u
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.dev_validation_gate --fixed-pilot \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --result "$RUNNER_TEMP/agent-os-ingress/result.json" \
+              --reference "$RUNNER_TEMP/agent-os-ingress/gate2-stdout.json" \
+              --process-stderr "$RUNNER_TEMP/agent-os-ingress/gate2-stderr.json" \
+              --receipt "$RUNNER_TEMP/agent-os-ingress/gate2-receipt.json" \
+              --transfer "$RUNNER_TEMP/agent-os-ingress/gate2-transfer.json" \
+              --event-private "$RUNNER_TEMP/agent-os-gate2-private/gate2-event.json" \
+              --output "$RUNNER_TEMP/agent-os-ingress/gate2-gate.json"
+          gate_rc=$?
+          decision="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          gate = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "gate2-gate.json"
+          try:
+              print("pass" if json.loads(gate.read_text(encoding="utf-8")).get("decision") == "PASS" else "fail")
+          except Exception:
+              print("fail")
+          PY
+          )"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          if [ "$gate_rc" -ne 0 ]; then
+            exit "$gate_rc"
+          fi
+          if [ "$decision" != "pass" ]; then
+            exit 1
+          fi
+
       - name: Resolve Codespaces-first transport route
         id: route
         if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
@@ -481,6 +940,25 @@ jobs:
                   summary.write(f"Transport: `{transport['status']}` / `{transport['reason']}`\n\n")
               if result_path.exists():
                   result = json.loads(result_path.read_text(encoding="utf-8"))
+                  # D1 (#3333): the fixed envelope takes precedence over the
+                  # generic Dispatch fallback below. The provider-less
+                  # diagnostic is never presented as execution, and the
+                  # acceptance gate decision is shown whenever it exists.
+                  codespace_impl = result.get("codespace_implementation")
+                  if isinstance(codespace_impl, dict):
+                      summary.write(f"Fixed Codespaces diagnostic: `{codespace_impl.get('status')}`\n\n")
+                      summary.write(f"Fixed diagnostic reasons: `{','.join(codespace_impl.get('reason_codes', []))}`\n\n")
+                      gate_path = root / "gate2-gate.json"
+                      if gate_path.exists():
+                          try:
+                              gate = json.loads(gate_path.read_text(encoding="utf-8"))
+                              summary.write(f"Fixed pilot acceptance gate: `{gate.get('decision')}`\n\n")
+                              summary.write(f"Fixed gate reasons: `{','.join(gate.get('reason_codes', []))}`\n\n")
+                          except json.JSONDecodeError:
+                              summary.write("Fixed pilot acceptance gate: `unparseable`\n\n")
+                      else:
+                          summary.write("Fixed pilot acceptance gate: `unavailable`\n\n")
+                      summary.write("Provider-less diagnostic only; not execution evidence.\n")
                   maintenance = result.get("maintenance")
                   if isinstance(maintenance, dict):
                       summary.write(f"Host maintenance: `{maintenance.get('status')}`\n\n")
@@ -519,9 +997,61 @@ jobs:
                                       summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
                                       summary.write(f"Cleanup complete: `{dev_validation.get('cleanup_complete')}`\n")
                                   else:
-                                      summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+                                      if not isinstance(result.get("codespace_implementation"), dict):
+                                          summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
               else:
                   summary.write("Result evidence unavailable; manual review required.\n")
+          PY
+
+      # D1 (#3333): remove the private remote staging directory only after
+      # the acceptance gate passed. On gate FAIL the remote directory is
+      # left in place for diagnosis (it is 0700, namespaced, and never
+      # uploaded). This step never touches the host receipt, any claim,
+      # or any artifact file, and never fails the job: its outcome is
+      # recorded in gate2-cleanup.json, which the upload step publishes.
+      - name: Clean up fixed #3333 remote staging on gate pass
+        id: fixed_cleanup
+        if: ${{ steps.fixed_gate.outputs.decision == 'pass' }}
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+        run: |
+          umask 077
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          cleanup_path = root / "gate2-cleanup.json"
+          outcome: dict[str, object] = {"schema_version": "1.0", "cleanup": "failed"}
+          try:
+              record = json.loads((root / "gate2-transfer.json").read_text(encoding="utf-8"))
+              selected = record.get("selected")
+              remote_dir = record.get("remote_dir")
+              if type(selected) is not str or not selected:
+                  raise ValueError("cleanup-selection-missing")
+              if (
+                  type(remote_dir) is not str
+                  or re.fullmatch(r"/tmp/agent-os-gate2-[0-9]+-[0-9]+", remote_dir) is None
+              ):
+                  raise ValueError("cleanup-remote-dir-invalid")
+              removed = subprocess.run(
+                  ["gh", "codespace", "ssh", "-c", selected, "--", f"rm -rf '{remote_dir}'"],
+                  capture_output=True, text=True, timeout=120,
+              )
+              if removed.returncode != 0:
+                  raise ValueError("cleanup-remote-removal-failed")
+              shutil.rmtree(
+                  Path(os.environ["RUNNER_TEMP"]) / "agent-os-gate2-private",
+                  ignore_errors=True,
+              )
+              outcome = {"schema_version": "1.0", "cleanup": "done"}
+          except Exception as exc:
+              outcome["reason"] = f"cleanup-error-{type(exc).__name__}"
+          cleanup_path.write_text(json.dumps(outcome, sort_keys=True) + "\n", encoding="utf-8")
           PY
 
       - name: Enforce developer-validation result gate
