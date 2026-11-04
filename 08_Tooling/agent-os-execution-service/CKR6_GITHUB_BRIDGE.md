@@ -121,6 +121,7 @@ No workflow change, Notion write, store or authority is added.
   signals. Per-lesson eligibility is read from the CKR6 result itself (live
   Notion evidence at selection time), never from a checked-in snapshot. No
   causality is inferred.
+  Migration for metrics parsers: the former `accountability` key has no successor field by design. It reported a static CKR12 snapshot keyed by lesson number, not current per-lesson state, and the metrics CLI reads only GitHub result/receipt comments, so it cannot reconstruct authoritative current activation state. All other metrics keys and receipt-count semantics are unchanged.
 
 Live follow-up (2026-10-09, #3418): a malformed `lesson-candidate` or
 `lesson-refinement` detail now returns the same bounded `status: rejected`
