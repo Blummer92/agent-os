@@ -809,6 +809,16 @@ class WorkflowSchedulerCLI:
             )
         continuation = self.run_workflow(workflow_id)
         in_flight = continuation.get("in_flight_task_ids", [])
+        # recovered_task_ids = eligible tasks dispatched for recovery;
+        # completed_task_ids = the subset actually COMPLETED after the
+        # run (read back fresh, not assumed from the dispatch). QA
+        # caveat (a) addressed: eligibility is never reported as
+        # completion.
+        completed = []
+        for task_id in recoverable:
+            task = self.repository.get_task(task_id)
+            if task is not None and task.status == TaskStatus.COMPLETED:
+                completed.append(task_id)
         return self._format_response(
             status=continuation.get("status", "blocked"),
             checks_passed=["continuation_recovered"]
@@ -817,6 +827,7 @@ class WorkflowSchedulerCLI:
             blockers=continuation.get("blockers", []),
             next_owner="system", workflow_id=workflow_id,
             recovered_task_ids=sorted(recoverable),
+            completed_task_ids=sorted(completed),
             unresolved_claim_task_ids=sorted(set(unresolved_claim) | set(in_flight)),
             still_pending_task_ids=sorted(still_pending),
             continuation=continuation,
@@ -860,7 +871,18 @@ class WorkflowSchedulerCLI:
 
         previous_status = task.status.value
         task.mark_paused()
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            # D1 fix: a guarded write refusal (e.g. an execution claim
+            # held by another runner, with an expired lease timestamp)
+            # must not be reported — or audited — as a pause.
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task pause was refused by the guarded update; the task was not paused",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_paused(task, previous_status=previous_status)
 
         return self._format_response(
@@ -910,7 +932,15 @@ class WorkflowSchedulerCLI:
             )
 
         restored_status = task.status.value
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task resume was refused by the guarded update; the task was not resumed",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_resumed(task, restored_status=restored_status)
 
         return self._format_response(
@@ -960,7 +990,16 @@ class WorkflowSchedulerCLI:
 
         previous_status = task.status.value
         task.mark_cancelled(reason=reason)
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            # D1 fix: see pause_task — a refused write is not a cancel.
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task cancel was refused by the guarded update; the task was not cancelled",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
 
         return self._format_response(
@@ -1018,7 +1057,15 @@ class WorkflowSchedulerCLI:
 
         previous_status = workflow.status.value
         workflow.mark_paused()
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow pause was refused by the guarded update; the workflow was not paused",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_paused(workflow, previous_status=previous_status)
 
         return self._format_response(
@@ -1056,7 +1103,15 @@ class WorkflowSchedulerCLI:
             )
 
         workflow.resume()
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow resume was refused by the guarded update; the workflow was not resumed",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_resumed(workflow)
 
         return self._format_response(
@@ -1096,24 +1151,52 @@ class WorkflowSchedulerCLI:
 
         previous_status = workflow.status.value
         workflow.mark_cancelled(reason=reason)
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow cancel was refused by the guarded update; the workflow was not cancelled",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_cancelled(workflow, previous_status=previous_status, reason=reason)
 
         # Cascade: cancel every non-terminal task, sequentially. Tasks
         # already COMPLETED, FAILED, CANCELLED, or GOVERNANCE_BLOCKED are
-        # left untouched.
+        # left untouched. D1 fix: a task whose guarded write is refused
+        # (e.g. it holds an execution claim) is NOT logged or listed as
+        # cancelled — it is reported separately as refused, and the
+        # overall response is blocked, not a pass claiming full cancel.
         cancelled_task_ids = []
+        refused_task_ids = []
         for task in self.repository.list_workflow_tasks(workflow_id):
             if task.status in _TERMINAL_TASK_STATUSES:
                 continue
 
             task_previous_status = task.status.value
             task.mark_cancelled(reason=f"{reason} (cascaded from workflow cancellation)")
-            self.repository.update_task(task)
+            if not self.repository.update_task(task):
+                refused_task_ids.append(task.id)
+                continue
             self.audit_logger.log_task_cancelled(
                 task, previous_status=task_previous_status, reason=f"{reason} (cascaded from workflow cancellation)"
             )
             cancelled_task_ids.append(task.id)
+
+        if refused_task_ids:
+            return self._format_response(
+                status="blocked",
+                blockers=["tasks_not_cancelled"],
+                checks_failed=["tasks_not_cancelled"],
+                next_owner="system",
+                workflow_id=workflow_id,
+                reason=reason,
+                cancelled_task_count=len(cancelled_task_ids),
+                cancelled_task_ids=cancelled_task_ids,
+                refused_task_ids=sorted(refused_task_ids),
+                error="Workflow is cancelled, but the refused tasks were not cancelled (guarded write refused, e.g. execution claim held); they must not be treated as stopped",
+            )
 
         return self._format_response(
             status="pass",

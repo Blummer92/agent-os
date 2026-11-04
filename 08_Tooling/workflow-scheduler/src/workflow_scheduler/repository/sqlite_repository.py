@@ -681,7 +681,7 @@ class SQLiteRepository:
                     if decision == ApprovalDecision.APPROVED
                     else TaskStatus.CANCELLED
                 )
-                payload = __import__("json").loads(row["payload"])
+                payload = json.loads(row["payload"])
                 if decision == ApprovalDecision.REJECTED and reason:
                     payload["cancellation_reason"] = reason
 
@@ -690,7 +690,7 @@ class SQLiteRepository:
                     "WHERE id = ? AND status = ? "
                     "AND execution_claim_token IS NULL",
                     (
-                        status.value, __import__("json").dumps(payload),
+                        status.value, json.dumps(payload),
                         now, task_id, TaskStatus.APPROVAL_PENDING.value,
                     ),
                 )
