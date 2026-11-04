@@ -204,9 +204,9 @@ requirement is introduced.
   hand-crafted serialized record may be treated as produced evidence.
 - **No merge dispatch.** No repository code calls the GitHub merge API,
   and no MCP tool, credential, or protected-setting change is made here.
-  The one workflow change is read-only: the existing `merge_admission`
-  job additionally runs the dispatch evaluator and publishes its
-  receipt; it grants no merge authority. The dispatch owner
+  The workflow remains read-only: the existing `merge_admission`
+  job runs the dispatch evaluator once and publishes its nested
+  admission evidence; it grants no merge authority. The dispatch owner
   (repo-owned Actions dispatch vs. product-side connector gating,
   decisions (a)/(b)) is still undecided for the merge-executing step.
 - **No host enforcement proof.** Repository tests prove the canonical
