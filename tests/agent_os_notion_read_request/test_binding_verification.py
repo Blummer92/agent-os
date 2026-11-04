@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 from functools import partial
+from pathlib import Path
 
 import pytest
 
@@ -379,6 +379,8 @@ def test_public_exports_resolve_after_title_contract_removal() -> None:
 
     assert missing == []
     assert "LESSONS_LEARNED_TITLE" not in binding_verification_module.__all__
+    assert "verify_candy_branding_binding" not in binding_verification_module.__all__
+    assert not hasattr(binding_verification_module, "verify_candy_branding_binding")
 
 
 def test_ambiguous_data_source_identity_fails_closed() -> None:
@@ -460,13 +462,14 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy
     assert query_call["data_source_id"] == "canonical-data-source-current"
     assert query_call["filter"] == {
         "property": "Canonical Unit Name",
-        "title": {"equals": staged_candy_catalog.canonical_unit("candy-branding").verification_title},
+        "title": {"equals": "Candy Branding / Candy Brand Design"},
     }
     assert query_call["max_pages"] == 1
     assert query_call["max_results"] == 2
+    assert evidence["request_id"] == "verify-candy-branding-binding"
     assert evidence["canonical_unit"] == {
         "canonical_unit_key": "candy-branding",
-        "stable_id": staged_candy_catalog.canonical_unit("candy-branding").stable_id,
+        "stable_id": "canonical-unit-candy-branding",
         "provider_page_id": "33333333-3333-3333-3333-333333333333",
         "verification_state": "verified-current",
     }
