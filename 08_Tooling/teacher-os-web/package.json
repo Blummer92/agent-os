@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:app": "node server/dev.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "playwright test"
   },
