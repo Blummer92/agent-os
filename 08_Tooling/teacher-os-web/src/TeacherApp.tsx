@@ -31,6 +31,11 @@ export function TeacherApp() {
   const [lessonIndex, setLessonIndex] = useState(0);
   const [screen, setScreen] = useState<Screen>("chat");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // The read generation the selection came from. A selection belongs to one
+  // read only: after a refresh, a regrown list must not resurrect a preview
+  // or edit the user left when the list shrank. No effect is needed — the
+  // derivation below compares this stored generation with the current one.
+  const [selectedReloadKey, setSelectedReloadKey] = useState<number | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
@@ -42,11 +47,17 @@ export function TeacherApp() {
   const unit = unitList.find(u => u.unit_id === unitId) ?? unitList[0];
   const lessons = useRemote<readonly Lesson[]>(unit?.unit_id, fetchLessons, reloadKey);
   const lessonList: readonly Lesson[] = lessons.kind === "ready" ? lessons.value.data : [];
-  const current = lessonList[lessonIndex] ?? lessonList[0];
+  // Derived, never stored back: clamp the index to the list on screen, so a
+  // refresh that shrinks the list can never render "3 of 1". No effect or
+  // extra state sync is needed; the stored index is only a preference.
+  const lessonIndexClamped = lessonList.length === 0 ? 0 : Math.min(lessonIndex, lessonList.length - 1);
+  const current = lessonList[lessonIndexClamped];
   const evidence = lessons.kind === "ready" ? lessons.value : units.kind === "ready" ? units.value : null;
   const stale = evidence ? isStale(evidence.generatedAt, clock) : false;
   // Derived from the current read, so a refresh can never leave a superseded lesson on screen.
-  const picked = selectedIndex === null ? undefined : lessonList[selectedIndex];
+  // An out-of-range selection, or one from an older read generation, is no
+  // selection, never a stale lesson and never a resurrected preview.
+  const picked = selectedIndex === null || selectedReloadKey !== reloadKey || selectedIndex >= lessonList.length ? undefined : lessonList[selectedIndex];
   const selected = picked ? { key: `${unit?.unit_id}:${selectedIndex}`, lesson: picked, label: lessonLabel(picked, selectedIndex!) } : null;
   const view: Screen = selected ? screen : "chat";
   useEffect(() => { const t = setInterval(() => setClock(Date.now()), 30_000); return () => clearInterval(t); }, []);
@@ -55,13 +66,14 @@ export function TeacherApp() {
   const history = messages[conversationKey] ?? [];
 
   function lessonLabel(lesson: Lesson, index: number) { return lesson.day_lesson_number ?? `Lesson ${index + 1}`; }
-  function changeUnit(next: string) { setUnitId(next); setLessonIndex(0); setScreen("chat"); setSelectedIndex(null); }
+  function changeUnit(next: string) { setUnitId(next); setLessonIndex(0); setScreen("chat"); setSelectedIndex(null); setSelectedReloadKey(null); }
   function closeAssignments() { setAssignmentOpen(false); triggerRef.current?.focus(); }
   function enter(next: "preview" | "edit", index: number) {
     setSelectedIndex(index);
+    setSelectedReloadKey(reloadKey);
     setScreen(next); setAssignmentOpen(false); setMenuOpen(false);
   }
-  function backToLesson() { setScreen("chat"); setSelectedIndex(null); }
+  function backToLesson() { setScreen("chat"); setSelectedIndex(null); setSelectedReloadKey(null); }
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = draft.trim();
@@ -106,12 +118,12 @@ export function TeacherApp() {
         {unit && sourceNotice(lessons, "lessons")}
         {current && <div className="carousel" aria-label="Lesson carousel">
           <article className="material-card">
-            <div className="card-meta"><span>{lessonLabel(current, lessonIndex)}</span><span>{unit?.title}</span></div>
+            <div className="card-meta"><span>{lessonLabel(current, lessonIndexClamped)}</span><span>{unit?.title}</span></div>
             <h3>{current.daily_focus ?? "No daily focus recorded in Notion"}</h3>
             <p>{current.daily_learning_target ?? "No learning target recorded in Notion"}</p>
-            <div className="card-actions"><button type="button" onClick={() => enter("preview", lessonIndex)}>View full lesson</button><button type="button" onClick={() => enter("edit", lessonIndex)}>Edit in focused chat</button></div>
+            <div className="card-actions"><button type="button" onClick={() => enter("preview", lessonIndexClamped)}>View full lesson</button><button type="button" onClick={() => enter("edit", lessonIndexClamped)}>Edit in focused chat</button></div>
           </article>
-          <div className="carousel-controls"><button type="button" disabled={lessonIndex === 0} onClick={() => setLessonIndex(v => v - 1)}>← Previous</button><span aria-live="polite">{lessonIndex + 1} of {lessonList.length}</span><button type="button" disabled={lessonIndex >= lessonList.length - 1} onClick={() => setLessonIndex(v => v + 1)}>Next →</button></div>
+          <div className="carousel-controls"><button type="button" disabled={lessonIndexClamped === 0} onClick={() => setLessonIndex(lessonIndexClamped - 1)}>← Previous</button><span aria-live="polite">{lessonList.length === 0 ? 0 : lessonIndexClamped + 1} of {lessonList.length}</span><button type="button" disabled={lessonIndexClamped >= lessonList.length - 1} onClick={() => setLessonIndex(lessonIndexClamped + 1)}>Next →</button></div>
         </div>}
         {lessons.kind === "ready" && <p className="fine-print">{provenance(lessons.value)}</p>}
       </section>}

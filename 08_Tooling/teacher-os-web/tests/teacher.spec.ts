@@ -82,18 +82,74 @@ test("network failure is an unavailable state, never sample lessons", async ({ p
   await expect(page.locator("body")).not.toContainText(/Photography|Graphic Design|Rule of Thirds|Unit Overview/);
 });
 
-test("negative control: with no Notion credential the real bridge reports unavailable and shows nothing", async ({ page }) => {
-  // No route mock: the request reaches the real dev-server bridge and the real Python reader,
-  // which has no NOTION_TOKEN in this test environment.
-  const requests: string[] = [];
-  page.on("request", r => { if (!r.url().startsWith("http://127.0.0.1:4174/src") && !r.url().includes("@vite") && !r.url().includes("node_modules")) requests.push(new URL(r.url()).pathname); });
+test("shrinking lesson list and unit change never render an impossible carousel position", async ({ page }) => {
+  // Regression for Copilot P1: viewing lesson 3, then refreshing to a single
+  // lesson, must show "1 of 1" and that lesson — never "3 of 1" — and the
+  // View button must open the lesson actually on screen.
+  let lessonsForA = [lesson(1), lesson(2), lesson(3)];
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }, { unit_id: UNIT_B, title: "Beta Unit" }], { [UNIT_A]: lessonsForA, [UNIT_B]: [lesson(9)] });
+  // Re-route the lessons endpoint so Refresh can shrink the list in place.
+  await page.unroute("**/api/teacher-os/units/*/lessons");
+  await page.route("**/api/teacher-os/units/*/lessons", r => {
+    const id = r.request().url().split("/units/")[1].split("/")[0];
+    const rows = id === UNIT_A ? lessonsForA : [lesson(9)];
+    return r.fulfill(json(rows.length ? { status: "ok", unit: undefined, lessons: rows, source: SRC, generated_at: now() } : { status: "empty", source: SRC, generated_at: now() }));
+  });
   await page.goto("/");
   await open(page);
-  // The specific reason proves the real Python reader ran and refused for lack of a credential,
-  // not merely that the bridge failed.
-  await expect(page.getByRole("alert").first()).toContainText("The Notion connection is not configured for this server");
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText("3 of 3")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Focus 3" })).toBeVisible();
+  lessonsForA = [lesson(1)];
+  await page.getByRole("button", { name: "Refresh from Notion" }).click();
+  await expect(page.getByText("1 of 1")).toBeVisible();
+  await expect(page.getByText("3 of 1")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Focus 1" })).toBeVisible();
+  await page.getByRole("button", { name: "View full lesson" }).click();
+  await expect(page.getByText("Evidence 1")).toBeVisible();
+  // Unit change also resets the carousel: switching to Beta shows its lesson at 1 of 1.
+  await page.getByRole("button", { name: "← Back to lesson" }).click();
+  await open(page);
+  await page.getByLabel("Unit", { exact: true }).selectOption(UNIT_B);
+  await expect(page.getByText("1 of 1")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Focus 9" })).toBeVisible();
+});
+
+test("shrink-while-in-preview never resurrects the preview when the list regrows", async ({ page }) => {
+  // QA follow-up to the P1 clamp: a selection belongs to one read only.
+  // Preview lesson 3, refresh (stale evidence) to one lesson — the preview
+  // must fall back to chat — then refresh back to three lessons: the
+  // preview must NOT reappear without the user choosing it again.
+  let lessonsForA = [lesson(1), lesson(2), lesson(3)];
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA }, "2020-01-01T00:00:00Z");
+  await page.unroute("**/api/teacher-os/units/*/lessons");
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: "2020-01-01T00:00:00Z" })));
+  await page.goto("/");
+  await open(page);
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("button", { name: "View full lesson" }).click();
+  await expect(page.getByRole("heading", { name: "Day 3" })).toBeVisible();
+  lessonsForA = [lesson(1)];
+  await page.getByRole("button", { name: "Refresh from Notion" }).click();
+  await expect(page.getByRole("heading", { name: "Alpha Unit" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Day 3" })).toHaveCount(0);
+  lessonsForA = [lesson(1), lesson(2), lesson(3)];
+  await page.getByRole("button", { name: "Refresh from Notion" }).click();
+  await expect(page.getByRole("heading", { name: "Alpha Unit" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Day 3" })).toHaveCount(0);
+});
+
+test("negative control: with no live bridge the app reports unavailable and shows nothing", async ({ page }) => {
+  // No route mock and no bridge route exists in this build: the fetch fails
+  // and the UI must show unavailable, never substitute lessons. This is the
+  // fail-closed posture after the unauthenticated bridge was removed; it is
+  // not live Notion evidence.
+  await page.goto("/");
+  await open(page);
+  await expect(page.getByRole("alert").first()).toContainText("Notion is unavailable");
   await expect(page.getByRole("button", { name: "View full lesson" })).toHaveCount(0);
-  expect([...new Set(requests.filter(p => p.startsWith("/api/")))]).toEqual(["/api/teacher-os/units"]); // StrictMode may repeat the aborted first request
 });
 
 test("local edit chat stays separate from the lesson chat", async ({ page }) => {

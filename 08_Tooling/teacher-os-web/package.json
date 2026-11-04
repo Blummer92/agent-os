@@ -4,10 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "playwright test",
-    "test:unit": "node --test tests/notion-bridge.test.mjs"
+    "test": "playwright test"
   },
   "dependencies": {
     "react": "^19.1.0",
