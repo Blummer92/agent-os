@@ -187,3 +187,44 @@ def test_ordinary_draft_publishes_no_status_by_job_conditions():
         assert "pull_request.draft == false" in workflow["jobs"][job]["if"]
     # plan job (the only Draft-running job) must never touch commit statuses.
     assert "statuses" not in json.dumps(workflow["jobs"]["plan"])
+
+
+# --- Track B: a failed/cancelled focused plan (for example React) closes the gate ---
+
+
+@pytest.mark.parametrize("plan_result", ["failure", "cancelled"])
+def test_failed_or_cancelled_plan_closes_gate_even_with_aggregate_success(plan_result):
+    gate_open, message = evaluate_aggregate_gate("success", plan_result)
+    assert gate_open is False
+    assert plan_result in message
+
+
+@pytest.mark.parametrize("plan_result", ["success", "skipped", ""])
+def test_passing_or_absent_plan_leaves_gate_semantics_unchanged(plan_result):
+    assert evaluate_aggregate_gate("success", plan_result)[0] is True
+    assert evaluate_aggregate_gate("skipped", plan_result)[0] is False
+
+
+def test_main_closes_gate_when_plan_failed(monkeypatch):
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "failure")
+    assert main() == 1
+
+
+def test_failed_plan_publishes_failure_status_instead_of_success():
+    assert _decide(plan_result="failure").state == "failure"
+    assert _decide(plan_result="cancelled").state == "error"
+
+
+def test_failed_plan_supersedes_reused_success():
+    assert _decide(reused=True, plan_result="failure").state == "failure"
+
+
+def test_failed_plan_never_publishes_for_non_authoritative_runs():
+    assert _decide(authoritative=False, plan_result="failure") is None
+
+
+def test_successful_or_skipped_plan_keeps_existing_status_decisions():
+    assert _decide(plan_result="success").state == "success"
+    assert _decide(plan_result="skipped").state == "success"
+    assert _decide(reused=True, plan_result="success") is None
