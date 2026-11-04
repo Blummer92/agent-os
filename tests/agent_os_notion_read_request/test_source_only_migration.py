@@ -6,7 +6,7 @@ from scripts.agent_os_notion_read_request.teacher_os import (
     read_units,
 )
 
-from .test_teacher_os import Stub, UNIT_B, GEN, _unit, _lesson
+from .test_teacher_os import Stub, UNIT_B, GEN, _admitted, _unit, _lesson
 
 
 def source_only_catalog():
@@ -19,7 +19,7 @@ def test_new_unit_discovery_without_static_unit_catalog():
     assert catalog.requests == ()
 
     stub = Stub([_unit(UNIT_B, "Live Notion Unit")])
-    result = read_units(catalog, stub.factory, generated_at=GEN)
+    result = read_units(catalog, _admitted(), stub.factory, generated_at=GEN)
 
     assert result["status"] == "ok"
     assert result["units"] == [
@@ -35,7 +35,7 @@ def test_new_unit_lessons_without_static_unit_catalog():
     )
 
     result = read_unit_lessons(
-        catalog, stub.factory, UNIT_B, generated_at=GEN
+        catalog, _admitted(), stub.factory, UNIT_B, generated_at=GEN
     )
 
     assert result["status"] == "ok"
@@ -49,7 +49,7 @@ def test_unapproved_unit_stays_blocked_without_static_catalog():
     catalog = source_only_catalog()
     stub = Stub([_unit(UNIT_B, "Unapproved", status="Draft")])
 
-    result = read_units(catalog, stub.factory, generated_at=GEN)
+    result = read_units(catalog, _admitted(), stub.factory, generated_at=GEN)
     assert result["status"] == "empty"
     assert result["units"] == []
 
