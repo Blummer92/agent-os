@@ -49,10 +49,6 @@ UNIT_REVIEW_PROPERTY = "Human Review Required"
 LESSON_SOURCE = "daily-generation-packet"
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$")
 
-#: Closed reason vocabulary; messages from the provider never reach the output.
-REASONS = ("not-configured", "source-unverified", "unit-not-approved", "invalid-request", "read-failed")
-
-
 class TeacherOsReadError(Exception):
     def __init__(self, reason_code: str) -> None:
         super().__init__(reason_code)
