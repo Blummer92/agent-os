@@ -60,6 +60,37 @@ _PROFILE_REASONS = {
 }
 
 
+#: Node projects whose focused commands run on the CI runner, as
+#: ``(project directory, installs its own dependencies)``. The lockfile of each
+#: selected project feeds ``actions/setup-node`` caching. Teacher OS runs
+#: ``npm ci`` as a registered plan command; Picture Perfect Coach needs the
+#: workflow's dedicated install step because its plan command is ``npm test``.
+_NODE_PROJECTS: tuple[tuple[str, bool], ...] = (
+    ("08_Tooling/instructional-materials-coach/picture-perfect-coach", False),
+    ("08_Tooling/teacher-os-web", True),
+)
+
+
+def node_setup_requirements(commands: tuple[str, ...]) -> dict[str, Any]:
+    """Return the Node setup a selected command set needs; pure and typed.
+
+    ``lock_paths`` feeds the setup-node npm cache and is empty for plans that
+    run no Node project (for example Python-only plans). ``install_dirs`` lists
+    projects needing the workflow's separate ``npm ci`` step; projects whose
+    own plan commands install are deliberately excluded so a Teacher OS-only
+    plan never runs the Picture Perfect install.
+    """
+    selected = [
+        (directory, self_installs)
+        for directory, self_installs in _NODE_PROJECTS
+        if any(command.startswith(f"cd {directory} && ") for command in commands)
+    ]
+    return {
+        "lock_paths": tuple(f"{directory}/package-lock.json" for directory, _ in selected),
+        "install_dirs": tuple(directory for directory, self_installs in selected if not self_installs),
+    }
+
+
 def load_rule_map(path: Path | None = None) -> dict[str, Any]:
     """Load rules at the caller boundary; selection itself remains pure."""
     data = json.loads((path or _RULES).read_text(encoding="utf-8"))

@@ -308,3 +308,127 @@ def test_issue_acceptance_preserves_input_sensitive_triggers_and_supersedes_stal
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content
     assert "Report-only boundary" in content
+
+
+# --- Track B: Node setup is derived from the selected plan, not a substring ---
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import textwrap  # noqa: E402
+
+import yaml  # noqa: E402
+
+_PPC_LOCK = "08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json"
+_TEACHER_LOCK = "08_Tooling/teacher-os-web/package-lock.json"
+
+
+def _plan_job_steps() -> dict:
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return {step["name"]: step for step in jobs["plan"]["steps"]}
+
+
+def _run_plan_script(tmp_path: Path, changed: list[str]) -> dict:
+    """Execute the workflow's real plan heredoc and parse its GITHUB_OUTPUT text."""
+    script = _plan_job_steps()["Compute canonical validation plan"]["run"]
+    body = script.split("python - <<'PY' >> \"$GITHUB_OUTPUT\"\n", 1)[1].rsplit("\nPY", 1)[0]
+    (tmp_path / "changed-files.txt").write_text("\n".join(changed) + "\n", encoding="utf-8")
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_REPOSITORY": "Blummer92/agent-os",
+        "PR_NUMBER": "1",
+        "BASE_SHA": "a" * 40,
+        "HEAD_SHA": "b" * 40,
+        "PYTHONPATH": str(ROOT),
+    }
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", textwrap.dedent(body)],
+        env=env, cwd=ROOT, capture_output=True, text=True, check=True,
+    )
+    outputs, lines = {}, iter(done.stdout.splitlines())
+    for line in lines:
+        if "<<" in line:
+            name, delimiter = line.split("<<", 1)
+            block = []
+            for inner in lines:
+                if inner == delimiter:
+                    break
+                block.append(inner)
+            outputs[name] = "\n".join(block)
+        else:
+            name, value = line.split("=", 1)
+            outputs[name] = value
+    return outputs
+
+
+def test_plan_outputs_teacher_only_uses_teacher_lock_and_no_ppc_install(tmp_path):
+    out = _run_plan_script(tmp_path, ["08_Tooling/teacher-os-web/src/TeacherApp.tsx"])
+    assert out["profile"] == "focused"
+    assert out["needs_node"] == "true"
+    assert out["needs_picture_perfect_install"] == "false"
+    assert out["node_lock_paths"] == _TEACHER_LOCK
+
+
+def test_plan_outputs_picture_perfect_only_keeps_original_install(tmp_path):
+    out = _run_plan_script(
+        tmp_path, ["08_Tooling/instructional-materials-coach/picture-perfect-coach/src/framePlan.ts"]
+    )
+    assert out["needs_node"] == "true"
+    assert out["needs_picture_perfect_install"] == "true"
+    assert out["node_lock_paths"] == _PPC_LOCK
+
+
+def test_plan_outputs_combined_caches_both_locks(tmp_path):
+    out = _run_plan_script(
+        tmp_path,
+        [
+            "08_Tooling/instructional-materials-coach/picture-perfect-coach/src/framePlan.ts",
+            "08_Tooling/teacher-os-web/src/style.css",
+        ],
+    )
+    assert out["needs_picture_perfect_install"] == "true"
+    assert out["node_lock_paths"].splitlines() == [_PPC_LOCK, _TEACHER_LOCK]
+
+
+def test_plan_outputs_python_only_has_no_node(tmp_path):
+    out = _run_plan_script(tmp_path, ["scripts/agent_os_issue_acceptance/anything.py"])
+    assert out["profile"] == "focused"
+    assert out["needs_node"] == "false"
+    assert out["needs_picture_perfect_install"] == "false"
+    assert out["node_lock_paths"] == ""
+
+
+def test_node_steps_consume_plan_derived_outputs_only():
+    steps = _plan_job_steps()
+    setup = steps["Set up Node for focused validation"]
+    assert setup["with"]["cache-dependency-path"] == "${{ steps.plan.outputs.node_lock_paths }}"
+    assert "needs_node == 'true'" in setup["if"]
+    install = steps["Install Picture Perfect Coach dependencies"]
+    assert "needs_picture_perfect_install == 'true'" in install["if"]
+    assert "needs_node" not in install["if"].replace("needs_picture_perfect_install", "")
+    script = steps["Compute canonical validation plan"]["run"]
+    assert 'in command for command in plan.commands' not in script
+
+
+@pytest.mark.parametrize("job,kind", [("jscpd-advisory", "jscpd"), ("pyan3-advisory", "pyan3")])
+def test_advisory_jobs_fail_visibly_via_guard_after_upload(job, kind):
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    names = [step["name"] for step in steps]
+    guard = next(step for step in steps if "scripts.advisory_evidence_guard" in step.get("run", ""))
+    assert names.index(guard["name"]) > names.index("Upload advisory evidence")
+    assert guard["if"] == "always()"
+    assert "continue-on-error" not in guard
+    assert f"--kind {kind}" in guard["run"] and "--sha" in guard["run"]
+
+
+def test_advisory_guard_never_becomes_a_gate_dependency():
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["aggregate-gate"]["needs"] == ["plan", "validate"]
+    assert "jscpd-advisory" not in jobs["validate"].get("needs", [])
+    assert "pyan3-advisory" not in jobs["validate"].get("needs", [])
+
+
+def test_terminal_status_step_receives_plan_result():
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    step = next(s for s in jobs["aggregate-gate"]["steps"] if s["name"] == "Publish terminal authoritative aggregate status")
+    assert step["env"]["PLAN_RESULT"] == "${{ needs.plan.result }}"

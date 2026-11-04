@@ -1541,9 +1541,6 @@ TEACHER_OS_COMMANDS = tuple(sorted(
     "08_Tooling/teacher-os-web/tsconfig.json",
     "08_Tooling/teacher-os-web/index.html",
     "08_Tooling/teacher-os-web/playwright.config.ts",
-    # NOTE: package-lock.json is intentionally absent — the lockfile does not
-    # exist in the repository yet (see PR body blockers). Re-add it here and to
-    # the rule's exact_paths when the lockfile lands.
 ])
 def test_teacher_os_executable_paths_select_focused_commands(path):
     plan = _select(_input([path]))
@@ -1585,3 +1582,51 @@ def test_3567_root_docs_plus_focused_owner_stays_focused() -> None:
     plan = _select(_input(["docs/canonical-json-classification.md", "scripts/agent_os_remote_validation/selector.py"]))
     assert plan.profile == "focused"
     assert plan.commands == ("python -m pytest tests/agent_os_remote_validation",)
+
+
+# --- Node setup requirements derived from the selected plan (Track B) ---
+
+PPC_DIR = "08_Tooling/instructional-materials-coach/picture-perfect-coach"
+PPC_LOCK = PPC_DIR + "/package-lock.json"
+TEACHER_LOCK = "08_Tooling/teacher-os-web/package-lock.json"
+
+
+def _node(paths):
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    plan = _select(_input(paths))
+    return plan, node_setup_requirements(plan.commands)
+
+
+def test_node_requirements_teacher_only_sets_up_node_without_ppc_install():
+    plan, node = _node(["08_Tooling/teacher-os-web/src/TeacherApp.tsx"])
+    assert plan.profile == "focused"
+    assert node == {"lock_paths": (TEACHER_LOCK,), "install_dirs": ()}
+
+
+def test_node_requirements_picture_perfect_only_keeps_original_route():
+    plan, node = _node([PPC_DIR + "/src/framePlan.ts"])
+    assert plan.profile == "focused"
+    assert node == {"lock_paths": (PPC_LOCK,), "install_dirs": (PPC_DIR,)}
+
+
+def test_node_requirements_combined_handles_both_lock_paths():
+    _, node = _node([PPC_DIR + "/src/framePlan.ts", "08_Tooling/teacher-os-web/src/style.css"])
+    assert node["lock_paths"] == (PPC_LOCK, TEACHER_LOCK)
+    assert node["install_dirs"] == (PPC_DIR,)
+
+
+def test_node_requirements_python_only_adds_no_node_setup():
+    plan, node = _node(["scripts/agent_os_issue_acceptance/anything.py"])
+    assert plan.profile == "focused"
+    assert node == {"lock_paths": (), "install_dirs": ()}
+
+
+def test_node_requirements_other_node_projects_do_not_select_teacher_or_ppc():
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    assert node_setup_requirements(("cd 08_Tooling/instructional-materials-coach/capture && npm ci",)) == {
+        "lock_paths": (),
+        "install_dirs": (),
+    }
+    assert node_setup_requirements(("python -m pytest",)) == {"lock_paths": (), "install_dirs": ()}
