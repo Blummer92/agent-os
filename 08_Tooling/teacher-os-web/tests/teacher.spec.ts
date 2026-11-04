@@ -6,7 +6,7 @@ const SRC = { display_name: "Test Source", verification_state: "verified-current
 const now = () => new Date().toISOString();
 const lesson = (n: number, extra = {}) => ({
   day_lesson_number: `Day ${n}`, daily_learning_target: `Target ${n}`, daily_focus: `Focus ${n}`,
-  key_vocabulary: null, source_evidence: `Evidence ${n}`, record_url: `https://example.test/r/${n}`, ...extra,
+  key_vocabulary: null, source_evidence: `Evidence ${n}`, record_url: `https://www.notion.so/r${n}`, ...extra,
 });
 const UNIT_A = "aaaaaaaa-0000-4000-8000-000000000001";
 const UNIT_B = "bbbbbbbb-0000-4000-8000-000000000002";
@@ -22,6 +22,7 @@ async function mockApi(page: Page, units: { unit_id: string; title: string }[], 
   });
 }
 const open = (page: Page) => page.getByRole("button", { name: /View Assignment/ }).click();
+const panel = (page: Page) => page.getByRole("region", { name: "View Assignment" });
 
 test("units and lessons render from the API, with provenance, and no sample content", async ({ page }) => {
   await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }, { unit_id: UNIT_B, title: "Added In Notion Later" }], { [UNIT_A]: [lesson(1), lesson(2)], [UNIT_B]: [lesson(9)] });
@@ -34,7 +35,7 @@ test("units and lessons render from the API, with provenance, and no sample cont
   await page.getByRole("button", { name: "View full lesson" }).click();
   await expect(page.getByText("Evidence 2")).toBeVisible();
   await expect(page.getByText("Not recorded in Notion").first()).toBeVisible(); // empty vocabulary is never invented
-  await expect(page.getByRole("link", { name: "Open the Notion record" })).toHaveAttribute("href", "https://example.test/r/2");
+  await expect(page.getByRole("link", { name: "Open the Notion record" })).toHaveAttribute("href", "https://www.notion.so/r2");
   await expect(page.getByText(/Google Drive/).first()).toBeVisible();
   await page.getByRole("button", { name: "← Back to lesson" }).click();
   await open(page);
@@ -99,11 +100,11 @@ test("shrinking lesson list and unit change never render an impossible carousel 
   await open(page);
   await page.getByRole("button", { name: "Next →" }).click();
   await page.getByRole("button", { name: "Next →" }).click();
-  await expect(page.getByText("3 of 3")).toBeVisible();
+  await expect(panel(page).getByText("3 of 3")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Focus 3" })).toBeVisible();
   lessonsForA = [lesson(1)];
   await page.getByRole("button", { name: "Refresh from Notion" }).click();
-  await expect(page.getByText("1 of 1")).toBeVisible();
+  await expect(panel(page).getByText("1 of 1")).toBeVisible();
   await expect(page.getByText("3 of 1")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Focus 1" })).toBeVisible();
   await page.getByRole("button", { name: "View full lesson" }).click();
@@ -112,7 +113,7 @@ test("shrinking lesson list and unit change never render an impossible carousel 
   await page.getByRole("button", { name: "← Back to lesson" }).click();
   await open(page);
   await page.getByLabel("Unit", { exact: true }).selectOption(UNIT_B);
-  await expect(page.getByText("1 of 1")).toBeVisible();
+  await expect(panel(page).getByText("1 of 1")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Focus 9" })).toBeVisible();
 });
 
@@ -185,4 +186,87 @@ test("narrow viewport has no horizontal page overflow", async ({ page }) => {
   await open(page);
   await expect(page.getByRole("heading", { name: "Focus 1" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+});
+
+test("no Teacher OS admission: the app explains live reads are not admitted, shows no lessons, and Try again re-reads", async ({ page }) => {
+  let calls = 0;
+  await page.route("**/api/teacher-os/units", r => { calls += 1; return r.fulfill(json({ status: "unavailable", reason_code: "admission-required" }, 503)); });
+  await page.goto("/");
+  await expect(page.getByRole("status", { name: "Curriculum connection: Live reads not admitted" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Live curriculum is not connected yet" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("live Notion reads are not admitted for Teacher OS yet");
+  await expect(page.getByRole("region", { name: "Lesson overview" })).toHaveCount(0);
+  const before = calls;
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(() => calls).toBeGreaterThan(before);
+});
+
+test("an unauthorized session is distinct from an outage and shows nothing", async ({ page }) => {
+  await page.route("**/api/teacher-os/units", r => r.fulfill(json({ status: "error", reason_code: "unauthenticated" }, 401)));
+  await page.goto("/");
+  await expect(page.getByRole("status", { name: "Curriculum connection: Session not authorized" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This session isn't authorized" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("Not authorized");
+});
+
+test("malformed or spoofed payloads render no curriculum", async ({ page }) => {
+  for (const body of [
+    { status: "ok", units: [{ unit_id: "../../etc", title: "Spoofed" }], source: SRC, generated_at: now() },
+    { status: "ok", units: [{ unit_id: UNIT_A, title: "Spoofed" }], source: "trust me", generated_at: now() },
+    { status: "ok", units: [{ unit_id: UNIT_A, title: "Spoofed" }], source: SRC, generated_at: "soon" },
+    { status: "error", reason_code: "<img src=x onerror=alert(1)>" },
+  ]) {
+    const p = await page.context().newPage();
+    await p.route("**/api/teacher-os/units", r => r.fulfill(json(body, body.status === "ok" ? 200 : 502)));
+    await p.goto("/");
+    await expect(p.getByRole("alert").first()).toBeVisible();
+    await expect(p.locator("body")).not.toContainText("Spoofed");
+    await expect(p.locator("body")).not.toContainText("onerror");
+    await p.close();
+  }
+});
+
+test("lessons for another unit, and non-Notion links, are never rendered", async ({ page }) => {
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], {});
+  await page.unroute("**/api/teacher-os/units/*/lessons");
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: { unit_id: UNIT_B, title: "Other" }, lessons: [lesson(1, { daily_focus: "FOREIGN" })], source: SRC, generated_at: now() })));
+  await page.goto("/");
+  await expect(page.getByRole("alert").first()).toContainText("does not match the Teacher OS contract");
+  await expect(page.locator("body")).not.toContainText("FOREIGN");
+
+  const links = await page.context().newPage();
+  await mockApi(links, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: [lesson(1, { record_url: "javascript:alert(1)" })] });
+  await links.goto("/");
+  await expect(links.getByRole("region", { name: "Lesson overview" })).toBeVisible();
+  await expect(links.getByRole("link")).toHaveCount(0);
+});
+
+test("the lesson overview stepper and the assignment carousel stay in sync", async ({ page }) => {
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: [lesson(1), lesson(2, { key_vocabulary: "contrast" })] });
+  await page.goto("/");
+  const overview = page.getByRole("region", { name: "Lesson overview" });
+  await expect(overview.getByText("Lesson 1 of 2")).toBeVisible();
+  await expect(overview.getByRole("button", { name: "Previous lesson" })).toBeDisabled();
+  await overview.getByRole("button", { name: "Next lesson" }).click();
+  await expect(overview.getByText("Target 2")).toBeVisible();
+  await expect(overview.getByText("contrast")).toBeVisible();
+  await expect(overview.getByText("Test Source")).toBeVisible();
+  await open(page);
+  await expect(panel(page).getByText("2 of 2")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Focus 2" })).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
+  await overview.getByRole("button", { name: "Open complete lesson" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Day 2" })).toBeVisible();
+});
+
+test("local notes are labelled unsaved and the menu closes with Escape", async ({ page }) => {
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: [lesson(1)] });
+  await page.goto("/");
+  await expect(page.getByText("Unsaved · this session only")).toBeVisible();
+  const menu = page.getByRole("button", { name: "Toggle recent conversations" });
+  await menu.click();
+  await expect(page.getByRole("navigation", { name: "Recent conversations" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("navigation", { name: "Recent conversations" })).toHaveCount(0);
+  await expect(menu).toBeFocused();
 });

@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1",
     "dev:app": "node server/dev.mjs",
     "build": "tsc --noEmit && vite build",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:unit": "node --experimental-strip-types --test --test-reporter=tap tests/unit/apiContract.test.ts | node tests/unit/require-tests.mjs --min 30",
+    "test:integration": "playwright test --config playwright.integration.config.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

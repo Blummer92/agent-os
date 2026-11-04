@@ -1,41 +1,55 @@
-# Agent OS Teacher — first read-only React slice (#2801)
+# Teacher OS — read-only React app (#2801)
 
-This is a **read-only** React/Vite Teacher OS slice (#2801). The repository holds no curriculum: `fixtures.ts` and every sample unit/lesson were removed. It does not write Notion or Drive, generate Slides/worksheets, or deploy.
+A teacher-facing React/Vite app that shows **approved units and their lessons read from verified Notion sources** through an authenticated local API. The repository holds no curriculum: there are no sample units or lessons, and nothing is ever shown in place of missing data. The app does not write Notion or Drive, generate Slides/worksheets, or deploy.
 
-## Behavior
+## What a teacher sees
 
-- **Live Notion reads are currently fail-closed, by design.** The unauthenticated Vite bridge from the reviewed PR (`server/notionBridge.mjs`, which exposed credential-backed reads as unauthenticated GETs on a `0.0.0.0`-bound dev server) was removed, not hardened with a synthetic token: there is no approved authenticated/admitted boundary for browser-initiated Teacher OS reads in this repository, and Codespaces port forwarding does not grant authorization. The UI's `/api/teacher-os/*` fetches therefore report unavailable and show no lessons until a separately owner-admitted live path exists (see the reader README).
-- The governed Python seam (`scripts/agent_os_notion_read_request/teacher_os.py`) still composes unit discovery and lesson reads from the verified sources, but only for a caller that already holds a `NotionReadAdmission` with `secret_dispatch_authorized is True`. Units are approved only when Canonical Status = Active **and** Human Review Required is a checkbox explicitly set to `false`; a unit's lessons are read from the verified `daily-generation-packet` source only if that live list contains it, so adding an approved unit in Notion needs no code or catalog edit once an admitted path exists.
-- The UI shows loading, empty, unavailable, error and stale (>15 min) states with provenance. There is no fallback content: if no admitted live path is available the app says so and shows no lessons. The lesson carousel index is derived and clamped to the list actually on screen, so a refresh that shrinks the list can never render an impossible position such as "3 of 1".
-- Student-facing Slides, Docs and worksheets remain approved Google Drive artifacts and are not shown here.
-- Local draft chat is session-only and mutates nothing.
+- **Lesson overview** for the selected unit: lesson counter with previous/next, learning target, today's focus, key vocabulary (fields not recorded in Notion say so), provenance (source, verification, access, read time) and an honest **Approved materials** line. No Drive links are invented; the Notion record link appears only if it is an `https://` Notion URL.
+- **View Assignment** (top right, #3517) to switch units and browse lessons in a carousel.
+- **Complete lesson** view with every governed field and the Notion record link.
+- **Local notes / focused edit** — clearly labelled *Unsaved · this session only*; nothing is sent anywhere.
+- A **connection status** in the header and a specific explanation for every non-ready state: live reads not admitted, reader not running, session not authorized, malformed response, rate limited, empty, read failed, stale (>15 min). Each offers **Try again**.
 
-## Run in a qualified Codespace or development environment
+## Run it
 
 ```sh
 cd 08_Tooling/teacher-os-web
-npm install
-npm run dev
-npm run build
-npx playwright install chromium
-npm test
+npm ci
+npm run dev:app        # loopback Vite app + authenticated loopback API; open http://127.0.0.1:5173/
 ```
 
-The development server binds loopback only (`127.0.0.1`, port 5173); do not forward it publicly — forwarding is not authorization, and there is no live bridge to forward to. Playwright uses port 4174 and checks desktop and narrow phone Chromium emulation. Tests are not proof of actual iPhone Safari acceptance. Playwright API payloads are mocked in-test and are not live Notion evidence.
+`npm run dev:app` starts `server/teacher_os_api.py` (Python stdlib, `127.0.0.1` only) and Vite (`127.0.0.1` only). A fresh random session secret is generated per launch and passed to both processes through their environment; Vite adds it server-side when proxying `/api/teacher-os`. It is never printed, logged, written to disk, or included in the browser bundle. **Do not forward these ports publicly** — forwarding is not authorization.
 
-## Reused architecture
+`npm run dev` starts the UI alone (no API); the app then reports the reader as not running.
 
-- #2225 sibling product and source-of-truth boundaries.
-- #3517 preferred top-right View Assignment carousel.
-- #3518 provisional design checkpoint (not a persistence store).
-- #1892 contextual teacher actions (future governed consumer, not executed here).
-- `01_Shared_Standards/global-engineering/typescript-react-development.md` and `react-web-development.md`.
-- `05_Examples/ui-cross-platform-reference` semantic web, keyboard and Playwright patterns.
+## Live Notion status: closed until an owner admission exists
+
+The API delegates every read to the governed seam `scripts/agent_os_notion_read_request/teacher_os.py`, which refuses dispatch without a scope-bound `NotionReadAdmission` (admitted, `secret_dispatch_authorized`, no single-unit binding, sources covering `canonical-unit` and `daily-generation-packet`) **before** any executor is built. The canonical admission path admits only GitHub issue-comment envelopes for the existing catalog request classes, none of which has that shape, so `canonical_teacher_os_admission()` returns nothing and the running app shows **"Live reads not admitted"** with no curriculum. `NOTION_TOKEN` alone is never permission.
+
+**Owner decision needed to go live:** admit a Teacher OS discovery request class with exactly that shape through the canonical admission path (or explicitly decide otherwise). Once it exists, `canonical_teacher_os_admission()` obtains it from there; no other code path can supply an admission.
+
+## API trust boundary (`server/teacher_os_api.py`)
+
+Checked in this order, all before admission or executor work: loopback bind only → `GET` only, no body/query/percent-encoding → `Host` must be this listener (DNS-rebinding defence) → cross-site `Origin`/`Sec-Fetch-Site` refused, only the launcher's exact app origin accepted → `Authorization: Bearer <session secret>` (constant-time) → exact route and strict lowercase dashed UUID → read budget (30 reads/min) and one Notion read at a time. Responses are `no-store`, `nosniff`, no CORS, closed `reason_code` vocabulary, no provider text, and the access log records request lines only. The session secret proves a request came through this operator's local launcher — **it is not a multi-user teacher identity**; classroom deployment needs real identity and is out of scope.
+
+The browser decodes every response at runtime (`src/apiContract.ts`): wrong shapes, foreign-unit lessons, unknown reasons and non-Notion links are refused or dropped, never trusted by type assertion.
+
+## Tests
+
+| Command | What it proves | Data |
+|---|---|---|
+| `npm run build` | `tsc --noEmit` + `vite build` | — |
+| `npm run test:unit` | Runtime contract decoder (Node test runner on the TypeScript source). A guard fails the run on any failure/skip or fewer than 30 executed tests, because a bare `node --test` exits 0 when no file matches | synthetic |
+| `npm test` | UI behaviour in desktop and phone Chromium with `page.route`-mocked API responses | synthetic, mocked |
+| `npm run test:integration` | Real HTTP chain: browser → Vite proxy → authenticated API → governed reader → test-only stub executor; plus bypass attempts (no secret, cross-site, rebinding Host, bad ids) | synthetic, real processes |
+| `pytest tests/teacher_os_web` (repo root) | API policy, admission fail-closed, real-process production server (refuses without secret; answers `admission-required`), synthetic fixture server | synthetic |
+
+`npx playwright install chromium` provides the browser. None of these tests is live Notion evidence, and Chromium phone emulation is not iPhone Safari acceptance.
 
 ## Deliberately excluded
 
-No Notion/Drive writes, no Figma sync (#3519), no Docs/Slides generation, no production worksheet editing (#3259), no approval engine, no backend store, no student data, no production deployment, no live browser-initiated Notion bridge, and no merge authority. Per-unit entries in `notion_read_catalog.json` remain for the issue-comment reader and other consumers (#3690 follow-up).
+No Notion/Drive writes, no Docs/Slides generation, no backend store, no student data, no telemetry, no production deployment, no public bridge, no merge authority. Per-unit entries in `notion_read_catalog.json` remain for the issue-comment reader (#3690 follow-up).
 
-## QA handoff
+## Reused architecture
 
-Run build and Playwright tests on the **exact PR head** through the existing governed executor. Independently inspect phone, tablet, Chromebook/desktop, keyboard, contrast, reduced motion, and fixture-versus-live labels. Treat unavailable CI/executor or browser dependencies as a blocker; a mocked UI test is not live Notion verification, and the current fail-closed UI must not be reported as live discovery.
+#2225 boundaries · #3517 top-right View Assignment carousel · #3518 design checkpoint · #1892 contextual actions (not executed) · `01_Shared_Standards/global-engineering/typescript-react-development.md` and `react-web-development.md` · `05_Examples/ui-cross-platform-reference` keyboard/Playwright patterns.
