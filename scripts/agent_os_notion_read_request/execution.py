@@ -404,7 +404,7 @@ def query_unit_lesson_records(
         raise NotionReadRequestError("Notion adapter returned malformed task evidence")
     if str(result.get("status") or "").strip().lower() != "success":
         raise NotionReadRequestError(
-            f"lesson content read was not successful: {result.get(status)!r}"
+            f"lesson content read was not successful: {result.get('status')!r}"
         )
     output = result.get("output")
     if not isinstance(output, Mapping):
