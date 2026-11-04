@@ -369,6 +369,13 @@ def test_plan_outputs_teacher_only_uses_teacher_lock_and_no_ppc_install(tmp_path
     assert out["node_lock_paths"] == _TEACHER_LOCK
 
 
+def test_plan_outputs_teacher_lockfile_only_runs_react_commands(tmp_path):
+    out = _run_plan_script(tmp_path, [_TEACHER_LOCK])
+    assert out["profile"] == "focused"
+    assert out["needs_node"] == "true"
+    assert out["node_lock_paths"] == _TEACHER_LOCK
+
+
 def test_plan_outputs_picture_perfect_only_keeps_original_install(tmp_path):
     out = _run_plan_script(
         tmp_path, ["08_Tooling/instructional-materials-coach/picture-perfect-coach/src/framePlan.ts"]

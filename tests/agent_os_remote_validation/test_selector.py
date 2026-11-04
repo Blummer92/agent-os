@@ -1538,6 +1538,7 @@ TEACHER_OS_COMMANDS = tuple(sorted(
     "08_Tooling/teacher-os-web/src/fixtures.ts",
     "08_Tooling/teacher-os-web/tests/teacher.spec.ts",
     "08_Tooling/teacher-os-web/package.json",
+    "08_Tooling/teacher-os-web/package-lock.json",
     "08_Tooling/teacher-os-web/tsconfig.json",
     "08_Tooling/teacher-os-web/index.html",
     "08_Tooling/teacher-os-web/playwright.config.ts",
@@ -1602,6 +1603,14 @@ def test_node_requirements_teacher_only_sets_up_node_without_ppc_install():
     plan, node = _node(["08_Tooling/teacher-os-web/src/TeacherApp.tsx"])
     assert plan.profile == "focused"
     assert node == {"lock_paths": (TEACHER_LOCK,), "install_dirs": ()}
+
+
+def test_node_requirements_teacher_lockfile_only_change_is_selected_and_cached():
+    plan, node = _node([TEACHER_LOCK])
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
+    assert node["lock_paths"] == (TEACHER_LOCK,)
+    assert node["install_dirs"] == ()
 
 
 def test_node_requirements_picture_perfect_only_keeps_original_route():
