@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from functools import partial
 
 import pytest
 
@@ -14,10 +15,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
     BINDING_VERIFICATION_REQUEST_IDS,
-    CANDY_BRANDING_STABLE_ID,
-    CANDY_BRANDING_TITLE,
-    CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
-    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     LESSONS_LEARNED_REFERENCE_PAGE_ID,
     LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
     LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
@@ -30,7 +27,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
     verify_additional_unit_binding,
-    verify_candy_branding_binding,
     verify_lessons_learned_binding,
     verify_live_bindings,
     verify_teacher_modeling_binding,
@@ -58,6 +54,9 @@ def staged_candy_catalog(monkeypatch):
     catalog = parse_catalog(staged)
     monkeypatch.setattr(binding_verification_module, "load_catalog", lambda: catalog)
     return catalog
+
+
+_verify_candy_binding = partial(verify_additional_unit_binding, canonical_unit_key="candy-branding")
 
 
 class VerificationAdapter:
@@ -446,7 +445,7 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy
             }
         ]
     )
-    evidence = verify_candy_branding_binding(
+    evidence = _verify_candy_binding(
         adapter,
         canonical_registry_data_source_id="canonical-data-source-current",
         generated_at="run:2816",
@@ -461,13 +460,13 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy
     assert query_call["data_source_id"] == "canonical-data-source-current"
     assert query_call["filter"] == {
         "property": "Canonical Unit Name",
-        "title": {"equals": CANDY_BRANDING_TITLE},
+        "title": {"equals": staged_candy_catalog.canonical_unit("candy-branding").verification_title},
     }
     assert query_call["max_pages"] == 1
     assert query_call["max_results"] == 2
     assert evidence["canonical_unit"] == {
         "canonical_unit_key": "candy-branding",
-        "stable_id": CANDY_BRANDING_STABLE_ID,
+        "stable_id": staged_candy_catalog.canonical_unit("candy-branding").stable_id,
         "provider_page_id": "33333333-3333-3333-3333-333333333333",
         "verification_state": "verified-current",
     }
@@ -488,7 +487,7 @@ def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(ti
         NotionReadRequestError,
         match="exactly one title property",
     ):
-        verify_candy_branding_binding(
+        _verify_candy_binding(
             CandyVerificationAdapter(
                 [],
                 title_properties=title_properties,
@@ -503,7 +502,7 @@ def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch(st
         NotionReadRequestError,
         match="data source identity mismatch",
     ):
-        verify_candy_branding_binding(
+        _verify_candy_binding(
             CandyVerificationAdapter(
                 [],
                 data_source_id="different-data-source",
@@ -528,7 +527,7 @@ def test_candy_binding_missing_or_ambiguous_fails_closed(results, staged_candy_c
         NotionReadRequestError,
         match="identity is missing or ambiguous",
     ):
-        verify_candy_branding_binding(
+        _verify_candy_binding(
             CandyVerificationAdapter(results),
             canonical_registry_data_source_id="canonical-data-source-current",
             generated_at="run:2816",
@@ -538,8 +537,8 @@ def test_candy_binding_missing_or_ambiguous_fails_closed(results, staged_candy_c
 def test_candy_verification_admission_is_finite_and_read_only(staged_candy_catalog) -> None:
     decision = admit_binding_verification_request(
         transport(
-            request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-            issue_number=CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+            request_id="verify-candy-branding-binding",
+            issue_number=2816,
         ),
         expected_repository=REPOSITORY,
         expected_actor=ACTOR,
@@ -566,8 +565,8 @@ def test_candy_verification_admission_is_finite_and_read_only(staged_candy_catal
 )
 def test_candy_verification_admission_rejects_broadened_envelopes(overrides, reason, staged_candy_catalog) -> None:
     payload = {
-        "request_id": CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-        "issue_number": CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+        "request_id": "verify-candy-branding-binding",
+        "issue_number": 2816,
         **overrides,
     }
     decision = admit_binding_verification_request(
@@ -589,7 +588,7 @@ def test_candy_binding_archived_or_trashed_fails_closed(staged_candy_catalog) ->
             NotionReadRequestError,
             match="canonical page is archived or trashed",
         ):
-            verify_candy_branding_binding(
+            _verify_candy_binding(
                 CandyVerificationAdapter(
                     [{"id": "33333333-3333-3333-3333-333333333333", **state}]
                 ),
@@ -681,7 +680,7 @@ def test_binding_verification_workflow_routes_only_finite_verifier_ids() -> None
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         "verify-motion-typography-binding",
     )
-    assert CANDY_BRANDING_VERIFICATION_REQUEST_ID not in BINDING_VERIFICATION_REQUEST_IDS
+    assert "verify-candy-branding-binding" not in BINDING_VERIFICATION_REQUEST_IDS
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -719,8 +718,8 @@ def test_candy_cli_uses_existing_adapter_and_verified_registry_source(tmp_path, 
     transport_path.write_text(
         json.dumps(
             transport(
-                request_id=CANDY_BRANDING_VERIFICATION_REQUEST_ID,
-                issue_number=CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
+                request_id="verify-candy-branding-binding",
+                issue_number=2816,
             )
         ),
         encoding="utf-8",
