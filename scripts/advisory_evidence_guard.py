@@ -39,7 +39,10 @@ def classify(kind: str, path: Path, expected_sha: str) -> tuple[str, str]:
         return "stale-sha", "evidence head_sha does not match the pull request head"
     status = data.get("status")
     if status == "scanner-error":
-        return "scanner-error", str(data.get("detail") or "producer reported scanner-error")[:200]
+        detail = str(data.get("detail") or "producer reported scanner-error")
+        # Producer text reaches a ``::error::`` workflow command; control characters
+        # (notably newlines) would let it inject further commands.
+        return "scanner-error", "".join(c if c.isprintable() else " " for c in detail)[:200]
     if status != "ok":
         return "invalid-evidence", "status is not a recognized value"
     count = data.get("candidate_count")
