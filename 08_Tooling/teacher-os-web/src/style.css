@@ -68,9 +68,10 @@ label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: var(-
 .recent-menu p { font-size: .82rem; color: var(--text-muted); margin: 0; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); margin-bottom: var(--space-3); }
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--space-3); margin: var(--space-3) 0; }
-.material-card { padding: var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); }
-.card-meta { display: flex; justify-content: space-between; gap: var(--space-4); color: var(--text-muted); font-size: .82rem; }
-.card-meta span:first-child { white-space: nowrap; font-weight: 600; }
+.filters > * { min-width: 0; }
+.material-card { padding: var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.card-meta { display: flex; justify-content: space-between; gap: var(--space-4); color: var(--text-muted); font-size: .82rem; min-width: 0; }
+.card-meta span:first-child { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .card-meta span:last-child { text-align: right; min-width: 0; overflow-wrap: anywhere; }
 .material-card h3 { font-size: 1.05rem; margin-top: var(--space-2); }
 .card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
@@ -90,9 +91,10 @@ label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: var(-
 .state-card .guidance { max-width: 60ch; }
 .state-card button { margin-top: var(--space-2); }
 
-.lesson-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-5); background: var(--surface-2); display: grid; gap: var(--space-4); }
-.lesson-card__top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
-.day-badge { display: inline-block; margin: var(--space-2) 0 0; padding: .15rem .6rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .82rem; }
+.lesson-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-5); background: var(--surface-2); display: grid; gap: var(--space-4); min-width: 0; overflow-wrap: anywhere; }
+.lesson-card__top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.lesson-card__top > * { min-width: 0; }
+.day-badge { display: inline-block; margin: var(--space-2) 0 0; padding: .15rem .6rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .82rem; max-width: 100%; overflow-wrap: anywhere; }
 .stepper { display: flex; align-items: center; gap: var(--space-2); }
 .stepper button { width: 44px; padding: 0; font-size: 1.3rem; line-height: 1; }
 .stepper__count { font-weight: 600; font-size: .9rem; white-space: nowrap; }

@@ -103,6 +103,33 @@ export function TeacherApp() {
   const unit = unitList.find(u => u.unit_id === unitId) ?? unitList[0];
   const lessons = useRemote<readonly Lesson[]>(unit?.unit_id, fetchLessons, reloadKey);
   const lessonList: readonly Lesson[] = lessons.kind === "ready" ? lessons.value.data : [];
+  // Lesson records carry no stable lesson ID (see apiContract: only
+  // day_lesson_number plus text fields), so a lesson-keyed draft/message
+  // cannot be re-attached by identity after a reorder. It is bound to one
+  // exact list signature for its unit instead: when a fresh ready read for
+  // the same unit arrives with a different signature, every draft/message
+  // keyed to that unit is dropped rather than risk attributing a note to a
+  // different lesson. An identical refresh preserves drafts; a reorder,
+  // insertion or removal invalidates them. Limitation: two lessons with
+  // byte-identical signature fields are indistinguishable, so a swap
+  // between them cannot be detected — no stable ID exists to do better,
+  // and none is fabricated here.
+  const lessonSignaturesRef = useRef<Record<string, string>>({});
+  const lessonSignature = (list: readonly Lesson[]) =>
+    list.map(l => [l.day_lesson_number, l.daily_focus, l.daily_learning_target].join("\u0000")).join("\u0001");
+  useEffect(() => {
+    if (lessons.kind !== "ready" || !unit) return;
+    const signature = lessonSignature(lessonList);
+    const previous = lessonSignaturesRef.current[unit.unit_id];
+    lessonSignaturesRef.current[unit.unit_id] = signature;
+    if (previous !== undefined && previous !== signature) {
+      const prefix = `${unit.unit_id}:`;
+      const dropUnitKeys = (prev: Record<string, string> | MessageMap) => Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(prefix)));
+      setDrafts(prev => dropUnitKeys(prev) as Record<string, string>);
+      setMessages(prev => dropUnitKeys(prev) as MessageMap);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessons, unit]);
   // Derived, never stored back: clamp the index to the list on screen, so a
   // refresh that shrinks the list can never render "3 of 1". No effect or
   // extra state sync is needed; the stored index is only a preference.
@@ -170,7 +197,9 @@ export function TeacherApp() {
         <p className={`connection connection--${status.tone}`} role="status" aria-label={`Curriculum connection: ${status.text}`}><span className="dot" aria-hidden="true" />{status.text}</p>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
-      <div className="demo-banner" role="note">Read-only · lessons come from verified Notion evidence · Slides, Docs and worksheets stay in approved Google Drive folders</div>
+      <div className="demo-banner" role="note">{units.kind === "unavailable" && units.reason === "admission-required"
+        ? "Read-only · live Notion reads are not admitted yet, so no lessons are shown · Slides, Docs and worksheets stay in approved Google Drive folders"
+        : "Read-only · only owner-approved Notion evidence is shown, when live reads are admitted · Slides, Docs and worksheets stay in approved Google Drive folders"}</div>
       {stale && evidence && <p role="alert" className="notice notice--warn banner-notice">Stale evidence: last read {evidence.generatedAt}. <button type="button" className="text-button" onClick={refresh}>Refresh from Notion</button></p>}
       {menuOpen && <nav aria-label="Recent conversations" className="recent-menu">
         <h2>Recent conversations</h2>
