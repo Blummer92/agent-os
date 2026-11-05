@@ -128,7 +128,14 @@ def build_production_governed_resume_bindings_for_handoff(
 ) -> GovernedResumeBindings:
     """Build the canonical #1319 bindings for one immutable handoff identity."""
     bootstrap = build_production_host_bootstrap_for_handoff(handoff_id)
-    return bootstrap.governed_resume_bindings(cancelled=_no_cancellation_requested)
+    try:
+        return bootstrap.governed_resume_bindings(cancelled=_no_cancellation_requested)
+    except ProductionGovernedResumeFactoryError:
+        raise
+    except RuntimeError as exc:
+        raise ProductionGovernedResumeFactoryError(
+            "production governed-resume composition failed closed"
+        ) from exc
 
 
 def _bind_descriptor_and_capsule(

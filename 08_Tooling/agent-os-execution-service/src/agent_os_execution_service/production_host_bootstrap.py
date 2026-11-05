@@ -80,6 +80,10 @@ from .governed_resume_restart_capsule import (
     build_required_environment_spec_reader,
     load_restart_capsule,
 )
+from .invocation_completion_receipt import (
+    InvocationCompletionReceiptError,
+    InvocationCompletionStore,
+)
 from .models import parse_canonical_utc
 from .production_host_composition import (
     CHECKPOINT_STORE_ROOT_ENV_VAR,
@@ -432,8 +436,25 @@ class ProductionHostBootstrap:
         reimplemented here -- and the one host-local lease directory is the
         same value the sources were bound to, so the reconstruction-time lease
         observation and the dispatch-time lease adapter cannot diverge.
+
+        The completion store is bound from the same checkpoint store root,
+        so a completed Pilot run for one handoff is recorded durably and a
+        later delivery of the same handoff returns without dispatching.
+        The store is probe-verified writable here: a permanently broken
+        store fails binding (fail-closed, before any execution) instead of
+        silently running without dedup.
         """
         self._require_bound_store_root()
+        completion_store = InvocationCompletionStore.for_store_root(
+            self.configuration.checkpoint_store_root
+        )
+        try:
+            completion_store.verify_writable()
+        except InvocationCompletionReceiptError as exc:
+            raise ProductionHostBootstrapError(
+                "completion store is not writable: "
+                f"{self.configuration.checkpoint_store_root}"
+            ) from exc
         binding = _InvocationRuntimeConfigurationBinding(self.sources.runtime_configuration)
         return build_production_governed_resume_bindings(
             lease_directory=str(self.configuration.lease_directory),
@@ -453,6 +474,7 @@ class ProductionHostBootstrap:
             changed_paths_inspector=changed_paths_inspector,
             dependency_command_runner=dependency_command_runner,
             runtime_request=self.runtime_request,
+            completion_store=completion_store,
         )
 
     def admission_providers(self) -> ProductionAdmissionProviders:
