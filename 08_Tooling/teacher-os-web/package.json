@@ -8,7 +8,7 @@
     "dev:app": "node server/dev.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "playwright test",
-    "test:unit": "node --experimental-strip-types --test --test-reporter=tap tests/unit/apiContract.test.ts tests/unit/fixtureContract.test.ts | node tests/unit/require-tests.mjs --min 50",
+    "test:unit": "node --experimental-strip-types --test --test-reporter=tap tests/unit/apiContract.test.ts tests/unit/fixtureContract.test.ts | node tests/unit/require-tests.mjs --min 55",
     "test:integration": "playwright test --config playwright.integration.config.ts"
   },
   "dependencies": {

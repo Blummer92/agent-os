@@ -128,3 +128,12 @@ test("staleness and read age are computed from the server timestamp", () => {
   assert.equal(readAge(AT, now + 3 * 3_600_000), "3 h ago");
   assert.equal(readAge("garbage", now), "unknown time");
 });
+
+test("labels with control or bidi-override characters are refused, not rendered", () => {
+  for (const bad of ["\u202eevil", "a\u0000b", "x\u2066y"]) {
+    const body = { status: "ok", units: [{ unit_id: A, title: "Unit" }], source: { ...SRC, display_name: bad }, generated_at: AT };
+    assert.equal(decodeUnits(200, body).kind, "unavailable", JSON.stringify(bad));
+    const titled = { status: "ok", units: [{ unit_id: A, title: bad }], source: SRC, generated_at: AT };
+    assert.equal(decodeUnits(200, titled).kind, "unavailable", JSON.stringify(bad));
+  }
+});

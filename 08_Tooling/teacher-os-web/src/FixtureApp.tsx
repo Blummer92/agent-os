@@ -23,12 +23,12 @@ function Chip({ tone, children }: { tone: "ok" | "warn" | "bad" | "neutral"; chi
 function Provenance({ source, ageMinutes }: { source: { display_name: string; verification_state: string; access: string }; ageMinutes: number }) {
   const fresh = freshness(ageMinutes) === "current";
   return (
-    <dl className="provenance" aria-label={`Where ${source.display_name} came from`}>
+    <div role="group" aria-label={`Where ${source.display_name} came from`}><dl className="provenance">
       <div><dt>Source</dt><dd>{source.display_name}</dd></div>
       <div><dt>Verification</dt><dd>{source.verification_state}</dd></div>
       <div><dt>Access</dt><dd>{source.access}</dd></div>
       <div><dt>Read</dt><dd>{ageText(ageMinutes)} · {fresh ? <Chip tone="ok">Current</Chip> : <Chip tone="warn">Stale</Chip>}</dd></div>
-    </dl>
+    </dl></div>
   );
 }
 
@@ -44,7 +44,7 @@ function VisualCard({ item }: { item: VisualItem }) {
   return (
     <li className="visual-card">
       <div className={`diagram diagram--${DIAGRAMS.has(item.diagram) ? item.diagram : "unknown"}`} role="img" aria-label={item.altText} />
-      <h4>{item.title}</h4>
+      <h3>{item.title}</h3>
       <p>{known ? <Chip tone={known.tone}>{known.label}</Chip> : <Chip tone="warn">Unrecognized status</Chip>}</p>
       <p className="muted">{known ? known.note : <>The source reported “{item.selectionState}”, which Teacher OS does not recognize. It is shown as text and treated as not approved.</>}</p>
       <p className="muted">Reviewed by: {item.reviewedByRole} · {item.rationale}</p>
@@ -56,55 +56,94 @@ function ArtifactCard({ item }: { item: ArtifactItem }) {
   const a = assessArtifact(item);
   return (
     <li className={`artifact-card artifact-card--${a.status}`}>
-      <div className="artifact-card__top"><h4>{item.title}</h4>{a.usable ? <Chip tone="ok">{a.headline}</Chip> : <Chip tone={a.status === "unknown" ? "warn" : "bad"}>{a.headline}</Chip>}</div>
-      <p className="muted">Type: {item.kind} · Notion: {item.notionState} · Drive: {item.driveState}</p>
+      <div className="artifact-card__top"><h3>{item.title}</h3>{a.usable ? <Chip tone="ok">{a.headline}</Chip> : <Chip tone={a.status === "unknown" ? "warn" : "bad"}>{a.headline}</Chip>}</div>
+      <p className="muted">{a.status === "permission" ? `Type: ${item.kind}` : `Type: ${item.kind} · Notion: ${item.notionState} · Drive: ${item.driveState}`}</p>
       <p>{a.detail}</p>
       {a.status !== "permission" && <p className="fine-print">{item.locationLabel}</p>}
     </li>
   );
 }
 
+type Intent = { id: number; text: string; ref: string; revision: number };
+type Revalidation = { kind: "unchanged" | "changed" | "failed" | "checking"; detail: string };
+type FocusTarget = "intent" | "draft" | "title";
+
 export function FixtureApp() {
   const [scenario, setScenario] = useState<ScenarioId>(initialScenario);
   const [state, setState] = useState<ProjectionState>({ kind: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
-  const attempts = useRef(0);
   const [draft, setDraft] = useState("");
   // An unsent improvement intent is bound to the exact lesson revision it was written against.
-  const [intent, setIntent] = useState<{ text: string; ref: string; revision: number } | null>(null);
-  const [revalidation, setRevalidation] = useState<{ kind: "unchanged" | "changed" | "failed" | "checking"; detail: string } | null>(null);
+  const [intent, setIntentState] = useState<Intent | null>(null);
+  const [revalidation, setRevalidation] = useState<Revalidation | null>(null);
+  // Exactly one read owns the page at a time: starting another aborts the previous one, so a
+  // superseded read can never apply (or write a message) after the teacher moved on.
+  const controllerRef = useRef<AbortController | null>(null);
+  const attempts = useRef(0); // advances only when a read is actually applied (StrictMode- and abort-safe)
+  const intentRef = useRef<Intent | null>(null);
+  const intentSeq = useRef(0);
+  const pendingFocus = useRef<FocusTarget | null>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const intentHeadingRef = useRef<HTMLHeadingElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
+  const setIntent = (next: Intent | null) => { intentRef.current = next; setIntentState(next); };
+  const startRead = () => { controllerRef.current?.abort(); const controller = new AbortController(); controllerRef.current = controller; return controller.signal; };
+  /** Return the teacher's words to the editor without overwriting what they have typed since. */
+  const restoreWords = (text: string) => setDraft(d => (d.trim() ? `${d}\n\n${text}` : text));
+  /** Every applied read passes through here, so an intent can never outlive the lesson it was written against. */
+  function applyRead(next: ProjectionState) {
+    setState(next);
+    const held = intentRef.current;
+    if (next.kind !== "ready" || !held) return;
+    if (next.value.lesson.ref !== held.ref || next.value.lesson.revision !== held.revision) {
+      restoreWords(held.text); setIntent(null); pendingFocus.current = "draft";
+      setRevalidation({ kind: "changed", detail: `The lesson changed since you wrote this (revision ${held.revision} → ${next.value.lesson.revision}). The intent was withdrawn and nothing was sent. Your words are back in the box; review the updated lesson, then prepare it again.` });
+    }
+  }
 
   useEffect(() => {
-    const controller = new AbortController();
+    const signal = startRead();
     setState({ kind: "loading" });
-    // The read counter advances only when a read is actually applied, so an aborted
-    // (superseded or StrictMode-doubled) effect can never consume a read.
+    setRevalidation(r => (r?.kind === "checking" ? null : r)); // a check this read superseded must not stay "checking"
     const attempt = attempts.current;
-    loadFixture(scenario, attempt, controller.signal).then(next => { if (!controller.signal.aborted) { attempts.current = attempt + 1; setState(next); } }, () => {});
-    return () => controller.abort();
-  }, [scenario, reloadKey]);
+    loadFixture(scenario, attempt, signal).then(next => { if (!signal.aborted) { attempts.current = attempt + 1; applyRead(next); } }, () => {});
+    return () => controllerRef.current?.abort();
+  }, [scenario, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus follows the teacher's task: it is never left on a control that just disappeared or became disabled.
+  useEffect(() => {
+    const target = pendingFocus.current;
+    if (!target) return;
+    const el = target === "intent" ? intentHeadingRef.current : target === "draft" ? draftRef.current : titleRef.current;
+    if (el) { el.focus(); pendingFocus.current = null; }
+  });
 
   function chooseScenario(next: ScenarioId) {
     attempts.current = 0;
+    const held = intentRef.current;
+    if (held) restoreWords(held.text);
     setIntent(null); setRevalidation(null);
     try { const url = new URL(window.location.href); url.searchParams.set("scenario", next); window.history.replaceState(null, "", url); } catch { /* the URL is a convenience only */ }
     setScenario(next);
   }
+  function tryAgain() { pendingFocus.current = "title"; setReloadKey(k => k + 1); }
   const current: Projection | null = state.kind === "ready" ? state.value : null;
 
   async function revalidate() {
-    if (!intent) return;
+    const checked = intentRef.current;
+    if (!checked) return;
     setRevalidation({ kind: "checking", detail: "Checking the lesson again before this intent could be used…" });
+    const signal = startRead();
     const attempt = attempts.current;
-    const next = await loadFixture(scenario, attempt, new AbortController().signal);
-    if (next.kind !== "ready") { setRevalidation({ kind: "failed", detail: "The lesson could not be re-read, so this intent is not trusted and was not sent." }); return; }
+    let next: ProjectionState;
+    try { next = await loadFixture(scenario, attempt, signal); } catch { return; } // aborted: a newer read owns the page
+    if (signal.aborted) return;
     attempts.current = attempt + 1;
-    setState(next);
-    if (next.value.lesson.ref !== intent.ref || next.value.lesson.revision !== intent.revision) {
-      setRevalidation({ kind: "changed", detail: `The lesson changed since you wrote this (revision ${intent.revision} → ${next.value.lesson.revision}). The intent was withdrawn and nothing was sent. Review the updated lesson, then prepare it again.` });
-      setDraft(intent.text);
-      setIntent(null);
-    } else setRevalidation({ kind: "unchanged", detail: `The lesson is unchanged (revision ${next.value.lesson.revision}). The intent is still only a preview; nothing was sent.` });
+    const stillChecked = () => intentRef.current?.id === checked.id; // the intent may have been replaced or discarded meanwhile
+    if (next.kind !== "ready") { if (stillChecked()) setRevalidation({ kind: "failed", detail: "The lesson could not be re-read, so this intent is not trusted and was not sent." }); return; }
+    applyRead(next);
+    if (stillChecked()) setRevalidation({ kind: "unchanged", detail: `The lesson is unchanged (revision ${next.value.lesson.revision}). The intent is still only a preview; nothing was sent.` });
   }
 
   const issues = current ? concerns(current) : [];
@@ -121,15 +160,14 @@ export function FixtureApp() {
         {state.kind === "loading" && <p role="status" className="notice notice--wait">Loading the sample classroom…</p>}
         {state.kind === "error" && <div className="state-card"><h2>The sample classroom couldn't be loaded</h2>
           <p role="alert" className="notice notice--bad">{REASON_TEXT[state.reason] ?? "The sample classroom could not be read."} Nothing is shown in its place.</p>
-          <button type="button" className="secondary" onClick={() => setReloadKey(k => k + 1)}>Try again</button></div>}
+          <button type="button" className="secondary" onClick={tryAgain}>Try again</button></div>}
         {state.kind === "empty" && <div className="state-card"><h2>No lesson is planned for tomorrow</h2>
-          <p role="status" className="notice">The sample has no lesson to show. Nothing is shown in its place.</p>
-          <button type="button" className="secondary" onClick={() => setReloadKey(k => k + 1)}>Try again</button></div>}
+          <p role="status" className="notice">The sample has no lesson to show. Nothing is shown in its place. Choose another sample state under Fixture review controls.</p></div>}
         {current && (<>
           <p className="eyebrow">{current.course} · Grade {current.grade} · {current.lesson.dayLabel}</p>
-          <h1 id="unit-title">{current.unit}</h1>
+          <h1 id="unit-title" ref={titleRef} tabIndex={-1}>{current.unit}</h1>
 
-          <section className={`summary ${issues.length ? "summary--attention" : "summary--clear"}`} aria-labelledby="summary-title" role="status">
+          <section className={`summary ${issues.length ? "summary--attention" : "summary--clear"}`} aria-labelledby="summary-title">
             <h2 id="summary-title">{issues.length ? `Needs your attention (${issues.length})` : "Context is current"}</h2>
             {issues.length
               ? <ul>{issues.map(i => <li key={i.id}>{i.text}</li>)}</ul>
@@ -148,7 +186,7 @@ export function FixtureApp() {
           </section>
 
           <section className="panel" aria-labelledby="visual-title">
-            <h2 id="visual-title">Approved visual selections</h2>
+            <h2 id="visual-title">Visual selections</h2>
             {current.visual.data.length === 0 ? <p className="muted">No visual selections are recorded.</p>
               : <ul className="visual-grid" aria-label="Visual selections">{current.visual.data.map(v => <VisualCard key={v.id} item={v} />)}</ul>}
             <Provenance source={current.visual.source} ageMinutes={current.visual.ageMinutes} />
@@ -176,17 +214,17 @@ export function FixtureApp() {
           <section className="panel" aria-labelledby="improve-title">
             <h2 id="improve-title">Improve tomorrow's lesson</h2>
             <p className="muted">Describe the change you want. This prepares a preview only: the live teacher/material route is not admitted yet (#1892), so nothing is dispatched and no plan, file or readiness is changed.</p>
-            <form onSubmit={event => { event.preventDefault(); const text = draft.trim(); if (!text) return; setIntent({ text, ref: current.lesson.ref, revision: current.lesson.revision }); setRevalidation(null); setDraft(""); }}>
+            <form onSubmit={event => { event.preventDefault(); const text = draft.trim(); if (!text) return; setIntent({ id: ++intentSeq.current, text, ref: current.lesson.ref, revision: current.lesson.revision }); setRevalidation(null); setDraft(""); pendingFocus.current = "intent"; }}>
               <label htmlFor="intent-input">What should change?</label>
-              <textarea id="intent-input" rows={3} value={draft} onChange={e => setDraft(e.target.value)} placeholder="e.g. add a quick exit question about balance" />
+              <textarea id="intent-input" ref={draftRef} rows={3} value={draft} onChange={e => setDraft(e.target.value)} placeholder="e.g. add a quick exit question about balance" />
               <div className="card-actions"><button type="submit" disabled={!draft.trim()}>Prepare intent preview</button><span className="unsaved-badge">Unsaved · this session only</span></div>
             </form>
             {intent && (
-              <div className="intent-card" aria-labelledby="intent-title">
-                <h3 id="intent-title">Intent preview — not sent</h3>
+              <div className="intent-card" role="group" aria-labelledby="intent-title">
+                <h3 id="intent-title" ref={intentHeadingRef} tabIndex={-1}>Intent preview — not sent</h3>
                 <p className="intent-text">{intent.text}</p>
                 <p className="muted">Bound to {current.unit}, {current.lesson.dayLabel}, lesson revision {intent.revision}. It would be routed through an existing teacher/material capability only after an owner admits that route. Being on this page grants no write, readiness or publication authority.</p>
-                <div className="card-actions"><button type="button" className="secondary" onClick={revalidate}>Check lesson is unchanged</button><button type="button" className="text-button" onClick={() => { setIntent(null); setRevalidation(null); }}>Discard preview</button></div>
+                <div className="card-actions"><button type="button" className="secondary" disabled={revalidation?.kind === "checking"} onClick={revalidate}>Check lesson is unchanged</button><button type="button" className="text-button" onClick={() => { setIntent(null); setRevalidation(null); pendingFocus.current = "draft"; }}>Discard preview</button></div>
               </div>)}
             {revalidation && <p role={revalidation.kind === "changed" || revalidation.kind === "failed" ? "alert" : "status"} className={`notice ${revalidation.kind === "unchanged" ? "" : revalidation.kind === "checking" ? "notice--wait" : "notice--warn"}`}>{revalidation.detail}</p>}
           </section>

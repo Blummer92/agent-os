@@ -54,7 +54,7 @@ The browser decodes every response at runtime (`src/apiContract.ts`): wrong shap
 | Command | What it proves | Data |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + `vite build` | — |
-| `npm run test:unit` | Runtime contract decoders for the live API and the fixture, fixture immutability (SHA-256 pin), privacy scan, scenario and Notion/Drive assessment rules (Node test runner on the TypeScript source). A guard fails the run on any failure/skip or fewer than 50 executed tests, because a bare `node --test` exits 0 when no file matches | synthetic |
+| `npm run test:unit` | Runtime contract decoders for the live API and the fixture, fixture immutability (SHA-256 pin), privacy scan, scenario and Notion/Drive assessment rules (Node test runner on the TypeScript source). A guard fails the run on any failure/skip or fewer than 55 executed tests, because a bare `node --test` exits 0 when no file matches | synthetic |
 | `npm test` | UI behaviour in desktop and phone Chromium: the live app with `page.route`-mocked API responses, and the fixture classroom (all states, keyboard, Chromebook/tablet/phone sizes, 400%/200% zoom equivalents, touch targets, interrupted network) | synthetic |
 | `npm run test:integration` | Real HTTP chain: browser → Vite proxy → authenticated API → governed reader → test-only stub executor; plus bypass attempts (no secret, cross-site, rebinding Host, bad ids) | synthetic, real processes |
 | `pytest tests/teacher_os_web` (repo root) | API policy, admission fail-closed, real-process production server (refuses without secret; answers `admission-required`), synthetic fixture server | synthetic |

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { ageText, assessArtifact, concerns, decodeProjection, freshness, type ArtifactItem } from "../../src/fixtureContract.ts";
+import { ageText, agoText, assessArtifact, concerns, decodeFixtureSource, decodeProjection, freshness, type ArtifactItem } from "../../src/fixtureContract.ts";
 import { SCENARIOS, applyScenario, isScenario } from "../../src/fixtureScenarios.ts";
 
 const PATH = new URL("../../public/fixture/classroom-fixture.v1.json", import.meta.url);
@@ -89,6 +89,28 @@ test("permission mismatch is withheld and reveals nothing more", () => {
   assert.equal(a.status, "permission"); assert.equal(a.usable, false);
 });
 
+test("restricted outranks moved and removed (recognized access): no location, no Drive state leaks", () => {
+  for (const driveState of ["moved", "removed", "present"]) {
+    const a = assessArtifact(art({ accessState: "restricted", driveState, movedToLabel: "Drive > SECRET NEW HOME" }));
+    assert.equal(a.status, "permission", driveState);
+    assert.doesNotMatch(a.detail + a.headline, /SECRET|moved|removed|new location/i, driveState);
+  }
+});
+
+test("provenance must declare itself fixture-verified, read-only and Fixture-named; hidden characters are refused", () => {
+  const ok = { display_name: "Fixture x", verification_state: "fixture-verified", access: "read-only" };
+  assert.deepEqual(decodeFixtureSource(ok), ok);
+  for (const bad of [{ ...ok, verification_state: "notion-verified" }, { ...ok, access: "read-write" }, { ...ok, display_name: "Notion x" },
+    { ...ok, display_name: "\u202eFixture x" }, { ...ok, access: "read-only\u0000" }, { ...ok, display_name: "" }, null, [], "x"]) assert.equal(decodeFixtureSource(bad), null, JSON.stringify(bad));
+  assert.equal(decodeProjection(mutate(b => { b.visual_selection.source.verification_state = "notion-verified"; })).kind, "error");
+  assert.equal(decodeProjection(mutate(b => { b.artifacts.source.access = "read-write"; })).kind, "error");
+});
+
+test("empty materials or empty practice is a concern, so 'Context is current' is never vacuous", () => {
+  const p = ready(mutate(b => { b.artifacts.items = []; b.guided_practice.steps = []; }));
+  assert.deepEqual(concerns(p).map(c => c.id), ["no-materials", "no-practice"]);
+});
+
 test("only full agreement on recognized values is usable; unknown values are never usable", () => {
   assert.equal(assessArtifact(art()).usable, true);
   for (const over of [{ notionState: "quantum-ready" }, { driveState: "teleported" }, { accessState: "root" }, { notionState: "listed-draft" }, { notionState: "not-listed" }])
@@ -145,6 +167,7 @@ test("malformed, non-synthetic, wrong-schema and oversized payloads are refused"
 
 test("age text is honest at boundaries", () => {
   assert.equal(ageText(0), "just now"); assert.equal(ageText(4), "4 min old"); assert.equal(ageText(60), "1 h old"); assert.equal(ageText(2880), "2 days old");
+  assert.equal(agoText(47), "47 min ago"); assert.equal(agoText(0), "just now"); assert.equal(agoText(120), "2 h ago"); assert.equal(agoText(2880), "2 days ago");
 });
 
 test("an unreviewed lesson and a missing approved visual are concerns, never silently fine", () => {

@@ -11,7 +11,7 @@
  * Nothing in this module grants write, readiness or publication authority:
  * the assessments below only describe what sources say; they never approve.
  */
-import { decodeSource, STALE_AFTER_MS, type Source } from "./apiContract.ts";
+import { STALE_AFTER_MS, type Source } from "./apiContract.ts";
 
 export const FIXTURE_SCHEMA = "teacher-os-classroom-fixture/v1";
 const MAX_ITEMS = 50;
@@ -66,9 +66,22 @@ const cleanList = <T>(value: unknown, one: (item: unknown) => T | null): readonl
   }
   return out;
 };
+/**
+ * Provenance of fixture data. It must declare itself as the fixture and as
+ * read-only: a source claiming "notion-verified" or "read-write" is refused, so
+ * synthetic data can never be presented with live-looking provenance.
+ */
+export function decodeFixtureSource(value: unknown): Source | null {
+  if (!isObject(value)) return null;
+  // Refuse, never repair: stripping a hidden character could turn a spoofed label into a valid-looking one.
+  if ([value.display_name, value.verification_state, value.access].some(v => typeof v === "string" && new RegExp(CONTROL.source).test(v))) return null;
+  const display_name = cleanText(value.display_name, 200), verification_state = cleanText(value.verification_state, 80), access = cleanText(value.access, 80);
+  if (!display_name || !/^Fixture /.test(display_name) || verification_state !== "fixture-verified" || access !== "read-only") return null;
+  return { display_name, verification_state, access };
+}
 function section<T>(value: unknown, data: (b: Body) => T | null): Section<T> | null {
   if (!isObject(value)) return null;
-  const source = decodeSource(value.source);
+  const source = decodeFixtureSource(value.source);
   const age = cleanAge(value.age_minutes);
   const decoded = source && age !== null ? data(value) : null;
   return source && age !== null && decoded !== null ? { source, ageMinutes: age, data: decoded } : null;
@@ -116,7 +129,7 @@ export function decodeProjection(body: unknown): ProjectionState {
   if (typeof grade !== "number" || !Number.isInteger(grade) || grade < 1 || grade > 12) return bad;
 
   // Planning carries no payload of its own: it is the provenance/freshness envelope of the lesson record above.
-  const planningEnvelope = isObject(body.planning) ? { source: decodeSource(body.planning.source), age: cleanAge(body.planning.age_minutes) } : null;
+  const planningEnvelope = isObject(body.planning) ? { source: decodeFixtureSource(body.planning.source), age: cleanAge(body.planning.age_minutes) } : null;
   if (!planningEnvelope?.source || planningEnvelope.age === null) return bad;
   const visualSection = section(body.visual_selection, b => cleanList(b.items, visual));
   const practiceSection = section(body.guided_practice, b => cleanList(b.steps, step));
@@ -145,6 +158,7 @@ export function decodeProjection(body: unknown): ProjectionState {
 
 export type Freshness = "current" | "stale";
 export const freshness = (ageMinutes: number): Freshness => (ageMinutes * 60_000 <= STALE_AFTER_MS ? "current" : "stale");
+export const agoText = (m: number) => (m < 1 ? "just now" : m < 60 ? `${Math.floor(m)} min ago` : m < 2880 ? `${Math.floor(m / 60)} h ago` : `${Math.floor(m / 1440)} days ago`);
 export const ageText = (m: number) => (m < 1 ? "just now" : m < 60 ? `${Math.floor(m)} min old` : m < 2880 ? `${Math.floor(m / 60)} h old` : `${Math.floor(m / 1440)} days old`);
 
 export type ArtifactAssessment = Readonly<{ status: "agree" | "moved" | "removed" | "permission" | "unlisted" | "unknown"; usable: boolean; headline: string; detail: string }>;
@@ -163,9 +177,10 @@ export function assessArtifact(item: ArtifactItem): ArtifactAssessment {
   if (!has(KNOWN.notion, item.notionState) || !has(KNOWN.drive, item.driveState) || !has(KNOWN.access, item.accessState)) {
     return { status: "unknown", usable: false, headline: "Unrecognized source value", detail: "A source reported a value Teacher OS does not recognize. It is shown as text only and the material is not treated as available." };
   }
+  // A restricted file is described no further: its Drive state, new location and path stay hidden.
+  if (item.accessState === "restricted") return { status: "permission", usable: false, headline: "Permission mismatch", detail: "Drive restricts this file for the current teacher account. It is not opened or described further." };
   if (item.driveState === "removed") return { status: "removed", usable: false, headline: "Removed from Drive", detail: item.notionState === "not-listed" ? "Drive reports it removed." : "Notion still lists it, but Drive reports it removed. Do not rely on it for tomorrow." };
   if (item.driveState === "moved") return { status: "moved", usable: false, headline: "Moved in Drive", detail: item.movedToLabel ? `Drive reports a new location: ${item.movedToLabel}. Confirm it before using it.` : "Drive reports it moved but gave no new location. Locate it before using it." };
-  if (item.accessState === "restricted") return { status: "permission", usable: false, headline: "Permission mismatch", detail: "Drive restricts this file for the current teacher account. It is not opened or described further." };
   if (item.notionState === "not-listed") return { status: "unlisted", usable: false, headline: "In Drive, not listed in Notion", detail: "Notion does not list this file for the lesson, so it is not treated as part of tomorrow's plan." };
   if (item.notionState === "listed-draft") return { status: "unknown", usable: false, headline: "Listed as draft", detail: "Notion lists this as a draft, so it is not treated as ready." };
   return { status: "agree", usable: true, headline: "Notion and Drive agree", detail: "Present in Drive and listed in Notion. This does not mean the lesson is ready; readiness comes from the lesson record." };
@@ -175,15 +190,17 @@ export type Concern = Readonly<{ id: string; text: string }>;
 /** Everything that needs the teacher's attention before relying on this lesson context. */
 export function concerns(p: Projection): readonly Concern[] {
   const list: Concern[] = [];
-  const stale = (label: string, age: number) => { if (freshness(age) === "stale") list.push({ id: `stale-${label}`, text: `${label} was read ${ageText(age)}; refresh before relying on it.` }); };
+  const stale = (label: string, age: number) => { if (freshness(age) === "stale") list.push({ id: `stale-${label}`, text: `${label} was read ${agoText(age)}; refresh before relying on it.` }); };
   stale("Lesson plan", p.planning.ageMinutes);
   stale("Visual selections", p.visual.ageMinutes);
   stale("Guided practice", p.practice.ageMinutes);
   if (p.artifacts.status === "unavailable") list.push({ id: "artifacts-unavailable", text: "Classroom materials are unavailable, so nothing about Drive is claimed." });
   else {
     stale("Classroom materials", p.artifacts.ageMinutes);
+    if (p.artifacts.items.length === 0) list.push({ id: "no-materials", text: "No classroom materials are listed, so nothing about Drive is confirmed." });
     for (const item of p.artifacts.items) { const a = assessArtifact(item); if (!a.usable) list.push({ id: `artifact-${item.id}`, text: `${item.title}: ${a.headline}.` }); }
   }
+  if (p.practice.data.length === 0) list.push({ id: "no-practice", text: "No guided practice is recorded for this lesson." });
   if (p.lesson.readiness !== "teacher-reviewed") list.push({ id: "readiness", text: `Lesson readiness is "${p.lesson.readiness}", not teacher-reviewed.` });
   if (!p.visual.data.some(v => v.selectionState === "approved")) list.push({ id: "no-approved-visuals", text: "No approved visual selection is recorded." });
   return list;

@@ -8,7 +8,7 @@ const FIXTURE_URL = "**/fixture/classroom-fixture.v1.json";
 const BODY = JSON.parse(readFileSync(new URL("../public/fixture/classroom-fixture.v1.json", import.meta.url), "utf8"));
 const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 const go = async (page: Page, scenario = "current") => { await page.goto(`/fixture.html?scenario=${scenario}`); };
-const summary = (page: Page) => page.getByRole("status").filter({ has: page.locator("#summary-title") });
+const summary = (page: Page) => page.locator("section.summary");
 const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 test("current: the canonical fixture shows plan, approved visuals, guided practice, materials and provenance", async ({ page }) => {
@@ -180,9 +180,10 @@ test("changing the sample state drops an unsent intent instead of carrying it to
   await page.getByRole("button", { name: "Prepare intent preview" }).click();
   await page.getByText("Fixture review controls").click();
   await page.getByLabel("Sample state").selectOption("stale");
+  await expect(summary(page)).toContainText("Needs your attention (4)"); // settled: the new evidence is on screen
   await expect(page.getByText("Intent preview — not sent")).toHaveCount(0);
+  await expect(page.getByLabel("What should change?")).toHaveValue("x"); // the teacher's words are kept, not the binding
   expect(new URL(page.url()).searchParams.get("scenario")).toBe("stale");
-  await expect(summary(page)).toContainText("Needs your attention (4)");
 });
 
 test("unknown scenario query falls back to the current fixture, never to anything else", async ({ page }) => {
@@ -236,7 +237,7 @@ for (const [name, width, height] of VIEWPORTS) {
       expect(await overflow(page), `${scenario} overflows at ${width}`).toBeLessThanOrEqual(0);
     }
     await go(page);
-    for (const h of ["Lesson plan", "Approved visual selections", "Guided practice", "Classroom materials", "Improve tomorrow's lesson"]) {
+    for (const h of ["Lesson plan", "Visual selections", "Guided practice", "Classroom materials", "Improve tomorrow's lesson"]) {
       const heading = page.getByRole("heading", { name: h });
       await heading.scrollIntoViewIfNeeded();
       await expect(heading).toBeInViewport();
@@ -287,4 +288,158 @@ test("the live app links to the fixture without presenting it as live data", asy
   await expect(page.getByRole("note")).toContainText("FIXTURE");
   await page.getByRole("link", { name: /Live Teacher OS/ }).click();
   await expect(page).toHaveURL(/\/$/);
+});
+
+/* ---------- QA-driven regression tests: races, supersession, precedence, focus, provenance ---------- */
+
+/** Holds exactly the next fixture request after `arm()` until `release()`; every other request passes straight through. */
+async function gated(page: Page) {
+  let armed = false; let release: () => void = () => {}; let gate: Promise<void> = Promise.resolve();
+  await page.route(FIXTURE_URL, async r => {
+    if (armed) { armed = false; await gate; }
+    try { await r.fulfill(json(BODY)); } catch { /* the page abandoned this request: nothing to answer */ }
+  });
+  return { arm() { armed = true; gate = new Promise<void>(res => { release = res; }); }, release: () => release() };
+}
+
+test("race: a check still in flight when the sample state changes can never overwrite the new evidence", async ({ page }) => {
+  const hold = await gated(page);
+  await go(page);
+  await expect(summary(page)).toContainText("Context is current");
+  await page.getByLabel("What should change?").fill("Check me");
+  await page.getByRole("button", { name: "Prepare intent preview" }).click();
+  hold.arm();
+  await page.getByRole("button", { name: "Check lesson is unchanged" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Checking the lesson again" })).toBeVisible();
+  await page.getByText("Fixture review controls").click();
+  await page.getByLabel("Sample state").selectOption("disagreement");
+  await expect(summary(page)).toContainText("Removed from Drive");
+  hold.release();
+  await page.waitForTimeout(400); // give the superseded response every chance to apply
+  await expect(summary(page)).toContainText("Needs your attention (1)");
+  await expect(summary(page)).not.toContainText("Context is current");
+  await expect(page.getByText("The lesson is unchanged")).toHaveCount(0);
+  await expect(page.getByText("Checking the lesson again")).toHaveCount(0);
+  await expect(page.getByLabel("What should change?")).toHaveValue("Check me");
+});
+
+test("race: an intent replaced while a check is in flight is judged on its own; the old words never come back", async ({ page }) => {
+  const hold = await gated(page);
+  await go(page, "context-changed");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.getByLabel("What should change?").fill("OLD intent");
+  await page.getByRole("button", { name: "Prepare intent preview" }).click();
+  hold.arm();
+  await page.getByRole("button", { name: "Check lesson is unchanged" }).click();
+  await page.getByRole("button", { name: "Discard preview" }).click();
+  await page.getByLabel("What should change?").fill("NEW intent");
+  await page.getByRole("button", { name: "Prepare intent preview" }).click();
+  await expect(page.locator(".intent-card")).toContainText("NEW intent");
+  hold.release();
+  // The held read reports revision 4: the NEW intent (written against revision 3) is withdrawn by the same rule, with ITS words restored.
+  await expect(page.getByRole("alert")).toContainText("revision 3 → 4");
+  await expect(page.getByLabel("What should change?")).toHaveValue("NEW intent");
+  await expect(page.locator(".intent-card")).toHaveCount(0);
+});
+
+test("a superseded read never applies: the page shows the last state the teacher chose", async ({ page }) => {
+  const hold = await gated(page);
+  await go(page, "current");
+  await expect(summary(page)).toContainText("Context is current");
+  await page.getByText("Fixture review controls").click();
+  hold.arm();
+  await page.getByRole("button", { name: "Read the sample again" }).click(); // slow read of "current"
+  await page.getByLabel("Sample state").selectOption("degraded");
+  await expect(page.getByRole("alert").filter({ hasText: "Classroom materials are unavailable" })).toBeVisible();
+  hold.release();
+  await page.waitForTimeout(400);
+  await expect(page.getByRole("alert").filter({ hasText: "Classroom materials are unavailable" })).toBeVisible();
+  await expect(summary(page)).not.toContainText("Context is current");
+});
+
+test("Read the sample again: a lesson that changed withdraws the older intent and says so", async ({ page }) => {
+  await go(page, "context-changed");
+  await page.getByLabel("What should change?").fill("Keep step 1");
+  await page.getByRole("button", { name: "Prepare intent preview" }).click();
+  await page.getByText("Fixture review controls").click();
+  await page.getByRole("button", { name: "Read the sample again" }).click();
+  await expect(page.getByRole("alert")).toContainText("revision 3 → 4");
+  await expect(page.getByText("Intent preview — not sent")).toHaveCount(0);
+  await expect(page.getByLabel("What should change?")).toHaveValue("Keep step 1");
+});
+
+test("a lesson change never overwrites words the teacher typed meanwhile", async ({ page }) => {
+  await go(page, "context-changed");
+  await page.getByLabel("What should change?").fill("First words");
+  await page.getByRole("button", { name: "Prepare intent preview" }).click();
+  await page.getByLabel("What should change?").fill("Second words");
+  await page.getByRole("button", { name: "Check lesson is unchanged" }).click();
+  await expect(page.getByRole("alert")).toContainText("revision 3 → 4");
+  const value = await page.getByLabel("What should change?").inputValue();
+  expect(value).toContain("First words"); expect(value).toContain("Second words");
+});
+
+test("permission outranks moved: a restricted file reveals neither its new location nor its path", async ({ page }) => {
+  await page.route(FIXTURE_URL, r => r.fulfill(json({ ...BODY, artifacts: { ...BODY.artifacts, items: [{ ...BODY.artifacts.items[1], drive_state: "moved", access_state: "restricted", moved_to_label: "Drive > TOP SECRET NEW HOME" }] } })));
+  await go(page);
+  const card = page.getByRole("list", { name: "Classroom materials" }).getByRole("listitem");
+  await expect(card).toContainText("Permission mismatch");
+  await expect(card).not.toContainText("TOP SECRET");
+  await expect(card).not.toContainText("Digital Media 1");
+  await expect(card).not.toContainText("moved");
+});
+
+test("provenance claiming to be live (or read-write, or with hidden characters) is refused, not rendered as current", async ({ page }) => {
+  for (const source of [
+    { display_name: "Fixture planning projection", verification_state: "notion-verified", access: "read-only" },
+    { display_name: "Fixture planning projection", verification_state: "fixture-verified", access: "read-write" },
+    { display_name: "Notion planning", verification_state: "fixture-verified", access: "read-only" },
+    { display_name: "\u202eFixture planning", verification_state: "fixture-verified", access: "read-only" },
+  ]) {
+    await page.route(FIXTURE_URL, r => r.fulfill(json({ ...BODY, planning: { ...BODY.planning, source } })));
+    await go(page);
+    await expect(page.getByRole("alert")).toContainText("did not match its contract");
+    await expect(summary(page)).toHaveCount(0);
+    await page.unroute(FIXTURE_URL);
+  }
+});
+
+test("an empty materials list or empty practice is never reported as 'Context is current'", async ({ page }) => {
+  await page.route(FIXTURE_URL, r => r.fulfill(json({ ...BODY, guided_practice: { ...BODY.guided_practice, steps: [] }, artifacts: { ...BODY.artifacts, items: [] } })));
+  await go(page);
+  await expect(summary(page)).toContainText("Needs your attention (2)");
+  await expect(summary(page)).toContainText("No classroom materials are listed");
+  await expect(summary(page)).toContainText("No guided practice is recorded");
+});
+
+test("keyboard focus is never dropped to the page body", async ({ page }) => {
+  await go(page);
+  await page.getByLabel("What should change?").click();
+  await page.keyboard.type("Add a gallery walk");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter"); // Prepare intent preview, with a real key press
+  await expect(page.getByRole("heading", { name: "Intent preview — not sent" })).toBeFocused();
+  await page.getByRole("button", { name: "Discard preview" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("What should change?")).toBeFocused();
+  // Try again after an error lands on the page title
+  await page.route(FIXTURE_URL, r => r.abort("internetdisconnected"));
+  await go(page);
+  await expect(page.getByRole("alert")).toContainText("network interrupted");
+  await page.unroute(FIXTURE_URL);
+  await page.getByRole("button", { name: "Try again" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Photography Foundations" })).toBeFocused();
+});
+
+test("heading structure has no skipped levels and the visual section does not claim everything is approved", async ({ page }) => {
+  await go(page, "unknown");
+  await expect(page.getByRole("heading", { level: 4 })).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 2, name: "Visual selections" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Approved visual selections/ })).toHaveCount(0);
+});
+
+test("stale wording reads naturally", async ({ page }) => {
+  await go(page, "stale");
+  await expect(summary(page)).toContainText("Lesson plan was read 47 min ago");
 });

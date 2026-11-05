@@ -42,7 +42,9 @@ type Body = Record<string, unknown>;
 const malformed = { kind: "unavailable", reason: "malformed-response" } as const;
 
 const isObject = (value: unknown): value is Body => typeof value === "object" && value !== null && !Array.isArray(value);
-const isLabel = (value: unknown, max = MAX_LABEL): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= max;
+// Control and bidi-override characters in a label are refused outright: they can reorder or hide text on screen.
+const HIDDEN_CHARS = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const isLabel = (value: unknown, max = MAX_LABEL): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= max && !HIDDEN_CHARS.test(value);
 
 /** Only links to Notion records are rendered; anything else is dropped (never followed). */
 export function safeRecordUrl(value: unknown): string | null {
