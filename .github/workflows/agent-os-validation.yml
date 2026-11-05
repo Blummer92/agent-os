@@ -64,6 +64,9 @@ jobs:
       profile: ${{ steps.plan.outputs.profile }}
       plan_base64: ${{ steps.plan.outputs.plan_base64 }}
       needs_node: ${{ steps.plan.outputs.needs_node }}
+      needs_node_cache: ${{ steps.plan.outputs.needs_node_cache }}
+      needs_picture_perfect_install: ${{ steps.plan.outputs.needs_picture_perfect_install }}
+      node_lock_paths: ${{ steps.plan.outputs.node_lock_paths }}
     steps:
       - name: Check out exact pull request head
         uses: actions/checkout@v7
@@ -100,6 +103,7 @@ jobs:
           from scripts.agent_os_remote_validation import (
               SelectionInput,
               load_rule_map,
+              node_setup_requirements,
               select_validation_plan,
               serialize_validation_plan,
           )
@@ -124,10 +128,13 @@ jobs:
           ).decode("ascii")
           print(f"profile={plan.profile}")
           print(f"plan_base64={encoded}")
-          print(
-              "needs_node=" +
-              str(any("picture-perfect-coach" in command for command in plan.commands)).lower()
-          )
+          node = node_setup_requirements(plan.commands)
+          print(f"needs_node={str(node['needs_node']).lower()}")
+          print(f"needs_node_cache={str(bool(node['lock_paths'])).lower()}")
+          print(f"needs_picture_perfect_install={str(bool(node['install_dirs'])).lower()}")
+          print("node_lock_paths<<NODE_LOCK_PATHS")
+          print("\n".join(node["lock_paths"]))
+          print("NODE_LOCK_PATHS")
           PY
 
       - name: Fail closed on manual review
@@ -158,15 +165,21 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 
       - name: Set up Node for focused validation
-        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' && steps.plan.outputs.needs_node_cache == 'true' }}
         uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: 08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json
+          cache-dependency-path: ${{ steps.plan.outputs.node_lock_paths }}
+
+      - name: Set up Node for focused validation (no lockfile cache)
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' && steps.plan.outputs.needs_node_cache == 'false' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
 
       - name: Install Picture Perfect Coach dependencies
-        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_picture_perfect_install == 'true' }}
         working-directory: 08_Tooling/instructional-materials-coach/picture-perfect-coach
         run: npm ci
 
@@ -1017,6 +1030,9 @@ jobs:
           path: tmp/jscpd-advisory/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Verify jscpd advisory evidence
+        if: always()
+        run: python -m scripts.advisory_evidence_guard --kind jscpd --file tmp/jscpd-advisory/jscpd-advisory.json --sha "${{ github.event.pull_request.head.sha }}"
 
   pyan3-advisory:
     name: pyan3 call-graph advisory
@@ -1047,6 +1063,9 @@ jobs:
           path: tmp/pyan3-advisory/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Verify pyan3 advisory evidence
+        if: always()
+        run: python -m scripts.advisory_evidence_guard --kind pyan3 --file tmp/pyan3-advisory/pyan3-advisory.json --sha "${{ github.event.pull_request.head.sha }}"
 
   aggregate-gate:
     # Terminal disposition only when authoritative aggregate validation is
@@ -1075,6 +1094,7 @@ jobs:
           AGGREGATE_OUTCOME: ${{ needs.validate.outputs.aggregate_outcome }}
           MAIN_HEALTH_OUTCOME: ${{ needs.validate.outputs.main_health_outcome }}
           MAIN_RECOVERY_STOP_OUTCOME: ${{ needs.validate.outputs.main_recovery_stop_outcome }}
+          PLAN_RESULT: ${{ needs.plan.result }}
           STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
