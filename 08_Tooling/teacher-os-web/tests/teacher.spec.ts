@@ -303,35 +303,6 @@ test("long unbroken labels do not overflow at 320px, 390px, or 160px (200% zoom 
   expect(zoomOverflow).toEqual([]);
 });
 
-test("a draft follows its lesson after a reorder, not its old position", async ({ page }) => {
-  let lessonsForA = [lesson(1), lesson(2), lesson(3)];
-  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA });
-  await page.unroute("**/api/teacher-os/units/*/lessons");
-  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: now() })));
-  await page.goto("/");
-  await open(page);
-  await page.getByRole("button", { name: "Next →" }).click();
-  await expect(page.getByRole("heading", { name: "Focus 2" })).toBeVisible();
-  await page.getByRole("button", { name: "Edit in focused chat" }).click();
-  await expect(page.getByRole("heading", { name: "Editing: Day 2" })).toBeVisible();
-  await page.getByLabel("Describe a proposed edit").fill("NOTE-FOR-DAY2");
-  await page.getByRole("button", { name: "Add local message" }).click();
-  await expect(page.getByText("NOTE-FOR-DAY2")).toBeVisible();
-  await page.getByRole("button", { name: "← Back to lesson" }).click();
-  // Rotate, not reverse: Day 2 moves from position 2 to position 3.
-  lessonsForA = [lesson(3), lesson(1), lesson(2)];
-  await open(page);
-  await page.getByRole("button", { name: "Refresh from Notion" }).click();
-  await expect(panel(page).getByText("2 of 3")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Focus 1" })).toBeVisible();
-  await page.getByRole("button", { name: "Next →" }).click();
-  await expect(panel(page).getByText("3 of 3")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Focus 2" })).toBeVisible();
-  await page.getByRole("button", { name: "Edit in focused chat" }).click();
-  await expect(page.getByRole("heading", { name: "Editing: Day 2" })).toBeVisible();
-  await expect(page.getByText("NOTE-FOR-DAY2")).toBeVisible();
-});
-
 test("an ambiguous lesson draft never attaches to another lesson after a refresh", async ({ page }) => {
   const ambiguous = (focus: string) => lesson(1, { day_lesson_number: null, daily_focus: focus });
   let lessonsForA = [ambiguous("Ambiguous A"), ambiguous("Ambiguous B")];

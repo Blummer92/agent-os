@@ -305,7 +305,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         api = TeacherOsApi(session_secret=secret, port=args.port, allowed_origins=frozenset(args.allowed_origin))
     except ValueError:
-        sys.stderr.write(f"teacher-os-api: refusing to start without {SECRET_ENV} and loopback origins (launch with `npm run dev:app`)\n")
+        # Static text only: this names the environment VARIABLE, never the
+        # secret value. The value lives only in `secret` above and is passed
+        # to TeacherOsApi, where it is used solely by hmac.compare_digest;
+        # it is never printed, logged, returned or placed in argv. Keeping
+        # the message a literal (no interpolation of SECRET_ENV or `secret`)
+        # removes the dataflow a clear-text-logging check flagged here
+        # (CodeQL thread PRRT_kwDOTNo9I86z3DPP) without suppressing logging.
+        sys.stderr.write("teacher-os-api: refusing to start without TEACHER_OS_API_SESSION_SECRET and loopback origins (launch with `npm run dev:app`)\n")
         return 2
     server = serve(api)
     sys.stderr.write(f"teacher-os-api listening on http://{LOOPBACK}:{args.port} (loopback only)\n")

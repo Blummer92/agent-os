@@ -284,9 +284,7 @@ def test_production_server_process_refuses_without_secret():
 def test_failed_startup_prints_the_variable_name_never_the_secret_value():
     # CodeQL thread PRRT_kwDOTNo9I86z3DPP: the refusal line names the
     # environment VARIABLE; the canary below is a full-length secret value
-    # that must never appear in stderr, in either failure mode. (At this
-    # head the line interpolates SECRET_ENV, the name constant, not the
-    # value; this test pins that property instead of the literal wording.)
+    # that must never appear in stderr, in either failure mode.
     canary = "CANARY-FAILED-STARTUP-" + "x" * 24
     assert len(canary) >= 32 and teacher_os_api.SECRET_ENV == "TEACHER_OS_API_SESSION_SECRET"
     for env_secret, extra in ((canary, ["--allowed-origin", "https://evil.example"]), (None, ["--allowed-origin", "http://127.0.0.1:5173"])):
