@@ -38,7 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER = REPO_ROOT / "08_Tooling" / "teacher-os-web" / "server" / "teacher_os_api.py"
 FIXTURE = Path(__file__).with_name("fixture_api.py")
 PORT = 8790
-SECRET = "s" * 43
+# Synthetic, per-process credential; never a committed or live Notion secret.
+SECRET = secrets.token_urlsafe(32)
 WEB_ORIGIN = "http://127.0.0.1:4175"
 UNITS = "/api/teacher-os/units"
 
