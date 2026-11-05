@@ -191,3 +191,44 @@ def test_python_reuse_decision_matches_workflow_matrix(
     from scripts.agent_os_aggregate_gate import evaluate_reuse
 
     assert evaluate_reuse(statuses) == (run_required == "false", state)
+
+
+# 2026-11-05 CI mutation repair (bounded retest of V3): id edge cases.
+#
+# Id-less / id-0 / duplicate-id inputs are outside the GitHub commit-status
+# contract (API ids are present, positive, unique), but
+# latest_authoritative_state accepts them without validation, so pin the
+# tie-break and the id default: an id-less entry counts as id 0, and the
+# first entry wins an id tie. Kills latest_authoritative_state mutants
+# 14 (entry id default), 15 (> vs >=) and 21 (newest id default).
+ID_EDGE_MATRIX = [
+    # Id-less success cannot displace an id-1 failure: failure governs.
+    (
+        [
+            {"state": "success", "context": "agent-os/authoritative-aggregate"},
+            _status(1, "failure"),
+        ],
+        "failure",
+        "true",
+    ),
+    # Id-less success cannot displace an id-0 failure either.
+    (
+        [
+            _status(0, "failure"),
+            {"state": "success", "context": "agent-os/authoritative-aggregate"},
+        ],
+        "failure",
+        "true",
+    ),
+    # Duplicate ids: first entry wins.
+    ([_status(1, "success"), _status(1, "failure")], "success", "false"),
+]
+
+
+@pytest.mark.parametrize("statuses,state,run_required", ID_EDGE_MATRIX)
+def test_python_reuse_decision_id_edge_cases(
+    statuses: list[dict], state: str, run_required: str
+) -> None:
+    from scripts.agent_os_aggregate_gate import evaluate_reuse
+
+    assert evaluate_reuse(statuses) == (run_required == "false", state)

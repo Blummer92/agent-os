@@ -324,3 +324,57 @@ def test_terminal_failure_evidence_for_another_head_is_not_inherited():
     assert result.status is GateCurrentness.STALE_RETRY
     assert result.reason_codes == (GateCurrentnessReason.RUN_HEAD_SHA_STALE,)
     assert result.merge_authorized is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-05 CI mutation repair (bounded retest of V3): boundary regressions.
+#
+# Three surviving mutants, each killed by one direct test below. No
+# production-code change: the unmutated code already behaves correctly on
+# every probed input; these tests pin the contract the mutants weaken.
+# ---------------------------------------------------------------------------
+
+
+def test_short_lowercase_hex_head_sha_is_rejected():
+    # _require_hex40 must enforce the exact-40 length for str inputs: "ab"
+    # and "a" * 39 are valid lowercase hex but truncated. Kills
+    # _require_hex40__mutmut_1 (or -> and drops the length check for strs).
+    # Existing malformed cases ("not-a-sha", "A" * 40) do not kill it: the
+    # first fails int(x, 16), the second fails the lowercase check.
+    for bad_sha in ("ab", "a" * 39):
+        with pytest.raises(ValueError, match="exact 40-character SHA"):
+            classify_validation_gate_currentness(
+                repository="Blummer92/agent-os",
+                pull_request=3267,
+                reacquired_head_sha=bad_sha,
+                wrapper_run=wrapper(),
+                canonical_check_runs=(),
+            )
+
+
+def test_valid_pr_number_one_is_accepted():
+    # classify must accept pull_request=1, the smallest valid PR number.
+    # Kills classify__mutmut_13 (<= 0 -> <= 1 falsely rejects PR #1).
+    result = classify_validation_gate_currentness(
+        repository="Blummer92/agent-os",
+        pull_request=1,
+        reacquired_head_sha=HEAD,
+        wrapper_run=wrapper(),
+        canonical_check_runs=(),
+    )
+    assert result.status is GateCurrentness.CROSS_CHECK_REQUIRED
+    assert result.pull_request == 1
+
+
+@pytest.mark.parametrize("bad_pr", ["3", None])
+def test_non_integer_pr_number_raises_value_error(bad_pr):
+    # A non-int pull_request must raise ValueError, not leak a TypeError
+    # from the <= comparison. Kills classify__mutmut_9 (or -> and).
+    with pytest.raises(ValueError):
+        classify_validation_gate_currentness(
+            repository="Blummer92/agent-os",
+            pull_request=bad_pr,
+            reacquired_head_sha=HEAD,
+            wrapper_run=wrapper(),
+            canonical_check_runs=(),
+        )
