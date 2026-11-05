@@ -312,7 +312,8 @@ def test_p1_wrong_attempt_junit_and_health_are_not_selected():
     jobs = [
         {"id": 7, "name": "pyan3 call-graph advisory", "conclusion": "success", "run_attempt": 2, "steps": []},
         {"id": 8, "name": "jscpd duplicate-code advisory", "conclusion": "skipped", "run_attempt": 2, "steps": []},
-        {"id": 9, "name": "Run validation plan", "conclusion": "success", "run_attempt": 2,
+        {"id": 9, "name": "Run validation plan", "conclusion": "success", "run_attempt": 2, "steps": []},
+        {"id": 10, "name": "Run aggregate validation", "conclusion": "success", "run_attempt": 2,
          "steps": [{"name": "Run aggregate validation", "conclusion": "success"}]},
     ]
     arts = [_artifact("junit-aggregate-1", 31)]
