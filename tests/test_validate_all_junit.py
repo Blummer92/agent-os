@@ -73,6 +73,8 @@ def repo(tmp_path: Path) -> Path:
 
 def run(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
+    # This harness models local defaults unless a test explicitly requests CI JUnit.
+    merged.pop("CI_JUNIT_DIR", None)
     merged["PYTHON_BIN"] = str(repo / "fake-python")
     if env:
         merged.update(env)
