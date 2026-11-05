@@ -1,0 +1,214 @@
+# Focused hosted proof for the Teacher OS React slice. This file does NOT
+# change Agent OS governance, authorize Notion reads, or bypass issue acceptance.
+name: teacher-os-react-ci
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths:
+      - "08_Tooling/teacher-os-web/**"
+      - "tests/teacher_os_web/**"
+      - "scripts/agent_os_notion_read_request/**"
+      - "src/navigation_registry/**"
+      - ".github/workflows/teacher-os-react-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "08_Tooling/teacher-os-web/**"
+      - "tests/teacher_os_web/**"
+      - "scripts/agent_os_notion_read_request/**"
+      - "src/navigation_registry/**"
+      - ".github/workflows/teacher-os-react-ci.yml"
+
+# No secrets, deployments, PR write authority, or pull_request_target.
+permissions:
+  contents: read
+
+concurrency:
+  group: teacher-os-react-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  react-ci:
+    name: Hosted React, browser and API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact PR head (or push commit)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert exact tested commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA" || { echo "ERROR: checkout not exact PR head"; exit 1; }
+          echo "PR head: $actual"
+          echo "PR head: $actual" >> "$GITHUB_STEP_SUMMARY"
+
+      # The standalone workflow PR is deliberately branched from main, where
+      # Teacher OS React is not merged yet. A workflow-only bootstrap PR is
+      # allowed to report "not executable here" instead of feigning a green
+      # React test. Any PR changing/removing Teacher OS files must fail closed.
+      - name: Determine whether React tests are applicable
+        id: preflight
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -f 08_Tooling/teacher-os-web/package.json && -f 08_Tooling/teacher-os-web/package-lock.json && -f 08_Tooling/teacher-os-web/playwright.config.ts ]]; then
+            echo 'run_tests=true' >> "$GITHUB_OUTPUT"
+            echo 'React checkout is present: run all tests.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" == 'push' ]]; then
+            echo 'run_tests=false' >> "$GITHUB_OUTPUT"
+            echo 'BOOTSTRAP ONLY: React sources have not merged into main; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" != 'pull_request' || -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo 'FAIL: missing PR diff provenance for absent React sources' >&2
+            exit 1
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          if [[ "$changed" == '.github/workflows/teacher-os-react-ci.yml' ]]; then
+            echo 'run_tests=false' >> "$GITHUB_OUTPUT"
+            echo 'BOOTSTRAP ONLY: workflow-file-only PR before React code is merged; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo 'FAIL: React sources missing on non-bootstrap PR. No success without tests.' >&2
+          printf 'Changed files: %s\n' "$changed" >&2
+          exit 1
+
+      - name: Set up Node 22
+        if: steps.preflight.outputs.run_tests == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: 08_Tooling/teacher-os-web/package-lock.json
+
+      - name: Set up Python 3.12
+        if: steps.preflight.outputs.run_tests == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Toolchain and evidence directory
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts
+          node --version | tee ci-artifacts/node-version.txt
+          npm --version | tee ci-artifacts/npm-version.txt
+          python3 --version | tee ci-artifacts/python-version.txt
+
+      - name: Install locked frontend dependencies
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee ci-artifacts/npm-ci.log
+
+      - name: Build React app
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npm run build 2>&1 | tee ci-artifacts/npm-build.log
+
+      - name: Run guarded unit tests
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npm run test:unit 2>&1 | tee ci-artifacts/unit-positive.log
+
+      - name: Confirm test failure detection (negative canary)
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          original="$RUNNER_TEMP/teacher-os-unit-test.original.ts"
+          cp tests/unit/apiContract.test.ts "$original"
+          trap 'cp "$original" tests/unit/apiContract.test.ts' EXIT
+          printf '\nimport { test as __hostedCanaryTest } from "node:test";\n__hostedCanaryTest("HOSTED_CI_NEGATIVE_CONTROL", () => { throw new Error("CI_NEGATIVE_CONTROL_SENTINEL"); });\n' >> tests/unit/apiContract.test.ts
+          if npm run test:unit > ci-artifacts/unit-negative-control.log 2>&1; then
+            cat ci-artifacts/unit-negative-control.log
+            echo 'ERROR: deliberately broken test exited successfully'
+            exit 1
+          fi
+          if ! grep -Fq 'CI_NEGATIVE_CONTROL_SENTINEL' ci-artifacts/unit-negative-control.log; then
+            cat ci-artifacts/unit-negative-control.log
+            echo 'ERROR: failure was unrelated to the injected sentinel'
+            exit 1
+          fi
+          echo 'PASS: a real assertion failure is rejected by npm run test:unit'
+          echo 'Negative unit-test canary: PASS (deliberate failure detected)' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Chromium for Playwright
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium 2>&1 | tee ci-artifacts/playwright-install.log
+
+      - name: Mocked browser tests (desktop and phone)
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npx playwright test --config playwright.config.ts --workers=2 2>&1 | tee ci-artifacts/playwright-mocked.log
+
+      - name: Real-process API/browser integration (synthetic fixtures only)
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: 08_Tooling/teacher-os-web
+        run: |
+          set -euo pipefail
+          npx playwright test --config playwright.integration.config.ts --workers=2 2>&1 | tee ci-artifacts/playwright-integration.log
+
+      - name: Python API and governed read-contract tests
+        if: steps.preflight.outputs.run_tests == 'true'
+        working-directory: .
+        env:
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          mkdir -p 08_Tooling/teacher-os-web/ci-artifacts
+          python3 -m pip install -q 'pytest>=8,<10'
+          python3 -m pytest tests/teacher_os_web tests/agent_os_notion_read_request -q 2>&1 | tee 08_Tooling/teacher-os-web/ci-artifacts/pytest-api-and-read.log
+
+      - name: Summarize CI result
+        if: always()
+        run: |
+          {
+            echo '### Teacher OS focused CI'
+            echo 'Preflight execute flag: ${{ steps.preflight.outputs.run_tests }}'
+            echo '- When applicable: exact-head checkout, build, guarded unit tests, negative canary, desktop/phone Playwright, real-process synthetic integration and Python contract tests.'
+            echo '- Any failing command fails its step. Test fixtures do not authorize live Notion access.'
+            echo '- This check does not certify issue #2801 acceptance or a Ready/merge decision.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test logs and browser traces
+        if: always() && steps.preflight.outputs.run_tests == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: teacher-os-react-ci-${{ github.run_id }}
+          path: |
+            08_Tooling/teacher-os-web/ci-artifacts/**
+            08_Tooling/teacher-os-web/test-results/**
+            08_Tooling/teacher-os-web/playwright-report/**
+          retention-days: 7
+          if-no-files-found: warn
