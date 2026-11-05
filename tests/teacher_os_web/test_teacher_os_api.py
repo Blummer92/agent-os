@@ -281,6 +281,27 @@ def test_production_server_process_refuses_without_secret():
     assert "refusing to start" in proc.stderr.read()
 
 
+def test_failed_startup_prints_the_variable_name_never_the_secret_value():
+    # CodeQL thread PRRT_kwDOTNo9I86z3DPP: the refusal line names the
+    # environment VARIABLE; the canary below is a full-length secret value
+    # that must never appear in stderr, in either failure mode. (At this
+    # head the line interpolates SECRET_ENV, the name constant, not the
+    # value; this test pins that property instead of the literal wording.)
+    canary = "CANARY-FAILED-STARTUP-" + "x" * 24
+    assert len(canary) >= 32 and teacher_os_api.SECRET_ENV == "TEACHER_OS_API_SESSION_SECRET"
+    for env_secret, extra in ((canary, ["--allowed-origin", "https://evil.example"]), (None, ["--allowed-origin", "http://127.0.0.1:5173"])):
+        port = _free_port()
+        env = {k: v for k, v in os.environ.items() if k != teacher_os_api.SECRET_ENV}
+        if env_secret is not None:
+            env[teacher_os_api.SECRET_ENV] = env_secret
+        proc = subprocess.Popen([sys.executable, "-I", str(SERVER), "--port", str(port), *extra], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert proc.wait(timeout=20) == 2
+        err = proc.stderr.read()
+        assert "refusing to start" in err and teacher_os_api.SECRET_ENV in err
+        assert canary not in err
+
+
 def test_production_server_process_is_loopback_authenticated_and_fails_closed_without_admission():
     port, secret = _free_port(), secrets.token_urlsafe(32)
     proc = _start(SERVER, port, secret, "--allowed-origin", "http://127.0.0.1:5173")

@@ -183,7 +183,9 @@ export function TeacherApp() {
         <p className={`connection connection--${status.tone}`} role="status" aria-label={`Curriculum connection: ${status.text}`}><span className="dot" aria-hidden="true" />{status.text}</p>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
-      <div className="demo-banner" role="note">Read-only · lessons come from verified Notion evidence · Slides, Docs and worksheets stay in approved Google Drive folders</div>
+      <div className="demo-banner" role="note">{units.kind === "unavailable" && units.reason === "admission-required"
+        ? "Read-only · live Notion reads are not admitted yet, so no lessons are shown · Slides, Docs and worksheets stay in approved Google Drive folders"
+        : "Read-only · only owner-approved Notion evidence is shown, when live reads are admitted · Slides, Docs and worksheets stay in approved Google Drive folders"}</div>
       {stale && evidence && <p role="alert" className="notice notice--warn banner-notice">Stale evidence: last read {evidence.generatedAt}. <button type="button" className="text-button" onClick={refresh}>Refresh from Notion</button></p>}
       {menuOpen && <nav aria-label="Recent conversations" className="recent-menu">
         <h2>Recent conversations</h2>
