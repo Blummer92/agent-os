@@ -7,6 +7,8 @@ on:
     paths:
       - "08_Tooling/teacher-os-web/**"
       - "tests/teacher_os_web/**"
+      - "tests/agent_os_notion_read_request/**"
+      - "tests/navigation_registry/**"
       - "scripts/agent_os_notion_read_request/**"
       - "src/navigation_registry/**"
       - ".github/workflows/teacher-os-react-ci.yml"
@@ -15,6 +17,8 @@ on:
     paths:
       - "08_Tooling/teacher-os-web/**"
       - "tests/teacher_os_web/**"
+      - "tests/agent_os_notion_read_request/**"
+      - "tests/navigation_registry/**"
       - "scripts/agent_os_notion_read_request/**"
       - "src/navigation_registry/**"
       - ".github/workflows/teacher-os-react-ci.yml"
@@ -65,29 +69,62 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ -f 08_Tooling/teacher-os-web/package.json && -f 08_Tooling/teacher-os-web/package-lock.json && -f 08_Tooling/teacher-os-web/playwright.config.ts ]]; then
-            echo 'run_tests=true' >> "$GITHUB_OUTPUT"
-            echo 'React checkout is present: run all tests.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
+          root='08_Tooling/teacher-os-web'
           if [[ "$EVENT_NAME" == 'push' ]]; then
-            echo 'run_tests=false' >> "$GITHUB_OUTPUT"
-            echo 'BOOTSTRAP ONLY: React sources have not merged into main; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if [[ "$EVENT_NAME" != 'pull_request' || -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
-            echo 'FAIL: missing PR diff provenance for absent React sources' >&2
+            if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+              echo 'FAIL: missing usable push baseline for source identity' >&2
+              exit 1
+            fi
+            changed="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+          elif [[ "$EVENT_NAME" == 'pull_request' && -n "$BASE_SHA" && -n "$HEAD_SHA" ]]; then
+            changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          else
+            echo 'FAIL: missing exact-head diff provenance' >&2
             exit 1
           fi
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-          if [[ "$changed" == '.github/workflows/teacher-os-react-ci.yml' ]]; then
-            echo 'run_tests=false' >> "$GITHUB_OUTPUT"
-            echo 'BOOTSTRAP ONLY: workflow-file-only PR before React code is merged; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
+          # main has a partial scaffold. Locked browser tests are mandatory only
+          # once full-slice markers appear; deleting React files fails closed.
+          if [[ -f "$root/package-lock.json" || -f "$root/playwright.integration.config.ts" || -f "$root/tests/unit/apiContract.test.ts" ]]; then
+            missing=''
+            for required in package.json package-lock.json playwright.config.ts playwright.integration.config.ts vite.config.ts tsconfig.json server/dev.mjs tests/unit/apiContract.test.ts tests/unit/require-tests.mjs; do
+              if [[ ! -f "$root/$required" ]]; then
+                missing="$missing $root/$required"
+              fi
+            done
+            for required in src tests server; do
+              if [[ ! -d "$root/$required" ]]; then
+                missing="$missing $root/$required/"
+              fi
+            done
+            if [[ -n "$missing" ]]; then
+              printf 'FAIL: incomplete React slice; missing prerequisites:%s\n' "$missing" >&2
+              exit 1
+            fi
+            echo 'run_tests=true' >> "$GITHUB_OUTPUT"
+            echo 'run_python=true' >> "$GITHUB_OUTPUT"
+            echo 'Complete React slice: run browser, unit and Python contracts.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo 'FAIL: React sources missing on non-bootstrap PR. No success without tests.' >&2
+          echo 'run_tests=false' >> "$GITHUB_OUTPUT"
+          if [[ "$changed" == '.github/workflows/teacher-os-react-ci.yml' ]]; then
+            echo 'run_python=false' >> "$GITHUB_OUTPUT"
+            echo 'BOOTSTRAP ONLY: full React slice absent; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if grep -Eq '^(08_Tooling/teacher-os-web/|tests/teacher_os_web/)' <<< "$changed"; then
+            echo 'FAIL: React paths changed without a complete testable React slice.' >&2
+            printf 'Changed files: %s\n' "$changed" >&2
+            exit 1
+          fi
+          if grep -Eq '^(tests/agent_os_notion_read_request/|tests/navigation_registry/|scripts/agent_os_notion_read_request/|src/navigation_registry/)' <<< "$changed"; then
+            echo 'run_python=true' >> "$GITHUB_OUTPUT"
+            echo 'Python-only: React slice absent; governed read/navigation tests execute.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo 'FAIL: no React slice and no admitted Python-only change' >&2
           printf 'Changed files: %s\n' "$changed" >&2
           exit 1
 
@@ -100,7 +137,7 @@ jobs:
           cache-dependency-path: 08_Tooling/teacher-os-web/package-lock.json
 
       - name: Set up Python 3.12
-        if: steps.preflight.outputs.run_tests == 'true'
+        if: steps.preflight.outputs.run_python == 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -179,8 +216,8 @@ jobs:
           set -euo pipefail
           npx playwright test --config playwright.integration.config.ts --workers=2 2>&1 | tee ci-artifacts/playwright-integration.log
 
-      - name: Python API and governed read-contract tests
-        if: steps.preflight.outputs.run_tests == 'true'
+      - name: Python API, governed read and navigation-registry tests
+        if: steps.preflight.outputs.run_python == 'true'
         working-directory: .
         env:
           PYTHONPATH: src
@@ -189,15 +226,20 @@ jobs:
           mkdir -p 08_Tooling/teacher-os-web/ci-artifacts
           python3 -m pip install -q 'pytest>=8,<10'
           python3 -m pip install -e ./08_Tooling/workflow-scheduler
-          python3 -m pytest tests/teacher_os_web tests/agent_os_notion_read_request -q 2>&1 | tee 08_Tooling/teacher-os-web/ci-artifacts/pytest-api-and-read.log
+          if [[ -d tests/teacher_os_web ]]; then
+            python3 -m pytest tests/teacher_os_web tests/agent_os_notion_read_request tests/navigation_registry -q 2>&1 | tee 08_Tooling/teacher-os-web/ci-artifacts/pytest-api-and-read.log
+          else
+            python3 -m pytest tests/agent_os_notion_read_request tests/navigation_registry -q 2>&1 | tee 08_Tooling/teacher-os-web/ci-artifacts/pytest-api-and-read.log
+          fi
 
       - name: Summarize CI result
         if: always()
         run: |
           {
             echo '### Teacher OS focused CI'
-            echo 'Preflight execute flag: ${{ steps.preflight.outputs.run_tests }}'
-            echo '- When applicable: exact-head checkout, build, guarded unit tests, negative canary, desktop/phone Playwright, real-process synthetic integration and Python contract tests.'
+            echo 'React execute flag: ${{ steps.preflight.outputs.run_tests }}'
+          echo 'Python contract execute flag: ${{ steps.preflight.outputs.run_python }}'
+            echo '- When applicable: exact-head checkout, build, guarded unit tests, negative canary, desktop/phone Playwright, real-process synthetic integration, governed read and navigation-registry Python tests.'
             echo '- Any failing command fails its step. Test fixtures do not authorize live Notion access.'
             echo '- This check does not certify issue #2801 acceptance or a Ready/merge decision.'
           } >> "$GITHUB_STEP_SUMMARY"
