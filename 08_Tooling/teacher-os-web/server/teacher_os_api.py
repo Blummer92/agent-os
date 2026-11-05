@@ -272,8 +272,18 @@ def make_handler(api: TeacherOsApi) -> type[BaseHTTPRequestHandler]:
         do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_HEAD = _respond
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            # Request line and status only: headers (and so the secret) are never logged.
-            sys.stderr.write("teacher-os-api %s %s\n" % (self.log_date_time_string(), format % args))
+            # Never log the request line: it is user-controlled text (method,
+            # path, query) and must not reach stderr, where a crafted path
+            # could carry sensitive-looking material. Only the response
+            # status and size are diagnostic, and only when the arguments
+            # match the log_request shape (requestline, code, size).
+            # Anything else is logged as a bare error marker, with no args.
+            if len(args) >= 3 and isinstance(args[1], (int, str)) and isinstance(args[2], (int, str)):
+                sys.stderr.write(
+                    "teacher-os-api %s %s %s\n" % (self.log_date_time_string(), args[1], args[2])
+                )
+            else:
+                sys.stderr.write("teacher-os-api %s error\n" % self.log_date_time_string())
 
     return Handler
 
@@ -295,14 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         api = TeacherOsApi(session_secret=secret, port=args.port, allowed_origins=frozenset(args.allowed_origin))
     except ValueError:
-        # Static text only: this names the environment VARIABLE, never the
-        # secret value. The value lives only in `secret` above and is passed
-        # to TeacherOsApi, where it is used solely by hmac.compare_digest;
-        # it is never printed, logged, returned or placed in argv. Keeping
-        # the message a literal (no interpolation of SECRET_ENV or `secret`)
-        # removes the dataflow a clear-text-logging check flagged here
-        # (CodeQL thread PRRT_kwDOTNo9I86z3DPP) without suppressing logging.
-        sys.stderr.write("teacher-os-api: refusing to start without TEACHER_OS_API_SESSION_SECRET and loopback origins (launch with `npm run dev:app`)\n")
+        sys.stderr.write(f"teacher-os-api: refusing to start without {SECRET_ENV} and loopback origins (launch with `npm run dev:app`)\n")
         return 2
     server = serve(api)
     sys.stderr.write(f"teacher-os-api listening on http://{LOOPBACK}:{args.port} (loopback only)\n")

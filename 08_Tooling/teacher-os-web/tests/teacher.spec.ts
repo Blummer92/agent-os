@@ -270,3 +270,86 @@ test("local notes are labelled unsaved and the menu closes with Escape", async (
   await expect(page.getByRole("navigation", { name: "Recent conversations" })).toHaveCount(0);
   await expect(menu).toBeFocused();
 });
+
+test("long unbroken labels do not overflow at 320px, 390px, or 160px (200% zoom equivalent)", async ({ page }) => {
+  const longLabel = "A".repeat(65);
+  const longFocus = "B".repeat(65);
+  const longTitle = "C".repeat(65);
+  await mockApi(page, [{ unit_id: UNIT_A, title: longTitle }], { [UNIT_A]: [lesson(1, { day_lesson_number: longLabel, daily_focus: longFocus })] });
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 740 });
+    await page.goto("/");
+    await open(page);
+    const overflow = await page.evaluate(() => {
+      const bad: string[] = [];
+      for (const el of [document.documentElement, document.body, ...Array.from(document.querySelectorAll(".app-shell, .material-card, .lesson-card, .card-meta, .stepper, .lesson-card__top") as HTMLElement[])]) {
+        if (el.scrollWidth > el.clientWidth + 1) bad.push(`${el.tagName.toLowerCase()}.${el.className}:${el.scrollWidth}>${el.clientWidth}`);
+      }
+      return bad;
+    });
+    expect(overflow).toEqual([]);
+  }
+  // 200% zoom on a 320px screen is a 160px CSS viewport: reflow must hold there too.
+  await page.setViewportSize({ width: 160, height: 740 });
+  await page.goto("/");
+  await open(page);
+  const zoomOverflow = await page.evaluate(() => {
+    const bad: string[] = [];
+    for (const el of [document.documentElement, document.body, ...Array.from(document.querySelectorAll(".app-shell, .material-card, .lesson-card, .card-meta, .stepper, .lesson-card__top") as HTMLElement[])]) {
+      if (el.scrollWidth > el.clientWidth + 1) bad.push(`${el.tagName.toLowerCase()}.${el.className}:${el.scrollWidth}>${el.clientWidth}`);
+    }
+    return bad;
+  });
+  expect(zoomOverflow).toEqual([]);
+});
+
+test("a draft follows its lesson after a reorder, not its old position", async ({ page }) => {
+  let lessonsForA = [lesson(1), lesson(2), lesson(3)];
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA });
+  await page.unroute("**/api/teacher-os/units/*/lessons");
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: now() })));
+  await page.goto("/");
+  await open(page);
+  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByRole("heading", { name: "Focus 2" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit in focused chat" }).click();
+  await expect(page.getByRole("heading", { name: "Editing: Day 2" })).toBeVisible();
+  await page.getByLabel("Describe a proposed edit").fill("NOTE-FOR-DAY2");
+  await page.getByRole("button", { name: "Add local message" }).click();
+  await expect(page.getByText("NOTE-FOR-DAY2")).toBeVisible();
+  await page.getByRole("button", { name: "← Back to lesson" }).click();
+  // Rotate, not reverse: Day 2 moves from position 2 to position 3.
+  lessonsForA = [lesson(3), lesson(1), lesson(2)];
+  await open(page);
+  await page.getByRole("button", { name: "Refresh from Notion" }).click();
+  await expect(panel(page).getByText("2 of 3")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Focus 1" })).toBeVisible();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(panel(page).getByText("3 of 3")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Focus 2" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit in focused chat" }).click();
+  await expect(page.getByRole("heading", { name: "Editing: Day 2" })).toBeVisible();
+  await expect(page.getByText("NOTE-FOR-DAY2")).toBeVisible();
+});
+
+test("an ambiguous lesson draft never attaches to another lesson after a refresh", async ({ page }) => {
+  const ambiguous = (focus: string) => lesson(1, { day_lesson_number: null, daily_focus: focus });
+  let lessonsForA = [ambiguous("Ambiguous A"), ambiguous("Ambiguous B")];
+  await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA });
+  await page.unroute("**/api/teacher-os/units/*/lessons");
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: now() })));
+  await page.goto("/");
+  await open(page);
+  await expect(page.getByRole("heading", { name: "Ambiguous A" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit in focused chat" }).click();
+  await page.getByLabel("Describe a proposed edit").fill("NOTE-FOR-AMBIGUOUS-A");
+  await page.getByRole("button", { name: "Add local message" }).click();
+  await expect(page.getByText("NOTE-FOR-AMBIGUOUS-A")).toBeVisible();
+  await page.getByRole("button", { name: "← Back to lesson" }).click();
+  lessonsForA = [ambiguous("Ambiguous B"), ambiguous("Ambiguous A")];
+  await open(page);
+  await page.getByRole("button", { name: "Refresh from Notion" }).click();
+  await expect(page.getByRole("heading", { name: "Ambiguous B" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit in focused chat" }).click();
+  await expect(page.getByText("NOTE-FOR-AMBIGUOUS-A")).toHaveCount(0);
+});

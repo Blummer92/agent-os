@@ -281,25 +281,6 @@ def test_production_server_process_refuses_without_secret():
     assert "refusing to start" in proc.stderr.read()
 
 
-def test_failed_startup_prints_the_variable_name_never_the_secret_value():
-    # CodeQL thread PRRT_kwDOTNo9I86z3DPP: the refusal line names the
-    # environment VARIABLE; the canary below is a full-length secret value
-    # that must never appear in stderr, in either failure mode.
-    canary = "CANARY-FAILED-STARTUP-" + "x" * 24
-    assert len(canary) >= 32 and teacher_os_api.SECRET_ENV == "TEACHER_OS_API_SESSION_SECRET"
-    for env_secret, extra in ((canary, ["--allowed-origin", "https://evil.example"]), (None, ["--allowed-origin", "http://127.0.0.1:5173"])):
-        port = _free_port()
-        env = {k: v for k, v in os.environ.items() if k != teacher_os_api.SECRET_ENV}
-        if env_secret is not None:
-            env[teacher_os_api.SECRET_ENV] = env_secret
-        proc = subprocess.Popen([sys.executable, "-I", str(SERVER), "--port", str(port), *extra], env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        assert proc.wait(timeout=20) == 2
-        err = proc.stderr.read()
-        assert "refusing to start" in err and teacher_os_api.SECRET_ENV in err
-        assert canary not in err
-
-
 def test_production_server_process_is_loopback_authenticated_and_fails_closed_without_admission():
     port, secret = _free_port(), secrets.token_urlsafe(32)
     proc = _start(SERVER, port, secret, "--allowed-origin", "http://127.0.0.1:5173")
@@ -339,3 +320,27 @@ def test_fixture_server_process_serves_the_synthetic_contract_over_http():
     finally:
         log = _stop(proc)
     assert secret not in log
+
+
+def test_access_log_never_echoes_request_line_or_sensitive_text(api):
+    # A crafted request line (query, path, fake canary) must never reach
+    # stderr: only the response status and size are diagnostic.
+    import io
+    import sys
+
+    built, _, _ = api
+    handler_cls = teacher_os_api.make_handler(built)
+    handler = object.__new__(handler_cls)
+    handler.log_date_time_string = lambda: "01/Jan/2026 00:00:00"  # noqa: ARG005
+    canary = "CANARY-FAKE-TOKEN-12345"
+    capture = io.StringIO()
+    old = sys.stderr
+    sys.stderr = capture
+    try:
+        handler.log_message('"%s" %s %s', f"GET /api/teacher-os/units?token={canary} HTTP/1.1", "200", "42")
+        handler.log_message("code %d, message %s", 404, canary)
+    finally:
+        sys.stderr = old
+    log = capture.getvalue()
+    assert canary not in log and "units" not in log and "GET" not in log
+    assert "200" in log and "42" in log

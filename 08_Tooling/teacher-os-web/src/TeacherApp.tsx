@@ -103,33 +103,6 @@ export function TeacherApp() {
   const unit = unitList.find(u => u.unit_id === unitId) ?? unitList[0];
   const lessons = useRemote<readonly Lesson[]>(unit?.unit_id, fetchLessons, reloadKey);
   const lessonList: readonly Lesson[] = lessons.kind === "ready" ? lessons.value.data : [];
-  // Lesson records carry no stable lesson ID (see apiContract: only
-  // day_lesson_number plus text fields), so a lesson-keyed draft/message
-  // cannot be re-attached by identity after a reorder. It is bound to one
-  // exact list signature for its unit instead: when a fresh ready read for
-  // the same unit arrives with a different signature, every draft/message
-  // keyed to that unit is dropped rather than risk attributing a note to a
-  // different lesson. An identical refresh preserves drafts; a reorder,
-  // insertion or removal invalidates them. Limitation: two lessons with
-  // byte-identical signature fields are indistinguishable, so a swap
-  // between them cannot be detected — no stable ID exists to do better,
-  // and none is fabricated here.
-  const lessonSignaturesRef = useRef<Record<string, string>>({});
-  const lessonSignature = (list: readonly Lesson[]) =>
-    list.map(l => [l.day_lesson_number, l.daily_focus, l.daily_learning_target].join("\u0000")).join("\u0001");
-  useEffect(() => {
-    if (lessons.kind !== "ready" || !unit) return;
-    const signature = lessonSignature(lessonList);
-    const previous = lessonSignaturesRef.current[unit.unit_id];
-    lessonSignaturesRef.current[unit.unit_id] = signature;
-    if (previous !== undefined && previous !== signature) {
-      const prefix = `${unit.unit_id}:`;
-      const dropUnitKeys = (prev: Record<string, string> | MessageMap) => Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(prefix)));
-      setDrafts(prev => dropUnitKeys(prev) as Record<string, string>);
-      setMessages(prev => dropUnitKeys(prev) as MessageMap);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lessons, unit]);
   // Derived, never stored back: clamp the index to the list on screen, so a
   // refresh that shrinks the list can never render "3 of 1". No effect or
   // extra state sync is needed; the stored index is only a preference.
@@ -141,7 +114,20 @@ export function TeacherApp() {
   // An out-of-range selection, or one from an older read generation, is no
   // selection, never a stale lesson and never a resurrected preview.
   const picked = selectedIndex === null || selectedReloadKey !== reloadKey || selectedIndex >= lessonList.length ? undefined : lessonList[selectedIndex];
-  const selected = picked ? { key: `${unit?.unit_id}:${selectedIndex}`, lesson: picked, label: lessonLabel(picked, selectedIndex!) } : null;
+  // Drafts/messages are keyed by lesson identity, never by position alone.
+  // A lesson's day label is a stable key only when it is present and unique
+  // in the current list; otherwise the key is bound to this read generation
+  // and can never resurface after a refresh/reorder for a different lesson.
+  // Selection itself still belongs to one read (selectedReloadKey above), so
+  // a refresh clears the preview/edit view; a stable draft is only shown
+  // again when the teacher re-selects that same lesson.
+  const dayLabelCounts = new Map<string, number>();
+  for (const lesson of lessonList) if (lesson.day_lesson_number) dayLabelCounts.set(lesson.day_lesson_number, (dayLabelCounts.get(lesson.day_lesson_number) ?? 0) + 1);
+  const lessonDraftKey = (lesson: Lesson, index: number, generation: number) =>
+    lesson.day_lesson_number && dayLabelCounts.get(lesson.day_lesson_number) === 1
+      ? `${unit?.unit_id}:${lesson.day_lesson_number}`
+      : `${unit?.unit_id}:__ephemeral__:${generation}:${index}`;
+  const selected = picked ? { key: lessonDraftKey(picked, selectedIndex!, selectedReloadKey!), lesson: picked, label: lessonLabel(picked, selectedIndex!) } : null;
   const view: Screen = selected ? screen : "chat";
   useEffect(() => { const t = setInterval(() => setClock(Date.now()), 30_000); return () => clearInterval(t); }, []);
   const conversationKey = view === "edit" && selected ? selected.key : "lesson";
@@ -197,9 +183,7 @@ export function TeacherApp() {
         <p className={`connection connection--${status.tone}`} role="status" aria-label={`Curriculum connection: ${status.text}`}><span className="dot" aria-hidden="true" />{status.text}</p>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
-      <div className="demo-banner" role="note">{units.kind === "unavailable" && units.reason === "admission-required"
-        ? "Read-only · live Notion reads are not admitted yet, so no lessons are shown · Slides, Docs and worksheets stay in approved Google Drive folders"
-        : "Read-only · only owner-approved Notion evidence is shown, when live reads are admitted · Slides, Docs and worksheets stay in approved Google Drive folders"}</div>
+      <div className="demo-banner" role="note">Read-only · lessons come from verified Notion evidence · Slides, Docs and worksheets stay in approved Google Drive folders</div>
       {stale && evidence && <p role="alert" className="notice notice--warn banner-notice">Stale evidence: last read {evidence.generatedAt}. <button type="button" className="text-button" onClick={refresh}>Refresh from Notion</button></p>}
       {menuOpen && <nav aria-label="Recent conversations" className="recent-menu">
         <h2>Recent conversations</h2>
