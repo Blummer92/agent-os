@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 // The /api/teacher-os proxy exists only when server/dev.mjs (or the integration
@@ -10,6 +11,9 @@ const apiPort = process.env.TEACHER_OS_API_PORT;
 const secret = process.env.TEACHER_OS_API_SESSION_SECRET;
 
 export default defineConfig({
+  // Two entries: the live (fail-closed) Teacher OS and the clearly labelled
+  // synthetic classroom fixture. They share no state and no data path.
+  build: { rollupOptions: { input: { main: resolve(__dirname, "index.html"), fixture: resolve(__dirname, "fixture.html") } } },
   server: {
     host: "127.0.0.1",
     proxy: apiPort && secret

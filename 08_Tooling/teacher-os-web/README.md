@@ -1,6 +1,21 @@
 # Teacher OS — read-only React app (#2801)
 
-A teacher-facing React/Vite app that shows **approved units and their lessons read from verified Notion sources** through an authenticated local API. The repository holds no curriculum: there are no sample units or lessons, and nothing is ever shown in place of missing data. The app does not write Notion or Drive, generate Slides/worksheets, or deploy.
+A teacher-facing React/Vite app with two deliberately separate surfaces:
+
+- **Live Teacher OS** (`/`) shows **approved units and their lessons read from verified Notion sources** through an authenticated local API. It holds no curriculum: nothing is ever shown in place of missing data, and it is fail-closed until an owner admits a Teacher OS read class.
+- **Sample classroom (fixture)** (`/fixture.html`) is the #2801 fixture-backed, non-mutating presentation over an **immutable, privacy-safe, synthetic** fixture. It is permanently labelled *FIXTURE — not Notion or Drive evidence*, shares no state or data path with the live app, and makes no Notion, Drive, AI or API call.
+
+Neither surface writes Notion or Drive, generates Slides/worksheets, publishes, or deploys.
+
+## Sample classroom (fixture)
+
+`npm run dev` and open `http://127.0.0.1:5173/fixture.html` (the live page links to it when reads are not admitted).
+
+It combines, for *tomorrow's lesson*: the **lesson/planning projection**, **approved visual-selection evidence**, **guided-practice context** and a **classroom-artifact (Drive-style) projection**, each with source, verification, access and read age. It states what needs attention and handles: loading, empty, error, interrupted network, current, stale, degraded (materials unavailable), **Notion/Drive disagreement**, **removed or moved artifact**, **permission mismatch**, **unrecognized source values** (shown as inert text, never trusted) and a **lesson that changed under an unsent improvement intent**.
+
+*Improve tomorrow's lesson* only prepares an **intent preview bound to the lesson revision**. Live `cta-v1.0` dispatch is not admitted (#1892), so there is no send control: the preview can be re-checked against the lesson (a changed lesson withdraws it and keeps the teacher's words) and discarded. Artifact existence is never shown as readiness or publication authority.
+
+The fixture is `public/fixture/classroom-fixture.v1.json`, pinned by SHA-256 in `tests/unit/fixtureContract.test.ts`; changing it means a new version and a reviewed hash change. The **Fixture review controls** (bottom of the page) switch the sample between states using pure, tested variants (`src/fixtureScenarios.ts`) that must still pass the same decoder (`src/fixtureContract.ts`). The `?scenario=` value is validated against a closed list.
 
 ## What a teacher sees
 
@@ -39,8 +54,8 @@ The browser decodes every response at runtime (`src/apiContract.ts`): wrong shap
 | Command | What it proves | Data |
 |---|---|---|
 | `npm run build` | `tsc --noEmit` + `vite build` | — |
-| `npm run test:unit` | Runtime contract decoder (Node test runner on the TypeScript source). A guard fails the run on any failure/skip or fewer than 30 executed tests, because a bare `node --test` exits 0 when no file matches | synthetic |
-| `npm test` | UI behaviour in desktop and phone Chromium with `page.route`-mocked API responses | synthetic, mocked |
+| `npm run test:unit` | Runtime contract decoders for the live API and the fixture, fixture immutability (SHA-256 pin), privacy scan, scenario and Notion/Drive assessment rules (Node test runner on the TypeScript source). A guard fails the run on any failure/skip or fewer than 50 executed tests, because a bare `node --test` exits 0 when no file matches | synthetic |
+| `npm test` | UI behaviour in desktop and phone Chromium: the live app with `page.route`-mocked API responses, and the fixture classroom (all states, keyboard, Chromebook/tablet/phone sizes, 400%/200% zoom equivalents, touch targets, interrupted network) | synthetic |
 | `npm run test:integration` | Real HTTP chain: browser → Vite proxy → authenticated API → governed reader → test-only stub executor; plus bypass attempts (no secret, cross-site, rebinding Host, bad ids) | synthetic, real processes |
 | `pytest tests/teacher_os_web` (repo root) | API policy, admission fail-closed, real-process production server (refuses without secret; answers `admission-required`), synthetic fixture server | synthetic |
 
@@ -48,7 +63,7 @@ The browser decodes every response at runtime (`src/apiContract.ts`): wrong shap
 
 ## Deliberately excluded
 
-No Notion/Drive writes, no Docs/Slides generation, no backend store, no student data, no telemetry, no production deployment, no public bridge, no merge authority. Per-unit entries in `notion_read_catalog.json` remain for the issue-comment reader (#3690 follow-up).
+No Notion/Drive writes, no Docs/Slides generation, no backend store, no student data, no telemetry, no production deployment, no public bridge, no merge authority, no live improvement dispatch (#1892). Fixture limits: Chromium emulation is not Safari/iPhone acceptance; the fixture is not evidence about real classes. Per-unit entries in `notion_read_catalog.json` remain for the issue-comment reader (#3690 follow-up).
 
 ## Reused architecture
 

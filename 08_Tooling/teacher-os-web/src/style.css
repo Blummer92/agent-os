@@ -148,3 +148,40 @@ footer { text-align: center; padding: var(--space-4); color: var(--text-muted); 
   .lesson-card, .state-card { padding: var(--space-4); }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+
+/* ---- Synthetic classroom fixture (fixture.html) ---- */
+.header-link { font-weight: 600; min-height: 44px; display: inline-flex; align-items: center; }
+.fixture-banner { padding: var(--space-3) var(--space-4); background: var(--warn-soft); color: var(--text); border-bottom: 2px dashed var(--warn); overflow-wrap: anywhere; }
+.chip { display: inline-block; padding: .1rem .55rem; border-radius: 999px; border: 1px solid currentColor; font-size: .82rem; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.chip--ok { color: var(--ok); } .chip--warn { color: var(--warn); } .chip--bad { color: var(--bad); } .chip--neutral { color: var(--text-muted); }
+.panel, .summary, .intent-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); margin: var(--space-4) 0; background: var(--surface); min-width: 0; }
+.panel h2 { margin-bottom: var(--space-2); }
+.panel h4 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.summary { border-width: 2px; }
+.summary--clear { border-color: var(--ok); background: var(--note-soft); color: var(--note-text); }
+.summary--attention { border-color: var(--warn); background: var(--warn-soft); }
+.summary ul { margin: var(--space-2) 0 0; padding-left: 1.25rem; overflow-wrap: anywhere; }
+.visual-grid, .artifact-list { list-style: none; padding: 0; margin: var(--space-3) 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: var(--space-3); }
+.visual-card, .artifact-card { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); background: var(--surface-2); min-width: 0; }
+.artifact-card--removed, .artifact-card--moved, .artifact-card--permission { border-color: var(--bad); border-width: 2px; }
+.artifact-card--unknown, .artifact-card--unlisted { border-color: var(--warn); border-width: 2px; }
+.artifact-card__top { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
+.diagram { aspect-ratio: 16 / 9; width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; margin-bottom: var(--space-2); position: relative; background: linear-gradient(var(--accent-soft), var(--surface-3)); overflow: hidden; }
+.diagram::before { content: ""; position: absolute; inset: 0; opacity: .7; background:
+  linear-gradient(to right, transparent calc(33.3% - .5px), var(--border-strong) 0 calc(33.3% + .5px), transparent 0),
+  linear-gradient(to right, transparent calc(66.6% - .5px), var(--border-strong) 0 calc(66.6% + .5px), transparent 0),
+  linear-gradient(to bottom, transparent calc(33.3% - .5px), var(--border-strong) 0 calc(33.3% + .5px), transparent 0),
+  linear-gradient(to bottom, transparent calc(66.6% - .5px), var(--border-strong) 0 calc(66.6% + .5px), transparent 0); }
+.diagram--centered { background-image: radial-gradient(circle at 50% 55%, var(--accent) 0 9%, transparent 9.5%), linear-gradient(var(--accent-soft), var(--surface-3)); }
+.diagram--thirds { background-image: radial-gradient(circle at 66.6% 66.6%, var(--accent) 0 9%, transparent 9.5%), linear-gradient(var(--accent-soft), var(--surface-3)); }
+.diagram--tilted { background-image: radial-gradient(circle at 50% 55%, var(--accent) 0 9%, transparent 9.5%), linear-gradient(8deg, var(--accent-soft) 50%, var(--surface-3) 50%); }
+.diagram--unknown { background-image: repeating-linear-gradient(45deg, var(--surface-3) 0 8px, var(--surface-2) 8px 16px); }
+.practice { padding-left: 1.25rem; } .practice li { margin-bottom: var(--space-3); overflow-wrap: anywhere; }
+.intent-card { border-style: dashed; border-color: var(--accent); background: var(--accent-soft); }
+.intent-text { white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 600; }
+.review-controls { margin: var(--space-5) 0; border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }
+.review-controls summary { cursor: pointer; font-weight: 700; min-height: 44px; display: flex; align-items: center; }
+.review-controls select { margin-bottom: var(--space-3); }
+.state-card .notice { margin-bottom: var(--space-3); }
+@media (prefers-reduced-motion: no-preference) { .chip, button { transition: background-color .12s; } }
+.fixture-column { max-width: 780px; margin: 0 auto; min-width: 0; }
