@@ -188,6 +188,7 @@ jobs:
           set -euo pipefail
           mkdir -p 08_Tooling/teacher-os-web/ci-artifacts
           python3 -m pip install -q 'pytest>=8,<10'
+          python3 -m pip install -e ./08_Tooling/workflow-scheduler
           python3 -m pytest tests/teacher_os_web tests/agent_os_notion_read_request -q 2>&1 | tee 08_Tooling/teacher-os-web/ci-artifacts/pytest-api-and-read.log
 
       - name: Summarize CI result
