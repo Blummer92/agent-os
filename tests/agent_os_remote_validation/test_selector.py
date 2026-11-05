@@ -1585,3 +1585,13 @@ def test_3567_root_docs_plus_focused_owner_stays_focused() -> None:
     plan = _select(_input(["docs/canonical-json-classification.md", "scripts/agent_os_remote_validation/selector.py"]))
     assert plan.profile == "focused"
     assert plan.commands == ("python -m pytest tests/agent_os_remote_validation",)
+
+
+def test_ci_negative_control_20261105_deliberate_failure():
+    """DISPOSABLE NEGATIVE CONTROL (2026-11-05): intentionally failing test.
+
+    Proves the focused plan fails and agent-os/authoritative-aggregate
+    reports failure for this head. Never merge this PR; close it after
+    collecting the red evidence. Sentinel: CI_NEGATIVE_CONTROL_20261105.
+    """
+    raise AssertionError("CI_NEGATIVE_CONTROL_20261105: deliberate failure")
