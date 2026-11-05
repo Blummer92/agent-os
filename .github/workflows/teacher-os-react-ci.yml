@@ -124,9 +124,14 @@ jobs:
             echo 'Python-only: React slice absent; governed read/navigation tests execute.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo 'FAIL: no React slice and no admitted Python-only change' >&2
-          printf 'Changed files: %s\n' "$changed" >&2
-          exit 1
+          # Every trigger-filter path is covered above except the workflow
+          # file itself: reaching here means the only filtered change is
+          # the workflow file plus files this workflow does not own. Those
+          # files are covered by the authoritative aggregate validation.
+          echo 'run_tests=false' >> "$GITHUB_OUTPUT"
+          echo 'run_python=false' >> "$GITHUB_OUTPUT"
+          echo 'BOOTSTRAP ONLY: no testable React or Python change in this PR; no tests executed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Set up Node 22
         if: steps.preflight.outputs.run_tests == 'true'
@@ -238,14 +243,14 @@ jobs:
           {
             echo '### Teacher OS focused CI'
             echo 'React execute flag: ${{ steps.preflight.outputs.run_tests }}'
-          echo 'Python contract execute flag: ${{ steps.preflight.outputs.run_python }}'
+            echo 'Python contract execute flag: ${{ steps.preflight.outputs.run_python }}'
             echo '- When applicable: exact-head checkout, build, guarded unit tests, negative canary, desktop/phone Playwright, real-process synthetic integration, governed read and navigation-registry Python tests.'
             echo '- Any failing command fails its step. Test fixtures do not authorize live Notion access.'
             echo '- This check does not certify issue #2801 acceptance or a Ready/merge decision.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test logs and browser traces
-        if: always() && steps.preflight.outputs.run_tests == 'true'
+        if: always() && (steps.preflight.outputs.run_tests == 'true' || steps.preflight.outputs.run_python == 'true')
         uses: actions/upload-artifact@v7
         with:
           name: teacher-os-react-ci-${{ github.run_id }}
