@@ -1,5 +1,6 @@
 """Download failures must persist truthful receipts and remain unsuccessful."""
 import contextlib
+import http.client
 import io
 import json
 import os
@@ -179,6 +180,51 @@ class FailureReceiptTests(unittest.TestCase):
             job=self.jobs[0], source_run_id=1, source_attempt=2,
         )
         self.assertEqual(result['classification'], 'REJECT_WRONG_HEAD')
+
+    def test_missing_or_malformed_download_url_writes_receipt(self):
+        actual_download = collector._api_get_bytes
+        for value in (None, '://malformed-' + PRIVATE):
+            with self.subTest(url_present=value is not None):
+                if value is None:
+                    self.artifacts[0].pop('archive_download_url', None)
+                else:
+                    self.artifacts[0]['archive_download_url'] = value
+                self.assert_failed_receipt(actual_download)
+
+    def test_http_protocol_errors_write_receipts(self):
+        for error in (http.client.IncompleteRead(b'partial', 10),
+                      http.client.BadStatusLine(PRIVATE)):
+            with self.subTest(error=type(error).__name__):
+                self.assert_failed_receipt(error)
+
+    def test_real_truncated_chunked_response_writes_receipt(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Transfer-Encoding', 'chunked')
+                self.end_headers()
+                # Declare five bytes, supply three, and close without a
+                # terminating chunk. HTTPResponse.read raises IncompleteRead.
+                self.wfile.write(b'5\r\nabc')
+                self.wfile.flush()
+                self.close_connection = True
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        actual_download = collector._api_get_bytes
+        self.artifacts[0]['archive_download_url'] = f'http://127.0.0.1:{server.server_port}/archive?sig={PRIVATE}'
+        try:
+            opener = collector.urllib.request.build_opener(collector.urllib.request.ProxyHandler({}))
+            with patch.object(collector.urllib.request, 'urlopen', side_effect=opener.open):
+                self.assert_failed_receipt(actual_download)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == '__main__':

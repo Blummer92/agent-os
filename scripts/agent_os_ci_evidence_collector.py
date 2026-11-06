@@ -15,6 +15,7 @@ the Actions API (run id, attempt, head SHA), never from the collector's own
 from __future__ import annotations
 
 import argparse
+import http.client
 import io
 import json
 import os
@@ -699,7 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         if name.startswith(tuple(ARTIFACT_PREFIXES.values()) + tuple(HEALTH_PREFIXES.values()) + ("junit-",)):
             try:
                 data = _api_get_bytes(str(art.get("archive_download_url")), token)
-            except (RuntimeError, OSError) as exc:
+            except (RuntimeError, OSError, ValueError, http.client.HTTPException) as exc:
                 # Keep the failed archive absent so existing classifiers
                 # cannot accept it. Do not persist exception text or URLs:
                 # provider errors can contain credentials or signed queries.
