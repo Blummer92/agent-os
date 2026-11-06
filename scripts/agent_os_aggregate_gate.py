@@ -35,11 +35,46 @@ _OPEN = "authoritative aggregate established on this head; gate open."
 _PLAN_BLOCKING = frozenset({"failure", "cancelled"})
 
 
-def evaluate_aggregate_gate(validate_result: str, plan_result: str = "") -> tuple[bool, str]:
+def frontend_blocker(frontend_result: str, frontend_required: bool) -> str | None:
+    """Return why the frontend check job closes the gate, or ``None``.
+
+    The frontend job (``scripts/agent_os_frontend_checks.py``) owns every Node
+    project's mandatory checks and runs on pull_request and workflow_dispatch
+    events regardless of which validation profile the selector chose. When it is
+    ``required`` for the event, only an exact ``success`` may stand: skipped,
+    cancelled, failed, or unreported all close the gate, because none of them is
+    proof that the applicable frontend checks executed. A job that ran and found
+    no applicable project reports ``success`` itself and states that in its
+    summary, so legitimate non-applicability never needs a skip. When it is not
+    required (``push`` to main, where no frontend job runs) only an explicit
+    failure or cancellation blocks.
+    """
+    if type(frontend_result) is not str:
+        raise TypeError("job results must be strings")
+    if frontend_result == "success":
+        return None
+    if frontend_required:
+        return (
+            f"frontend checks reported {frontend_result or 'unreported'}; only an "
+            "exact success proves the applicable frontend checks executed and passed; "
+            "the gate is closed."
+        )
+    if frontend_result in _PLAN_BLOCKING:
+        return f"frontend checks reported {frontend_result}; the gate is closed."
+    return None
+
+
+def evaluate_aggregate_gate(
+    validate_result: str,
+    plan_result: str = "",
+    frontend_result: str = "",
+    frontend_required: bool = False,
+) -> tuple[bool, str]:
     """Decide the gate disposition from the authoritative aggregate job result.
 
     Returns ``(gate_open, message)``. The gate opens only for an exact
-    ``success`` aggregate disposition and a plan job that did not fail.
+    ``success`` aggregate disposition, a plan job that did not fail, and a
+    frontend job that satisfies :func:`frontend_blocker`.
     """
     if type(validate_result) is not str or type(plan_result) is not str:
         raise TypeError("job results must be strings")
@@ -49,6 +84,9 @@ def evaluate_aggregate_gate(validate_result: str, plan_result: str = "") -> tupl
             f"focused validation plan reported {plan_result}; aggregate success "
             "cannot stand for a head whose focused commands did not pass; the gate is closed.",
         )
+    blocker = frontend_blocker(frontend_result, frontend_required)
+    if blocker is not None:
+        return False, blocker
     if validate_result == "success":
         return True, _OPEN
     return (
@@ -97,6 +135,8 @@ def decide_terminal_status(
     main_health_outcome: str = "",
     main_recovery_stop_outcome: str = "",
     plan_result: str = "",
+    frontend_result: str = "",
+    frontend_required: bool = False,
 ) -> TerminalStatus | None:
     """Map the authoritative run disposition to the terminal commit status.
 
@@ -111,6 +151,15 @@ def decide_terminal_status(
         # Newest status wins (#2761), so this also supersedes a reused success.
         state = "failure" if plan_result == "failure" else "error"
         return TerminalStatus(state, f"Focused validation plan {plan_result} on this exact head; no verdict can pass")
+    if frontend_blocker(frontend_result, frontend_required) is not None:
+        # Same supersession rule as the plan: newest status wins, so this also
+        # supersedes a reused aggregate success. A proven failure is a failure;
+        # a skipped/missing/cancelled result is "no verdict", never a pass.
+        state = "failure" if frontend_result == "failure" else "error"
+        return TerminalStatus(
+            state,
+            f"Frontend checks {frontend_result or 'unreported'} on this exact head; no verdict can pass",
+        )
     if validate_result == "success":
         if reused:
             return None
@@ -142,6 +191,8 @@ def status_main() -> int:
         main_health_outcome=env("MAIN_HEALTH_OUTCOME", ""),
         main_recovery_stop_outcome=env("MAIN_RECOVERY_STOP_OUTCOME", ""),
         plan_result=env("PLAN_RESULT", ""),
+        frontend_result=env("FRONTEND_RESULT", ""),
+        frontend_required=env("FRONTEND_REQUIRED", "") == "true",
     )
     if decision is not None:
         print(json.dumps(decision._asdict()))
@@ -152,8 +203,13 @@ def main() -> int:
     """Workflow entry point: reads ``VALIDATE_RESULT`` and exits 0/1."""
     validate_result = os.environ.get("VALIDATE_RESULT", "")
     plan_result = os.environ.get("PLAN_RESULT", "")
-    gate_open, message = evaluate_aggregate_gate(validate_result, plan_result)
+    frontend_result = os.environ.get("FRONTEND_RESULT", "")
+    frontend_required = os.environ.get("FRONTEND_REQUIRED", "") == "true"
+    gate_open, message = evaluate_aggregate_gate(
+        validate_result, plan_result, frontend_result, frontend_required
+    )
     print(f"plan job result: {plan_result or 'unreported'}")
+    print(f"frontend job result: {frontend_result or 'unreported'} (required: {frontend_required})")
     print(f"aggregate job result: {validate_result or 'unreported'}")
     print(message, file=sys.stderr if not gate_open else sys.stdout)
     return 0 if gate_open else 1

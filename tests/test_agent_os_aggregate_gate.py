@@ -228,3 +228,98 @@ def test_successful_or_skipped_plan_keeps_existing_status_decisions():
     assert _decide(plan_result="success").state == "success"
     assert _decide(plan_result="skipped").state == "success"
     assert _decide(reused=True, plan_result="success") is None
+
+
+# --- CI-trust repair: the frontend job is part of the required decision ---------
+
+from scripts.agent_os_aggregate_gate import frontend_blocker  # noqa: E402
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", "", "timed_out", "Success", "success "])
+def test_required_frontend_only_exact_success_opens_the_gate(result):
+    # Control 4: missing, skipped, cancelled, or failed mandatory checks can never
+    # produce a successful decision, even with a green aggregate and plan.
+    gate_open, message = evaluate_aggregate_gate("success", "success", result, True)
+    assert gate_open is False
+    assert "frontend" in message
+
+
+def test_required_frontend_success_opens_the_gate():
+    assert evaluate_aggregate_gate("success", "success", "success", True)[0] is True
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled"])
+def test_unrequired_frontend_still_blocks_on_failure_or_cancel(result):
+    # `push` to main runs no frontend job, but a failing one is never ignored.
+    assert evaluate_aggregate_gate("success", "skipped", result, False)[0] is False
+
+
+@pytest.mark.parametrize("result", ["skipped", ""])
+def test_unrequired_frontend_skip_is_neutral_for_push(result):
+    assert evaluate_aggregate_gate("success", "skipped", result, False)[0] is True
+    assert evaluate_aggregate_gate("skipped", "skipped", result, False)[0] is False
+
+
+def test_frontend_success_cannot_rescue_a_failed_aggregate_or_plan():
+    assert evaluate_aggregate_gate("failure", "success", "success", True)[0] is False
+    assert evaluate_aggregate_gate("success", "failure", "success", True)[0] is False
+
+
+def test_frontend_result_must_be_a_string():
+    with pytest.raises(TypeError):
+        frontend_blocker(None, True)
+
+
+def test_main_closes_gate_when_required_frontend_did_not_succeed(monkeypatch):
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "success")
+    monkeypatch.setenv("FRONTEND_REQUIRED", "true")
+    for result in ("failure", "skipped", "cancelled", ""):
+        monkeypatch.setenv("FRONTEND_RESULT", result)
+        assert main() == 1
+    monkeypatch.setenv("FRONTEND_RESULT", "success")
+    assert main() == 0
+
+
+@pytest.mark.parametrize(
+    ("frontend", "state"),
+    [("failure", "failure"), ("cancelled", "error"), ("skipped", "error"), ("", "error")],
+)
+def test_frontend_non_success_publishes_non_success_status(frontend, state):
+    assert _decide(frontend_result=frontend, frontend_required=True).state == state
+
+
+def test_frontend_failure_supersedes_reused_aggregate_success():
+    assert _decide(reused=True, frontend_result="failure", frontend_required=True).state == "failure"
+
+
+def test_frontend_success_keeps_existing_status_decisions():
+    assert _decide(frontend_result="success", frontend_required=True).state == "success"
+    assert _decide(reused=True, frontend_result="success", frontend_required=True) is None
+
+
+def test_frontend_never_publishes_for_non_authoritative_runs():
+    assert _decide(authoritative=False, frontend_result="failure", frontend_required=True) is None
+
+
+def test_only_exact_frontend_success_can_produce_success_status():
+    for frontend in ("failure", "cancelled", "skipped", "", "Success"):
+        decision = _decide(frontend_result=frontend, frontend_required=True)
+        assert decision is not None and decision.state != "success"
+
+
+def test_workflow_gate_requires_frontend_job_and_passes_its_result_to_both_steps():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    gate = workflow["jobs"]["aggregate-gate"]
+    assert set(gate["needs"]) == {"plan", "validate", "frontend"}
+    for step in gate["steps"]:
+        if "env" in step and "PLAN_RESULT" in step["env"]:
+            assert step["env"]["FRONTEND_RESULT"] == "${{ needs.frontend.result }}"
+            assert step["env"]["FRONTEND_REQUIRED"] == "${{ github.event_name != 'push' }}"
+    frontend = workflow["jobs"]["frontend"]
+    # Runs wherever the gate is admitted for a PR/dispatch, and never on a profile or Draft condition
+    # that could turn "no frontend verdict" into silence.
+    assert "pull_request" in frontend["if"] and "workflow_dispatch" in frontend["if"]
+    assert "profile" not in frontend["if"] and "draft" not in frontend["if"]
+    assert "needs" not in frontend
+    assert "statuses" not in json.dumps(frontend)
