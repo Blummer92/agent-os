@@ -46,7 +46,7 @@ from .models import (
     NotionReadRequestError,
     NotionReadSource,
 )
-from .projection import LESSON_UNIT_RELATION_PROPERTY, validate_lesson_unit_identity
+from .projection import LESSON_UNIT_RELATION_PROPERTY, _dashed_uuid, validate_lesson_unit_identity
 
 SchedulerTaskExecutorFactory = Callable[[], Callable[[Mapping[str, object]], object]]
 
@@ -309,10 +309,7 @@ def resolve_lesson_unit_page_id(catalog: NotionReadCatalog, canonical_unit_key: 
     ]
     if len(sharing) != 1:
         raise NotionReadRequestError("canonical unit page id is bound more than once")
-    return (
-        f"{page_key[0:8]}-{page_key[8:12]}-{page_key[12:16]}"
-        f"-{page_key[16:20]}-{page_key[20:32]}"
-    )
+    return _dashed_uuid(page_key)
 
 
 def execute_lesson_content(
