@@ -245,7 +245,7 @@ def test_report_only_acceptance_workflow_records_diff_retrieval_failure():
     content = _content()
 
     assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' not in content
-    assert 'if ! gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch"; then' in content
+    assert 'if ! gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"; then' in content
     assert 'printf \'%s\\n\' true > "$out/diff_retrieval_failed.txt"' in content
     assert "--diff-retrieval-failed" in content
 
@@ -444,15 +444,24 @@ def test_acceptance_workflow_uses_net_pr_diff_not_commit_series():
 
 
 def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
-    """Negative control: changing the source must not weaken secret detection."""
+    """A removed historical secret must not taint the delivered net diff."""
     from scripts.agent_os_issue_acceptance.checks.banned_patterns import check
     from scripts.agent_os_issue_acceptance.models import IssueMetadata, Status
 
-    # Construct a synthetic secret-shaped addition without embedding a
-    # literal sensitive assignment anywhere in this repository's diff.
+    # Assemble a synthetic literal so this test does not itself introduce
+    # sensitive-looking material into the PR's final text.
     candidate = "se" + "cret" + " = " + repr("synthetic-test-canary-only")
-    newly_added = "diff --git a/example.py b/example.py\n+" + candidate + "\n"
-    final_clean = "diff --git a/example.py b/example.py\n+status = 'safe'\n"
+    old_patch = "diff --git a/example.py b/example.py\n+status = 'old'\n+" + candidate + "\n"
+    removal_patch = "diff --git a/example.py b/example.py\n-" + candidate + "\n+status = 'safe'\n"
+    history = old_patch + removal_patch
+    # Exactly the same final content may have harmless modifications.
+    final_net_diff = "diff --git a/example.py b/example.py\n+status = 'safe'\n"
+    surviving_net_diff = final_net_diff + "+" + candidate + "\n"
     metadata = IssueMetadata.empty()
-    assert check(metadata, newly_added).status == Status.FAIL
-    assert check(metadata, final_clean).status == Status.PASS
+
+    # The original per-commit input false-positively matches removed history.
+    assert check(metadata, history).status == Status.FAIL
+    # The fixed workflow supplies only final net changes.
+    assert check(metadata, final_net_diff).status == Status.PASS
+    # A real addition that survives in the delivered diff stays blocked.
+    assert check(metadata, surviving_net_diff).status == Status.FAIL
