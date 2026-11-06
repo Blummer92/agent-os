@@ -246,6 +246,22 @@ python_path_with_src() {
   fi
 }
 
+# CI_JUNIT_DIR is opt-in: unset locally, set by CI to collect real JUnit.
+# When set, every pytest invocation gets a unique --junitxml path and a
+# manifest.tsv is written at the end. Default local behaviour is unchanged.
+junit_key() {
+  local key="$1"
+  key="${key//\//__}"
+  printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+junit_path_for() {
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
+    printf '%s/%s.xml' "$CI_JUNIT_DIR" "$(junit_key "$1")"
+  fi
+}
+
 run_check() {
   local name="$1"
   local workdir="$2"
@@ -304,6 +320,12 @@ run_focused_target() {
     command+=("--maxfail=$focused_maxfail")
     display+=" --maxfail=$focused_maxfail"
   fi
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    local focused_junit_path
+    focused_junit_path="$(junit_path_for "focused__$target")"
+    command+=("--junitxml=$focused_junit_path")
+    display+=" --junitxml=$focused_junit_path"
+  fi
 
   if [ -d "$suite_dir/src" ]; then
     local pythonpath_value
@@ -348,6 +370,10 @@ coverage_report_for_suite() {
 run_pytest_suite() {
   local suite_dir="$1"
   local suite_name="$2"
+  local suite_junit_path=""
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    suite_junit_path="$(junit_path_for "$suite_name")"
+  fi
 
   if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
     : # Preserve scheduler suite identity for canonical aggregate admission.
@@ -367,6 +393,10 @@ run_pytest_suite() {
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
+    if [ -n "$suite_junit_path" ]; then
+      command+=("--junitxml=$suite_junit_path")
+      display+=" --junitxml=$suite_junit_path"
+    fi
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
@@ -380,7 +410,13 @@ run_pytest_suite() {
       run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
     fi
   else
-    run_check "$suite_name" "$suite_dir" "cd $suite_dir && $PYTHON_BIN -m pytest tests" "$PYTHON_BIN" -m pytest tests
+    local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
+    local plain_command=("$PYTHON_BIN" -m pytest tests)
+    if [ -n "$suite_junit_path" ]; then
+      plain_command+=("--junitxml=$suite_junit_path")
+      plain_display+=" --junitxml=$suite_junit_path"
+    fi
+    run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
 }
 
@@ -396,9 +432,16 @@ suite_command_text() {
       coverage_report="$(coverage_report_for_suite "$suite_name")"
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
+    if [ -n "${CI_JUNIT_DIR:-}" ]; then
+      display+=" --junitxml=$(junit_path_for "$suite_name")"
+    fi
     printf '%s' "$display"
   else
-    printf 'cd %s && %s -m pytest tests' "$suite_dir" "$PYTHON_BIN"
+    local plain="cd $suite_dir && $PYTHON_BIN -m pytest tests"
+    if [ -n "${CI_JUNIT_DIR:-}" ]; then
+      plain+=" --junitxml=$(junit_path_for "$suite_name")"
+    fi
+    printf '%s' "$plain"
   fi
 }
 
@@ -526,6 +569,39 @@ for test_dir in "${test_dirs[@]}"; do
   fi
 done
 flush_parallel_batch
+
+if [ -n "${CI_JUNIT_DIR:-}" ]; then
+  mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
+  manifest_file="$CI_JUNIT_DIR/manifest.tsv"
+  printf 'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n' > "$manifest_file"
+  for result in "${check_results[@]}"; do
+    IFS='|' read -r status name command_text code <<< "$result"
+    case "$name" in
+      "Ruff lint"|"structural validation") continue ;;
+    esac
+    case "$name" in
+      "focused: "*)
+        target_name="${name#focused: }"
+        junit_file="$(junit_key "focused__$target_name").xml"
+        ;;
+      *)
+        junit_file="$(junit_key "$name").xml"
+        ;;
+    esac
+    if [ "$code" = "5" ]; then
+      # pytest exit 5 = no tests collected: never a pass, never a generic failure.
+      if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
+      classification="ZERO_COLLECTED"
+    elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
+      junit_exists="yes"
+      if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
+    else
+      junit_exists="no"
+      if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else classification="MISSING_UNEXPECTED"; fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification" >> "$manifest_file"
+  done
+fi
 
 aggregate_ended_us="$(timer_now_us || true)"
 record_timing "aggregate total" "$aggregate_started_us" "$aggregate_ended_us"

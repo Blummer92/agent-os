@@ -188,10 +188,20 @@ jobs:
         env:
           PLAN_BASE64: ${{ steps.plan.outputs.plan_base64 }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_JUNIT_DIR: ${{ runner.temp }}/junit-plan-focused
         run: |
           python scripts/agent_os_ci_validation.py \
             --plan-base64 "$PLAN_BASE64" \
             --expected-head-sha "$EXPECTED_HEAD_SHA"
+
+      - name: Upload focused JUnit evidence
+        if: ${{ always() && steps.plan.outputs.profile == 'focused' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-plan-focused-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit-plan-focused/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish PR validation-plan summary
         if: always()
@@ -944,7 +954,18 @@ jobs:
       - name: Run aggregate validation
         id: aggregate
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
+        env:
+          CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
         run: ./scripts/validate-all.sh
+
+      - name: Upload aggregate JUnit evidence
+        if: ${{ always() && steps.aggregate_evidence.outputs.run_required != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-aggregate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit-aggregate/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish validation summary
         if: always()
@@ -1019,16 +1040,37 @@ jobs:
         with:
           python-version: "3.11"
       - name: Generate report-only jscpd evidence
+        id: generate
         continue-on-error: true
         run: python -m scripts.jscpd_advisory --output tmp/jscpd-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Record advisory evidence health
+        id: health
+        if: always()
+        run: |
+          python -m scripts.agent_os_ci_evidence_health \
+            --tool jscpd \
+            --output-dir tmp/jscpd-advisory \
+            --report jscpd-advisory.json \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --generate-outcome "${{ steps.generate.outcome }}" \
+            --health-dir tmp/jscpd-health \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: jscpd-advisory-${{ github.event.pull_request.number }}
+          name: jscpd-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/jscpd-advisory/
-          if-no-files-found: ignore
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload advisory health receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jscpd-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
+          path: tmp/jscpd-health/
+          if-no-files-found: error
           retention-days: 7
       - name: Verify jscpd advisory evidence
         if: always()
@@ -1052,16 +1094,37 @@ jobs:
       - name: Install pinned Pyan3 and PyYAML
         run: python -m pip install "pyan3==2.9.0" "PyYAML==6.0.3"
       - name: Generate report-only pyan3 evidence
+        id: generate
         continue-on-error: true
         run: python -m scripts.pyan3_advisory --output tmp/pyan3-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Record advisory evidence health
+        id: health
+        if: always()
+        run: |
+          python -m scripts.agent_os_ci_evidence_health \
+            --tool pyan3 \
+            --output-dir tmp/pyan3-advisory \
+            --report pyan3-advisory.json \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --generate-outcome "${{ steps.generate.outcome }}" \
+            --health-dir tmp/pyan3-health \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: pyan3-advisory-${{ github.event.pull_request.number }}
+          name: pyan3-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/pyan3-advisory/
-          if-no-files-found: ignore
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload advisory health receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyan3-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
+          path: tmp/pyan3-health/
+          if-no-files-found: error
           retention-days: 7
       - name: Verify pyan3 advisory evidence
         if: always()
