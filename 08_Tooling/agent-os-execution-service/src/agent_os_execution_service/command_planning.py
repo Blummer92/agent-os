@@ -51,6 +51,13 @@ class CommandOperation(str, Enum):
 _COMMAND_REGISTRY = MappingProxyType(
     {
         "python -m pytest": ("python", "-m", "pytest"),
+        "python -m pytest tests/test_agent_os_ci_evidence_collector.py tests/test_agent_os_ci_evidence_collector_provider_fidelity.py tests/test_collector_download_redirect.py tests/test_collector_failure_receipt.py": (
+            "python", "-m", "pytest",
+            "tests/test_agent_os_ci_evidence_collector.py",
+            "tests/test_agent_os_ci_evidence_collector_provider_fidelity.py",
+            "tests/test_collector_download_redirect.py",
+            "tests/test_collector_failure_receipt.py",
+        ),
         "python -m pytest tests/agent_os_issue_acceptance": (
             "python",
             "-m",

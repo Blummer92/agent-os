@@ -621,8 +621,11 @@ def _api_get_bytes(url: str, token: str) -> bytes:
     """Download an artifact archive with a hard size cap. Returns bytes
     only; never parses or executes them here."""
     request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "agent-os-ci-evidence-collector"}
+        url, headers={"Accept": "application/vnd.github+json", "User-Agent": "agent-os-ci-evidence-collector"}
     )
+    # Authenticate the API request without forwarding credentials to the
+    # artifact's temporary signed download URL on a redirect.
+    request.add_unredirected_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             data = response.read(MAX_ARCHIVE_BYTES + 1)
@@ -688,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     artifacts = _paginate(f"{base}/artifacts?per_page=100", token)
     downloads: dict[str, bytes] = {}
+    download_errors: list[dict] = []
     for art in artifacts:
         if not isinstance(art, dict):
             continue
@@ -695,9 +699,20 @@ def main(argv: list[str] | None = None) -> int:
         if name.startswith(tuple(ARTIFACT_PREFIXES.values()) + tuple(HEALTH_PREFIXES.values()) + ("junit-",)):
             try:
                 data = _api_get_bytes(str(art.get("archive_download_url")), token)
-            except RuntimeError as exc:
-                print(f"artifact download failed for {name}: {exc}", file=sys.stderr)
-                return 1
+            except (RuntimeError, OSError) as exc:
+                # Keep the failed archive absent so existing classifiers
+                # cannot accept it. Do not persist exception text or URLs:
+                # provider errors can contain credentials or signed queries.
+                cause = exc.__cause__ if isinstance(exc, RuntimeError) else exc
+                download_errors.append({
+                    "artifact_id": str(art.get("id")),
+                    "stage": "artifact_download",
+                    "http_status": cause.code if isinstance(cause, urllib.error.HTTPError) else None,
+                })
+                if isinstance(cause, urllib.error.HTTPError):
+                    cause.close()
+                print("artifact download failed; recording diagnostic receipt", file=sys.stderr)
+                continue
             downloads[str(art["id"])] = data
     receipt = build_verified_receipt(
         source_run=run_payload, jobs=jobs, artifacts=artifacts, downloads=downloads,
@@ -709,11 +724,15 @@ def main(argv: list[str] | None = None) -> int:
         stream: select_advisory_artifact(artifacts, stream, source_attempt=args.source_attempt) is not None
         for stream in ("pyan", "jscpd")
     }
+    if download_errors:
+        receipt["collection_status"] = "DOWNLOAD_FAILED"
+        receipt["download_errors"] = download_errors
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(receipt, sort_keys=True))
-    return 0
+    return 1 if download_errors else 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

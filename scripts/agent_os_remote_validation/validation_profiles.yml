@@ -6,6 +6,7 @@
   "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements-dev.txt", "pytest.ini"],
   "aggregate_prefixes": [".github/workflows/", "tests/test_agent_os_validation_workflow.py"],
   "focused_rules": [
+    {"name":"ci-evidence-collector","exact_paths":["scripts/agent_os_ci_evidence_collector.py","scripts/agent_os_ci_evidence_health.py","tests/test_agent_os_ci_evidence_collector.py","tests/test_agent_os_ci_evidence_collector_provider_fidelity.py","tests/test_collector_download_redirect.py","tests/test_collector_failure_receipt.py"],"commands":["python -m pytest tests/test_agent_os_ci_evidence_collector.py tests/test_agent_os_ci_evidence_collector_provider_fidelity.py tests/test_collector_download_redirect.py tests/test_collector_failure_receipt.py"]},
     {"name":"issue-acceptance","prefixes":["scripts/agent_os_issue_acceptance/","tests/agent_os_issue_acceptance/"],"commands":["python -m pytest tests/agent_os_issue_acceptance"]},
     {"name":"issue-labels","prefixes":["scripts/agent_os_issue_labels/","tests/agent_os_issue_labels/"],"commands":["python -m pytest tests/agent_os_issue_labels"]},
     {"name":"execution-interface","prefixes":["scripts/agent_os_execution_interface/","tests/agent_os_execution_interface/"],"commands":["python -m pytest tests/agent_os_execution_interface"]},
@@ -29,3 +30,4 @@
   "command_coverage": [{"broader":"python -m pytest 08_Tooling/workflow-scheduler/tests","subsumes":["python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"]}],
   "aggregate_command": "python -m pytest"
 }
+
