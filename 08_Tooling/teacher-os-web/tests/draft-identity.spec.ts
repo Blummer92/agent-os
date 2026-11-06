@@ -8,7 +8,7 @@ const SRC = { display_name: "Test Source", verification_state: "verified-current
 const now = () => new Date().toISOString();
 const UNIT_A = "aaaaaaaa-0000-4000-8000-000000000001";
 const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
-const lesson = (n: number) => ({ day_lesson_number: `Day ${n}`, daily_learning_target: `Target ${n}`, daily_focus: `Focus ${n}`, key_vocabulary: null, source_evidence: `Evidence ${n}`, record_url: null });
+const lesson = (n: number) => ({ day_lesson_number: `Day ${n}`, daily_learning_target: `Target ${n}`, daily_focus: `Focus ${n}`, key_vocabulary: null, source_evidence: `Evidence ${n}`, record_url: null, canonical_unit: { page_id: UNIT_A } });
 const panel = (page: Page) => page.getByRole("region", { name: "View Assignment" });
 async function setup(page: Page, getLessons: () => unknown[]) {
   await page.route("**/api/teacher-os/units", r => r.fulfill(json({ status: "ok", units: [{ unit_id: UNIT_A, title: "Alpha Unit" }], source: SRC, generated_at: now() })));
@@ -56,4 +56,20 @@ test("identical refresh preserves the lesson draft", async ({ page }) => {
   await panel(page).getByRole("button", { name: "Edit in focused chat" }).click();
   await expect(page.getByRole("heading", { name: "Editing: Day 2" })).toBeVisible();
   await expect(page.getByLabel("Describe a proposed edit")).toHaveValue("KEEP-ME-DAY-2");
+});
+
+// #3778 review: lessons that agree on day/focus/target but differ in vocabulary, evidence or record link
+// must still invalidate drafts when they are reordered.
+test("reorder of lessons differing only in vocabulary/evidence drops the draft", async ({ page }) => {
+  const twin = (v: string) => ({ ...lesson(1), day_lesson_number: "Day 1", key_vocabulary: v, source_evidence: `Evidence ${v}` });
+  let lessons: unknown[] = [twin("alpha"), twin("beta")];
+  await setup(page, () => lessons);
+  await editAtIndex(page, 0);
+  await page.getByLabel("Describe a proposed edit").fill("DRAFT-FOR-ALPHA");
+  await page.getByRole("button", { name: "← Back to lesson" }).click();
+  lessons = [twin("beta"), twin("alpha")];
+  await page.getByRole("button", { name: /View Assignment/ }).click();
+  await panel(page).getByRole("button", { name: "Refresh from Notion" }).click();
+  await panel(page).getByRole("button", { name: "Edit in focused chat" }).click();
+  await expect(page.getByLabel("Describe a proposed edit")).toHaveValue("");
 });

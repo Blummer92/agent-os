@@ -270,6 +270,8 @@ def make_handler(api: TeacherOsApi) -> type[BaseHTTPRequestHandler]:
                 self.close_connection = True
 
         do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_HEAD = _respond
+        # BaseHTTPRequestHandler answers methods without a do_* with its own HTML 501; route them here too.
+        do_TRACE = do_CONNECT = _respond
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             # Never log the request line: it is user-controlled text (method,

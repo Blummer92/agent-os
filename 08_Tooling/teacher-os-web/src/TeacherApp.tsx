@@ -116,7 +116,7 @@ export function TeacherApp() {
   // and none is fabricated here.
   const lessonSignaturesRef = useRef<Record<string, string>>({});
   const lessonSignature = (list: readonly Lesson[]) =>
-    list.map(l => [l.day_lesson_number, l.daily_focus, l.daily_learning_target].join("\u0000")).join("\u0001");
+    list.map(l => [l.day_lesson_number, l.daily_focus, l.daily_learning_target, l.key_vocabulary, l.source_evidence, l.record_url].map(f => f ?? "\u0002").join("\u0000")).join("\u0001");
   useEffect(() => {
     if (lessons.kind !== "ready" || !unit) return;
     const signature = lessonSignature(lessonList);

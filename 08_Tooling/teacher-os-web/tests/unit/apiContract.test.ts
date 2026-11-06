@@ -137,3 +137,24 @@ test("labels with control or bidi-override characters are refused, not rendered"
     assert.equal(decodeUnits(200, titled).kind, "unavailable", JSON.stringify(bad));
   }
 });
+
+test("a source that is not verified-current and read-only is refused before curriculum is exposed", () => {
+  for (const source of [
+    { ...SRC, verification_state: "unverified" }, { ...SRC, access: "write" },
+    { ...SRC, verification_state: "VERIFIED-CURRENT" }, { ...SRC, access: "read-write" },
+  ]) {
+    assert.deepEqual(decodeUnits(200, unitsBody([{ unit_id: A, title: "x" }], { source })), { kind: "unavailable", reason: "malformed-response" });
+    assert.deepEqual(decodeLessons(200, lessonsBody([lesson(1)], { source }), A), { kind: "unavailable", reason: "malformed-response" });
+  }
+});
+
+test("every lesson must name the requested unit, not just the envelope", () => {
+  const bad: unknown[] = [
+    lesson(2, { canonical_unit: { page_id: B } }), lesson(2, { canonical_unit: undefined }),
+    lesson(2, { canonical_unit: null }), lesson(2, { canonical_unit: { page_id: 7 } }), lesson(2, { canonical_unit: "a" }),
+  ];
+  for (const item of bad) {
+    assert.deepEqual(decodeLessons(200, lessonsBody([lesson(1), item]), A), { kind: "unavailable", reason: "malformed-response" });
+  }
+  assert.equal(decodeLessons(200, lessonsBody([lesson(1), lesson(2)]), A).kind, "ready");
+});

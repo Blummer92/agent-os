@@ -18,7 +18,7 @@ async function mockApi(page: Page, units: { unit_id: string; title: string }[], 
   await page.route("**/api/teacher-os/units/*/lessons", r => {
     const id = r.request().url().split("/units/")[1].split("/")[0];
     const rows = lessons[id] ?? [];
-    return r.fulfill(json(rows.length ? { status: "ok", unit: units.find(u => u.unit_id === id), lessons: rows, source: SRC, generated_at: generatedAt } : { status: "empty", source: SRC, generated_at: generatedAt }));
+    return r.fulfill(json(rows.length ? { status: "ok", unit: units.find(u => u.unit_id === id), lessons: rows.map(row => ({ canonical_unit: { page_id: id }, ...(row as object) })), source: SRC, generated_at: generatedAt } : { status: "empty", source: SRC, generated_at: generatedAt }));
   });
 }
 const open = (page: Page) => page.getByRole("button", { name: /View Assignment/ }).click();
@@ -94,7 +94,7 @@ test("shrinking lesson list and unit change never render an impossible carousel 
   await page.route("**/api/teacher-os/units/*/lessons", r => {
     const id = r.request().url().split("/units/")[1].split("/")[0];
     const rows = id === UNIT_A ? lessonsForA : [lesson(9)];
-    return r.fulfill(json(rows.length ? { status: "ok", unit: undefined, lessons: rows, source: SRC, generated_at: now() } : { status: "empty", source: SRC, generated_at: now() }));
+    return r.fulfill(json(rows.length ? { status: "ok", unit: undefined, lessons: rows.map(row => ({ canonical_unit: { page_id: id }, ...(row as object) })), source: SRC, generated_at: now() } : { status: "empty", source: SRC, generated_at: now() }));
   });
   await page.goto("/");
   await open(page);
@@ -125,7 +125,7 @@ test("shrink-while-in-preview never resurrects the preview when the list regrows
   let lessonsForA = [lesson(1), lesson(2), lesson(3)];
   await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA }, "2020-01-01T00:00:00Z");
   await page.unroute("**/api/teacher-os/units/*/lessons");
-  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: "2020-01-01T00:00:00Z" })));
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA.map(row => ({ canonical_unit: { page_id: UNIT_A }, ...row })), source: SRC, generated_at: "2020-01-01T00:00:00Z" })));
   await page.goto("/");
   await open(page);
   await page.getByRole("button", { name: "Next →" }).click();
@@ -308,7 +308,7 @@ test("an ambiguous lesson draft never attaches to another lesson after a refresh
   let lessonsForA = [ambiguous("Ambiguous A"), ambiguous("Ambiguous B")];
   await mockApi(page, [{ unit_id: UNIT_A, title: "Alpha Unit" }], { [UNIT_A]: lessonsForA });
   await page.unroute("**/api/teacher-os/units/*/lessons");
-  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA, source: SRC, generated_at: now() })));
+  await page.route("**/api/teacher-os/units/*/lessons", r => r.fulfill(json({ status: "ok", unit: undefined, lessons: lessonsForA.map(row => ({ canonical_unit: { page_id: UNIT_A }, ...row })), source: SRC, generated_at: now() })));
   await page.goto("/");
   await open(page);
   await expect(page.getByRole("heading", { name: "Ambiguous A" })).toBeVisible();

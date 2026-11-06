@@ -59,7 +59,9 @@ export function safeRecordUrl(value: unknown): string | null {
 export function decodeSource(value: unknown): Source | null {
   if (!isObject(value)) return null;
   const { display_name, verification_state, access } = value;
-  if (!isLabel(display_name) || !isLabel(verification_state) || !isLabel(access)) return null;
+  if (!isLabel(display_name)) return null;
+  // The trust contract is exact: anything but what the server emits is not verified, read-only curriculum.
+  if (verification_state !== "verified-current" || access !== "read-only") return null;
   return { display_name, verification_state, access };
 }
 
@@ -76,11 +78,14 @@ export function decodeUnitList(value: unknown): readonly Unit[] | null {
   return units;
 }
 
-export function decodeLessonList(value: unknown): readonly Lesson[] | null {
+export function decodeLessonList(value: unknown, unitId: string): readonly Lesson[] | null {
   if (!Array.isArray(value) || value.length > MAX_ITEMS) return null;
   const lessons: Lesson[] = [];
   for (const item of value) {
     if (!isObject(item)) return null;
+    // Every lesson must itself name the requested unit; the envelope alone is not enough.
+    const relation = item.canonical_unit;
+    if (!isObject(relation) || typeof relation.page_id !== "string" || relation.page_id.toLowerCase() !== unitId.toLowerCase()) return null;
     const fields: Record<string, string | null> = {};
     for (const name of LESSON_TEXT_FIELDS) {
       const field = item[name];
@@ -128,7 +133,7 @@ export const decodeUnits = (httpStatus: number, body: unknown) =>
 export const decodeLessons = (httpStatus: number, body: unknown, unitId: string) =>
   decodeResponse(httpStatus, body, b => {
     if (b.unit !== undefined && b.unit !== null && (!isObject(b.unit) || b.unit.unit_id !== unitId)) return null;
-    return b.lessons === undefined && b.status === "empty" ? [] : decodeLessonList(b.lessons);
+    return b.lessons === undefined && b.status === "empty" ? [] : decodeLessonList(b.lessons, unitId);
   });
 
 export const isStale = (generatedAt: string, now = Date.now()) => !(now - Date.parse(generatedAt) <= STALE_AFTER_MS);

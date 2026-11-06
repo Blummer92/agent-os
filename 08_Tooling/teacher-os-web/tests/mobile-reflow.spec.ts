@@ -11,7 +11,7 @@ const UNIT_A = "aaaaaaaa-0000-4000-8000-000000000001";
 const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 const lesson = (extra: Record<string, unknown> = {}) => ({
   day_lesson_number: "Day 1", daily_learning_target: "Target 1", daily_focus: "Focus 1",
-  key_vocabulary: null, source_evidence: "Evidence 1", record_url: null, ...extra,
+  key_vocabulary: null, source_evidence: "Evidence 1", record_url: null, canonical_unit: { page_id: UNIT_A }, ...extra,
 });
 async function mockApi(page: Page, unitTitle: string, lessonExtra: Record<string, unknown> = {}) {
   await page.route("**/api/teacher-os/units", r => r.fulfill(json({ status: "ok", units: [{ unit_id: UNIT_A, title: unitTitle }], source: SRC, generated_at: now() })));

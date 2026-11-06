@@ -364,3 +364,21 @@ def test_access_log_never_echoes_request_line_or_sensitive_text(api):
     log = capture.getvalue()
     assert canary not in log and "units" not in log and "GET" not in log
     assert "200" in log and "42" in log
+
+
+@pytest.mark.parametrize("method", ["TRACE", "CONNECT"])
+def test_unhandled_http_methods_get_the_closed_json_405_not_the_stdlib_html_501(method):
+    """Review (#3778): BaseHTTPRequestHandler's own 501 page must not bypass the API's GET-only contract."""
+    import http.client
+    port = _free_port()
+    proc = _start(SERVER, port, SECRET, "--allowed-origin", WEB_ORIGIN)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(method, "/api/teacher-os/units", headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        raw = response.read().decode()
+        assert response.status == 405 and json.loads(raw)["reason_code"] == "method-not-allowed"
+        assert response.getheader("Content-Type", "").startswith("application/json")
+        assert "<html" not in raw.lower() and response.getheader("Cache-Control") == "no-store"
+    finally:
+        _stop(proc)
