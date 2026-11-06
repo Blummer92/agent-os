@@ -64,6 +64,9 @@ jobs:
       profile: ${{ steps.plan.outputs.profile }}
       plan_base64: ${{ steps.plan.outputs.plan_base64 }}
       needs_node: ${{ steps.plan.outputs.needs_node }}
+      needs_node_cache: ${{ steps.plan.outputs.needs_node_cache }}
+      needs_picture_perfect_install: ${{ steps.plan.outputs.needs_picture_perfect_install }}
+      node_lock_paths: ${{ steps.plan.outputs.node_lock_paths }}
     steps:
       - name: Check out exact pull request head
         uses: actions/checkout@v7
@@ -100,6 +103,7 @@ jobs:
           from scripts.agent_os_remote_validation import (
               SelectionInput,
               load_rule_map,
+              node_setup_requirements,
               select_validation_plan,
               serialize_validation_plan,
           )
@@ -124,10 +128,13 @@ jobs:
           ).decode("ascii")
           print(f"profile={plan.profile}")
           print(f"plan_base64={encoded}")
-          print(
-              "needs_node=" +
-              str(any("picture-perfect-coach" in command for command in plan.commands)).lower()
-          )
+          node = node_setup_requirements(plan.commands)
+          print(f"needs_node={str(node['needs_node']).lower()}")
+          print(f"needs_node_cache={str(bool(node['lock_paths'])).lower()}")
+          print(f"needs_picture_perfect_install={str(bool(node['install_dirs'])).lower()}")
+          print("node_lock_paths<<NODE_LOCK_PATHS")
+          print("\n".join(node["lock_paths"]))
+          print("NODE_LOCK_PATHS")
           PY
 
       - name: Fail closed on manual review
@@ -158,15 +165,21 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 
       - name: Set up Node for focused validation
-        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' && steps.plan.outputs.needs_node_cache == 'true' }}
         uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: 08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json
+          cache-dependency-path: ${{ steps.plan.outputs.node_lock_paths }}
+
+      - name: Set up Node for focused validation (no lockfile cache)
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' && steps.plan.outputs.needs_node_cache == 'false' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
 
       - name: Install Picture Perfect Coach dependencies
-        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
+        if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_picture_perfect_install == 'true' }}
         working-directory: 08_Tooling/instructional-materials-coach/picture-perfect-coach
         run: npm ci
 
@@ -175,10 +188,20 @@ jobs:
         env:
           PLAN_BASE64: ${{ steps.plan.outputs.plan_base64 }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_JUNIT_DIR: ${{ runner.temp }}/junit-plan-focused
         run: |
           python scripts/agent_os_ci_validation.py \
             --plan-base64 "$PLAN_BASE64" \
             --expected-head-sha "$EXPECTED_HEAD_SHA"
+
+      - name: Upload focused JUnit evidence
+        if: ${{ always() && steps.plan.outputs.profile == 'focused' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-plan-focused-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit-plan-focused/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish PR validation-plan summary
         if: always()
@@ -931,7 +954,18 @@ jobs:
       - name: Run aggregate validation
         id: aggregate
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
+        env:
+          CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
         run: ./scripts/validate-all.sh
+
+      - name: Upload aggregate JUnit evidence
+        if: ${{ always() && steps.aggregate_evidence.outputs.run_required != 'false' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-aggregate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit-aggregate/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish validation summary
         if: always()
@@ -1006,17 +1040,41 @@ jobs:
         with:
           python-version: "3.11"
       - name: Generate report-only jscpd evidence
+        id: generate
         continue-on-error: true
         run: python -m scripts.jscpd_advisory --output tmp/jscpd-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Record advisory evidence health
+        id: health
+        if: always()
+        run: |
+          python -m scripts.agent_os_ci_evidence_health \
+            --tool jscpd \
+            --output-dir tmp/jscpd-advisory \
+            --report jscpd-advisory.json \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --generate-outcome "${{ steps.generate.outcome }}" \
+            --health-dir tmp/jscpd-health \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: jscpd-advisory-${{ github.event.pull_request.number }}
+          name: jscpd-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/jscpd-advisory/
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
+      - name: Upload advisory health receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jscpd-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
+          path: tmp/jscpd-health/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify jscpd advisory evidence
+        if: always()
+        run: python -m scripts.advisory_evidence_guard --kind jscpd --file tmp/jscpd-advisory/jscpd-advisory.json --sha "${{ github.event.pull_request.head.sha }}"
 
   pyan3-advisory:
     name: pyan3 call-graph advisory
@@ -1036,17 +1094,41 @@ jobs:
       - name: Install pinned Pyan3 and PyYAML
         run: python -m pip install "pyan3==2.9.0" "PyYAML==6.0.3"
       - name: Generate report-only pyan3 evidence
+        id: generate
         continue-on-error: true
         run: python -m scripts.pyan3_advisory --output tmp/pyan3-advisory --sha "${{ github.event.pull_request.head.sha }}"
+      - name: Record advisory evidence health
+        id: health
+        if: always()
+        run: |
+          python -m scripts.agent_os_ci_evidence_health \
+            --tool pyan3 \
+            --output-dir tmp/pyan3-advisory \
+            --report pyan3-advisory.json \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --generate-outcome "${{ steps.generate.outcome }}" \
+            --health-dir tmp/pyan3-health \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: pyan3-advisory-${{ github.event.pull_request.number }}
+          name: pyan3-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/pyan3-advisory/
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
+      - name: Upload advisory health receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pyan3-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
+          path: tmp/pyan3-health/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify pyan3 advisory evidence
+        if: always()
+        run: python -m scripts.advisory_evidence_guard --kind pyan3 --file tmp/pyan3-advisory/pyan3-advisory.json --sha "${{ github.event.pull_request.head.sha }}"
 
   aggregate-gate:
     # Terminal disposition only when authoritative aggregate validation is
@@ -1075,6 +1157,7 @@ jobs:
           AGGREGATE_OUTCOME: ${{ needs.validate.outputs.aggregate_outcome }}
           MAIN_HEALTH_OUTCOME: ${{ needs.validate.outputs.main_health_outcome }}
           MAIN_RECOVERY_STOP_OUTCOME: ${{ needs.validate.outputs.main_recovery_stop_outcome }}
+          PLAN_RESULT: ${{ needs.plan.result }}
           STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
