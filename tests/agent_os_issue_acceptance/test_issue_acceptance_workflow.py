@@ -432,3 +432,27 @@ def test_m14_workflow_remains_advisory_and_report_only():
         "this workflow does not approve, merge, label, close, or mutate"
         in content
     )
+
+
+def test_acceptance_workflow_uses_net_pr_diff_not_commit_series():
+    """The scanner must evaluate the final delivered change, not removed history."""
+    source = _content()
+    assert 'gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"' in source
+    assert 'gh pr diff "$PR_NUMBER" --patch' not in source
+    assert 'diff_retrieval_failed.txt' in source
+    assert 'evidence_args+=(--diff-retrieval-failed)' in source
+
+
+def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
+    """Negative control: changing the source must not weaken secret detection."""
+    from scripts.agent_os_issue_acceptance.checks.banned_patterns import check
+    from scripts.agent_os_issue_acceptance.models import IssueMetadata, Status
+
+    # Construct a synthetic secret-shaped addition without embedding a
+    # literal sensitive assignment anywhere in this repository's diff.
+    candidate = "se" + "cret" + " = " + repr("synthetic-test-canary-only")
+    newly_added = "diff --git a/example.py b/example.py\\n+" + candidate + "\\n"
+    final_clean = "diff --git a/example.py b/example.py\\n+status = 'safe'\\n"
+    metadata = IssueMetadata.empty()
+    assert check(metadata, newly_added).status == Status.FAIL
+    assert check(metadata, final_clean).status == Status.PASS
