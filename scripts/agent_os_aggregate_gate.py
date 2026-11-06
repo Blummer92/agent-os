@@ -28,14 +28,27 @@ AUTHORITATIVE_STATUS_CONTEXT = "agent-os/authoritative-aggregate"
 _OPEN = "authoritative aggregate established on this head; gate open."
 
 
-def evaluate_aggregate_gate(validate_result: str) -> tuple[bool, str]:
+# The plan job is the only place focused (for example Teacher OS React) commands
+# run; the aggregate does not repeat them. A plan that ran and did not succeed is
+# a verdict on this head, so it must close the gate. ``skipped`` (non-PR events,
+# where no plan runs) and an unset value stay neutral and change nothing.
+_PLAN_BLOCKING = frozenset({"failure", "cancelled"})
+
+
+def evaluate_aggregate_gate(validate_result: str, plan_result: str = "") -> tuple[bool, str]:
     """Decide the gate disposition from the authoritative aggregate job result.
 
     Returns ``(gate_open, message)``. The gate opens only for an exact
-    ``success`` disposition.
+    ``success`` aggregate disposition and a plan job that did not fail.
     """
-    if type(validate_result) is not str:
-        raise TypeError("validate_result must be a string")
+    if type(validate_result) is not str or type(plan_result) is not str:
+        raise TypeError("job results must be strings")
+    if plan_result in _PLAN_BLOCKING:
+        return (
+            False,
+            f"focused validation plan reported {plan_result}; aggregate success "
+            "cannot stand for a head whose focused commands did not pass; the gate is closed.",
+        )
     if validate_result == "success":
         return True, _OPEN
     return (
@@ -83,6 +96,7 @@ def decide_terminal_status(
     aggregate_outcome: str = "",
     main_health_outcome: str = "",
     main_recovery_stop_outcome: str = "",
+    plan_result: str = "",
 ) -> TerminalStatus | None:
     """Map the authoritative run disposition to the terminal commit status.
 
@@ -93,6 +107,10 @@ def decide_terminal_status(
     """
     if not authoritative:
         return None
+    if plan_result in _PLAN_BLOCKING:
+        # Newest status wins (#2761), so this also supersedes a reused success.
+        state = "failure" if plan_result == "failure" else "error"
+        return TerminalStatus(state, f"Focused validation plan {plan_result} on this exact head; no verdict can pass")
     if validate_result == "success":
         if reused:
             return None
@@ -123,6 +141,7 @@ def status_main() -> int:
         aggregate_outcome=env("AGGREGATE_OUTCOME", ""),
         main_health_outcome=env("MAIN_HEALTH_OUTCOME", ""),
         main_recovery_stop_outcome=env("MAIN_RECOVERY_STOP_OUTCOME", ""),
+        plan_result=env("PLAN_RESULT", ""),
     )
     if decision is not None:
         print(json.dumps(decision._asdict()))
@@ -133,7 +152,7 @@ def main() -> int:
     """Workflow entry point: reads ``VALIDATE_RESULT`` and exits 0/1."""
     validate_result = os.environ.get("VALIDATE_RESULT", "")
     plan_result = os.environ.get("PLAN_RESULT", "")
-    gate_open, message = evaluate_aggregate_gate(validate_result)
+    gate_open, message = evaluate_aggregate_gate(validate_result, plan_result)
     print(f"plan job result: {plan_result or 'unreported'}")
     print(f"aggregate job result: {validate_result or 'unreported'}")
     print(message, file=sys.stderr if not gate_open else sys.stdout)
