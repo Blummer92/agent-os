@@ -24,8 +24,10 @@
     {"name":"instructional-materials-coach","prefixes":["08_Tooling/instructional-materials-coach/src/","08_Tooling/instructional-materials-coach/tests/","08_Tooling/instructional-materials-coach/docs/","08_Tooling/instructional-materials-coach/reports/","08_Tooling/instructional-materials-coach/samples/"],"exact_paths":["08_Tooling/instructional-materials-coach/.env.example","08_Tooling/instructional-materials-coach/BUGS.md","08_Tooling/instructional-materials-coach/CHANGELOG.md","08_Tooling/instructional-materials-coach/README.md","08_Tooling/instructional-materials-coach/pyproject.toml"],"commands":["python -m pytest 08_Tooling/instructional-materials-coach/tests"]},
     {"name":"curriculum-pipeline-boundaries","exact_paths":["tests/test_curriculum_pipeline_boundaries.py"],"commands":["python -m pytest tests/test_curriculum_pipeline_boundaries.py"]},
     {"name":"curriculum-language-system","exact_paths":["tests/test_curriculum_language_system.py"],"commands":["python -m pytest tests/test_curriculum_language_system.py"]},
-    {"name":"teacher-modeling-workflows","exact_paths":["tests/test_teacher_modeling_workflows.py"],"commands":["python -m pytest tests/test_teacher_modeling_workflows.py"]}
+    {"name":"teacher-modeling-workflows","exact_paths":["tests/test_teacher_modeling_workflows.py"],"commands":["python -m pytest tests/test_teacher_modeling_workflows.py"]},
+    {"name":"ci-evidence-collector","exact_paths":["scripts/agent_os_ci_evidence_collector.py","scripts/agent_os_ci_evidence_health.py","tests/test_agent_os_ci_evidence_collector.py","tests/test_agent_os_ci_evidence_collector_provider_fidelity.py","tests/test_collector_download_redirect.py","tests/test_collector_failure_receipt.py"],"commands":["python -m pytest tests/test_agent_os_ci_evidence_collector.py","python -m pytest tests/test_agent_os_ci_evidence_collector_provider_fidelity.py","python -m pytest tests/test_collector_download_redirect.py","python -m pytest tests/test_collector_failure_receipt.py"]}
   ],
   "command_coverage": [{"broader":"python -m pytest 08_Tooling/workflow-scheduler/tests","subsumes":["python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"]}],
   "aggregate_command": "python -m pytest"
 }
+
