@@ -36,11 +36,6 @@ CANONICAL_REGISTRY_TITLE = "Canonical Digital Media Unit Registry"
 VISUAL_ASSET_LIBRARY_DATABASE_ID = "21783abc-55de-49a4-a87c-94656fff0400"
 VISUAL_ASSET_LIBRARY_TITLE = "Visual Asset Library"
 PHOTOGRAPHY_FOUNDATIONS_PAGE_ID = "3907ac78-3131-8129-8c73-cd9f6b8e8a7d"
-CANDY_BRANDING_UNIT_KEY = "candy-branding"
-CANDY_BRANDING_STABLE_ID = "canonical-unit-candy-branding"
-CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
-CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
-CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
 LESSONS_LEARNED_VERIFICATION_REQUEST_ID = "verify-lessons-learned-binding"
 LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER = 2854
 LESSONS_LEARNED_REFERENCE_PAGE_ID = "3c67ac78-3131-8130-94dd-da66213ca42b"
@@ -344,22 +339,6 @@ def verify_additional_unit_binding(
     }
 
 
-def verify_candy_branding_binding(
-    adapter: object,
-    *,
-    canonical_registry_data_source_id: str,
-    generated_at: str,
-) -> dict[str, object]:
-    """Compatibility wrapper for the first #2816 additional-unit verifier."""
-
-    return verify_additional_unit_binding(
-        adapter,
-        canonical_unit_key=CANDY_BRANDING_UNIT_KEY,
-        canonical_registry_data_source_id=canonical_registry_data_source_id,
-        generated_at=generated_at,
-    )
-
-
 def _verified_database(
     adapter: object,
     *,
@@ -586,10 +565,6 @@ if __name__ == "__main__":
 __all__ = [
     "BINDING_VERIFICATION_REQUEST_IDS",
     "CANONICAL_REGISTRY_DATABASE_ID",
-    "CANDY_BRANDING_STABLE_ID",
-    "CANDY_BRANDING_TITLE",
-    "CANDY_BRANDING_UNIT_KEY",
-    "CANDY_BRANDING_VERIFICATION_REQUEST_ID",
     "LESSONS_LEARNED_REFERENCE_PAGE_ID",
     "LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER",
     "LESSONS_LEARNED_VERIFICATION_REQUEST_ID",
@@ -601,7 +576,6 @@ __all__ = [
     "VISUAL_ASSET_LIBRARY_DATABASE_ID",
     "admit_binding_verification_request",
     "verify_additional_unit_binding",
-    "verify_candy_branding_binding",
     "verify_lessons_learned_binding",
     "verify_teacher_modeling_binding",
     "verify_live_bindings",
