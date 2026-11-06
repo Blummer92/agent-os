@@ -451,8 +451,8 @@ def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
     # Construct a synthetic secret-shaped addition without embedding a
     # literal sensitive assignment anywhere in this repository's diff.
     candidate = "se" + "cret" + " = " + repr("synthetic-test-canary-only")
-    newly_added = "diff --git a/example.py b/example.py\\n+" + candidate + "\\n"
-    final_clean = "diff --git a/example.py b/example.py\\n+status = 'safe'\\n"
+    newly_added = "diff --git a/example.py b/example.py\n+" + candidate + "\n"
+    final_clean = "diff --git a/example.py b/example.py\n+status = 'safe'\n"
     metadata = IssueMetadata.empty()
     assert check(metadata, newly_added).status == Status.FAIL
     assert check(metadata, final_clean).status == Status.PASS
