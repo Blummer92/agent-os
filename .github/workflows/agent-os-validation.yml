@@ -196,7 +196,7 @@ jobs:
 
       - name: Upload focused JUnit evidence
         if: ${{ always() && steps.plan.outputs.profile == 'focused' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-plan-focused-${{ github.run_attempt }}
           path: ${{ runner.temp }}/junit-plan-focused/
@@ -960,7 +960,7 @@ jobs:
 
       - name: Upload aggregate JUnit evidence
         if: ${{ always() && steps.aggregate_evidence.outputs.run_required != 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-aggregate-${{ github.run_attempt }}
           path: ${{ runner.temp }}/junit-aggregate/
@@ -1058,7 +1058,7 @@ jobs:
             --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jscpd-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/jscpd-advisory/
@@ -1066,7 +1066,7 @@ jobs:
           retention-days: 7
       - name: Upload advisory health receipt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jscpd-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/jscpd-health/
@@ -1112,7 +1112,7 @@ jobs:
             --run-attempt "${{ github.run_attempt }}"
       - name: Upload advisory evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pyan3-advisory-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/pyan3-advisory/
@@ -1120,7 +1120,7 @@ jobs:
           retention-days: 7
       - name: Upload advisory health receipt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pyan3-health-${{ github.event.pull_request.number }}-attempt-${{ github.run_attempt }}
           path: tmp/pyan3-health/
