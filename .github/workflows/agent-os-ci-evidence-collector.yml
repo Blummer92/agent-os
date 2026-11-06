@@ -50,7 +50,7 @@ jobs:
           python -m json.tool tmp/collector-receipt.json > /dev/null
       - name: Upload evidence receipt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-receipt-${{ github.event.workflow_run.id }}
           path: tmp/collector-receipt.json
