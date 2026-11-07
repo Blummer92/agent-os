@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-HELPER_SCRIPT = Path(__file__).parents[1] / "scripts" / "agent_os_ci_test_completeness.py"
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -23,7 +23,8 @@ def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, root / "scripts" / "validate-all.sh")
-    shutil.copy2(HELPER_SCRIPT, root / "scripts" / "agent_os_ci_test_completeness.py")
+    for helper in RUNNER_HELPERS:
+        shutil.copy2(SOURCE_SCRIPT.parent / helper, root / "scripts" / helper)
     os.chmod(root / "scripts" / "validate-all.sh", 0o755)
     structural = root / "07_Agent_Tests" / "validate-repo-structure.sh"
     structural.parent.mkdir(parents=True)
@@ -41,18 +42,12 @@ def repo(tmp_path: Path) -> Path:
         "    raise SystemExit(0)\n"
         "if args and args[0].endswith('.py') and pathlib.Path(args[0]).is_file():\n"
         "    import runpy\n"
+        "    sys.path.insert(0, str(pathlib.Path(args[0]).resolve().parent))  # like `python script.py`\n"
         "    sys.argv = args\n"
         "    runpy.run_path(args[0], run_name='__main__')\n"
         "    raise SystemExit(0)\n"
         "if len(args) >= 3 and args[:2] == ['-m', 'pytest'] and '--collect-only' in args:\n"
-        "    deselect = os.environ.get('PYTEST_SHIM_DESELECT', '')\n"
-        "    is_reference = '-o' in args\n"
-        "    found = sorted(pathlib.Path('tests').rglob('test_*.py')) + sorted(pathlib.Path('tests').rglob('*_test.py'))\n"
-        "    for path in sorted(set(found)):\n"
-        "        rel = path.as_posix()\n"
-        "        if deselect and rel == deselect and not is_reference:\n"
-        "            continue\n"
-        "        print(rel + ': 1')\n"
+        "    print('m.py::t')  # the one test the shim's JUnit reports\n"
         "    raise SystemExit(0)\n"
         "if args == ['-m', 'pytest', '--version']:\n"
         "    print('pytest 9.0')\n"

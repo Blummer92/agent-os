@@ -11,7 +11,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-HELPER_SCRIPT = Path(__file__).parents[1] / "scripts" / "agent_os_ci_test_completeness.py"
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
 TIMING_LINE = re.compile(r"^- .+ \| (?:[0-9]+\.[0-9]{3} s|unavailable)$", re.MULTILINE)
 
 
@@ -21,7 +21,9 @@ def _make_repo(tmp_path: Path, *, structure_exit: int = 0) -> Path:
     (repo / "07_Agent_Tests").mkdir()
     (repo / "tests").mkdir()
     shutil.copy2(SCRIPT, repo / "scripts" / "validate-all.sh")
-    shutil.copy2(HELPER_SCRIPT, repo / "scripts" / "agent_os_ci_test_completeness.py")
+    for helper in RUNNER_HELPERS:
+        shutil.copy2(SCRIPT.parent / helper, repo / "scripts" / helper)
+    (repo / "ruff.toml").write_text('exclude = ["scripts"]\n', encoding="utf-8")  # lint only the fixtures
     (repo / "07_Agent_Tests" / "validate-repo-structure.sh").write_text(
         f"#!/usr/bin/env bash\nexit {structure_exit}\n",
         encoding="utf-8",
