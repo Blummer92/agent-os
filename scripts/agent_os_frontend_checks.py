@@ -141,7 +141,7 @@ def unowned_node_changes(
         return any(_under(path, directory) for directory in known)
 
     unowned: set[str] = set()
-    for path in changed:  # includes deleted manifests, which HEAD's tracked files no longer list
+    for path in changed:  # added or edited manifests, even where HEAD tracks nothing else (deleted paths are excluded upstream)
         if PurePosixPath(path).name in ("package.json", "package-lock.json"):
             directory = str(PurePosixPath(path).parent)
             if directory == ".":
