@@ -20,6 +20,13 @@ from scripts.agent_os_aggregate_gate import evaluate_aggregate_gate, main
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _no_frontend_job_unless_a_test_says_otherwise(monkeypatch):
+    # The gate CLI treats the frontend verdict as required unless FRONTEND_REQUIRED is
+    # exactly "false" (fail closed). Tests of the non-frontend semantics say "false".
+    monkeypatch.setenv("FRONTEND_REQUIRED", "false")
+
+
 def test_skipped_aggregate_closes_the_gate():
     gate_open, message = evaluate_aggregate_gate("skipped")
     assert gate_open is False
@@ -245,7 +252,7 @@ def test_required_frontend_only_exact_success_opens_the_gate(result):
 
 
 def test_required_frontend_success_opens_the_gate():
-    assert evaluate_aggregate_gate("success", "success", "success", True)[0] is True
+    assert evaluate_aggregate_gate("success", "success", "success", True, SHA_A, SHA_A)[0] is True
 
 
 @pytest.mark.parametrize("result", ["failure", "cancelled"])
@@ -278,6 +285,8 @@ def test_main_closes_gate_when_required_frontend_did_not_succeed(monkeypatch):
         monkeypatch.setenv("FRONTEND_RESULT", result)
         assert main() == 1
     monkeypatch.setenv("FRONTEND_RESULT", "success")
+    monkeypatch.setenv("FRONTEND_TESTED_SHA", SHA_A)
+    monkeypatch.setenv("FRONTEND_EXPECTED_SHA", SHA_A)
     assert main() == 0
 
 
@@ -294,8 +303,9 @@ def test_frontend_failure_supersedes_reused_aggregate_success():
 
 
 def test_frontend_success_keeps_existing_status_decisions():
-    assert _decide(frontend_result="success", frontend_required=True).state == "success"
-    assert _decide(reused=True, frontend_result="success", frontend_required=True) is None
+    bound = dict(frontend_result="success", frontend_required=True, frontend_tested_sha=SHA_A, frontend_expected_sha=SHA_A)
+    assert _decide(**bound).state == "success"
+    assert _decide(reused=True, **bound) is None
 
 
 def test_frontend_never_publishes_for_non_authoritative_runs():
@@ -344,11 +354,50 @@ def test_required_frontend_success_for_the_same_sha_opens_the_gate():
     assert evaluate_aggregate_gate("success", "success", "success", True, SHA_A, SHA_A)[0] is True
 
 
-def test_sha_binding_is_skipped_only_when_no_verdict_sha_exists_or_frontend_is_unrequired():
+def test_sha_binding_is_skipped_only_when_the_frontend_verdict_is_unrequired():
     # push to main: no frontend job and no verdict SHA to bind.
     assert evaluate_aggregate_gate("success", "skipped", "skipped", False, "", "")[0] is True
     assert evaluate_aggregate_gate("success", "skipped", "success", False, SHA_B, SHA_A)[0] is True
-    assert evaluate_aggregate_gate("success", "success", "success", True, SHA_B, "")[0] is True
+
+
+def test_required_frontend_success_with_no_verdict_sha_closes_the_gate():
+    # Fail closed: a dropped or empty FRONTEND_EXPECTED_SHA can never make the binding vacuous.
+    gate_open, message = evaluate_aggregate_gate("success", "success", "success", True, SHA_B, "")
+    assert gate_open is False
+    assert "no verdict SHA" in message
+    assert _decide(frontend_result="success", frontend_required=True, frontend_tested_sha=SHA_A).state == "error"
+
+
+@pytest.mark.parametrize("value", ["", "true", "True", "FALSE", "no", "0", "1"])
+def test_cli_treats_anything_but_an_exact_false_as_frontend_required(monkeypatch, value):
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "skipped")
+    monkeypatch.setenv("FRONTEND_RESULT", "skipped")
+    monkeypatch.setenv("FRONTEND_REQUIRED", value)
+    assert main() == 1
+
+
+def test_cli_fails_closed_when_the_frontend_variables_are_dropped(monkeypatch):
+    for name in ("FRONTEND_REQUIRED", "FRONTEND_RESULT", "FRONTEND_TESTED_SHA", "FRONTEND_EXPECTED_SHA"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "success")
+    assert main() == 1
+    monkeypatch.setenv("AUTHORITATIVE", "true")
+    monkeypatch.setenv("AGGREGATE_OUTCOME", "success")
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "status"],
+        env=dict(os.environ), capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert json.loads(done.stdout)["state"] == "error"
+
+
+def test_cli_exact_false_is_the_only_way_to_make_the_frontend_verdict_optional(monkeypatch):
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "skipped")
+    monkeypatch.setenv("FRONTEND_RESULT", "skipped")
+    monkeypatch.setenv("FRONTEND_REQUIRED", "false")
+    assert main() == 0
 
 
 def test_other_sha_frontend_publishes_error_not_success():
@@ -408,4 +457,7 @@ def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_step
     assert len(gate_steps) == 2
     for step in gate_steps:
         assert step["env"]["FRONTEND_TESTED_SHA"] == "${{ needs.frontend.outputs.tested_sha }}"
-        assert step["env"]["FRONTEND_EXPECTED_SHA"] == "${{ needs.validate.outputs.head_sha || github.sha }}"
+        # Never the PR merge commit: fall back to the event's own head SHA, then the dispatch SHA.
+        assert step["env"]["FRONTEND_EXPECTED_SHA"] == (
+            "${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}"
+        )

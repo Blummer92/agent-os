@@ -60,15 +60,18 @@ def frontend_blocker(
     no applicable project reports ``success`` itself and states that in its
     check annotation and summary, so legitimate non-applicability never needs a
     skip. A required ``success`` must also name the SHA it tested and that SHA
-    must be the one this verdict is minted for (``expected_sha``): validation
-    evidence from another SHA never stands. When the job is not required
+    must equal a non-empty ``expected_sha``, the one this verdict is minted for:
+    validation evidence from another SHA, or with no SHA to bind to, never
+    stands. When the job is not required
     (``push`` to main, where no frontend job runs) only an explicit failure or
     cancellation blocks.
     """
     if any(type(value) is not str for value in (frontend_result, tested_sha, expected_sha)):
         raise TypeError("job results and SHAs must be strings")
     if frontend_result == "success":
-        if frontend_required and expected_sha and tested_sha != expected_sha:
+        if frontend_required and not expected_sha:
+            return FrontendBlock("error", "Frontend checks have no verdict SHA to bind to")
+        if frontend_required and tested_sha != expected_sha:
             return FrontendBlock("error", "Frontend checks tested a different SHA than this verdict")
         return None
     if frontend_required or frontend_result in _PLAN_BLOCKING:
@@ -202,6 +205,16 @@ def decide_terminal_status(
     return TerminalStatus("error", f"Authoritative aggregate run ended {validate_result or 'unreported'}; no verdict")
 
 
+def _frontend_required_from_env(env_get) -> bool:
+    """The frontend verdict is required unless the workflow says ``false`` explicitly.
+
+    The workflow passes ``false`` only for ``push`` events, where no frontend job
+    exists. A dropped, renamed, or mistyped variable therefore fails closed instead
+    of silently making the frontend verdict optional.
+    """
+    return env_get("FRONTEND_REQUIRED", "") != "false"
+
+
 def status_main() -> int:
     """Print the terminal status as JSON, or nothing when none may be published."""
     env = os.environ.get
@@ -214,7 +227,7 @@ def status_main() -> int:
         main_recovery_stop_outcome=env("MAIN_RECOVERY_STOP_OUTCOME", ""),
         plan_result=env("PLAN_RESULT", ""),
         frontend_result=env("FRONTEND_RESULT", ""),
-        frontend_required=env("FRONTEND_REQUIRED", "") == "true",
+        frontend_required=_frontend_required_from_env(env),
         frontend_tested_sha=env("FRONTEND_TESTED_SHA", ""),
         frontend_expected_sha=env("FRONTEND_EXPECTED_SHA", ""),
     )
@@ -228,7 +241,7 @@ def main() -> int:
     validate_result = os.environ.get("VALIDATE_RESULT", "")
     plan_result = os.environ.get("PLAN_RESULT", "")
     frontend_result = os.environ.get("FRONTEND_RESULT", "")
-    frontend_required = os.environ.get("FRONTEND_REQUIRED", "") == "true"
+    frontend_required = _frontend_required_from_env(os.environ.get)
     tested_sha = os.environ.get("FRONTEND_TESTED_SHA", "")
     expected_sha = os.environ.get("FRONTEND_EXPECTED_SHA", "")
     gate_open, message = evaluate_aggregate_gate(

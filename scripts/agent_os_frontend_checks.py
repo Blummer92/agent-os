@@ -82,7 +82,9 @@ PROJECTS: tuple[Project, ...] = (
 
 
 def _normalize(path: str) -> str:
-    return path.strip().replace("\\", "/").removeprefix("./")
+    # Paths arrive NUL-delimited from git, so names are exact (spaces and backslashes
+    # are legal on Linux): never strip or rewrite them, only drop a leading "./".
+    return path.removeprefix("./")
 
 
 def _under(path: str, directory: str) -> bool:
@@ -93,7 +95,7 @@ def applicable_projects(
     changed_files: Iterable[str], projects: Sequence[Project] = PROJECTS
 ) -> tuple[Project, ...]:
     """Projects with at least one changed path beneath their directory."""
-    paths = [_normalize(p) for p in changed_files if p.strip()]
+    paths = [_normalize(p) for p in changed_files if p]
     return tuple(
         project
         for project in projects
@@ -114,7 +116,7 @@ def unowned_node_changes(
     lockfile counts as its own project. Untouched unregistered projects never fail
     unrelated pull requests.
     """
-    changed = [_normalize(p) for p in changed_files if p.strip()]
+    changed = [_normalize(p) for p in changed_files if p]
     registered = [project.directory for project in projects]
 
     def owned(path: str) -> bool:
@@ -141,7 +143,14 @@ Runner = Callable[[Sequence[str], Path], int]
 
 
 def _run_command(argv: Sequence[str], cwd: Path) -> int:
-    return subprocess.run(list(argv), cwd=cwd, check=False).returncode
+    try:
+        return subprocess.run(list(argv), cwd=cwd, check=False).returncode
+    except OSError as exc:
+        # A registered project whose directory or executable is missing (for example a
+        # PR that deletes the project but keeps its registration) is a recorded failure
+        # with a named cause, never a bare traceback.
+        print(f"cannot run `{' '.join(argv)}` in {cwd}: {exc}", file=sys.stderr)
+        return 127
 
 
 def run_projects(
@@ -299,5 +308,16 @@ def main() -> int:
     return 0
 
 
+def guarded_main() -> int:
+    """Run :func:`main`, turning any unexpected exception into an annotated failure."""
+    try:
+        return main()
+    except Exception as exc:  # noqa: BLE001 - the lane must fail closed with a visible cause
+        message = f"frontend lane error: {type(exc).__name__}: {exc}"
+        print(message, file=sys.stderr)
+        _annotate("error", message)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded_main())

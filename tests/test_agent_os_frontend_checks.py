@@ -260,3 +260,53 @@ def test_registered_project_has_install_when_packaged_then_real_checks(project):
     else:
         assert project.commands and project.commands[0][0] == "node"
         assert (directory / project.commands[0][1]).is_file()
+
+
+def test_exact_names_are_preserved_not_stripped_or_rewritten():
+    # Paths arrive NUL-delimited from git; spaces and backslashes are legal Linux name characters.
+    assert names([PP + "/src/trailing.ts "]) == ["picture-perfect-coach"]  # still beneath the project
+    assert fe.unowned_node_changes(["tools/solo/trailing.ts "], []) == ()  # "x.ts " is not a .ts file
+    assert fe.unowned_node_changes(["tools/solo/back\\slash.ts"], []) == ("tools/solo/back\\slash.ts",)
+    assert names([PP + "\\src/a.ts"]) == []  # a backslash is part of the name, never a separator
+
+
+def test_missing_project_directory_or_executable_is_a_recorded_failure(tmp_path, capsys):
+    assert fe._run_command(("npm", "ci"), tmp_path / "does-not-exist") == 127
+    assert "cannot run `npm ci`" in capsys.readouterr().err
+    assert fe._run_command(("definitely-not-an-installed-binary",), tmp_path) == 127
+
+
+def test_deleting_a_registered_project_without_unregistering_it_fails_with_a_named_cause(tmp_path):
+    ghost = fe.Project("ghost", "08_Tooling/removed-project", (("npm", "ci"), ("npm", "test")))
+    results = fe.run_projects([ghost], root=tmp_path)
+    assert results == {"ghost": [("npm ci", 127)]}
+    assert fe.evaluate([ghost], results) == ["ghost: `npm ci` exit 127"]
+
+
+def test_guarded_main_turns_unexpected_exceptions_into_annotated_failures(monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(fe, "main", boom)
+    assert fe.guarded_main() == 1
+    captured = capsys.readouterr()
+    assert "::error title=Frontend checks::frontend lane error: RuntimeError: git exploded" in captured.out
+    assert "git exploded" in captured.err
+
+
+def test_every_node_project_in_the_selector_is_also_required_by_the_lane():
+    # Drift guard between the two registries: a Node project the selector knows must be validated here.
+    import re
+
+    from scripts.agent_os_remote_validation.selector import _NODE_PROJECTS
+
+    lane_directories = {p.directory for p in fe.PROJECTS}
+    assert {directory for directory, _, _ in _NODE_PROJECTS} <= lane_directories
+    rules = load_rule_map()["focused_rules"]
+    selector_directories = {
+        match.group(1)
+        for rule in rules
+        for command in rule["commands"]
+        if (match := re.match(r"^cd (\S+) && (?:npm|npx|node)\b", command))
+    }
+    assert selector_directories and selector_directories <= lane_directories, selector_directories - lane_directories

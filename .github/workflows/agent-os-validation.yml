@@ -1204,7 +1204,7 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
-          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.sha }}
+          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1225,6 +1225,6 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
-          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.sha }}
+          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py
