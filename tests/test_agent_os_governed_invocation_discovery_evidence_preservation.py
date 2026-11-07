@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """The independent discovery receipt stays available after fallback retirement.
-+
-+Actual workflow conditions, shell handoffs, failure retention, and provider call
-+bounds are exercised in test_ordinary_codespaces_no_gce_fallback.py.
-+"""
+
+Actual workflow conditions, shell handoffs, failure retention, and provider call
+bounds are exercised in test_ordinary_codespaces_no_gce_fallback.py.
+"""
+
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -32,8 +32,7 @@ def test_discovery_step_preserves_payload_independently() -> None:
     # The module still writes the live result.json (downstream readers and the
     # capable/not-capable outputs are unchanged).
     assert f'--result-output "$RUNNER_TEMP/agent-os-ingress/{LIVE_RESULT}"' in block
-    # The payload is then copied to an independent path before any fallback
-    # consumer reads it.
+    # The payload is copied to an independent path for evidence consumers.
     assert PRESERVED in block
     assert f'cp "$RUNNER_TEMP/agent-os-ingress/{LIVE_RESULT}"' in block
     assert f'"$RUNNER_TEMP/agent-os-ingress/{PRESERVED}"' in block
@@ -46,7 +45,7 @@ def test_preservation_is_scoped_to_the_discovery_step() -> None:
     assert text.count(PRESERVED) >= 2, "preservation copy + summary read expected"
     gce_block = _step_block(text, GCE_STEP, SUMMARY_STEP)
     assert PRESERVED not in gce_block, (
-        "the GCE fallback step must not touch the preserved Codespaces payload"
+        "the explicit GCE step must not touch the preserved Codespaces payload"
     )
 
 

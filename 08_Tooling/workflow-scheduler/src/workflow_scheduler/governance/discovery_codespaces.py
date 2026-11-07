@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif request is not None:
         result = {
-            "discovery": _failure(request, str(route["reason_codes"][0])),
+            "discovery": _failure(request, str(route["reason_codes"][0]), route.get("codespace_name")),
             "codespaces_capable": False,
         }
     else:
