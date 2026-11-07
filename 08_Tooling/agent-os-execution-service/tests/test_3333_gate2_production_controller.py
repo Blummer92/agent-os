@@ -35,7 +35,9 @@ import pytest
 from agent_os_execution_service.gate2_production_controller import (
     Gate2ControllerError,
     _build_bound_bootstrap,
+    _find_completed_receipt,
     _persist_receipt_atomically,
+    _receipt_file_name,
     main,
     run_gate2_fixed_pilot_controller,
 )
@@ -1444,3 +1446,91 @@ def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeyp
     dependency = bootstrap.sources.repository_reader.read_dependency_evidence(_BOUND_REPO, 3333)
     assert str(dependency.status) == "EvidenceStatus.UNAVAILABLE"
     assert any("not-current" in code for code in dependency.reason_codes)
+
+
+# ---------------------------------------------------------------------------
+# Receipt scan isolation (governed-resume receipts share receipts/)
+# ---------------------------------------------------------------------------
+
+
+def _probe_envelope() -> dict:
+    return {
+        "codespace_implementation_handoff_id_or_none": f"executor-handoff:{HANDOFF}",
+        "codespace_implementation_sha_or_none": SHA,
+        "repository": "Blummer92/agent-os",
+        "issue_number": 3333,
+    }
+
+
+def _probe_receipt_file(receipts_dir: Path, envelope: dict) -> Path:
+    name = _receipt_file_name(envelope, "2026-08-17T11:00:00Z")
+    path = receipts_dir / name
+    path.write_text(json.dumps(_completed_receipt()))
+    return path
+
+
+def test_scan_ignores_malformed_foreign_receipts_and_leftover_temps(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    envelope = _probe_envelope()
+    probe = _probe_receipt_file(receipts_dir, envelope)
+    # A malformed governed-resume receipt and a leftover temp file from an
+    # older suffix must not disrupt the probe's scan.
+    (receipts_dir / f"governed-resume-completed-{'a' * 64}.json").write_text("{not json")
+    (receipts_dir / ".tmp-receipt-leftover.json").write_text("{not json")
+    (receipts_dir / "governed-resume-claim-ignored.json").write_text("{not json")
+    found = _find_completed_receipt(receipts_dir, envelope, "test-box")
+    assert found is not None
+    assert found[0] == probe
+    assert found[1]["status"] == "completed"
+
+
+def test_scan_with_only_foreign_files_returns_none(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    (receipts_dir / f"governed-resume-completed-{'a' * 64}.json").write_text(
+        json.dumps({"status": "completed"})
+    )
+    assert _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box") is None
+
+
+def test_scan_still_fails_closed_on_a_malformed_probe_receipt(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    envelope = _probe_envelope()
+    name = _receipt_file_name(envelope, "2026-08-17T11:00:00Z")
+    (receipts_dir / name).write_text("{not json")
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _find_completed_receipt(receipts_dir, envelope, "test-box")
+    assert excinfo.value.reason == "receipt-store-unreadable"
+
+
+def test_scan_ignores_a_symlinked_foreign_receipt(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    envelope = _probe_envelope()
+    probe = _probe_receipt_file(receipts_dir, envelope)
+    real = tmp_path / "real.json"
+    real.write_text("{not json")
+    foreign = receipts_dir / f"governed-resume-completed-{'a' * 64}.json"
+    foreign.symlink_to(real)
+    found = _find_completed_receipt(receipts_dir, envelope, "test-box")
+    assert found is not None
+    assert found[0] == probe
+
+
+def test_scan_with_no_probe_receipt_ignores_governed_files(tmp_path: Path) -> None:
+    """The symlink skip is proven without a probe receipt sorting first.
+
+    With no probe receipt present, a directory holding only a malformed
+    governed receipt and a symlinked governed receipt must return None
+    (not raise): the governed namespace is skipped before any read.
+    """
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    (receipts_dir / f"governed-resume-completed-{'a' * 64}.json").write_text("{not json")
+    real = tmp_path / "real.json"
+    real.write_text("{not json")
+    foreign = receipts_dir / f"governed-resume-completed-{'b' * 64}.json"
+    foreign.symlink_to(real)
+    assert _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box") is None

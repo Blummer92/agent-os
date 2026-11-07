@@ -42,6 +42,42 @@ executor/validator adapters, cancellation probe) is an existing canonical
 protocol implementation supplied by the caller; this function performs no
 reconstruction or dispatch logic of its own and invents no adapter.
 
+One handoff executes the Pilot at most once across sequential deliveries.
+`run_governed_resume` consults an optional completion store bound on
+`GovernedResumeBindings` (`completion_store`, default `None`): a completed
+receipt for the handoff returns blocked `invocation-already-completed`
+without dispatching, and a completed dispatch records its receipt
+afterwards. In production the Pilot runs validation-only
+(`ConcreteRuntimeConfiguration.bind_candidate` hardcodes
+`execution_mode="validation-only"`; the standard-mode executor is never
+bound on this path), so what the receipt dedups is duplicate validation-only
+execution — lease acquisition, git-worktree workspace creation, and the
+frozen test commands — not duplicate executor execution. The
+post-completion race is closed by a durable execution claim: a delivery
+publishes a claim under `invocations/claims/` before dispatching, and a
+second delivery that finds another delivery's claim waits up to
+`claim_wait_seconds` (default 5s) for the receipt instead of dispatching;
+a completed dispatch records its receipt while still holding the claim,
+then releases it. Failed, quarantined, or blocked runs release the claim
+and record nothing, so retries and crash recovery are preserved. Two
+windows bound the guarantee: if the host dies between the Pilot returning
+`completed` and the receipt write landing, the next delivery duplicates
+(crash window); and if a receipt write stalls longer than
+`claim_wait_seconds`, a waiting delivery replaces the stale claim and
+dispatches (record-stall window). Exactly-once is not claimed. The
+production bootstrap binds the store from the checkpoint store root
+(`$AGENT_OS_CHECKPOINT_STORE_ROOT/invocations/receipts/` plus the sibling
+`claims/`) and probe-verifies it writable at binding time — a permanently
+broken store fails binding before any execution instead of silently
+running without dedup (see `GOVERNED_RESUME_RECEIPT_RECOVERY.md` for the
+operator runbook); bindings without a store preserve the previous
+behavior. A record failure after a completed run never misreports the
+run: it is surfaced as `completion-receipt-unrecorded` in the evidence
+and on stderr with the store path. A pilot input naming more than one
+issue cannot be receipted (a receipt requires exactly one issue), so such a
+completed run leaves no receipt, stays re-admissible, and is marked
+`completion-receipt-unrecorded` per run.
+
 AOS-GCE1 (#1217) now gives normal installed execution its production default.
 When `bindings` is omitted, `main()` validates the immutable handoff ID and then
 calls `production_governed_resume_factory.build_production_governed_resume_bindings_for_handoff(...)`.
@@ -87,7 +123,9 @@ admits, which is not known until after admission. So this module builds
 (`HostCurrentInvocationSources`, `CanonicalCurrentInvocationResolver`,
 `load_invocation_descriptor`); `dispatch` builds the concrete adapters via
 `build_concrete_runtime_adapters` only once an admitted `pilot_input` exists,
-then calls `run_single_issue_pilot` exactly once.
+then calls `run_single_issue_pilot` once for that delivery (the at-most-once
+guarantee across deliveries is the completion receipt + execution claim,
+not this call shape).
 
 The checkpoint store root comes only from `AGENT_OS_CHECKPOINT_STORE_ROOT`
 (no default, no caller override), matching the existing hook-adapter

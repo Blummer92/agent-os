@@ -75,7 +75,10 @@ from workflow_scheduler.governance.dev_validation_codespaces import (
 
 from .current_invocation_resolver import CanonicalCurrentInvocationResolver
 from .execution_authorization_source import ExecutionAuthorizationSourceTransport
-from .governed_resume_entrypoint import GovernedResumeBindings
+from .governed_resume_entrypoint import (
+    DEFAULT_CLAIM_WAIT_SECONDS,
+    GovernedResumeBindings,
+)
 from .host_current_invocation_sources import (
     DescriptorReader,
     HandoffReader,
@@ -237,6 +240,8 @@ def build_production_governed_resume_bindings(
     changed_paths_inspector: ChangedPathsInspector | None = None,
     dependency_command_runner: DependencyCommandRunner | None = None,
     runtime_request: RuntimeExecutionRequest | None = None,
+    completion_store: object | None = None,
+    claim_wait_seconds: float = DEFAULT_CLAIM_WAIT_SECONDS,
 ) -> GovernedResumeBindings:
     """Compose the real #1218 seam and the real #758/#1253 dispatch boundary.
 
@@ -325,4 +330,6 @@ def build_production_governed_resume_bindings(
             cancelled=cancelled,
         )
 
-    return GovernedResumeBindings(reconstruct, dispatch)
+    return GovernedResumeBindings(
+        reconstruct, dispatch, completion_store, claim_wait_seconds
+    )

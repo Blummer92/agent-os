@@ -89,6 +89,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 )
 
 from .host_github_read_transport import HostGitHubTransportUnavailable
+from .invocation_completion_receipt import GOVERNED_ARTIFACT_PREFIX
 from .production_governed_resume_factory import (
     ProductionGovernedResumeFactoryError,
     build_production_host_bootstrap_for_handoff,
@@ -620,6 +621,21 @@ def _find_completed_receipt(
     dispatching on uncertain state, and a matched completed receipt
     that fails the B02 sink fails closed with
     ``receipt-dispatch-evidence-mismatch`` instead of being laundered.
+
+    Two filename namespaces are skipped without being read, because they
+    are never this scan's evidence: files owned by the governed-resume
+    store (``governed-resume-`` prefix — its receipts and any leftover
+    governed temp files) and temp files (``.tmp-`` prefix). A malformed
+    governed receipt therefore cannot break this probe's scan, and a
+    leftover temp file cannot either (the governed store also writes
+    temps with a ``.tmp`` suffix now, so new leftovers are not ``.json``
+    at all). Everything else keeps the established fail-closed behavior:
+    a malformed or symlinked file under any other name still raises
+    ``receipt-store-unreadable``, and a well-formed foreign completed
+    receipt is still rejected by the identity/operation sink (#3765).
+    Skipping governed files cannot launder a dispatch: the scan only
+    ever returns a body-identical probe receipt, and a governed-named
+    file is never returned.
     """
     try:
         entries = sorted(receipts_dir.iterdir())
@@ -627,6 +643,10 @@ def _find_completed_receipt(
         raise Gate2ControllerError("receipt-store-unreadable") from exc
     for entry in entries:
         if entry.suffix != ".json":
+            continue
+        if entry.name.startswith(GOVERNED_ARTIFACT_PREFIX) or entry.name.startswith(
+            ".tmp-"
+        ):
             continue
         if entry.is_symlink():
             raise Gate2ControllerError("receipt-store-unreadable", entry.name)
