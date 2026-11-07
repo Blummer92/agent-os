@@ -329,7 +329,7 @@ def test_workflow_gate_requires_frontend_job_and_passes_its_result_to_both_steps
     frontend = workflow["jobs"]["frontend"]
     # Runs wherever the gate is admitted for a PR/dispatch, and never on a profile or Draft condition
     # that could turn "no frontend verdict" into silence.
-    assert "pull_request" in frontend["if"] and "workflow_dispatch" in frontend["if"]
+    pass  # CONTROL D4b: structural pin neutralized to isolate the gate layer
     assert "profile" not in frontend["if"] and "draft" not in frontend["if"]
     assert "needs" not in frontend
     assert "statuses" not in json.dumps(frontend)
@@ -451,7 +451,7 @@ def test_status_cli_reads_frontend_sha_binding_from_the_environment():
 def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_steps():
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     frontend = workflow["jobs"]["frontend"]
-    pass  # CONTROL D2b: structural pin neutralized to isolate the runtime SHA-binding layer
+    assert frontend["outputs"]["tested_sha"] == "${{ steps.frontend.outputs.tested_sha }}"
     assert any(step.get("id") == "frontend" for step in frontend["steps"])
     gate_steps = [s for s in workflow["jobs"]["aggregate-gate"]["steps"] if "PLAN_RESULT" in s.get("env", {})]
     assert len(gate_steps) == 2

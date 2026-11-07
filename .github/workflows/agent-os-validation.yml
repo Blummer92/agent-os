@@ -237,7 +237,7 @@ jobs:
     # workflow_dispatch (so final-candidate admission carries a frontend verdict);
     # `aggregate-gate` requires its exact `success`. A PR that changes no Node
     # project still gets `success` with non-applicability printed in the summary.
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -248,7 +248,7 @@ jobs:
       # The SHA this job actually checked out and tested; the gate compares it with
       # the SHA the authoritative status is minted for, so evidence from another
       # SHA can never stand.
-      tested_sha: "0123456789abcdef0123456789abcdef01234567" # CONTROL D2b: simulated evidence from another SHA
+      tested_sha: ${{ steps.frontend.outputs.tested_sha }}
     steps:
       - name: Check out exact head with history for the diff base
         uses: actions/checkout@v7
