@@ -33,6 +33,7 @@ out of scope.
 
 import json
 import sqlite3
+import uuid
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -171,6 +172,8 @@ class SQLiteRepository:
             cursor.execute("ALTER TABLE tasks ADD COLUMN paused_from_status TEXT")
         if "batch_id" not in existing_columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN batch_id TEXT")
+        if "execution_claim_token" not in existing_columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN execution_claim_token TEXT")
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection.
@@ -247,8 +250,20 @@ class SQLiteRepository:
                 updated_at=parse_utc_storage(row["updated_at"]),
             )
 
-    def update_workflow(self, workflow: WorkflowPlan) -> None:
-        """Update workflow in database."""
+    def update_workflow(self, workflow: WorkflowPlan) -> bool:
+        """Update workflow in database.
+
+        Conditional transition guard (Repair B): a terminal workflow is
+        never overwritten, and a non-terminal workflow may only stay in
+        place (metadata-only write) or move forward along a legitimate
+        transition (draft/pending -> running/paused/cancelled,
+        running -> paused/completed/failed/cancelled/governance_blocked,
+        paused -> running/cancelled). A stale snapshot that would reverse
+        a workflow (e.g. completed -> running, paused -> draft) is
+        refused as a no-op; the return value reports whether the write
+        landed. Existing callers that ignore the return value keep
+        working, with the DB row unchanged on refusal.
+        """
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -258,6 +273,13 @@ class SQLiteRepository:
                 UPDATE workflows
                 SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
                 WHERE workflow_id = ?
+                  AND status NOT IN ('completed','failed','cancelled','governance_blocked')
+                  AND (
+                    status = ?
+                    OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
+                    OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
+                    OR (status = 'paused' AND ? IN ('running','cancelled'))
+                  )
                 """,
                 (
                     workflow.status.value,
@@ -266,9 +288,14 @@ class SQLiteRepository:
                     json.dumps(workflow.metadata),
                     utc_storage_string(workflow.updated_at),
                     workflow.workflow_id,
+                    workflow.status.value,
+                    workflow.status.value,
+                    workflow.status.value,
+                    workflow.status.value,
                 ),
             )
             conn.commit()
+            return cursor.rowcount == 1
 
     def create_task(self, task: Task) -> None:
         """Store task in database."""
@@ -346,8 +373,26 @@ class SQLiteRepository:
                 batch_id=row["batch_id"],
             )
 
-    def update_task(self, task: Task) -> None:
-        """Update task in database."""
+    def update_task(self, task: Task) -> bool:
+        """Update task in database.
+
+        Conditional transition guard (Repair B): the write is a single
+        conditional UPDATE, so it holds across separate connections and
+        processes, not just in-process locks. It is refused when:
+        - the task currently holds an execution claim (the claim holder
+          must use update_claimed_task instead);
+        - the current status is terminal (completed, failed, cancelled,
+          governance_blocked) — no stale writer may revive it;
+        - the current status is paused and the new status is neither the
+          recorded paused_from_status (a legitimate resume) nor cancelled
+          (a legitimate cancel, including workflow-cascade cancel);
+        - the new retry_count would move backwards (retry state may only
+          stay or advance).
+        All other transitions that existing code performs are preserved:
+        draft/pending/approved/queued/retry_scheduled movement, approval
+        pending and governance-blocked entry, pause, resume, cancel, and
+        same-status field updates. Returns True when the write landed.
+        """
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -357,7 +402,10 @@ class SQLiteRepository:
                 UPDATE tasks
                 SET status = ?, payload = ?, lease_lock = ?, updated_at = ?,
                     retry_count = ?, next_retry_at = ?, max_retries = ?, paused_from_status = ?, batch_id = ?
-                WHERE id = ?
+                WHERE id = ? AND execution_claim_token IS NULL
+                  AND status NOT IN ('completed','failed','cancelled','governance_blocked')
+                  AND retry_count <= ?
+                  AND (status != 'paused' OR ? = paused_from_status OR ? = 'cancelled')
                 """,
                 (
                     task.status.value,
@@ -370,9 +418,85 @@ class SQLiteRepository:
                     task.paused_from_status,
                     task.batch_id,
                     task.id,
+                    task.retry_count,
+                    task.status.value,
+                    task.status.value,
                 ),
             )
             conn.commit()
+            return cursor.rowcount == 1
+
+
+    def try_claim_execution(self, task_id: str) -> str | None:
+        """Single-winner claim across connections and processes.
+
+        Running tasks are not automatically stolen after a timeout.
+        Recovery requires a separately proven, fenced procedure.
+        """
+        token = uuid.uuid4().hex
+        now = utc_storage_string(utc_now())
+        with self._lock:
+            conn = self._get_connection()
+            result = conn.execute(
+                "UPDATE tasks SET status = ?, lease_lock = ?, "
+                "execution_claim_token = ?, updated_at = ? "
+                "WHERE id = ? AND execution_claim_token IS NULL "
+                "AND lease_lock IS NULL "
+                "AND status IN (?, ?, ?, ?, ?)",
+                (
+                    TaskStatus.RUNNING.value, now, token, now, task_id,
+                    TaskStatus.DRAFT.value, TaskStatus.PENDING.value,
+                    TaskStatus.APPROVED.value, TaskStatus.QUEUED.value,
+                    TaskStatus.RETRY_SCHEDULED.value,
+                ),
+            )
+            conn.commit()
+            return token if result.rowcount == 1 else None
+
+    def update_claimed_task(self, task: Task, token: str) -> bool:
+        """Only the execution claim holder can persist its result.
+
+        Repair B extension: even the holder may not write over a
+        terminal status or move retry_count backwards. The holder's
+        legitimate path starts from RUNNING and moves retry_count only
+        forward, so this guard changes no legitimate execution outcome;
+        it fails closed (False, so the executor raises) if the row was
+        terminalized or its retry state advanced by another writer.
+        """
+        with self._lock:
+            conn = self._get_connection()
+            result = conn.execute(
+                "UPDATE tasks SET status = ?, payload = ?, updated_at = ?, "
+                "retry_count = ?, next_retry_at = ?, max_retries = ?, "
+                "paused_from_status = ?, batch_id = ? "
+                "WHERE id = ? AND execution_claim_token = ? "
+                "AND status NOT IN ('completed','failed','cancelled','governance_blocked') "
+                "AND retry_count <= ?",
+                (
+                    task.status.value, json.dumps(task.payload),
+                    utc_storage_string(task.updated_at),
+                    task.retry_count,
+                    utc_storage_string(task.next_retry_at)
+                    if task.next_retry_at else None,
+                    task.max_retries, task.paused_from_status, task.batch_id,
+                    task.id, token, task.retry_count,
+                ),
+            )
+            conn.commit()
+            return result.rowcount == 1
+
+    def release_execution_claim(self, task_id: str, token: str) -> bool:
+        """A different or superseded worker cannot release this claim."""
+        with self._lock:
+            conn = self._get_connection()
+            result = conn.execute(
+                "UPDATE tasks SET lease_lock = NULL, "
+                "execution_claim_token = NULL "
+                "WHERE id = ? AND execution_claim_token = ?",
+                (task_id, token),
+            )
+            conn.commit()
+            return result.rowcount == 1
 
     def list_workflow_tasks(self, workflow_id: str) -> List[Task]:
         """List all tasks in a workflow."""
@@ -493,6 +617,92 @@ class SQLiteRepository:
             )
             conn.commit()
             return self.get_approval_request(task_id)
+
+
+    def try_decide_pending_approval(
+        self, task_id: str, approver: str,
+        decision: ApprovalDecision, reason: Optional[str] = None,
+    ) -> bool:
+        """One durable winner for an existing pending task approval."""
+        if decision not in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED):
+            raise ValueError("Unsupported approval decision")
+        with self._lock:
+            conn = self._get_connection()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT status, payload, execution_claim_token "
+                    "FROM tasks WHERE id = ?", (task_id,),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["status"] != TaskStatus.APPROVAL_PENDING.value
+                    or row["execution_claim_token"] is not None
+                ):
+                    conn.rollback()
+                    return False
+
+                approval = conn.execute(
+                    "SELECT id, decision FROM approval_requests "
+                    "WHERE task_id = ? "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                if approval and approval["decision"] != ApprovalDecision.PENDING.value:
+                    conn.rollback()
+                    return False
+
+                now = utc_storage_string(utc_now())
+                if approval is None:
+                    approval_id = uuid.uuid4().hex
+                    conn.execute(
+                        "INSERT INTO approval_requests "
+                        "(id, task_id, requested_by, decision, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (approval_id, task_id, approver,
+                         ApprovalDecision.PENDING.value, now),
+                    )
+                else:
+                    approval_id = approval["id"]
+
+                update = conn.execute(
+                    "UPDATE approval_requests "
+                    "SET decision = ?, approver = ?, reason = ?, decided_at = ? "
+                    "WHERE id = ? AND decision = ?",
+                    (decision.value, approver, reason, now, approval_id,
+                     ApprovalDecision.PENDING.value),
+                )
+                if update.rowcount != 1:
+                    conn.rollback()
+                    return False
+
+                status = (
+                    TaskStatus.APPROVED
+                    if decision == ApprovalDecision.APPROVED
+                    else TaskStatus.CANCELLED
+                )
+                payload = json.loads(row["payload"])
+                if decision == ApprovalDecision.REJECTED and reason:
+                    payload["cancellation_reason"] = reason
+
+                update = conn.execute(
+                    "UPDATE tasks SET status = ?, payload = ?, updated_at = ? "
+                    "WHERE id = ? AND status = ? "
+                    "AND execution_claim_token IS NULL",
+                    (
+                        status.value, json.dumps(payload),
+                        now, task_id, TaskStatus.APPROVAL_PENDING.value,
+                    ),
+                )
+                if update.rowcount != 1:
+                    conn.rollback()
+                    return False
+
+                conn.commit()
+                return True
+            except BaseException:
+                conn.rollback()
+                raise
 
     def log_event(
         self,
