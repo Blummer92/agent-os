@@ -323,3 +323,89 @@ def test_workflow_gate_requires_frontend_job_and_passes_its_result_to_both_steps
     assert "profile" not in frontend["if"] and "draft" not in frontend["if"]
     assert "needs" not in frontend
     assert "statuses" not in json.dumps(frontend)
+
+
+# --- stale head: the frontend verdict must cover the SHA the status is minted for ---
+
+SHA_A, SHA_B = "a" * 40, "b" * 40
+
+
+def test_required_frontend_success_for_another_sha_closes_the_gate():
+    gate_open, message = evaluate_aggregate_gate("success", "success", "success", True, SHA_B, SHA_A)
+    assert gate_open is False
+    assert "different SHA" in message
+
+
+def test_required_frontend_success_without_a_tested_sha_closes_the_gate():
+    assert evaluate_aggregate_gate("success", "success", "success", True, "", SHA_A)[0] is False
+
+
+def test_required_frontend_success_for_the_same_sha_opens_the_gate():
+    assert evaluate_aggregate_gate("success", "success", "success", True, SHA_A, SHA_A)[0] is True
+
+
+def test_sha_binding_is_skipped_only_when_no_verdict_sha_exists_or_frontend_is_unrequired():
+    # push to main: no frontend job and no verdict SHA to bind.
+    assert evaluate_aggregate_gate("success", "skipped", "skipped", False, "", "")[0] is True
+    assert evaluate_aggregate_gate("success", "skipped", "success", False, SHA_B, SHA_A)[0] is True
+    assert evaluate_aggregate_gate("success", "success", "success", True, SHA_B, "")[0] is True
+
+
+def test_other_sha_frontend_publishes_error_not_success():
+    decision = _decide(frontend_result="success", frontend_required=True, frontend_tested_sha=SHA_B, frontend_expected_sha=SHA_A)
+    assert decision.state == "error"
+    assert "different SHA" in decision.description
+    assert _decide(frontend_result="success", frontend_required=True, frontend_tested_sha=SHA_A, frontend_expected_sha=SHA_A).state == "success"
+
+
+def test_other_sha_frontend_supersedes_a_reused_success():
+    decision = _decide(reused=True, frontend_result="success", frontend_required=True, frontend_tested_sha=SHA_B, frontend_expected_sha=SHA_A)
+    assert decision.state == "error"
+
+
+@pytest.mark.parametrize("frontend", ["failure", "cancelled", "skipped", "", "success"])
+def test_every_status_description_fits_githubs_140_character_limit(frontend):
+    decision = _decide(frontend_result=frontend, frontend_required=True, frontend_tested_sha=SHA_B, frontend_expected_sha=SHA_A)
+    assert decision is not None and len(decision.description) <= 140
+
+
+def test_main_closes_gate_on_other_sha_frontend_and_reports_both_shas(monkeypatch, capsys):
+    monkeypatch.setenv("VALIDATE_RESULT", "success")
+    monkeypatch.setenv("PLAN_RESULT", "skipped")
+    monkeypatch.setenv("FRONTEND_RESULT", "success")
+    monkeypatch.setenv("FRONTEND_REQUIRED", "true")
+    monkeypatch.setenv("FRONTEND_TESTED_SHA", SHA_B)
+    monkeypatch.setenv("FRONTEND_EXPECTED_SHA", SHA_A)
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert SHA_A in captured.out and SHA_B in captured.out
+    monkeypatch.setenv("FRONTEND_TESTED_SHA", SHA_A)
+    assert main() == 0
+
+
+def test_status_cli_reads_frontend_sha_binding_from_the_environment():
+    env = dict(
+        os.environ, AUTHORITATIVE="true", VALIDATE_RESULT="success", AGGREGATE_OUTCOME="success",
+        FRONTEND_RESULT="success", FRONTEND_REQUIRED="true", FRONTEND_TESTED_SHA=SHA_B, FRONTEND_EXPECTED_SHA=SHA_A,
+    )
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "status"], env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert json.loads(done.stdout)["state"] == "error"
+    env["FRONTEND_TESTED_SHA"] = SHA_A
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "status"], env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert json.loads(done.stdout)["state"] == "success"
+
+
+def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_steps():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    frontend = workflow["jobs"]["frontend"]
+    assert frontend["outputs"]["tested_sha"] == "${{ steps.frontend.outputs.tested_sha }}"
+    assert any(step.get("id") == "frontend" for step in frontend["steps"])
+    gate_steps = [s for s in workflow["jobs"]["aggregate-gate"]["steps"] if "PLAN_RESULT" in s.get("env", {})]
+    assert len(gate_steps) == 2
+    for step in gate_steps:
+        assert step["env"]["FRONTEND_TESTED_SHA"] == "${{ needs.frontend.outputs.tested_sha }}"
+        assert step["env"]["FRONTEND_EXPECTED_SHA"] == "${{ needs.validate.outputs.head_sha || github.sha }}"

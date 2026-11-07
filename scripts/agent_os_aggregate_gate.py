@@ -35,7 +35,20 @@ _OPEN = "authoritative aggregate established on this head; gate open."
 _PLAN_BLOCKING = frozenset({"failure", "cancelled"})
 
 
-def frontend_blocker(frontend_result: str, frontend_required: bool) -> str | None:
+class FrontendBlock(NamedTuple):
+    """Why the frontend job closes the gate: the commit-status state to publish
+    and a short reason that fits GitHub's 140-character status description."""
+
+    state: str
+    reason: str
+
+
+def frontend_blocker(
+    frontend_result: str,
+    frontend_required: bool,
+    tested_sha: str = "",
+    expected_sha: str = "",
+) -> FrontendBlock | None:
     """Return why the frontend check job closes the gate, or ``None``.
 
     The frontend job (``scripts/agent_os_frontend_checks.py``) owns every Node
@@ -45,23 +58,31 @@ def frontend_blocker(frontend_result: str, frontend_required: bool) -> str | Non
     cancelled, failed, or unreported all close the gate, because none of them is
     proof that the applicable frontend checks executed. A job that ran and found
     no applicable project reports ``success`` itself and states that in its
-    summary, so legitimate non-applicability never needs a skip. When it is not
-    required (``push`` to main, where no frontend job runs) only an explicit
-    failure or cancellation blocks.
+    check annotation and summary, so legitimate non-applicability never needs a
+    skip. A required ``success`` must also name the SHA it tested and that SHA
+    must be the one this verdict is minted for (``expected_sha``): validation
+    evidence from another SHA never stands. When the job is not required
+    (``push`` to main, where no frontend job runs) only an explicit failure or
+    cancellation blocks.
     """
-    if type(frontend_result) is not str:
-        raise TypeError("job results must be strings")
+    if any(type(value) is not str for value in (frontend_result, tested_sha, expected_sha)):
+        raise TypeError("job results and SHAs must be strings")
     if frontend_result == "success":
+        if frontend_required and expected_sha and tested_sha != expected_sha:
+            return FrontendBlock("error", "Frontend checks tested a different SHA than this verdict")
         return None
-    if frontend_required:
-        return (
-            f"frontend checks reported {frontend_result or 'unreported'}; only an "
-            "exact success proves the applicable frontend checks executed and passed; "
-            "the gate is closed."
-        )
-    if frontend_result in _PLAN_BLOCKING:
-        return f"frontend checks reported {frontend_result}; the gate is closed."
+    if frontend_required or frontend_result in _PLAN_BLOCKING:
+        state = "failure" if frontend_result == "failure" else "error"
+        return FrontendBlock(state, f"Frontend checks reported {frontend_result or 'unreported'}")
     return None
+
+
+def _frontend_message(block: FrontendBlock) -> str:
+    return (
+        f"{block.reason}; only an exact success of the frontend job, tested on the SHA "
+        "this verdict covers, proves the applicable frontend checks executed and passed; "
+        "the gate is closed."
+    )
 
 
 def evaluate_aggregate_gate(
@@ -69,6 +90,8 @@ def evaluate_aggregate_gate(
     plan_result: str = "",
     frontend_result: str = "",
     frontend_required: bool = False,
+    frontend_tested_sha: str = "",
+    frontend_expected_sha: str = "",
 ) -> tuple[bool, str]:
     """Decide the gate disposition from the authoritative aggregate job result.
 
@@ -84,9 +107,9 @@ def evaluate_aggregate_gate(
             f"focused validation plan reported {plan_result}; aggregate success "
             "cannot stand for a head whose focused commands did not pass; the gate is closed.",
         )
-    blocker = frontend_blocker(frontend_result, frontend_required)
-    if blocker is not None:
-        return False, blocker
+    block = frontend_blocker(frontend_result, frontend_required, frontend_tested_sha, frontend_expected_sha)
+    if block is not None:
+        return False, _frontend_message(block)
     if validate_result == "success":
         return True, _OPEN
     return (
@@ -137,6 +160,8 @@ def decide_terminal_status(
     plan_result: str = "",
     frontend_result: str = "",
     frontend_required: bool = False,
+    frontend_tested_sha: str = "",
+    frontend_expected_sha: str = "",
 ) -> TerminalStatus | None:
     """Map the authoritative run disposition to the terminal commit status.
 
@@ -151,15 +176,12 @@ def decide_terminal_status(
         # Newest status wins (#2761), so this also supersedes a reused success.
         state = "failure" if plan_result == "failure" else "error"
         return TerminalStatus(state, f"Focused validation plan {plan_result} on this exact head; no verdict can pass")
-    if frontend_blocker(frontend_result, frontend_required) is not None:
+    block = frontend_blocker(frontend_result, frontend_required, frontend_tested_sha, frontend_expected_sha)
+    if block is not None:
         # Same supersession rule as the plan: newest status wins, so this also
         # supersedes a reused aggregate success. A proven failure is a failure;
-        # a skipped/missing/cancelled result is "no verdict", never a pass.
-        state = "failure" if frontend_result == "failure" else "error"
-        return TerminalStatus(
-            state,
-            f"Frontend checks {frontend_result or 'unreported'} on this exact head; no verdict can pass",
-        )
+        # a skipped/missing/cancelled/other-SHA result is "no verdict", never a pass.
+        return TerminalStatus(block.state, f"{block.reason} on this exact head; no verdict can pass")
     if validate_result == "success":
         if reused:
             return None
@@ -193,6 +215,8 @@ def status_main() -> int:
         plan_result=env("PLAN_RESULT", ""),
         frontend_result=env("FRONTEND_RESULT", ""),
         frontend_required=env("FRONTEND_REQUIRED", "") == "true",
+        frontend_tested_sha=env("FRONTEND_TESTED_SHA", ""),
+        frontend_expected_sha=env("FRONTEND_EXPECTED_SHA", ""),
     )
     if decision is not None:
         print(json.dumps(decision._asdict()))
@@ -205,11 +229,16 @@ def main() -> int:
     plan_result = os.environ.get("PLAN_RESULT", "")
     frontend_result = os.environ.get("FRONTEND_RESULT", "")
     frontend_required = os.environ.get("FRONTEND_REQUIRED", "") == "true"
+    tested_sha = os.environ.get("FRONTEND_TESTED_SHA", "")
+    expected_sha = os.environ.get("FRONTEND_EXPECTED_SHA", "")
     gate_open, message = evaluate_aggregate_gate(
-        validate_result, plan_result, frontend_result, frontend_required
+        validate_result, plan_result, frontend_result, frontend_required, tested_sha, expected_sha
     )
     print(f"plan job result: {plan_result or 'unreported'}")
-    print(f"frontend job result: {frontend_result or 'unreported'} (required: {frontend_required})")
+    print(
+        f"frontend job result: {frontend_result or 'unreported'} (required: {frontend_required}); "
+        f"tested SHA: {tested_sha or 'none'}; verdict SHA: {expected_sha or 'none'}"
+    )
     print(f"aggregate job result: {validate_result or 'unreported'}")
     print(message, file=sys.stderr if not gate_open else sys.stdout)
     return 0 if gate_open else 1
