@@ -297,6 +297,19 @@ def project_drive_file_id(properties: Mapping[str, object]) -> str | None:
     return _rich_text(properties, DRIVE_FILE_ID_PROPERTY)
 
 
+def project_asset_title(properties: Mapping[str, object]) -> str | None:
+    """Project the governed Asset Title from the Visual Asset Library record.
+
+    This is the ONLY authoritative source of an asset's descriptive title
+    for contextual selection (#3672): the title property of the governed
+    Notion record itself. Titles asserted anywhere else (candidate
+    envelopes, caller flags, historical Drive documents) are claims to be
+    reconciled against this value in the governed visual-reuse boundary,
+    never provenance. None when the record carries no title.
+    """
+    return _rich_text(properties, ASSET_TITLE_PROPERTY)
+
+
 # ---------------------------------------------------------------------------
 # v2 compatibility-evidence field projection.
 #
@@ -444,6 +457,7 @@ def project_notion_asset_page(
     status = project_reuse_status(properties)
     scope_unit_ids = project_scope_unit_ids(properties)
     drive_file_id = project_drive_file_id(properties)
+    asset_title = project_asset_title(properties)
     if drive_file_id is None:
         gaps.append("drive binding: no Drive File ID on the Notion record")
 
@@ -469,6 +483,11 @@ def project_notion_asset_page(
     }
     if scope_unit_ids:
         evidence["scope_unit_ids"] = list(scope_unit_ids)
+    if asset_title is not None:
+        # #3672: the governed title rides on the evidence, bound to this
+        # record's Asset ID / page ID / Drive file ID by construction: all
+        # values are projected from the same Notion page in this call.
+        evidence["asset_title"] = asset_title
     if drive_file_id is not None:
         evidence["library_reference"] = {
             "page_id": page_id,
@@ -504,6 +523,19 @@ def project_ingestion_admission(record: Mapping[str, object]) -> ProjectedAsset:
         )
     properties = {
         ASSET_ID_PROPERTY: {"type": "rich_text", "rich_text": [{"plain_text": asset_id.strip()}]},
+        # #3672: an ingestion record's verified title joins the same
+        # governed projection path; it is never read from the raw record
+        # downstream.
+        **(
+            {
+                ASSET_TITLE_PROPERTY: {
+                    "type": "title",
+                    "title": [{"plain_text": record["asset_title"].strip()}],
+                }
+            }
+            if isinstance(record.get("asset_title"), str) and record["asset_title"].strip()
+            else {}
+        ),
         DRIVE_FILE_ID_PROPERTY: {"type": "rich_text", "rich_text": [{"plain_text": str(record.get("drive_file_id", ""))}]},
         REUSE_STATUS_PROPERTY: {"type": "status", "status": {"name": str(record.get("reuse_status", ""))}},
         SOURCE_APPROVED_PROPERTY: {"type": "checkbox", "checkbox": bool(record.get("source_approved", False))},
