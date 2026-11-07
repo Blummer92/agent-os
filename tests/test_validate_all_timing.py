@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
 HELPER_SCRIPT = Path(__file__).parents[1] / "scripts" / "agent_os_ci_test_completeness.py"
@@ -34,6 +36,10 @@ def _make_repo(tmp_path: Path, *, structure_exit: int = 0) -> Path:
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHON_BIN"] = sys.executable
+    # Same isolation as the other validate-all test files: never let a
+    # CI_JUNIT_DIR inherited from the outer run leak fixture receipts
+    # into the production artifact directory.
+    env.pop("CI_JUNIT_DIR", None)
     return subprocess.run(
         ["bash", "scripts/validate-all.sh", *args],
         cwd=repo,
@@ -42,6 +48,21 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def test_timing_does_not_leak_into_inherited_ci_junit_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same leak as the runner tests: _run() inherited CI_JUNIT_DIR from
+    the outer run, so fixture receipts overwrote production receipts in
+    the aggregate artifact on hosted CI (PR #3817)."""
+    repo = _make_repo(tmp_path)
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    monkeypatch.setenv("CI_JUNIT_DIR", str(junit_dir))
+    result = _run(repo)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert list(junit_dir.iterdir()) == []
 
 
 def test_validate_all_reports_structure_suite_and_total_timings(tmp_path: Path) -> None:

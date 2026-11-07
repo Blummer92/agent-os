@@ -100,6 +100,11 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     merged["PYTHON_BIN"] = str(repo / "fake-python")
+    # Never let a CI_JUNIT_DIR inherited from the outer run leak fixture
+    # receipts into the production artifact directory: these tests assert
+    # on stdout, not on receipts, so drop it unless a caller sets it
+    # explicitly for this invocation.
+    merged.pop("CI_JUNIT_DIR", None)
     if env:
         merged.update(env)
     return subprocess.run(
@@ -111,6 +116,21 @@ def run(
         check=False,
         timeout=30,
     )
+
+
+def test_runner_does_not_leak_into_inherited_ci_junit_dir(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hosted CI on PR #3817 showed fixture receipts (1-test collections
+    from this file's fake repos) overwriting the production receipts in
+    the aggregate artifact: run() inherited CI_JUNIT_DIR from the outer
+    run. The runner must drop it unless a caller sets it explicitly."""
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    monkeypatch.setenv("CI_JUNIT_DIR", str(junit_dir))
+    result = run(repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert list(junit_dir.iterdir()) == []
 
 
 def test_no_argument_behavior_runs_structure_and_root_once(repo: Path) -> None:
