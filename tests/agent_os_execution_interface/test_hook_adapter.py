@@ -115,6 +115,238 @@ def test_repository_identity_is_none_without_a_remote(tmp_path, monkeypatch):
     assert hook_adapter.resolve_repository_identity(tmp_path) is None
 
 
+def _git(cwd, *args):
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env=env)
+
+
+@pytest.fixture
+def real_repo(tmp_path, monkeypatch):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    if shutil.which("git") is None:
+        pytest.skip("git is required for real worktree coverage")
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    _git(main, "remote", "add", "origin", "https://github.com/Blummer92/agent-os.git")
+    (main / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(main, "add", "f.txt")
+    _git(main, "commit", "-q", "-m", "init")
+    return main
+
+
+def test_repository_identity_resolves_in_real_linked_worktree(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    assert (worktree / ".git").is_file()
+    assert hook_adapter.resolve_repository_identity(worktree) == REPOSITORY
+
+
+def test_repository_identity_resolves_in_detached_linked_worktree(real_repo, tmp_path):
+    worktree = tmp_path / "detached"
+    _git(real_repo, "worktree", "add", "-q", "--detach", str(worktree))
+    assert hook_adapter.resolve_repository_identity(worktree) == REPOSITORY
+
+
+def test_repository_identity_resolves_in_detached_head_ordinary_clone(real_repo):
+    _git(real_repo, "checkout", "-q", "--detach")
+    assert hook_adapter.resolve_repository_identity(real_repo) == REPOSITORY
+
+
+def test_linked_worktree_without_origin_is_unresolved(real_repo, tmp_path):
+    _git(real_repo, "remote", "remove", "origin")
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    assert hook_adapter.resolve_repository_identity(worktree) is None
+
+
+def test_relative_gitdir_pointer_resolves(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    admin = next((real_repo / ".git" / "worktrees").iterdir())
+    (worktree / ".git").write_text(f"gitdir: {os.path.relpath(admin, worktree)}\n", encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(worktree) == REPOSITORY
+
+
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "",
+        "gitdir:",
+        "not-a-pointer\n",
+        "gitdir: /nonexistent/.git/worktrees/x\n",
+        "gitdir: a\ngitdir: b\n",
+        "gitdir: \0bad\n",
+        "gitdir: " + "a" * 5000 + "\n",
+    ],
+)
+def test_malformed_gitdir_pointer_fails_closed(real_repo, tmp_path, pointer):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    (worktree / ".git").write_text(pointer, encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(worktree) is None
+
+
+def test_pointer_to_non_worktree_admin_dir_fails_closed(real_repo, tmp_path):
+    # A pointer straight at a repository's own .git (not a worktrees/<id> admin dir).
+    impostor = tmp_path / "impostor"
+    impostor.mkdir()
+    (impostor / ".git").write_text(f"gitdir: {real_repo / '.git'}\n", encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(impostor) is None
+
+
+def test_copied_worktree_pointer_without_backlink_fails_closed(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    copy = tmp_path / "copy"
+    shutil.copytree(worktree, copy)
+    assert (copy / ".git").is_file()
+    assert hook_adapter.resolve_repository_identity(copy) is None
+
+
+def test_worktree_with_forged_commondir_fails_closed(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    other = tmp_path / "other"
+    (other / "worktrees").mkdir(parents=True)
+    (other / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/Evil/repo.git\n', encoding="utf-8"
+    )
+    admin = next((real_repo / ".git" / "worktrees").iterdir())
+    forged = other / "worktrees" / admin.name
+    shutil.copytree(admin, forged)
+    (forged / "commondir").write_text("../..\n", encoding="utf-8")
+    (forged / "gitdir").write_text(f"{worktree / '.git'}\n", encoding="utf-8")
+    (worktree / ".git").write_text(f"gitdir: {forged}\n", encoding="utf-8")
+    # Round-trips structurally, so this is the documented trust boundary: the
+    # checkout's own git metadata. The identity must still come from that config,
+    # never from the directory name or any other source.
+    assert hook_adapter.resolve_repository_identity(worktree) == "Evil/repo"
+    (forged / "commondir").write_text(f"{real_repo / '.git'}\n", encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(worktree) is None
+
+
+def test_directory_name_never_establishes_identity(tmp_path, monkeypatch):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    named = tmp_path / "Blummer92" / "agent-os"
+    named.mkdir(parents=True)
+    assert hook_adapter.resolve_repository_identity(named) is None
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://github.com/Blummer92/agent-os.git", REPOSITORY),
+        ("https://github.com/Blummer92/agent-os", REPOSITORY),
+        ("https://github.com/Blummer92/agent-os/", REPOSITORY),
+        ("https://x-access-token@github.com/Blummer92/agent-os.git", REPOSITORY),
+        ("git@github.com:Blummer92/agent-os.git", REPOSITORY),
+        ("git@github.com:Blummer92/agent-os", REPOSITORY),
+        ("ssh://git@github.com/Blummer92/agent-os.git", REPOSITORY),
+        ("ssh://git@github.com:22/Blummer92/agent-os.git", REPOSITORY),
+        ("ssh://git@ssh.github.com:443/Blummer92/agent-os.git", REPOSITORY),
+        ("ssh://git@ssh.github.com/Blummer92/agent-os.git", REPOSITORY),
+        ("https://evil.example#@github.com/Blummer92/agent-os", None),
+        ("https://evil.example?@github.com/Blummer92/agent-os", None),
+        ("https://evil.example\\@github.com/Blummer92/agent-os", None),
+        ("https://github.com:8443/Blummer92/agent-os", None),
+        ("https://github.com/Blummer92/agent-os?x=1", None),
+        ("https://github.com/Blummer92/agent-os#frag", None),
+        ("https://github.com/../agent-os", None),
+        ("https://github.com/Blummer92/..", None),
+        ("http://github.com/Blummer92/agent-os", None),
+        ("https://evilgithub.com/Blummer92/agent-os.git", None),
+        ("https://github.com.evil.example/Blummer92/agent-os.git", None),
+        ("https://evil.example/github.com/Blummer92/agent-os.git", None),
+        ("git@evilgithub.com:Blummer92/agent-os.git", None),
+        ("https://gitlab.com/Blummer92/agent-os.git", None),
+        ("https://github.com/Blummer92", None),
+        ("https://github.com/Blummer92/agent-os/extra", None),
+        ("/local/path/github.com/Blummer92/agent-os", None),
+        ("", None),
+    ],
+)
+def test_origin_url_forms(tmp_path, monkeypatch, url, expected):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(f'[remote "origin"]\n\turl = {url}\n', encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(root) == expected
+
+
+def test_relative_backlink_in_admin_dir_resolves(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    admin = next((real_repo / ".git" / "worktrees").iterdir())
+    (admin / "gitdir").write_text(f"{os.path.relpath(worktree / '.git', admin)}\n", encoding="utf-8")
+    assert hook_adapter.resolve_repository_identity(worktree) == REPOSITORY
+
+
+def test_missing_commondir_fails_closed(real_repo, tmp_path):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    admin = next((real_repo / ".git" / "worktrees").iterdir())
+    (admin / "commondir").unlink()
+    assert hook_adapter.resolve_repository_identity(worktree) is None
+
+
+def test_oversized_git_config_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(
+        "# " + "x" * hook_adapter._MAX_GIT_CONFIG_BYTES + '\n[remote "origin"]\n\turl = https://github.com/Blummer92/agent-os\n',
+        encoding="utf-8",
+    )
+    assert hook_adapter.resolve_repository_identity(root) is None
+
+
+def test_conflicting_origin_urls_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/Blummer92/agent-os.git\n'
+        "\turl = https://github.com/Other/repo.git\n",
+        encoding="utf-8",
+    )
+    assert hook_adapter.resolve_repository_identity(root) is None
+
+
+def test_non_origin_remote_never_establishes_identity(tmp_path, monkeypatch):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(
+        '[remote "upstream"]\n\turl = https://github.com/Blummer92/agent-os.git\n', encoding="utf-8"
+    )
+    assert hook_adapter.resolve_repository_identity(root) is None
+
+
+def test_user_prompt_hook_no_longer_reports_repository_unresolved_in_linked_worktree(
+    real_repo, tmp_path, configured_env
+):
+    worktree = tmp_path / "linked"
+    _git(real_repo, "worktree", "add", "-q", "-b", "feature", str(worktree))
+    for marker in GOVERNED_CHECKOUT_MARKERS:
+        path = worktree / marker
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("marker\n", encoding="utf-8")
+    notice = hook_adapter.run_user_prompt_submit_hook(
+        json.dumps({"prompt": "Work on #3690", "cwd": str(worktree)})
+    )
+    assert "repository-identity-unresolved" not in notice
+    assert f"repository={REPOSITORY} issue=#3690" in notice
+
+
 @pytest.fixture(params=("gh-absent", "gh-present"))
 def local_gh(request, tmp_path, monkeypatch):
     path_dir = tmp_path / f"bin-{request.param}"
@@ -481,3 +713,80 @@ def test_prompt_hook_reports_unavailable_discovery_dependency_as_needs_decision(
     assert "Fail closed." in notice
     assert "/agent-os resume" not in notice
     assert "executor-handoff:" not in notice
+
+
+@pytest.mark.parametrize(
+    "reason,marker",
+    [
+        ("DESCRIPTOR_STORE_NOT_CONFIGURED", "simply unavailable on this execution surface"),
+        ("DISCOVERY_STORE_UNAVAILABLE", "simply unavailable on this execution surface"),
+        ("DISCOVERY_DEPENDENCY_UNAVAILABLE", "simply unavailable on this execution surface"),
+        ("REPOSITORY_IDENTITY_UNRESOLVED", "This is an identity gap, not a mission decision"),
+    ],
+)
+def test_needs_decision_notice_scopes_capability_and_identity_reasons(reason, marker):
+    from scripts.agent_os_execution_interface.governed_route_preflight import (
+        GovernedRoutePreflightReason,
+        GovernedRoutePreflightStatus,
+        _result,
+    )
+
+    result = _result(
+        status=GovernedRoutePreflightStatus.NEEDS_DECISION,
+        reasons=(GovernedRoutePreflightReason[reason],),
+        repository=REPOSITORY,
+        issue_number=3690,
+    )
+    notice = hook_adapter.render_preflight_notice(result)
+    assert "Fail closed." in notice
+    assert marker in notice
+    assert "authorizes no GitHub write" in notice or "Never infer the repository" in notice
+    if "Scope: the governed-resume" in notice:
+        assert "does not relax the fail-closed instruction above" in notice
+    assert "grant no implementation, execution, GitHub-write" in notice
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "AMBIGUOUS_ISSUE_REFERENCE",
+        "DISCOVERY_MULTIPLE_MATCHING_DESCRIPTORS",
+        "DISCOVERY_DESCRIPTOR_INTEGRITY_UNVERIFIED",
+        "DISCOVERY_STORE_BOUND_EXCEEDED",
+    ],
+)
+def test_substantive_needs_decision_reasons_get_no_softening_scope(reason):
+    from scripts.agent_os_execution_interface.governed_route_preflight import (
+        GovernedRoutePreflightReason,
+        GovernedRoutePreflightStatus,
+        _result,
+    )
+
+    result = _result(
+        status=GovernedRoutePreflightStatus.NEEDS_DECISION,
+        reasons=(GovernedRoutePreflightReason[reason],),
+        repository=REPOSITORY,
+        issue_number=3690,
+    )
+    notice = hook_adapter.render_preflight_notice(result)
+    assert "Fail closed." in notice
+    assert "Scope:" not in notice
+
+
+def test_mixed_capability_and_substantive_reasons_get_no_softening_scope():
+    from scripts.agent_os_execution_interface.governed_route_preflight import (
+        GovernedRoutePreflightReason,
+        GovernedRoutePreflightStatus,
+        _result,
+    )
+
+    result = _result(
+        status=GovernedRoutePreflightStatus.NEEDS_DECISION,
+        reasons=(
+            GovernedRoutePreflightReason.DISCOVERY_STORE_UNAVAILABLE,
+            GovernedRoutePreflightReason.DISCOVERY_MULTIPLE_MATCHING_DESCRIPTORS,
+        ),
+        repository=REPOSITORY,
+        issue_number=3690,
+    )
+    assert "Scope:" not in hook_adapter.render_preflight_notice(result)
