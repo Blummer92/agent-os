@@ -298,13 +298,23 @@ a second fixed root-owned runtime published at:
 ```
 
 After exact branch/SHA checkout the host runner requires that fixed wrapper and
-that fixed overlay, proves the overlay resolves Vitest `5.0.0` on a Node `22.x`
+that fixed overlay, proves the overlay resolves Vitest `5.0.4` on a Node `22.x`
 interpreter, links the root-owned overlay into the ephemeral checkout so Node can
 resolve the package's declared dependencies, and runs only the fixed argv above
 from the fixed package directory. Cleanup removes the ephemeral link, never the
 overlay. The runner has no package-install, index-selection, `sudo`, or shell
 surface, and the transport carries only the validated
 repository/issue/branch/SHA/identity binding.
+
+The Vitest `5.0.4` version above is the **repository-required host runtime
+identity**, not proof that an overlay has been published on the GCE host. This
+repository change does not install, replace, or authorize publication of the
+root-owned Node runtime. A missing overlay fails closed as
+`test-runtime-unavailable`; an installed overlay with a different Vitest/Node
+version fails closed as `test-runtime-invalid`. Before this fixed identity is
+used on GCE, a separately authorized administrator must verify the published
+root-owned overlay actually resolves Vitest `5.0.4` under Node `22.x` at the
+fixed paths. The local/hosted frontend test lane is not that host proof.
 
 Fail-closed reason codes are:
 
