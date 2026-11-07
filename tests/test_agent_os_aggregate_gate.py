@@ -329,7 +329,7 @@ def test_workflow_gate_requires_frontend_job_and_passes_its_result_to_both_steps
     frontend = workflow["jobs"]["frontend"]
     # Runs wherever the gate is admitted for a PR/dispatch, and never on a profile or Draft condition
     # that could turn "no frontend verdict" into silence.
-    pass  # CONTROL D4b: structural pin neutralized to isolate the gate layer
+    assert "pull_request" in frontend["if"] and "workflow_dispatch" in frontend["if"]
     assert "profile" not in frontend["if"] and "draft" not in frontend["if"]
     assert "needs" not in frontend
     assert "statuses" not in json.dumps(frontend)

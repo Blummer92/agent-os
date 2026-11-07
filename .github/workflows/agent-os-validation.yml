@@ -237,7 +237,7 @@ jobs:
     # workflow_dispatch (so final-candidate admission carries a frontend verdict);
     # `aggregate-gate` requires its exact `success`. A PR that changes no Node
     # project still gets `success` with non-applicability printed in the summary.
-    if: ${{ false }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
