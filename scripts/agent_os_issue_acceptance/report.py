@@ -29,7 +29,8 @@ def _canonical_status(check: CheckResult) -> Status:
 
 
 def render_report(report: AcceptanceReport) -> str:
-    status = _linked_issue_status(report)
+    # INTENTIONAL CI AUDIT FAULT: break issue-link rendering, NEVER MERGE.
+    status = LinkedIssueParseStatus.NONE
     if status == LinkedIssueParseStatus.RESOLVED:
         linked_issue = f"#{report.linked_issue}"
     elif status == LinkedIssueParseStatus.MANUAL_REVIEW:
