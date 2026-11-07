@@ -192,6 +192,16 @@ def _git(*args: str) -> str:
     ).stdout
 
 
+def _git_paths(*args: str) -> list[str]:
+    """Run a git command that lists paths and split its NUL-delimited (``-z``) output.
+
+    Without ``-z`` git quotes and octal-escapes non-ASCII names, so a changed
+    ``caf\u00e9.ts`` would never match its project directory and would read as
+    "nothing changed".
+    """
+    return [path for path in _git(*args).split("\0") if path]
+
+
 def changed_files_against_main() -> tuple[str, list[str]]:
     """Return ``(merge_base, changed paths)`` for HEAD against ``origin/main``.
 
@@ -200,8 +210,7 @@ def changed_files_against_main() -> tuple[str, list[str]]:
     fails the job; it is never treated as "nothing changed".
     """
     base = _git("merge-base", "origin/main", "HEAD").strip()
-    names = _git("diff", "--name-only", "--no-renames", base, "HEAD").splitlines()
-    return base, [name for name in names if name]
+    return base, _git_paths("diff", "--name-only", "-z", "--no-renames", base, "HEAD")
 
 
 def _set_output(name: str, value: str) -> None:
@@ -241,7 +250,7 @@ def main() -> int:
     _set_output("tested_sha", head)
 
     base, changed = changed_files_against_main()
-    tracked = _git("ls-files").splitlines()
+    tracked = _git_paths("ls-files", "-z")
     lines = [
         "## Agent OS Frontend Checks",
         "",

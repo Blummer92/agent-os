@@ -164,10 +164,13 @@ def lane(monkeypatch, tmp_path):
             return state["head"] + "\n"
         if args[0] == "merge-base":
             return "b" * 40 + "\n"
+        # Real git only emits unquoted names with -z; fail the test if the lane forgets it.
         if args[0] == "diff":
-            return "\n".join(state["changed"]) + "\n"
+            assert "-z" in args, args
+            return "".join(path + "\0" for path in state["changed"])
         if args[0] == "ls-files":
-            return "\n".join(state["tracked"]) + "\n"
+            assert "-z" in args, args
+            return "".join(path + "\0" for path in state["tracked"])
         raise AssertionError(args)
 
     monkeypatch.setattr(fe, "_git", fake_git)
@@ -213,6 +216,27 @@ def test_main_head_sha_mismatch_fails_and_publishes_no_tested_sha(lane, monkeypa
     assert fe.main() == 1
     assert "tested_sha" not in lane["outputs"]()
     assert "does not match expected head" in capsys.readouterr().err
+
+
+def test_main_selects_project_for_non_ascii_and_spaced_paths(lane):
+    # git quotes non-ASCII names unless -z is used; those files must still select their project.
+    lane["changed"] = [f"{PP}/src/caf\u00e9.ts", f"{CAPTURE}/test/with space.test.mjs"]
+    assert fe.main() == 0
+    assert lane["outputs"]()["applicable"] == "picture-perfect-coach,software-tutorial-capture"
+
+
+def test_changed_files_against_main_requests_nul_delimited_output(monkeypatch):
+    calls = []
+
+    def fake_git(*args):
+        calls.append(args)
+        return "b" * 40 + "\n" if args[0] == "merge-base" else f"{PP}/src/caf\u00e9.ts\0docs/a.md\0"
+
+    monkeypatch.setattr(fe, "_git", fake_git)
+    base, changed = fe.changed_files_against_main()
+    assert base == "b" * 40
+    assert changed == [f"{PP}/src/caf\u00e9.ts", "docs/a.md"]
+    assert "-z" in calls[1]
 
 
 def test_main_teacher_os_note_discloses_advisory_playwright(lane):
