@@ -71,6 +71,7 @@ jobs:
               # #2940: notion-read envelopes are GitHub-hosted reads; they must
               # never trigger the GCP authentication / gcloud setup steps below.
               output.write(f"is_notion_read={'true' if payload['reason'] == 'accepted-notion-read-envelope' else 'false'}\n")
+              output.write(f"is_discovery={'true' if payload['reason'] == 'accepted-discovery-envelope' else 'false'}\n")
               output.write(f"is_codespace_implementation={'true' if payload['reason'] == 'accepted-codespace-implementation-envelope' else 'false'}\n")
           PY
 
@@ -185,7 +186,7 @@ jobs:
 
       - name: Attempt Codespaces discovery
         id: codespaces_discovery
-        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
+        if: ${{ steps.transport.outputs.is_discovery == 'true' && steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && steps.route.outputs.preferred == 'codespaces' }}
         env:
           GH_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
         run: |
@@ -194,11 +195,8 @@ jobs:
               --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
               --route-output "$RUNNER_TEMP/agent-os-ingress/codespaces-discovery-route.json" \
               --result-output "$RUNNER_TEMP/agent-os-ingress/result.json"
-          # Preserve the Codespaces discovery payload independently: the GCE
-          # fallback step below overwrites result.json by design, which would
-          # destroy the SSH transport evidence (exit codes, framed response,
-          # reason codes). This copy keeps it recoverable from the published
-          # artifact without changing any routing or fallback behavior.
+          # Keep the independent discovery receipt for existing evidence consumers.
+          # Ordinary requests cannot enter the GCE transport.
           cp "$RUNNER_TEMP/agent-os-ingress/result.json" \
              "$RUNNER_TEMP/agent-os-ingress/codespaces-discovery-result.json"
           python - <<'PY'
@@ -218,14 +216,14 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && steps.route.outputs.preferred == 'gce') }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true')) }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested == 'true' || (steps.transport.outputs.accepted == 'true' && steps.transport.outputs.is_notion_read != 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && steps.route.outputs.preferred == 'gce') }}
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Install and verify bounded #1238 host runtime
@@ -403,7 +401,7 @@ jobs:
           PY
 
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && (steps.route.outputs.preferred == 'gce' || steps.route.outputs.gce_fallback_allowed == 'true') }}
+        if: ${{ steps.transport.outputs.is_codespace_implementation != 'true' && steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' && steps.codespaces_diagnostic.outputs.handled != 'true' && steps.codespaces.outputs.selected != 'true' && (steps.codespaces_discovery.outputs.selected != 'true' || steps.codespaces_discovery.outputs.capable != 'true') && steps.route.outputs.preferred == 'gce' }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -451,9 +449,7 @@ jobs:
                           summary.write(f"Codespaces discovery capable: `{capable_result.get('codespaces_capable')}`\n\n")
                   except json.JSONDecodeError:
                       pass
-              # The preserved Codespaces discovery payload survives the GCE
-              # fallback overwrite of result.json; surface it so the SSH
-              # transport evidence is visible without opening the artifact.
+              # Surface the independent discovery receipt and SSH diagnostics.
               if discovery_result_path.exists():
                   try:
                       preserved = json.loads(discovery_result_path.read_text(encoding="utf-8"))

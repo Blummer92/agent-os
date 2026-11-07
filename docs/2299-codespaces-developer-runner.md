@@ -2,12 +2,14 @@
 
 ## Purpose
 
-Agent OS keeps one provider-neutral #918 governed-runner route while preferring
-the existing `agent-os-codespaces-v1` environment for ordinary developer-loop
-runtime work. GCE remains available when Codespaces is unavailable, stale, or
-missing a required capability. Operations already classified as requiring an
-autonomous VM host never select Codespaces; #2300 owns the detailed #759 /
-Scheduler / fixed-host boundary.
+Agent OS reuses the provider-neutral #918 governed-runner contracts while
+using the existing `agent-os-codespaces-v1` environment for qualified ordinary
+developer-loop operations. Governed issue-comment discovery, developer validation,
+and diagnostics never fall back to GCE. A missing, stale, unauthorized, incapable,
+or failed Codespace produces bounded failure evidence. This follows the owner's
+[2026-10-14 Codespaces-first decision](https://github.com/Blummer92/agent-os/issues/3333#issuecomment-6178339957).
+GCE resources remain preserved under #3102; no VM-only operation is qualified for
+Codespaces by this route change.
 
 ## Composition
 
@@ -16,7 +18,7 @@ operation requirements
 -> current runtime observations
 -> choose_governed_runner(...)
    -> Codespaces when current + capable + developer-loop eligible
-   -> otherwise GCE when current + capable
+   -> otherwise GCE candidate metadata when current + capable
    -> otherwise no capable governed runner
 -> project selected runtime into existing #918 inputs
 -> select_executor_route(...)
@@ -25,7 +27,8 @@ operation requirements
 
 `choose_governed_runner` is a candidate preference only. It creates no executor
 route enum, Scheduler, lease, capability registry, validation plan, transport,
-credential, or authority. The selected candidate supplies #918's existing
+credential, or authority. The Codespaces implementation dispatcher refuses a
+GCE selection rather than invoking GCE. The selected candidate supplies #918's existing
 `governed_runner_capabilities`, environment profile, environment-health evidence,
 and workflow runtime identity.
 
@@ -92,8 +95,9 @@ provisioning, credential, or protected-setting change is involved.
 #1212 proved `gh codespace ssh` with the official Dev Container SSH feature, but
 that closed qualification PR was not merged. #2299 does not silently reactivate
 its devcontainer changes. Live use must consume current environment-health and
-transport evidence; stale or unavailable Codespaces evidence falls back to GCE
-through the same #918 route. Any devcontainer activation change is separately
+transport evidence; stale or unavailable evidence blocks ordinary ingress.
+The generic preference function can still describe GCE candidates; it executes
+no provider operation. Any devcontainer activation change is separately
 validated before being treated as current capability.
 
 ## Governed ingress read-only pilot (#2931)
@@ -116,43 +120,44 @@ the accepted developer-validation envelope when all of these conditions hold:
 
 The workflow never starts, stops, exports, creates, edits, deletes, or publishes
 a Codespace. A stopped, stale, mismatched, unauthenticated, or otherwise
-unqualified Codespaces candidate is treated as unavailable and preserves the
-existing GCE fallback. GitHub CLI is invoked with a fixed trusted command built
+unqualified Codespaces candidate produces an explicit failure receipt.
+No alternate execution is attempted, including after the CLI pre-start timeout. GitHub CLI is invoked with a fixed trusted command built
 from the existing developer-validation request identity; caller-provided shell
 or argv is not exposed.
 
 Only `remote-validation-suite` participates in the developer-validation pilot.
-Other developer-validation profiles remain on the existing GCE transport until
-separately qualified for Codespaces. Discovery now prefers Codespaces too: the
-`agent-os-governed-invocation` workflow resolves a Codespaces-first route per
-ingress envelope (`workflow_scheduler.governance.codespaces_first_route`), and
-the accepted discovery envelope runs the bounded read-only discovery adapter
-(`workflow_scheduler.governance.discovery_codespaces`) on the current Codespace
-before any GCE fallback. Discovery on Codespaces reuses the same single-current-
-surface resolver, read-only token, and fixed `gh codespace ssh` transport as the
-diagnostic and developer-validation pilots; the remote runner executes the
-repository-owned handoff discovery entrypoint with a fixed argv and returns a
-framed read-only evidence object bound to that execution surface. The remote
-runner verifies the host-local checkpoint store (`invocations` directory) is
-present before importing the discovery implementation: a Codespace without the
-store reports `codespaces_capable=False` so the workflow falls back through the
-existing GCE path instead of returning a misleading `not-found`. If the current
-Codespace is unavailable, the repository checkout is missing, or the store is
-absent, the run fails closed and the existing GCE path is preserved. The GCE
-fallback recognizes the accepted discovery envelope with its own bounded
-branch (`gce_gcloud_adapter.execute_transport`): the envelope is validated
-strictly (accepted status, canonical issue identity, no handoff identity,
-single run attempt) and answered with non-authorizing `needs-decision`
-discovery evidence (`discovery-gce-unavailable`) instead of reaching the
-resume-only binder, which correctly continues to reject non-resume envelopes.
-The GCE transport performs no discovery operation and invokes no adapter
-method for discovery; the retired GCE host is never observed, started, or
-probed on this path. First-run
-validation, Scheduler/control, #759 containment, fixed-service-identity, host
-maintenance, and other VM-specific operations remain GCE-owned under #2300.
+Other developer-validation profiles return `codespaces-profile-not-qualified`
+without executing either provider. Qualification of a replacement remains a
+separate decision; historical GCE support is not Codespaces capability evidence.
 
-The read-only token is a transport credential, not routing or execution
-authority. Missing credential material leaves the prior GCE behavior intact.
+Discovery reuses the same current-surface selection, read-only token, fixed SSH
+transport, and provider-neutral handoff-discovery contract. Its checkpoint store
+defaults to `/workspaces/agent-os-state/checkpoints`, matching the devcontainer.
+A missing checkout, missing store, failed SSH, malformed response, or unavailable
+Codespace retains its own reason-coded `needs-decision` receipt. The independent
+`codespaces-discovery-result.json` copy remains available for existing evidence
+consumers. GCE discovery is retired and is never an ordinary alternate route.
+
+The workflow only invokes discovery for a discovery envelope, so it cannot
+overwrite a failed developer-validation receipt. Developer validation always
+writes its SHA/profile-bound result when its request is recognized. The existing
+gate still requires success, exit code zero, matching branch/SHA/profile, and
+completed cleanup; it rejects unsupported or failed routes. Ordinary route
+evidence retains `gce_fallback_allowed=false` for schema compatibility, but no
+cloud step consumes that field as authority.
+
+Fixed-host inspection, governed resume/control, PPUX projection, and publication
+activation remain separately implemented GCE paths; no new migration or live
+qualification is claimed. The owner-only `host_install.outputs.requested` branch
+is independent of ordinary route resolution and still contains fixed-host
+installation and VM-start code. This repair does not retire it or authorize its
+use. The owner decision forbids GCE reactivation/reinstallation; #3102 resource
+disposition and any further repository retirement remain separately gated.
+
+The read-only token is transport access, never implementation authorization.
+The fixed #3333 implementation pilot separately requires canonical descriptor,
+authorization, currentness, health, and lease evidence; its Actions entry remains
+fail closed. Discovery and test success do not establish pilot qualification.
 
 
 ## Reconstructed #2826 acceptance coverage
