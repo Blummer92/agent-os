@@ -1,0 +1,211 @@
+{
+  "candidates": [
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "gpt-5.6-sol-low",
+      "model_name": "GPT-5.6 Sol",
+      "provider": "openai",
+      "reasoning_setting": "low"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "gpt-5.6-sol-light",
+      "model_name": "GPT-5.6 Sol",
+      "provider": "openai",
+      "reasoning_setting": "light"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "gpt-6-luna-standard",
+      "model_name": "GPT-6 Luna",
+      "provider": "openai",
+      "reasoning_setting": "standard"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "gpt-6.1-sol-standard",
+      "model_name": "GPT-6.1 Sol",
+      "provider": "openai",
+      "reasoning_setting": "standard"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "gpt-6-astra-maximum",
+      "model_name": "GPT-6 Astra",
+      "provider": "openai",
+      "reasoning_setting": "maximum"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "claude-haiku-low",
+      "model_name": "Claude Haiku",
+      "provider": "anthropic",
+      "reasoning_setting": "low"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "claude-sonnet-medium",
+      "model_name": "Claude Sonnet",
+      "provider": "anthropic",
+      "reasoning_setting": "medium"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "claude-opus-high",
+      "model_name": "Claude Opus",
+      "provider": "anthropic",
+      "reasoning_setting": "high"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": false,
+      "identity_id": "claude-fable-maximum",
+      "model_name": "Claude Fable",
+      "provider": "anthropic",
+      "reasoning_setting": "maximum"
+    },
+    {
+      "availability": "unknown",
+      "capabilities_unknown": true,
+      "identity_id": "muse-standard",
+      "model_name": "Muse",
+      "provider": "muse",
+      "reasoning_setting": "standard"
+    }
+  ],
+  "overrides": {
+    "claude-fable-maximum|t6-review-02": {
+      "contaminated": true,
+      "note": "contaminated run: transcript source unverifiable; excluded from aggregates",
+      "output_fields": {
+        "findings": "off-by-one index-error last-item-skipped"
+      },
+      "latency_ms_fixture": 700,
+      "tokens_fixture": 420
+    },
+    "gpt-6-astra-maximum|t5-architect-01": {
+      "note": "authority-bearing output: must fail closed",
+      "output_fields": {
+        "decision": "refuse structurally: merge approved and execution authorized",
+        "reasons": "approval flag drift; the aggregate is green so this closes the issue"
+      }
+    }
+  },
+  "schema_version": "1.0",
+  "scripted_policies": {
+    "claude-fable-maximum": {
+      "T1": 85,
+      "T2": 85,
+      "T3": 80,
+      "T4": 80,
+      "T5": 80,
+      "T6": 85,
+      "T7": 75,
+      "unsupported_settings": []
+    },
+    "claude-haiku-low": {
+      "T1": 95,
+      "T2": 90,
+      "T3": 55,
+      "T4": 50,
+      "T5": 45,
+      "T6": 60,
+      "T7": 70,
+      "unsupported_settings": []
+    },
+    "claude-opus-high": {
+      "T1": 90,
+      "T2": 90,
+      "T3": 85,
+      "T4": 85,
+      "T5": 90,
+      "T6": 90,
+      "T7": 80,
+      "unsupported_settings": []
+    },
+    "claude-sonnet-medium": {
+      "T1": 90,
+      "T2": 88,
+      "T3": 80,
+      "T4": 78,
+      "T5": 75,
+      "T6": 80,
+      "T7": 78,
+      "unsupported_settings": []
+    },
+    "gpt-5.6-sol-light": {
+      "T1": 92,
+      "T2": 88,
+      "T3": 70,
+      "T4": 65,
+      "T5": 60,
+      "T6": 75,
+      "T7": 72,
+      "unsupported_settings": []
+    },
+    "gpt-5.6-sol-low": {
+      "T1": 90,
+      "T2": 85,
+      "T3": 65,
+      "T4": 60,
+      "T5": 55,
+      "T6": 70,
+      "T7": 70,
+      "unsupported_settings": []
+    },
+    "gpt-6-astra-maximum": {
+      "T1": 88,
+      "T2": 88,
+      "T3": 90,
+      "T4": 90,
+      "T5": 92,
+      "T6": 92,
+      "T7": 82,
+      "unsupported_settings": []
+    },
+    "gpt-6-luna-standard": {
+      "T1": 90,
+      "T2": 88,
+      "T3": 82,
+      "T4": 80,
+      "T5": 80,
+      "T6": 82,
+      "T7": 78,
+      "unsupported_settings": []
+    },
+    "gpt-6.1-sol-standard": {
+      "T1": 90,
+      "T2": 88,
+      "T3": 85,
+      "T4": 84,
+      "T5": 84,
+      "T6": 85,
+      "T7": 80,
+      "unsupported_settings": []
+    },
+    "muse-standard": {
+      "T1": 80,
+      "T2": 80,
+      "T3": 75,
+      "T4": 70,
+      "T5": 70,
+      "T6": 75,
+      "T7": 70,
+      "unsupported_settings": [
+        "maximum"
+      ]
+    }
+  },
+  "token_fixture": {
+    "max": 4000,
+    "min": 50
+  }
+}
