@@ -8,7 +8,8 @@ from the workflow text, following the refresh-job test pattern:
 - read-only job permissions (no write permission anywhere in the job);
 - one dispatch step internally performs canonical admission on the fixed transport;
 - no merge-API call in the job;
-- the summary program reports both receipts, and the artifact step
+- the summary program reports both decisions (nested candidate and dispatch)
+  from the single dispatch receipt, and the artifact step
   publishes the single dispatch receipt with nested admission evidence.
 """
 import json
@@ -137,3 +138,14 @@ def test_merge_admission_artifacts_publish_all_receipt_json() -> None:
     artifact = job.split("- name: Publish bounded merge-admission receipt artifacts", 1)[1]
     assert "path: ${{ runner.temp }}/agent-os-merge-admission/*.json" in artifact
     assert "retention-days: 7" in artifact
+
+
+def test_readme_describes_single_dispatch_with_nested_receipt() -> None:
+    # Regression guard for Copilot review r4472986775 on PR #3782: the
+    # package README must not describe the retired two-step caller that
+    # published both receipts.
+    readme = (ROOT / "scripts/agent_os_issue_acceptance/README.md").read_text(encoding="utf-8")
+    assert "runs `merge_applicability` once" in readme
+    assert "containing nested `admission_receipt` evidence" in readme
+    assert "runs `merge_admission_actions` and then `merge_applicability`" not in readme
+    assert "publishes both receipts" not in readme
