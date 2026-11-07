@@ -475,7 +475,10 @@ def test_advisory_jobs_fail_visibly_via_guard_after_upload(job, kind):
 
 def test_advisory_guard_never_becomes_a_gate_dependency():
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-    assert jobs["aggregate-gate"]["needs"] == ["plan", "validate"]
+    # `frontend` is a mandatory quality job (agent_os_frontend_checks.py), not advisory.
+    assert jobs["aggregate-gate"]["needs"] == ["plan", "validate", "frontend"]
+    assert "jscpd-advisory" not in jobs["aggregate-gate"]["needs"]
+    assert "pyan3-advisory" not in jobs["aggregate-gate"]["needs"]
     assert "jscpd-advisory" not in jobs["validate"].get("needs", [])
     assert "pyan3-advisory" not in jobs["validate"].get("needs", [])
 
