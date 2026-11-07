@@ -562,6 +562,36 @@ def test_unauthorized_actor_blocked():
     assert receipt["reason_codes"] == ["lifecycle.actor-not-owner"]
 
 
+def test_q04_owner_provenance_with_valid_owner_trigger():
+    # Q04: the transport actor is the legitimate owner and the comment
+    # chain is owner-authored, so no earlier actor guard may fire. Only
+    # the record's authorizer_id is forged (mallory, not the repo owner).
+    # The forged record is built through the canonical producers: a
+    # pending revision with the forged authorizer, then the AUTHORIZED
+    # decision with the same forged authorizer, so the chain, binding,
+    # expiry, schema, and comment authorship all stay valid and the
+    # owner-provenance guard is the first check that may reject it.
+    # Replacing authorizer_id on an already-authorized record is not
+    # used: its content-derived revision hash would no longer match.
+    bundle = None
+    original = _authorized_record(bundle)
+    pending = replace(
+        _pending_for(original), authorizer_id="mallory",
+        authorization_revision="",
+    )
+    forged = record_merge_authorization_decision(
+        pending, state=_tauth.MergeAuthorizationState.AUTHORIZED,
+        decision_id="authz-decision", authorizer_id="mallory",
+        decision_at=pending.decision_at,
+    )
+    assert forged.authorizer_id == "mallory"
+    assert forged.authorizer_id != OWNER
+    receipt = _run(bundle=bundle, record=forged)
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["authorization.owner-provenance-mismatch"]
+
+
 def test_scope_expansion_blocked():
     pr = _PR(_files=[_File(ALLOWED_FILE, FILE_SHA), _File("evil.py", "f" * 40)])
     receipt = _run(pr=pr)
