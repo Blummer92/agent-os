@@ -13,8 +13,8 @@ is compiled into this module.
 A missing credential, unresolvable Codespace, missing repository checkout,
 missing discovery implementation, missing checkpoint store, or malformed
 evidence fails closed. A Codespace without the host-local checkpoint store
-reports codespaces_capable=False so the workflow falls back through the
-existing governed GCE path instead of returning a misleading not-found.
+reports codespaces_capable=False with an explicit blocker instead of returning
+a misleading not-found or entering the retired GCE discovery path.
 """
 from __future__ import annotations
 
@@ -304,8 +304,7 @@ def run_discovery_over_codespaces(
         ["codespaces-discovery-import-failed"],
         ["codespaces-discovery-store-unavailable"],
     ):
-        # No discovery capability on this surface: not capable, so the
-        # workflow falls back through the existing GCE path.
+        # No discovery capability on this surface: preserve its blocker.
         return {"discovery": payload, "codespaces_capable": False}
     return {"discovery": payload, "codespaces_capable": True}
 
@@ -355,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
         result = run_discovery_over_codespaces(
             request, codespace_name=str(route.get("codespace_name"))
         )
+    elif request is not None:
+        result = {
+            "discovery": _failure(request, str(route["reason_codes"][0])),
+            "codespaces_capable": False,
+        }
     else:
         result = {"discovery": None, "codespaces_capable": False}
     args.result_output.write_text(

@@ -616,67 +616,7 @@ def test_codespaces_identity_mismatch_lists_each_differing_field() -> None:
     assert evidence["identity_mismatch_fields"] == ["tested_sha"]
 
 
-def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
-    workflow = (
-        ROOT / ".github/workflows/agent-os-governed-invocation.yml"
-    ).read_text(encoding="utf-8")
-    selected_guard = (
-        "steps.transport.outputs.accepted == 'true' && "
-        "steps.codespaces_diagnostic.outputs.handled != 'true' && "
-        "steps.codespaces.outputs.selected != 'true' && "
-        "(steps.codespaces_discovery.outputs.selected != 'true' || "
-        "steps.codespaces_discovery.outputs.capable != 'true')"
-    )
-    assert "Attempt read-only Codespaces developer validation" in workflow
-    assert "Attempt Codespaces discovery" in workflow
-    assert "secrets.AGENT_OS_CODESPACES_TOKEN" in workflow
-    assert selected_guard in workflow
-    assert "Invoke exact governed GCE control path" in workflow
-    assert (
-        "steps.codespaces_discovery.outputs.capable != 'true') && "
-        "(steps.route.outputs.preferred == 'gce' || "
-        "steps.route.outputs.gce_fallback_allowed == 'true') }}"
-        in workflow
-    )
-
-
-def test_2944_ssh_start_timeout_alone_admits_gce_fallback() -> None:
-    from workflow_scheduler.governance.dev_validation_codespaces import (
-        _ssh_start_failed_before_execution,
-    )
-
-    request = build_dev_validation_request(
-        repository=REPOSITORY,
-        issue_number=2931,
-        branch=BRANCH,
-        source_sha=SHA,
-        validation_id=VALIDATION_ID,
-    )
-    base = {
-        "schema_version": "1.0",
-        "status": "needs-decision",
-        "reason_codes": ["dev-validation-codespaces-ssh-failed"],
-        "ssh_exit_code": 1,
-        "ssh_stdout_tail": "",
-        "ssh_stderr_tail": (
-            "error connecting to codespace: timed out while waiting "
-            "for the codespace to start"
-        ),
-        "workspace_side_effects_performed": False,
-        "tested_sha": request.source_sha,
-    }
-    assert _ssh_start_failed_before_execution(base)
-    for patch in (
-        {"ssh_stderr_tail": "remote command failed"},
-        {"ssh_stdout_tail": "remote command started"},
-        {"ssh_exit_code": 2},
-        {"workspace_side_effects_performed": True},
-        {"reason_codes": ["dev-validation-codespaces-frame-invalid"]},
-    ):
-        assert not _ssh_start_failed_before_execution({**base, **patch})
-
-
-def test_2944_prestart_timeout_projects_fallback_without_stale_result(
+def test_prestart_timeout_preserves_failure_evidence_without_fallback(
     monkeypatch, tmp_path,
 ) -> None:
     from dataclasses import asdict
@@ -719,14 +659,14 @@ def test_2944_prestart_timeout_projects_fallback_without_stale_result(
         "--result-output", str(result_path),
     ]) == 0
     route = json.loads(route_path.read_text(encoding="utf-8"))
-    assert route["selected"] is False
-    assert route["reason_codes"] == ["codespaces-ssh-start-timeout-fallback"]
-    assert route["codespaces_failure_reason"] == "dev-validation-codespaces-ssh-failed"
-    assert route["tested_sha"] == SHA
-    assert route["validation_id"] == VALIDATION_ID
-    assert route["ssh_exit_code"] == 1
-    assert route["cleanup_complete"] is False
-    assert not result_path.exists()
+    assert route["selected"] is True
+    result = json.loads(result_path.read_text(encoding="utf-8"))["dev_validation"]
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["dev-validation-codespaces-ssh-failed"]
+    assert result["tested_sha"] == SHA
+    assert result["validation_id"] == VALIDATION_ID
+    assert result["ssh_exit_code"] == 1
+    assert result["cleanup_complete"] is False
 
 
 def test_codespaces_api_read_failure_classification_is_bounded(monkeypatch) -> None:

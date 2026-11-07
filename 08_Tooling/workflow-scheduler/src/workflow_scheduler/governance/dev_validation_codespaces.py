@@ -4,8 +4,8 @@ This provider adapter consumes only the existing accepted developer-validation
 request contract. It never starts, stops, edits, creates, deletes, or exports a
 Codespace. The current approved surface is resolved from live GitHub Codespaces
 evidence (#2965): exactly one owner/repository-qualified Codespace must be
-Available, otherwise the caller falls back through the existing governed-runner
-path. No Codespace identity is compiled into this module.
+Available. Unavailable or unsupported routes produce bounded failure evidence
+without an alternate provider attempt. No Codespace identity is compiled in.
 """
 from __future__ import annotations
 
@@ -508,18 +508,6 @@ def run_dev_validation_over_codespaces(
     return payload
 
 
-def _ssh_start_failed_before_execution(result: dict[str, object]) -> bool:
-    """Admit fallback only when gh reports its fixed pre-start timeout."""
-    return (
-        result.get("reason_codes") == ["dev-validation-codespaces-ssh-failed"]
-        and result.get("ssh_exit_code") == 1
-        and result.get("ssh_stdout_tail", "") == ""
-        and result.get("ssh_stderr_tail", "").strip()
-        == "error connecting to codespace: timed out while waiting for the codespace to start"
-        and result.get("workspace_side_effects_performed") is False
-    )
-
-
 def _ingress_from_file(path: Path) -> IssueCommentIngressResult:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if type(payload) is not dict:
@@ -564,33 +552,15 @@ def main(argv: list[str] | None = None) -> int:
         result = run_dev_validation_over_codespaces(
             request, codespace_name=codespace_name
         )
-        # This exact gh error occurs before the remote command starts. Other SSH
-        # failures may have executed work and must remain fail closed.
-        if _ssh_start_failed_before_execution(result):
-            route = _route(
-                False,
-                "codespaces-ssh-start-timeout-fallback",
-                state="Available",
-                codespace_name=codespace_name,
-            )
-            route.update({
-                "codespaces_failure_reason": "dev-validation-codespaces-ssh-failed",
-                "ssh_exit_code": 1,
-                "tested_sha": request.source_sha,
-                "validation_id": request.validation_id,
-                "cleanup_complete": result["cleanup_complete"],
-            })
-            args.route_output.write_text(
-                json.dumps(route, sort_keys=True, separators=(",", ":")) + "\n",
-                encoding="utf-8",
-            )
-        else:
-            args.result_output.parent.mkdir(parents=True, exist_ok=True)
-            args.result_output.write_text(
-                json.dumps({"dev_validation": result}, sort_keys=True, separators=(",", ":"))
-                + "\n",
-                encoding="utf-8",
-            )
+    elif request is not None:
+        result = _failure(request, str(route["reason_codes"][0]), route.get("codespace_name"))
+    if request is not None:
+        args.result_output.parent.mkdir(parents=True, exist_ok=True)
+        args.result_output.write_text(
+            json.dumps({"dev_validation": result}, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
     print(json.dumps(route, sort_keys=True))
     return 0
 
