@@ -95,6 +95,31 @@ test-gap evidence**, not evidence that code is unreachable or safe to remove.
 Any wire-or-retire decisions belong to #1729, and static security analysis to
 #3427.
 
+### Test-selection completeness (PR #3817)
+
+A suite that passes must also have *executed* every test the repository defines
+(PR #3816: `--deselect` in `pytest.ini` produced a green aggregate while the
+regression tests never ran). Every suite writes JUnit (published under
+`CI_JUNIT_DIR` when set, otherwise a private temp file), and after each passing
+suite `scripts/agent_os_ci_test_completeness.py` requires every test of one
+runner-owned reference collection (`addopts` emptied, discovery options reset to
+pytest defaults, must exit 0) to appear as an executed `<testcase>`. Suites run
+with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
+and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
+`TEST_COLLECTION_ERROR` when the comparison could not be established) in the
+manifest row `test selection completeness: <suite>`, whose receipt is
+`test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
+pass per suite; the single intentional discovery exclusion is
+`08_Tooling/reusable-capability-registry/tests/fixtures`.
+
+Proven boundary: pytest **configuration** (any config file or addopts, including
+`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`).
+**`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
+outside the boundary**: they change the reference and the real run identically,
+so they are not detected (pinned by a strict xfail in
+`tests/test_agent_os_ci_test_completeness.py`). Focused runs are explicit
+selections and are not checked. This is not CI trust certification.
+
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
 

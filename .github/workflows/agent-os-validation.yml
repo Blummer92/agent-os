@@ -1001,6 +1001,54 @@ jobs:
           CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
         run: ./scripts/validate-all.sh
 
+      - name: Record not-executed infrastructure receipt
+        # Only when a pre-aggregate step failed and the aggregate step
+        # itself never produced a verdict (skipped/cancelled): the
+        # candidate tests did not run, so there is no JUnit or manifest
+        # yet. Without this receipt the upload step below fails with a
+        # second, misleading "no files" error that obscures the original
+        # failure (for example a GitHub HTTP 502 in the main-evidence
+        # recovery step, PR #3813 run 42393965702). The terminal status
+        # still reports the run as infrastructure error; this receipt
+        # only preserves the cause in machine-readable form.
+        if: ${{ failure() && steps.aggregate_evidence.outputs.run_required != 'false' && steps.aggregate.outcome != 'success' && steps.aggregate.outcome != 'failure' }}
+        env:
+          JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.candidate.outputs.head_sha }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
+          MAIN_HEALTH_OUTCOME: ${{ steps.main_health.outcome }}
+          RECOVERY_OUTCOME: ${{ steps.main_evidence_recovery.outcome }}
+          RECOVERY_STOP_OUTCOME: ${{ steps.main_recovery_stop.outcome }}
+        run: |
+          mkdir -p "$JUNIT_DIR"
+          # The note says what actually happened to the aggregate step:
+          # "not executed" is only true when it was skipped; a cancelled
+          # step may have run some suites before it stopped.
+          case "$AGGREGATE_OUTCOME" in
+            skipped)
+              note="Candidate aggregate tests were not executed: a pre-aggregate step failed. The original failure is the failed step outcome above; this receipt only preserves it in machine-readable form."
+              ;;
+            cancelled)
+              note="Candidate aggregate tests were cancelled before completing, after a pre-aggregate step failed. The original failure is the failed step outcome above; this receipt only preserves it in machine-readable form."
+              ;;
+            *)
+              note="Candidate aggregate tests produced no verdict (aggregate outcome: $AGGREGATE_OUTCOME). The original failure is the failed step outcome above; this receipt only preserves it in machine-readable form."
+              ;;
+          esac
+          jq -n \
+            --arg schema "agent-os-ci-not-executed/1" \
+            --arg classification "NOT_EXECUTED_INFRASTRUCTURE" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg aggregate_outcome "$AGGREGATE_OUTCOME" \
+            --arg main_health_outcome "$MAIN_HEALTH_OUTCOME" \
+            --arg recovery_outcome "$RECOVERY_OUTCOME" \
+            --arg recovery_stop_outcome "$RECOVERY_STOP_OUTCOME" \
+            --arg note "$note" \
+            '{schema: $schema, classification: $classification, head_sha: $head_sha, run_id: $run_id, run_attempt: $run_attempt, aggregate_outcome: $aggregate_outcome, main_health_outcome: $main_health_outcome, recovery_outcome: $recovery_outcome, recovery_stop_outcome: $recovery_stop_outcome, note: $note}' \
+            > "$JUNIT_DIR/not-executed-infrastructure.json"
+
       - name: Upload aggregate JUnit evidence
         if: ${{ always() && steps.aggregate_evidence.outputs.run_required != 'false' }}
         uses: actions/upload-artifact@v7
