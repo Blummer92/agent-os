@@ -19,7 +19,7 @@ def _rt(text):
     return {"type": "rich_text", "rich_text": [{"plain_text": text, "text": {"content": text}}]}
 
 
-def row(number=999, revision=REVISION, *, status="New"):
+def row(number=999, revision=REVISION, *, status="New", area="Governance", learning_type="Mistake"):
     return {
         "object": "page", "last_edited_time": revision,
         "url": f"https://www.notion.so/{number}",
@@ -28,8 +28,8 @@ def row(number=999, revision=REVISION, *, status="New"):
             "Lesson Learned": {"type": "title", "title": [{"plain_text": "Verify labels after issue creation"}]},
             "Status": {"type": "select", "select": None if status is None else {"name": status}},
             "Surface Before Work?": {"type": "checkbox", "checkbox": True},
-            "Area": {"type": "select", "select": {"name": "Governance"}},
-            "Learning Type": {"type": "select", "select": {"name": "Mistake"}},
+            "Area": {"type": "select", "select": {"name": area}},
+            "Learning Type": {"type": "select", "select": {"name": learning_type}},
             "Applies To": {"type": "multi_select", "multi_select": [{"name": "Notion"}]},
             "Source Link": {"type": "url", "url": "https://github.com/Blummer92/agent-os/issues/3305"},
             "Guardrail": _rt("Prove label convergence through readback."),
@@ -67,6 +67,28 @@ def test_issue_start_returns_exact_lesson_revision_and_selection_provenance():
     }]
     assert result["selected_lessons"][0]["selection_reason_codes"]
     assert result["materiality_source"] == "caller-asserted-material"
+
+
+def test_issue_start_selection_follows_notion_data_and_task_context():
+    testing = {"area": "Testing", "learning_type": "Testing lesson"}
+    governance = {"area": "Governance", "learning_type": "Scope/permission lesson"}
+    python_testing = {"ecosystem_hints": ("python",), "capability_keywords": ("testing",)}
+    agent_os_routing = {"ecosystem_hints": ("agent-os",), "capability_keywords": ("authorization-routing",)}
+
+    def selected(rows, **task):
+        return activate_issue_start_lesson_preflight(
+            repository="Blummer92/agent-os", issue_number=3418, task_reference="issue:#3418",
+            specialized_knowledge_required=True, execute_read=reader(rows), **task,
+        )["selected_lesson_ids"]
+
+    # Same task, different Notion data: a different lesson, and an empty result selects nothing.
+    assert selected([row(201, **testing)], **python_testing) == ["LL-201"]
+    assert selected([row(202, **testing)], **python_testing) == ["LL-202"]
+    assert selected([], **python_testing) == []
+    # Same Notion data, different task: a different lesson.
+    both = [row(201, **testing), row(202, **governance)]
+    assert selected(both, **python_testing) == ["LL-201"]
+    assert selected(both, **agent_os_routing) == ["LL-202"]
 
 
 def test_issue_start_projects_real_rejected_candidate_provenance():
@@ -366,15 +388,13 @@ def test_metrics_count_only_valid_deduplicated_receipts_and_expose_signals():
     assert metrics["lesson_candidates"] == {"reusable-new": 2}
     assert metrics["candidate_recurrences"] == 1
     assert metrics["malformed_markers"] == {"receipt": 1}
-    assert metrics["accountability"] == {"LL-999": "not-in-accountability-catalog"}
     assert metrics["causality_inferred"] is False
     json.dumps(metrics)
 
 
-def test_metrics_reuse_ckr12_accountability_by_lesson_number():
+def test_metrics_report_selected_lessons_without_receipt_from_durable_results():
     result_body = bridge.serialize_ckr6_result_comment(sufficient_result((("LL-36", REVISION),)), request_comment_id=500)
     metrics = derive_lesson_metrics({1: [_comment(501, result_body)]})
-    assert metrics["accountability"]["LL-36"] != "not-in-accountability-catalog"
     assert metrics["selected_without_receipt"] == [f"LL-36@{REVISION}"]
 
 

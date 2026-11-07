@@ -1,3 +1,5 @@
+> **Archived (#1729).** The module, snapshot and risk map described below were retired; per-lesson eligibility is derived from live Notion rows by `normalize_lesson_row` (CKR11) and CKR2. See `08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md`. Retained as read-only reference; the removed code is in git history at `7f293b5907db42d30da6a42089f2f9ef8e23e511`.
+
 # CKR12 Lessons Learned Activation Accountability
 
 Issues: #1517, #1559.
