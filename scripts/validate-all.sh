@@ -554,6 +554,8 @@ for test_dir in "${test_dirs[@]}"; do
   if [ -n "${CI_JUNIT_DIR:-}" ]; then
     mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
     completeness_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$completeness_suite_name").json"
+    # Never reuse a prior attempt's receipt as evidence for this attempt.
+    rm -f "$completeness_receipt" || runner_error "cannot replace stale completeness receipt: $completeness_receipt"
     completeness_args+=(--receipt "$completeness_receipt")
     completeness_display+=" --receipt $completeness_receipt"
   fi
@@ -565,6 +567,13 @@ for test_dir in "${test_dirs[@]}"; do
     "${completeness_args[@]}"
   fi
   completeness_code=$?
+  # A successful helper exit is not enough when its evidence is missing.
+  if [ "$completeness_code" -eq 0 ] && [ -n "${CI_JUNIT_DIR:-}" ]; then
+    if [ ! -f "$completeness_receipt" ] || ! grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"COMPLETE"' "$completeness_receipt"; then
+      echo "completeness helper succeeded without a COMPLETE receipt: $completeness_suite_name" >&2
+      completeness_code=2
+    fi
+  fi
   completeness_ended_us="$(timer_now_us || true)"
   record_timing "test selection completeness: $completeness_suite_name" "$completeness_started_us" "$completeness_ended_us"
   commands_executed+=("$completeness_display")
@@ -661,14 +670,19 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       # The completeness check has no JUnit file of its own; its evidence
       # is the test-completeness-<suite>.json receipt in CI_JUNIT_DIR, so
       # the row points at the receipt and records whether it exists.
-      # Exit 1 is a proven omission; any other non-zero exit (2, or a
-      # crash/signal the helper never returns) means the comparison
-      # itself could not be established.
+      # Exit 1 proves an omission only with an INCOMPLETE receipt from
+      # this attempt. Uncaught helper exceptions also exit 1 but have
+      # no comparison evidence; they must be TEST_COLLECTION_ERROR.
       completeness_suite="${name#test selection completeness: }"
       junit_file="test-completeness-$(junit_key "$completeness_suite").json"
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
-      if [ "$status" = "PASS" ]; then classification="COMPLETE";
-      elif [ "$code" = "1" ]; then classification="TEST_SELECTION_INCOMPLETE"; else classification="TEST_COLLECTION_ERROR"; fi
+      if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
+        classification="COMPLETE"
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
+        classification="TEST_SELECTION_INCOMPLETE"
+      else
+        classification="TEST_COLLECTION_ERROR"
+      fi
     elif [ "$code" = "5" ]; then
       # pytest exit 5 = no tests collected: never a pass, never a generic failure.
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi

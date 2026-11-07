@@ -84,6 +84,19 @@ def test_filter_selection_options_removes_only_selection(addopts: str, expected:
     assert filter_selection_options(addopts) == expected
 
 
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--collect-only", "--co", "--setup-only", "--setup-plan",
+        "--fixtures", "--fixtures-per-test", "--help", "--version",
+        "--markers", "-h", "-V", "-qV", "-qh",
+    ],
+)
+def test_filter_rejects_execution_suppressing_addopts(option: str) -> None:
+    with pytest.raises(ValueError, match="execution-suppressing"):
+        filter_selection_options(f"-q {option}")
+
+
 def test_filter_selection_options_rejects_unparseable_addopts() -> None:
     with pytest.raises(ValueError, match="addopts cannot be parsed"):
         filter_selection_options("--deselect 'unterminated")
@@ -429,6 +442,45 @@ def test_skipped_tests_stay_complete(tmp_path: Path) -> None:
     )
     result = _check(root)
     assert result["verdict"] == "COMPLETE", result
+
+
+def test_ignored_collection_error_module_is_incomplete(tmp_path: Path) -> None:
+    root = _write_suite(
+        tmp_path / "excluded-broken",
+        ini="[pytest]\naddopts = --ignore=tests/test_broken.py\n",
+    )
+    (root / "tests" / "test_broken.py").write_text(
+        "def broken(:\n", encoding="utf-8"
+    )
+    result = _check(root)
+    assert result["verdict"] == "INCOMPLETE", result
+    assert result["missing_error_files"] == ["tests/test_broken.py"]
+    assert result["actual_error_files"] == []
+    assert result["reference_error_files"] == ["tests/test_broken.py"]
+    assert result["missing_count"] == 0  # the broken file never had a node
+
+
+def test_norecursedirs_cannot_hide_collection_error(tmp_path: Path) -> None:
+    root = _write_suite(
+        tmp_path / "excluded-subdir", ini="[pytest]\nnorecursedirs = hidden\n"
+    )
+    hidden = root / "tests" / "hidden"
+    hidden.mkdir()
+    (hidden / "test_broken.py").write_text(
+        "def broken(:\n", encoding="utf-8"
+    )
+    result = _check(root)
+    assert result["verdict"] == "INCOMPLETE", result
+    assert result["missing_error_files"] == ["tests/hidden/test_broken.py"]
+
+
+def test_execution_suppressing_config_is_error(tmp_path: Path) -> None:
+    root = _write_suite(
+        tmp_path / "collect-only", ini="[pytest]\naddopts = --collect-only\n"
+    )
+    result = _check(root)
+    assert result["verdict"] == "ERROR", result
+    assert "execution-suppressing" in result["error"]
 
 
 def test_collection_error_module_is_tolerated_identically(tmp_path: Path) -> None:

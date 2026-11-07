@@ -38,8 +38,11 @@ How this check works, per pytest suite:
    scrubbed from both collections' environment (and unset by
    ``validate-all.sh`` before any suite runs), because the environment
    variable applies to both collections identically and would
-   otherwise be an invisible narrowing.
-2. Compare the two node sets. Any test in the reference set but missing
+   otherwise be an invisible narrowing. Addopts that suppress execution
+   (such as ``--collect-only``) are rejected as ERROR.
+2. Compare collection-error files and node sets. A broken file visible
+   only in the reference collection is an omission even if neither
+   collection lists its node. Any test in the reference set but missing
    from the actual set is an unexpected omission and the suite verdict
    is ``INCOMPLETE``. Tests in the actual set but missing from the
    reference set are an ``ERROR`` (fail closed: the comparison itself
@@ -93,6 +96,15 @@ SCHEMA = "agent-os-ci-test-completeness/1"
 
 # pytest's inifile search order within each directory, walking upward.
 _INI_CANDIDATES = ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+
+# Pytest addopts that can succeed without executing test bodies.
+# These are not selection flags: fail closed instead of stripping them.
+_EXECUTION_SUPPRESSING_OPTIONS = frozenset({
+    "--collect-only", "--co", "--setup-only", "--setup-plan",
+    "--fixtures", "--fixtures-per-test", "--help", "--version",
+    "--markers", "-h", "-V",
+})
+_EXECUTION_SUPPRESSING_SHORT_FLAGS = frozenset("hV")
 
 # Tokens that narrow the selected set. A following argument is consumed
 # for the bare forms; the ``=`` forms carry their argument inline.
@@ -328,6 +340,8 @@ def _filter_short_cluster(
     index = 0
     while index < len(chars):
         char = chars[index]
+        if char in _EXECUTION_SUPPRESSING_SHORT_FLAGS:
+            raise ValueError(f"execution-suppressing pytest addopts option in {token}")
         if char in _SHORT_SELECTION_FLAGS or char == "o":
             # Drop the flag and its argument (the rest of the token,
             # or the next token when the rest is empty).
@@ -371,6 +385,12 @@ def filter_selection_options(addopts: str) -> str:
     index = 0
     while index < len(tokens):
         token = tokens[index]
+        if token in _EXECUTION_SUPPRESSING_OPTIONS or any(
+            token.startswith(f"{option}=")
+            for option in _EXECUTION_SUPPRESSING_OPTIONS
+            if option.startswith("--")
+        ):
+            raise ValueError(f"execution-suppressing pytest addopts option: {token}")
         if token in _SELECTION_WITH_ARG or token in _OVERRIDE_WITH_ARG:
             index += 2  # drop the option and its argument
             continue
@@ -662,6 +682,39 @@ def _as_counts(inventory: dict) -> dict:
     return {"file_counts": counts}
 
 
+def _check_error_file_parity(
+    base: dict, actual_inv: dict, reference_inv: dict
+) -> bool:
+    """Reject collection errors hidden by candidate test selection.
+
+    A module with a syntax error has no collected node, so comparing
+    node sets or file counts alone would miss an excluded module.
+    This runs before either inventory format is compared.
+    """
+    actual_errors = set(actual_inv["error_files"])
+    reference_errors = set(reference_inv["error_files"])
+    missing = sorted(reference_errors - actual_errors)
+    extra = sorted(actual_errors - reference_errors)
+    base["missing_error_files"] = missing
+    base["extra_error_files"] = extra
+    if missing:
+        base["verdict"] = "INCOMPLETE"
+        base["error"] = (
+            "the candidate excluded collection-error file(s) present in "
+            "the unfiltered reference: " + ", ".join(missing)
+        )
+        return True
+    if extra:
+        base["verdict"] = "ERROR"
+        base["error"] = (
+            "the candidate reported collection-error file(s) absent from "
+            "the reference; the comparison cannot be trusted: "
+            + ", ".join(extra)
+        )
+        return True
+    return False
+
+
 def check_suite(
     python_bin: str,
     suite_dir: Path,
@@ -716,6 +769,8 @@ def check_suite(
         return base
     actual_inv = actual["inventory"]
     reference_inv = reference["inventory"]
+    if _check_error_file_parity(base, actual_inv, reference_inv):
+        return base
     if (
         actual_inv["collected"] is None
         and reference_inv["collected"] is None
@@ -853,6 +908,8 @@ def _receipt(
         "reference_count": None,
         "missing": [],
         "missing_count": 0,
+        "missing_error_files": [],
+        "extra_error_files": [],
         "extra": [],
         "extra_count": 0,
         "regenerated_param_count": 0,

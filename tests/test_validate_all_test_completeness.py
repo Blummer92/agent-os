@@ -199,6 +199,49 @@ def test_helper_crash_is_collection_error_not_incomplete(repo: Path, tmp_path: P
     assert not (junit_dir / "root.xml").exists()
 
 
+def test_uncaught_helper_exception_exit_one_is_collection_error(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Exit 1 without a fresh receipt is a crash, not proven missing tests."""
+    (repo / "scripts" / "agent_os_ci_test_completeness.py").write_text(
+        "raise RuntimeError('unhandled collection helper exception')\n",
+        encoding="utf-8",
+    )
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    (junit_dir / "test-completeness-root.json").write_text(
+        '{"schema":"agent-os-ci-test-completeness/1","verdict":"INCOMPLETE"}',
+        encoding="utf-8",
+    )
+    result = run(repo, env={"CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert not (junit_dir / "test-completeness-root.json").exists()
+    assert not (junit_dir / "root.xml").exists()
+    manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+    rows = [
+        line.split("\t")
+        for line in manifest.splitlines()
+        if "test selection completeness: root" in line
+    ]
+    assert len(rows) == 1
+    assert rows[0][2] == "no"
+    assert rows[0][4] == "1"
+    assert rows[0][5] == "TEST_COLLECTION_ERROR"
+
+
+def test_success_without_receipt_fails_closed(repo: Path, tmp_path: Path) -> None:
+    (repo / "scripts" / "agent_os_ci_test_completeness.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8"
+    )
+    junit_dir = tmp_path / "junit"
+    result = run(repo, env={"CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+    assert "TEST_COLLECTION_ERROR" in manifest
+    assert "EXECUTED_PASS" not in manifest
+    assert not (junit_dir / "root.xml").exists()
+
+
 def test_pytest_addopts_env_is_unset_before_suites_run(repo: Path, tmp_path: Path) -> None:
     """PYTEST_ADDOPTS applies to every pytest invocation identically,
     so the runner must unset it before any suite runs: with the env
