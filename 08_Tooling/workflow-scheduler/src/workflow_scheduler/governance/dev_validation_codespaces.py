@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,7 +75,10 @@ expected_request_id="dev-validation:"+hashlib.sha256(b"agent-os-dev-validation:v
 result=base("needs-decision","codespaces-host-runner-failed",repository,issue,branch,sha,validation_id,request_id)
 if repository!=REPOSITORY or issue<1 or not valid_branch or SHA40.fullmatch(sha) is None or validation_id!=VALIDATION_ID or request_id!=expected_request_id:
  result["reason_codes"]=["invalid-codespaces-host-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub selection and the fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -371,14 +375,15 @@ def run_dev_validation_over_codespaces(
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
     try:
-        completed = run(
+        # #3333/#3617: the remote program must cross the SSH shell boundary
+        # as one safely quoted command. Passing the multiline source as
+        # separate argv elements lets the remote shell split it at newlines
+        # (Python SyntaxError, then bash parsing Python lines, as in run
+        # 41633810143). shlex.join preserves the source as the single -c
+        # argument through the remote shell, mirroring the merged discovery
+        # repair in discovery_codespaces.py.
+        remote_command = shlex.join(
             (
-                "gh",
-                "codespace",
-                "ssh",
-                "-c",
-                codespace_name,
-                "--",
                 "python3",
                 "-c",
                 _REMOTE_RUNNER_SOURCE,
@@ -389,6 +394,17 @@ def run_dev_validation_over_codespaces(
                 request.validation_id,
                 request.request_id,
                 codespace_name,
+            )
+        )
+        completed = run(
+            (
+                "gh",
+                "codespace",
+                "ssh",
+                "-c",
+                codespace_name,
+                "--",
+                remote_command,
             ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )
@@ -443,8 +459,32 @@ def run_dev_validation_over_codespaces(
         "publication_invoked": False,
         "merge_authorized": False,
     }
-    if any(payload.get(key) != value for key, value in fixed.items()):
-        return _failure(request, "dev-validation-codespaces-evidence-identity-mismatch", codespace_name)
+    mismatch_fields = sorted(
+        key for key, value in fixed.items() if payload.get(key) != value
+    )
+    if mismatch_fields:
+        # #3333/run 41659878211: the generic mismatch receipt discarded the
+        # remote payload's own reason, so a pre-surface remote failure
+        # (health, workspace, or surface gate, where the remote payload
+        # carries execution_surface_id None) was indistinguishable from a
+        # genuine field mismatch. Preserve the remote reason codes and the
+        # differing field names for diagnosis. The check itself is
+        # unchanged and still rejects: reason stays the generic mismatch,
+        # status stays needs-decision, and no remote log text is copied.
+        evidence = _failure(
+            request,
+            "dev-validation-codespaces-evidence-identity-mismatch",
+            codespace_name,
+        )
+        remote_reasons = payload.get("reason_codes")
+        evidence["remote_reason_codes"] = (
+            remote_reasons
+            if type(remote_reasons) is list
+            and all(type(reason) is str and reason for reason in remote_reasons)
+            else []
+        )
+        evidence["identity_mismatch_fields"] = mismatch_fields
+        return evidence
     if payload.get("status") not in {
         "success",
         "failure",

@@ -405,6 +405,9 @@ class TestExistingAdaptersUnaffected:
         result = executor.execute(task)
 
         assert result.success is True
+        # EXP-S2: read the persisted row back, not the in-memory task input,
+        # so a fault that erases the stored task type cannot survive here.
+        assert repository.get_task(task.id).type == "write"
 
     def test_noop_still_resolves(self):
         assert resolve_adapter("noop") is not None

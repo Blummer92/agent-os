@@ -40,6 +40,9 @@ from scripts.agent_os_execution_interface.codespace_implementation_dispatch impo
 from scripts.agent_os_execution_interface.codespaces_orchestrator_transport import (
     MAX_EVIDENCE_CHARS,
     CodespaceCandidate,
+    TransportRequest,
+    run_codespace_transport,
+    transport_request_id,
 )
 from scripts.agent_os_execution_interface.fixed_codespace_pilot import (
     ACCEPTED_REASON,
@@ -789,7 +792,12 @@ def test_receipt_from_a_different_codespace_than_the_selected_one_is_blocked(can
         codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
         evaluated_at=EVALUATED_AT,
         dispatcher=lambda **_kwargs: SimpleNamespace(
-            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+            status=DispatchStatus.DISPATCHED,
+            transport_result_or_none=transport_result,
+            # B01: the fake dispatcher binds the same request id it
+            # returns, so these tests exercise the completion check
+            # (wrong codespace / wrong argv), not the request-id gate.
+            request_or_none="request-3333-probe",
         ),
     )
     assert receipt["status"] == "blocked"
@@ -821,7 +829,12 @@ def test_receipt_reporting_a_different_argv_than_the_fixed_one_is_blocked(canoni
         codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
         evaluated_at=EVALUATED_AT,
         dispatcher=lambda **_kwargs: SimpleNamespace(
-            status=DispatchStatus.DISPATCHED, transport_result_or_none=transport_result
+            status=DispatchStatus.DISPATCHED,
+            transport_result_or_none=transport_result,
+            # B01: the fake dispatcher binds the same request id it
+            # returns, so these tests exercise the completion check
+            # (wrong codespace / wrong argv), not the request-id gate.
+            request_or_none="request-3333-probe",
         ),
     )
     assert receipt["status"] == "blocked"
@@ -1055,6 +1068,48 @@ def test_host_entry_admits_the_fixed_probe_through_directly_bound_providers(cano
     assert blocked["status"] == "blocked"
     assert blocked["reason_codes"] == ["canonical-invocation-not-admitted"]
     assert len(run.calls) == 1
+
+
+def test_3333_x01_wrong_actor_envelope_cannot_dispatch(canonical):
+    """#3333 X01 chain regression: a wrong-actor envelope must not dispatch.
+
+    The envelope is admitted for the owner, then tampered to another actor
+    before the canonical chain runs. The existing ingress check alone is
+    not the oracle here: the chain itself must block with zero runner calls.
+    """
+    tampered = {**admit(event()).to_dict(), "actor": "mallory"}
+    receipt, run = _consume(transport=tampered)
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["invalid-fixed-operation-envelope"]
+    assert receipt["side_effects_performed"] is False
+    assert len(run.calls) == 0
+
+
+def test_3333_x03_transport_result_request_id_matches_derivation():
+    """#3333 X03 regression: the result id must equal the derived request id.
+
+    This pins the transport's own derivation. The B01 repair additionally
+    makes the pilot compare the returned result id against the id the
+    dispatcher carried from the dispatched request (see
+    test_3333_mcp_repair_pilot.py), and the production receipt consumer
+    verifies it again against descriptor-derived identity.
+    """
+    request = TransportRequest(
+        repository=REPO,
+        issue_identity="issue:3333",
+        admission_id="admission:probe",
+        argv=FIXED_ARGV,
+        codespace_name_or_none=CODESPACE,
+        base_sha_or_none=SHA,
+        workdir_or_none="/workspaces/agent-os",
+        timeout_seconds=90,
+    )
+    result = run_codespace_transport(
+        request, list_candidates=_listed(), run=_Run(),
+    )
+    assert result.request_id == transport_request_id(request)
+    assert result.request_id == request.request_id
+    assert result.request_id != "request:stale-other-invocation"
 
 
 def test_actions_entry_still_fails_closed_without_a_host(tmp_path):
