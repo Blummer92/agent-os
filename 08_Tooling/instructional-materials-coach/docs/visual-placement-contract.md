@@ -245,3 +245,13 @@ Docs/Slides execution requires the separately governed activation: deploy
 the `VisualPlacementTransport` Apps Script as an API executable, grant
 execution to the build identity, and configure `--placement-script-id`.
 Until then, classification is IMPLEMENTED -- LIVE ACCEPTANCE PENDING.
+
+## Checked-in producer reference reconciliation (2026-11-06)
+
+The `apps-script/VisualPlacementTransport.gs` reference now preserves the requested
+artifact revision, reads back real persisted Docs inline-object IDs and post-placement
+Docs/Slides revisions, and exports the top-level `placeVisual` entrypoint used by
+`AppsScriptPlacementTransport.FUNCTION`. The existing Python consumer and receipt
+owners remain unchanged. The added Node conformance tests use injected fake services.
+This reference update does **not** deploy Apps Script, grant execution permissions,
+authorize external writes, or prove live persisted-artifact acceptance.
