@@ -950,6 +950,45 @@ def run_gate2_fixed_pilot_controller(
     )
 
 
+def check_host_bindings(
+    *,
+    environ: Mapping[str, str] | None = None,
+    resolve_selection: Callable[[], object] | None = None,
+) -> dict[str, object]:
+    """Read-only probe of the four host bindings plus strict host identity.
+
+    D1 addition: the workflow preflight runs this before any event transfer.
+    It verifies exactly what a real dispatch would need -- bound paths, an
+    initialized checkpoint store, the strict ``CODESPACE_NAME`` identity
+    rule (present-and-equal; absent or different both fail), and an empty
+    lease directory -- without reading an event, creating state (no
+    receipts directory), acquiring any claim, or dispatching any command.
+    The returned mapping names reasons only, never path values.
+    """
+    source = os.environ if environ is None else environ
+    try:
+        configuration = load_production_host_configuration(source)
+        _verify_host_bindings(configuration)
+        selected = _verify_execution_surface_identity(
+            resolve_selection=resolve_selection, environ=source
+        )
+        _fail_on_active_leases(configuration.lease_directory)
+    except Gate2ControllerError as exc:
+        return {"check_bindings": "INVALID", "reason": exc.reason}
+    except ProductionHostBootstrapError:
+        return {"check_bindings": "INVALID", "reason": "host-configuration-invalid"}
+    except HostGitHubTransportUnavailable:
+        return {
+            "check_bindings": "INVALID",
+            "reason": "github-read-credential-unavailable",
+        }
+    return {
+        "check_bindings": "VALID",
+        "reason": None,
+        "codespace_name": selected,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: ``gate2-controller --event <owner-comment-event.json>``."""
     parser = argparse.ArgumentParser(
@@ -961,10 +1000,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--event",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the owner's issue-comment event JSON document.",
     )
+    parser.add_argument(
+        "--check-bindings",
+        action="store_true",
+        help=(
+            "Read-only host-binding probe (D1): verify the four host paths, "
+            "the initialized store, strict host identity, and an empty lease "
+            "directory. Creates no state, reads no event, acquires no claim, "
+            "and dispatches nothing."
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.check_bindings:
+        if args.event is not None:
+            parser.error("--event must not be combined with --check-bindings")
+        probe = check_host_bindings()
+        print(json.dumps(probe, sort_keys=True))
+        return 0 if probe.get("check_bindings") == "VALID" else 1
+    if args.event is None:
+        parser.error("--event is required unless --check-bindings is set")
     try:
         result = run_gate2_fixed_pilot_controller(event_path=args.event)
     except Gate2ControllerError as exc:
