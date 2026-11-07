@@ -228,6 +228,49 @@ jobs:
             echo "- Static/focused evidence is non-final; Ready-for-Review still requires one exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  frontend:
+    name: Run frontend checks
+    # Profile-independent frontend lane. The selector's `aggregate` profile and
+    # validate-all.sh are Python-only, so without this job a PR touching a Node
+    # project plus any workflow/config file ran no frontend command at all. It
+    # runs on every pull_request (Draft included, as developer-loop signal) and on
+    # workflow_dispatch (so final-candidate admission carries a frontend verdict);
+    # `aggregate-gate` requires its exact `success`. A PR that changes no Node
+    # project still gets `success` with non-applicability printed in the summary.
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha || github.sha }}
+    outputs:
+      # The SHA this job actually checked out and tested; the gate compares it with
+      # the SHA the authoritative status is minted for, so evidence from another
+      # SHA can never stand.
+      tested_sha: ${{ steps.frontend.outputs.tested_sha }}
+    steps:
+      - name: Check out exact head with history for the diff base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Run applicable frontend checks
+        id: frontend
+        run: python scripts/agent_os_frontend_checks.py
+
   validate:
     name: Run aggregate validation
     # Deliberately not `needs: plan`. The plan job owns only the cheap
@@ -1140,11 +1183,15 @@ jobs:
     # can never become merge/Ready authority (#3114).
     name: Agent OS aggregate gate
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
-    needs: [plan, validate]
+    needs: [plan, validate, frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       statuses: write
+    env:
+      # The SHA this verdict covers: the status SHA when the aggregate established one, otherwise the
+      # head the event or dispatch names (the same chain the frontend job tests), never the PR merge commit.
+      FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || inputs.expected_head_sha || github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -1158,6 +1205,9 @@ jobs:
           MAIN_HEALTH_OUTCOME: ${{ needs.validate.outputs.main_health_outcome }}
           MAIN_RECOVERY_STOP_OUTCOME: ${{ needs.validate.outputs.main_recovery_stop_outcome }}
           PLAN_RESULT: ${{ needs.plan.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
+          FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1175,5 +1225,8 @@ jobs:
       - name: Enforce authoritative aggregate disposition
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
+          FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py

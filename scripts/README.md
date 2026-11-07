@@ -98,6 +98,18 @@ Any wire-or-retire decisions belong to #1729, and static security analysis to
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
 
+## agent_os_frontend_checks.py
+
+Profile-independent frontend lane run by the `frontend` job of the Agent OS Validation Gate. With Node 22 on `PATH` and `origin/main` fetched, from the repository root:
+
+```bash
+EXPECTED_HEAD_SHA="$(git rev-parse HEAD)" python scripts/agent_os_frontend_checks.py
+```
+
+It diffs `HEAD` against the merge-base with `origin/main`, runs every registered Node project (`PROJECTS`) that has changed files, and exits `0` when each applicable project passed or none applies, `1` on a failed command, an unregistered `package.json` project or JS/TS source file, or a head mismatch. It writes `tested_sha` to `GITHUB_OUTPUT`, plus check-run annotations and a step summary. Deleted paths select a project (its tests must still pass) but never count as an unknown project, so a project can be removed together with its `PROJECTS` entry. `agent_os_aggregate_gate.py` requires its success for the same SHA the authoritative status is minted for. To bring a new Node project under CI, add it to `PROJECTS`; list in its `also_triggered_by` any repo path outside the project that its tests read (a drift test scans for `../` reads and fails when one is undeclared).
+
+Tests: `python -m pytest tests/test_agent_os_frontend_checks.py tests/test_agent_os_aggregate_gate.py`.
+
 ## agent_os_github_git_objects
 
 Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/blob identities, plans a deterministic operation fingerprint, requires explicit matching confirmation, validates an unattached commit before ref movement, and updates only a non-protected branch with `force=false`. Tests use injected fakes; live execution requires separate authorization. See `scripts/agent_os_github_git_objects/README.md`.
