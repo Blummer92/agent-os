@@ -106,7 +106,7 @@ Profile-independent frontend lane run by the `frontend` job of the Agent OS Vali
 EXPECTED_HEAD_SHA="$(git rev-parse HEAD)" python scripts/agent_os_frontend_checks.py
 ```
 
-It diffs `HEAD` against the merge-base with `origin/main`, runs every registered Node project (`PROJECTS`) that has changed files, and exits `0` when each applicable project passed or none applies, `1` on a failed command, an unregistered `package.json` project or JS/TS source file, or a head mismatch. It writes `tested_sha` and `applicable` to `GITHUB_OUTPUT`, plus check-run annotations and a step summary. `agent_os_aggregate_gate.py` requires its success for the same SHA the authoritative status is minted for. To bring a new Node project under CI, add it to `PROJECTS`.
+It diffs `HEAD` against the merge-base with `origin/main`, runs every registered Node project (`PROJECTS`) that has changed files, and exits `0` when each applicable project passed or none applies, `1` on a failed command, an unregistered `package.json` project or JS/TS source file, or a head mismatch. It writes `tested_sha` and `applicable` to `GITHUB_OUTPUT`, plus check-run annotations and a step summary. `agent_os_aggregate_gate.py` requires its success for the same SHA the authoritative status is minted for. To bring a new Node project under CI, add it to `PROJECTS`; list in its `also_triggered_by` any repo path outside the project that its tests read (a drift test scans for `../` reads and fails when one is undeclared).
 
 Tests: `python -m pytest tests/test_agent_os_frontend_checks.py tests/test_agent_os_aggregate_gate.py`.
 

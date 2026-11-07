@@ -46,6 +46,9 @@ class Project(NamedTuple):
     directory: str
     commands: tuple[tuple[str, ...], ...]
     note: str = ""
+    # Other repo paths this project's tests read from outside ``directory``. A change
+    # there must run the project too, or the lane would call it "not applicable".
+    also_triggered_by: tuple[str, ...] = ()
 
 
 # Install commands mirror each project's existing plan: the reference UI project has
@@ -56,11 +59,15 @@ PROJECTS: tuple[Project, ...] = (
         "picture-perfect-coach",
         "08_Tooling/instructional-materials-coach/picture-perfect-coach",
         (("npm", "ci"), ("npm", "run", "check")),
+        # src/uiEvidence.test.ts imports ../../capture/safe_recording.mjs
+        also_triggered_by=("08_Tooling/instructional-materials-coach/capture",),
     ),
     Project(
         "software-tutorial-capture",
         "08_Tooling/instructional-materials-coach/capture",
         (("npm", "ci"), ("npm", "test"), ("npm", "run", "check")),
+        # the *_capture_runtime_contract tests read the host scripts from process.cwd()/../../agent-os-execution-service/scripts
+        also_triggered_by=("08_Tooling/agent-os-execution-service/scripts",),
     ),
     Project(
         "ui-cross-platform-reference",
@@ -91,15 +98,19 @@ def _under(path: str, directory: str) -> bool:
     return path == directory or path.startswith(directory + "/")
 
 
+def _selects(project: Project, path: str) -> bool:
+    return _under(path, project.directory) or any(
+        _under(path, extra) for extra in project.also_triggered_by
+    )
+
+
 def applicable_projects(
     changed_files: Iterable[str], projects: Sequence[Project] = PROJECTS
 ) -> tuple[Project, ...]:
-    """Projects with at least one changed path beneath their directory."""
+    """Projects with a changed path beneath their directory or an ``also_triggered_by`` path."""
     paths = [_normalize(p) for p in changed_files if p]
     return tuple(
-        project
-        for project in projects
-        if any(_under(path, project.directory) for path in paths)
+        project for project in projects if any(_selects(project, path) for path in paths)
     )
 
 
@@ -110,11 +121,12 @@ def unowned_node_changes(
 ) -> tuple[str, ...]:
     """Changed Node project files that no registered project owns (fail closed).
 
-    Two signals, both independent of the registry: a ``package.json`` directory
-    (existing or newly added) with changed paths beneath it, and a changed JS/TS
-    source file outside every registered project. A repo-root ``package.json`` or
-    lockfile counts as its own project. Untouched unregistered projects never fail
-    unrelated pull requests.
+    Three signals, all independent of the registry: a changed ``package.json`` or
+    lockfile (added, edited, or deleted) in an unregistered directory, any changed
+    path beneath an unregistered directory that HEAD tracks a ``package.json`` for,
+    and a changed JS/TS source file outside every registered project. A repo-root
+    ``package.json`` or lockfile counts as its own project. Untouched unregistered
+    projects never fail unrelated pull requests.
     """
     changed = [_normalize(p) for p in changed_files if p]
     registered = [project.directory for project in projects]
@@ -123,15 +135,19 @@ def unowned_node_changes(
         return any(_under(path, directory) for directory in registered)
 
     unowned: set[str] = set()
+    for path in changed:  # includes deleted manifests, which HEAD's tracked files no longer list
+        if PurePosixPath(path).name in ("package.json", "package-lock.json"):
+            directory = str(PurePosixPath(path).parent)
+            if directory == ".":
+                unowned.add("package.json (repository root)")
+            elif not owned(directory):
+                unowned.add(directory)
     for tracked in tracked_files:
         tracked = _normalize(tracked)
         if PurePosixPath(tracked).name != "package.json":
             continue
         directory = str(PurePosixPath(tracked).parent)
-        if directory == ".":
-            if {"package.json", "package-lock.json"} & set(changed):
-                unowned.add("package.json (repository root)")
-        elif not owned(directory) and any(_under(path, directory) for path in changed):
+        if directory != "." and not owned(directory) and any(_under(path, directory) for path in changed):
             unowned.add(directory)
     unowned.update(
         path for path in changed if path.endswith(_NODE_SOURCE_SUFFIXES) and not owned(path)

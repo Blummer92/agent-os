@@ -98,6 +98,11 @@ def evaluate_aggregate_gate(
 ) -> tuple[bool, str]:
     """Decide the gate disposition from the authoritative aggregate job result.
 
+    ``frontend_required`` defaults to ``False`` only so pre-frontend callers keep their
+    meaning; the sole production callers are :func:`main` and :func:`status_main`, whose
+    environment parsing fails closed (see :func:`_frontend_required_from_env`), and a
+    test pins that no other production caller exists.
+
     Returns ``(gate_open, message)``. The gate opens only for an exact
     ``success`` aggregate disposition, a plan job that did not fail, and a
     frontend job that satisfies :func:`frontend_blocker`.

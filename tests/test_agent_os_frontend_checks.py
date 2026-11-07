@@ -310,3 +310,74 @@ def test_every_node_project_in_the_selector_is_also_required_by_the_lane():
         if (match := re.match(r"^cd (\S+) && (?:npm|npx|node)\b", command))
     }
     assert selector_directories and selector_directories <= lane_directories, selector_directories - lane_directories
+
+
+HOST_SCRIPTS = "08_Tooling/agent-os-execution-service/scripts"
+
+
+def test_cross_directory_dependencies_select_the_dependent_project():
+    # capture's contract tests read the execution-service host scripts; Picture Perfect imports capture.
+    assert names([f"{HOST_SCRIPTS}/agent-os-canva-browser-session"]) == ["software-tutorial-capture"]
+    assert names([f"{CAPTURE}/safe_recording.mjs"]) == ["picture-perfect-coach", "software-tutorial-capture"]
+    assert names([f"{HOST_SCRIPTS}-extra/x"]) == []  # a sibling prefix is not the dependency
+
+
+def test_declared_trigger_paths_exist():
+    for project in fe.PROJECTS:
+        for extra in project.also_triggered_by:
+            assert (ROOT / extra).exists(), (project.name, extra)
+
+
+def test_project_sources_do_not_read_outside_their_directory_without_declaring_it():
+    # Drift guard: a JS/TS string literal such as '../../x' (or process.cwd()/../../x) that resolves to an
+    # existing repo path outside the project must be covered by also_triggered_by, otherwise a change to
+    # that path would report "not applicable" while the project's tests depend on it.
+    import os
+    import re
+
+    literal = re.compile(r"""['"](\.\./[^'"\s]*)['"]""")
+    cwd_literal = re.compile(r"""process\.cwd\(\)\s*,\s*['"](\.\./[^'"\s]*)['"]""")
+    suffixes = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+    tracked = _tracked()
+
+    def inside(path: Path, directory: Path) -> bool:
+        return path == directory or directory in path.parents
+
+    problems = []
+    for project in fe.PROJECTS:
+        base = ROOT / project.directory
+        declared = [ROOT / extra for extra in project.also_triggered_by]
+        for rel in tracked:
+            if not rel.startswith(project.directory + "/") or not rel.endswith(suffixes):
+                continue
+            source = ROOT / rel
+            text = source.read_text(encoding="utf-8", errors="ignore")
+            # A literal is file-relative (import.meta.url, import specifiers) unless it is passed to
+            # process.cwd(), where it is relative to the project directory (npm runs tests from there).
+            candidates = [(source.parent, found) for found in literal.findall(text)]
+            candidates += [(base, found) for found in cwd_literal.findall(text)]
+            for origin, found in candidates:
+                target = Path(os.path.normpath(origin / found))
+                if ROOT not in target.parents or not target.exists() or inside(target, base):
+                    continue
+                if not any(inside(target, directory) for directory in declared):
+                    problems.append(f"{rel}: {found} -> {target.relative_to(ROOT)}")
+    assert not problems, problems
+
+
+def test_deleted_or_added_unregistered_manifests_fail_closed_without_any_tracked_file():
+    # HEAD no longer tracks a deleted manifest, so detection must also read the changed paths.
+    assert fe.unowned_node_changes(["tools/old/package.json", "tools/old/package-lock.json"], []) == ("tools/old",)
+    assert fe.unowned_node_changes(["package.json"], []) == ("package.json (repository root)",)
+    assert fe.unowned_node_changes([f"{PP}/package.json", f"{PP}/package-lock.json"], []) == ()
+    assert fe.unowned_node_changes(["docs/package.json.md", "tools/package.jsonc"], []) == ()
+
+
+def test_gate_decision_functions_have_no_production_caller_outside_the_cli_wrappers():
+    # evaluate_aggregate_gate/decide_terminal_status default frontend_required=False for backward
+    # compatibility; only the fail-closed CLI wrappers may call them. A new caller must opt in explicitly.
+    found = subprocess.run(
+        ["git", "grep", "-lE", r"\b(evaluate_aggregate_gate|decide_terminal_status)\(", "--", "scripts", "08_Tooling", ".github", "src"],
+        cwd=ROOT, text=True, stdout=subprocess.PIPE, check=False,
+    ).stdout.split()
+    assert set(found) <= {"scripts/agent_os_aggregate_gate.py"}, found
