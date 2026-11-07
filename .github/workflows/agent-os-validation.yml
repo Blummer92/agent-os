@@ -248,7 +248,7 @@ jobs:
       # The SHA this job actually checked out and tested; the gate compares it with
       # the SHA the authoritative status is minted for, so evidence from another
       # SHA can never stand.
-      tested_sha: ${{ steps.frontend.outputs.tested_sha }}
+      tested_sha: "0123456789abcdef0123456789abcdef01234567" # CONTROL D2: simulated evidence from another SHA
     steps:
       - name: Check out exact head with history for the diff base
         uses: actions/checkout@v7
