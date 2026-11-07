@@ -457,7 +457,10 @@ def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_step
     assert len(gate_steps) == 2
     for step in gate_steps:
         assert step["env"]["FRONTEND_TESTED_SHA"] == "${{ needs.frontend.outputs.tested_sha }}"
-        # Never the PR merge commit: fall back to the event's own head SHA, then the dispatch SHA.
-        assert step["env"]["FRONTEND_EXPECTED_SHA"] == (
-            "${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}"
-        )
+        assert "FRONTEND_EXPECTED_SHA" not in step["env"]  # defined once, at job level
+    # Never the PR merge commit: the status SHA, else the head the event or dispatch names (the same
+    # chain the frontend job tests), else the dispatch SHA.
+    assert workflow["jobs"]["aggregate-gate"]["env"]["FRONTEND_EXPECTED_SHA"] == (
+        "${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha"
+        " || inputs.expected_head_sha || github.sha }}"
+    )

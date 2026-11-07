@@ -1188,6 +1188,10 @@ jobs:
     permissions:
       contents: read
       statuses: write
+    env:
+      # The SHA this verdict covers: the status SHA when the aggregate established one, otherwise the
+      # head the event or dispatch names (the same chain the frontend job tests), never the PR merge commit.
+      FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || inputs.expected_head_sha || github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -1204,7 +1208,6 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
-          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1225,6 +1228,5 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
-          FRONTEND_EXPECTED_SHA: ${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py

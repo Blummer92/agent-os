@@ -121,18 +121,24 @@ def unowned_node_changes(
 ) -> tuple[str, ...]:
     """Changed Node project files that no registered project owns (fail closed).
 
+    ``changed_files`` must list only paths that still exist at HEAD: a deleted path has
+    nothing left to validate, so removing a project (and its registration) can go green,
+    while a project deleted but still registered fails with a named cause when it runs.
+
     Three signals, all independent of the registry: a changed ``package.json`` or
-    lockfile (added, edited, or deleted) in an unregistered directory, any changed
-    path beneath an unregistered directory that HEAD tracks a ``package.json`` for,
-    and a changed JS/TS source file outside every registered project. A repo-root
-    ``package.json`` or lockfile counts as its own project. Untouched unregistered
-    projects never fail unrelated pull requests.
+    lockfile in an unregistered directory, any changed path beneath an unregistered
+    directory that HEAD tracks a ``package.json`` for, and a changed JS/TS source file
+    outside every known project. A repo-root ``package.json`` or lockfile counts as its
+    own project. Untouched unregistered projects never fail unrelated pull requests.
     """
     changed = [_normalize(p) for p in changed_files if p]
-    registered = [project.directory for project in projects]
+    # A path a registered project reads from outside its directory is known to the lane too.
+    known = [project.directory for project in projects] + [
+        extra for project in projects for extra in project.also_triggered_by
+    ]
 
     def owned(path: str) -> bool:
-        return any(_under(path, directory) for directory in registered)
+        return any(_under(path, directory) for directory in known)
 
     unowned: set[str] = set()
     for path in changed:  # includes deleted manifests, which HEAD's tracked files no longer list
@@ -158,9 +164,21 @@ def unowned_node_changes(
 Runner = Callable[[Sequence[str], Path], int]
 
 
+# npm retries a failed registry fetch twice by default; a transient outage would otherwise turn a
+# required status red (and a failure supersedes a reused success), so retry more patiently.
+# Variables already set in the environment win.
+_NPM_RETRY_ENV = {
+    "npm_config_fetch_retries": "5",
+    "npm_config_fetch_retry_mintimeout": "2000",
+    "npm_config_fetch_retry_maxtimeout": "30000",
+}
+
+
 def _run_command(argv: Sequence[str], cwd: Path) -> int:
     try:
-        return subprocess.run(list(argv), cwd=cwd, check=False).returncode
+        return subprocess.run(
+            list(argv), cwd=cwd, check=False, env={**_NPM_RETRY_ENV, **os.environ}
+        ).returncode
     except OSError as exc:
         # A registered project whose directory or executable is missing (for example a
         # PR that deletes the project but keeps its registration) is a recorded failure
@@ -227,15 +245,18 @@ def _git_paths(*args: str) -> list[str]:
     return [path for path in _git(*args).split("\0") if path]
 
 
-def changed_files_against_main() -> tuple[str, list[str]]:
-    """Return ``(merge_base, changed paths)`` for HEAD against ``origin/main``.
+def changed_files_against_main() -> tuple[str, list[str], list[str]]:
+    """Return ``(merge_base, changed paths, changed paths that still exist)`` for HEAD vs ``origin/main``.
 
     ``--no-renames`` reports both sides of a rename, so moving a file out of a
-    project still selects that project. Failure to compute the diff raises and
-    fails the job; it is never treated as "nothing changed".
+    project still selects that project. Deleted paths select a project (its tests
+    must still pass) but never count as an unknown project. Failure to compute the
+    diff raises and fails the job; it is never treated as "nothing changed".
     """
     base = _git("merge-base", "origin/main", "HEAD").strip()
-    return base, _git_paths("diff", "--name-only", "-z", "--no-renames", base, "HEAD")
+    changed = _git_paths("diff", "--name-only", "-z", "--no-renames", base, "HEAD")
+    present = _git_paths("diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", base, "HEAD")
+    return base, changed, present
 
 
 def _set_output(name: str, value: str) -> None:
@@ -274,7 +295,7 @@ def main() -> int:
         return 1
     _set_output("tested_sha", head)
 
-    base, changed = changed_files_against_main()
+    base, changed, present = changed_files_against_main()
     tracked = _git_paths("ls-files", "-z")
     lines = [
         "## Agent OS Frontend Checks",
@@ -284,7 +305,7 @@ def main() -> int:
         f"- Changed files: {len(changed)}",
     ]
 
-    unowned = unowned_node_changes(changed, tracked)
+    unowned = unowned_node_changes(present, tracked)
     if unowned:
         message = (
             "changed Node project file(s) not owned by a registered project in "
@@ -296,7 +317,6 @@ def main() -> int:
         return 1
 
     applicable = applicable_projects(changed)
-    _set_output("applicable", ",".join(p.name for p in applicable) or "none")
     if not applicable:
         message = "No Node project changed; no frontend command was executed or needed. This is non-applicability, not a skipped check."
         lines.append(f"- {message}")

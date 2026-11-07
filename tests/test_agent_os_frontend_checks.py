@@ -153,7 +153,7 @@ def test_incomplete_command_record_is_a_failure():
 @pytest.fixture
 def lane(monkeypatch, tmp_path):
     """Drive main() against a fake git, recording outputs and annotations."""
-    state = {"head": "a" * 40, "changed": [], "tracked": [], "run": lambda projects: {p.name: [(" ".join(c), 0) for c in p.commands] for p in projects}}
+    state = {"head": "a" * 40, "changed": [], "deleted": [], "tracked": [], "run": lambda projects: {p.name: [(" ".join(c), 0) for c in p.commands] for p in projects}}
     out, summary = tmp_path / "out.txt", tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -167,7 +167,8 @@ def lane(monkeypatch, tmp_path):
         # Real git only emits unquoted names with -z; fail the test if the lane forgets it.
         if args[0] == "diff":
             assert "-z" in args, args
-            return "".join(path + "\0" for path in state["changed"])
+            paths = state["changed"] if "--diff-filter=d" in args else state["changed"] + state["deleted"]
+            return "".join(path + "\0" for path in paths)
         if args[0] == "ls-files":
             assert "-z" in args, args
             return "".join(path + "\0" for path in state["tracked"])
@@ -186,14 +187,14 @@ def test_main_non_applicable_succeeds_with_visible_nonapplicability(lane, capsys
     out = capsys.readouterr().out
     assert "::notice title=Frontend checks::No Node project changed" in out
     assert "not a skipped check" in lane["summary_text"]()
-    assert lane["outputs"]() == {"tested_sha": "a" * 40, "applicable": "none"}
+    assert lane["outputs"]() == {"tested_sha": "a" * 40}
 
 
 def test_main_applicable_success_reports_projects_and_tested_sha(lane, capsys):
     lane["changed"] = [f"{PP}/package-lock.json", "scripts/x.py"]
     assert fe.main() == 0
     assert "::notice title=Frontend checks::Executed and passed: picture-perfect-coach" in capsys.readouterr().out
-    assert lane["outputs"]() == {"tested_sha": "a" * 40, "applicable": "picture-perfect-coach"}
+    assert lane["outputs"]() == {"tested_sha": "a" * 40}
 
 
 def test_main_failing_project_exits_nonzero_with_error_annotation(lane, capsys):
@@ -218,11 +219,12 @@ def test_main_head_sha_mismatch_fails_and_publishes_no_tested_sha(lane, monkeypa
     assert "does not match expected head" in capsys.readouterr().err
 
 
-def test_main_selects_project_for_non_ascii_and_spaced_paths(lane):
+def test_main_selects_project_for_non_ascii_and_spaced_paths(lane, capsys):
     # git quotes non-ASCII names unless -z is used; those files must still select their project.
     lane["changed"] = [f"{PP}/src/caf\u00e9.ts", f"{CAPTURE}/test/with space.test.mjs"]
     assert fe.main() == 0
-    assert lane["outputs"]()["applicable"] == "picture-perfect-coach,software-tutorial-capture"
+    out = capsys.readouterr().out
+    assert "Executed and passed: picture-perfect-coach, software-tutorial-capture" in out
 
 
 def test_changed_files_against_main_requests_nul_delimited_output(monkeypatch):
@@ -233,10 +235,11 @@ def test_changed_files_against_main_requests_nul_delimited_output(monkeypatch):
         return "b" * 40 + "\n" if args[0] == "merge-base" else f"{PP}/src/caf\u00e9.ts\0docs/a.md\0"
 
     monkeypatch.setattr(fe, "_git", fake_git)
-    base, changed = fe.changed_files_against_main()
+    base, changed, present = fe.changed_files_against_main()
     assert base == "b" * 40
-    assert changed == [f"{PP}/src/caf\u00e9.ts", "docs/a.md"]
-    assert "-z" in calls[1]
+    assert changed == present == [f"{PP}/src/caf\u00e9.ts", "docs/a.md"]
+    assert "-z" in calls[1] and "-z" in calls[2]
+    assert "--diff-filter=d" in calls[2] and "--diff-filter=d" not in calls[1]
 
 
 def test_main_teacher_os_note_discloses_advisory_playwright(lane):
@@ -365,9 +368,9 @@ def test_project_sources_do_not_read_outside_their_directory_without_declaring_i
     assert not problems, problems
 
 
-def test_deleted_or_added_unregistered_manifests_fail_closed_without_any_tracked_file():
-    # HEAD no longer tracks a deleted manifest, so detection must also read the changed paths.
-    assert fe.unowned_node_changes(["tools/old/package.json", "tools/old/package-lock.json"], []) == ("tools/old",)
+def test_added_or_edited_unregistered_manifests_fail_closed_without_any_tracked_file():
+    # The manifest signal reads the changed paths, so it works even when HEAD tracks nothing there.
+    assert fe.unowned_node_changes(["tools/new/package.json", "tools/new/package-lock.json"], []) == ("tools/new",)
     assert fe.unowned_node_changes(["package.json"], []) == ("package.json (repository root)",)
     assert fe.unowned_node_changes([f"{PP}/package.json", f"{PP}/package-lock.json"], []) == ()
     assert fe.unowned_node_changes(["docs/package.json.md", "tools/package.jsonc"], []) == ()
@@ -381,3 +384,47 @@ def test_gate_decision_functions_have_no_production_caller_outside_the_cli_wrapp
         cwd=ROOT, text=True, stdout=subprocess.PIPE, check=False,
     ).stdout.split()
     assert set(found) <= {"scripts/agent_os_aggregate_gate.py"}, found
+
+
+def test_main_removing_a_project_and_its_registration_is_not_an_unknown_project(lane, capsys):
+    # Deleted paths still select a registered project, but never count as an unknown one.
+    lane["changed"] = ["scripts/agent_os_frontend_checks.py"]
+    lane["deleted"] = ["tools/gone/package.json", "tools/gone/package-lock.json", "tools/gone/src/a.ts", "tools/gone/run.mjs"]
+    assert fe.main() == 0
+    assert "No Node project changed" in capsys.readouterr().out
+
+
+def test_main_deleted_files_inside_a_registered_project_still_run_that_project(lane, capsys):
+    lane["deleted"] = [f"{PP}/src/removed.ts"]
+    assert fe.main() == 0
+    assert "Executed and passed: picture-perfect-coach" in capsys.readouterr().out
+
+
+def test_main_new_unregistered_project_still_fails_when_files_exist(lane, capsys):
+    lane["changed"] = ["tools/fresh/package.json", "tools/fresh/index.js"]
+    lane["tracked"] = ["tools/fresh/package.json"]
+    lane["run"] = lambda projects: pytest.fail("nothing may run when a project is unowned")
+    assert fe.main() == 1
+    assert "tools/fresh" in capsys.readouterr().out
+
+
+def test_js_under_a_declared_trigger_path_is_known_not_an_unknown_project():
+    assert fe.unowned_node_changes([f"{HOST_SCRIPTS}/helper.mjs", f"{CAPTURE}/x.mjs"], []) == ()
+    assert names([f"{HOST_SCRIPTS}/helper.mjs"]) == ["software-tutorial-capture"]
+    assert fe.unowned_node_changes([f"{HOST_SCRIPTS}-extra/helper.mjs"], []) == (f"{HOST_SCRIPTS}-extra/helper.mjs",)
+
+
+def test_npm_commands_retry_registry_fetches_unless_the_environment_overrides(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(argv, cwd, check, env):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(fe.subprocess, "run", fake_run)
+    monkeypatch.delenv("npm_config_fetch_retries", raising=False)
+    assert fe._run_command(("npm", "ci"), tmp_path) == 0
+    assert seen["env"]["npm_config_fetch_retries"] == "5"
+    monkeypatch.setenv("npm_config_fetch_retries", "1")
+    assert fe._run_command(("npm", "ci"), tmp_path) == 0
+    assert seen["env"]["npm_config_fetch_retries"] == "1"
