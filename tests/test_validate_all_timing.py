@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
+HELPER_SCRIPT = Path(__file__).parents[1] / "scripts" / "agent_os_ci_test_completeness.py"
 TIMING_LINE = re.compile(r"^- .+ \| (?:[0-9]+\.[0-9]{3} s|unavailable)$", re.MULTILINE)
 
 
@@ -18,6 +19,7 @@ def _make_repo(tmp_path: Path, *, structure_exit: int = 0) -> Path:
     (repo / "07_Agent_Tests").mkdir()
     (repo / "tests").mkdir()
     shutil.copy2(SCRIPT, repo / "scripts" / "validate-all.sh")
+    shutil.copy2(HELPER_SCRIPT, repo / "scripts" / "agent_os_ci_test_completeness.py")
     (repo / "07_Agent_Tests" / "validate-repo-structure.sh").write_text(
         f"#!/usr/bin/env bash\nexit {structure_exit}\n",
         encoding="utf-8",
@@ -52,8 +54,9 @@ def test_validate_all_reports_structure_suite_and_total_timings(tmp_path: Path) 
     assert "TIMING RESULTS\n" in result.stdout
     assert re.search(r"^- structural validation \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- root \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
+    assert re.search(r"^- test selection completeness: root \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- aggregate total \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
-    assert len(TIMING_LINE.findall(result.stdout)) == 4
+    assert len(TIMING_LINE.findall(result.stdout)) == 5
     assert "OVERALL STATUS\nPASS\n\nEXIT CODE\n0\n" in result.stdout
 
 
@@ -85,7 +88,7 @@ def test_validate_all_focused_check_uses_same_timing_boundary(tmp_path: Path) ->
     assert "python" in result.stdout
     assert "- PASS | focused: tests/test_sample.py | exit 0 |" in result.stdout
     assert "- focused: tests/test_sample.py |" in result.stdout
-    assert len(TIMING_LINE.findall(result.stdout)) == 5
+    assert len(TIMING_LINE.findall(result.stdout)) == 6
 
 
 def test_validate_all_excludes_transient_tmp_test_trees(tmp_path: Path) -> None:

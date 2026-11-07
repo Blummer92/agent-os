@@ -483,6 +483,18 @@ consume_captured_suite() {
 
 aggregate_started_us="$(timer_now_us || true)"
 
+# PYTEST_ADDOPTS would silently narrow every pytest invocation below --
+# the completeness collections, the real suite runs, and the focused
+# runs -- because it applies identically to all of them. The
+# completeness check cannot detect it (both collections would narrow
+# together), so an authoritative run must not have it set at all.
+# Unset it loudly rather than failing: a local operator may have it
+# set for an unrelated reason, and the run stays valid without it.
+if [ -n "${PYTEST_ADDOPTS:-}" ]; then
+  echo "PYTEST_ADDOPTS is set in this environment; unsetting it so the authoritative run is not silently narrowed." >&2
+  unset PYTEST_ADDOPTS
+fi
+
 echo "AGGREGATE VALIDATION START"
 echo "Repository: $ROOT_DIR"
 echo "Python: $PYTHON_BIN"
@@ -512,6 +524,63 @@ mapfile -t test_dirs < <(
 
 if [ "${#test_dirs[@]}" -eq 0 ]; then
   runner_error "no pytest test directories discovered."
+fi
+
+# Test-selection completeness pre-flight (false-green repair, PR #3816).
+# Before any suite executes, verify that the candidate configuration does
+# not silently narrow the collected test set (for example --deselect in
+# pytest.ini addopts, or a narrowing ini discovery option). The check
+# compares each suite's own collection against an unfiltered reference
+# collected from the same tree, so legitimate additions, removals, and
+# renames pass and skipped/xfailed tests stay valid. A failing suite is
+# recorded and no suite runs: a full run on a narrowed selection would
+# only produce misleading pass evidence for tests that never ran.
+# Focused runs, Ruff, and structural validation run before this
+# pre-flight: focused runs select tests explicitly and by design, and
+# Ruff/structural checks are not test suites, so neither is in scope
+# for the completeness check.
+completeness_failed=0
+for test_dir in "${test_dirs[@]}"; do
+  completeness_dir="$(dirname "$test_dir")"
+  if [ "$completeness_dir" = "." ]; then
+    completeness_suite_name="root"
+    completeness_suite_dir="$ROOT_DIR"
+  else
+    completeness_suite_name="${completeness_dir#./}"
+    completeness_suite_dir="$completeness_dir"
+  fi
+  completeness_args=("$PYTHON_BIN" scripts/agent_os_ci_test_completeness.py --suite-dir "$completeness_suite_dir" --suite-name "$completeness_suite_name" --python-bin "$PYTHON_BIN")
+  completeness_display="$PYTHON_BIN scripts/agent_os_ci_test_completeness.py --suite-dir $completeness_suite_dir --suite-name $completeness_suite_name --python-bin $PYTHON_BIN"
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
+    completeness_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$completeness_suite_name").json"
+    completeness_args+=(--receipt "$completeness_receipt")
+    completeness_display+=" --receipt $completeness_receipt"
+  fi
+  completeness_started_us="$(timer_now_us || true)"
+  if [ -d "$completeness_suite_dir/src" ]; then
+    completeness_src_dir="$(cd "$completeness_suite_dir" && pwd)/src"
+    env PYTHONPATH="$(python_path_with_src "$completeness_src_dir")" "${completeness_args[@]}"
+  else
+    "${completeness_args[@]}"
+  fi
+  completeness_code=$?
+  completeness_ended_us="$(timer_now_us || true)"
+  record_timing "test selection completeness: $completeness_suite_name" "$completeness_started_us" "$completeness_ended_us"
+  commands_executed+=("$completeness_display")
+  if [ "$completeness_code" -eq 0 ]; then
+    check_results+=("PASS|test selection completeness: $completeness_suite_name|$completeness_display|$completeness_code")
+  else
+    check_results+=("FAIL|test selection completeness: $completeness_suite_name|$completeness_display|$completeness_code")
+    record_failure "test selection completeness: $completeness_suite_name" "$completeness_display" "$completeness_code"
+    completeness_failed=1
+    break
+  fi
+done
+
+if [ "$completeness_failed" -ne 0 ]; then
+  # Do not execute any suite on a narrowed selection.
+  test_dirs=()
 fi
 
 parallel_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-os-validate.XXXXXX")" || runner_error "unable to create validation capture directory."
@@ -588,7 +657,19 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
         junit_file="$(junit_key "$name").xml"
         ;;
     esac
-    if [ "$code" = "5" ]; then
+    if [[ "$name" == "test selection completeness: "* ]]; then
+      # The completeness check has no JUnit file of its own; its evidence
+      # is the test-completeness-<suite>.json receipt in CI_JUNIT_DIR, so
+      # the row points at the receipt and records whether it exists.
+      # Exit 1 is a proven omission; any other non-zero exit (2, or a
+      # crash/signal the helper never returns) means the comparison
+      # itself could not be established.
+      completeness_suite="${name#test selection completeness: }"
+      junit_file="test-completeness-$(junit_key "$completeness_suite").json"
+      if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
+      if [ "$status" = "PASS" ]; then classification="COMPLETE";
+      elif [ "$code" = "1" ]; then classification="TEST_SELECTION_INCOMPLETE"; else classification="TEST_COLLECTION_ERROR"; fi
+    elif [ "$code" = "5" ]; then
       # pytest exit 5 = no tests collected: never a pass, never a generic failure.
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       classification="ZERO_COLLECTED"

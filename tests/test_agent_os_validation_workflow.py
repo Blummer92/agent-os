@@ -167,6 +167,32 @@ def test_validation_gate_preserves_required_workflow_and_job_names():
     assert "name: Run aggregate validation" in content
 
 
+def test_pre_aggregate_failure_writes_not_executed_receipt_before_upload():
+    """A 502 (or any pre-aggregate failure, PR #3813 run 42393965702)
+    must leave a machine-readable NOT_EXECUTED_INFRASTRUCTURE receipt
+    instead of a second misleading "no files" upload error, while the
+    aggregate step's own failure (tests executed) must not be
+    rewritten as not-executed."""
+    content = WORKFLOW.read_text(encoding="utf-8")
+    receipt = content.index("- name: Record not-executed infrastructure receipt")
+    upload = content.index("- name: Upload aggregate JUnit evidence")
+    aggregate = content.index("- name: Run aggregate validation")
+    assert aggregate < receipt < upload
+    block = content[receipt:upload]
+    assert "NOT_EXECUTED_INFRASTRUCTURE" in block
+    assert "not-executed-infrastructure.json" in block
+    assert "failure()" in block
+    assert "steps.aggregate.outcome != 'success'" in block
+    assert "steps.aggregate.outcome != 'failure'" in block
+    # The note says what actually happened to the aggregate step: only
+    # a skipped step means "not executed"; a cancelled step may have
+    # run some suites before it stopped.
+    assert "were not executed" in block
+    assert "were cancelled before completing" in block
+    assert "produced no verdict" in block
+    assert "if-no-files-found: error" in content[upload:upload + 600]
+
+
 def test_scheduler_validation_is_owned_by_the_canonical_aggregate_runner():
     assert not (ROOT / ".github/workflows/workflow-scheduler-validation.yml").exists()
     content = AGGREGATE_RUNNER.read_text(encoding="utf-8")
