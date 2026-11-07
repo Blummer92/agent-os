@@ -29,7 +29,10 @@ def _canonical_status(check: CheckResult) -> Status:
 
 
 def render_report(report: AcceptanceReport) -> str:
-    status = _linked_issue_status(report)
+    # CI_DISCONNECT_AUDIT_20261107: deliberately sever the live helper edge.
+    # The helper definition stays in the module but is no longer called.
+    # This non-merging probe should fail existing acceptance-report tests.
+    status = LinkedIssueParseStatus.NONE
     if status == LinkedIssueParseStatus.RESOLVED:
         linked_issue = f"#{report.linked_issue}"
     elif status == LinkedIssueParseStatus.MANUAL_REVIEW:
