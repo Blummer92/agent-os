@@ -374,6 +374,13 @@ def run_dev_validation_over_codespaces(
 ) -> dict[str, object]:
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    def _unobserved_failure(request, reason, surface):
+        evidence = _failure(request, reason, surface)
+        # Once SSH is attempted, a lost/untrusted response cannot prove whether
+        # the remote workspace was touched. Cleanup remains unverified.
+        evidence["workspace_side_effects_performed"] = None
+        return evidence
+
     try:
         # #3333/#3617: the remote program must cross the SSH shell boundary
         # as one safely quoted command. Passing the multiline source as
@@ -409,7 +416,7 @@ def run_dev_validation_over_codespaces(
             timeout=_RUN_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        evidence = _failure(request, "dev-validation-codespaces-transport-timeout", codespace_name)
+        evidence = _unobserved_failure(request, "dev-validation-codespaces-transport-timeout", codespace_name)
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
         evidence.update(
@@ -424,7 +431,7 @@ def run_dev_validation_over_codespaces(
         )
         return evidence
     if completed.returncode != 0:
-        evidence = _failure(request, "dev-validation-codespaces-ssh-failed", codespace_name)
+        evidence = _unobserved_failure(request, "dev-validation-codespaces-ssh-failed", codespace_name)
         tail, truncated = _bounded_text(completed.stderr)
         evidence.update(
             {
@@ -436,13 +443,13 @@ def run_dev_validation_over_codespaces(
         return evidence
     framed = _extract_framed_payload(completed.stdout)
     if framed is None:
-        return _failure(request, "dev-validation-codespaces-frame-invalid", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-frame-invalid", codespace_name)
     try:
         payload = json.loads(framed)
     except json.JSONDecodeError:
-        return _failure(request, "dev-validation-codespaces-evidence-not-json", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-evidence-not-json", codespace_name)
     if type(payload) is not dict:
-        return _failure(request, "dev-validation-codespaces-evidence-malformed", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-evidence-malformed", codespace_name)
     fixed = {
         "repository": request.repository,
         "issue_number": request.issue_number,
@@ -471,7 +478,7 @@ def run_dev_validation_over_codespaces(
         # differing field names for diagnosis. The check itself is
         # unchanged and still rejects: reason stays the generic mismatch,
         # status stays needs-decision, and no remote log text is copied.
-        evidence = _failure(
+        evidence = _unobserved_failure(
             request,
             "dev-validation-codespaces-evidence-identity-mismatch",
             codespace_name,
@@ -491,20 +498,20 @@ def run_dev_validation_over_codespaces(
         "timeout",
         "needs-decision",
     }:
-        return _failure(request, "dev-validation-codespaces-status-invalid", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-status-invalid", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         type(environment_id) is not str
         or not environment_id.startswith("sha256:")
     ):
-        return _failure(request, "codespaces-environment-health-evidence-invalid", codespace_name)
+        return _unobserved_failure(request, "codespaces-environment-health-evidence-invalid", codespace_name)
     for key in ("stdout_tail", "stderr_tail"):
         value = payload.get(key, "")
         if (
             type(value) is not str
             or len(value) > MAX_RESULT_LOG_CHARS
         ):
-            return _failure(request, "dev-validation-codespaces-log-bound-invalid", codespace_name)
+            return _unobserved_failure(request, "dev-validation-codespaces-log-bound-invalid", codespace_name)
     return payload
 
 

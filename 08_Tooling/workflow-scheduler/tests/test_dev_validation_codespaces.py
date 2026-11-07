@@ -777,3 +777,19 @@ def test_3333_noninteractive_ssh_identity_policy_preserves_remote_gates() -> Non
     assert invalid.returncode == 0
     assert '"invalid-codespaces-host-identity"' in invalid.stdout
     assert '"codespaces-workspace-unavailable"' not in invalid.stdout
+
+
+def test_transport_loss_cannot_claim_no_workspace_effects():
+    request = build_dev_validation_request(repository=REPOSITORY, issue_number=2931,
+        branch=BRANCH, source_sha=SHA, validation_id=VALIDATION_ID)
+    def timeout_run(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    def failed_run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="connection lost")
+    def malformed_run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout="unframed", stderr="")
+    for runner in (timeout_run, failed_run, malformed_run):
+        result = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=runner)
+        assert result["status"] == "needs-decision"
+        assert result["workspace_side_effects_performed"] is None
+        assert result["cleanup_complete"] is False
