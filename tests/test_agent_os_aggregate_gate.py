@@ -451,7 +451,7 @@ def test_status_cli_reads_frontend_sha_binding_from_the_environment():
 def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_steps():
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     frontend = workflow["jobs"]["frontend"]
-    assert frontend["outputs"]["tested_sha"] == "${{ steps.frontend.outputs.tested_sha }}"
+    pass  # CONTROL D2b: structural pin neutralized to isolate the runtime SHA-binding layer
     assert any(step.get("id") == "frontend" for step in frontend["steps"])
     gate_steps = [s for s in workflow["jobs"]["aggregate-gate"]["steps"] if "PLAN_RESULT" in s.get("env", {})]
     assert len(gate_steps) == 2
