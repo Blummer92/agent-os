@@ -64,3 +64,5 @@ evidence contract every focused validation plan carries.
 - web: empty, validation error, dialog open/closed and keyboard focus path;
 - native: empty/error-compatible rendering, bounded screen transition, permission granted/denied/unavailable seam;
 - network/provider failure: the shared repository adapter returns an explicit error state rather than fabricated success.
+
+<!-- CONTROL P2b: touch so the lane exercises this project -->
