@@ -3,6 +3,8 @@
 Sources are only the existing bounded marker comments on issues: CKR6 result
 comments (`<!-- agent-os-ckr6-result:v1 -->`, posted by the ingress workflow)
 and lesson application receipts (`<!-- agent-os-lesson-receipt:v1 -->`).
+Output schema v2.0 explicitly retires the v1 snapshot-backed
+``accountability`` field; CKR6 evidence remains the lesson eligibility source.
 No database, telemetry store, Notion read or write, score, or promotion
 authority is created. Unknown stays unknown; causality is never inferred.
 
@@ -26,6 +28,10 @@ from .lesson_learning_loop import (
     receipt_key,
     verify_receipt_against_result,
 )
+
+# v1 was the unversioned snapshot-backed JSON output. v2 explicitly removes
+# the static CKR12 accountability field.
+METRICS_OUTPUT_SCHEMA_VERSION = "2.0"
 
 MAX_ISSUES = 50
 MAX_PAGES_PER_ISSUE = 10
@@ -116,6 +122,7 @@ def derive_lesson_metrics(comments_by_issue: Mapping[int, Iterable[Mapping[str, 
         if r["disposition"] == "skipped" and r["reason_code"] in REFINEMENT_SIGNAL_REASONS
     })
     return {
+        "schema_version": METRICS_OUTPUT_SCHEMA_VERSION,
         "ckr6_results": dict(sorted(by_status.items())),
         "materiality_source": dict(sorted(materiality.items())),
         "notion_retrievals": reads,

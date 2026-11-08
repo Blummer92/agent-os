@@ -356,6 +356,14 @@ def test_receipt_requires_actual_retrieval_of_that_revision():
 # ---------------------------------------------------------------- metrics
 
 
+def test_metrics_empty_input_reports_version_without_snapshot():
+    metrics = derive_lesson_metrics({})
+    assert metrics["schema_version"] == "2.0"
+    assert "accountability" not in metrics
+
+
+
+
 def _comment(comment_id, body):
     return {"id": comment_id, "body": body}
 
@@ -389,6 +397,8 @@ def test_metrics_count_only_valid_deduplicated_receipts_and_expose_signals():
     assert metrics["candidate_recurrences"] == 1
     assert metrics["malformed_markers"] == {"receipt": 1}
     assert metrics["causality_inferred"] is False
+    assert metrics["schema_version"] == "2.0"
+    assert "accountability" not in metrics
     json.dumps(metrics)
 
 
