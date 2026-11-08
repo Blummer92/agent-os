@@ -458,8 +458,19 @@ discovery and SSH readiness.
 The adapter requires exactly one owner/repository-qualified Codespace in
 Shutdown or Available state, compares independent pre-state evidence and
 rechecks identity before a start, then waits for both GitHub Available state
-and SSH readiness. A nonzero/timeout start outcome remains uncertain and is
-never automatically retried. No stop is issued: the existing Codespaces
+and SSH readiness. Once a start request may have been sent, any failure
+(nonzero exit, timeout, or an unexpected exception from any later step) is
+recorded as `needs-decision` / `codespaces-start-outcome-uncertain` with
+`start_issued: true`, and is never automatically retried. A failure while
+verifying an already Available Codespace records `needs-decision` /
+`codespaces-ssh-readiness-unverified` without a start. A failure before any
+start request is `blocked` (`codespaces-discovery-error` or
+`codespaces-precheck-error`); only an unreadable transport is
+`codespaces-start-input-invalid`. The receipt field `lifecycle_authorized` is
+`true` only once every owner, credential, target and pre-state check passed
+for this exact target and the adapter proceeded to start or verify; it is
+evidence of admission, not of outcome. The job log prints the same receipt
+that is uploaded as the run artifact. No stop is issued: the existing Codespaces
 idle timeout remains responsible for inactivity shutdown. This is an explicit
 developer-session policy distinct from the #3345 one-shot start/execute/stop
 contract; do not silently replace that contract.
