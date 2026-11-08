@@ -307,3 +307,15 @@ def test_unusual_run_id_cannot_raise_outside_the_recorded_outcome(monkeypatch):
     result = run(FakeRun())
     assert result["status"] == "success"
     assert result["workflow_run_id"] is None
+
+
+# R2 (#3828 independent QA): typed narrowing is an explicit fail-closed check.
+
+def test_qualified_target_without_a_name_fails_closed(monkeypatch):
+    monkeypatch.setattr(remote_start, "_list_target",
+                        lambda run, token: (None, "Shutdown", "qualified"))
+    fake = FakeRun()
+    result = run(fake)
+    assert result["status"] == "blocked"
+    assert result["reason_codes"] == ["codespaces-discovery-invalid"]
+    assert fake.calls == []

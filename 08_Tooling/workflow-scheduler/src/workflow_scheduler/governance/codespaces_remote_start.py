@@ -109,6 +109,9 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
         return _receipt("blocked", "codespaces-discovery-error", comment_id=comment_id, run_id=parsed_run_id)
     if reason != "qualified":
         return _receipt("blocked", reason, name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
+    if name is None:
+        # Explicit fail-closed narrowing: a qualified result always names its target.
+        return _receipt("blocked", "codespaces-discovery-invalid", comment_id=comment_id, run_id=parsed_run_id)
     started = False
     admitted = False
     try:
@@ -127,6 +130,7 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             response = _api(run, "POST", f"/user/codespaces/{name}/start", lifecycle_token)
             if response.returncode != 0:
                 return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=pre_state, start_issued=True, comment_id=comment_id, run_id=parsed_run_id)
+        current: str | None = None
         for attempt in range(wait_attempts):
             current = _state(run, name, lifecycle_token)
             if current == "Available" and _ssh_ready(run, name, read_token):
