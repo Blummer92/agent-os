@@ -620,6 +620,13 @@ def _find_completed_receipt(
     dispatching on uncertain state, and a matched completed receipt
     that fails the B02 sink fails closed with
     ``receipt-dispatch-evidence-mismatch`` instead of being laundered.
+
+    All JSON entries in the shared receipt directory are inspected, regardless
+    of filename prefix. A prefix is not evidence of ownership; malformed,
+    symlinked or spoofed JSON fails closed rather than hiding a conflicting
+    completed Gate 2 receipt. Unrelated valid governed-resume receipts lack
+    the Gate 2 exact identity and are ignored. Governed temporary files use
+    the non-JSON `.tmp` suffix and are not scanned.
     """
     try:
         entries = sorted(receipts_dir.iterdir())

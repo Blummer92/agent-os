@@ -415,3 +415,507 @@ def test_installer_refuses_unrelated_target(tmp_path):
     )
     assert proc.returncode == 64
     assert "refusing unexpected target" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Invocation completion receipt (sequential re-delivery duplicate, R-1)
+# ---------------------------------------------------------------------------
+
+
+class FakeCompletionStore:
+    """In-memory completion store for entrypoint tests."""
+
+    def __init__(self, *, receipt=None, find_error=None, record_error=None):
+        self._receipt = receipt
+        self.find_error = find_error
+        self.record_error = record_error
+        self.find_calls = []
+        self.record_calls = []
+        self._claims = {}
+
+    def find_completed(self, handoff_id):
+        self.find_calls.append(handoff_id)
+        if self.find_error is not None:
+            raise self.find_error
+        return self._receipt
+
+    def record_completed(self, receipt):
+        self.record_calls.append(receipt)
+        if self.record_error is not None:
+            raise self.record_error
+        self._receipt = receipt
+        return None
+
+    def find_claim(self, handoff_id):
+        claim = self._claims.get(handoff_id)
+        return dict(claim) if claim is not None else None
+
+    def claim(self, handoff_id, run_id):
+        existing = self._claims.get(handoff_id)
+        if existing is None:
+            self._claims[handoff_id] = {"handoff_id": handoff_id, "run_id": run_id}
+            return True
+        return existing["run_id"] == run_id
+
+    def release_claim(self, handoff_id, run_id):
+        existing = self._claims.get(handoff_id)
+        if existing is not None and existing["run_id"] == run_id:
+            del self._claims[handoff_id]
+            return True
+        return False
+
+    def wait_for_completed(self, handoff_id, *, timeout_seconds):
+        # In-memory: the receipt either exists now or never will.
+        return self.find_completed(handoff_id)
+
+
+def _completed_receipt(result_id="single-issue-pilot:" + "b" * 64):
+    return {
+        "schema_version": "1.0",
+        "operation": "governed-resume",
+        "handoff_id": H,
+        "repository": "Blummer92/agent-os",
+        "issue_number": 560,
+        "invocation_id": "invocation:1",
+        "source_sha": "a" * 40,
+        "status": "completed",
+        "result_id": result_id,
+        "recorded_at": "2026-08-17T11:00:00Z",
+    }
+
+
+def _admitted_bindings(dispatch, completion_store=None, claim_wait_seconds=5.0):
+    from types import SimpleNamespace
+
+    pilot = SimpleNamespace(
+        repository="Blummer92/agent-os",
+        issue_numbers=(560,),
+        invocation_id="invocation:1",
+        source_head_sha="a" * 40,
+    )
+
+    def reconstruct(handoff_id):
+        return Result(Status.ADMITTED, ("admitted",), pilot)
+
+    return GovernedResumeBindings(
+        reconstruct,
+        dispatch,
+        completion_store=completion_store,
+        claim_wait_seconds=claim_wait_seconds,
+    )
+
+
+def test_completed_receipt_blocks_second_dispatch_without_execution():
+    dispatched = []
+    store = FakeCompletionStore(receipt=_completed_receipt())
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatched.append, completion_store=store),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-completed"]
+    assert payload["scheduler_dispatch_count"] == 0
+    assert payload["accepted"] is False
+    assert payload["terminal_status"] == "blocked-before-execution"
+    assert store.find_calls == [H]
+    assert store.record_calls == []
+
+
+def test_completed_dispatch_records_the_receipt(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert len(dispatched) == 1
+    assert payload["status"] == "completed"
+    found = store.find_completed(H)
+    assert found is not None
+    assert found["status"] == "completed"
+    assert found["handoff_id"] == H
+    assert found["result_id"] == PilotResult().result_id
+
+
+def test_second_delivery_with_the_same_store_does_not_dispatch(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    first = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    second = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert first["status"] == "completed"
+    assert first["scheduler_dispatch_count"] == 1
+    assert second["status"] == "blocked"
+    assert second["reason_codes"] == ["invocation-already-completed"]
+    assert second["scheduler_dispatch_count"] == 0
+    assert len(dispatched) == 1
+
+
+def test_failed_dispatch_records_no_receipt(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+
+    def dispatch(value):
+        return PilotResult(
+            status="failed",
+            reason_codes=("validation.failed",),
+            validation_attempted=True,
+            validation_passed=False,
+        )
+
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert payload["status"] == "failed"
+    assert store.find_completed(H) is None
+
+
+def test_unreadable_completion_store_fails_closed_without_dispatch():
+    dispatched = []
+    store = FakeCompletionStore(find_error=RuntimeError("store unreadable"))
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatched.append, completion_store=store),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "needs-decision"
+    assert payload["reason_codes"] == ["completion-receipt-unavailable"]
+    assert payload["scheduler_dispatch_count"] == 0
+
+
+def test_receipt_record_failure_is_visible_but_does_not_misreport_success(
+    capsys,
+):
+    dispatched = []
+    store = FakeCompletionStore(record_error=RuntimeError("disk full"))
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert len(dispatched) == 1
+    assert payload["status"] == "completed"
+    assert payload["terminal_status"] == "succeeded"
+    assert "completion-receipt-unrecorded" in payload["reason_codes"]
+    assert "completion receipt unrecorded" in capsys.readouterr().err
+    assert store.find_claim(H) is not None
+    replay = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store, claim_wait_seconds=0),
+        )
+    )
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 1
+
+
+def test_no_completion_store_preserves_current_behavior():
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    for _ in range(2):
+        payload = json.loads(
+            run_governed_resume(
+                ["--handoff-id", H],
+                bindings=_admitted_bindings(dispatch),
+            )
+        )
+        assert payload["status"] == "completed"
+    assert len(dispatched) == 2
+
+
+# ---------------------------------------------------------------------------
+# Execution claim (post-completion race, hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_is_released_after_a_completed_dispatch(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert payload["status"] == "completed"
+    assert store.find_claim(H) is None  # recorded, then released
+    assert store.find_completed(H) is not None
+
+
+def test_failed_dispatch_releases_the_claim_and_records_nothing(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult(status="failed", reason_codes=("boom",))
+
+    first = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert first["status"] == "failed"
+    assert store.find_claim(H) is None
+    assert store.find_completed(H) is None
+    # A retry is not blocked by the failed run's claim.
+    second = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    )
+    assert second["status"] == "failed"
+    assert len(dispatched) == 2
+
+
+def test_dispatch_exception_retains_claim_until_outcome_is_reconciled(tmp_path):
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = InvocationCompletionStore.for_store_root(tmp_path / "store")
+    (tmp_path / "store" / "invocations").mkdir(parents=True)
+
+    def dispatch(value):
+        raise RuntimeError("pilot exploded")
+
+    with pytest.raises(RuntimeError, match="pilot exploded"):
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store),
+        )
+    assert store.find_claim(H) is not None
+    assert store.find_completed(H) is None
+    replay = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(lambda _: pytest.fail("duplicate dispatch"),
+                                        completion_store=store, claim_wait_seconds=0),
+        )
+    )
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-claimed"]
+
+
+def test_second_delivery_waits_for_the_owners_receipt_and_blocks():
+    class LateReceiptStore(FakeCompletionStore):
+        """No receipt at the first check; the owner's receipt lands in the wait."""
+
+        def __init__(self):
+            super().__init__()
+            self._claims[H] = {"handoff_id": H, "run_id": "a" * 32}
+            self._find_calls = 0
+
+        def find_completed(self, handoff_id):
+            self._find_calls += 1
+            if self._find_calls == 1:
+                return None
+            return _completed_receipt()
+
+    store = LateReceiptStore()
+    dispatched = []
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(
+                dispatched.append, completion_store=store, claim_wait_seconds=5.0
+            ),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-completed"]
+    assert payload["scheduler_dispatch_count"] == 0
+
+
+def test_wait_timeout_cannot_take_over_an_unproven_claim():
+    store = FakeCompletionStore()
+    store._claims[H] = {"handoff_id": H, "run_id": "a" * 32}
+    dispatched = []
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(
+                dispatch, completion_store=store, claim_wait_seconds=0.0
+            ),
+        )
+    )
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 0
+    assert store.find_claim(H)["run_id"] == "a" * 32
+    assert store.find_completed(H) is None
+
+
+def test_competing_claim_owner_returns_blocked_without_dispatching():
+    class ContendedStore(FakeCompletionStore):
+        """Another delivery already owns the claim and never relinquishes it."""
+
+        def __init__(self):
+            super().__init__()
+            self._claims[H] = {"handoff_id": H, "run_id": "a" * 32}
+            self._claim_calls = 0
+
+        def claim(self, handoff_id, run_id):
+            self._claim_calls += 1
+            return False
+
+    store = ContendedStore()
+    dispatched = []
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(
+                dispatched.append, completion_store=store, claim_wait_seconds=0.0
+            ),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-claimed"]
+    assert payload["scheduler_dispatch_count"] == 0
+
+
+def test_claim_unavailable_fails_closed_without_dispatch():
+    class BrokenClaimStore(FakeCompletionStore):
+        def claim(self, handoff_id, run_id):
+            raise RuntimeError("claims dir is gone")
+
+    store = BrokenClaimStore()
+    dispatched = []
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatched.append, completion_store=store),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "needs-decision"
+    assert payload["reason_codes"] == ["completion-claim-unavailable"]
+
+
+def test_receipt_landing_between_claim_and_dispatch_blocks_without_execution():
+    class ReceiptDuringClaimStore(FakeCompletionStore):
+        """The owner's receipt lands after we acquire the claim."""
+
+        def __init__(self):
+            super().__init__()
+            self._find_calls = 0
+
+        def find_completed(self, handoff_id):
+            self._find_calls += 1
+            if self._find_calls <= 1:
+                return None
+            return _completed_receipt()
+
+    store = ReceiptDuringClaimStore()
+    dispatched = []
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatched.append, completion_store=store),
+        )
+    )
+    assert dispatched == []
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-completed"]
+    assert store.find_claim(H) is None  # claim released on the blocked path
+
+
+def test_claim_wait_seconds_is_validated():
+    for bad in (-1, float("nan"), float("inf"), True, "5"):
+        with pytest.raises(TypeError):
+            GovernedResumeBindings(lambda _: None, lambda _: None, claim_wait_seconds=bad)
+    assert GovernedResumeBindings(lambda _: None, lambda _: None).claim_wait_seconds == 5.0
+    assert (
+        GovernedResumeBindings(lambda _: None, lambda _: None, claim_wait_seconds=0).claim_wait_seconds
+        == 0
+    )
+
+
+def test_store_without_claim_methods_is_rejected_at_construction():
+    class ReceiptOnlyStore:
+        def find_completed(self, handoff_id):
+            return None
+
+        def record_completed(self, receipt):
+            return None
+
+    with pytest.raises(TypeError, match="claim"):
+        GovernedResumeBindings(lambda _: None, lambda _: None, completion_store=ReceiptOnlyStore())

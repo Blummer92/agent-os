@@ -35,7 +35,9 @@ import pytest
 from agent_os_execution_service.gate2_production_controller import (
     Gate2ControllerError,
     _build_bound_bootstrap,
+    _find_completed_receipt,
     _persist_receipt_atomically,
+    _receipt_file_name,
     main,
     run_gate2_fixed_pilot_controller,
 )
@@ -1444,3 +1446,100 @@ def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeyp
     dependency = bootstrap.sources.repository_reader.read_dependency_evidence(_BOUND_REPO, 3333)
     assert str(dependency.status) == "EvidenceStatus.UNAVAILABLE"
     assert any("not-current" in code for code in dependency.reason_codes)
+
+
+# ---------------------------------------------------------------------------
+# Shared receipt scan is fail-closed regardless of filename prefix.
+# ---------------------------------------------------------------------------
+
+
+def _probe_envelope() -> dict:
+    return {
+        "codespace_implementation_handoff_id_or_none": f"executor-handoff:{HANDOFF}",
+        "codespace_implementation_sha_or_none": SHA,
+        "repository": "Blummer92/agent-os",
+        "issue_number": 3333,
+    }
+
+
+def _probe_receipt_file(receipts_dir: Path, envelope: dict) -> Path:
+    name = _receipt_file_name(envelope, "2026-08-17T11:00:00Z")
+    path = receipts_dir / name
+    path.write_text(json.dumps(_completed_receipt()))
+    return path
+
+
+@pytest.mark.parametrize("filename", [
+    f"governed-resume-completed-{'a' * 64}.json",
+    "governed-resume-claim-ignored.json",
+    ".tmp-receipt-leftover.json",
+])
+def test_scan_rejects_malformed_json_even_with_foreign_prefix(tmp_path: Path, filename: str) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    (receipts_dir / filename).write_text("{not json")
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box")
+    assert excinfo.value.reason == "receipt-store-unreadable"
+
+
+def test_scan_with_unrelated_valid_json_returns_none(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    (receipts_dir / f"governed-resume-completed-{'a' * 64}.json").write_text(
+        json.dumps({"status": "completed", "operation": "governed-resume"})
+    )
+    assert _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box") is None
+
+
+@pytest.mark.parametrize("fake_field,fake_value", [
+    ("operation_id", "governed-resume"),
+    ("schema_version", "not-a-gate2-receipt"),
+])
+def test_scan_rejects_spoofed_governed_prefix_with_matching_probe_identity(
+    tmp_path: Path, fake_field: str, fake_value: str
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    spoofed = _completed_receipt()
+    spoofed[fake_field] = fake_value
+    (receipts_dir / f"governed-resume-completed-{'a' * 64}.json").write_text(
+        json.dumps(spoofed)
+    )
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box")
+    assert excinfo.value.reason == "receipt-dispatch-evidence-mismatch"
+
+
+def test_scan_fails_closed_on_a_malformed_probe_receipt(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    envelope = _probe_envelope()
+    name = _receipt_file_name(envelope, "2026-08-17T11:00:00Z")
+    (receipts_dir / name).write_text("{not json")
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _find_completed_receipt(receipts_dir, envelope, "test-box")
+    assert excinfo.value.reason == "receipt-store-unreadable"
+
+
+def test_scan_fails_closed_on_symlinked_foreign_receipt(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    real = tmp_path / "real.json"
+    real.write_text("{not json")
+    foreign = receipts_dir / f"governed-resume-completed-{'a' * 64}.json"
+    foreign.symlink_to(real)
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _find_completed_receipt(receipts_dir, _probe_envelope(), "test-box")
+    assert excinfo.value.reason == "receipt-store-unreadable"
+
+
+def test_scan_keeps_valid_matching_probe_receipt(tmp_path: Path) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    envelope = _probe_envelope()
+    probe = _probe_receipt_file(receipts_dir, envelope)
+    found = _find_completed_receipt(receipts_dir, envelope, "test-box")
+    assert found is not None
+    assert found[0] == probe
+    assert found[1]["status"] == "completed"

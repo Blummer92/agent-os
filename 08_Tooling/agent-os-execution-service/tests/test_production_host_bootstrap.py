@@ -207,6 +207,9 @@ def host_environment(tmp_path, monkeypatch) -> dict[str, str]:
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv(DELEGATED_PARENT_CGROUP_ENV_VAR, raising=False)
+    # A bound checkpoint store root carries invocations/ (the descriptor
+    # lives there); governed_resume_bindings() probe-verifies the store.
+    (tmp_path / "checkpoints" / "invocations").mkdir(parents=True)
     return values
 
 
@@ -317,6 +320,64 @@ def test_seven_source_methods_are_passed_to_1287_composition(
     assert captured["evaluated_at"] == EVALUATED_AT
     assert captured["lease_directory"] == str(tmp_path / "leases")
     assert captured["authorization_transport"] is bootstrap.authorization_transport
+
+
+def test_production_bindings_carry_a_completion_store_for_the_bound_root(
+    monkeypatch, host_environment, tmp_path
+):
+    bootstrap, _ = _build(monkeypatch, host_environment)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        bootstrap_module,
+        "build_production_governed_resume_bindings",
+        lambda **kwargs: captured.update(kwargs) or "bindings",
+    )
+
+    assert bootstrap.governed_resume_bindings(cancelled=lambda: False) == "bindings"
+
+    from agent_os_execution_service.invocation_completion_receipt import (
+        InvocationCompletionStore,
+    )
+
+    store = captured["completion_store"]
+    assert isinstance(store, InvocationCompletionStore)
+    assert store._receipts_dir == (
+        bootstrap.configuration.checkpoint_store_root
+        / "invocations"
+        / "receipts"
+    )
+
+
+def test_governed_resume_bindings_probe_verifies_the_store_is_writable(
+    monkeypatch, host_environment, tmp_path
+):
+    bootstrap, _ = _build(monkeypatch, host_environment)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "build_production_governed_resume_bindings",
+        lambda **kwargs: "bindings",
+    )
+    assert bootstrap.governed_resume_bindings(cancelled=lambda: False) == "bindings"
+    invocations = tmp_path / "checkpoints" / "invocations"
+    assert (invocations / "receipts").is_dir()
+    assert (invocations / "claims").is_dir()
+
+
+def test_governed_resume_bindings_fails_closed_when_the_store_is_broken(
+    monkeypatch, host_environment, tmp_path
+):
+    bootstrap, _ = _build(monkeypatch, host_environment)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "build_production_governed_resume_bindings",
+        lambda **kwargs: "bindings",
+    )
+    invocations = tmp_path / "checkpoints" / "invocations"
+    (invocations / "receipts").write_text("not a directory")
+    with pytest.raises(
+        ProductionHostBootstrapError, match="completion store is not writable"
+    ):
+        bootstrap.governed_resume_bindings(cancelled=lambda: False)
 
 
 def test_dispatch_without_a_reacquired_configuration_fails_closed():
