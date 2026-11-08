@@ -351,6 +351,27 @@ removed it — so no D1 condition references it.)
    and any host receipt are preserved, nothing is retried automatically,
    and the next run fails with `fixed-pilot-claim-ambiguous` until an
    owner adjudicates the uncertain outcome.
+
+   **Change A — uncertain-outcome classification (D2).** Before this
+   change, the pilot labelled a timeout, a transport error after start,
+   a non-zero SSH client exit, and a post-dispatch exception with the
+   same retryable reasons as refusals where provably nothing ran, and
+   the controller released its claim after any verified persistence —
+   so a second owner comment re-executed the fixed argv. Now the pilot
+   reports those outcomes as `execution-outcome-uncertain` (with a
+   `transport-timeout`, `transport-error`, or
+   `post-dispatch-evidence-unavailable` detail), reports a transport
+   result with no start time as `codespace-transport-not-started` with
+   a `transport-*` detail and `side_effects_performed=false`, and the
+   controller releases the claim only for a completed receipt or a
+   receipt whose every reason code is in the
+   `PRE_EXECUTION_REASON_CODES` allow-list. Any other or unknown reason
+   retains the claim; the next run fails with
+   `fixed-pilot-claim-ambiguous` until the owner verifies nothing is
+   in flight, inspects the receipt, and removes the claim file by hand.
+   Exit-0 known failures (for example a stale HEAD) also retain the
+   claim, by the same fail-closed policy. The nested-SSH hop itself is
+   unchanged.
 4. **Acceptance gate** (`fixed_gate`, `if: always()`, no
    `continue-on-error`): runs `dev_validation_gate --fixed-pilot` over
    transport, diagnostic, reference, process stderr, receipt, transfer,

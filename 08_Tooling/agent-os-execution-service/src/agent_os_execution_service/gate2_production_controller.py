@@ -81,6 +81,7 @@ from scripts.agent_os_execution_interface.fixed_codespace_pilot import (
     ACCEPTED_REASON,
     ISSUE_NUMBER,
     OPERATION_ID,
+    PRE_EXECUTION_REASON_CODES,
     REPOSITORY,
     drive_fixed_codespace_pilot_on_host,
 )
@@ -606,6 +607,29 @@ def _release_fixed_pilot_claim(path: Path) -> None:
         pass
 
 
+def _claim_releasable_after_persistence(receipt: dict[str, Any]) -> bool:
+    """Whether a persisted receipt proves the claim may be released.
+
+    Only two receipts prove that no ambiguous execution remains: a completed
+    receipt (it passed the B02 sink before persistence), or a non-completed
+    receipt whose every reason code is a pre-execution reason the fixed
+    pilot emits only when the fixed argv provably never ran. Any other or
+    unknown reason -- including ``execution-outcome-uncertain`` and an
+    executed-but-rejected result -- retains the claim, so the next
+    invocation fails ``fixed-pilot-claim-ambiguous`` pending owner
+    adjudication. A persisted blocked receipt is never by itself proof that
+    nothing executed.
+    """
+    if receipt.get("status") == "completed":
+        return True
+    reasons = receipt.get("reason_codes")
+    return (
+        type(reasons) is list
+        and bool(reasons)
+        and all(type(item) is str and item in PRE_EXECUTION_REASON_CODES for item in reasons)
+    )
+
+
 def _find_completed_receipt(
     receipts_dir: Path, envelope: dict[str, Any], codespace_name: str
 ) -> tuple[Path, dict[str, Any]] | None:
@@ -926,7 +950,10 @@ def run_gate2_fixed_pilot_controller(
                 _release_fixed_pilot_claim(claim_path)
             raise
         else:
-            _release_fixed_pilot_claim(claim_path)
+            # Verified persistence alone does not prove nothing executed:
+            # an uncertain or executed-but-rejected receipt keeps the claim.
+            if _claim_releasable_after_persistence(receipt):
+                _release_fixed_pilot_claim(claim_path)
     except Gate2ControllerError:
         raise
     except ProductionHostBootstrapError as exc:
