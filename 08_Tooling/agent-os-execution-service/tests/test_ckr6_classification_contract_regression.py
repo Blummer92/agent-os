@@ -61,18 +61,21 @@ def envelope(operation: str, specialized: bool = False):
 
 
 @pytest.mark.parametrize(
-    ("operation", "specialized", "expected_read"),
+    ("operation", "specialized", "expected_read", "expected_escalation"),
     [
-        ("issue-start", False, False),
-        ("issue-start", True, True),
-        ("failed-repair", False, False),
-        ("failed-repair", True, True),
-        ("lesson-candidate", False, False),
-        ("lesson-refinement", False, True),
+        ("issue-start", False, False, "none"),
+        ("issue-start", True, True, "filtered-data-source-query"),
+        ("failed-repair", False, False, "none"),
+        ("failed-repair", True, True, "filtered-data-source-query"),
+        ("lesson-candidate", False, False, "none"),
+        ("lesson-refinement", False, True, "known-reference"),
     ],
 )
 def test_classification_schema_and_safety(
-    operation: str, specialized: bool, expected_read: bool
+    operation: str,
+    specialized: bool,
+    expected_read: bool,
+    expected_escalation: str,
 ):
     result = bridge.classify_envelope(envelope(operation, specialized))
 
@@ -91,12 +94,7 @@ def test_classification_schema_and_safety(
     assert result["reason_codes"]
 
     assert type(result["recommended_escalation"]) is str
-    assert result["recommended_escalation"]
-
-    if operation == "lesson-candidate":
-        assert result["recommended_escalation"] == "none"
-    elif operation == "lesson-refinement":
-        assert result["recommended_escalation"] == "known-reference"
+    assert result["recommended_escalation"] == expected_escalation
 
 
 def test_sparse_issue_start_does_not_inherit_failed_repair_context():
