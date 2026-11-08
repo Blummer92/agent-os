@@ -37,8 +37,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -57,6 +59,9 @@ REQUIRED_CODESPACE_STATE = "Available"
 #: under this validated constant. It is the only admissible workdir value:
 #: anything else is rejected before any Codespace is contacted.
 VALIDATED_CODESPACE_REPOSITORY_ROOT = "/workspaces/agent-os"
+LOCAL_CODESPACE_EXECUTION_MODE = "codespace-host-local"
+IDENTITY_GATE_ARGV = ("git", "rev-parse", "--show-toplevel")
+_LOCAL_CHILD_ENV_PATH = "/usr/local/bin:/usr/bin:/bin"
 CODESPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$", re.ASCII)
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 
@@ -139,6 +144,7 @@ class TransportRequest:
     execution_profile_or_none: str | None = None
     environment_health_evidence_or_none: str | None = None
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    execution_mode_or_none: Literal["codespace-host-local"] | None = None
     request_id: str = ""
 
     def __post_init__(self) -> None:
@@ -165,13 +171,18 @@ class TransportRequest:
             or self.timeout_seconds > MAX_TIMEOUT_SECONDS
         ):
             raise ValueError("timeout_seconds must be within the bounded range")
+        if self.execution_mode_or_none is not None and (
+            type(self.execution_mode_or_none) is not str
+            or self.execution_mode_or_none != LOCAL_CODESPACE_EXECUTION_MODE
+        ):
+            raise ValueError("unsupported execution mode")
         computed = transport_request_id(self)
         if self.request_id and self.request_id != computed:
             raise ValueError("request_id does not match request content")
         object.__setattr__(self, "request_id", computed)
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "repository": self.repository,
             "issue_identity": self.issue_identity,
             "admission_id": self.admission_id,
@@ -184,6 +195,9 @@ class TransportRequest:
             "timeout_seconds": self.timeout_seconds,
             "request_id": self.request_id,
         }
+        if self.execution_mode_or_none is not None:
+            payload["execution_mode_or_none"] = self.execution_mode_or_none
+        return payload
 
 
 def transport_request_id(request: TransportRequest) -> str:
@@ -205,6 +219,10 @@ def transport_request_id(request: TransportRequest) -> str:
             "runner-evidence", request.execution_profile_or_none,
             request.environment_health_evidence_or_none,
         ])
+    # Explicit mode is domain-separated so existing SSH request IDs remain
+    # byte-for-byte compatible with prior receipts and tests.
+    if request.execution_mode_or_none is not None:
+        fields.extend(["execution-mode", request.execution_mode_or_none])
     material = json.dumps(
         fields,
         separators=(",", ":"),
@@ -486,11 +504,44 @@ def default_run(argv: tuple[str, ...], *, timeout_seconds: int) -> tuple[int, st
     return completed.returncode, completed.stdout, completed.stderr
 
 
+def _local_child_env(home: str | None) -> dict[str, str]:
+    """An allow-listed child environment, never inherited from the controller.
+
+    In particular GIT_DIR, GIT_WORK_TREE, credentials, Python imports and the
+    controller's possibly checkout-writable PATH cannot affect the probe.
+    """
+    safe_home = home if type(home) is str and home.startswith("/") and "\x00" not in home and "\n" not in home else "/nonexistent"
+    return {"PATH": _LOCAL_CHILD_ENV_PATH, "HOME": safe_home, "LANG": "C.UTF-8", "TZ": "UTC"}
+
+
+def default_run_local(
+    argv: tuple[str, ...], *, cwd: str, env: dict[str, str], timeout_seconds: int
+) -> tuple[int, str, str]:
+    """Run bounded argv without a shell and kill its process group on timeout."""
+    child = subprocess.Popen(
+        tuple(argv), cwd=cwd, env=env, shell=False,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, process_group=0,
+    )
+    try:
+        stdout, stderr = child.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            child.communicate()
+        raise
+    return child.returncode, stdout, stderr
+
+
 def run_codespace_transport(
     request: TransportRequest,
     *,
     list_candidates: Callable[[], tuple[CodespaceCandidate, ...]] = default_list_candidates,
     run: Callable[..., tuple[int, str, str]] = default_run,
+    run_local: Callable[..., tuple[int, str, str]] = default_run_local,
     utc_now: Callable[[], datetime] = _utc_now,
 ) -> TransportResult:
     """Execute one bounded request on the current qualified Codespace.
@@ -509,6 +560,11 @@ def run_codespace_transport(
         return _failure(
             request, TransportStatus.REJECTED, TransportReason.INVALID_REQUEST, None
         )
+    local_mode = request.execution_mode_or_none == LOCAL_CODESPACE_EXECUTION_MODE
+    if local_mode and request.workdir_or_none != VALIDATED_CODESPACE_REPOSITORY_ROOT:
+        return _failure(request, TransportStatus.REJECTED, TransportReason.INVALID_REQUEST, None)
+    if local_mode and request.codespace_name_or_none is None:
+        return _failure(request, TransportStatus.FAILED, TransportReason.CODESPACE_IDENTITY_MISMATCH, None)
 
     try:
         candidates = list_candidates()
@@ -530,38 +586,46 @@ def run_codespace_transport(
             codespace.name,
         )
 
-    ssh_prefix = ("gh", "codespace", "ssh", "-c", codespace.name, "--")
-    if request.workdir_or_none is not None:
-        # Deterministic working-directory contract (#3333 Option B): the only
-        # admissible workdir is the validated repository root. The remote
-        # command is pinned under `cd '<root>' &&`, and repository identity
-        # (not merely the directory path) is asserted on the remote side
-        # before the fixed command runs: the identity gate requires
-        # `git rev-parse --show-toplevel` to report exactly the validated
-        # root. A missing directory, a non-git directory, or a different
-        # repository fails the `&&` chain with a non-zero exit before the
-        # fixed argv executes. Every word here is a validated constant or
-        # fixed gate text, never caller shell text; the admitted argv is
-        # unchanged and the command grammar is not widened.
-        quoted_root = _sh_single_quote(request.workdir_or_none)
-        ssh_argv = (
-            *ssh_prefix,
-            "cd",
-            quoted_root,
-            "&&",
-            *_identity_gate_words(quoted_root),
-            "&&",
-            *(shlex.quote(part) for part in request.argv),
-        )
-    else:
-        ssh_argv = (
-            *ssh_prefix,
-            *(shlex.quote(part) for part in request.argv),
-        )
+    if local_mode:
+        # The outer Actions SSH already placed Gate 2 inside this Codespace.
+        # Fail closed unless its live identity equals both the independently
+        # listed Codespace and the request. Never switch modes automatically.
+        if os.environ.get("CODESPACE_NAME") != codespace.name or request.codespace_name_or_none != codespace.name:
+            return _failure(request, TransportStatus.FAILED, TransportReason.CODESPACE_IDENTITY_MISMATCH, codespace.name)
     started_at_or_none = _utc_text(utc_now())
     started = time.monotonic()
     try:
-        exit_status, stdout, stderr = run(ssh_argv, timeout_seconds=request.timeout_seconds)
+        if local_mode:
+            env = _local_child_env(os.environ.get("HOME"))
+            # The gate's stdout is NOT command output. Compare it in Python;
+            # a mismatch must never execute the fixed argv.
+            gate_rc, gate_stdout, gate_stderr = run_local(
+                IDENTITY_GATE_ARGV,
+                cwd=VALIDATED_CODESPACE_REPOSITORY_ROOT,
+                env=env,
+                timeout_seconds=request.timeout_seconds,
+            )
+            if gate_rc != 0 or gate_stdout.strip() != VALIDATED_CODESPACE_REPOSITORY_ROOT:
+                exit_status, stdout, stderr = (gate_rc if gate_rc != 0 else 1), "", gate_stderr
+            else:
+                exit_status, stdout, stderr = run_local(
+                    request.argv,
+                    cwd=VALIDATED_CODESPACE_REPOSITORY_ROOT,
+                    env=env,
+                    timeout_seconds=request.timeout_seconds,
+                )
+        else:
+            ssh_prefix = ("gh", "codespace", "ssh", "-c", codespace.name, "--")
+            if request.workdir_or_none is not None:
+                quoted_root = _sh_single_quote(request.workdir_or_none)
+                ssh_argv = (
+                    *ssh_prefix, "cd", quoted_root, "&&",
+                    *_identity_gate_words(quoted_root), "&&",
+                    *(shlex.quote(part) for part in request.argv),
+                )
+            else:
+                ssh_argv = (*ssh_prefix, *(shlex.quote(part) for part in request.argv))
+            exit_status, stdout, stderr = run(ssh_argv, timeout_seconds=request.timeout_seconds)
     except subprocess.TimeoutExpired:
         duration_ms = int((time.monotonic() - started) * 1000)
         return _failure(
