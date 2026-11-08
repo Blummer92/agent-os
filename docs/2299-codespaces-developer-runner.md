@@ -430,3 +430,43 @@ The existing affected-package selector recognizes the Teacher OS web executable 
 5. `npx playwright test`
 
 The executor admits only the fixed argument vectors, not arbitrary caller commands. Selection and command admission do not prove runtime success. `npm ci` requires a genuine dependency-resolved `package-lock.json` on the Teacher OS implementation branch. Until a qualified npm registry executor generates and verifies that lockfile, this plan is **blocked**, not passing. The existing workflow's Node setup and browser dependencies must also be qualified; workflow edits remain separately authorization-gated. Actual command exit codes, stdout/stderr, exact checked-out head and browser evidence are required for QA acceptance. A passing build does not establish a working preview or production integration.
+
+## Owner-only remote Codespaces startup (#3345)
+
+The existing `codespaces_lifecycle.py` remains the canonical start/SSH-readiness/
+stop controller for one-shot operations. The new `codespaces_remote_start.py`
+is a **start-and-verify** adapter for a developer session that should remain
+running; it reuses the same lifecycle API helpers and SSH readiness checks.
+
+The GitHub Actions ingress accepts only the exact owner-authored comment
+`/agent-os codespace-start` on issue #3345. It runs in a separate serialized
+job with no GCE fallback, no arbitrary Codespace target, no generic shell and
+no GitHub repository-write permission. The normal governed ingress explicitly
+excludes this command. A workflow rerun is rejected. An already Available
+Codespace is verified without issuing a second start.
+
+The lifecycle job needs two **separate** repository secrets:
+`AGENT_OS_CODESPACES_TOKEN` (existing Codespaces read/SSH credential) and
+`AGENT_OS_CODESPACES_LIFECYCLE_TOKEN` (separately provisioned fine-grained
+user credential with Codespaces lifecycle admin write for only
+`Blummer92/agent-os`). Do not widen the existing read token. This PR
+does not create or inspect secret values. An absent or identical credential
+fails closed before API access. Lifecycle credentials are used only for
+authenticated-user state/start calls; the read token is used for canonical
+discovery and SSH readiness.
+
+The adapter requires exactly one owner/repository-qualified Codespace in
+Shutdown or Available state, compares independent pre-state evidence and
+rechecks identity before a start, then waits for both GitHub Available state
+and SSH readiness. A nonzero/timeout start outcome remains uncertain and is
+never automatically retried. No stop is issued: the existing Codespaces
+idle timeout remains responsible for inactivity shutdown. This is an explicit
+developer-session policy distinct from the #3345 one-shot start/execute/stop
+contract; do not silently replace that contract.
+
+This is **code and CI integration only**, not proof of a live remote start.
+The workflow must not be exercised until its exact-head validation and
+independent QA pass and the separate lifecycle credential is configured
+through an authorized settings operation. GitHub Actions success without a
+`codespaces-ssh-ready` receipt is not acceptance.
+
