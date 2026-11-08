@@ -95,8 +95,45 @@ test-gap evidence**, not evidence that code is unreachable or safe to remove.
 Any wire-or-retire decisions belong to #1729, and static security analysis to
 #3427.
 
+### Test-selection completeness (PR #3817)
+
+A suite that passes must also have *executed* every test the repository defines
+(PR #3816: `--deselect` in `pytest.ini` produced a green aggregate while the
+regression tests never ran). Every suite writes JUnit (published under
+`CI_JUNIT_DIR` when set, otherwise a private temp file), and after each passing
+suite `scripts/agent_os_ci_test_completeness.py` requires every test of one
+runner-owned reference collection (`addopts` emptied, discovery options reset to
+pytest defaults, must exit 0) to appear as an executed `<testcase>`. Suites run
+with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
+and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
+`TEST_COLLECTION_ERROR` when the comparison could not be established) in the
+manifest row `test selection completeness: <suite>`, whose receipt is
+`test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
+pass per suite; the single intentional discovery exclusion is
+`08_Tooling/reusable-capability-registry/tests/fixtures`.
+
+Proven boundary: pytest **configuration** (any config file or addopts, including
+`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`).
+**`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
+outside the boundary**: they change the reference and the real run identically,
+so they are not detected (pinned by a strict xfail in
+`tests/test_agent_os_ci_test_completeness.py`). Focused runs are explicit
+selections and are not checked. This is not CI trust certification.
+
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
+
+## agent_os_frontend_checks.py
+
+Profile-independent frontend lane run by the `frontend` job of the Agent OS Validation Gate. With Node 22 on `PATH` and `origin/main` fetched, from the repository root:
+
+```bash
+EXPECTED_HEAD_SHA="$(git rev-parse HEAD)" python scripts/agent_os_frontend_checks.py
+```
+
+It diffs `HEAD` against the merge-base with `origin/main`, runs every registered Node project (`PROJECTS`) that has changed files, and exits `0` when each applicable project passed or none applies, `1` on a failed command, an unregistered `package.json` project or JS/TS source file, or a head mismatch. It writes `tested_sha` to `GITHUB_OUTPUT`, plus check-run annotations and a step summary. Deleted paths select a project (its tests must still pass) but never count as an unknown project, so a project can be removed together with its `PROJECTS` entry. `agent_os_aggregate_gate.py` requires its success for the same SHA the authoritative status is minted for. To bring a new Node project under CI, add it to `PROJECTS`; list in its `also_triggered_by` any repo path outside the project that its tests read (a drift test scans for `../` reads and fails when one is undeclared).
+
+Tests: `python -m pytest tests/test_agent_os_frontend_checks.py tests/test_agent_os_aggregate_gate.py`.
 
 ## agent_os_github_git_objects
 

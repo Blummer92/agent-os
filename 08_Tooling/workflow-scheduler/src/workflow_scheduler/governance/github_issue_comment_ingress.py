@@ -22,7 +22,14 @@ _HANDOFF_RE = re.compile(r"executor-handoff:[0-9a-f]{64}", re.ASCII)
 _SOURCE_CAPSULE_RE = re.compile(r"pre-publication-evidence:[0-9a-f]{64}", re.ASCII)
 _TRIGGER_RE = re.compile(r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})", re.ASCII)
 _ACTIVATION_RE = re.compile(r"/agent-os activate-first-publication (?P<capsule>pre-publication-evidence:[0-9a-f]{64})", re.ASCII)
-_FIRST_RUN_VALIDATION_RE = re.compile(r"/agent-os validate-first-run (?P<candidate_sha>[0-9a-f]{40})", re.ASCII)
+# Wave 1 (GCE retirement): the `/agent-os validate-first-run <40-hex>` selector
+# was retired (its GCE transport was already removed in #3233; the route
+# resolves the stale envelope to preferred="none"). Ingress no longer admits
+# the command: it is ignored with reason "malformed-trigger" and carries no
+# trigger identity. The `first_run_candidate_sha_or_none` transport field is
+# retained (always null) so stored-evidence consumers keep parsing the same
+# schema, and the retired reason literal below is kept for the same
+# stored-evidence comparison purpose only.
 _RULESET_ADMIN_RE = re.compile(r"/agent-os apply-required-validation-gate (?P<prestate>[0-9a-f]{64})", re.ASCII)
 RULESET_ADMIN_ISSUE = 2234
 _VALIDATION_IDS = (
@@ -97,6 +104,9 @@ IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope", "accepted-discovery-envelope", "accepted-runtime-inspection-envelope",
     "accepted-dev-validation-envelope", "accepted-first-publication-activation-envelope",
+    # Retired in GCE Wave 1: never produced by ingress anymore; kept so
+    # stored-evidence comparisons and the route's fail-closed handling of
+    # stale envelopes keep type-checking.
     "accepted-first-run-validation-envelope", "accepted-notion-read-envelope",
     "accepted-codespaces-diagnostic-envelope", "accepted-ruleset-admin-envelope",
     "accepted-codespace-implementation-envelope", "codespace-implementation-issue-mismatch",
@@ -159,10 +169,6 @@ def _activation_trigger_id(repository:str,issue_number:int,capsule:str)->str:
     material=f"{repository}\0{issue_number}\0activate-first-publication\0{capsule}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _first_run_validation_trigger_id(repository:str,issue_number:int,candidate_sha:str)->str:
-    material=f"{repository}\0{issue_number}\0validate-first-run\0{candidate_sha}".encode("ascii")
-    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
-
 def _notion_read_trigger_id(repository:str,issue_number:int,request_id:str)->str:
     material=f"{repository}\0{issue_number}\0notion-read\0{request_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
@@ -205,11 +211,10 @@ def _ready_recovery_trigger_id(repository:str,issue_number:int,pr_number:int,hea
     material=f"{repository}\0{issue_number}\0recover-ready\0{pr_number}\0{head_sha}\0{main_sha}\0{workflow_sha}\0{source_run_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,merge_admission_pr_number:int|None=None,merge_admission_head_sha:str|None=None,merge_admission_body_sha256:str|None=None,merge_admission_method:str|None=None,draft_validation_pr_number:int|None=None,draft_validation_head_sha:str|None=None,ready_recovery_pr_number:int|None=None,ready_recovery_head_sha:str|None=None,ready_recovery_main_sha:str|None=None,ready_recovery_workflow_sha:str|None=None,ready_recovery_source_run_id:int|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,merge_admission_pr_number:int|None=None,merge_admission_head_sha:str|None=None,merge_admission_body_sha256:str|None=None,merge_admission_method:str|None=None,draft_validation_pr_number:int|None=None,draft_validation_head_sha:str|None=None,ready_recovery_pr_number:int|None=None,ready_recovery_head_sha:str|None=None,ready_recovery_main_sha:str|None=None,ready_recovery_workflow_sha:str|None=None,ready_recovery_source_run_id:int|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
     elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
-    elif first_run_candidate_sha is not None and issue_number is not None: logical_id=_first_run_validation_trigger_id(repository,issue_number,first_run_candidate_sha)
     elif notion_read_request_id is not None and issue_number is not None: logical_id=_notion_read_trigger_id(repository,issue_number,notion_read_request_id)
     elif diagnostic_id is not None and diagnostic_request_id is not None and issue_number is not None: logical_id=_diagnostic_trigger_id(repository,issue_number,diagnostic_id,diagnostic_request_id)
     elif ready_admission_pr_number is not None and ready_admission_head_sha is not None and ready_admission_body_sha256 is not None and issue_number is not None: logical_id=_ready_admission_trigger_id(repository,issue_number,ready_admission_pr_number,ready_admission_head_sha,ready_admission_body_sha256)
@@ -221,7 +226,7 @@ def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attem
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif ppux_projection_branch is not None and ppux_projection_sha is not None and ppux_projection_input_ref is not None and issue_number is not None: logical_id=_ppux_projection_trigger_id(repository,issue_number,ppux_projection_branch,ppux_projection_sha,ppux_projection_input_ref)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256,merge_admission_pr_number_or_none=merge_admission_pr_number,merge_admission_head_sha_or_none=merge_admission_head_sha,merge_admission_body_sha256_or_none=merge_admission_body_sha256,merge_admission_method_or_none=merge_admission_method,draft_validation_pr_number_or_none=draft_validation_pr_number,draft_validation_head_sha_or_none=draft_validation_head_sha,ready_recovery_pr_number_or_none=ready_recovery_pr_number,ready_recovery_head_sha_or_none=ready_recovery_head_sha,ready_recovery_main_sha_or_none=ready_recovery_main_sha,ready_recovery_workflow_sha_or_none=ready_recovery_workflow_sha,ready_recovery_source_run_id_or_none=ready_recovery_source_run_id)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256,merge_admission_pr_number_or_none=merge_admission_pr_number,merge_admission_head_sha_or_none=merge_admission_head_sha,merge_admission_body_sha256_or_none=merge_admission_body_sha256,merge_admission_method_or_none=merge_admission_method,draft_validation_pr_number_or_none=draft_validation_pr_number,draft_validation_head_sha_or_none=draft_validation_head_sha,ready_recovery_pr_number_or_none=ready_recovery_pr_number,ready_recovery_head_sha_or_none=ready_recovery_head_sha,ready_recovery_main_sha_or_none=ready_recovery_main_sha,ready_recovery_workflow_sha_or_none=ready_recovery_workflow_sha,ready_recovery_source_run_id_or_none=ready_recovery_source_run_id)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
@@ -270,9 +275,6 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if ruleset_admin is not None:
         if issue_number!=RULESET_ADMIN_ISSUE:return _result(status="blocked",reason="ruleset-admin-issue-mismatch",operation="apply-required-validation-gate",**common)
         return _result(status="accepted",reason="accepted-ruleset-admin-envelope",ruleset_prestate_sha256=ruleset_admin.group("prestate"),**common)
-    first_run=_FIRST_RUN_VALIDATION_RE.fullmatch(body)
-    if first_run is not None:
-        return _result(status="accepted",reason="accepted-first-run-validation-envelope",first_run_candidate_sha=first_run.group("candidate_sha"),**common)
     activation=_ACTIVATION_RE.fullmatch(body)
     if activation is not None:
         capsule=activation.group("capsule")
