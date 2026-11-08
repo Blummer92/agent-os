@@ -352,6 +352,27 @@ removed it — so no D1 condition references it.)
    and the next run fails with `fixed-pilot-claim-ambiguous` until an
    owner adjudicates the uncertain outcome.
 
+   **Change B — explicit host-local transport (D2).** The trusted Gate 2
+   controller is already running inside the selected Codespace through the
+   outer Actions SSH hop. For the production fixed pilot (without a test-
+   injected dispatcher), the existing canonical dispatcher now requests
+   `codespace-host-local` explicitly instead of opening a second SSH
+   connection back to the same Codespace. The normal transport SSH mode
+   remains available for other callers. Local mode requires the exact
+   canonical repository root, a named and uniquely qualified Codespace,
+   and equality with the host `CODESPACE_NAME` before GitHub API
+   discovery, followed by independent candidate-identity verification;
+   it checks the repository root using a separate fixed
+   `git rev-parse --show-toplevel` subprocess,
+   then runs only the already allowlisted argv with a fixed system PATH,
+   minimal child environment (no inherited Git config or credentials),
+   closed stdin and process-group timeout kill. Both local subprocesses
+   share one monotonic deadline; post-timeout process cleanup is bounded.
+   No fallback to SSH or GCE is allowed. Mode is bound into the request ID;
+   old SSH request IDs are unchanged. The Gate 2 claim and receipt logic from
+   Change A, the workflow, credential configuration and acceptance gate are
+   unchanged. A clean, separately authorized live pilot remains required.
+
    **Change A — uncertain-outcome classification (D2).** Before this
    change, the pilot labelled a timeout, a transport error after start,
    a non-zero SSH client exit, and a post-dispatch exception with the

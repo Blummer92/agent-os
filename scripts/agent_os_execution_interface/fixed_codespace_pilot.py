@@ -332,6 +332,12 @@ def consume_fixed_codespace_pilot(
         ):
             return _receipt("blocked", "canonical-route-binding-unavailable", envelope)
         invoke = dispatcher or dispatch_admitted_operation_to_codespace
+        # Injected dispatchers retain their historical keyword contract.
+        # Only the canonical production dispatcher receives the new mode.
+        production_mode_kwargs = (
+            {"execution_mode_or_none": "codespace-host-local"}
+            if dispatcher is None else {}
+        )
         dispatch_entered = True
         outcome = invoke(
             issue_identity=descriptor.issue_or_handoff_identity,
@@ -350,10 +356,13 @@ def consume_fixed_codespace_pilot(
             codespace_name_or_none=selection.codespace_name,
             base_sha_or_none=sha,
             timeout_seconds=90,
+            # The trusted Gate 2 host is already the selected Codespace;
+            # request an explicit local mode, never an automatic SSH fallback.
             # Deterministic working-directory contract (#3333 Option B): the
             # fixed probe always runs under the validated repository root
             # rather than the incidental SSH session directory.
             workdir_or_none=VALIDATED_CODESPACE_REPOSITORY_ROOT,
+            **production_mode_kwargs,
         )
         result = outcome.transport_result_or_none
         receipt = _receipt("blocked", "codespace-dispatch-not-completed", envelope)

@@ -401,6 +401,77 @@ def _assert_no_authority(receipt):
         assert receipt[flag] is False
 
 
+def test_default_production_pilot_selects_host_local_without_nested_ssh(canonical, monkeypatch):
+    """Full admitted composition uses the real dispatcher in local mode."""
+    import scripts.agent_os_execution_interface.codespace_implementation_dispatch as dispatch_module
+
+    monkeypatch.setenv("CODESPACE_NAME", CODESPACE)
+    actual_dispatch = dispatch_module.dispatch_admitted_operation_to_codespace
+    seen = {}
+    calls = []
+
+    def local(argv, *, cwd, env, timeout_seconds):
+        calls.append(tuple(argv))
+        assert cwd == "/workspaces/agent-os"
+        assert 0 < timeout_seconds <= 90
+        if len(calls) == 1:
+            return 0, "/workspaces/agent-os\n", ""
+        return 0, SHA + "\n", ""
+
+    def default_dispatch(**kwargs):
+        seen.update(kwargs)
+        return actual_dispatch(
+            **kwargs,
+            list_candidates=_listed(),
+            run_local=local,
+            run=lambda *a, **k: pytest.fail("unexpected nested SSH"),
+        )
+
+    monkeypatch.setattr(
+        dispatch_module, "dispatch_admitted_operation_to_codespace", default_dispatch
+    )
+    descriptor = _descriptor()
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+    )
+    assert seen["execution_mode_or_none"] == "codespace-host-local"
+    assert seen["argv"] == ("git", "rev-parse", "HEAD")
+    assert calls == [("git", "rev-parse", "--show-toplevel"), ("git", "rev-parse", "HEAD")]
+    assert receipt["status"] == "completed"
+    assert receipt["reason_codes"] == ["fixed-head-probe-passed"]
+    _assert_no_authority(receipt)
+
+
+def test_injected_dispatcher_preserves_legacy_keyword_signature(canonical):
+    """Existing callbacks must not receive the new production-only keyword."""
+    descriptor = _descriptor()
+    observed = {}
+
+    def legacy_dispatcher(**kwargs):
+        assert "execution_mode_or_none" not in kwargs
+        observed.update(kwargs)
+        return SimpleNamespace(
+            status=DispatchStatus.NOT_DISPATCHED, transport_result_or_none=None
+        )
+
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=legacy_dispatcher,
+    )
+    assert observed["argv"] == ("git", "rev-parse", "HEAD")
+    assert receipt["status"] == "blocked"
+
+
 def test_fixed_operation_identity_is_pinned_to_literals():
     # Literals, not the module constants on both sides: a change to the fixed
     # operation must not be able to move the assertion that guards it.
