@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pwd
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -517,8 +518,79 @@ def test_documented_sudo_rule_authorizes_nothing_the_old_path_needed() -> None:
 
 # GCE Wave 1: the workflow refusal-mapping `case` block (refusal string ->
 # finite reason code) retired with the host-install step that consumed it.
-# Nothing maps refusals anymore. Refusal *emission* is still proven by the
-# real-execution tests above, which assert the exact refusal strings fire.
+# Nothing maps refusals anymore, so a new refusal string can no longer
+# silently default anywhere. What survives is the emission inventory below:
+# any new refusal the preserved scripts emit must be added to the pinned set
+# deliberately. (Only a subset of these strings also has an exact-string
+# real-execution assertion above; the pinned set is the completeness guard.)
+
+
+# Every refusal string the two preserved installer scripts can emit, exactly.
+# Recompute with the same extraction the retired workflow-mapping tests used
+# (fail "..." + "host runtime install refused: ..." + require_trusted_* messages).
+PINNED_EMITTED_REFUSALS = frozenset(
+    {
+        "EXPECTED_SHA must be a lowercase 40-hex commit",
+        "REPOSITORY_ROOT must be absolute",
+        "REPOSITORY_ROOT must be a git checkout",
+        "checkout does not match EXPECTED_SHA",
+        "checkout must be on main",
+        "entrypoint installer was not idempotent",
+        "entrypoint owner/group/mode mismatch",
+        "expected one agent-memory-context-manager wheel",
+        "expected one agent-os-execution-service wheel",
+        "expected one workflow-scheduler wheel",
+        "host OS identity unavailable",
+        "passwordless bounded sudo unavailable",
+        "privileged installer argv must be exactly --source-sha <sha>",
+        "privileged installer evidence malformed",
+        "privileged installer evidence source mismatch",
+        "privileged installer must be a root-owned regular file",
+        "privileged installer must run as root",
+        "privileged installer path is untrusted",
+        "privileged installer unavailable",
+        "python3 pip unavailable",
+        "qualified host must be Debian",
+        "qualified host must be Debian 12",
+        "source SHA is not on canonical main",
+        "source SHA must be a lowercase 40-hex commit",
+        "staged checkout does not match source SHA",
+        "staged entrypoint installer missing",
+        "staged entrypoint installer must not be a symlink",
+        "staged tree must be root-owned",
+        "staging path is untrusted",
+        "staging root is not root-owned 0700",
+        "staging root must not be a symlink",
+        "sudo unavailable",
+    }
+)
+
+
+def _emitted_refusals(script: Path) -> set[str]:
+    text = script.read_text(encoding="utf-8")
+    emitted = set()
+    emitted.update(re.findall(r'fail "([^"$]+)"', text))
+    emitted.update(re.findall(rf"{REFUSAL_PREFIX}([^\"$\\]+)\\n", text))
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(
+            ("require_trusted_path ", "require_trusted_ancestry ")
+        ):
+            continue
+        try:
+            message = shlex.split(stripped)[-1]
+        except ValueError:
+            continue
+        if "$" not in message:
+            emitted.add(message)
+    return emitted
+
+
+def test_emitted_refusal_inventory_is_pinned() -> None:
+    """A new refusal the preserved scripts emit must be noticed deliberately,
+    not silently added: the emitted set must equal the pinned inventory."""
+    emitted = _emitted_refusals(PRIVILEGED) | _emitted_refusals(UNPRIVILEGED)
+    assert emitted == set(PINNED_EMITTED_REFUSALS)
 
 
 # --------------------------------------------------------------------------

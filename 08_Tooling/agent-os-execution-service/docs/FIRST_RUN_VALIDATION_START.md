@@ -12,45 +12,51 @@
 
 ## Selector
 
-The bounded GitHub issue-comment selector is exactly:
+The retired bounded GitHub issue-comment selector was exactly:
 
 ```text
 /agent-os validate-first-run <candidate-sha>
 ```
 
-`candidate-sha` is exactly 40 lowercase hexadecimal characters. Repository and issue identity come from the trusted GitHub event envelope. The ingress result carries only `first_run_candidate_sha_or_none`; it carries no argv, shell text, approval/evidence JSON, authority booleans, store paths, credentials, or runtime configuration.
+`candidate-sha` was exactly 40 lowercase hexadecimal characters. Repository and issue identity came from the trusted GitHub event envelope. The ingress result carried only `first_run_candidate_sha_or_none`; it carried no argv, shell text, approval/evidence JSON, authority booleans, store paths, credentials, or runtime configuration.
 
-Equivalent comments for the same repository, issue, and candidate SHA converge to one deterministic logical trigger identity. A different candidate SHA produces a different trigger identity. Transport admission remains non-authorizing: execution, Scheduler invocation, and side effects remain false.
+Equivalent comments for the same repository, issue, and candidate SHA converged to one deterministic logical trigger identity. A different candidate SHA produced a different trigger identity. Transport admission remained non-authorizing: execution, Scheduler invocation, and side effects remained false.
 
 ## Transport route
 
-`github_issue_comment_ingress` accepts the selector and carries the candidate
+`github_issue_comment_ingress` accepted the selector and carried the candidate
 identity on `first_run_candidate_sha_or_none`. Transport reconstruction in
 `gce_gcloud_adapter._ingress_from_file` preserves that field, and
-`execute_transport` routes `accepted-first-run-validation-envelope` to
+`execute_transport` formerly routed `accepted-first-run-validation-envelope` to
 `first_run_validation_gce.execute_first_run_validation_transport` before the
-generic #1217 control binding. Without both, an accepted first-run envelope
-loses its candidate identity and falls through to the Scheduler control path,
-which cannot carry it.
+generic #1217 control binding (`first_run_validation_gce.py` was deleted in
+#3233, and the adapter carries no first-run branch anymore). Without both, an
+accepted first-run envelope lost its candidate identity and fell through to
+the Scheduler control path, which cannot carry it.
 
-The transport performs, in order: ingress identity validation, OIDC claims
-check, bounded cold start when the approved host is STOPPED, fixed-entrypoint
+The transport performed, in order: ingress identity validation, OIDC claims
+check, bounded cold start when the approved host was STOPPED, fixed-entrypoint
 readiness probe, then exactly one `GcloudIapAdapter.validate_first_run` call.
-That method builds the fixed host command from the trusted repository/issue plus
-the 40-hex SHA — there is no argv parameter — and rejects returned evidence
-whose repository, issue, or candidate identity drifts, or that reports a crossed
+That method built the fixed host command from the trusted repository/issue plus
+the 40-hex SHA — there was no argv parameter — and rejected returned evidence
+whose repository, issue, or candidate identity drifted, or that reported a crossed
 Scheduler/publication/lease/resume boundary.
 
-When this first-run operation owns the cold start, #2428 composes the adapter's
-existing opt-in stop capability and independently waits for provider-observed
-STOPPED before reporting cleanup. A host that was already RUNNING is never
+When this first-run operation owned the cold start, #2428 composed the adapter's
+existing opt-in stop capability and independently waited for provider-observed
+STOPPED before reporting cleanup. A host that was already RUNNING was never
 claimed or stopped by this first-run transport. Missing shutdown capability,
-stop failure, or unconfirmed provider terminal state is reported as bounded
+stop failure, or unconfirmed provider terminal state was reported as bounded
 `needs-decision` evidence rather than as successful cleanup. No independent
 shutdown authority, second lifecycle controller, or unconditional `finally:
-stop` path is introduced.
+stop` path was introduced.
 
 ## Trusted-host composition
+
+The composition below describes the preserved entrypoint module as built; it
+is not reachable through any live governed route after the Wave 1 retirement
+(the selector and its transport are gone, and no production caller invokes
+`compose_first_run_validation`).
 
 `first_run_validation_entrypoint.compose_first_run_validation` composes the
 existing owners once each, in order, failing closed between steps:
@@ -94,11 +100,13 @@ The selector does not create a second validation, approval, currentness, custody
 
 ## Activation boundary
 
-`gce_gcloud_adapter.py` now carries the fixed `validate-first-run` host
-operation and the composition contract above, but the governed GitHub Actions ->
-WIF -> GCE/IAP route remains workflow/deployment controlled. This issue's
-ordinary Safe Implementation Lane does not authorize GitHub Actions workflow
-mutation, IAM/WIF changes, VM/host deployment, or live Scheduler/GCE execution.
+`gce_gcloud_adapter.py` no longer carries the fixed `validate-first-run` host
+operation (#3233 removed its transport; GCE Wave 1 retired the ingress
+selector). The composition contract above describes the preserved entrypoint
+module only, and the governed GitHub Actions -> WIF -> GCE/IAP route remains
+workflow/deployment controlled. This issue's ordinary Safe Implementation Lane
+does not authorize GitHub Actions workflow mutation, IAM/WIF changes, VM/host
+deployment, or live Scheduler/GCE execution.
 
 Two things therefore remain separately authorized, and the repository fails
 closed on both rather than inventing a fallback:

@@ -44,21 +44,23 @@ closed if they are not.
 > literal exactly once, solely as the expected-SHA anchor for the surviving
 > read-only sudo-admission inspection.
 
-`scripts/install-host-runtime` remains the unprivileged repository-owned wrapper
-for the separately authorized #1238 maintenance action. It validates the local
-checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed privileged helper, and
-the exact bounded sudo capability. All root work is delegated to
-`/usr/local/libexec/agent-os-host-install`; returned JSON evidence must report the
-same source SHA and explicitly keeps `scheduler_invoked` and
+`scripts/install-host-runtime` was the unprivileged repository-owned wrapper
+for the separately authorized #1238 maintenance action. No workflow route
+invokes it anymore; the wrapper is preserved as historical installer evidence.
+It validates the local checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed
+privileged helper, and the exact bounded sudo capability. All root work is
+delegated to `/usr/local/libexec/agent-os-host-install`; returned JSON evidence
+must report the same source SHA and explicitly keeps `scheduler_invoked` and
 `execution_authorized` false.
 
-The existing `.github/workflows/agent-os-governed-invocation.yml` route remains
-bound to the exact repository-owner comment, identity, repository, issue,
+The former `.github/workflows/agent-os-governed-invocation.yml` route was bound
+to the exact repository-owner comment, identity, repository, issue,
 `refs/heads/main`, WIF transport, resource tuple, and current permissions. #1341
-does not add Scheduler, lease, retry, fallback, VM-stop, repository-write, or
-execution authority. The separately authorized workflow diff is limited to the
-tracked installer digest and finite refusal mappings; the post-merge source-SHA
-bump remains a separate mechanical follow-up already recorded on #1341.
+added no Scheduler, lease, retry, fallback, VM-stop, repository-write, or
+execution authority. GCE Wave 1 retired that route; the tracked installer digest
+pin and the finite refusal mappings were deleted with it, and the source SHA
+survives only as the expected-SHA anchor for the read-only sudo-admission
+inspection.
 
 ## Bounded privileged installation (#1341)
 
