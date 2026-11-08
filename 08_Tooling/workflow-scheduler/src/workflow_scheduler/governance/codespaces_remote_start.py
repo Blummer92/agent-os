@@ -88,12 +88,15 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
     Codespace is verified without a second start.
     """
     comment_id = transport.get("comment_id")
+    issue_number = transport.get("issue_number")
+    run_attempt = transport.get("run_attempt")
+    # Exact int types: bool and float (True, 1.0, 3345.0) must not satisfy ==.
     if not (transport.get("status") == "accepted"
             and transport.get("reason") == "accepted-codespace-start-envelope"
             and transport.get("repository") == REPOSITORY
-            and transport.get("issue_number") == CODESPACE_START_ISSUE
+            and type(issue_number) is int and issue_number == CODESPACE_START_ISSUE
             and transport.get("actor") == APPROVED_OWNER
-            and transport.get("run_attempt") == 1
+            and type(run_attempt) is int and run_attempt == 1
             and type(comment_id) is int and comment_id > 0
             and type(read_token) is str and bool(read_token)
             and type(lifecycle_token) is str and bool(lifecycle_token)

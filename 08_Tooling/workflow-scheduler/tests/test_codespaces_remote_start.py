@@ -319,3 +319,20 @@ def test_qualified_target_without_a_name_fails_closed(monkeypatch):
     assert result["status"] == "blocked"
     assert result["reason_codes"] == ["codespaces-discovery-invalid"]
     assert fake.calls == []
+
+
+# R3 (#3828 independent QA): numeric transport fields require exact int.
+
+@pytest.mark.parametrize("field, value", [
+    ("run_attempt", True), ("run_attempt", 1.0),
+    ("issue_number", 3345.0), ("issue_number", True),
+    ("comment_id", True), ("comment_id", 1001.0),
+])
+def test_numeric_transport_fields_require_exact_int(field, value):
+    payload = transport()
+    payload[field] = value
+    fake = FakeRun()
+    result = run(fake, payload=payload)
+    assert result["status"] == "blocked"
+    assert result["reason_codes"] == ["start-authorization-or-credential-unavailable"]
+    assert fake.calls == []
