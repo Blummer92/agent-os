@@ -26,19 +26,46 @@ AUTHORITY_PATHS = frozenset({
     "scripts/agent_os_ci_test_completeness.py",
     "scripts/agent_os_ci_junit_diff.py",
     "scripts/agent_os_frontend_checks.py",
+    # Four direct pip / editable-project inputs installed in both the plan
+    # and aggregate jobs of agent-os-validation.yml.
+    "requirements-dev.txt",
+    "08_Tooling/workflow-scheduler/requirements.txt",
+    "08_Tooling/instructional-materials-coach/pyproject.toml",
+    "08_Tooling/notion-navigation-client/pyproject.toml",
+    # npm ci consumes a package manifest and lockfile for the focused plan.
+    "08_Tooling/instructional-materials-coach/picture-perfect-coach/package.json",
+    "08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json",
 })
-AUTHORITY_PREFIXES = ("scripts/agent_os_ci_", "scripts/agent_os_remote_validation/")
+AUTHORITY_PREFIXES = (
+    "scripts/agent_os_ci_",
+    "scripts/agent_os_remote_validation/",
+    ".github/actions/",
+    ".github/workflows/",
+)
 AUTHORITY_SUFFIXES = ("/conftest.py",)
+# Dependencies are selected dynamically by some validation branches. Reject
+# *any* package/test runner configuration change rather than assuming the four
+# direct pip inputs above are the exhaustive future authority surface.
+AUTHORITY_FILENAMES = frozenset({
+    "pyproject.toml", "setup.py", "setup.cfg", "tox.ini", "pytest.ini",
+    "package.json", "package-lock.json", "npm-shrinkwrap.json",
+    "pnpm-lock.yaml", "yarn.lock", "uv.lock", "Pipfile", "Pipfile.lock",
+})
 
 
 def touches_authority(paths: set[str]) -> bool:
-    return any(
-        path in AUTHORITY_PATHS
-        or path in {"pytest.ini", "pyproject.toml", "tests/conftest.py", "07_Agent_Tests/validate-repo-structure.sh"}
-        or path.startswith(AUTHORITY_PREFIXES)
-        or path.endswith(AUTHORITY_SUFFIXES)
-        for path in paths
-    )
+    def is_authority_path(path: str) -> bool:
+        name = path.rsplit("/", 1)[-1]
+        return (
+            path in AUTHORITY_PATHS
+            or path in {"tests/conftest.py", "07_Agent_Tests/validate-repo-structure.sh"}
+            or path.startswith(AUTHORITY_PREFIXES)
+            or path.endswith(AUTHORITY_SUFFIXES)
+            or name in AUTHORITY_FILENAMES
+            or (name.startswith("requirements") and name.endswith(".txt"))
+        )
+
+    return any(is_authority_path(path) for path in paths)
 
 
 JOBS = (
