@@ -360,8 +360,10 @@ removed it — so no D1 condition references it.)
    connection back to the same Codespace. The normal transport SSH mode
    remains available for other callers. Local mode requires the exact
    canonical repository root, a named and uniquely qualified Codespace,
-   and equality with the host `CODESPACE_NAME`; it checks the repository
-   root using a separate fixed `git rev-parse --show-toplevel` subprocess,
+   and equality with the host `CODESPACE_NAME` before GitHub API
+   discovery, followed by independent candidate-identity verification;
+   it checks the repository root using a separate fixed
+   `git rev-parse --show-toplevel` subprocess,
    then runs only the already allowlisted argv with a fixed system PATH,
    minimal child environment (no inherited Git config or credentials),
    closed stdin and process-group timeout kill. Both local subprocesses
