@@ -534,12 +534,29 @@ def default_run_local(
     try:
         stdout, stderr = child.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
+        # The whole isolated process group must be stopped, but a descendant
+        # that escaped the group can still hold a captured pipe open. Never
+        # wait indefinitely for those pipes after the timeout.
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        finally:
-            child.communicate()
+        try:
+            child.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            # Reaping is also bounded. The original request remains an
+            # uncertain timeout, never a retryable pre-execution refusal.
+            try:
+                child.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            for stream in (child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
         raise
     return child.returncode, stdout, stderr
 
@@ -602,25 +619,34 @@ def run_codespace_transport(
             return _failure(request, TransportStatus.FAILED, TransportReason.CODESPACE_IDENTITY_MISMATCH, codespace.name)
     started_at_or_none = _utc_text(utc_now())
     started = time.monotonic()
+    # The identity gate and the command share one wall-clock budget. Never
+    # reset the timeout after the first child returns.
+    deadline = started + request.timeout_seconds
     try:
         if local_mode:
             env = _local_child_env(os.environ.get("HOME"))
             # The gate's stdout is NOT command output. Compare it in Python;
             # a mismatch must never execute the fixed argv.
+            gate_remaining = deadline - time.monotonic()
+            if gate_remaining <= 0:
+                raise subprocess.TimeoutExpired(IDENTITY_GATE_ARGV, request.timeout_seconds)
             gate_rc, gate_stdout, gate_stderr = run_local(
                 IDENTITY_GATE_ARGV,
                 cwd=VALIDATED_CODESPACE_REPOSITORY_ROOT,
                 env=env,
-                timeout_seconds=request.timeout_seconds,
+                timeout_seconds=gate_remaining,
             )
             if gate_rc != 0 or gate_stdout.strip() != VALIDATED_CODESPACE_REPOSITORY_ROOT:
                 exit_status, stdout, stderr = (gate_rc if gate_rc != 0 else 1), "", gate_stderr
             else:
+                payload_remaining = deadline - time.monotonic()
+                if payload_remaining <= 0:
+                    raise subprocess.TimeoutExpired(request.argv, request.timeout_seconds)
                 exit_status, stdout, stderr = run_local(
                     request.argv,
                     cwd=VALIDATED_CODESPACE_REPOSITORY_ROOT,
                     env=env,
-                    timeout_seconds=request.timeout_seconds,
+                    timeout_seconds=payload_remaining,
                 )
         else:
             ssh_prefix = ("gh", "codespace", "ssh", "-c", codespace.name, "--")
