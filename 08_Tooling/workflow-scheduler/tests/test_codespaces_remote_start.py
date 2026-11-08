@@ -360,3 +360,13 @@ def test_lifecycle_authorized_is_explicit_per_path(label, fake, payload_override
     payload.update(payload_override or {})
     result = run(fake, payload=payload)
     assert (result["status"], result["lifecycle_authorized"]) == expected, label
+
+
+# R5 (#3828 independent QA): the log line and the uploaded receipt agree.
+
+def test_logged_receipt_matches_uploaded_receipt(tmp_path, monkeypatch, capsys):
+    code, receipt = _invoke_main(tmp_path, monkeypatch, FakeRun(), json.dumps(transport()))
+    logged = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0
+    assert logged == receipt
+    assert receipt["codespace_name"] == NAME

@@ -178,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({k: v for k, v in result.items() if k not in {"codespace_name"}}))
+    # The log line matches the uploaded receipt: the Codespace name is already
+    # published through the artifact and the existing execution_surface_id
+    # evidence, so a partial stdout filter would only imply false redaction.
+    print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "success" else 1
 
 
