@@ -27,6 +27,7 @@ import textwrap
 from pathlib import Path
 
 import yaml
+import pytest
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = Path(os.environ.get("D1_WORKFLOW_PATH", str(ROOT / ".github/workflows/agent-os-governed-invocation.yml")))
@@ -370,3 +371,46 @@ def test_d1_transfer_shell_metacharacters_are_data(tmp_path) -> None:
     assert evidence["record"]["transfer_ok"] is True
     assert not pwn.exists()
     assert evidence["remote_event_bytes"] == event_body
+
+ 
+def test_d1_preflight_fixed_repository_root_guard() -> None:
+    preflight = _block(_text(), PREFLIGHT, TRANSFER)
+    assert 'bindings["AGENT_OS_REPOSITORY_ROOT"].rstrip("/") != "/workspaces/agent-os"' in preflight
+    assert "preflight-repository-root-mismatch" in preflight
+
+
+def test_d1_receipt_path_guard_is_canonical_before_copy() -> None:
+    run = _block(_text(), RUN, GATE)
+    assert 'store_root = Path(bindings["AGENT_OS_CHECKPOINT_STORE_ROOT"])' in run
+    assert 'receipt_file.parent == receipts_dir' in run
+    assert '".." not in receipt_file.parts' in run
+    assert 'str(receipt_file) == receipt_path' in run
+    assert run.index("receipt_path_canonical") < run.index('["gh", "codespace", "cp"')
+
+
+@pytest.mark.parametrize(
+    "root,path,allowed",
+    [
+        ("/store", "/store/invocations/receipts/fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", True),
+        ("/store/", "/store/invocations/receipts/fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", True),
+        ("/store", "/store/invocations/receipts/../../tmp/fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", False),
+        ("/store", "/store/invocations/receipts/./fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", False),
+        ("/store", "/store/invocations/receipts//fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", False),
+        ("/other", "/store/invocations/receipts/fixed-head-probe-" + "a" * 64 + "-" + "b" * 40 + "-20261108T060000Z.json", False),
+    ],
+)
+def test_d1_receipt_path_lexical_policy(root: str, path: str, allowed: bool) -> None:
+    # Mirror the literal/pathlib policy and keep this input table as a
+    # regression oracle for trailing slash, traversal and duplicate separators.
+    store_root = Path(root)
+    file = Path(path)
+    receipts_dir = store_root / "invocations" / "receipts"
+    valid = (
+        store_root.is_absolute()
+        and ".." not in store_root.parts
+        and file.is_absolute()
+        and ".." not in file.parts
+        and str(file) == path
+        and file.parent == receipts_dir
+    )
+    assert valid is allowed
