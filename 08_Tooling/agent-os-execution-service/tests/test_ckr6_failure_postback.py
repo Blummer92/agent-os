@@ -147,17 +147,30 @@ def test_infrastructure_failure_posts_one_correlated_fallback(transport):
     assert set(payload) - {"request_comment_id"} <= bridge.RESULT_FIELDS
 
 
-def test_reporter_fallback_matches_bridge_fallback_exactly():
-    assert reporter.fallback_result(
-        REPOSITORY, ISSUE_NUMBER
-    ) == bridge._fallback_result(REPOSITORY, ISSUE_NUMBER)
-    assert reporter.serialize_result_comment(
-        reporter.fallback_result(REPOSITORY, ISSUE_NUMBER),
-        request_comment_id=REQUEST_COMMENT_ID,
-    ) == bridge.serialize_ckr6_result_comment(
-        bridge._fallback_result(REPOSITORY, ISSUE_NUMBER),
-        request_comment_id=REQUEST_COMMENT_ID,
+@pytest.mark.parametrize(
+    ("repository", "issue_number", "request_comment_id"),
+    [
+        (REPOSITORY, ISSUE_NUMBER, REQUEST_COMMENT_ID),
+        ("Example/café", 12, 789),
+    ],
+)
+def test_reporter_fallback_matches_bridge_fallback_exactly(
+    repository: str, issue_number: int, request_comment_id: int
+):
+    # The stdlib-only reporter must remain byte-compatible with the bridge,
+    # including non-ASCII canonical JSON and correlation metadata.
+    fallback = reporter.fallback_result(repository, issue_number)
+    assert fallback == bridge._fallback_result(repository, issue_number)
+    reporter_comment = reporter.serialize_result_comment(
+        fallback, request_comment_id=request_comment_id
     )
+    bridge_comment = bridge.serialize_ckr6_result_comment(
+        bridge._fallback_result(repository, issue_number),
+        request_comment_id=request_comment_id,
+    )
+    assert reporter_comment.encode("utf-8") == bridge_comment.encode("utf-8")
+    assert bridge.parse_ckr6_result_comment(reporter_comment)["request_comment_id"] == request_comment_id
+    assert reporter.parse_result_comment(bridge_comment)["request_comment_id"] == request_comment_id
 
 
 def test_cli_main_posts_and_returns_zero(transport, tmp_path, monkeypatch):
