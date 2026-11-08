@@ -103,40 +103,85 @@ def test_broken_store_detect_repair_redeliver(tmp_path, capsys):
     with pytest.raises(InvocationCompletionReceiptError):
         store.verify_writable()
 
-    # A delivery of a fresh handoff still completes but warns and records
-    # nothing — the run is not misreported as failed.
+    # A non-directory receipt store makes prior completion unknowable.
+    # Fail closed before dispatch, rather than executing and hoping to
+    # write a completion receipt afterward.
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
+        )
+    )
+    assert payload["status"] == "needs-decision"
+    assert payload["reason_codes"] == ["completion-receipt-unavailable"]
+    assert len(dispatched) == 1  # baseline H2 only
+    assert store.find_claim(H3) is None
+
+    # Step 2 (runbook): repair the store and verify its writeability.
+    (root / "invocations" / "receipts").unlink()
+    (root / "invocations" / "receipts").mkdir(mode=0o700)
+    store.verify_writable()
+
+    # No work ran for H3 while the receipt directory was corrupt.
+    # Re-delivery can now complete once, then the receipt blocks replay.
     payload = json.loads(
         run_governed_resume(
             ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
         )
     )
     assert payload["status"] == "completed"
-    assert "completion-receipt-unrecorded" in payload["reason_codes"]
-    err = capsys.readouterr().err
-    assert "completion receipt unrecorded" in err
-    assert f"(store {store.receipts_dir})" in err
-    assert store.find_completed(H3) is None
-    assert store.find_claim(H3) is not None  # protect the completed but unreceipted run
-
-    # Step 2 (runbook): remove the blocking file, recreate the directory.
-    (root / "invocations" / "receipts").unlink()
-    (root / "invocations" / "receipts").mkdir(mode=0o700)
-    store.verify_writable()  # the probe passes again
-
-    # Step 3 (runbook): no automatic retry of a completed but unreceipted
-    # run. A new delivery must not execute again after the store is repaired.
+    assert len(dispatched) == 2
+    assert store.find_completed(H3) is not None
     payload = json.loads(
         run_governed_resume(
             ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
         )
     )
     assert payload["status"] == "blocked"
-    assert payload["reason_codes"] == ["invocation-already-claimed"]
-    assert len(dispatched) == 2  # baseline H2 plus the one H3 dispatch
+    assert payload["reason_codes"] == ["invocation-already-completed"]
+    assert payload["scheduler_dispatch_count"] == 0
+    assert len(dispatched) == 2
 
-    # Operator separately verifies the completed Pilot evidence, binds the
-    # exact admitted identity, records the missing receipt, then clears the
-    # single orphaned claim while no owner is running.
+
+def test_completed_but_unrecorded_result_requires_operator_reconciliation(
+    tmp_path, capsys
+):
+    store, root = _store(tmp_path)
+    dispatched = []
+
+    class ReceiptWriteFailureStore(InvocationCompletionStore):
+        def record_completed(self, receipt):
+            raise InvocationCompletionReceiptError("injected post-dispatch failure")
+
+    failing_store = ReceiptWriteFailureStore.for_store_root(root)
+
+    def dispatch(value):
+        dispatched.append(value)
+        return PilotResult()
+
+    # This failure happens AFTER dispatch, not during pre-dispatch receipt
+    # lookup. A completion cannot be truthfully reported as failed.
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H3], bindings=_bindings(H3, dispatch, failing_store)
+        )
+    )
+    assert payload["status"] == "completed"
+    assert "completion-receipt-unrecorded" in payload["reason_codes"]
+    assert "completion receipt unrecorded" in capsys.readouterr().err
+    assert store.find_completed(H3) is None
+    assert store.find_claim(H3) is not None
+    assert len(dispatched) == 1
+
+    replay = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
+        )
+    )
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 1
+
+    # Independent completion evidence is required before reconciliation.
     verified_pilot = SimpleNamespace(
         repository="Blummer92/agent-os",
         issue_numbers=(560,),
@@ -151,15 +196,14 @@ def test_broken_store_detect_repair_redeliver(tmp_path, capsys):
     claim = store.find_claim(H3)
     assert claim is not None
     assert store.release_claim(H3, claim["run_id"])
-    payload = json.loads(
+    replay = json.loads(
         run_governed_resume(
             ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
         )
     )
-    assert payload["status"] == "blocked"
-    assert payload["reason_codes"] == ["invocation-already-completed"]
-    assert payload["scheduler_dispatch_count"] == 0
-    assert len(dispatched) == 2
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-completed"]
+    assert len(dispatched) == 1
 
 
 def test_wrong_receipt_conflicts_then_recovers_by_deleting_one_file(tmp_path):
