@@ -22,7 +22,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.agent_os_issue_acceptance import merge_admission_actions as actions  # noqa: E402
 from scripts.agent_os_issue_acceptance.merge_applicability import (  # noqa: E402

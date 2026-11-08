@@ -104,9 +104,7 @@ it performs the one live issue read, translates every #1451 input, invokes
 the unchanged #1451 -> #1441 -> #1419 chain exactly once, and returns the
 serialized ``agent-os-compute-control-projection/1.0`` payload. It performs
 no Notion write, no merge, no closure, and no other external-system
-mutation; the #1424 destination writer was retired 2026-11-05
-(governance simplification, Loop 3) and no destination writer remains --
-the projection is computed but never written to Notion.
+mutation; #1424 remains the sole destination writer.
 
 The one join this composition boundary owns is the single-claim lineage
 check below: when the acquired state has one primary claim, the caller's
