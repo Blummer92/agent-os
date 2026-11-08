@@ -68,7 +68,8 @@ def test_local_executes_gate_then_fixed_argv_no_ssh(monkeypatch):
     assert result.argv == ("git", "rev-parse", "HEAD")
     assert result.execution_surface == "codespaces"
     assert [x[0] for x in calls] == [tr.IDENTITY_GATE_ARGV, ("git", "rev-parse", "HEAD")]
-    assert all(x[1] == ROOT and x[3] == 90 for x in calls)
+    assert all(x[1] == ROOT and 0 < x[3] <= 90 for x in calls)
+    assert calls[1][3] <= calls[0][3]
     assert all(x[2]["PATH"] == "/usr/bin:/bin" for x in calls)
     assert all(x[2]["HOME"] == "/nonexistent" and x[2]["GIT_CONFIG_NOSYSTEM"] == "1" for x in calls)
 
@@ -264,4 +265,70 @@ def test_timeout_kills_process_group_and_reaps(monkeypatch):
             ("git", "rev-parse", "HEAD"), cwd=ROOT,
             env=tr._local_child_env("/home/codespace"), timeout_seconds=90,
         )
-    assert seen == [("communicate", 90), ("killpg", 2001, tr.signal.SIGKILL), ("communicate", None)]
+    assert seen == [("communicate", 90), ("killpg", 2001, tr.signal.SIGKILL), ("communicate", 2)]
+
+def test_gate_and_payload_share_single_deadline(monkeypatch):
+    monkeypatch.setenv("CODESPACE_NAME", NAME)
+    now = iter([10.0, 10.0, 10.0, 60.0, 60.0])
+    monkeypatch.setattr(tr.time, "monotonic", lambda: next(now))
+    budgets = []
+
+    def local(argv, *, cwd, env, timeout_seconds):
+        budgets.append((argv, timeout_seconds))
+        if argv == tr.IDENTITY_GATE_ARGV:
+            return 0, ROOT + "\\n", ""
+        return 0, SHA + "\\n", ""
+
+    result = tr.run_codespace_transport(
+        request(), list_candidates=lambda: (candidate(),),
+        run_local=local, run=lambda *a, **k: pytest.fail("SSH fallback"),
+    )
+    assert result.exit_status_or_none == 0
+    assert budgets == [(tr.IDENTITY_GATE_ARGV, 90.0), (("git", "rev-parse", "HEAD"), 40.0)]
+
+
+def test_exhausted_budget_never_starts_payload(monkeypatch):
+    monkeypatch.setenv("CODESPACE_NAME", NAME)
+    now = iter([10.0, 10.0, 10.0, 100.0, 100.0])
+    monkeypatch.setattr(tr.time, "monotonic", lambda: next(now))
+    calls = []
+
+    def local(argv, *, cwd, env, timeout_seconds):
+        calls.append(argv)
+        return 0, ROOT + "\\n", ""
+
+    result = tr.run_codespace_transport(
+        request(), list_candidates=lambda: (candidate(),),
+        run_local=local, run=lambda *a, **k: pytest.fail("SSH fallback"),
+    )
+    assert calls == [tr.IDENTITY_GATE_ARGV]
+    assert result.reason_codes == (tr.TransportReason.TRANSPORT_TIMEOUT,)
+    assert result.started_at_or_none and result.ended_at_or_none
+
+
+def test_timeout_reaping_is_bounded_even_when_pipes_stay_open(monkeypatch):
+    seen = []
+    class FakeStream:
+        def close(self):
+            seen.append("closed")
+    class FakePopen:
+        pid = 2001
+        stdout = FakeStream()
+        stderr = FakeStream()
+        def __init__(self, argv, **kwargs):
+            pass
+        def communicate(self, timeout=None):
+            seen.append(("communicate", timeout))
+            raise subprocess.TimeoutExpired("git", timeout)
+        def kill(self):
+            seen.append("kill")
+        def wait(self, timeout=None):
+            seen.append(("wait", timeout))
+            return -9
+    monkeypatch.setattr(tr.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(tr.os, "killpg", lambda pid, sig: seen.append(("killpg", pid, sig)))
+    with pytest.raises(subprocess.TimeoutExpired):
+        tr.default_run_local(("git", "rev-parse", "HEAD"), cwd=ROOT,
+                             env=tr._local_child_env(None), timeout_seconds=90)
+    assert seen == [("communicate", 90), ("killpg", 2001, tr.signal.SIGKILL),
+                    ("communicate", 2), "kill", ("wait", 1), "closed", "closed"]
