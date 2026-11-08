@@ -136,6 +136,10 @@ jobs:
               record["bindings_present"] = bindings_present
               if not bindings_present:
                   reasons.append("preflight-bindings-invalid")
+              # Fixed pilot measures and runs from this deterministic checkout.
+              # Fail closed if the host binding names a different checkout.
+              if bindings["AGENT_OS_REPOSITORY_ROOT"].rstrip("/") != "/workspaces/agent-os":
+                  reasons.append("preflight-repository-root-mismatch")
               selection = resolve_current_codespace()
               selected = (
                   selection.codespace_name
@@ -432,7 +436,21 @@ jobs:
               if run_rc == 0:
                   reference = json.loads(stdout_path.read_text(encoding="utf-8"))
                   receipt_path = reference.get("receipt_path")
-                  store_root = bindings["AGENT_OS_CHECKPOINT_STORE_ROOT"]
+                  store_root = Path(bindings["AGENT_OS_CHECKPOINT_STORE_ROOT"])
+                  receipt_file = Path(receipt_path) if type(receipt_path) is str else None
+                  receipts_dir = store_root / "invocations" / "receipts"
+                  # Lexical remote validation, not runner-local resolution.
+                  # Path() normalizes a trailing root slash; exact canonical
+                  # parent and spelling checks prohibit traversal/aliases.
+                  receipt_path_canonical = (
+                      store_root.is_absolute()
+                      and ".." not in store_root.parts
+                      and receipt_file is not None
+                      and receipt_file.is_absolute()
+                      and ".." not in receipt_file.parts
+                      and str(receipt_file) == receipt_path
+                      and receipt_file.parent == receipts_dir
+                  )
                   if (
                       type(reference) is not dict
                       or set(reference.keys()) != {
@@ -441,10 +459,10 @@ jobs:
                           "expected_sha", "status", "reason_codes", "consumer",
                       }
                       or type(receipt_path) is not str
-                      or not receipt_path.startswith(store_root + "/invocations/receipts/")
+                      or not receipt_path_canonical
                       or re.fullmatch(
                           r"fixed-head-probe-[0-9a-f]{64}-[0-9a-f]{40}-\d{8}T\d{6}Z\.json",
-                          receipt_path.rsplit("/", 1)[-1],
+                          receipt_file.name if receipt_file is not None else "",
                       ) is None
                       or reference.get("handoff_id")
                       != transport.get("codespace_implementation_handoff_id_or_none")
