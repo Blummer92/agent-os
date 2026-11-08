@@ -149,10 +149,11 @@ cloud step consumes that field as authority.
 Fixed-host inspection, governed resume/control, PPUX projection, and publication
 activation remain separately implemented GCE paths; no new migration or live
 qualification is claimed. The owner-only `host_install.outputs.requested` branch
-is independent of ordinary route resolution and still contains fixed-host
-installation and VM-start code. This repair does not retire it or authorize its
-use. The owner decision forbids GCE reactivation/reinstallation; #3102 resource
-disposition and any further repository retirement remain separately gated.
+was retired in GCE Wave 1: the governed workflow no longer classifies, authenticates,
+or runs a host-runtime installation, and the former `/agent-os install-host-runtime`
+comment is ignored through canonical ingress. The owner decision forbids GCE
+reactivation/reinstallation; #3102 resource disposition and any further repository
+retirement remain separately gated.
 
 The read-only token is transport access, never implementation authorization.
 The fixed #3333 implementation pilot separately requires canonical descriptor,
@@ -284,14 +285,15 @@ than Adobe compatibility failures.
 
 ## Developer-validation SSH start timeout (#2944)
 
-For the developer-validation operation only, the exact `gh codespace ssh`
-error `timed out while waiting for the codespace to start` (exit 1 with no
-remote stdout) proves that the remote command did not begin. The route records
-the requested SHA, validation identity, SSH exit code, and bounded reason,
-then sets `selected=false` so the existing governed GCE fallback can run.
-Other SSH failures, remote-result errors, and the read-only diagnostic operation
-remain fail closed. The GCE result replaces the provisional developer-validation
-result; the Codespaces reason remains in the route artifact.
+The former #2944 SSH-start-timeout-to-GCE fallback was retired by PR #3820.
+For developer validation, a `gh codespace ssh` start timeout now preserves the
+requested SHA, validation identity, SSH exit code, and bounded
+`dev-validation-codespaces-ssh-failed` reason. The developer-validation gate
+rejects this non-success result. No GCE authentication, VM start, or alternate
+provider execution is attempted. Other SSH failures and malformed remote
+results also fail closed; read-only diagnostics retain their own bounded
+receipts. A successful workflow conclusion for a non-gated diagnostic is not
+proof of a successful Codespaces operation.
 
 ## Target-bound lifecycle contract (#3345)
 
