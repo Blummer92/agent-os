@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -305,6 +306,22 @@ def _discard_temp(temp_name: str | None) -> None:
             pass
 
 
+def _read_regular_store_entry(path: Path, *, what: str) -> bytes | None:
+    """An absent entry is retryable; an existing non-file entry is corruption."""
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise InvocationCompletionReceiptError(f"{what} is unreadable") from exc
+    if not stat.S_ISREG(mode):
+        raise InvocationCompletionReceiptError(f"{what} is not a regular file")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise InvocationCompletionReceiptError(f"{what} is unreadable") from exc
+
+
 class InvocationCompletionStore:
     """One completion receipt and one execution claim per handoff."""
 
@@ -389,16 +406,9 @@ class InvocationCompletionStore:
     def find_completed(self, handoff_id: str) -> dict[str, Any] | None:
         """Return the completed receipt for one handoff, or ``None``."""
         path = self._receipt_path(handoff_id)
-        if path.is_symlink():
-            raise InvocationCompletionReceiptError("completion receipt is a symlink")
-        if not path.is_file():
+        raw = _read_regular_store_entry(path, what="completion receipt")
+        if raw is None:
             return None
-        try:
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise InvocationCompletionReceiptError(
-                "completion receipt is unreadable"
-            ) from exc
         try:
             receipt = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
@@ -442,16 +452,9 @@ class InvocationCompletionStore:
     def find_claim(self, handoff_id: str) -> dict[str, Any] | None:
         """Return the execution claim for one handoff, or ``None``."""
         path = self._claim_path(handoff_id)
-        if path.is_symlink():
-            raise InvocationCompletionReceiptError("execution claim is a symlink")
-        if not path.is_file():
+        raw = _read_regular_store_entry(path, what="execution claim")
+        if raw is None:
             return None
-        try:
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise InvocationCompletionReceiptError(
-                "execution claim is unreadable"
-            ) from exc
         try:
             claim = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
