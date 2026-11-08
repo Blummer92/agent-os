@@ -61,7 +61,7 @@ REQUIRED_CODESPACE_STATE = "Available"
 VALIDATED_CODESPACE_REPOSITORY_ROOT = "/workspaces/agent-os"
 LOCAL_CODESPACE_EXECUTION_MODE = "codespace-host-local"
 IDENTITY_GATE_ARGV = ("git", "rev-parse", "--show-toplevel")
-_LOCAL_CHILD_ENV_PATH = "/usr/local/bin:/usr/bin:/bin"
+_LOCAL_CHILD_ENV_PATH = "/usr/bin:/bin"
 CODESPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$", re.ASCII)
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 
@@ -505,13 +505,21 @@ def default_run(argv: tuple[str, ...], *, timeout_seconds: int) -> tuple[int, st
 
 
 def _local_child_env(home: str | None) -> dict[str, str]:
-    """An allow-listed child environment, never inherited from the controller.
+    """Isolate the fixed probe from caller credentials and Git configuration.
 
-    In particular GIT_DIR, GIT_WORK_TREE, credentials, Python imports and the
-    controller's possibly checkout-writable PATH cannot affect the probe.
+    A real user HOME could contain Git includes, hooks or aliases, so do not
+    propagate it to the child. The argument remains for compatibility with
+    existing injected tests, but never grants access to caller configuration.
     """
-    safe_home = home if type(home) is str and home.startswith("/") and "\x00" not in home and "\n" not in home else "/nonexistent"
-    return {"PATH": _LOCAL_CHILD_ENV_PATH, "HOME": safe_home, "LANG": "C.UTF-8", "TZ": "UTC"}
+    return {
+        "PATH": _LOCAL_CHILD_ENV_PATH,
+        "HOME": "/nonexistent",
+        "LANG": "C.UTF-8",
+        "TZ": "UTC",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_COUNT": "0",
+    }
 
 
 def default_run_local(
