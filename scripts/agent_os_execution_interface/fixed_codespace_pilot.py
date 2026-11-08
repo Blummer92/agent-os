@@ -56,6 +56,41 @@ ROUTE_OPERATION = "pre-pr-developer-loop"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _HANDOFF = re.compile(r"^executor-handoff:[0-9a-f]{64}$", re.ASCII)
 
+#: Execution may have begun and its outcome is not known. A receipt carrying
+#: this reason must never allow a silent re-dispatch of the same operation.
+EXECUTION_OUTCOME_UNCERTAIN = "execution-outcome-uncertain"
+#: The transport returned before running anything (no ``started_at``).
+TRANSPORT_NOT_STARTED = "codespace-transport-not-started"
+#: Transport stop reasons that, with no start time, prove nothing executed.
+_NOT_STARTED_DETAIL = {
+    "no-qualified-codespace": "transport-no-qualified-codespace",
+    "multiple-qualified-codespaces": "transport-multiple-qualified-codespaces",
+    "codespace-identity-mismatch": "transport-codespace-identity-mismatch",
+    "invalid-request": "transport-invalid-request",
+    "forbidden-command": "transport-forbidden-command",
+    "transport-error": "transport-listing-error",
+}
+#: Reason codes this consumer emits ONLY when the fixed argv provably never
+#: executed (before dispatcher entry, NOT_DISPATCHED, or a transport result
+#: without a start time). The controller may release its dispatch claim for
+#: a non-completed receipt only if every reason code is in this set; any
+#: other or unknown code retains the claim (fail closed).
+PRE_EXECUTION_REASON_CODES = frozenset({
+    "invalid-fixed-operation-envelope",
+    "canonical-admission-provider-unavailable",
+    "canonical-host-binding-incomplete",
+    "canonical-invocation-not-admitted",
+    "invocation-currentness-mismatch",
+    "canonical-identity-or-authorization-mismatch",
+    "codespace-currentness-or-health-unverified",
+    "runner-capabilities-unverified",
+    "canonical-route-binding-unavailable",
+    "current-evidence-unavailable",
+    "codespace-dispatch-not-completed",
+    TRANSPORT_NOT_STARTED,
+    *_NOT_STARTED_DETAIL.values(),
+})
+
 
 def _receipt(status: str, reason: str, transport: dict[str, Any]) -> dict[str, object]:
     """Return a finite, non-authoritative, public-safe result."""
@@ -203,6 +238,9 @@ def consume_fixed_codespace_pilot(
 
     handoff = envelope["codespace_implementation_handoff_id_or_none"]
     sha = envelope["codespace_implementation_sha_or_none"]
+    # Set immediately before the dispatcher is entered. From that point on a
+    # failure can no longer prove that the fixed argv did not execute.
+    dispatch_entered = False
     try:
         resolve = reconstruct or reconstruct_governed_invocation
         admitted = resolve(
@@ -294,6 +332,7 @@ def consume_fixed_codespace_pilot(
         ):
             return _receipt("blocked", "canonical-route-binding-unavailable", envelope)
         invoke = dispatcher or dispatch_admitted_operation_to_codespace
+        dispatch_entered = True
         outcome = invoke(
             issue_identity=descriptor.issue_or_handoff_identity,
             admission_id=authorization.authorization_id,
@@ -338,9 +377,18 @@ def consume_fixed_codespace_pilot(
         derived_request_id, bind_failure = _bind_request_id(outcome, result)
         if bind_failure is not None:
             receipt["request_id"] = derived_request_id
-            receipt.update(status="blocked", reason_codes=[bind_failure])
+            # The result cannot be attributed to the request that was sent,
+            # so it cannot prove what (if anything) executed.
+            receipt.update(status="blocked", reason_codes=[bind_failure, EXECUTION_OUTCOME_UNCERTAIN])
+            # The dispatcher was entered and returned DISPATCHED.
+            receipt["side_effects_performed"] = True
             return receipt
         receipt["request_id"] = derived_request_id
+        # Unknown or missing transport reasons never qualify as "not started"
+        # (fail closed: they fall through to a claim-retaining branch).
+        transport_reasons = tuple(
+            getattr(item, "value", None) for item in (getattr(result, "reason_codes", None) or ())
+        )
         if (
             result.exit_status_or_none == 0
             and result.stdout_tail.strip() == sha
@@ -350,14 +398,50 @@ def consume_fixed_codespace_pilot(
             and tuple(result.argv) == FIXED_ARGV
         ):
             receipt.update(status="completed", reason_codes=["fixed-head-probe-passed"])
+        elif (
+            result.started_at_or_none is None
+            and len(transport_reasons) == 1
+            and transport_reasons[0] in _NOT_STARTED_DETAIL
+        ):
+            # Refused before any command ran: truthful no-execution evidence.
+            receipt.update(
+                status="blocked",
+                reason_codes=[TRANSPORT_NOT_STARTED, _NOT_STARTED_DETAIL[transport_reasons[0]]],
+            )
+            receipt["side_effects_performed"] = False
+        elif transport_reasons == ("transport-timeout",):
+            receipt.update(status="blocked", reason_codes=[EXECUTION_OUTCOME_UNCERTAIN, "transport-timeout"])
+        elif transport_reasons == ("transport-error",):
+            receipt.update(status="blocked", reason_codes=[EXECUTION_OUTCOME_UNCERTAIN, "transport-error"])
+        elif result.exit_status_or_none != 0:
+            # A non-zero SSH client exit cannot distinguish a remote command
+            # failure from a lost session (``gh codespace ssh`` exits non-zero
+            # for both), so completion of the remote command is not known.
+            receipt.update(
+                status="blocked",
+                reason_codes=[EXECUTION_OUTCOME_UNCERTAIN, "codespace-head-or-transport-mismatch"],
+            )
         else:
+            # Exit 0 but wrong/truncated output, codespace or argv: executed,
+            # outcome known and not accepted. Not a pre-execution reason, so
+            # the controller still retains its claim (fail closed).
             receipt.update(status="blocked", reason_codes=["codespace-head-or-transport-mismatch"])
         receipt["admission_id"] = authorization.authorization_id
         receipt["invocation_id"] = admitted.invocation_id
         receipt["descriptor_id"] = admitted.descriptor_id
-        receipt["side_effects_performed"] = True
+        if receipt["reason_codes"][0] != TRANSPORT_NOT_STARTED:
+            receipt["side_effects_performed"] = True
         return receipt
     except (AttributeError, TypeError, ValueError, RuntimeError, OSError):
+        if dispatch_entered:
+            # The dispatcher was entered; a later failure cannot prove the
+            # fixed argv did not run. Never report this as pre-execution.
+            uncertain = _receipt("needs-decision", EXECUTION_OUTCOME_UNCERTAIN, envelope)
+            uncertain["reason_codes"] = [EXECUTION_OUTCOME_UNCERTAIN, "post-dispatch-evidence-unavailable"]
+            # Same meaning as on every dispatched receipt: the dispatcher was
+            # entered. Never report "no side effects" after dispatch entry.
+            uncertain["side_effects_performed"] = True
+            return uncertain
         return _receipt("needs-decision", "current-evidence-unavailable", envelope)
 
 

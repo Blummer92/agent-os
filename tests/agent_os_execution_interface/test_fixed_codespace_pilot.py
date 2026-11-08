@@ -659,8 +659,11 @@ def test_changed_or_unqualified_codespace_selection_never_dispatches(canonical, 
 def test_transport_cannot_silently_switch_to_another_codespace(canonical):
     receipt, run = _consume(listed=_listed("other-codespace"))
     assert receipt["status"] == "blocked"
-    assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    # Refused before any command ran: truthful pre-execution evidence.
+    assert receipt["reason_codes"] == [
+        "codespace-transport-not-started", "transport-codespace-identity-mismatch"]
     assert receipt["exit_status"] is None
+    assert receipt["side_effects_performed"] is False
     assert run.calls == []
 
 
@@ -753,7 +756,13 @@ def test_malformed_or_truncated_receipt_is_not_completed(canonical, result):
     receipt, run = _consume(run=_Run(result))
     assert len(run.calls) == 1
     assert receipt["status"] == "blocked"
-    assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    if result[0] != 0:
+        # A non-zero SSH client exit cannot prove the remote command finished.
+        assert receipt["reason_codes"] == [
+            "execution-outcome-uncertain", "codespace-head-or-transport-mismatch"]
+    else:
+        assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    assert not set(receipt["reason_codes"]) <= pilot_module.PRE_EXECUTION_REASON_CODES
     _assert_no_authority(receipt)
 
 
@@ -761,7 +770,9 @@ def test_ssh_timeout_is_not_completed(canonical):
     receipt, run = _consume(run=_Run(subprocess.TimeoutExpired(cmd="gh", timeout=90)))
     assert len(run.calls) == 1
     assert receipt["status"] == "blocked"
-    assert receipt["reason_codes"] == ["codespace-head-or-transport-mismatch"]
+    # The timeout is preserved as outcome-uncertain, never collapsed.
+    assert receipt["reason_codes"] == ["execution-outcome-uncertain", "transport-timeout"]
+    assert receipt["side_effects_performed"] is True
     assert receipt["exit_status"] is None
     # A dispatched-but-failed transport still keeps its attempt timing.
     assert type(receipt["started_at"]) is str and type(receipt["ended_at"]) is str
@@ -1120,3 +1131,96 @@ def test_actions_entry_still_fails_closed_without_a_host(tmp_path):
     result = json.loads(output.read_text(encoding="utf-8"))["codespace_implementation"]
     assert result["reason_codes"] == ["canonical-admission-provider-unavailable"]
     assert result["side_effects_performed"] is False
+
+
+# --- Change A (D2 review): uncertain-outcome classification ------------------
+
+
+def test_transport_error_after_start_is_outcome_uncertain(canonical):
+    receipt, run = _consume(run=_Run(OSError("ssh client died mid-session")))
+    assert len(run.calls) == 1
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["execution-outcome-uncertain", "transport-error"]
+    assert type(receipt["started_at"]) is str
+
+
+def test_post_dispatch_exception_is_uncertain_not_pre_execution(canonical):
+    descriptor = _descriptor()
+    run = _Run()
+
+    def dispatcher(**kwargs):
+        dispatch_admitted_operation_to_codespace(**kwargs, list_candidates=_listed(), run=run)
+        raise RuntimeError("failure after the transport returned")
+
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=dispatcher,
+    )
+    assert len(run.calls) == 1
+    assert receipt["status"] == "needs-decision"
+    assert receipt["reason_codes"] == [
+        "execution-outcome-uncertain", "post-dispatch-evidence-unavailable"]
+    assert receipt["side_effects_performed"] is True
+    assert "current-evidence-unavailable" not in receipt["reason_codes"]
+
+
+def test_no_qualified_codespace_is_truthfully_not_started(canonical):
+    receipt, run = _consume(listed=lambda: ())
+    assert run.calls == []
+    assert receipt["reason_codes"] == [
+        "codespace-transport-not-started", "transport-no-qualified-codespace"]
+    assert receipt["side_effects_performed"] is False
+    assert set(receipt["reason_codes"]) <= pilot_module.PRE_EXECUTION_REASON_CODES
+
+
+def test_pre_execution_reason_set_excludes_every_post_execution_reason():
+    for code in (
+        "execution-outcome-uncertain",
+        "transport-timeout",
+        "transport-error",
+        "post-dispatch-evidence-unavailable",
+        "codespace-head-or-transport-mismatch",
+        "transport-request-id-mismatch",
+        "transport-request-unavailable",
+        "fixed-head-probe-passed",
+    ):
+        assert code not in pilot_module.PRE_EXECUTION_REASON_CODES
+
+
+def test_foreign_request_id_is_uncertain_and_reports_dispatch_entered(canonical):
+    descriptor = _descriptor()
+    transport_result = SimpleNamespace(
+        request_id="foreign-request-id",
+        codespace_name_or_none=CODESPACE,
+        exit_status_or_none=0,
+        stdout_tail=SHA + "\n",
+        stderr_tail="",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        argv=FIXED_ARGV,
+        started_at_or_none="2026-10-14T00:00:00Z",
+        ended_at_or_none="2026-10-14T00:00:01Z",
+        duration_ms=1000,
+    )
+    receipt = consume_fixed_codespace_pilot(
+        admit(event()).to_dict(),
+        descriptor_loader=_Loader(descriptor),
+        current_resolver=_Resolver(_current(descriptor)),
+        lease_reader=_Lease(),
+        codespace_selection=CodespaceSelection(True, "selected", CODESPACE, "Available"),
+        evaluated_at=EVALUATED_AT,
+        dispatcher=lambda **_kwargs: SimpleNamespace(
+            status=DispatchStatus.DISPATCHED,
+            transport_result_or_none=transport_result,
+            request_or_none="request-3333-probe",
+        ),
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason_codes"] == ["transport-request-id-mismatch", "execution-outcome-uncertain"]
+    assert receipt["side_effects_performed"] is True
+    assert not set(receipt["reason_codes"]) <= pilot_module.PRE_EXECUTION_REASON_CODES
