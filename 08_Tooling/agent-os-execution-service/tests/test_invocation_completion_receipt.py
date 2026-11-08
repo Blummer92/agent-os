@@ -9,7 +9,9 @@ later delivery return without dispatching.
 import json
 import os
 import sys
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +22,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from agent_os_execution_service.invocation_completion_receipt import (  # noqa: E402
     InvocationCompletionReceiptError,
     InvocationCompletionStore,
+    build_completion_receipt,
 )
 
 H = "executor-handoff:" + "a" * 64
@@ -310,3 +313,59 @@ def test_existing_nonregular_store_entry_fails_closed(tmp_path, entry):
     path.mkdir()
     with pytest.raises(InvocationCompletionReceiptError, match="not a regular file"):
         lookup(H)
+
+
+
+@pytest.mark.parametrize("status", ["failed", "quarantined", "blocked", None])
+def test_builder_rejects_noncompleted_pilot_results(status):
+    input_data = SimpleNamespace(
+        repository="Blummer92/agent-os", issue_numbers=(560,),
+        invocation_id="invocation:1", source_head_sha="a" * 40,
+    )
+    result = SimpleNamespace(status=status, result_id="single-issue-pilot:" + "b" * 64)
+    with pytest.raises(InvocationCompletionReceiptError, match="not completed"):
+        build_completion_receipt(handoff_id=H, pilot_input=input_data, pilot_result=result)
+
+
+@pytest.mark.parametrize("operation", ["receipt", "claim"])
+def test_publication_fsyncs_the_parent_directory(tmp_path, monkeypatch, operation):
+    store = _store(tmp_path)
+    observed = []
+    original_fsync = os.fsync
+
+    def observe(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            observed.append(True)
+        return original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", observe)
+    if operation == "receipt":
+        store.record_completed(_receipt())
+    else:
+        assert store.claim(H, RUN)
+    assert observed, "publication must fsync its containing directory"
+
+
+@pytest.mark.parametrize("operation", ["receipt", "claim"])
+def test_publication_fails_closed_when_directory_fsync_fails(tmp_path, monkeypatch, operation):
+    store = _store(tmp_path)
+    original_fsync = os.fsync
+
+    def failing_directory_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("injected directory fsync failure")
+        return original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", failing_directory_sync)
+    with pytest.raises(InvocationCompletionReceiptError, match="directory could not be persisted"):
+        if operation == "receipt":
+            store.record_completed(_receipt())
+        else:
+            store.claim(H, RUN)
+
+
+def test_wait_for_completed_rejects_infinite_timeout(tmp_path):
+    store = _store(tmp_path)
+    for timeout in (float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            store.wait_for_completed(H, timeout_seconds=timeout)
