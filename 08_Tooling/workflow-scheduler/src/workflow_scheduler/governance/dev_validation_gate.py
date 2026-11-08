@@ -448,6 +448,22 @@ def evaluate_fixed_pilot_gate(
     run_rc = transfer.get("run_rc")
 
     # 4. Gate 2 stderr: the originating failure reason, preserved verbatim.
+    # Timeout first: rc 124 means the 300 s `fixed_run` timeout killed the
+    # SSH session, and the remote controller may have finished or may still
+    # hold its O_EXCL claim. Its stderr cannot settle that, so the gate
+    # records outcome-uncertainty instead of a clean failure: FAIL, with
+    # the claim and any host receipt preserved and no automatic retry.
+    # (D1 repair: the PR as shipped fell through to stderr parsing here
+    # and reported `fixed-pilot-process-stderr-unparseable` for a timeout.)
+    if run_rc == 124:
+        return _fixed_fail(
+            "run-timeout-outcome-uncertain",
+            "transfer.run_rc",
+            diagnostic_status=diagnostic_status,
+            handoff_id=handoff,
+            expected_sha=sha,
+            codespace_name=selected if type(selected) is str else None,
+        )
     if run_rc != 0:
         if process_stderr is None:
             return _fixed_fail(

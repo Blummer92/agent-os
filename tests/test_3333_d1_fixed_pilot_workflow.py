@@ -115,10 +115,20 @@ def test_d1_gate_condition_and_no_continue_on_error() -> None:
     condition = gate.get("if", "")
     assert "always()" in condition
     assert "is_codespace_implementation" in condition
-    assert "host_install" in condition
     for step_id in ("fixed_preflight", "fixed_transfer", "fixed_run", "fixed_gate", "fixed_cleanup"):
         step = _step_by_id(step_id)
         assert step.get("continue-on-error") in (None, False), step_id
+
+
+def test_d1_no_host_install_references() -> None:
+    """The retired GCE host-install step is gone: no D1 condition or workflow
+    text may reference it. (#3821 retired the step; the D1 conditions that
+    carried `steps.host_install.outputs.requested != 'true'` were dead logic
+    on an undefined step and are removed, not reintroduced.)"""
+    text = _text()
+    assert "host_install" not in text
+    for step_id in ("fixed_preflight", "fixed_transfer", "fixed_run", "fixed_gate", "fixed_cleanup"):
+        assert "host_install" not in (_step_by_id(step_id).get("if", "") or ""), step_id
 
 
 def test_d1_step_condition_chaining() -> None:
@@ -136,6 +146,12 @@ def test_d1_summary_precedence() -> None:
     assert "Fixed pilot acceptance gate" in block
     assert "Provider-less diagnostic only; not execution evidence." in block
     assert 'if not isinstance(result.get("codespace_implementation"), dict):' in block
+    # Rebase pin: main's `control` summary block is preserved, and the
+    # discovery/diagnostic/dev-validation chain still runs only when no
+    # `control` dict is present (spelled as a negated if, because the D1
+    # block sits between the control check and the chain).
+    assert "Control status:" in block
+    assert "if not isinstance(control, dict):" in block
 
 
 def test_d1_event_confidentiality_and_no_expand() -> None:

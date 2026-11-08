@@ -315,7 +315,8 @@ repository-variable change, lifecycle operation, Ready, merge, or closure
 is included; D2 remains a separate decision.
 
 New steps in the `ingress` job, in order, all gated on the fixed
-envelope and on `host_install` not being requested:
+envelope. (The retired GCE `host_install` step no longer exists — #3821
+removed it — so no D1 condition references it.)
 
 1. **Preflight** (`fixed_preflight`): validates the four
    `vars.AGENT_OS_*` bindings (presence booleans only, never values),
@@ -343,7 +344,13 @@ envelope and on `host_install` not being requested:
    returns the receipt by staging plus atomic link after validating the
    full receipt-path prefix (store root + `/invocations/receipts/`).
    A non-zero Gate 2 exit records the stderr reason for the gate; the
-   step itself exits 0.
+   step itself exits 0. A 300 s timeout (exit 124) is different: the
+   remote controller may have finished, or may still hold its O_EXCL
+   claim, so the gate records `run-timeout-outcome-uncertain` — a
+   fail-closed FAIL that asserts neither success nor failure. The claim
+   and any host receipt are preserved, nothing is retried automatically,
+   and the next run fails with `fixed-pilot-claim-ambiguous` until an
+   owner adjudicates the uncertain outcome.
 4. **Acceptance gate** (`fixed_gate`, `if: always()`, no
    `continue-on-error`): runs `dev_validation_gate --fixed-pilot` over
    transport, diagnostic, reference, process stderr, receipt, transfer,
@@ -365,7 +372,10 @@ inode equality, run exit 0, receipt returned), an empty Gate 2 stderr
 channel, and a private event whose bytes and SHA-256 still match the
 transfer record. Check order preserves the originating failure: a Gate 2
 stderr reason is reported verbatim instead of being masked by the
-missing reference or receipt it also explains. A workflow exit 0, a
+missing reference or receipt it also explains. One exception precedes
+stderr parsing: a 300 s timeout (transfer `run_rc` 124) short-circuits
+to `run-timeout-outcome-uncertain`, because a killed controller's
+stderr cannot say whether the remote run finished. A workflow exit 0, a
 reference alone, or the provider-less diagnostic can never pass.
 
 **Gate 2 `--check-bindings`** (the only Gate 2 change in D1): a

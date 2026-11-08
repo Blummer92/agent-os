@@ -459,6 +459,45 @@ def test_fixed_pilot_gate2_stderr_unparseable_and_nonempty_fail() -> None:
     assert decision.reason_codes == ("fixed-pilot-process-stderr-missing",)
 
 
+@pytest.mark.parametrize("stderr", ["", "not json", None])
+def test_fixed_pilot_run_timeout_is_uncertain_not_failed(stderr: object) -> None:
+    """D1 repair: rc 124 (300 s timeout) is outcome-uncertain, never a clean
+    failure. The remote controller may have finished or may still hold its
+    O_EXCL claim, and a killed controller's stderr cannot settle that — so
+    the gate reports `run-timeout-outcome-uncertain` whatever stderr holds,
+    even a well-formed Gate 2 failure payload (which must not be mistaken
+    for a definitive failure here). FAIL, claim/receipt preserved, no retry."""
+    transfer = fixed_transfer(run_rc=124, receipt_returned=False)
+    decision = evaluate_fixed_pilot_gate(
+        **fixed_gate_inputs(transfer=transfer, process_stderr=stderr, reference=None, receipt=None)  # type: ignore[arg-type]
+    )
+    assert decision.passed is False
+    assert decision.status == "fail"
+    assert decision.reason_codes == ("run-timeout-outcome-uncertain",)
+    assert decision.failed_check == "transfer.run_rc"
+    assert decision.event_verified is False
+    assert decision.codespace_name == FIXED_CODESPACE
+
+
+def test_fixed_pilot_run_timeout_beats_plausible_stderr_reason() -> None:
+    """D1 repair: a plausible Gate 2 stderr reason under rc 124 still yields
+    uncertainty — the timeout short-circuit precedes stderr parsing."""
+    transfer = fixed_transfer(run_rc=124, receipt_returned=False)
+    stderr = json.dumps(
+        {
+            "schema_version": "1.0",
+            "operation_id": "codespace-implementation-pilot-v1",
+            "status": "failed",
+            "reason_codes": ["host-configuration-invalid"],
+        }
+    )
+    decision = evaluate_fixed_pilot_gate(
+        **fixed_gate_inputs(transfer=transfer, process_stderr=stderr, reference=None, receipt=None)  # type: ignore[arg-type]
+    )
+    assert decision.passed is False
+    assert decision.reason_codes == ("run-timeout-outcome-uncertain",)
+
+
 @pytest.mark.parametrize(
     "transfer_mutate,reason",
     [
