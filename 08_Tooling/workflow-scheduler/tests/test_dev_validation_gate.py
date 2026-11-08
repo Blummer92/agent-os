@@ -356,6 +356,7 @@ def test_fixed_pilot_positive_passes_from_real_producer() -> None:
             "fixed-pilot-receipt-identity-mismatch",
         ),
         (lambda r: r.update(codespace_name="other-codespace"), "fixed-pilot-receipt-identity-mismatch"),
+        (lambda r: r.update(logical_trigger_id="wrong-trigger"), "fixed-pilot-receipt-identity-mismatch"),
         (lambda r: r.update(stderr_tail="warning: x"), "fixed-pilot-receipt-evidence-mismatch"),
         (lambda r: r.update(side_effects_performed=False), "fixed-pilot-receipt-evidence-mismatch"),
         (lambda r: r.update(execution_authorized=True), "fixed-pilot-receipt-evidence-mismatch"),
@@ -603,3 +604,45 @@ def test_fixed_pilot_cli_missing_files_fail_without_traceback(tmp_path, capsys) 
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
     assert gate["decision"] == "FAIL"
     assert gate["reason_codes"] == ["fixed-pilot-diagnostic-missing-or-malformed"]
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"event_bytes": None},
+        {"event_sha256": None},
+        {"event_bytes": None, "event_sha256": None},
+        {"event_missing": True},
+    ],
+)
+def test_fixed_pilot_event_evidence_mandatory(missing: dict) -> None:
+    kwargs = fixed_gate_inputs()
+    kwargs.update(missing)
+    decision = evaluate_fixed_pilot_gate(**kwargs)
+    assert decision.passed is False
+    assert decision.reason_codes == ("fixed-pilot-event-evidence-missing",)
+    assert decision.event_verified is False
+
+
+def test_fixed_pilot_cli_rejects_omitted_event_even_with_other_positive_evidence(
+    tmp_path: Path,
+) -> None:
+    def write(name: str, value: object) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+    args = [
+        "--fixed-pilot",
+        "--transport", str(write("transport.json", fixed_transport())),
+        "--result", str(write("result.json", fixed_diagnostic())),
+        "--reference", str(write("reference.json", fixed_reference())),
+        "--process-stderr", str(tmp_path / "stderr.txt"),
+        "--receipt", str(write("receipt.json", fixed_receipt())),
+        "--transfer", str(write("transfer.json", fixed_transfer())),
+        "--output", str(tmp_path / "decision.json"),
+    ]
+    (tmp_path / "stderr.txt").write_text("", encoding="utf-8")
+    assert main(args) == 1
+    result = json.loads((tmp_path / "decision.json").read_text(encoding="utf-8"))
+    assert result["decision"] == "FAIL"
+    assert result["reason_codes"] == ["fixed-pilot-event-evidence-missing"]
