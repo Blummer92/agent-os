@@ -112,6 +112,13 @@ var VisualPlacementTransport = (function () {
       if (!slide) throw new Error('slides target drift: slide not found');
       var marker = slide.getPageElementById(input.target.element_id);
       if (!marker) throw new Error('slides target drift: marker element not found');
+      // Verify revision-readback availability before changing the slide.
+      // Without this preflight, a missing Advanced Slides service would leave
+      // an inserted image and removed marker but no placement receipt.
+      var beforeSlides = readSlidesState_(svc, input.target.artifact_id);
+      if (!beforeSlides || typeof beforeSlides.revisionId !== 'string' || beforeSlides.revisionId.trim() === '') {
+        throw new Error('slides preflight returned no verifiable revision; refusing to mutate');
+      }
       var image = slide.insertImage(blob);
       if (input.target.bounds) {
         if (input.target.bounds.left != null) image.setLeft(Number(input.target.bounds.left));
