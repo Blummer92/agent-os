@@ -36,7 +36,9 @@ CODESPACES_PREFERRED_REASONS = frozenset(
 # perform it anymore. "accepted-first-run-validation-envelope" is deliberately
 # absent here, so it resolves to preferred="none" (route-unknown-envelope) and
 # the governed invocation workflow fails closed instead of routing the envelope
-# to a transport that can no longer carry it.
+# to a transport that can no longer carry it. GCE Wave 1 additionally retired
+# the ingress admission itself, so the reason is now only ever seen on stale
+# stored evidence; this branch stays as fail-closed defense in depth.
 GCE_REQUIRED_REASONS = {
     "accepted-runtime-inspection-envelope": "gce-required-fixed-host",
     "accepted-ruleset-admin-envelope": "gce-required-ruleset-admin",

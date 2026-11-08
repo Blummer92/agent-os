@@ -1,5 +1,15 @@
 # First-run authorized-validation lifecycle start (#1972)
 
+> **Retired — GCE Wave 1.** The `/agent-os validate-first-run` selector is no
+> longer admitted by `github_issue_comment_ingress` (ignored as
+> `malformed-trigger`, no trigger identity, no execution). Its GCE transport
+> was already removed in #3233 (`first_run_validation_gce.py` deleted; the
+> adapter carries no first-run branch) and the Codespaces-first route resolves
+> any stale accepted envelope to `preferred="none"`. The body below describes
+> the historical lifecycle only; do not treat it as a live route. The
+> `first_run_candidate_sha_or_none` transport field is retained (always null)
+> for stored-evidence schema compatibility.
+
 ## Selector
 
 The bounded GitHub issue-comment selector is exactly:

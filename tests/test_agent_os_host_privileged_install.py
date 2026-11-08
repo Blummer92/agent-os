@@ -7,7 +7,6 @@ actually fires.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import pwd
 import re
@@ -19,7 +18,6 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[1]
-WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
 SCRIPTS = ROOT / "08_Tooling/agent-os-execution-service/scripts"
 PRIVILEGED = SCRIPTS / "agent-os-host-install"
 UNPRIVILEGED = SCRIPTS / "install-host-runtime"
@@ -398,17 +396,6 @@ def test_privileged_installer_verifies_its_own_path_ancestry() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_workflow_digest_pin_matches_the_tracked_installer() -> None:
-    """The route refuses on mismatch, so a stale pin is a silent outage."""
-    digest = hashlib.sha256(UNPRIVILEGED.read_bytes()).hexdigest()
-    pinned = re.search(
-        r"HOST_INSTALL_SCRIPT_SHA256: ([0-9a-f]{64})",
-        WORKFLOW.read_text(encoding="utf-8"),
-    )
-    assert pinned is not None
-    assert pinned.group(1) == digest
-
-
 def test_documented_bootstrap_establishes_the_helper_directory_first() -> None:
     """GNU install does not create a missing parent, and /usr/local/libexec is
     not part of Debian's stock tree."""
@@ -528,90 +515,10 @@ def test_documented_sudo_rule_authorizes_nothing_the_old_path_needed() -> None:
         assert banned not in block, banned
 
 
-def _case_block() -> str:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    body = text.split('case "$refusal" in', 1)[1].split("esac", 1)[0]
-    return 'case "$refusal" in' + body + "esac"
-
-
-def _classify(refusal: str) -> str:
-    program = (
-        'refusal="$1"\n'
-        "failure_reason=host-runtime-install-failed\n"
-        f"{_case_block()}\n"
-        'printf %s "$failure_reason"\n'
-    )
-    return subprocess.run(
-        ["/bin/sh", "-c", program, "sh", refusal],
-        env={"PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-
-
-@pytest.mark.parametrize(
-    ("refusal", "expected"),
-    [
-        ("privileged installer unavailable", "host-privileged-installer-unavailable"),
-        (
-            "privileged installer must be a root-owned regular file",
-            "host-privileged-installer-unsafe",
-        ),
-        ("privileged installer must run as root", "host-privileged-installer-misuse"),
-        (
-            "privileged installer argv must be exactly --source-sha <sha>",
-            "host-privileged-installer-misuse",
-        ),
-        (
-            "source SHA must be a lowercase 40-hex commit",
-            "host-privileged-installer-misuse",
-        ),
-        (
-            "privileged installer evidence malformed",
-            "host-privileged-installer-evidence-invalid",
-        ),
-        (
-            "privileged installer evidence source mismatch",
-            "host-privileged-installer-evidence-invalid",
-        ),
-        ("staging root must not be a symlink", "host-staging-root-unsafe"),
-        ("staging root is not root-owned 0700", "host-staging-root-unsafe"),
-        ("staged tree must be root-owned", "host-staged-source-unsafe"),
-        (
-            "staged entrypoint installer must not be a symlink",
-            "host-staged-source-unsafe",
-        ),
-        ("staged entrypoint installer missing", "host-staged-source-unsafe"),
-        ("source SHA is not on canonical main", "host-runtime-source-not-main"),
-        ("staged checkout does not match source SHA", "host-runtime-source-mismatch"),
-        ("checkout must be on main", "host-runtime-source-not-main"),
-        ("checkout does not match EXPECTED_SHA", "host-runtime-source-mismatch"),
-        ("passwordless bounded sudo unavailable", "host-passwordless-sudo-unavailable"),
-        ("sudo unavailable", "host-sudo-unavailable"),
-    ],
-)
-def test_every_refusal_maps_to_its_own_finite_reason_code(refusal, expected) -> None:
-    assert _classify(f"{REFUSAL_PREFIX}{refusal}") == expected
-
-
-def test_every_refusal_the_scripts_emit_is_classified() -> None:
-    """A new refusal must be mapped deliberately, never silently defaulted."""
-    emitted = set()
-    for script in (PRIVILEGED, UNPRIVILEGED):
-        text = script.read_text(encoding="utf-8")
-        emitted.update(re.findall(r'fail "([^"$]+)"', text))
-        emitted.update(re.findall(rf'{REFUSAL_PREFIX}([^"$\\]+)\\n', text))
-    # Preconditions the workflow itself guarantees may stay on the default.
-    unmapped = {
-        "EXPECTED_SHA must be a lowercase 40-hex commit",
-        "REPOSITORY_ROOT must be absolute",
-        "REPOSITORY_ROOT must be a git checkout",
-    }
-    for refusal in sorted(emitted - unmapped):
-        assert (
-            _classify(f"{REFUSAL_PREFIX}{refusal}") != "host-runtime-install-failed"
-        ), refusal
+# GCE Wave 1: the workflow refusal-mapping `case` block (refusal string ->
+# finite reason code) retired with the host-install step that consumed it.
+# Nothing maps refusals anymore. Refusal *emission* is still proven by the
+# real-execution tests above, which assert the exact refusal strings fire.
 
 
 # --------------------------------------------------------------------------

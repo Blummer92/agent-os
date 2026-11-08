@@ -49,9 +49,15 @@ def _steps():
 
 def _pipeline(tmp_path, operation="dev", scenario="success", actor="Blummer92"):
     profile = "semantic-ownership-advisory" if scenario == "unsupported" else "remote-validation-suite"
-    body = "/agent-os discover" if operation == "discovery" else f"/agent-os dev-validate {BRANCH} {SHA} {profile}"
+    if operation == "install":
+        # The retired owner host-install comment on #1238, attempt 1.
+        body = "/agent-os install-host-runtime"
+        issue_number = 1238
+    else:
+        body = "/agent-os discover" if operation == "discovery" else f"/agent-os dev-validate {BRANCH} {SHA} {profile}"
+        issue_number = 2931
     event = {"action": "created", "repository": {"full_name": REPOSITORY},
-             "issue": {"number": 2931}, "comment": {"id": 1, "body": body,
+             "issue": {"number": issue_number}, "comment": {"id": 1, "body": body,
              "user": {"login": actor}}, "sender": {"login": actor}}
     (tmp_path / "event.json").write_text(json.dumps(event))
     request = build_dev_validation_request(repository=REPOSITORY, issue_number=2931,
@@ -165,16 +171,45 @@ def test_unauthorized_ingress_never_contacts_provider(tmp_path):
     assert not CLOUD.intersection(entered) and calls == []
 
 
-def test_fixed_host_maintenance_remains_independent():
-    steps = {step["name"]: step for step in _steps()}
-    outputs = {"host_install": {"requested": "true"}}
-    for name in (CLOUD - {"Invoke exact governed GCE control path"}) | {HOST}:
-        assert _condition(steps[name]["if"], outputs)
-    assert not _condition(steps["Invoke exact governed GCE control path"]["if"], outputs)
-    outputs = {"host_install": {"requested": "false"}, "transport": {"accepted": "true"},
-               "route": {"preferred": "gce"}}
-    assert all(_condition(steps[name]["if"], outputs) for name in CLOUD)
-    assert not _condition(steps[HOST]["if"], outputs)
+def test_no_host_install_step_or_cloud_shortcut_remains() -> None:
+    """GCE Wave 1 retired the host-install activation branch: no classifier
+    step, no install step, no VM start, and no host-install GCP shortcut.
+    The GCE control path still requires an accepted, specifically GCE-routed
+    envelope (positive control below)."""
+    steps = _steps()
+    assert not any(step.get("id") == "host_install" for step in steps)
+    assert not any(
+        str(step.get("name", "")).startswith("Install and verify bounded")
+        for step in steps
+    )
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "host_install" not in text
+    assert "install-host-runtime" not in text
+    assert "gcloud compute instances start" not in text
+    outputs = {"transport": {"accepted": "true"}, "route": {"preferred": "gce"}}
+    by_name = {step["name"]: step for step in steps}
+    assert all(_condition(by_name[name]["if"], outputs) for name in CLOUD)
+    outputs = {"transport": {"accepted": "true"}, "route": {"preferred": "codespaces"}}
+    assert not any(_condition(by_name[name]["if"], outputs) for name in CLOUD)
+
+
+def test_former_host_install_comment_is_ignored_with_no_cloud_step(tmp_path):
+    """The original owner install comment on #1238 (attempt 1) now flows
+    through canonical low-trust ingress, is ignored with a bounded blocked
+    result, and enters no cloud or host step."""
+    result, entered, failed, calls, _ = _pipeline(tmp_path, operation="install")
+    assert not CLOUD.intersection(entered)
+    assert not any(name.startswith("Install and verify bounded") for name in entered)
+    assert result["dispatch_status"] == "blocked"
+    assert result["dispatch_reason"] == "malformed-trigger"
+    assert result["execution_authorized"] is False
+    assert result["scheduler_invoked"] is False
+    assert result["side_effects_performed"] is False
+    assert result["transport"]["status"] == "ignored"
+    assert result["transport"]["reason"] == "malformed-trigger"
+    assert result["transport"]["logical_trigger_id_or_none"] is None
+    assert failed is False  # the dev-validation gate is not-applicable here
+    assert calls == []
 
 
 def test_fallback_output_cannot_activate_cloud_steps():
@@ -182,7 +217,7 @@ def test_fallback_output_cannot_activate_cloud_steps():
         if step["name"] not in CLOUD:
             continue
         for preferred in ("codespaces", "none", ""):
-            outputs = {"host_install": {"requested": "false"}, "transport": {"accepted": "true"},
+            outputs = {"transport": {"accepted": "true"},
                        "route": {"preferred": preferred, "gce_fallback_allowed": "true"}}
             assert not _condition(step["if"], outputs)
 
@@ -190,18 +225,43 @@ def test_fallback_output_cannot_activate_cloud_steps():
 @pytest.mark.parametrize("change", [None, ("COMMENT_USER_ID", "1"), ("ISSUE_NUMBER", "2931"),
                                     ("REPOSITORY_ID", "1"), ("REF_NAME", "refs/heads/agent/test"),
                                     ("WORKFLOW_REF", "untrusted"), ("GITHUB_RUN_ATTEMPT", "2"),
-                                    ("COMMENT_BODY", "/agent-os discover")])
-def test_host_install_classifier_requires_its_exact_owner_envelope(tmp_path, change):
-    step = next(s for s in _steps() if s.get("id") == "host_install")
-    output = tmp_path / "output"
-    env = {"PATH": os.defpath, "GITHUB_OUTPUT": str(output), "GITHUB_RUN_ATTEMPT": "1",
-           "COMMENT_BODY": "/agent-os install-host-runtime", "COMMENT_USER_ID": "32861845",
+                                    ("COMMENT_BODY", "/agent-os discover"),
+                                    ("COMMENT_BODY", "/agent-os install-host-runtime --force"),
+                                    ("COMMENT_BODY", "/agent-os install-host-runtime ")])
+def test_former_host_install_envelope_is_never_admitted(change):
+    """GCE Wave 1: the host_install classifier step is gone. The former owner
+    install envelope — exact or varied — is ignored by canonical ingress and
+    cannot produce a trigger identity. Rerun is blocked at the ingress gate."""
+    from workflow_scheduler.governance.github_issue_comment_ingress import (
+        admit_issue_comment_event,
+    )
+
+    env = {"COMMENT_BODY": "/agent-os install-host-runtime", "COMMENT_USER_ID": "32861845",
            "ISSUE_NUMBER": "1238", "REPOSITORY_ID": "1289370915", "EVENT_NAME": "issue_comment",
            "REF_NAME": "refs/heads/main",
            "WORKFLOW_REF": REPOSITORY + "/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"}
     if change is not None:
         env[change[0]] = change[1]
-    completed = subprocess.run(("bash", "-e", "-c", step["run"]), env=env,
-                               capture_output=True, text=True, timeout=5)
-    assert completed.returncode == 0, completed.stderr
-    assert output.read_text().strip() == ("requested=true" if change is None else "requested=false")
+    event = {"action": "created", "repository": {"full_name": REPOSITORY},
+             "issue": {"number": int(env["ISSUE_NUMBER"])},
+             "comment": {"id": 1, "body": env["COMMENT_BODY"],
+                         "user": {"login": "Blummer92" if env["COMMENT_USER_ID"] == "32861845" else "mallory"}},
+             "sender": {"login": "Blummer92" if env["COMMENT_USER_ID"] == "32861845" else "mallory"}}
+    result = admit_issue_comment_event(
+        event, expected_repository=REPOSITORY, allowed_actor="Blummer92",
+        run_attempt=int(env["GITHUB_RUN_ATTEMPT"]) if change == ("GITHUB_RUN_ATTEMPT", "2") else 1,
+    )
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+    if change == ("COMMENT_BODY", "/agent-os discover"):
+        # Control case: a different, still-live command is accepted normally.
+        assert (result.status, result.reason) == ("accepted", "accepted-discovery-envelope")
+    else:
+        assert result.logical_trigger_id_or_none is None
+    if change == ("GITHUB_RUN_ATTEMPT", "2"):
+        assert (result.status, result.reason) == ("blocked", "workflow-rerun")
+    elif change == ("COMMENT_USER_ID", "1"):
+        assert (result.status, result.reason) == ("blocked", "actor-not-allowed")
+    elif change != ("COMMENT_BODY", "/agent-os discover"):
+        assert (result.status, result.reason) == ("ignored", "malformed-trigger")

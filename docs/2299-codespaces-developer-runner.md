@@ -149,10 +149,11 @@ cloud step consumes that field as authority.
 Fixed-host inspection, governed resume/control, PPUX projection, and publication
 activation remain separately implemented GCE paths; no new migration or live
 qualification is claimed. The owner-only `host_install.outputs.requested` branch
-is independent of ordinary route resolution and still contains fixed-host
-installation and VM-start code. This repair does not retire it or authorize its
-use. The owner decision forbids GCE reactivation/reinstallation; #3102 resource
-disposition and any further repository retirement remain separately gated.
+was retired in GCE Wave 1: the governed workflow no longer classifies, authenticates,
+or runs a host-runtime installation, and the former `/agent-os install-host-runtime`
+comment is ignored through canonical ingress. The owner decision forbids GCE
+reactivation/reinstallation; #3102 resource disposition and any further repository
+retirement remain separately gated.
 
 The read-only token is transport access, never implementation authorization.
 The fixed #3333 implementation pilot separately requires canonical descriptor,

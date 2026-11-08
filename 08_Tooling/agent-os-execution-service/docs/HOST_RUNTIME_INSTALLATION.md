@@ -35,6 +35,15 @@ closed if they are not.
 
 ## Bounded #1238 maintenance route
 
+> **GCE Wave 1 note.** The governed workflow no longer invokes this maintenance
+> route: the host-install activation branch (classifier, GCP auth bypass,
+> VM-start/install step) was retired under the #3333 no-reactivation decision,
+> and the former `/agent-os install-host-runtime` comment is ignored. The
+> scripts and this privilege documentation are preserved as historical
+> installer evidence; the workflow retains the `HOST_RUNTIME_SOURCE_SHA`
+> literal exactly once, solely as the expected-SHA anchor for the surviving
+> read-only sudo-admission inspection.
+
 `scripts/install-host-runtime` remains the unprivileged repository-owned wrapper
 for the separately authorized #1238 maintenance action. It validates the local
 checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed privileged helper, and
@@ -106,7 +115,8 @@ non-symlink, and not group- or other-writable.
 
 The sudoers rule must authorize one literal source SHA only. Replace
 `<AUTHORIZED_SOURCE_SHA>` with the exact 40-lowercase-hex canonical source SHA
-that the workflow will pass as `HOST_RUNTIME_SOURCE_SHA`. Do not use a branch,
+that the workflow retains as `HOST_RUNTIME_SOURCE_SHA` (the sudo-admission
+inspection anchor). Do not use a branch,
 prefix, glob, regex, an older `main` commit, or a second allowed SHA.
 
 <!-- sudoers-begin -->
