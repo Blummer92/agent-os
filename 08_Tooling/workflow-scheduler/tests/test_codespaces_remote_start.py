@@ -60,6 +60,19 @@ def run(fake, *, payload=None, read="read-token", lifecycle="lifecycle-token"):
     )
 
 
+def test_credential_env_never_exposes_both_secret_names(monkeypatch):
+    monkeypatch.setenv("AGENT_OS_CODESPACES_READ_TOKEN", "read-token")
+    monkeypatch.setenv("AGENT_OS_CODESPACES_LIFECYCLE_TOKEN", "lifecycle-token")
+    fake = FakeRun()
+    result = run(fake)
+    assert result["status"] == "success"
+    assert fake.calls
+    for _, env in fake.calls:
+        assert "AGENT_OS_CODESPACES_READ_TOKEN" not in env
+        assert "AGENT_OS_CODESPACES_LIFECYCLE_TOKEN" not in env
+        assert "GITHUB_TOKEN" not in env
+
+
 def test_shutdown_start_and_ssh_ready_never_stops():
     fake = FakeRun()
     result = run(fake)
