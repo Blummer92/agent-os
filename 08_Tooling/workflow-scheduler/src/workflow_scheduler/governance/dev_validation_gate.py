@@ -601,6 +601,7 @@ def evaluate_fixed_pilot_gate(
         or type(receipt.get("issue_number")) is not int
         or receipt.get("issue_number") != FIXED_PILOT_ISSUE_NUMBER
         or receipt.get("handoff_id") != handoff
+        or receipt.get("logical_trigger_id") != transport.get("logical_trigger_id_or_none")
         or type(receipt.get("handoff_id")) is not str
         or _HANDOFF.fullmatch(receipt["handoff_id"]) is None  # type: ignore[index]
         or receipt.get("expected_sha") != sha
@@ -670,7 +671,7 @@ def evaluate_fixed_pilot_gate(
         )
 
     # 8. Event: the staged event still matches the transferred record.
-    if event_missing:
+    if event_missing or event_bytes is None or event_sha256 is None:
         return _fixed_fail(
             "fixed-pilot-event-evidence-missing",
             "event_private",
@@ -678,21 +679,20 @@ def evaluate_fixed_pilot_gate(
             handoff_id=handoff,
             expected_sha=sha,
         )
-    if event_bytes is not None or event_sha256 is not None:
-        if (
-            event_bytes != transfer.get("event_bytes")
-            or event_sha256 != transfer.get("event_sha256")
-        ):
-            return _fixed_fail(
-                "fixed-pilot-event-evidence-mismatch",
-                "event_private",
-                diagnostic_status=diagnostic_status,
-                handoff_id=handoff,
-                expected_sha=sha,
-            )
-        event_verified = True
-    else:
-        event_verified = False
+    if (
+        not _is_int(event_bytes)
+        or event_bytes != transfer.get("event_bytes")
+        or type(event_sha256) is not str
+        or _SHA64.fullmatch(event_sha256) is None
+        or event_sha256 != transfer.get("event_sha256")
+    ):
+        return _fixed_fail(
+            "fixed-pilot-event-evidence-mismatch",
+            "event_private",
+            diagnostic_status=diagnostic_status,
+            handoff_id=handoff,
+            expected_sha=sha,
+        )
 
     return FixedPilotGateDecision(
         applies=True,
@@ -704,7 +704,7 @@ def evaluate_fixed_pilot_gate(
         handoff_id=handoff,
         expected_sha=sha,
         codespace_name=selected if type(selected) is str else None,
-        event_verified=event_verified,
+        event_verified=True,
     )
 
 
@@ -781,7 +781,7 @@ def _run_fixed_pilot_gate(args: argparse.Namespace) -> int:
     transfer = _load_fixed_object(args.transfer)
     event_bytes: int | None = None
     event_sha256: str | None = None
-    event_missing = False
+    event_missing = args.event_private is None
     if args.event_private is not None:
         try:
             raw = args.event_private.read_bytes()
