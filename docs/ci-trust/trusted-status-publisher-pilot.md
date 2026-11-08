@@ -11,7 +11,8 @@ A privileged commit-status publisher must not execute pull-request-controlled co
 - Source jobs: read via the authenticated GitHub API for the **exact run attempt**, not artifact-supplied claims.
 - Four named jobs and critical steps must have successful conclusions; failures, missing jobs, ambiguous identities, or missing steps cannot produce success.
 - A newer run/attempt supersedes stale evidence for the same SHA.
-- Changes to validation policy or trusted test-discovery infrastructure cannot receive a pilot success without a separately reviewed authorization procedure.
+- Changes to validation policy or trusted test-discovery infrastructure cannot receive a pilot success without a separately reviewed authorization procedure. The authority guard covers all four explicitly installed pip/editable-project inputs, dynamically selected package/test configuration files (Python and npm), composite actions, and workflow files. This is intentionally conservative: even a legitimate package upgrade must use the independently reviewed authority-change route rather than inherit a normal pilot success.
+- The privileged checkout action is pinned to the immutable commit `3d3c42e5aac5ba805825da76410c181273ba90b1` (`actions/checkout` v7.0.1, verified against the official upstream GitHub release tag on 2026-11-08). Upgrading it requires a reviewed SHA and a fresh exact-head trust review.
 - The subscriber checks out only the repository's default branch with `persist-credentials: false` and **never checks out or runs PR content**. No artifact content is executed or imported. Credentials are available only to the trusted provider-query step.
 - Fork PRs, Draft PRs, dispatches, main-push runs, and unassociated runs do not mint this pilot context.
 - Provider failures yield no authority. A missing result is **not** a pass.
