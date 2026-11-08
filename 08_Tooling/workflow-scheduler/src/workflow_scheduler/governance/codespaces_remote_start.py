@@ -32,7 +32,11 @@ _RUN_ID_RE = re.compile(r"[0-9]{1,20}", re.ASCII)
 def _receipt(status: str, reason: str, *, name: str | None = None,
              pre_state: str | None = None, post_state: str | None = None,
              start_issued: bool = False, ssh_ready: bool = False,
-             comment_id: int | None = None, run_id: int | None = None) -> dict[str, object]:
+             comment_id: int | None = None, run_id: int | None = None,
+             lifecycle_authorized: bool = False) -> dict[str, object]:
+    # lifecycle_authorized is explicit evidence, not derived from status: it is
+    # True only once every owner, credential, target and pre-state check passed
+    # for this exact target and the adapter proceeded to start or verify.
     return {
         "schema_version": "1.0", "status": status, "reason_codes": [reason],
         "repository": REPOSITORY, "issue_number": CODESPACE_START_ISSUE,
@@ -41,7 +45,7 @@ def _receipt(status: str, reason: str, *, name: str | None = None,
         "execution_surface_id": f"codespace:{name}" if name else None,
         "pre_state": pre_state, "post_state": post_state,
         "start_issued": start_issued, "ssh_ready": ssh_ready,
-        "lifecycle_authorized": status != "blocked",
+        "lifecycle_authorized": lifecycle_authorized,
         "github_repository_writes_authorized": False,
         "execution_authorized": False, "stop_issued": False,
         "create_delete_rebuild_authorized": False,
@@ -132,23 +136,23 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             started = True  # attempted, not proof the provider accepted it
             response = _api(run, "POST", f"/user/codespaces/{name}/start", lifecycle_token)
             if response.returncode != 0:
-                return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=pre_state, start_issued=True, comment_id=comment_id, run_id=parsed_run_id)
+                return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=pre_state, start_issued=True, comment_id=comment_id, run_id=parsed_run_id, lifecycle_authorized=True)
         current: str | None = None
         for attempt in range(wait_attempts):
             current = _state(run, name, lifecycle_token)
             if current == "Available" and _ssh_ready(run, name, read_token):
-                return _receipt("success", "codespaces-ssh-ready", name=name, pre_state=pre_state, post_state=current, start_issued=started, ssh_ready=True, comment_id=comment_id, run_id=parsed_run_id)
+                return _receipt("success", "codespaces-ssh-ready", name=name, pre_state=pre_state, post_state=current, start_issued=started, ssh_ready=True, comment_id=comment_id, run_id=parsed_run_id, lifecycle_authorized=True)
             if attempt + 1 < wait_attempts:
                 sleep(5)
-        return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=pre_state, post_state=current, start_issued=started, comment_id=comment_id, run_id=parsed_run_id)
+        return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=pre_state, post_state=current, start_issued=started, comment_id=comment_id, run_id=parsed_run_id, lifecycle_authorized=True)
     except Exception:
         # Any failure after a start request may have been sent is uncertain,
         # never "nothing happened", and is never retried here. Before that
         # point no lifecycle mutation was requested, so the outcome is certain.
         if started:
-            return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=observed, start_issued=True, comment_id=comment_id, run_id=parsed_run_id)
+            return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=observed, start_issued=True, comment_id=comment_id, run_id=parsed_run_id, lifecycle_authorized=True)
         if admitted:
-            return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
+            return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id, lifecycle_authorized=True)
         return _receipt("blocked", "codespaces-precheck-error", name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
 
 

@@ -336,3 +336,27 @@ def test_numeric_transport_fields_require_exact_int(field, value):
     assert result["status"] == "blocked"
     assert result["reason_codes"] == ["start-authorization-or-credential-unavailable"]
     assert fake.calls == []
+
+
+# R4 (#3828 independent QA): lifecycle_authorized is explicit evidence that
+# every owner, credential, target and pre-state check passed for this target.
+
+@pytest.mark.parametrize("label, fake, payload_override, expected", [
+    ("gate-blocked", FakeRun(), {"actor": "intruder"}, ("blocked", False)),
+    ("discovery-blocked", FakeRun(listed=[]), None, ("blocked", False)),
+    ("discovery-raises", FakeRun(fail={"discovery": OSError("x")}), None, ("blocked", False)),
+    ("prestate-mismatch", FakeRun(states=["Available"]), None, ("blocked", False)),
+    ("prestate-raises", FakeRun(fail={"prestate": OSError("x")}), None, ("blocked", False)),
+    ("target-drift", FakeRun(fail={"recheck": OSError("x")}), None, ("blocked", False)),
+    ("success-after-start", FakeRun(), None, ("success", True)),
+    ("success-already-available",
+     FakeRun(listed=[(NAME, "Available")], states=["Available", "Available"]), None, ("success", True)),
+    ("start-uncertain", FakeRun(start_rc=1), None, ("needs-decision", True)),
+    ("start-raises", FakeRun(fail={"start": RuntimeError("x")}), None, ("needs-decision", True)),
+    ("readiness-unverified", FakeRun(ssh_rc=1), None, ("needs-decision", True)),
+])
+def test_lifecycle_authorized_is_explicit_per_path(label, fake, payload_override, expected):
+    payload = transport()
+    payload.update(payload_override or {})
+    result = run(fake, payload=payload)
+    assert (result["status"], result["lifecycle_authorized"]) == expected, label
