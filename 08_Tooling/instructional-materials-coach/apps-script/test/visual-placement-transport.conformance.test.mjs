@@ -197,3 +197,53 @@ test('reference exports the Execution API entrypoint and forwards the exact requ
   assert.equal(sandbox.placeVisual(request), expected);
   assert.equal(forwarded, request);
 });
+
+function slidesPreflightFixture(revisionId) {
+  const calls = { inserts: 0, removals: 0, reads: 0 };
+  const marker = { remove: () => { calls.removals += 1; } };
+  const image = { getObjectId: () => 'slide-image-7' };
+  const slide = {
+    getPageElementById: () => marker,
+    insertImage: () => { calls.inserts += 1; return image; },
+  };
+  const services = {
+    drive: { getFileById: () => ({ getBlob: () => ({}) }) },
+    slides: {
+      openById: () => ({
+        getSlideById: () => slide,
+      }),
+    },
+  };
+  if (revisionId !== undefined) {
+    services.slidesReadback = () => {
+      calls.reads += 1;
+      return { revisionId };
+    };
+  }
+  const request = docsRequest({
+    artifact_type: 'slides',
+    artifact_id: 'slides-1',
+    artifact_revision_id: 'srev-requested',
+    container_id: 'slide-1',
+    element_id: 'marker-el',
+    index: null,
+  });
+  return { calls, request, services };
+}
+
+test('place (slides) refuses to mutate when revision read-back is unavailable', () => {
+  const t = loadTransport();
+  const { calls, request, services } = slidesPreflightFixture();
+  assert.throws(() => t.place(request, services), /read-back surface is unavailable/);
+  assert.equal(calls.inserts, 0, 'no image may be inserted without revision evidence');
+  assert.equal(calls.removals, 0, 'the existing marker must survive a failed preflight');
+});
+
+test('place (slides) refuses to mutate when revision read-back is invalid', () => {
+  const t = loadTransport();
+  const { calls, request, services } = slidesPreflightFixture('');
+  assert.throws(() => t.place(request, services), /no verifiable revision/);
+  assert.equal(calls.reads, 1);
+  assert.equal(calls.inserts, 0);
+  assert.equal(calls.removals, 0);
+});
