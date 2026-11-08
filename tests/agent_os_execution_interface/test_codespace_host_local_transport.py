@@ -69,7 +69,8 @@ def test_local_executes_gate_then_fixed_argv_no_ssh(monkeypatch):
     assert result.execution_surface == "codespaces"
     assert [x[0] for x in calls] == [tr.IDENTITY_GATE_ARGV, ("git", "rev-parse", "HEAD")]
     assert all(x[1] == ROOT and x[3] == 90 for x in calls)
-    assert all(x[2]["PATH"] == "/usr/local/bin:/usr/bin:/bin" for x in calls)
+    assert all(x[2]["PATH"] == "/usr/bin:/bin" for x in calls)
+    assert all(x[2]["HOME"] == "/nonexistent" and x[2]["GIT_CONFIG_NOSYSTEM"] == "1" for x in calls)
 
 
 @pytest.mark.parametrize("gate_rc,gate_stdout", [(1, ""), (0, "/foreign/repo\n")])
@@ -127,12 +128,27 @@ def test_missing_requested_codespace_name_fails_before_listing(monkeypatch):
     assert result.reason_codes == (tr.TransportReason.CODESPACE_IDENTITY_MISMATCH,)
 
 
+def test_user_git_configuration_cannot_leak_to_local_probe(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/attacker-controlled")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "/tmp/attacker-hooks")
+    env = tr._local_child_env(os.environ["HOME"])
+    assert env["HOME"] == "/nonexistent"
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_CONFIG_COUNT"] == "0"
+    assert "GIT_CONFIG_KEY_0" not in env
+    assert "GIT_CONFIG_VALUE_0" not in env
+
+
 def test_clean_env_drops_git_and_credentials(monkeypatch):
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GH_TOKEN", "GITHUB_TOKEN", "AGENT_OS_X", "PYTHONPATH", "SSH_AUTH_SOCK"):
         monkeypatch.setenv(key, "poison")
     monkeypatch.setenv("PATH", "/workspaces/agent-os/.venv/bin:/tmp/hostile")
     env = tr._local_child_env("/home/codespace")
-    assert env == {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/codespace", "LANG": "C.UTF-8", "TZ": "UTC"}
+    assert env == {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C.UTF-8", "TZ": "UTC", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_COUNT": "0"}
 
 
 @pytest.mark.parametrize("listed", [(), (candidate("one"), candidate("two"))])
