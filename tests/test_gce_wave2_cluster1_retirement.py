@@ -57,7 +57,10 @@ def test_retired_module_absent_from_repo_tree(name: str, parent: str) -> None:
     assert PathFinder.find_spec(name, [str(ROOT / parent)]) is None
 
 
-def test_codespaces_projection_and_profile_matcher_survive() -> None:
+def test_codespaces_projection_and_profile_matcher_survive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "08_Tooling/workflow-scheduler/src"))
     from workflow_scheduler.governance.first_run_validation_observation import (
         CODESPACES_RUNNER_ID,
         FirstRunValidationObservationError,
@@ -71,7 +74,10 @@ def test_codespaces_projection_and_profile_matcher_survive() -> None:
     assert issubclass(FirstRunValidationObservationError, ValueError)
 
 
-def test_gce_first_run_projector_is_not_exported() -> None:
+def test_gce_first_run_projector_is_not_exported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "08_Tooling/workflow-scheduler/src"))
     from workflow_scheduler.governance import first_run_validation_observation as module
 
     assert not hasattr(module, "FIXED_GCE_RUNNER_ID")
