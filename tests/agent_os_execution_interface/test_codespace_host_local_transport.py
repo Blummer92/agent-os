@@ -100,7 +100,7 @@ def test_missing_or_foreign_host_never_runs(monkeypatch, host):
     else:
         monkeypatch.setenv("CODESPACE_NAME", host)
     result = tr.run_codespace_transport(
-        request(), list_candidates=lambda: (candidate(),),
+        request(), list_candidates=lambda: pytest.fail("foreign host must not query Codespaces API"),
         run_local=lambda *a, **k: pytest.fail("local execution"),
         run=lambda *a, **k: pytest.fail("SSH execution"),
     )
@@ -118,6 +118,36 @@ def test_invalid_local_workdir_never_lists(monkeypatch, overrides):
         run_local=lambda *a, **k: pytest.fail("local"),
     )
     assert result.reason_codes == (tr.TransportReason.INVALID_REQUEST,)
+
+
+def test_foreign_host_rejected_before_candidate_discovery(monkeypatch):
+    """A foreign local host must not invoke the default GitHub API lister."""
+    monkeypatch.setenv("CODESPACE_NAME", "foreign-codespace")
+    result = tr.run_codespace_transport(
+        request(),
+        list_candidates=lambda: pytest.fail("unexpected GitHub API discovery"),
+        run_local=lambda *a, **k: pytest.fail("unexpected local execution"),
+        run=lambda *a, **k: pytest.fail("unexpected SSH fallback"),
+    )
+    assert result.reason_codes == (tr.TransportReason.CODESPACE_IDENTITY_MISMATCH,)
+    assert result.codespace_name_or_none is None
+    assert result.started_at_or_none is None
+
+
+def test_valid_local_host_still_checks_independent_candidate_identity(monkeypatch):
+    monkeypatch.setenv("CODESPACE_NAME", NAME)
+    calls = []
+    def list_candidates():
+        calls.append("discovery")
+        return (candidate("different-codespace"),)
+    result = tr.run_codespace_transport(
+        request(), list_candidates=list_candidates,
+        run_local=lambda *a, **k: pytest.fail("unexpected local execution"),
+        run=lambda *a, **k: pytest.fail("unexpected SSH fallback"),
+    )
+    assert calls == ["discovery"]
+    assert result.reason_codes == (tr.TransportReason.CODESPACE_IDENTITY_MISMATCH,)
+    assert result.started_at_or_none is None
 
 
 def test_missing_requested_codespace_name_fails_before_listing(monkeypatch):
