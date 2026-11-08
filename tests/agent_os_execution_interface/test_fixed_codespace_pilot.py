@@ -415,8 +415,8 @@ def test_default_production_pilot_selects_host_local_without_nested_ssh(canonica
         assert cwd == "/workspaces/agent-os"
         assert 0 < timeout_seconds <= 90
         if len(calls) == 1:
-            return 0, "/workspaces/agent-os\\n", ""
-        return 0, SHA + "\\n", ""
+            return 0, "/workspaces/agent-os\n", ""
+        return 0, SHA + "\n", ""
 
     def default_dispatch(**kwargs):
         seen.update(kwargs)
