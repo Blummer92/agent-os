@@ -24,6 +24,13 @@ and performs no duplicate validation, even after the store is repaired.
 Recovery requires reconciliation against the original completed Pilot
 evidence before a receipt can be reconstructed.
 
+**An existing store path is corrupt or unreadable.** A direct delivery
+that cannot check the prior completion receipt returns `needs-decision`
+with `completion-receipt-unavailable` and dispatch count zero. It must
+not execute and rely on a later receipt write to detect the corruption.
+Repair the directory under a quiescent, operator-controlled window and
+verify no prior completed work is unaccounted for before re-delivery.
+
 **The store cannot be written at all.** Binding fails before any
 execution with `completion store is not writable: <store-root>` (raised as
 `ProductionHostBootstrapError` from the bootstrap, converted by the
@@ -33,6 +40,12 @@ entrypoint's `main()` as `RuntimeError("governed-resume requires
 host-supplied #1218/#1253 composition; production host composition
 failed closed")`). Nothing executed; nothing was misreported. Fix the
 store, then re-deliver.
+
+The distinct `completion-receipt-unrecorded` case occurs only when a
+dispatch already returned `completed` but the subsequent receipt
+publication fails (for example an injected post-dispatch persistence
+error). That case retains the claim and requires Step 3; it is not a
+justification for dispatching into a known-broken store.
 
 ## Step 1 — confirm with the probe
 
