@@ -26,6 +26,7 @@ from .github_issue_comment_ingress import (
 
 _RUN = Callable[..., subprocess.CompletedProcess[str]]
 _ALLOWED_STATES = frozenset({"Shutdown", "Available"})
+_RUN_ID_RE = re.compile(r"[0-9]{1,20}", re.ASCII)
 
 
 def _receipt(status: str, reason: str, *, name: str | None = None,
@@ -100,14 +101,16 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             and type(wait_attempts) is int and 1 <= wait_attempts <= 24):
         return _receipt("blocked", "start-authorization-or-credential-unavailable")
     run_id = os.environ.get("GITHUB_RUN_ID")
-    parsed_run_id = int(run_id) if type(run_id) is str and run_id.isdigit() else None
+    parsed_run_id = int(run_id) if type(run_id) is str and _RUN_ID_RE.fullmatch(run_id) else None
     try:
         name, observed, reason = _list_target(run, read_token)
-    except (OSError, subprocess.TimeoutExpired):
+    except Exception:
+        # No lifecycle request has been sent yet, so nothing can have changed.
         return _receipt("blocked", "codespaces-discovery-error", comment_id=comment_id, run_id=parsed_run_id)
     if reason != "qualified":
         return _receipt("blocked", reason, name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
     started = False
+    admitted = False
     try:
         # Independent user-token readback before mutation; no stale target.
         pre_state = _state(run, name, lifecycle_token)
@@ -118,6 +121,8 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             name_again, state_again, reason_again = _list_target(run, read_token)
             if reason_again != "qualified" or name_again != name or state_again != "Shutdown":
                 return _receipt("blocked", "codespaces-target-drift", name=name, pre_state=pre_state, comment_id=comment_id, run_id=parsed_run_id)
+        admitted = True  # every pre-mutation check passed for this exact target
+        if pre_state == "Shutdown":
             started = True  # attempted, not proof the provider accepted it
             response = _api(run, "POST", f"/user/codespaces/{name}/start", lifecycle_token)
             if response.returncode != 0:
@@ -129,8 +134,15 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             if attempt + 1 < wait_attempts:
                 sleep(5)
         return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=pre_state, post_state=current, start_issued=started, comment_id=comment_id, run_id=parsed_run_id)
-    except (OSError, subprocess.TimeoutExpired):
-        return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=observed, start_issued=started, comment_id=comment_id, run_id=parsed_run_id)
+    except Exception:
+        # Any failure after a start request may have been sent is uncertain,
+        # never "nothing happened", and is never retried here. Before that
+        # point no lifecycle mutation was requested, so the outcome is certain.
+        if started:
+            return _receipt("needs-decision", "codespaces-start-outcome-uncertain", name=name, pre_state=observed, start_issued=True, comment_id=comment_id, run_id=parsed_run_id)
+        if admitted:
+            return _receipt("needs-decision", "codespaces-ssh-readiness-unverified", name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
+        return _receipt("blocked", "codespaces-precheck-error", name=name, pre_state=observed, comment_id=comment_id, run_id=parsed_run_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -138,18 +150,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--transport", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    # Only transport parsing may yield "input-invalid": once run_fixed_start
+    # begins, it alone records the outcome (it handles its own failures).
     try:
         payload = json.loads(args.transport.read_text(encoding="utf-8"))
-        if type(payload) is not dict:
-            raise ValueError("invalid transport")
+    except (OSError, ValueError):
+        payload = None
+    if type(payload) is not dict:
+        result = _receipt("blocked", "codespaces-start-input-invalid")
+    else:
         result = run_fixed_start(
             transport=payload,
             read_token=os.environ.get("AGENT_OS_CODESPACES_READ_TOKEN", ""),
             lifecycle_token=os.environ.get("AGENT_OS_CODESPACES_LIFECYCLE_TOKEN", ""),
             run=lambda cmd, **kw: subprocess.run(cmd, capture_output=True, text=True, check=False, **kw),
         )
-    except (OSError, ValueError, TypeError):
-        result = _receipt("blocked", "codespaces-start-input-invalid")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in result.items() if k not in {"codespace_name"}}))
