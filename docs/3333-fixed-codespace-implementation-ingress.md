@@ -363,7 +363,9 @@ removed it — so no D1 condition references it.)
    and equality with the host `CODESPACE_NAME`; it checks the repository
    root using a separate fixed `git rev-parse --show-toplevel` subprocess,
    then runs only the already allowlisted argv with a fixed system PATH,
-   minimal child environment (no inherited Git config or credentials),\n   fixed system PATH, closed stdin and process-group timeout kill.
+   minimal child environment (no inherited Git config or credentials),
+   closed stdin and process-group timeout kill. Both local subprocesses
+   share one monotonic deadline; post-timeout process cleanup is bounded.
    No fallback to SSH or GCE is allowed. Mode is bound into the request ID;
    old SSH request IDs are unchanged. The Gate 2 claim and receipt logic from
    Change A, the workflow, credential configuration and acceptance gate are
