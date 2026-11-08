@@ -19,6 +19,8 @@ SOURCE_PATH = ".github/workflows/agent-os-validation.yml"
 # pilot status can be required. Conservatively reject source-trust modifications.
 AUTHORITY_PATHS = frozenset({
     SOURCE_PATH,
+    ".github/workflows/agent-os-trusted-status-pilot.yml",
+    "scripts/agent_os_trusted_status_publisher.py",
     "scripts/validate-all.sh",
     "scripts/agent_os_aggregate_gate.py",
     "scripts/agent_os_ci_test_completeness.py",
@@ -98,6 +100,8 @@ def changed_paths(repository: str, pr_number: int) -> set[str]:
             if isinstance(f.get("previous_filename"), str):
                 paths.add(f["previous_filename"])
         if len(data) < 100:
+            if not paths:
+                raise ValueError("PR changed-file set is empty")
             return paths
     raise ValueError("provider files pagination incomplete")
 
@@ -130,6 +134,12 @@ def lookup_pr(repository: str, head_sha: str, branch: str) -> dict[str, Any] | N
     if current.get("state") != "open" or current.get("draft") is not False:
         return None
     if current.get("head", {}).get("repo", {}).get("full_name") != repository:
+        return None
+    if current.get("head", {}).get("ref") != branch:
+        return None
+    if current.get("base", {}).get("repo", {}).get("full_name") != repository:
+        return None
+    if current.get("base", {}).get("ref") != "main":
         return None
     return current
 
