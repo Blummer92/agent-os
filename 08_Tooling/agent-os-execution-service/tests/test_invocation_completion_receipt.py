@@ -294,3 +294,19 @@ def test_verify_writable_fails_when_claims_is_a_file(tmp_path):
     store = InvocationCompletionStore.for_store_root(store_root)
     with pytest.raises(InvocationCompletionReceiptError):
         store.verify_writable()
+
+
+
+@pytest.mark.parametrize("entry", ["receipt", "claim"])
+def test_existing_nonregular_store_entry_fails_closed(tmp_path, entry):
+    store = _store(tmp_path)
+    if entry == "receipt":
+        path = store.receipts_dir / f"governed-resume-completed-{'a' * 64}.json"
+        lookup = store.find_completed
+    else:
+        path = store.claims_dir / f"governed-resume-claim-{'a' * 64}.json"
+        lookup = store.find_claim
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()
+    with pytest.raises(InvocationCompletionReceiptError, match="not a regular file"):
+        lookup(H)
