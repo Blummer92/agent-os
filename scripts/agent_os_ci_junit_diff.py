@@ -34,7 +34,10 @@ def node_ids(xml: bytes) -> set[str]:
     ids: list[str] = []
     for suite in suites:
         cases = [x for x in suite if x.tag == "testcase"]
-        if len(cases) != int(suite.attrib.get("tests", "-1")):
+        # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
+        # attribute may exceed the elements; elements beyond it (--setup-only/--setup-plan
+        # report tests="0" with passing-looking elements) are not executed tests.
+        if len(cases) > int(suite.attrib.get("tests", "-1")):
             raise ValueError("testcase-count-mismatch")
         for case in cases:
             classname = case.attrib.get("classname") or case.attrib.get("file") or ""

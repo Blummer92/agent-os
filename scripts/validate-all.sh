@@ -367,13 +367,28 @@ coverage_report_for_suite() {
   fi
 }
 
+# With these plugins disabled pytest itself rejects --setup-only/--setup-plan
+# (exit 4, "unrecognized arguments") from any config source; both options write
+# passing-looking JUnit without running test bodies.
+PYTEST_EXECUTION_GUARD=(-p no:setuponly -p no:setupplan)
+
+# Every suite writes JUnit so its executed tests can be reconciled against the
+# reference collection: published under CI_JUNIT_DIR when set (and shown in the
+# command text), otherwise a private runner temp file (not shown, not published).
+suite_junit_path_for() {
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    junit_path_for "$1"
+  else
+    printf '%s/junit/%s.xml' "$parallel_tmp" "$(junit_key "$1")"
+  fi
+}
+
 run_pytest_suite() {
   local suite_dir="$1"
   local suite_name="$2"
-  local suite_junit_path=""
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
-    suite_junit_path="$(junit_path_for "$suite_name")"
-  fi
+  local suite_junit_path
+  suite_junit_path="$(suite_junit_path_for "$suite_name")"
+  local guard_display="${PYTEST_EXECUTION_GUARD[*]}"
 
   if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
     : # Preserve scheduler suite identity for canonical aggregate admission.
@@ -393,10 +408,9 @@ run_pytest_suite() {
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
-    if [ -n "$suite_junit_path" ]; then
-      command+=("--junitxml=$suite_junit_path")
-      display+=" --junitxml=$suite_junit_path"
-    fi
+    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
+    [ -n "${CI_JUNIT_DIR:-}" ] && display+=" --junitxml=$suite_junit_path"
+    display+=" $guard_display"
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
@@ -412,10 +426,9 @@ run_pytest_suite() {
   else
     local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
     local plain_command=("$PYTHON_BIN" -m pytest tests)
-    if [ -n "$suite_junit_path" ]; then
-      plain_command+=("--junitxml=$suite_junit_path")
-      plain_display+=" --junitxml=$suite_junit_path"
-    fi
+    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
+    [ -n "${CI_JUNIT_DIR:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
+    plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
 }
@@ -435,13 +448,13 @@ suite_command_text() {
     if [ -n "${CI_JUNIT_DIR:-}" ]; then
       display+=" --junitxml=$(junit_path_for "$suite_name")"
     fi
-    printf '%s' "$display"
+    printf '%s %s' "$display" "${PYTEST_EXECUTION_GUARD[*]}"
   else
     local plain="cd $suite_dir && $PYTHON_BIN -m pytest tests"
     if [ -n "${CI_JUNIT_DIR:-}" ]; then
       plain+=" --junitxml=$(junit_path_for "$suite_name")"
     fi
-    printf '%s' "$plain"
+    printf '%s %s' "$plain" "${PYTEST_EXECUTION_GUARD[*]}"
   fi
 }
 
@@ -462,6 +475,54 @@ run_captured_suite() {
   return 0
 }
 
+# Test-selection completeness (false-green repair, PR #3816). A suite that
+# passed must also have executed every test of the runner-owned reference
+# collection; the executed set is the suite's own JUnit, not a prediction.
+# Runs after each passing suite. The receipt is cleared first so a prior
+# attempt's receipt is never evidence for this one.
+check_test_completeness() {
+  local suite_name="$1"
+  local suite_dir="$ROOT_DIR"
+  [ "$suite_name" = "root" ] || suite_dir="$ROOT_DIR/$suite_name"
+  local junit_path
+  junit_path="$(suite_junit_path_for "$suite_name")"
+  local name="test selection completeness: $suite_name"
+  local args=("$PYTHON_BIN" scripts/agent_os_ci_test_completeness.py --suite-dir "$suite_dir" --suite-name "$suite_name" --python-bin "$PYTHON_BIN" --junit "$junit_path")
+  local display="$PYTHON_BIN scripts/agent_os_ci_test_completeness.py --suite-dir $suite_dir --suite-name $suite_name --python-bin $PYTHON_BIN --junit $junit_path"
+  local receipt=""
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
+    receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$suite_name").json"
+    rm -f "$receipt" || runner_error "cannot replace stale completeness receipt: $receipt"
+    args+=(--receipt "$receipt")
+    display+=" --receipt $receipt"
+  fi
+  local started_us ended_us code
+  started_us="$(timer_now_us || true)"
+  if [ -d "$suite_dir/src" ]; then
+    env PYTHONPATH="$(python_path_with_src "$suite_dir/src")" "${args[@]}"
+  else
+    "${args[@]}"
+  fi
+  code=$?
+  # A successful helper exit is not enough when its evidence is missing.
+  if [ "$code" -eq 0 ] && [ -n "$receipt" ]; then
+    if [ ! -f "$receipt" ] || ! grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"COMPLETE"' "$receipt"; then
+      echo "completeness helper succeeded without a COMPLETE receipt: $suite_name" >&2
+      code=2
+    fi
+  fi
+  ended_us="$(timer_now_us || true)"
+  record_timing "$name" "$started_us" "$ended_us"
+  commands_executed+=("$display")
+  if [ "$code" -eq 0 ]; then
+    check_results+=("PASS|$name|$display|$code")
+  else
+    check_results+=("FAIL|$name|$display|$code")
+    record_failure "$name" "$display" "$code"
+  fi
+}
+
 consume_captured_suite() {
   local suite_name="$1"
   local command_text="$2"
@@ -475,6 +536,7 @@ consume_captured_suite() {
   record_timing "$suite_name" "$started_us" "$ended_us"
   if [ "$code" -eq 0 ]; then
     check_results+=("PASS|$suite_name|$command_text|$code")
+    check_test_completeness "$suite_name"
   else
     check_results+=("FAIL|$suite_name|$command_text|$code")
     record_failure "$suite_name" "$command_text" "$code"
@@ -482,6 +544,18 @@ consume_captured_suite() {
 }
 
 aggregate_started_us="$(timer_now_us || true)"
+
+# PYTEST_ADDOPTS would silently narrow every pytest invocation below --
+# the completeness collections, the real suite runs, and the focused
+# runs -- because it applies identically to all of them. The
+# completeness check cannot detect it (both collections would narrow
+# together), so an authoritative run must not have it set at all.
+# Unset it loudly rather than failing: a local operator may have it
+# set for an unrelated reason, and the run stays valid without it.
+if [ -n "${PYTEST_ADDOPTS:-}" ]; then
+  echo "PYTEST_ADDOPTS is set in this environment; unsetting it so the authoritative run is not silently narrowed." >&2
+  unset PYTEST_ADDOPTS
+fi
 
 echo "AGGREGATE VALIDATION START"
 echo "Repository: $ROOT_DIR"
@@ -516,6 +590,7 @@ fi
 
 parallel_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-os-validate.XXXXXX")" || runner_error "unable to create validation capture directory."
 trap 'rm -rf "$parallel_tmp"' EXIT
+mkdir -p "$parallel_tmp/junit" || runner_error "unable to create private JUnit directory."
 
 pending_names=()
 pending_commands=()
@@ -549,7 +624,9 @@ for test_dir in "${test_dirs[@]}"; do
 
   if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then
     flush_parallel_batch
-    run_pytest_suite "$suite_dir" "$suite_name"
+    if run_pytest_suite "$suite_dir" "$suite_name"; then
+      check_test_completeness "$suite_name"
+    fi
     continue
   fi
 
@@ -588,7 +665,24 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
         junit_file="$(junit_key "$name").xml"
         ;;
     esac
-    if [ "$code" = "5" ]; then
+    if [[ "$name" == "test selection completeness: "* ]]; then
+      # The completeness check has no JUnit file of its own; its evidence
+      # is the test-completeness-<suite>.json receipt in CI_JUNIT_DIR, so
+      # the row points at the receipt and records whether it exists.
+      # Exit 1 proves an omission only with an INCOMPLETE receipt from
+      # this attempt. Uncaught helper exceptions also exit 1 but have
+      # no comparison evidence; they must be TEST_COLLECTION_ERROR.
+      completeness_suite="${name#test selection completeness: }"
+      junit_file="test-completeness-$(junit_key "$completeness_suite").json"
+      if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
+      if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
+        classification="COMPLETE"
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
+        classification="TEST_SELECTION_INCOMPLETE"
+      else
+        classification="TEST_COLLECTION_ERROR"
+      fi
+    elif [ "$code" = "5" ]; then
       # pytest exit 5 = no tests collected: never a pass, never a generic failure.
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       classification="ZERO_COLLECTED"
