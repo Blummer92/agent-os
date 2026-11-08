@@ -1,3 +1,12 @@
+"""GCE Wave 1: the governed host-install activation route is retired.
+
+The workflow no longer classifies, authenticates, or runs a bounded #1238
+host-runtime installation (owner decision #3333: no GCE reactivation or
+reinstallation). The installer scripts themselves are preserved, so the
+unprivileged/privileged installer invariant tests below stay and keep
+passing against the untouched scripts.
+"""
+
 from __future__ import annotations
 
 import re
@@ -11,20 +20,43 @@ PRIVILEGED_INSTALLER = (
 )
 
 
-def test_host_runtime_route_is_exact_owner_bound_and_main_only() -> None:
+def test_host_runtime_install_activation_is_retired_from_the_workflow() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert '[ "$GITHUB_RUN_ATTEMPT" = "1" ]' in text
-    assert '[ "$EVENT_NAME" = "issue_comment" ]' in text
-    assert '[ "$REPOSITORY_ID" = "1289370915" ]' in text
-    assert '[ "$COMMENT_USER_ID" = "32861845" ]' in text
-    assert '[ "$ISSUE_NUMBER" = "1238" ]' in text
-    assert '[ "$REF_NAME" = "refs/heads/main" ]' in text
-    assert (
-        "Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
-        in text
-    )
-    assert '[ "$COMMENT_BODY" = "/agent-os install-host-runtime" ]' in text
-    assert "workflow_dispatch" not in text
+    assert "host_install" not in text
+    assert "install-host-runtime" not in text
+    assert "Classify bounded #1238 host-runtime installation" not in text
+    assert "Install and verify bounded #1238 host runtime" not in text
+    assert "/agent-os install-host-runtime" not in text
+    assert "gcloud compute instances start" not in text
+    assert "gcloud compute ssh" not in text
+    assert "HOST_INSTALL_SCRIPT_SHA256" not in text
+    assert "host-runtime-install-failed" not in text
+    assert "host-install.stderr" not in text
+
+
+def test_gcp_auth_has_no_host_install_shortcut() -> None:
+    """Only accepted, specifically GCE-routed envelopes may authenticate."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    for step_name in (
+        "Authenticate bounded Agent OS transport",
+        "Install Google Cloud CLI",
+    ):
+        block = text.split(f"- name: {step_name}", 1)[1]
+        condition = block.split("if:", 1)[1].split("\n", 1)[0]
+        assert "host_install" not in condition
+        assert "steps.route.outputs.preferred == 'gce'" in condition
+        assert "steps.transport.outputs.accepted == 'true'" in condition
+
+
+def test_source_sha_pin_survives_only_as_the_sudo_inspection_anchor() -> None:
+    """Exactly one HOST_RUNTIME_SOURCE_SHA literal remains: the expected-SHA
+    anchor for the surviving read-only sudo-admission inspection, which fails
+    closed without exactly one pin. It sits in the top-level env block; no
+    step consumes it for installation."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    pins = re.findall(r"HOST_RUNTIME_SOURCE_SHA: ([0-9a-f]{40})", text)
+    assert pins == ["36ccd1715b8b11e30f8d92196b8e7f0791c10547"]
+    assert "HOST_RUNTIME_SOURCE_SHA" not in text.split("jobs:", 1)[1]
 
 
 def test_host_runtime_route_preserves_least_privilege_and_fixed_target() -> None:
@@ -35,33 +67,9 @@ def test_host_runtime_route_preserves_least_privilege_and_fixed_target() -> None
     assert "issues:" not in permissions
     assert "contents: write" not in permissions
     assert "actions: write" not in permissions
-    host_runtime_step = text.split(
-        "- name: Install and verify bounded #1238 host runtime", 1
-    )[1].split("- name: Invoke exact governed GCE control path", 1)[0]
-    assert "secrets." not in host_runtime_step
-    assert "AGENT_OS_CODESPACES_TOKEN" not in host_runtime_step
-    assert 'project="agent-os-502614"' in text
-    assert 'zone="us-central1-a"' in text
-    assert 'instance="agent-os-test"' in text
     assert "compute instances stop" not in text
     assert '"scheduler_invoked": False' in text
     assert '"execution_authorized": False' in text
-
-
-def test_host_runtime_route_pins_source_and_installer_integrity() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    source = re.search(r"HOST_RUNTIME_SOURCE_SHA: ([0-9a-f]{40})", text)
-    installer = re.search(r"HOST_INSTALL_SCRIPT_SHA256: ([0-9a-f]{64})", text)
-    assert source is not None
-    assert installer is not None
-    assert "sha256sum -c -" in text
-    assert "gcloud compute scp" not in text
-    assert (
-        'installer="\\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"'
-        in text
-    )
-    assert 'git -C "\\$root" checkout --quiet -B main $HOST_RUNTIME_SOURCE_SHA' in text
-    assert "COMMENT_BODY" not in text.split("remote_command=$(cat <<EOF_REMOTE", 1)[1]
 
 
 def test_host_runtime_installer_is_bounded_and_never_dispatches() -> None:

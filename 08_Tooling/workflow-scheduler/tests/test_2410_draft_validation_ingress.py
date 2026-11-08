@@ -112,10 +112,13 @@ def test_wrong_repository_is_blocked() -> None:
     assert (result.status, result.reason) == ("blocked", "repository-mismatch")
 
 
-def test_validate_draft_does_not_collide_with_validate_first_run() -> None:
+def test_validate_draft_does_not_collide_with_retired_validate_first_run() -> None:
+    # GCE Wave 1 retired validate-first-run: it is ignored, never accepted,
+    # and still carries no draft-validation identity.
     first_run = admit(event(f"/agent-os validate-first-run {HEAD_SHA}"))
-    assert first_run.reason == "accepted-first-run-validation-envelope"
+    assert (first_run.status, first_run.reason) == ("ignored", "malformed-trigger")
     assert first_run.draft_validation_pr_number_or_none is None
+    assert first_run.logical_trigger_id_or_none is None
 
 
 def test_transport_dict_carries_draft_validation_fields() -> None:
@@ -171,7 +174,6 @@ def test_service_actor_is_blocked_for_every_other_operation() -> None:
         f"/agent-os merge-admit 2411 {HEAD_SHA} {'b' * 64} squash",
         f"/agent-os dev-validate agent/2411-example {HEAD_SHA} remote-validation-suite",
         "/agent-os notion-read req-123",
-        f"/agent-os validate-first-run {HEAD_SHA}",
         f"/agent-os activate-first-publication pre-publication-evidence:{'a' * 64}",
         "/agent-os diagnose ppux-canva-cdp-readonly req-123",
         f"/agent-os project-ppux-prompts agent/2411-example {HEAD_SHA} {'a' * 64}",
@@ -181,6 +183,16 @@ def test_service_actor_is_blocked_for_every_other_operation() -> None:
         assert admit(event(body)).status == "accepted", body
         result = admit_service(event(body, actor=SERVICE_ACTOR))
         assert (result.status, result.reason) == ("blocked", "actor-not-allowed"), body
+
+
+def test_service_actor_is_blocked_for_retired_first_run() -> None:
+    # The retired first-run command is not an accepted owner command either,
+    # so the service actor is refused at the actor gate (no validate-draft
+    # prefix) and the owner sees the same ignored non-authorizing result.
+    body = f"/agent-os validate-first-run {HEAD_SHA}"
+    assert admit(event(body)).status == "ignored"
+    result = admit_service(event(body, actor=SERVICE_ACTOR))
+    assert (result.status, result.reason) == ("blocked", "actor-not-allowed")
 
 
 def test_service_actor_blocked_for_issue_bound_operations() -> None:

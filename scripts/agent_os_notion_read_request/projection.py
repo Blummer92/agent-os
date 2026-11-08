@@ -272,15 +272,20 @@ def project_lesson_content_result(
             "verification_state": binding.verification_state,
             "access": "read-only",
         },
-        "lessons": [
-            _project_lesson_record(record, expected_unit_page_id) for record in records
-        ],
+        "lessons": project_lesson_records(records, expected_unit_page_id),
         "authority": _authority({}),
         "generated_at": generated_at.strip(),
     }
 
     reject_credential_keys(payload)
     return payload
+
+
+def project_lesson_records(records: object, expected_unit_page_id: str) -> list[dict[str, Any]]:
+    """Project the 7 governed fields from every lesson record of one unit."""
+    if not isinstance(records, list):
+        raise NotionReadRequestError("execution evidence is missing lesson records")
+    return [_project_lesson_record(record, expected_unit_page_id) for record in records]
 
 
 def validate_lesson_unit_identity(record: object, expected_unit_page_id: str) -> str:
