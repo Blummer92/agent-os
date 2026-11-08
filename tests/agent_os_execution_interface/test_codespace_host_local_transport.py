@@ -255,7 +255,7 @@ def test_timeout_kills_process_group_and_reaps(monkeypatch):
             pass
         def communicate(self, timeout=None):
             seen.append(("communicate", timeout))
-            if timeout is not None:
+            if timeout == 90:
                 raise subprocess.TimeoutExpired("git", timeout)
             return "", ""
     monkeypatch.setattr(tr.subprocess, "Popen", FakePopen)
@@ -269,15 +269,15 @@ def test_timeout_kills_process_group_and_reaps(monkeypatch):
 
 def test_gate_and_payload_share_single_deadline(monkeypatch):
     monkeypatch.setenv("CODESPACE_NAME", NAME)
-    now = iter([10.0, 10.0, 10.0, 60.0, 60.0])
+    now = iter([10.0, 10.0, 60.0, 60.0])
     monkeypatch.setattr(tr.time, "monotonic", lambda: next(now))
     budgets = []
 
     def local(argv, *, cwd, env, timeout_seconds):
         budgets.append((argv, timeout_seconds))
         if argv == tr.IDENTITY_GATE_ARGV:
-            return 0, ROOT + "\\n", ""
-        return 0, SHA + "\\n", ""
+            return 0, ROOT + "\n", ""
+        return 0, SHA + "\n", ""
 
     result = tr.run_codespace_transport(
         request(), list_candidates=lambda: (candidate(),),
@@ -289,13 +289,13 @@ def test_gate_and_payload_share_single_deadline(monkeypatch):
 
 def test_exhausted_budget_never_starts_payload(monkeypatch):
     monkeypatch.setenv("CODESPACE_NAME", NAME)
-    now = iter([10.0, 10.0, 10.0, 100.0, 100.0])
+    now = iter([10.0, 10.0, 100.0, 100.0])
     monkeypatch.setattr(tr.time, "monotonic", lambda: next(now))
     calls = []
 
     def local(argv, *, cwd, env, timeout_seconds):
         calls.append(argv)
-        return 0, ROOT + "\\n", ""
+        return 0, ROOT + "\n", ""
 
     result = tr.run_codespace_transport(
         request(), list_candidates=lambda: (candidate(),),
