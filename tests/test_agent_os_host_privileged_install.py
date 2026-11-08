@@ -519,15 +519,15 @@ def test_documented_sudo_rule_authorizes_nothing_the_old_path_needed() -> None:
 # GCE Wave 1: the workflow refusal-mapping `case` block (refusal string ->
 # finite reason code) retired with the host-install step that consumed it.
 # Nothing maps refusals anymore, so a new refusal string can no longer
-# silently default anywhere. What survives is the emission inventory below:
-# any new refusal the preserved scripts emit must be added to the pinned set
-# deliberately. (Only a subset of these strings also has an exact-string
-# real-execution assertion above; the pinned set is the completeness guard.)
+# silently default anywhere. The inventory below pins static messages,
+# trust-ancestry messages, and embedded Python's dynamic refusal templates.
+# It is a source-level change detector, not proof of complete execution-path
+# coverage. Selected security-sensitive cases have real-execution tests above.
 
 
-# Every refusal string the two preserved installer scripts can emit, exactly.
-# Recompute with the same extraction the retired workflow-mapping tests used
-# (fail "..." + "host runtime install refused: ..." + require_trusted_* messages).
+# Every literal refusal and embedded Python f-string refusal template in both
+# retained installer scripts. Placeholder variables in templates are deliberate;
+# the values are not fabricated output from an executed privileged operation.
 PINNED_EMITTED_REFUSALS = frozenset(
     {
         "EXPECTED_SHA must be a lowercase 40-hex commit",
@@ -552,6 +552,10 @@ PINNED_EMITTED_REFUSALS = frozenset(
         "python3 pip unavailable",
         "qualified host must be Debian",
         "qualified host must be Debian 12",
+        "runtime package root escaped site root: {package_name}",
+        "runtime package root unavailable: {package_name}",
+        "runtime package symlink directory: {package_name}",
+        "runtime package unsafe file: {package_name}",
         "source SHA is not on canonical main",
         "source SHA must be a lowercase 40-hex commit",
         "staged checkout does not match source SHA",
@@ -571,6 +575,15 @@ def _emitted_refusals(script: Path) -> set[str]:
     emitted = set()
     emitted.update(re.findall(r'fail "([^"$]+)"', text))
     emitted.update(re.findall(rf"{REFUSAL_PREFIX}([^\"$\\]+)\\n", text))
+    # The privileged script also emits from embedded Python using dynamic
+    # f-strings. Pin their templates including placeholders; do not mistake
+    # a source inventory for executed-path coverage.
+    emitted.update(
+        re.findall(
+            rf'f"{re.escape(REFUSAL_PREFIX)}([^"\n]*\{{[^"\n]+\}}[^"\n]*)"',
+            text,
+        )
+    )
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped.startswith(
@@ -587,10 +600,23 @@ def _emitted_refusals(script: Path) -> set[str]:
 
 
 def test_emitted_refusal_inventory_is_pinned() -> None:
-    """A new refusal the preserved scripts emit must be noticed deliberately,
-    not silently added: the emitted set must equal the pinned inventory."""
+    """Pin static messages and dynamic Python templates in both scripts."""
     emitted = _emitted_refusals(PRIVILEGED) | _emitted_refusals(UNPRIVILEGED)
     assert emitted == set(PINNED_EMITTED_REFUSALS)
+
+
+def test_dynamic_python_refusal_templates_are_detected(tmp_path: Path) -> None:
+    """Changing a dynamic embedded-Python refusal must break the inventory."""
+    source = PRIVILEGED.read_text(encoding="utf-8")
+    before = "runtime package root unavailable: {package_name}"
+    assert before in source
+    altered = tmp_path / "privileged-install-with-changed-refusal"
+    altered.write_text(
+        source.replace(before, "runtime package root missing: {package_name}", 1),
+        encoding="utf-8",
+    )
+    assert _emitted_refusals(altered) != set(PINNED_EMITTED_REFUSALS)
+    assert "runtime package root missing: {package_name}" in _emitted_refusals(altered)
 
 
 # --------------------------------------------------------------------------

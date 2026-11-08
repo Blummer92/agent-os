@@ -53,13 +53,14 @@ stop` path was introduced.
 
 ## Trusted-host composition
 
-The composition below describes the preserved entrypoint module as built; it
-is not reachable through any live governed route after the Wave 1 retirement
-(the selector and its transport are gone, and no production caller invokes
-`compose_first_run_validation`).
+The composition below documents the historical entrypoint module, which was
+deleted by #3233. Neither `first_run_validation_entrypoint` nor its
+`compose_first_run_validation` function is present or callable now. Wave 1
+also retired the issue-comment selector; this is historical evidence only.
 
-`first_run_validation_entrypoint.compose_first_run_validation` composes the
-existing owners once each, in order, failing closed between steps:
+The removed `first_run_validation_entrypoint.compose_first_run_validation`
+was designed to compose the then-existing owners in order, failing closed
+between steps:
 
 1. trusted GitHub identity (`FirstRunValidationIdentity`);
 2. current candidate/provenance and current approval (`FirstRunHostState`);
@@ -83,13 +84,13 @@ existing owners once each, in order, failing closed between steps:
 
 `run_fixed_validation` and `run_authorized_validation` are named seams whose
 bindings are the existing owners. Supplying a seam selects an existing owner; it
-never creates a command surface or widens authority. The composition holds no
-validation, approval, currentness, custody, evidence, persistence, Scheduler,
-lease, transport, or retry system of its own, and calls each owner exactly once.
+never creates a command surface or widens authority. The former composition did not own an independent validation, approval,
+currentness, custody, evidence, persistence, Scheduler, lease, transport, or
+retry system; it was designed to call each existing owner once.
 
 ## Existing owners reused
 
-The selector does not create a second validation, approval, currentness, custody, Scheduler, lease, or persistence system. Current architecture already owns the downstream pieces:
+The retired selector did not create a second validation, approval, currentness, custody, Scheduler, lease, or persistence system. Its historical downstream dependencies were:
 
 - #1982/#2309: production human approval and durable approval custody;
 - #753/#755: approval applicability and execution-candidate compilation;
@@ -102,22 +103,15 @@ The selector does not create a second validation, approval, currentness, custody
 
 `gce_gcloud_adapter.py` no longer carries the fixed `validate-first-run` host
 operation (#3233 removed its transport; GCE Wave 1 retired the ingress
-selector). The composition contract above describes the preserved entrypoint
-module only, and the governed GitHub Actions -> WIF -> GCE/IAP route remains
-workflow/deployment controlled. This issue's ordinary Safe Implementation Lane
-does not authorize GitHub Actions workflow mutation, IAM/WIF changes, VM/host
-deployment, or live Scheduler/GCE execution.
+selector). The composition contract above describes a deleted entrypoint,
+not a preserved module or a live execution route. Other GCE control paths
+remain separately governed; nothing here authorizes GitHub Actions workflow
+mutation, IAM/WIF changes, VM/host deployment, or live Scheduler/GCE execution.
 
-Two things therefore remain separately authorized, and the repository fails
-closed on both rather than inventing a fallback:
-
-- host-state acquisition. `first_run_validation_entrypoint.main` validates the
-  fixed selector and then raises `first-run-host-state-activation-required`. The
-  module imports cleanly (so the readiness probe is honest) but performs no
-  composition until the host-runtime activation binds `FirstRunHostState` and
-  the two seams to their production owners.
-- the workflow/transport wiring that invokes
-  `first_run_validation_gce.main` on an accepted envelope.
-
-Both must reuse the existing fixed-operation architecture; neither may be
-implemented as arbitrary command transport or a second router.
+Historically, host-state acquisition and the workflow/transport invocation
+required separate authorization. The former
+`first_run_validation_entrypoint.main` failed closed with
+`first-run-host-state-activation-required`; both that entrypoint and
+`first_run_validation_gce.main` were deleted by #3233. The remaining ingress
+selector was retired in Wave 1. No current first-run runtime, importable
+entrypoint, or activation path should be inferred from these historical steps.
