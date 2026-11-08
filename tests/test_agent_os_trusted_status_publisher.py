@@ -93,6 +93,50 @@ def decide(s=None, api_fn=fake_api):
         return pub.decide({'workflow_run':s or source()},REPO)
 
 
+def test_privileged_checkout_action_is_pinned_to_verified_release_commit():
+    # Verified against actions/checkout refs/tags/v7.0.1 on GitHub on 2026-11-08.
+    workflow = (ROOT / '.github/workflows/agent-os-trusted-status-pilot.yml').read_text()
+    assert 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' in workflow
+    assert 'uses: actions/checkout@v7' not in workflow
+    assert 'persist-credentials: false' in workflow
+    assert 'ref: ${{ github.event.repository.default_branch }}' in workflow
+
+
+def test_workflow_installed_dependency_manifests_are_authority():
+    # Each path is directly consumed by the validation workflow, regardless
+    # of whether the changed source code and its tests are otherwise green.
+    paths = {
+        'requirements-dev.txt',
+        '08_Tooling/workflow-scheduler/requirements.txt',
+        '08_Tooling/instructional-materials-coach/pyproject.toml',
+        '08_Tooling/notion-navigation-client/pyproject.toml',
+        '08_Tooling/instructional-materials-coach/picture-perfect-coach/package.json',
+        '08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json',
+        '.github/actions/setup-python-dev/action.yml',
+    }
+    for path in paths:
+        assert pub.touches_authority({path}), path
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+
+
+def test_unlisted_build_and_workflow_authority_configs_fail_closed():
+    for path in (
+        '08_Tooling/future-tool/requirements-test.txt',
+        '08_Tooling/future-tool/pyproject.toml',
+        '08_Tooling/future-tool/setup.py',
+        '08_Tooling/future-tool/tox.ini',
+        '08_Tooling/future-tool/package.json',
+        '08_Tooling/future-tool/npm-shrinkwrap.json',
+        '08_Tooling/future-tool/pnpm-lock.yaml',
+        '08_Tooling/future-tool/yarn.lock',
+        '08_Tooling/future-tool/uv.lock',
+        '.github/workflows/another-validation.yml',
+    ):
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+    assert pub.evaluate(source(), jobs(), {'src/domain_logic.py'})['state'] == 'success'
+    assert pub.evaluate(source(), jobs(), {'docs/requirements-notes.md'})['state'] == 'success'
+
+
 def test_source_event_has_to_be_actual_pr():
     assert decide(source(event='workflow_dispatch'))['state'] is None
     assert decide(source(status='in_progress'))['state'] is None
