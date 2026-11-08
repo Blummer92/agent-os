@@ -114,6 +114,60 @@ def test_unqualified_validation_profile_falls_back_before_codespaces_probe(
     assert calls == []
 
 
+def test_codespaces_reuses_canonical_fixed_profile_without_widening(monkeypatch) -> None:
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        get_profile, profile_argv,
+    )
+
+    profile = get_profile(VALIDATION_ID)
+    assert profile.profile_id == "remote-validation"
+    assert profile.fixed_targets == ("tests/agent_os_remote_validation",)
+    assert profile_argv(VALIDATION_ID) == (
+        "python", "-m", "pytest", "tests/agent_os_remote_validation",
+    )
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    route, request = select_codespaces_dev_validation(
+        _ingress(), run=_listing_run(_codespace_payload())
+    )
+    assert request is not None
+    assert request.profile_id == profile.profile_id
+    assert route["selected"] is True
+    assert route["lifecycle_mutation_authorized"] is False
+
+
+def test_canonical_profile_drift_blocks_before_codespaces_probe(monkeypatch) -> None:
+    from workflow_scheduler.governance import dev_validation_codespaces as live
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        DevValidationProfile, RunnerKind,
+    )
+
+    original = live.get_profile
+
+    def changed(profile_id):
+        profile = original(profile_id)
+        return DevValidationProfile(
+            profile_id=profile.profile_id,
+            runner_kind=RunnerKind.PYTEST_TARGETS,
+            fixed_targets=("tests/agent_os_remote_validation/extra",),
+            fixed_working_directory=profile.fixed_working_directory,
+            runtime_id=profile.runtime_id,
+            timeout_class=profile.timeout_class,
+            selector_requirements=profile.selector_requirements,
+        )
+
+    monkeypatch.setattr(live, "get_profile", changed)
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+
+    def forbidden_run(argv, *, timeout):
+        raise AssertionError("drift must be refused before Codespaces access")
+
+    route, request = select_codespaces_dev_validation(_ingress(), run=forbidden_run)
+    assert request is not None
+    assert route["selected"] is False
+    assert route["reason_codes"] == ["codespaces-profile-not-qualified"]
+    assert route["lifecycle_mutation_authorized"] is False
+
+
 def test_stopped_codespace_falls_back_without_lifecycle_mutation(monkeypatch) -> None:
     monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
     calls = []
