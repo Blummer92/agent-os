@@ -26,6 +26,7 @@ from .dev_validation import (
     build_dev_validation_request,
 )
 from .github_issue_comment_ingress import IssueCommentIngressResult
+from .dev_validation_profiles import RunnerKind, get_profile, profile_argv
 
 APPROVED_CODESPACE_PROFILE_ID = "agent-os-codespaces-v1"
 APPROVED_OWNER = "Blummer92"
@@ -337,6 +338,19 @@ def select_codespaces_dev_validation(
         return _route(False, "not-dev-validation"), None
     request = _request_from_ingress(ingress)
     if request.validation_id not in SUPPORTED_VALIDATION_IDS:
+        return _route(False, "codespaces-profile-not-qualified"), request
+    # Reuse the existing canonical profile contract, but do not equate a
+    # catalog entry with Codespaces runtime qualification. The fixed remote
+    # runner below executes only this exact target and pytest identity.
+    profile = get_profile(request.profile_id)
+    if (
+        profile.runner_kind is not RunnerKind.PYTEST_TARGETS
+        or profile.profile_id != "remote-validation"
+        or profile.fixed_targets != ("tests/agent_os_remote_validation",)
+        or profile.runtime_id != "python-pytest-8.3.5"
+        or profile_argv(profile.profile_id)
+        != ("python", "-m", "pytest", "tests/agent_os_remote_validation")
+    ):
         return _route(False, "codespaces-profile-not-qualified"), request
     selection = resolve_current_codespace(run)
     return (

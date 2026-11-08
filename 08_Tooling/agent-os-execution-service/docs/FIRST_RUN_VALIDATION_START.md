@@ -5,7 +5,11 @@
 > `malformed-trigger`, no trigger identity, no execution). Its GCE transport
 > was already removed in #3233 (`first_run_validation_gce.py` deleted; the
 > adapter carries no first-run branch) and the Codespaces-first route resolves
-> any stale accepted envelope to `preferred="none"`. The body below describes
+> any stale accepted envelope to `preferred="none"`. Wave 2 Cluster 1 also
+> retired the orphaned GCE observed-validation wrapper, the GCE-only evidence
+> projector, and the unused #1970 first-run invalidation composition. The
+> Codespaces evidence projector and historical exact-profile matcher remain.
+> The body below describes
 > the historical lifecycle only; do not treat it as a live route. The
 > `first_run_candidate_sha_or_none` transport field is retained (always null)
 > for stored-evidence schema compatibility.
@@ -54,7 +58,8 @@ stop` path was introduced.
 ## Trusted-host composition
 
 The composition below documents the historical entrypoint module, which was
-deleted by #3233. Neither `first_run_validation_entrypoint` nor its
+deleted by #3233. Its former observed-GCE validation and #1970 residual
+invalidation helper modules were later retired as orphaned Wave 2 code. Neither `first_run_validation_entrypoint` nor its
 `compose_first_run_validation` function is present or callable now. Wave 1
 also retired the issue-comment selector; this is historical evidence only.
 
