@@ -358,11 +358,11 @@ def consume_fixed_codespace_pilot(
             timeout_seconds=90,
             # The trusted Gate 2 host is already the selected Codespace;
             # request an explicit local mode, never an automatic SSH fallback.
-            **production_mode_kwargs,
             # Deterministic working-directory contract (#3333 Option B): the
             # fixed probe always runs under the validated repository root
             # rather than the incidental SSH session directory.
             workdir_or_none=VALIDATED_CODESPACE_REPOSITORY_ROOT,
+            **production_mode_kwargs,
         )
         result = outcome.transport_result_or_none
         receipt = _receipt("blocked", "codespace-dispatch-not-completed", envelope)
