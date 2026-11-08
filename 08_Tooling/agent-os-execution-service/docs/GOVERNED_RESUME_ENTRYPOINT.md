@@ -59,12 +59,13 @@ second delivery that finds another delivery's claim waits up to
 `claim_wait_seconds` (default 5s) for the receipt instead of dispatching;
 a completed dispatch records its receipt while still holding the claim,
 then releases it. Failed, quarantined, or blocked runs release the claim
-and record nothing, so retries and crash recovery are preserved. Two
-windows bound the guarantee: if the host dies between the Pilot returning
-`completed` and the receipt write landing, the next delivery duplicates
-(crash window); and if a receipt write stalls longer than
-`claim_wait_seconds`, a waiting delivery replaces the stale claim and
-dispatches (record-stall window). Exactly-once is not claimed. The
+and record nothing, so explicitly failed attempts stay retryable. If the
+receipt cannot be recorded after completed work, the claim remains and the
+completed result is reported with `completion-receipt-unrecorded`.
+A waiting delivery never replaces another delivery's claim just because
+`claim_wait_seconds` elapsed; an exception or crash can leave an
+orphaned claim needing evidence-backed operator recovery. This avoids
+automatic duplicate validation, but exactly-once is not claimed. The
 production bootstrap binds the store from the checkpoint store root
 (`$AGENT_OS_CHECKPOINT_STORE_ROOT/invocations/receipts/` plus the sibling
 `claims/`) and probe-verifies it writable at binding time — a permanently
@@ -73,10 +74,11 @@ running without dedup (see `GOVERNED_RESUME_RECEIPT_RECOVERY.md` for the
 operator runbook); bindings without a store preserve the previous
 behavior. A record failure after a completed run never misreports the
 run: it is surfaced as `completion-receipt-unrecorded` in the evidence
-and on stderr with the store path. A pilot input naming more than one
-issue cannot be receipted (a receipt requires exactly one issue), so such a
-completed run leaves no receipt, stays re-admissible, and is marked
-`completion-receipt-unrecorded` per run.
+and on stderr with the store path, and its claim is retained to prevent
+automatic re-execution. A pilot input naming more than one issue cannot
+be receipted (a receipt requires exactly one issue), so such a
+completed run leaves no receipt, remains claimed pending reconciliation,
+and is marked `completion-receipt-unrecorded`.
 
 AOS-GCE1 (#1217) now gives normal installed execution its production default.
 When `bindings` is omitted, `main()` validates the immutable handoff ID and then

@@ -647,6 +647,16 @@ def test_receipt_record_failure_is_visible_but_does_not_misreport_success(
     assert payload["terminal_status"] == "succeeded"
     assert "completion-receipt-unrecorded" in payload["reason_codes"]
     assert "completion receipt unrecorded" in capsys.readouterr().err
+    assert store.find_claim(H) is not None
+    replay = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(dispatch, completion_store=store, claim_wait_seconds=0),
+        )
+    )
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 1
 
 
 def test_no_completion_store_preserves_current_behavior():
@@ -729,7 +739,7 @@ def test_failed_dispatch_releases_the_claim_and_records_nothing(tmp_path):
     assert len(dispatched) == 2
 
 
-def test_dispatch_exception_releases_the_claim(tmp_path):
+def test_dispatch_exception_retains_claim_until_outcome_is_reconciled(tmp_path):
     from agent_os_execution_service.invocation_completion_receipt import (
         InvocationCompletionStore,
     )
@@ -745,8 +755,17 @@ def test_dispatch_exception_releases_the_claim(tmp_path):
             ["--handoff-id", H],
             bindings=_admitted_bindings(dispatch, completion_store=store),
         )
-    assert store.find_claim(H) is None
+    assert store.find_claim(H) is not None
     assert store.find_completed(H) is None
+    replay = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=_admitted_bindings(lambda _: pytest.fail("duplicate dispatch"),
+                                        completion_store=store, claim_wait_seconds=0),
+        )
+    )
+    assert replay["status"] == "blocked"
+    assert replay["reason_codes"] == ["invocation-already-claimed"]
 
 
 def test_second_delivery_waits_for_the_owners_receipt_and_blocks():
@@ -780,7 +799,7 @@ def test_second_delivery_waits_for_the_owners_receipt_and_blocks():
     assert payload["scheduler_dispatch_count"] == 0
 
 
-def test_stale_claim_is_replaced_and_the_delivery_dispatches():
+def test_wait_timeout_cannot_take_over_an_unproven_claim():
     store = FakeCompletionStore()
     store._claims[H] = {"handoff_id": H, "run_id": "a" * 32}
     dispatched = []
@@ -797,15 +816,16 @@ def test_stale_claim_is_replaced_and_the_delivery_dispatches():
             ),
         )
     )
-    assert payload["status"] == "completed"
-    assert len(dispatched) == 1
-    assert store.find_claim(H) is None  # released after the completed run
-    assert store.find_completed(H) is not None
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 0
+    assert store.find_claim(H)["run_id"] == "a" * 32
+    assert store.find_completed(H) is None
 
 
-def test_loser_of_a_claim_replace_returns_blocked_without_dispatching():
+def test_competing_claim_owner_returns_blocked_without_dispatching():
     class ContendedStore(FakeCompletionStore):
-        """First claim wins; every later claim loses (a replacer won first)."""
+        """Another delivery already owns the claim and never relinquishes it."""
 
         def __init__(self):
             super().__init__()

@@ -116,20 +116,41 @@ def test_broken_store_detect_repair_redeliver(tmp_path, capsys):
     assert "completion receipt unrecorded" in err
     assert f"(store {store.receipts_dir})" in err
     assert store.find_completed(H3) is None
+    assert store.find_claim(H3) is not None  # protect the completed but unreceipted run
 
     # Step 2 (runbook): remove the blocking file, recreate the directory.
     (root / "invocations" / "receipts").unlink()
     (root / "invocations" / "receipts").mkdir(mode=0o700)
     store.verify_writable()  # the probe passes again
 
-    # Step 3 (runbook): re-deliver records; the next delivery is blocked.
+    # Step 3 (runbook): no automatic retry of a completed but unreceipted
+    # run. A new delivery must not execute again after the store is repaired.
     payload = json.loads(
         run_governed_resume(
             ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
         )
     )
-    assert payload["status"] == "completed"
-    assert store.find_completed(H3) is not None
+    assert payload["status"] == "blocked"
+    assert payload["reason_codes"] == ["invocation-already-claimed"]
+    assert len(dispatched) == 2  # baseline H2 plus the one H3 dispatch
+
+    # Operator separately verifies the completed Pilot evidence, binds the
+    # exact admitted identity, records the missing receipt, then clears the
+    # single orphaned claim while no owner is running.
+    verified_pilot = SimpleNamespace(
+        repository="Blummer92/agent-os",
+        issue_numbers=(560,),
+        invocation_id="invocation:1",
+        source_head_sha="a" * 40,
+    )
+    store.record_completed(
+        build_completion_receipt(
+            handoff_id=H3, pilot_input=verified_pilot, pilot_result=PilotResult()
+        )
+    )
+    claim = store.find_claim(H3)
+    assert claim is not None
+    assert store.release_claim(H3, claim["run_id"])
     payload = json.loads(
         run_governed_resume(
             ["--handoff-id", H3], bindings=_bindings(H3, dispatch, store)
@@ -138,6 +159,7 @@ def test_broken_store_detect_repair_redeliver(tmp_path, capsys):
     assert payload["status"] == "blocked"
     assert payload["reason_codes"] == ["invocation-already-completed"]
     assert payload["scheduler_dispatch_count"] == 0
+    assert len(dispatched) == 2
 
 
 def test_wrong_receipt_conflicts_then_recovers_by_deleting_one_file(tmp_path):

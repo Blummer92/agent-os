@@ -18,9 +18,11 @@ governed-resume: completion receipt unrecorded for executor-handoff:<hex> (store
 ```
 
 The run **completed** — do not report it as failed and do not re-run it as
-if it failed. What is missing is only the durable record: the next
-delivery of the same handoff will dispatch again (duplicate validation
-work) until the store is fixed and a receipt is recorded.
+if it failed. The execution claim is intentionally retained. Re-delivery
+without a receipt returns `blocked` with `invocation-already-claimed`
+and performs no duplicate validation, even after the store is repaired.
+Recovery requires reconciliation against the original completed Pilot
+evidence before a receipt can be reconstructed.
 
 **The store cannot be written at all.** Binding fails before any
 execution with `completion store is not writable: <store-root>` (raised as
@@ -41,8 +43,8 @@ bootstrap runs at binding time):
 python3 -c "from agent_os_execution_service.invocation_completion_receipt import InvocationCompletionStore; InvocationCompletionStore.for_store_root('<store-root>').verify_writable(); print('store writable')"
 ```
 
-- Probe passes → the failure was transient (a single record error, a
-  momentary disk stall). No repair is needed; go to Step 3.
+- Probe passes → the store is writable now. Do **not** retry a completed
+  unreceipted run; go to Step 3 for evidence reconciliation.
 - Probe raises `completion store is not writable` (or `checkpoint store
   is not initialized: invocations/ is missing`) → go to Step 2.
 
@@ -64,19 +66,30 @@ Common causes, in the order to check them:
 
 Re-run the probe after each fix. It must pass before any re-delivery.
 
-## Step 3 — re-deliver, then verify dedup
+## Step 3 — reconcile evidence, then verify dedup
 
-Re-deliver the same handoff. It will dispatch once and record its
-receipt. Then deliver it once more: the second delivery must return
-`blocked` with reason `invocation-already-completed` and
-`scheduler_dispatch_count` 0. If the re-delivery reports
-`completion-receipt-unrecorded` again, the store is still broken — go
-back to Step 1.
+Do not automatically retry the handoff solely because the store is writable.
+A retained claim is not proof the Pilot is still running or that it
+completed. Under an operator-controlled quiescent window, check the
+Scheduler lease, workspace, original Pilot result, and termination/validation
+evidence for this exact handoff. If outcome is uncertain, leave the claim
+intact and escalate for a governed decision. A wait timeout is never proof
+that a claim is stale.
 
-Deliveries that ran while the store was broken may have duplicated
-validation work. Check the evidence logs for repeated `completed` runs
-for the same handoff with no intervening receipt; that is the expected
-consequence of the outage, not a defect in the repair.
+If independently verified evidence proves the Pilot completed, construct the
+canonical receipt with `build_completion_receipt(...)` using the exact
+admitted Pilot identity and original result; do not invent IDs or validation
+results. Persist it with `InvocationCompletionStore.record_completed(...)`
+and read it back with `find_completed(...)`. Only after quiescing the
+original owner and verifying the receipt may an operator release that one
+claim with its observed run ID. Re-delivering must return `blocked`,
+`invocation-already-completed`, dispatch count zero.
+
+If evidence conclusively proves the Pilot never started or that an explicit
+non-completed result was already returned, an operator may release only
+that handoff's claim under a quiescent window, and then run a fresh
+admission. Do not clear claims automatically, on a timeout, or just because
+the checkpoint directory is writable.
 
 ## Wrong or planted receipt
 
@@ -87,20 +100,26 @@ fail closed, no dispatch. To recover:
 
 1. Identify the file: `<store-root>/invocations/receipts/governed-resume-completed-<handoff-hex>.json`.
 2. Read it and confirm the mismatch against the invocation descriptor.
-3. Delete **that one file only**. Never delete the whole `receipts/`
-   directory — that would erase other handoffs' completion records.
-4. Re-deliver the handoff; it dispatches once and records a correct
-   receipt.
+3. Confirm with independent execution evidence whether any Pilot work
+   completed for this identity. If completion is possible or uncertain,
+   do **not** delete-and-retry; reconcile or escalate.
+4. Only when evidence proves the receipt is invalid and no completed
+   dispatch could be duplicated, remove that one file under a quiescent
+   window. Never delete the entire `receipts/` directory.
 
 ## Wedged or corrupt claim
 
-A claim file left by a crashed delivery
+A claim file left by a crash
 (`<store-root>/invocations/claims/governed-resume-claim-<handoff-hex>.json`)
-is replaced automatically: the next delivery waits up to
-`claim_wait_seconds` (default 5s) for the receipt, then replaces the
-stale claim and dispatches. No manual action is needed.
+is **not** automatically replaced. A timeout without a receipt is
+ambiguous: the owner may still be running or its receipt write may have
+stalled. A later delivery returns `blocked` /
+`invocation-already-claimed` without dispatching. Follow Step 3 to
+reconcile the original work before any release.
 
-If the claim file itself is corrupt (malformed JSON), the next delivery
-returns `needs-decision` with reason `completion-claim-unavailable`.
-Delete **that one claim file only** and re-deliver; the delivery
-re-claims and proceeds. Never delete the whole `claims/` directory.
+A malformed claim reports `needs-decision` /
+`completion-claim-unavailable`. Do not delete it while an owner may
+still be active. Investigate the underlying corruption and independently
+prove that no ongoing or completed Pilot can be duplicated. Only then,
+under a quiescent window, remove **that one file only** and re-admit.
+Never delete the whole `claims/` directory.

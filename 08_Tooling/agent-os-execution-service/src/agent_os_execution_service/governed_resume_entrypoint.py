@@ -269,7 +269,7 @@ def _blocked_for_receipt(handoff_id: str, receipt: object, pilot_input: object) 
 
 
 def _release_claim_quietly(store: object, handoff_id: str, run_id: object) -> None:
-    """Best-effort claim release; a stale claim is handled by wait+replace."""
+    """Best-effort claim release by the delivery that owns it."""
     if type(run_id) is not str:
         return
     try:
@@ -290,13 +290,13 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
     dispatching. A completed dispatch records its receipt while still
     holding the claim, then releases it; failed, quarantined, and blocked
     runs release the claim and record nothing, so retries and crash
-    recovery are preserved. A record failure never misreports the completed
-    run, it is surfaced in the evidence reasons and on stderr instead.
-    The guarantee is at most once across sequential deliveries, bounded
-    by two windows: the crash window (host dies between Pilot return and
-    receipt write) and the record-stall window (a receipt write stalling
-    longer than ``claim_wait_seconds`` lets a waiting delivery replace
-    the stale claim and dispatch). Exactly-once is not claimed.
+    recovery are preserved when an explicit non-completed result is returned.
+    A receipt-write failure retains the claim and reports the completed
+    outcome with a visible warning. A wait timeout never proves an owner
+    has terminated, and an exception during dispatch leaves the outcome
+    uncertain: in both cases the claim stays in place until independently
+    reconciled. This favors fail-closed recovery over duplicate execution.
+    Exactly-once is not claimed.
     """
     handoff_id = parse_handoff_argv(argv)
     result = bindings.reconstruct(handoff_id)
@@ -340,10 +340,9 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
                 reasons=(COMPLETION_CLAIM_UNAVAILABLE_REASON,),
             )
         if not claimed:
-            # Another delivery owns the claim. Wait for its receipt: it
-            # may land at any moment (the owner records while holding the
-            # claim). Only a wait that finds no receipt proves the owner
-            # terminated without recording.
+            # Another delivery owns the claim. Wait briefly for its receipt.
+            # A timeout is NOT evidence the owner stopped or that its
+            # validation-only Pilot did not complete.
             try:
                 prior = store.wait_for_completed(
                     handoff_id, timeout_seconds=bindings.claim_wait_seconds
@@ -366,33 +365,14 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
                 )
             if prior is not None:
                 return _blocked_for_receipt(handoff_id, prior, pilot_input)
-            # Stale claim: replace it. The release removes the file only
-            # when it still carries the run id we just read, so a winner's
-            # replacement can never be unlinked by a loser.
-            try:
-                existing = store.find_claim(handoff_id)
-            except Exception:
-                return _blocked_evidence(
-                    handoff_id=handoff_id,
-                    status="needs-decision",
-                    reasons=(COMPLETION_CLAIM_UNAVAILABLE_REASON,),
-                )
-            if type(existing) is dict:
-                _release_claim_quietly(store, handoff_id, existing.get("run_id"))
-            try:
-                claimed = store.claim(handoff_id, run_id)
-            except Exception:
-                return _blocked_evidence(
-                    handoff_id=handoff_id,
-                    status="needs-decision",
-                    reasons=(COMPLETION_CLAIM_UNAVAILABLE_REASON,),
-                )
-            if not claimed:
-                return _blocked_evidence(
-                    handoff_id=handoff_id,
-                    status="blocked",
-                    reasons=(INVOCATION_ALREADY_CLAIMED_REASON,),
-                )
+            # Never unlink another delivery's claim on a wait timeout:
+            # the owner may still be dispatching or writing its receipt.
+            # Recovery of an orphaned claim requires independent evidence.
+            return _blocked_evidence(
+                handoff_id=handoff_id,
+                status="blocked",
+                reasons=(INVOCATION_ALREADY_CLAIMED_REASON,),
+            )
         # We own the claim. A receipt may have landed while we acquired
         # or replaced it; re-check before dispatching.
         try:
@@ -411,10 +391,11 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
     try:
         pilot_result = bindings.dispatch(pilot_input)
     except BaseException:
-        if run_id is not None and bindings.completion_store is not None:
-            _release_claim_quietly(bindings.completion_store, handoff_id, run_id)
+        # Dispatch may have started before the exception. Keep the claim:
+        # treating an unknown outcome as retryable can duplicate the Pilot.
         raise
     extra_reasons: tuple[str, ...] = ()
+    receipt_recorded = True
     if (
         bindings.completion_store is not None
         and _status_value(pilot_result) == "completed"
@@ -427,6 +408,7 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
             )
             bindings.completion_store.record_completed(receipt)
         except Exception as exc:  # noqa: BLE001 - completed work must still report
+            receipt_recorded = False
             location = getattr(bindings.completion_store, "receipts_dir", None)
             where = f" (store {location})" if location is not None else ""
             detail = f"{type(exc).__name__}: {exc}"[:200]
@@ -436,7 +418,11 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
             )[:512]
             print(message, file=sys.stderr)
             extra_reasons = (COMPLETION_RECEIPT_UNRECORDED_REASON,)
-    if run_id is not None and bindings.completion_store is not None:
+    if (
+        run_id is not None
+        and bindings.completion_store is not None
+        and receipt_recorded
+    ):
         _release_claim_quietly(bindings.completion_store, handoff_id, run_id)
     return _pilot_evidence(
         handoff_id=handoff_id, result=pilot_result, extra_reasons=extra_reasons

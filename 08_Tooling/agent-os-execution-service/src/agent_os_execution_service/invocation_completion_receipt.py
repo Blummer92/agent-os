@@ -19,10 +19,12 @@ The store also holds one durable execution claim per handoff under the
 sibling directory ``invocations/claims/``:
 ``governed-resume-claim-<handoff-hex>.json``. A delivery claims before
 dispatching; a later delivery that finds another delivery's claim waits
-for the receipt instead of dispatching. Claims close the post-completion
-race in which the Pilot releases its lease before the receipt is
-published. Claims never decide authorization: they record only that one
-delivery is executing (or was executing) for one immutable handoff.
+briefly for a receipt and otherwise fails closed without dispatching.
+Claims close the post-completion race in which the Pilot releases its
+lease before the receipt is published. Claims never decide authorization:
+they record only that one delivery is executing (or was executing) for
+one immutable handoff. A crashed or uncertain delivery requires operator
+reconciliation; a timeout does not prove the claim stale.
 
 Temporary files use the ``.tmp`` suffix (never ``.json``): the gate2 probe
 scan reads every ``.json`` file in ``receipts/``, so a leftover temp file
