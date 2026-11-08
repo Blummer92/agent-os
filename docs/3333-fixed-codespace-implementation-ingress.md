@@ -305,3 +305,109 @@ variable is unset. The existing `handoff_publication` producer is authorized to
 publish genuine pre-PR developer-loop descriptors there; a producer invoked over
 SSH must use the same root. No descriptor is synthesized or copied from the
 retired GCE host. This is not live acceptance.
+
+## D1 workflow connection (2026-11-04)
+
+The governed-invocation workflow now connects the fixed pilot to a
+trusted host for the #3333 path only (Change Request v2.1 as corrected by
+Addendum v2.2). No live pilot, descriptor publication, credential change,
+repository-variable change, lifecycle operation, Ready, merge, or closure
+is included; D2 remains a separate decision.
+
+New steps in the `ingress` job, in order, all gated on the fixed
+envelope. (The retired GCE `host_install` step no longer exists — #3821
+removed it — so no D1 condition references it.)
+
+1. **Preflight** (`fixed_preflight`): validates the four
+   `vars.AGENT_OS_*` bindings (presence booleans only, never values),
+   resolves the canonical Codespace selection, checks the runner main
+   head against the comment SHA, checks the remote HEAD against the same
+   SHA over the exact noninteractive SSH session, measures
+   `CODESPACE_NAME` present-and-equal over that session, and runs the
+   read-only Gate 2 `--check-bindings` probe. Any failure records a
+   blocked `gate2-transfer.json` and `ready=false`; the step itself
+   exits 0 so the acceptance gate below is the terminal boundary.
+2. **Exclusive transfer** (`fixed_transfer`): stages the raw event
+   outside the uploaded ingress directory, under
+   `$RUNNER_TEMP/agent-os-gate2-private/` (0700 directory, 0600 file,
+   umask 077, size bound 1,048,576 bytes), creates a fresh 0700 remote
+   directory (exists means blocked, never overwritten), copies without
+   `--expand`, guards regular-file/not-symlink, verifies the staging
+   SHA-256, links atomically (`ln`, never copy-over), and verifies the
+   final SHA-256 plus staging/final inode equality. Remote names are
+   built only from validated numeric run/attempt values plus fixed
+   literals; event text is never interpolated into any command.
+3. **Run + receipt return** (`fixed_run`): invokes the existing Gate 2
+   controller over SSH with quoted `AGENT_OS_*` assignments and the
+   constructed `--event` path, captures stdout/stderr separately into
+   `gate2-stdout.json` / `gate2-stderr.json`, and, only on exit 0,
+   returns the receipt by staging plus atomic link after validating the
+   full receipt-path prefix (store root + `/invocations/receipts/`).
+   A non-zero Gate 2 exit records the stderr reason for the gate; the
+   step itself exits 0. A 300 s timeout (exit 124) is different: the
+   remote controller may have finished, or may still hold its O_EXCL
+   claim, so the gate records `run-timeout-outcome-uncertain` — a
+   fail-closed FAIL that asserts neither success nor failure. The claim
+   and any host receipt are preserved, nothing is retried automatically,
+   and the next run fails with `fixed-pilot-claim-ambiguous` until an
+   owner adjudicates the uncertain outcome.
+4. **Acceptance gate** (`fixed_gate`, `if: always()`, no
+   `continue-on-error`): runs `dev_validation_gate --fixed-pilot` over
+   transport, diagnostic, reference, process stderr, receipt, transfer,
+   and the private event file, writes `gate2-gate.json`, and exits 1
+   unless the decision is PASS. It runs before the invocation summary.
+5. **Cleanup** (`fixed_cleanup`, only on gate PASS): removes the remote
+   staging directory and the runner private staging. On gate FAIL the
+   remote directory is left in place for diagnosis. Cleanup never
+   touches the host receipt, any claim, or any artifact file, and never
+   fails the job; its outcome is recorded in `gate2-cleanup.json`.
+
+**Acceptance validator** (`dev_validation_gate --fixed-pilot`): requires
+the genuine 30-field completed receipt (the producer's 27-key template
+plus `admission_id`, `invocation_id`, `descriptor_id`), the exact
+10-field reference (`operation_id`, not `operation`), transport
+identities (repository, issue 3333, actor, run attempt 1, handoff, SHA),
+transfer evidence (preflight booleans, VALID probe, dual SHA-256,
+inode equality, run exit 0, receipt returned), an empty Gate 2 stderr
+channel, and a private event whose bytes and SHA-256 still match the
+transfer record. Check order preserves the originating failure: a Gate 2
+stderr reason is reported verbatim instead of being masked by the
+missing reference or receipt it also explains. One exception precedes
+stderr parsing: a 300 s timeout (transfer `run_rc` 124) short-circuits
+to `run-timeout-outcome-uncertain`, because a killed controller's
+stderr cannot say whether the remote run finished. A workflow exit 0, a
+reference alone, or the provider-less diagnostic can never pass.
+
+**Gate 2 `--check-bindings`** (the only Gate 2 change in D1): a
+read-only probe verifying the four bound paths, the initialized store,
+strict host identity, and an empty lease directory. It creates no state
+(no receipts directory), reads no event, acquires no claim, and
+dispatches nothing. The strict `CODESPACE_NAME` rule is unchanged:
+absent means `host-surface-identity-unavailable`, different means
+`host-surface-identity-mismatch`, and only present-and-equal passes.
+The v2.1 absent-tolerance amendment was withdrawn in v2.2 and is not
+implemented.
+
+**Summary precedence**: for fixed envelopes the summary prints the
+diagnostic status, the gate decision and reasons, and the line
+"Provider-less diagnostic only; not execution evidence." The generic
+`Dispatch: None / None` fallback is suppressed for fixed envelopes.
+The seven-day artifact upload step is unchanged and still publishes the
+whole ingress directory after acceptance and summary.
+
+**D1/D2 source rule**: D2 requires this patch merged to main and the
+selected host's checkout at the merged main commit exactly. A D2 attempt
+from a PR head is not permitted, and no checkout is ever reset, cleaned,
+or replaced to achieve a matching state.
+
+**Publication honesty**: the #1411 chain still contains no assertion
+that `projection.tested_repository_sha == packet.candidate_sha`, and no
+chain line asserts the execution request's `expected_sha` equals the
+candidate SHA. Both equalities remain P-descriptor/D2 blockers enforced
+by publication readback plus Gate 2, not by D1 code. D1 adds no
+publication authority and no hand-written descriptor.
+
+**Rollback**: revert only the five new workflow steps, the summary
+precedence hunk, the validator's fixed-pilot mode, the Gate 2
+`--check-bindings` mode, and their tests/docs. The diagnostic, GCE,
+Notion, Ready, merge, and developer-validation paths are untouched.

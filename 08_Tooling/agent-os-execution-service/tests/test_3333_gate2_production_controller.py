@@ -36,6 +36,7 @@ from agent_os_execution_service.gate2_production_controller import (
     Gate2ControllerError,
     _build_bound_bootstrap,
     _persist_receipt_atomically,
+    check_host_bindings,
     main,
     run_gate2_fixed_pilot_controller,
 )
@@ -1444,3 +1445,104 @@ def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeyp
     dependency = bootstrap.sources.repository_reader.read_dependency_evidence(_BOUND_REPO, 3333)
     assert str(dependency.status) == "EvidenceStatus.UNAVAILABLE"
     assert any("not-current" in code for code in dependency.reason_codes)
+
+
+# --- Read-only --check-bindings probe (D1) ----------------------------------
+# N3: the strict host-identity rule is unchanged (absent and different
+# both fail), and the probe creates no state, reads no event, acquires
+# no claim, and dispatches nothing.
+
+def _check_env(host: dict) -> dict[str, str]:
+    return {key: value for key, value in host.items() if type(value) is str}
+
+
+def test_check_bindings_valid_and_creates_no_state(host, tmp_path) -> None:
+    """The probe passes on a qualified host and leaves the tree untouched."""
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {
+        "check_bindings": "VALID",
+        "reason": None,
+        "codespace_name": "test-box",
+    }
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert before == after
+    assert not (host["store"] / "invocations" / "receipts").exists()
+
+
+@pytest.mark.parametrize(
+    "mutate,reason",
+    [
+        (
+            lambda env: env.pop("AGENT_OS_LEASE_DIRECTORY"),
+            "host-configuration-invalid",
+        ),
+        (
+            lambda env: env.update(CODESPACE_NAME=""),
+            "host-surface-identity-unavailable",
+        ),
+        (
+            lambda env: env.update(CODESPACE_NAME="other-box"),
+            "host-surface-identity-mismatch",
+        ),
+    ],
+)
+def test_check_bindings_invalid_cases(host, mutate, reason) -> None:
+    env = _check_env(host)
+    mutate(env)
+    probe = check_host_bindings(
+        environ=env, resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": reason}
+
+
+def test_check_bindings_uninitialized_store_is_invalid(host) -> None:
+    import shutil
+
+    shutil.rmtree(host["store"] / "invocations")
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "checkpoint-store-not-initialized"}
+
+
+def test_check_bindings_unqualified_selection_is_invalid(host) -> None:
+    probe = check_host_bindings(
+        environ=_check_env(host),
+        resolve_selection=lambda: CodespaceSelection(
+            selected=False, reason="none", codespace_name=None, state=None
+        ),
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "execution-surface-unqualified"}
+
+
+def test_check_bindings_active_lease_is_invalid(host) -> None:
+    (host["lease_dir"] / ("f" * 64 + ".active.json")).write_text("{}\n")
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "conflicting-active-lease"}
+
+
+def test_check_bindings_cli_wiring(host, monkeypatch, capsys) -> None:
+    """main() accepts --check-bindings alone and rejects ambiguous argv."""
+    for key, value in _check_env(host).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        "agent_os_execution_service.gate2_production_controller"
+        ".read_canonical_codespace_selection",
+        lambda resolve_selection: _selection("test-box"),
+    )
+    assert main(["--check-bindings"]) == 0
+    assert json.loads(capsys.readouterr().out)["check_bindings"] == "VALID"
+    monkeypatch.setenv("CODESPACE_NAME", "other-box")
+    assert main(["--check-bindings"]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "host-surface-identity-mismatch"
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--check-bindings", "--event", "event.json"])
+    assert excinfo.value.code == 2
+    with pytest.raises(SystemExit) as excinfo:
+        main([])
+    assert excinfo.value.code == 2
