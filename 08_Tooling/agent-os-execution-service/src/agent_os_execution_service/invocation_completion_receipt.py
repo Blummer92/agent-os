@@ -38,6 +38,7 @@ or blocked runs record nothing and remain re-admissible.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
@@ -154,6 +155,9 @@ def build_completion_receipt(
     invocation_id = getattr(pilot_input, "invocation_id", None)
     source_sha = getattr(pilot_input, "source_head_sha", None)
     result_id = getattr(pilot_result, "result_id", None)
+    status = getattr(pilot_result, "status", None)
+    if getattr(status, "value", status) != "completed":
+        raise InvocationCompletionReceiptError("pilot result is not completed")
     if type(repository) is not str or not repository:
         raise InvocationCompletionReceiptError("pilot input repository is invalid")
     if type(invocation_id) is not str or not invocation_id:
@@ -265,6 +269,20 @@ def _write_temp_file(directory: Path, payload: bytes) -> str:
                     pass
 
 
+def _sync_parent_directory(path: Path) -> None:
+    """Persist the directory entry; a durable payload alone is insufficient."""
+    try:
+        descriptor = os.open(os.fspath(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise InvocationCompletionReceiptError(
+            "completion store directory could not be persisted"
+        ) from exc
+
+
 def _link_or_exists(temp_name: str, final: Path) -> bool:
     """Publish a temp file with ``os.link`` O_EXCL; True if linked.
 
@@ -284,6 +302,7 @@ def _link_or_exists(temp_name: str, final: Path) -> bool:
         raise InvocationCompletionReceiptError(
             "completion store entry could not be published"
         ) from exc
+    _sync_parent_directory(final)
     return True
 
 
@@ -442,6 +461,7 @@ class InvocationCompletionStore:
                     "completion receipt is unreadable"
                 ) from exc
             if existing == payload:
+                _sync_parent_directory(final)
                 return final
             raise InvocationCompletionReceiptError(
                 "completion receipt already holds different content"
@@ -491,7 +511,10 @@ class InvocationCompletionStore:
             # owning run (a retry after a crash between link and return),
             # and a refusal for any other run.
             existing = self.find_claim(handoff_id)
-            return existing is not None and existing.get("run_id") == run_id
+            if existing is not None and existing.get("run_id") == run_id:
+                _sync_parent_directory(final)
+                return True
+            return False
         finally:
             _discard_temp(temp_name)
 
@@ -550,7 +573,7 @@ class InvocationCompletionStore:
             timeout_seconds, bool
         ):
             raise TypeError("timeout_seconds must be a number")
-        if timeout_seconds < 0 or timeout_seconds != timeout_seconds:
+        if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
             raise ValueError("timeout_seconds must be finite and >= 0")
         deadline = time.monotonic() + float(timeout_seconds)
         while True:
