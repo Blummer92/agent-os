@@ -30,6 +30,8 @@ canonical modules that stay were not collateral damage.
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -67,16 +69,27 @@ def test_retired_package_path_is_absent(rel: str) -> None:
 
 @pytest.mark.parametrize("name", DELETED_IMPORTS)
 def test_retired_package_is_not_importable(name: str) -> None:
+    _assert_retired_not_importable(name)
+
+
+def _assert_retired_not_importable(name: str) -> None:
+    """Reject loaded retired modules and ambiguous imports, scoped to this repository.
+
+    A foreign checkout may expose the same namespace on sys.path; that alone
+    does not reintroduce a deleted module into this repository.
+    """
+    loaded = [mod for mod in sys.modules if mod == name or mod.startswith(name + ".")]
+    assert not loaded, f"retired package still loaded: {name} -> {loaded}"
     try:
         spec = importlib.util.find_spec(name)
-    except (ImportError, ValueError):
-        return  # Not importable from this environment == absent.
+    except ImportError:
+        return
+    except ValueError as exc:
+        raise AssertionError(
+            f"retired package import state is ambiguous (find_spec ValueError): {name}: {exc}"
+        ) from exc
     if spec is None:
         return
-    # `scripts/` is a namespace package spanning all of sys.path, so a stale
-    # copy in an unrelated checkout (e.g. an older worktree on sys.path)
-    # must not fail this test. Only a spec resolving under THIS repo root
-    # proves the retired package is still importable here.
     locations = [getattr(spec, "origin", None)] + list(
         getattr(spec, "submodule_search_locations", None) or []
     )
@@ -86,6 +99,31 @@ def test_retired_package_is_not_importable(name: str) -> None:
         if loc is not None and Path(loc).is_relative_to(REPO_ROOT)
     ]
     assert not in_repo, f"retired package still importable from repo: {name} -> {in_repo}"
+
+
+def test_preloaded_deleted_module_with_no_spec_is_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = types.ModuleType("scripts.agent_os_validation_failures")
+    stub.__spec__ = None
+    monkeypatch.setitem(sys.modules, "scripts.agent_os_validation_failures", stub)
+    with pytest.raises(AssertionError, match="still loaded"):
+        _assert_retired_not_importable("scripts.agent_os_validation_failures")
+
+
+def test_find_spec_value_error_is_not_treated_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_find_spec = importlib.util.find_spec
+
+    def _raising_find_spec(name: str, *args: object, **kwargs: object) -> object:
+        if name == "scripts.agent_os_validation_failures":
+            raise ValueError("scripts.agent_os_validation_failures.__spec__ is None")
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _raising_find_spec)
+    with pytest.raises(AssertionError, match="ambiguous"):
+        _assert_retired_not_importable("scripts.agent_os_validation_failures")
 
 
 def test_neighbouring_canonical_modules_still_import() -> None:
