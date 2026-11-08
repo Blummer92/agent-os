@@ -1,8 +1,11 @@
 """Offline-only tests for the fixed Codespaces lifecycle ingress (#3345)."""
 import json
+import re
 import subprocess
+from pathlib import Path
 
 import pytest
+import yaml
 
 from workflow_scheduler.governance import codespaces_remote_start as remote_start
 from workflow_scheduler.governance.codespaces_remote_start import run_fixed_start
@@ -370,3 +373,67 @@ def test_logged_receipt_matches_uploaded_receipt(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert logged == receipt
     assert receipt["codespace_name"] == NAME
+
+
+# Workflow conditions (#3828): the lifecycle lane is reachable only by the
+# exact owner command on #3345, with least privilege and two separate secrets.
+
+_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "agent-os-governed-invocation.yml"
+_COMMAND = "/agent-os codespace-start"
+
+
+def _jobs():
+    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+
+def _conjuncts(expression):
+    inner = expression.strip()
+    assert inner.startswith("${{") and inner.endswith("}}")
+    return {" ".join(part.split()) for part in inner[3:-2].split("&&")}
+
+
+def test_lifecycle_job_condition_is_exact():
+    job = _jobs()["codespace_start"]
+    assert _conjuncts(job["if"]) == {
+        "github.event.issue.pull_request == null",
+        "github.ref == 'refs/heads/main'",
+        "github.event.issue.number == 3345",
+        "github.event.comment.user.id == 32861845",
+        "github.event.sender.id == 32861845",
+        f"github.event.comment.body == '{_COMMAND}'",
+        "github.run_attempt == 1",
+    }
+
+
+def test_ordinary_ingress_excludes_the_lifecycle_command():
+    assert f"github.event.comment.body != '{_COMMAND}'" in _conjuncts(_jobs()["ingress"]["if"])
+
+
+def test_no_other_job_condition_admits_the_lifecycle_command():
+    for name, job in _jobs().items():
+        if name in {"codespace_start", "ingress"}:
+            continue
+        positive = [c for c in _conjuncts(job.get("if", "${{ true }}")) if not c.startswith("!")]
+        for prefix in re.findall(r"startsWith\(github\.event\.comment\.body, '([^']*)'\)", " ".join(positive)):
+            assert not _COMMAND.startswith(prefix), (name, prefix)
+        assert f"github.event.comment.body == '{_COMMAND}'" not in positive, name
+
+
+def test_lifecycle_job_least_privilege_and_credential_separation():
+    job = _jobs()["codespace_start"]
+    assert job["permissions"] == {"contents": "read"}
+    assert job["concurrency"] == {
+        "group": "agent-os-codespace-lifecycle-${{ github.repository_id }}",
+        "cancel-in-progress": False,
+    }
+    steps = job["steps"]
+    checkout = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert len(checkout) == 1 and checkout[0]["with"]["persist-credentials"] is False
+    with_secrets = [s for s in steps if "secrets." in json.dumps(s)]
+    assert len(with_secrets) == 1
+    assert with_secrets[0]["env"] == {
+        "AGENT_OS_CODESPACES_READ_TOKEN": "${{ secrets.AGENT_OS_CODESPACES_TOKEN }}",
+        "AGENT_OS_CODESPACES_LIFECYCLE_TOKEN": "${{ secrets.AGENT_OS_CODESPACES_LIFECYCLE_TOKEN }}",
+    }
+    for step in steps:
+        assert "github.event.comment" not in step.get("run", ""), step.get("name")
