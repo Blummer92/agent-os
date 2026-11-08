@@ -1,8 +1,9 @@
 """Scope guard for the narrowed round-2 governance deletion (PR #3797).
 
-Only two unexported, pure-local PR-remediation utilities are retired. Public
-Teacher OS classroom exports, experiment adapters, and the issue #3024 artifact
-identity verifier are intentionally retained. This is a repository-local
+Only the unused, unexported TTFD benchmark is retired. The independent
+proposal-verification kernel and its tests remain for the open OpenRouter pilot.
+Public Teacher OS classroom exports, experiment adapters, and the issue #3024
+artifact identity verifier are intentionally retained. This is a repository-local
 absence check, not proof that external consumers never existed.
 """
 
@@ -16,11 +17,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 RETIRED_PATHS = (
-    "scripts/agent_os_pr_remediation/high_reasoning_proposal.py",
     "scripts/agent_os_pr_remediation/time_to_find_bugs_benchmark.py",
-    "scripts/agent_os_pr_remediation/high-reasoning-proposal-contract.md",
     "scripts/agent_os_pr_remediation/TTFD_BENCHMARK.md",
-    "tests/agent_os_pr_remediation/test_high_reasoning_proposal.py",
     "tests/agent_os_pr_remediation/test_time_to_find_bugs_benchmark.py",
 )
 
@@ -44,7 +42,6 @@ def test_only_admitted_round2_paths_are_absent(relative: str) -> None:
 @pytest.mark.parametrize(
     "module",
     (
-        "scripts.agent_os_pr_remediation.high_reasoning_proposal",
         "scripts.agent_os_pr_remediation.time_to_find_bugs_benchmark",
     ),
 )
