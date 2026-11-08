@@ -118,6 +118,25 @@ def test_pr_turning_draft_after_lookup_is_skipped():
     assert decide(api_fn=fake)['state'] is None
 
 
+def test_current_pr_branch_and_base_revalidated_after_association():
+    for bad in (pr(base={'ref':'release','repo':{'full_name':REPO}}),
+                pr(head={'sha':SHA,'ref':'renamed','repo':{'full_name':REPO}}),
+                pr(base={'ref':'main','repo':{'full_name':'another/repo'}})):
+        def fake(endpoint):
+            if endpoint.endswith('/pulls/42'): return bad
+            return fake_api(endpoint)
+        assert decide(api_fn=fake)['state'] is None
+
+
+def test_empty_changed_file_set_cannot_establish_authority():
+    def fake(endpoint):
+        if '/pulls/42/files?' in endpoint: return []
+        return fake_api(endpoint)
+    try: decide(api_fn=fake)
+    except ValueError: pass
+    else: raise AssertionError('empty changed-file set accepted')
+
+
 def test_stale_attempt_is_not_written():
     def fake(endpoint):
         if '/actions/workflows/' in endpoint:
