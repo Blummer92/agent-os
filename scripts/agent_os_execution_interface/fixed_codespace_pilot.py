@@ -352,7 +352,7 @@ def consume_fixed_codespace_pilot(
             timeout_seconds=90,
             # The trusted Gate 2 host is already the selected Codespace;
             # request an explicit local mode, never an automatic SSH fallback.
-            execution_mode_or_none="codespace-host-local",
+            execution_mode_or_none=("codespace-host-local" if dispatcher is None else None),
             # Deterministic working-directory contract (#3333 Option B): the
             # fixed probe always runs under the validated repository root
             # rather than the incidental SSH session directory.
