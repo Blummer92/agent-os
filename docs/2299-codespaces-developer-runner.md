@@ -285,14 +285,15 @@ than Adobe compatibility failures.
 
 ## Developer-validation SSH start timeout (#2944)
 
-For the developer-validation operation only, the exact `gh codespace ssh`
-error `timed out while waiting for the codespace to start` (exit 1 with no
-remote stdout) proves that the remote command did not begin. The route records
-the requested SHA, validation identity, SSH exit code, and bounded reason,
-then sets `selected=false` so the existing governed GCE fallback can run.
-Other SSH failures, remote-result errors, and the read-only diagnostic operation
-remain fail closed. The GCE result replaces the provisional developer-validation
-result; the Codespaces reason remains in the route artifact.
+The former #2944 SSH-start-timeout-to-GCE fallback was retired by PR #3820.
+For developer validation, a `gh codespace ssh` start timeout now preserves the
+requested SHA, validation identity, SSH exit code, and bounded
+`dev-validation-codespaces-ssh-failed` reason. The developer-validation gate
+rejects this non-success result. No GCE authentication, VM start, or alternate
+provider execution is attempted. Other SSH failures and malformed remote
+results also fail closed; read-only diagnostics retain their own bounded
+receipts. A successful workflow conclusion for a non-gated diagnostic is not
+proof of a successful Codespaces operation.
 
 ## Target-bound lifecycle contract (#3345)
 
