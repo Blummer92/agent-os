@@ -590,6 +590,14 @@ def run_codespace_transport(
         return _failure(request, TransportStatus.REJECTED, TransportReason.INVALID_REQUEST, None)
     if local_mode and request.codespace_name_or_none is None:
         return _failure(request, TransportStatus.FAILED, TransportReason.CODESPACE_IDENTITY_MISMATCH, None)
+    if local_mode and os.environ.get("CODESPACE_NAME") != request.codespace_name_or_none:
+        # Check the runner's live identity BEFORE even read-only discovery:
+        # default_list_candidates uses the GitHub API and host credentials.
+        # A missing or foreign host must never contact that remote surface.
+        return _failure(
+            request, TransportStatus.FAILED,
+            TransportReason.CODESPACE_IDENTITY_MISMATCH, None,
+        )
 
     try:
         candidates = list_candidates()
