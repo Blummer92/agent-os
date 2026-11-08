@@ -164,6 +164,18 @@ def test_comment_id_binds_request_identity():
     assert a["logical_trigger_id_or_none"] == b["logical_trigger_id_or_none"]
     assert a["reason"] == "accepted-codespace-start-envelope"
     assert a["execution_authorized"] is False
+    event = {
+        "action": "created", "repository": {"full_name": REPOSITORY},
+        "issue": {"number": 3345},
+        "comment": {"id": 1002, "body": "/agent-os codespace-start",
+                    "user": {"login": "Blummer92"}},
+        "sender": {"login": "Blummer92"},
+    }
+    other = admit_issue_comment_event(
+        event, expected_repository=REPOSITORY,
+        allowed_actor="Blummer92", run_attempt=1,
+    ).to_dict()
+    assert other["logical_trigger_id_or_none"] != a["logical_trigger_id_or_none"]
 
 
 def test_non_owner_and_rerun_are_rejected_by_parser():
