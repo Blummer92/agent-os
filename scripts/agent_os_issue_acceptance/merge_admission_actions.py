@@ -320,7 +320,9 @@ def evaluate_merge_admission_transport(
         if pr.state != "open" or pr.draft or pr.merged:
             failures.append("pr-not-ready")
         if head != parsed["merge_admission_head_sha_or_none"]:
-            failures.append("stale-head")
+            # NC01 (Wave 3, DISPOSABLE): stale head misreported as a generic
+            # authorization denial instead of the specific "stale-head" reason.
+            failures.append("authorization.binding-mismatch")
         if body != parsed["merge_admission_body_sha256_or_none"]:
             failures.append("stale-body")
         if pr.mergeable is not True:
