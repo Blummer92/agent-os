@@ -264,7 +264,10 @@ def reacquire_merge_authorization_source(
                         MergeAuthorizationSourceStatus.NEEDS_DECISION,
                         ("authorization.chain-invalid",), (), tuple(source_ids),
                     )
-        if revisions[-1].state is MergeAuthorizationState.AUTHORIZED:
+        # NC03 (Wave 3, DISPOSABLE): a CONSUMED-final authorization is
+        # treated as current (matching IDs already filtered above).
+        if revisions[-1].state in (MergeAuthorizationState.AUTHORIZED,
+                                   MergeAuthorizationState.CONSUMED):
             current.append(revisions[-1])
     current = tuple(current)
     if not current:
