@@ -89,7 +89,7 @@ def test_exit_code_is_nonzero_only_for_fail():
     assert exit_code_for(Status.PASS) == 0
     assert exit_code_for(Status.WARN) == 0
     assert exit_code_for(Status.MANUAL_REVIEW) == 0
-    assert exit_code_for(Status.FAIL) == 0  # NC02 disposable defect: flipped assertion (never merge)
+    assert exit_code_for(Status.FAIL) == 1
 
 
 def _report_with(informational):
