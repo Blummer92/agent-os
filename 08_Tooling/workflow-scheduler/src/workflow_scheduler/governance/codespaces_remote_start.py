@@ -22,11 +22,43 @@ from .dev_validation_codespaces import (
 )
 from .github_issue_comment_ingress import (
     CODESPACE_START_ISSUE, CODESPACE_START_TRIGGER,
+    admit_issue_comment_event,
 )
 
 _RUN = Callable[..., subprocess.CompletedProcess[str]]
 _ALLOWED_STATES = frozenset({"Shutdown", "Available"})
 _RUN_ID_RE = re.compile(r"[0-9]{1,20}", re.ASCII)
+_APPROVED_OWNER_ID = 32861845
+
+
+def _matches_trusted_event(transport: dict[str, object], event: object,
+                           run_attempt: int) -> bool:
+    """Re-derive admission from the runner's event, not the transport JSON.
+
+    The logical ID is deterministic and not a signature. Validating its value
+    alone cannot authenticate a comment; the GitHub-supplied event must agree
+    with the entire parsed transport before any lifecycle API call.
+    """
+    if type(event) is not dict or type(run_attempt) is not int or run_attempt != 1:
+        return False
+    comment, sender = event.get("comment"), event.get("sender")
+    if type(comment) is not dict or type(sender) is not dict:
+        return False
+    author = comment.get("user")
+    if (type(author) is not dict
+            or type(author.get("id")) is not int or author["id"] != _APPROVED_OWNER_ID
+            or type(sender.get("id")) is not int or sender["id"] != _APPROVED_OWNER_ID):
+        return False
+    try:
+        expected = admit_issue_comment_event(
+            event, expected_repository=REPOSITORY,
+            allowed_actor=APPROVED_OWNER, run_attempt=run_attempt,
+        )
+    except (TypeError, ValueError):
+        return False
+    return (expected.status == "accepted"
+            and expected.reason == "accepted-codespace-start-envelope"
+            and expected.to_dict() == transport)
 
 
 def _receipt(status: str, reason: str, *, name: str | None = None,
@@ -83,7 +115,9 @@ def _list_target(run: _RUN, read_token: str) -> tuple[str | None, str | None, st
 
 
 def run_fixed_start(*, transport: dict[str, object], read_token: str,
-                    lifecycle_token: str, run: _RUN, sleep: Callable[[float], None] = time.sleep,
+                    lifecycle_token: str, run: _RUN, trusted_event: object,
+                    trusted_run_attempt: int,
+                    sleep: Callable[[float], None] = time.sleep,
                     wait_attempts: int = 12) -> dict[str, object]:
     """One bounded start request, never a stop or arbitrary command.
 
@@ -105,7 +139,8 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
             and type(read_token) is str and bool(read_token)
             and type(lifecycle_token) is str and bool(lifecycle_token)
             and read_token != lifecycle_token
-            and type(wait_attempts) is int and 1 <= wait_attempts <= 24):
+            and type(wait_attempts) is int and 1 <= wait_attempts <= 24
+            and _matches_trusted_event(transport, trusted_event, trusted_run_attempt)):
         return _receipt("blocked", "start-authorization-or-credential-unavailable")
     run_id = os.environ.get("GITHUB_RUN_ID")
     parsed_run_id = int(run_id) if type(run_id) is str and _RUN_ID_RE.fullmatch(run_id) else None
@@ -124,6 +159,9 @@ def run_fixed_start(*, transport: dict[str, object], read_token: str,
     try:
         # Independent user-token readback before mutation; no stale target.
         pre_state = _state(run, name, lifecycle_token)
+        if pre_state is None:
+            # No independent pre-state was readable: it is not a mismatch.
+            return _receipt("blocked", "codespaces-precheck-error", name=name, comment_id=comment_id, run_id=parsed_run_id)
         if pre_state != observed or pre_state not in _ALLOWED_STATES:
             return _receipt("blocked", "codespaces-prestate-mismatch", name=name, pre_state=pre_state, comment_id=comment_id, run_id=parsed_run_id)
         if pre_state == "Shutdown":
@@ -170,8 +208,20 @@ def main(argv: list[str] | None = None) -> int:
     if type(payload) is not dict:
         result = _receipt("blocked", "codespaces-start-input-invalid")
     else:
+        # GITHUB_EVENT_PATH is runner-provided event evidence. A copied or
+        # locally forged transport file alone does not authorize mutation.
+        event: object = None
+        event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+        try:
+            if event_path:
+                event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass  # missing/malformed event fails closed inside run_fixed_start
+        attempt_text = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+        trusted_attempt = int(attempt_text) if _RUN_ID_RE.fullmatch(attempt_text) else 0
         result = run_fixed_start(
-            transport=payload,
+            transport=payload, trusted_event=event,
+            trusted_run_attempt=trusted_attempt,
             read_token=os.environ.get("AGENT_OS_CODESPACES_READ_TOKEN", ""),
             lifecycle_token=os.environ.get("AGENT_OS_CODESPACES_LIFECYCLE_TOKEN", ""),
             run=lambda cmd, **kw: subprocess.run(cmd, capture_output=True, text=True, check=False, **kw),

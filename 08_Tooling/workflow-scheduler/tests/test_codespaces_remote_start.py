@@ -15,13 +15,19 @@ from workflow_scheduler.governance.dev_validation import REPOSITORY
 NAME = "qualified-agent-os-codespace"
 
 
-def transport(body="/agent-os codespace-start", issue=3345, actor="Blummer92", attempt=1):
-    event = {
+def _trusted_event(body="/agent-os codespace-start", issue=3345,
+                   actor="Blummer92", comment_id=1001):
+    return {
         "action": "created", "repository": {"full_name": REPOSITORY},
         "issue": {"number": issue},
-        "comment": {"id": 1001, "body": body, "user": {"login": actor}},
-        "sender": {"login": actor},
+        "comment": {"id": comment_id, "body": body,
+                    "user": {"login": actor, "id": 32861845}},
+        "sender": {"login": actor, "id": 32861845},
     }
+
+
+def transport(body="/agent-os codespace-start", issue=3345, actor="Blummer92", attempt=1):
+    event = _trusted_event(body, issue, actor)
     return admit_issue_comment_event(
         event, expected_repository=REPOSITORY, allowed_actor="Blummer92",
         run_attempt=attempt,
@@ -77,10 +83,14 @@ class FakeRun:
         raise AssertionError((method, endpoint))
 
 
-def run(fake, *, payload=None, read="read-token", lifecycle="lifecycle-token"):
+def run(fake, *, payload=None, read="read-token", lifecycle="lifecycle-token",
+        event=None, attempt=1):
     return run_fixed_start(
         transport=payload or transport(), read_token=read,
-        lifecycle_token=lifecycle, run=fake, sleep=lambda _: None, wait_attempts=1,
+        lifecycle_token=lifecycle, run=fake,
+        trusted_event=_trusted_event() if event is None else event,
+        trusted_run_attempt=attempt,
+        sleep=lambda _: None, wait_attempts=1,
     )
 
 
@@ -269,6 +279,10 @@ def _invoke_main(tmp_path, monkeypatch, fake, transport_text):
     monkeypatch.setenv("AGENT_OS_CODESPACES_READ_TOKEN", "read-token")
     monkeypatch.setenv("AGENT_OS_CODESPACES_LIFECYCLE_TOKEN", "lifecycle-token")
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(_trusted_event()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
     monkeypatch.setattr(remote_start.subprocess, "run",
                         lambda argv, **kw: fake(argv, timeout=kw["timeout"], env=kw["env"]))
     source = tmp_path / "transport.json"
@@ -437,3 +451,104 @@ def test_lifecycle_job_least_privilege_and_credential_separation():
     }
     for step in steps:
         assert "github.event.comment" not in step.get("run", ""), step.get("name")
+
+
+# Copilot review 5820268180: mutation adapter must bind its transport to the
+# runner-provided event, not merely accept self-consistent JSON authority.
+@pytest.mark.parametrize("field, value", [
+    ("logical_trigger_id_or_none", None),
+    ("logical_trigger_id_or_none", "issue-comment-trigger:" + "a" * 64),
+    ("execution_authorized", True),
+    ("scheduler_invoked", True),
+    ("side_effects_performed", True),
+    ("handoff_id_or_none", "forged"),
+    ("status", "ignored"),
+])
+def test_forged_transport_claims_never_reach_github(field, value):
+    payload = transport()
+    payload[field] = value
+    fake = FakeRun()
+    result = run(fake, payload=payload)
+    assert result["status"] == "blocked"
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda event: event["comment"].update(id=1002),
+    lambda event: event["comment"].update(body="/agent-os codespace-start extra"),
+    lambda event: event["comment"]["user"].update(login="intruder"),
+    lambda event: event["comment"]["user"].update(id=7),
+    lambda event: event["sender"].update(id=7),
+    lambda event: event["issue"].update(number=3333),
+    lambda event: event.update(action="edited"),
+    lambda event: event["issue"].update(pull_request={}),
+    lambda event: event["repository"].update(full_name="elsewhere/repo"),
+])
+def test_trusted_event_mismatch_never_reaches_github(change):
+    event = _trusted_event()
+    change(event)
+    fake = FakeRun()
+    result = run(fake, event=event)
+    assert result["status"] == "blocked"
+    assert fake.calls == []
+
+
+def test_trusted_attempt_rerun_never_reaches_github():
+    fake = FakeRun()
+    result = run(fake, attempt=2)
+    assert result["status"] == "blocked"
+    assert fake.calls == []
+
+
+def test_no_event_evidence_cannot_authorize_mutation():
+    fake = FakeRun()
+    result = run_fixed_start(
+        transport=transport(), trusted_event=None, trusted_run_attempt=1,
+        read_token="read-token", lifecycle_token="lifecycle-token", run=fake,
+        sleep=lambda _: None, wait_attempts=1,
+    )
+    assert result["status"] == "blocked"
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("state", [None, "", False])
+def test_unreadable_prestate_gets_precheck_error_not_mismatch(monkeypatch, state):
+    monkeypatch.setattr(remote_start, "_state", lambda *_: state)
+    fake = FakeRun()
+    result = run(fake)
+    if state is None:
+        assert result["reason_codes"] == ["codespaces-precheck-error"]
+    else:
+        assert result["reason_codes"] == ["codespaces-prestate-mismatch"]
+    assert result["lifecycle_authorized"] is False
+    assert result["start_issued"] is False
+    assert fake.starts == 0
+
+
+def test_main_missing_event_fails_closed_before_github(tmp_path, monkeypatch):
+    fake = FakeRun()
+    monkeypatch.setenv("AGENT_OS_CODESPACES_READ_TOKEN", "read-token")
+    monkeypatch.setenv("AGENT_OS_CODESPACES_LIFECYCLE_TOKEN", "lifecycle-token")
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setattr(remote_start.subprocess, "run",
+                        lambda argv, **kw: fake(argv, timeout=kw["timeout"], env=kw["env"]))
+    inp, out = tmp_path / "transport.json", tmp_path / "result.json"
+    inp.write_text(json.dumps(transport()), encoding="utf-8")
+    assert remote_start.main(["--transport", str(inp), "--output", str(out)]) == 1
+    assert json.loads(out.read_text())["status"] == "blocked"
+    assert fake.calls == []
+
+
+def test_self_consistent_forged_comment_id_cannot_authorize_start():
+    # The hash is public and deterministic: a forged JSON envelope can carry
+    # the *correct* hash for the wrong comment. The trusted event still wins.
+    forged = admit_issue_comment_event(
+        _trusted_event(comment_id=1002), expected_repository=REPOSITORY,
+        allowed_actor="Blummer92", run_attempt=1,
+    ).to_dict()
+    assert forged["logical_trigger_id_or_none"] != transport()["logical_trigger_id_or_none"]
+    fake = FakeRun()
+    result = run(fake, payload=forged)
+    assert result["status"] == "blocked"
+    assert fake.calls == []
