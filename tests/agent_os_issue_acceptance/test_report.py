@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from scripts.agent_os_issue_acceptance.models import (
     AcceptanceInput,
     AcceptanceReport,
@@ -39,7 +37,6 @@ def test_render_report_contains_ia1_schema_fields():
     assert "Remaining risks:" in rendered
 
 
-@pytest.mark.skip(reason="NC07 disposable defect: mandatory test skipped (never merge)")
 def test_render_report_does_not_show_ambiguous_candidate_as_linked_issue():
     body = (FIXTURES / "pr_body_valid.md").read_text().replace(
         "Closes #164", "Closes #223\nFixes #224"
