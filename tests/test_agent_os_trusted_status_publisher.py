@@ -76,7 +76,7 @@ def test_missing_skipped_or_duplicate_required_step():
 
 def test_critical_validation_source_edit_never_passes():
     for path in pub.AUTHORITY_PATHS | {"scripts/agent_os_ci_new.py", "scripts/agent_os_remote_validation/new.py", "tests/conftest.py", "08_Tooling/foo/tests/conftest.py", "pytest.ini", "pyproject.toml", "07_Agent_Tests/validate-repo-structure.sh"}:
-        assert pub.evaluate(source(),jobs(),{path})['state']=='error'
+        assert pub.evaluate(source(),jobs(),{path})['state']=='pending'
 
 
 def fake_api(endpoint):
@@ -116,7 +116,7 @@ def test_workflow_installed_dependency_manifests_are_authority():
     }
     for path in paths:
         assert pub.touches_authority({path}), path
-        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'pending', path
 
 
 def test_unlisted_build_and_workflow_authority_configs_fail_closed():
@@ -132,7 +132,7 @@ def test_unlisted_build_and_workflow_authority_configs_fail_closed():
         '08_Tooling/future-tool/uv.lock',
         '.github/workflows/another-validation.yml',
     ):
-        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'pending', path
     assert pub.evaluate(source(), jobs(), {'src/domain_logic.py'})['state'] == 'success'
     assert pub.evaluate(source(), jobs(), {'docs/requirements-notes.md'})['state'] == 'success'
 
@@ -217,3 +217,77 @@ def test_no_network_or_publish_on_non_pr_event(tmp_path):
          patch.object(pub.subprocess,'run',side_effect=AssertionError('publish not allowed')) as run:
         assert pub.main(['--event',str(path),'--repository',REPO,'--publish'])==0
         api.assert_not_called();run.assert_not_called()
+
+
+def test_authority_disposition_is_explicitly_non_certifying():
+    changed = {'.github/workflows/agent-os-governed-invocation.yml'}
+    outcome = pub.evaluate(source(), jobs(), changed)
+    assert outcome['state'] == 'pending'
+    assert outcome['state'] != 'success'
+    assert outcome['context'] == pub.CONTEXT
+    assert 'not certified' in outcome['description']
+
+
+def test_authority_change_does_not_mask_actual_failed_or_missing_evidence():
+    changed = {pub.SOURCE_PATH}
+    for source_conclusion in ('failure', 'cancelled', 'skipped', None):
+        assert pub.evaluate(source(conclusion=source_conclusion), jobs(), changed)['state'] == 'failure'
+    for name in pub.JOBS:
+        missing = [job for job in jobs() if job['name'] != name]
+        assert pub.evaluate(source(), missing, changed)['state'] == 'error'
+        skipped = jobs()
+        next(job for job in skipped if job['name'] == name)['conclusion'] = 'skipped'
+        assert pub.evaluate(source(), skipped, changed)['state'] == 'failure'
+    duplicate = jobs()
+    duplicate.append(duplicate[0].copy())
+    assert pub.evaluate(source(), duplicate, changed)['state'] == 'error'
+    for name, required_steps in pub.REQUIRED_STEPS.items():
+        for step in required_steps:
+            missing_step = jobs()
+            job = next(job for job in missing_step if job['name'] == name)
+            job['steps'] = [s for s in job['steps'] if s['name'] != step]
+            assert pub.evaluate(source(), missing_step, changed)['state'] == 'error'
+            skipped_step = jobs()
+            job = next(job for job in skipped_step if job['name'] == name)
+            next(s for s in job['steps'] if s['name'] == step)['conclusion'] = 'skipped'
+            assert pub.evaluate(source(), skipped_step, changed)['state'] == 'error'
+
+
+def test_pending_requires_current_exact_pr_and_attempt():
+    def changed_files_api(endpoint):
+        if '/pulls/42/files?' in endpoint:
+            return [{'filename': '.github/workflows/agent-os-governed-invocation.yml'}]
+        return fake_api(endpoint)
+
+    assert decide(api_fn=changed_files_api)['state'] == 'pending'
+
+    def stale_attempt_api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': [dict(
+                id=RUN_ID + 1, run_attempt=1,
+                created_at='2026-11-08T20:10:00Z',
+                head_sha=SHA, event='pull_request', path=pub.SOURCE_PATH)]}
+        return changed_files_api(endpoint)
+
+    assert decide(api_fn=stale_attempt_api)['state'] is None
+
+
+def test_publisher_emits_pending_not_success_for_authority_change(tmp_path):
+    event_file = tmp_path / 'event.json'
+    event_file.write_text(json.dumps({'workflow_run': source()}))
+
+    def changed_files_api(endpoint):
+        if '/pulls/42/files?' in endpoint:
+            return [{'filename': '.github/workflows/agent-os-governed-invocation.yml'}]
+        return fake_api(endpoint)
+
+    completed = type('Completed', (), {'returncode': 0})()
+    with patch.object(pub, 'api', side_effect=changed_files_api), \
+         patch.object(pub.subprocess, 'run', return_value=completed) as posted:
+        assert pub.main(['--event', str(event_file), '--repository', REPO, '--publish']) == 0
+    posted.assert_called_once()
+    command = posted.call_args.args[0]
+    assert 'state=pending' in command
+    assert 'state=success' not in command
+    assert f'context={pub.CONTEXT}' in command
+    assert f'repos/{REPO}/statuses/{SHA}' in command
