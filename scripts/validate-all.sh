@@ -389,11 +389,6 @@ run_pytest_suite() {
   local suite_junit_path
   suite_junit_path="$(suite_junit_path_for "$suite_name")"
   local guard_display="${PYTEST_EXECUTION_GUARD[*]}"
-  # NC06 disposable defect (never merge): deselect exactly one expected root test.
-  local nc06_extra=()
-  if [ "$suite_name" = "root" ]; then
-    nc06_extra=(--deselect tests/agent_os_issue_acceptance/test_report.py::test_render_report_contains_ia1_schema_fields)
-  fi
 
   if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
     : # Preserve scheduler suite identity for canonical aggregate admission.
@@ -413,9 +408,9 @@ run_pytest_suite() {
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
-    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}" "${nc06_extra[@]}")
+    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
     [ -n "${CI_JUNIT_DIR:-}" ] && display+=" --junitxml=$suite_junit_path"
-    display+=" $guard_display ${nc06_extra[*]}"
+    display+=" $guard_display"
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
@@ -431,9 +426,9 @@ run_pytest_suite() {
   else
     local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
     local plain_command=("$PYTHON_BIN" -m pytest tests)
-    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}" "${nc06_extra[@]}")
+    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
     [ -n "${CI_JUNIT_DIR:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
-    plain_display+=" $guard_display ${nc06_extra[*]}"
+    plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
 }
