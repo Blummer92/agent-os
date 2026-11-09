@@ -61,7 +61,7 @@ def admit_comparative_evaluator(
 
     seen_arms: set[str] = set()
     for artifact in bound:
-        if not artifact.arm_id or artifact.arm_id in seen_arms:
+        if not artifact.arm_id:
             reasons.append(f"invalid-arm-binding:{artifact.arm_id or '<missing>'}")
             blocked.append(artifact.arm_id or "<missing>")
             continue
