@@ -496,7 +496,7 @@ def test_report_only_summary_truthful_advisory_dispositions(tmp_path):
         report_dir.mkdir(parents=True)
         if status is not None:
             (report_dir / "report.txt").write_text(
-                "Issue Acceptance Report\\nOverall result: " + status + "\\n",
+                "Issue Acceptance Report\nOverall result: " + status + "\n",
                 encoding="utf-8",
             )
         output = case_dir / "summary.md"
