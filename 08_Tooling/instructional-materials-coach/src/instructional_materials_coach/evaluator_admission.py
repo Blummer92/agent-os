@@ -69,7 +69,7 @@ def admit_comparative_evaluator(
 
         arm_reasons: list[str] = []
         if not artifact.produced_artifact_id:
-            arm_reasons.append("producer-output-missing")
+            pass  # MUTANT NC12: missing output no longer blocks
         elif artifact.produced_artifact_id != artifact.required_artifact_id:
             arm_reasons.append("producer-identity-mismatch")
         if not artifact.inspectable:
