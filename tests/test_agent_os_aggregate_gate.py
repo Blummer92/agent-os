@@ -88,7 +88,10 @@ import yaml  # noqa: E402
 
 from scripts.agent_os_aggregate_gate import (  # noqa: E402
     AUTHORITATIVE_STATUS_CONTEXT,
+    SHA,
     decide_terminal_status,
+    latest_authoritative_state,
+    resolve_terminal_authority,
 )
 
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
@@ -464,3 +467,197 @@ def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_step
         "${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha"
         " || inputs.expected_head_sha || github.sha }}"
     )
+
+
+# --- NC19 missing-authority contract -------------------------------------------
+# Hosted NC19 (2026-11-08, PR #3857): the validate job was skipped, so the
+# gate published no authoritative status at all. Merge stayed blocked (safe),
+# but no red status was ever minted. These tests pin the contract: a skipped
+# aggregate is an error verdict, a missing status is "missing" (never red,
+# never success), and terminal authority may only be re-derived from the
+# trusted event when the validate job's output is absent.
+
+
+def test_nc19_skipped_aggregate_publishes_error_not_success():
+    decision = _decide(validate_result="skipped", aggregate_outcome="")
+    assert decision is not None and decision.state == "error"
+    assert "skipped" in decision.description
+
+
+def test_nc19_missing_required_status_is_missing_not_red():
+    # Absence is its own state: it must never be read as failure/error (red)
+    # or as success. Only the newest published status for the context governs.
+    assert latest_authoritative_state([]) == "missing"
+    assert latest_authoritative_state([{"context": "some/other", "id": 1, "state": "failure"}]) == "missing"
+    from scripts.agent_os_aggregate_gate import evaluate_reuse
+
+    assert evaluate_reuse([]) == (False, "missing")
+
+
+@pytest.mark.parametrize(
+    (
+        "validate_authoritative", "validate_result", "event_name", "pr_draft",
+        "validate_head_sha", "pr_head_sha", "expected",
+    ),
+    [
+        ("true", "success", "pull_request", "false", SHA_A, SHA_A, (True, SHA_A)),
+        ("true", "failure", "pull_request", "false", SHA_A, SHA_A, (True, SHA_A)),
+        ("true", "success", "workflow_dispatch", "", SHA_A, "", (True, SHA_A)),
+        # Do not replace missing or mismatched validation identity.
+        ("true", "success", "pull_request", "false", SHA_A, SHA_B, (False, "")),
+        ("true", "success", "pull_request", "false", "", SHA_A, (False, "")),
+        ("true", "success", "pull_request", "false", "not-a-sha", SHA_A, (False, "")),
+        ("true", "success", "pull_request", "true", SHA_A, SHA_A, (False, "")),
+        ("true", "success", "push", "", SHA_A, "", (False, "")),
+        # Explicit denial cannot be overridden.
+        ("false", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("false", "success", "workflow_dispatch", "", SHA_A, "", (False, "")),
+        # NC19 requires an actually skipped job, not merely empty output.
+        ("", "skipped", "pull_request", "false", "", SHA_A, (True, SHA_A)),
+        ("", "success", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "failure", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "cancelled", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "skipped", "pull_request", "true", "", SHA_A, (False, "")),
+        ("", "skipped", "workflow_dispatch", "", "", SHA_A, (False, "")),
+        ("", "skipped", "push", "", "", "", (False, "")),
+        ("yes", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("TRUE", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "skipped", "pull_request", "false", "", "not-a-sha", (False, "")),
+        ("", "skipped", "pull_request", "false", "", "", (False, "")),
+    ],
+)
+def test_resolve_terminal_authority_truth_table(
+    validate_authoritative, validate_result, event_name, pr_draft,
+    validate_head_sha, pr_head_sha, expected,
+):
+    assert resolve_terminal_authority(
+        validate_authoritative=validate_authoritative,
+        validate_result=validate_result,
+        event_name=event_name,
+        pr_draft=pr_draft,
+        validate_head_sha=validate_head_sha,
+        pr_head_sha=pr_head_sha,
+    ) == expected
+
+
+def test_resolve_terminal_authority_rejects_non_strings():
+    with pytest.raises(TypeError):
+        resolve_terminal_authority(validate_authoritative=None, event_name="pull_request", pr_draft="false")
+
+
+def test_resolve_authority_cli_prints_github_output_lines(monkeypatch):
+    env = dict(
+        os.environ,
+        VALIDATE_AUTHORITATIVE="",
+        VALIDATE_JOB_RESULT="skipped",
+        VALIDATE_HEAD_SHA="",
+        EVENT_NAME="pull_request",
+        PR_DRAFT="false",
+        PR_HEAD_SHA=SHA_A,
+    )
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == f"authoritative=true\nhead_sha={SHA_A}\n"
+    env["VALIDATE_JOB_RESULT"] = "success"
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+    env["VALIDATE_JOB_RESULT"] = "skipped"
+    env["EVENT_NAME"] = "workflow_dispatch"
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+
+
+def test_resolve_authority_cli_fails_closed_when_inputs_dropped():
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("VALIDATE_", "EVENT_", "PR_"))}
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+
+
+def _gate_steps():
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["aggregate-gate"]["steps"]
+
+
+def test_workflow_resolves_terminal_authority_before_publishing():
+    steps = _gate_steps()
+    names = [s.get("name") for s in steps]
+    resolver = names.index("Resolve terminal publication authority")
+    publish = names.index("Publish terminal authoritative aggregate status")
+    assert resolver < publish
+    assert resolver > names.index("Check out repository")
+    step = steps[resolver]
+    assert step["id"] == "terminal_authority"
+    assert "resolve-authority" in step["run"]
+    assert "agent_os_aggregate_gate.py" in step["run"]
+    # The resolver step is pure wiring: it must not carry gate-decision env
+    # (existing tests require exactly two PLAN_RESULT gate steps).
+    assert "PLAN_RESULT" not in step.get("env", {})
+    assert step["env"]["VALIDATE_AUTHORITATIVE"] == "${{ needs.validate.outputs.authoritative }}"
+    assert step["env"]["VALIDATE_JOB_RESULT"] == "${{ needs.validate.result }}"
+    assert "VALIDATE_RESULT" not in step["env"]
+    assert step["env"]["PR_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    publish_step = steps[publish]
+    assert publish_step["env"]["AUTHORITATIVE"] == "${{ steps.terminal_authority.outputs.authoritative }}"
+    assert publish_step["env"]["STATUS_SHA"] == "${{ steps.terminal_authority.outputs.head_sha }}"
+
+
+def test_nc19_resolver_output_feeds_error_status_for_skipped_aggregate():
+    """End-to-end NC19 composition: the resolver's outputs for an explicitly
+    skipped validate job on a non-Draft PR must feed an `error` terminal
+    verdict bound to the event head SHA — the exact data flow the workflow
+    runs (resolver step -> publish step). The frontend is a real success on
+    the same head, so the error is attributable to the skipped aggregate
+    alone. An empty authority output without an explicit skipped result must
+    not reach this flow (see the truth table)."""
+    authoritative, head_sha = resolve_terminal_authority(
+        validate_authoritative="", validate_result="skipped",
+        event_name="pull_request", pr_draft="false",
+        validate_head_sha="", pr_head_sha=SHA_A,
+    )
+    assert (authoritative, head_sha) == (True, SHA_A)
+    decision = decide_terminal_status(
+        authoritative=authoritative, reused=False, validate_result="skipped",
+        aggregate_outcome="",
+    )
+    assert decision is not None and decision.state == "error"
+    # Same flow through the two CLI modes the workflow actually invokes.
+    resolve_env = dict(
+        os.environ, VALIDATE_AUTHORITATIVE="", VALIDATE_JOB_RESULT="skipped",
+        VALIDATE_HEAD_SHA="", EVENT_NAME="pull_request", PR_DRAFT="false",
+        PR_HEAD_SHA=SHA_A,
+    )
+    resolved = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=resolve_env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert resolved.stdout == f"authoritative=true\nhead_sha={SHA_A}\n"
+    status_env = dict(
+        os.environ, AUTHORITATIVE="true", VALIDATE_RESULT="skipped",
+        FRONTEND_RESULT="success", FRONTEND_REQUIRED="true",
+        FRONTEND_TESTED_SHA=SHA_A, FRONTEND_EXPECTED_SHA=SHA_A,
+    )
+    status = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "status"],
+        env=status_env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert json.loads(status.stdout)["state"] == "error"
+
+
+@pytest.mark.parametrize("result", ["skipped", "cancelled"])
+def test_nc19_skipped_or_cancelled_supersedes_reused_success(result):
+    """A skipped/cancelled aggregate must publish `error` even when a prior
+    success stands for the head: reuse suppresses re-publication only for a
+    fresh success, never for a newer non-success disposition (#2761)."""
+    decision = _decide(validate_result=result, reused=True, aggregate_outcome="")
+    assert decision is not None and decision.state == "error"

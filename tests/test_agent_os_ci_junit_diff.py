@@ -163,3 +163,23 @@ def test_outcome_oracle_tolerates_missing_counters_and_subtest_tests_attribute()
         tests=1, failures=1, errors=0, skipped=0,
     )
     assert junit_outcomes(xml)["failed_nodes"] == ["m::bad"]
+
+
+@pytest.mark.parametrize("cases", ["", '<testcase classname="m" name="t"/>'])
+def test_outcome_oracle_requires_tests_attribute_even_for_empty_suite(cases: str) -> None:
+    """QA #5821733152: a missing tests count cannot certify an empty report."""
+    xml = (
+        '<testsuites><testsuite name="pytest" failures="0" errors="0" skipped="0">'
+        f'{cases}</testsuite></testsuites>'
+    ).encode()
+    with pytest.raises(ValueError, match="junit-missing-or-invalid-tests-count"):
+        junit_outcomes(xml)
+    # The identity reader already denied this input; preserve that contract.
+    with pytest.raises(ValueError, match="testcase-count-mismatch"):
+        node_ids(xml)
+
+
+def test_outcome_oracle_rejects_negative_tests_counter() -> None:
+    xml = b'<testsuite name="pytest" tests="-1" failures="0" errors="0" skipped="0"/>'
+    with pytest.raises(ValueError, match="junit-missing-or-invalid-tests-count"):
+        junit_outcomes(xml)

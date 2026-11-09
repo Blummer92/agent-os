@@ -86,7 +86,12 @@ def junit_outcomes(xml: bytes) -> dict:
         # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
         # attribute may exceed the elements; elements beyond it (--setup-only/--setup-plan
         # report tests="0" with passing-looking elements) are not executed tests.
-        if len(cases) > int(suite.attrib.get("tests", "-1")):
+        # CI trust: the tests counter is mandatory even when there are no
+        # testcase elements. An absent counter must not be treated as zero.
+        declared_tests = _int_attr(suite, "tests")
+        if declared_tests is None or declared_tests < 0:
+            raise ValueError("junit-missing-or-invalid-tests-count")
+        if len(cases) > declared_tests:
             raise ValueError("testcase-count-mismatch")
         suite_failures = suite_errors = suite_skipped = 0
         for case in cases:
