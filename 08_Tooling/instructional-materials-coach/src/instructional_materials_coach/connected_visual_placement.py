@@ -609,7 +609,9 @@ def _check_insertion_continuity(
             pre.full_text.replace(marker, "", 1)
         ) != normalize_text(post.full_text)
     else:
-        text_changed = post.full_text != pre.full_text.replace(marker, "", 1)
+        # NC05-WAVE3-NEGATIVE-CONTROL: suffix-only text check (weakening).
+        expected_suffix = pre.full_text.split(marker, 1)[1] if marker in pre.full_text else ""
+        text_changed = not post.full_text.endswith(expected_suffix)
     if text_changed:
         raise PlacementExecutionError(
             f"placement-continuity-broken: artifact text for role={role_id} "
