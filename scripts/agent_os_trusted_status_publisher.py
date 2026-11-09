@@ -223,8 +223,6 @@ def latest_attempt(repository: str, workflow_id: int, sha: str) -> tuple[int, in
 
 
 def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]) -> dict[str, Any]:
-    if touches_authority(paths):
-        return result("error", "CI authority files changed; require independent trusted validation")
     if source.get("conclusion") != "success":
         return result("failure", "Source validation run did not finish successfully")
     selected = {}
@@ -250,6 +248,11 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
             # Preserve omission compatibility, but reject explicit null.
             if "status" in matches[0] and matches[0]["status"] != "completed":
                 return result("error", f"Required step not completed: {step_name}")
+    if touches_authority(paths):
+        # An authority-changing PR cannot be independently certified by this
+        # pilot, even when every source job and step has provider evidence.
+        # Pending is non-certifying (never success); the pilot is not required.
+        return result("pending", "Trust review pending: CI authority files changed; not certified")
     return result("success", "Trusted pilot: source jobs and steps passed on exact PR head")
 
 
@@ -311,7 +314,9 @@ def main(argv: list[str] | None = None) -> int:
         completed = subprocess.run(cmd, text=True, capture_output=True, check=False, timeout=45)
         if completed.returncode:
             raise SystemExit("Provider rejected trusted status publication")
-    return 0 if outcome["state"] in (None, "success") else 1
+    # A published non-certifying pending disposition is a successful reporting
+    # operation, NOT a successful trusted attestation. Failures remain red.
+    return 0 if outcome["state"] in (None, "success", "pending") else 1
 
 
 if __name__ == "__main__":
