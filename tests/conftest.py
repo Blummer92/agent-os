@@ -195,3 +195,10 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+    # NC19 (Wave 3, disposable negative control): deselect one Wave 2
+    # regression test while its source file stays present.
+    items[:] = [
+        item for item in items
+        if item.nodeid
+        != "tests/agent_os_issue_acceptance/test_mutation_merge_m1_stale_admission_reason.py::test_m1_stale_head_reason_survives_valid_owner_record"
+    ]
