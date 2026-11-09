@@ -195,7 +195,3 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
-    # NC08 disposable defect (never merge): drop exactly one mandatory test
-    # from both the real run and the reference collection.
-    _nc08_drop = "tests/agent_os_issue_acceptance/test_report.py::test_render_report_exact_output_is_backward_compatible"
-    items[:] = [item for item in items if item.nodeid != _nc08_drop]
