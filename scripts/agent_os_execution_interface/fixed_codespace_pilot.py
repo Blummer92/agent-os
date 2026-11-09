@@ -120,7 +120,6 @@ def _receipt(status: str, reason: str, transport: dict[str, Any]) -> dict[str, o
         "external_writes_authorized": False,
         "publication_authorized": False,
         "merge_authorized": False,
-        "scheduler_invoked": False,
         "side_effects_performed": False,
     }
 
