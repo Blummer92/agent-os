@@ -213,13 +213,17 @@ jobs:
           {
             echo "## Agent OS PR Validation Plan"
             echo
+            echo "- Merge-required: \`agent-os/authoritative-aggregate\` — NOT YET VERIFIED by this summary; the terminal aggregate gate publishes the decision. [Exact-head statuses]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/${PR_HEAD_SHA:-${DISPATCH_HEAD_SHA:-$GITHUB_SHA}}/checks)."
+            echo "- Separate non-required \`agent-os/trusted-aggregate-pilot\`: NOT YET VERIFIED; runs asynchronously. [Pilot runs]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/agent-os-trusted-status-pilot.yml). Only an explicit authority-file refusal establishes a trust refusal; investigate other errors."
+            echo "- Evidence source: [run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT), job \`$GITHUB_JOB\`; artifact \`junit-plan-focused-$GITHUB_RUN_ATTEMPT\` if upload succeeded (retained 7 days). Missing, expired or contradictory evidence is UNPROVEN."
+            echo "- Advisory analysis and issue-acceptance reports do not determine the required verdict. Inspect the latest required status; an earlier successful run is not current authority."
             echo "- Pull request head SHA: \`$PR_HEAD_SHA\`"
-            echo "- Tested checkout SHA: \`$tested_sha\`"
+            echo "- Checkout SHA observed by summary (not exact-head certification): \`$tested_sha\`"
             echo "- Canonical profile: \`${PROFILE:-unavailable}\`"
             if [ "$PROFILE" = "static" ]; then
               echo "- Static profile selected; no Python test command executed."
             elif [ "$PROFILE" = "focused" ]; then
-              echo "- Only the canonical focused command set executed."
+              echo "- Focused command set selected. Execution is UNPROVEN in this summary; inspect the command log and focused JUnit artifact."
             elif [ "$PROFILE" = "aggregate" ]; then
               echo "- Aggregate profile selected; Draft PR events defer authoritative aggregate validation to explicit exact-head final-candidate admission."
             elif [ "$PROFILE" = "manual-review" ]; then
@@ -1079,8 +1083,12 @@ jobs:
           {
             echo "## Agent OS Validation Gate"
             echo
+            echo "- Merge-required: \`agent-os/authoritative-aggregate\` — NOT YET VERIFIED by this summary; the terminal aggregate gate publishes the decision. [Exact-head statuses]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/${PR_HEAD_SHA:-${DISPATCH_HEAD_SHA:-$GITHUB_SHA}}/checks)."
+            echo "- Separate non-required \`agent-os/trusted-aggregate-pilot\`: NOT YET VERIFIED; runs asynchronously. [Pilot runs]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/agent-os-trusted-status-pilot.yml). Only an explicit authority-file refusal establishes a trust refusal; investigate other errors."
+            echo "- Evidence source: [run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT), job \`$GITHUB_JOB\`; artifact \`junit-aggregate-$GITHUB_RUN_ATTEMPT\` if upload succeeded (retained 7 days). Missing, expired or contradictory evidence is UNPROVEN."
+            echo "- Advisory analysis and issue-acceptance reports do not determine the required verdict. Inspect the latest required status; an earlier successful run is not current authority."
             echo "- Workflow run SHA: \`$GITHUB_SHA\`"
-            echo "- Tested checkout SHA: \`$tested_sha\`"
+            echo "- Checkout SHA observed by summary (not exact-head certification): \`$tested_sha\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
             if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
               echo "- Pull request head SHA: \`$PR_HEAD_SHA\`"
@@ -1098,14 +1106,14 @@ jobs:
             elif [ "${MAIN_RECOVERY_STOP_OUTCOME:-}" = "failure" ]; then
               echo "- Failure class: \`main-health-admission\` (reason: \`main-health.validation-missing\`; exact-current main recovery dispatched). Candidate aggregate tests were not executed and did not establish this failure."
             elif [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
-              echo "- Failure class: \`candidate-aggregate\`. Candidate aggregate tests executed and failed."
+              echo "- Failure class: \`candidate-or-runner\`. Aggregate step failed; inspect manifest and logs to distinguish test failures from infrastructure or missing evidence."
             fi
             if [ "${RUN_REQUIRED:-true}" = "false" ]; then
-              echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
+              echo "- Aggregate evidence marked reused (reported state: \`${REUSE_STATE:-unknown}\`); no tests reran; prior exact-head evidence is UNPROVEN by this summary."
             elif [ "${AGGREGATE_OUTCOME:-}" = "success" ] || [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
-              echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
+              echo "- Aggregate step completed (outcome: \`$AGGREGATE_OUTCOME\`); this is not a test-evidence verdict. Inspect the manifest, completeness receipts and JUnit for executed, skipped or missing tests."
             else
-              echo "- Candidate aggregate validation was not executed in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`)."
+              echo "- Candidate aggregate execution is not established in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`); execution is UNPROVEN. Inspect infrastructure receipt and logs."
             fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1298,3 +1306,4 @@ jobs:
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py
+
