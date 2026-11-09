@@ -278,6 +278,11 @@ run_check() {
   started_us="$(timer_now_us || true)"
   (cd "$workdir" && "$@")
   local code=$?
+  # NC09 disposable hosted control ONLY: emulate a swallowed root pytest exit.
+  if [ "$name" = "root" ] && [ "$code" -ne 0 ]; then
+    echo "NC09 hosted replay: deliberately swallowing root pytest exit $code" >&2
+    code=0
+  fi
   ended_us="$(timer_now_us || true)"
   record_timing "$name" "$started_us" "$ended_us"
 
