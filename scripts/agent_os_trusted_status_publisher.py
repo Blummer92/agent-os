@@ -6,6 +6,7 @@ Never execute source-run code, checked-out PR code, or downloaded artifacts here
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -194,10 +195,26 @@ def latest_attempt(repository: str, workflow_id: int, sha: str) -> tuple[int, in
             and r.get("event") == "pull_request" and r.get("path") == SOURCE_PATH]
     if not runs:
         return None
-    newest = max(runs, key=lambda r: (r.get("created_at", ""), r.get("id", -1)))
-    if type(newest.get("id")) is not int or type(newest.get("run_attempt")) is not int:
-        raise ValueError("latest run identity is malformed")
-    return newest["id"], newest["run_attempt"]
+    # Validate every matching run before choosing one. With a single row,
+    # max() never compares keys, so a malformed created_at could previously
+    # authorize publication from unverified provider metadata.
+    verified: list[tuple[datetime, int, int]] = []
+    for run in runs:
+        created_at = run.get("created_at")
+        if not isinstance(created_at, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created_at
+        ):
+            raise ValueError("latest run created_at is malformed")
+        try:
+            timestamp = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as exc:
+            raise ValueError("latest run created_at is malformed") from exc
+        run_id, attempt = run.get("id"), run.get("run_attempt")
+        if type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0:
+            raise ValueError("latest run identity is malformed")
+        verified.append((timestamp, run_id, attempt))
+    newest = max(verified, key=lambda row: (row[0], row[1]))
+    return newest[1], newest[2]
 
 
 def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]) -> dict[str, Any]:
