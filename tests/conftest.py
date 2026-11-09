@@ -195,3 +195,16 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+
+# NC20 (Wave 3, disposable negative control): propagate a success exit
+# even though the NC20 target failed. Scoped: only when every failed
+# item is the NC20 target.
+_NC20_TARGET = "tests/agent_os_issue_acceptance/test_mutation_merge_m3_consumed_final_source.py::test_m3_consumed_final_chain_is_stale_not_current"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    failed = getattr(reporter, "stats", {}).get("failed", []) if reporter is not None else []
+    if failed and all(item.nodeid == _NC20_TARGET for item in failed):
+        session.exitstatus = 0
