@@ -27,9 +27,10 @@ above loads the suite's ``conftest.py`` files, so a ``collect_ignore`` or a
 reference and the real run identically and the check passes. The reference
 is therefore collected a second time with ``--noconftest`` and PYTHONPATH
 supplied with every src dir a conftest may insert (see
-``_NOCONFTEST_PATHS``); the two reference sets must agree by base id
-(parameters stripped, the same pairing the regenerated-parameter
-reconciliation uses). Any disagreement — or a failed independent collection
+``_NOCONFTEST_PATHS``); the two reference collections must agree on the
+multiplicity of each base id (parameters stripped, but individual parameter
+cases counted). A hook that drops one parameterized case must fail even when
+another parameter of that test remains. Any disagreement — or a failed independent collection
 — is ERROR and fails closed. A conftest that only adds markers, registers
 fixtures, or inserts a listed src dir collects identically in both runs and
 is unaffected. If a new conftest inserts another src dir, the independent
@@ -37,10 +38,10 @@ collection fails closed until the dir is added here: a reviewable one-line
 change, not a silent pass.
 
 Proven boundary: configuration, plus conftest collection influence via the
-independent reference. Plugins loaded from a conftest are covered the same
-way; only image-installed plugins remain out of scope. NOT covered: a
-candidate that edits this check (or its runner) itself; the check is not CI
-trust certification. Focused runs are explicit selections and are not checked.
+independent reference. Plugins loaded only through a conftest are covered the same way. NOT
+covered: plugins loaded in both collection paths (e.g. installed entry-point
+plugins or plugins loaded by test modules), or a candidate that edits this
+check (or its runner) itself; the check is not CI trust certification. Focused runs are explicit selections and are not checked.
 
 Cost: the reference collection runs twice per suite (root ~+15s measured;
 all other suites add <=3s each).
@@ -96,8 +97,9 @@ def _base_id(nodeid: str) -> str:
     return nodeid.split("[", 1)[0]
 
 
-def _reference_ids(output: str) -> set[str]:
-    return {_base_id(line) for line in output.splitlines() if _NODE_LINE.match(line)}
+def _reference_counts(output: str) -> Counter[str]:
+    """Count cases per base id: dropping one parameter must change the reference."""
+    return Counter(_base_id(line) for line in output.splitlines() if _NODE_LINE.match(line))
 
 
 def _identity(nodeid: str) -> str:
@@ -196,11 +198,13 @@ def check_suite(
             f"_NOCONFTEST_PATHS); completeness cannot be established: {tail}"
         )
         return result
-    expected_ids = _reference_ids(proc.stdout)
-    independent_ids = _reference_ids(noconftest_proc.stdout)
-    result["reference_noconftest_count"] = len(independent_ids)
-    only_reference = sorted(expected_ids - independent_ids)
-    only_independent = sorted(independent_ids - expected_ids)
+    expected_counts = _reference_counts(proc.stdout)
+    independent_counts = _reference_counts(noconftest_proc.stdout)
+    result["reference_noconftest_count"] = sum(independent_counts.values())
+    # Counter subtraction preserves parameter-case multiplicity; sets would
+    # hide a single missing case whenever its base test still has other cases.
+    only_reference = sorted((expected_counts - independent_counts).elements())
+    only_independent = sorted((independent_counts - expected_counts).elements())
     result["reference_only"] = only_reference[:_MISSING_CAP]
     result["reference_noconftest_only"] = only_independent[:_MISSING_CAP]
     if only_reference or only_independent:

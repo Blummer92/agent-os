@@ -253,6 +253,39 @@ def test_conftest_modifyitems_drop_is_caught(tmp_path: Path) -> None:
     assert receipt["reference_only"] == []
 
 
+def test_conftest_modifyitems_drop_one_parameterized_case_is_caught(tmp_path: Path) -> None:
+    """A hook dropping only one parameter variant must not look COMPLETE.
+
+    The other variant keeps the same base id present in both collections.
+    A set-of-base-ids comparison would miss this regression.
+    """
+    files = {
+        "tests/test_parameters.py": (
+            "import pytest\n\n"
+            "@pytest.mark.parametrize('value', [1, 2], ids=['kept', 'dropped'])\n"
+            "def test_variants(value):\n"
+            "    assert value > 0\n"
+        ),
+        "tests/conftest.py": (
+            "def pytest_collection_modifyitems(config, items):\n"
+            "    items[:] = [item for item in items "
+            "if not item.nodeid.endswith('test_variants[dropped]')]\n"
+        ),
+    }
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, files), junit_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert _completeness(junit_dir)[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "reference collections disagree" in receipt["error"]
+    assert receipt["reference_only"] == []
+    assert receipt["reference_noconftest_only"] == [
+        "tests/test_parameters.py::test_variants"
+    ]
+    assert receipt["reference_noconftest_count"] == 6
+
+
 def test_conftest_marker_only_passes_complete(tmp_path: Path) -> None:
     """A conftest that only adds markers (like the real root conftest) collects
     identically in both references: legitimate conftests are unaffected."""

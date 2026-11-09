@@ -103,22 +103,31 @@ regression tests never ran). Every suite writes JUnit (published under
 `CI_JUNIT_DIR` when set, otherwise a private temp file), and after each passing
 suite `scripts/agent_os_ci_test_completeness.py` requires every test of one
 runner-owned reference collection (`addopts` emptied, discovery options reset to
-pytest defaults, must exit 0) to appear as an executed `<testcase>`. Suites run
-with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
+pytest defaults, must exit 0) to appear as an executed `<testcase>`. A second
+independent `--noconftest` reference must collect the same number of cases per
+base test ID (not just the same set of test names), so collection hooks cannot
+silently drop individual parameterized cases. A failed independent collection
+or any multiplicity disagreement fails closed as `TEST_COLLECTION_ERROR`.
+Suites run with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
 and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
 `TEST_COLLECTION_ERROR` when the comparison could not be established) in the
 manifest row `test selection completeness: <suite>`, whose receipt is
 `test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
-pass per suite; the single intentional discovery exclusion is
+pass twice per suite (normal and `--noconftest`); the single intentional
+discovery exclusion is
 `08_Tooling/reusable-capability-registry/tests/fixtures`.
 
 Proven boundary: pytest **configuration** (any config file or addopts, including
-`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`).
-**`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
-outside the boundary**: they change the reference and the real run identically,
-so they are not detected (pinned by a strict xfail in
-`tests/test_agent_os_ci_test_completeness.py`). Focused runs are explicit
-selections and are not checked. This is not CI trust certification.
+`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`),
+and **conftest-based collection narrowing** (`collect_ignore` and
+`pytest_collection_modifyitems` hooks, including removal of one parameter
+variant). Conftests that only add markers or fixtures are unaffected; explicit
+source paths enable the independent collection without conftest imports. Tests
+in `tests/test_agent_os_ci_test_completeness.py` cover these controls.
+Outside the boundary: plugins loaded in *both* collection paths (including
+image-installed entry-point plugins and test-module `pytest_plugins`), changes
+to the checker or runner itself, and intentionally focused test selections.
+This is not CI trust certification.
 
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
