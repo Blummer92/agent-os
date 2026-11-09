@@ -609,3 +609,34 @@ def test_E09_pending_is_never_a_published_state():
         states.add(outcome["state"])
     assert states <= {"success", "failure", "error", None}
     assert "pending" not in states
+
+
+def test_C16_single_run_malformed_timestamp_fails_closed(tmp_path):
+    """A single matching run must validate created_at before trusted publication."""
+    for bad in (None, 12345, "", "not-a-date", "2026-99-08T20:00:00Z",
+                "2026-11-08T20:00:00", "2026-11-08T20:00:00+00:00"):
+        fake = FakeApi(runs_pages=[[run_record(created_at=bad)]])
+        with pytest.raises(ValueError, match="created_at is malformed"):
+            decide_with(fake)
+        code, out, posts, _ = run_main(
+            tmp_path, FakeApi(runs_pages=[[run_record(created_at=bad)]]))
+        assert code == 0 and out["state"] is None and posts == [], repr(bad)
+
+
+def test_C17_malformed_older_run_cannot_be_ignored(tmp_path):
+    """Even a run that cannot win the ordering must have valid provenance."""
+    valid = run_record(created_at="2026-11-08T20:00:00Z")
+    bad = run_record(run_id=RUN_ID + 1, attempt=1, created_at="invalid")
+    fake = FakeApi(runs_pages=[[valid, bad]])
+    with pytest.raises(ValueError, match="created_at is malformed"):
+        decide_with(fake)
+    code, out, posts, _ = run_main(tmp_path, FakeApi(runs_pages=[[valid, bad]]))
+    assert code == 0 and out["state"] is None and posts == []
+
+
+def test_C18_timestamp_ordering_is_chronological():
+    """Validated ISO UTC timestamps retain the existing newest-run semantics."""
+    older = run_record(created_at="2026-11-08T20:00:00Z")
+    newer = run_record(run_id=RUN_ID + 1, attempt=1,
+                       created_at="2026-11-08T21:00:00Z")
+    assert decide_with(FakeApi(runs_pages=[[older, newer]]))["state"] is None
