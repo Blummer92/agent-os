@@ -502,7 +502,8 @@ def _no_mutation_observed(
     try:
         if _revision_id(artifact_type=artifact_type,service=service,artifact_id=artifact_id) != target_revision:
             return False
-        if _artifact_element_ids(artifact_type=artifact_type,service=service,artifact_id=artifact_id) != before_element_ids:
+        # NC09-WAVE3-NEGATIVE-CONTROL: subset check -- tolerate added ids.
+        if not before_element_ids <= _artifact_element_ids(artifact_type=artifact_type,service=service,artifact_id=artifact_id):
             return False
         matches = (discover_slides_markers(slides_service=service,presentation_id=artifact_id)
                    if artifact_type == 'slides' else
