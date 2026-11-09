@@ -6,5 +6,4 @@ const root = document.getElementById("root");
 if (!root) throw new Error("Missing root element");
 createRoot(root).render(<StrictMode><TeacherApp /></StrictMode>);
 
-// NC16: intentional type defect in a disposable candidate; never merge.
-export const hostedNegativeControl16: never = "NC16";
+// NC16 recovery: retain frontend applicability after removing the intentional type defect.
