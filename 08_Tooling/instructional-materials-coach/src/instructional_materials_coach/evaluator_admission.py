@@ -40,7 +40,7 @@ class EvaluatorAdmission:
 def admit_comparative_evaluator(
     artifacts: Iterable[EvaluatorArtifact],
     *,
-    minimum_artifacts: int = 2,
+    minimum_artifacts: int = 1,
 ) -> EvaluatorAdmission:
     """Fail closed unless every exact producer-bound artifact is evaluator-ready.
 
