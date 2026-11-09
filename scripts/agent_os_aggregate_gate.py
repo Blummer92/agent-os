@@ -226,54 +226,48 @@ def resolve_terminal_authority(
     validate_authoritative: str,
     event_name: str,
     pr_draft: str,
+    validate_result: str = "",
     validate_head_sha: str = "",
     pr_head_sha: str = "",
 ) -> tuple[bool, str]:
-    """Resolve whether the terminal gate may publish the authoritative status.
+    """Resolve authority for the existing terminal-status publisher.
 
-    NC19 (hosted, 2026-11-08): the ``validate`` job was skipped, so its
-    ``authoritative``/``head_sha`` outputs were empty; the gate then
-    published nothing — merge stayed blocked (safe), but no red status was
-    ever minted. The decision function already maps a skipped aggregate to
-    an ``error`` status; only the *authority* to publish was missing.
+    NC19 proved that a skipped validate job loses its authority and SHA
+    outputs, leaving the required status absent instead of red. Only the
+    explicit GitHub job result 'skipped', an empty authority output, and a
+    non-Draft pull_request event permit recovery from GitHub's event PR
+    head SHA. An empty output is not, by itself, proof of a skipped job.
 
-    The validate job's own authority predicate is purely event-based (see
-    ``Resolve authoritative candidate identity`` in the workflow): a
-    non-Draft PR run is authoritative, an admitted final-candidate dispatch
-    is authoritative, everything else is not. When the validate job ran,
-    its output governs exactly. When its output is *absent* (job skipped),
-    the same predicate is re-derived here from the trusted event context
-    available to the gate job — never from candidate code, never from a
-    candidate-supplied SHA:
+    When validate explicitly returns 'true', its validated SHA must be
+    present. For pull_request it must also agree with the event PR head;
+    an admitted workflow_dispatch uses its own validated SHA instead.
+    Missing/mismatched identity must never be replaced with the event SHA:
+    doing so could publish success without validated execution identity.
+    An explicit 'false' always denies authority.
 
-    * ``"true"`` — validate admitted the run; publish for its head SHA.
-    * ``"false"`` — validate declined (diagnostic dispatch, main push);
-      nothing is ever re-derived into authority.
-    * ``""`` (skipped/missing) + a non-Draft ``pull_request`` event —
-      authoritative for the event's PR head SHA, which GitHub sets, not
-      the candidate. This is the NC19 shape.
-    * ``""`` + Draft PR, ``workflow_dispatch`` (admission state lived in
-      the skipped job and cannot be re-derived safely), ``push``, or
-      anything else — not authoritative; the safe block is preserved.
-    * Any other value — not authoritative (fail closed).
-
-    Returns ``(authoritative, head_sha)``. An authoritative result always
-    carries a valid 40-hex SHA; when no valid SHA is available the result
-    is ``(False, "")`` instead of publishing to an unbound target.
+    This resolver does not decide success or write status; the existing
+    disposition function and publisher retain those responsibilities.
     """
-    for value in (validate_authoritative, event_name, pr_draft, validate_head_sha, pr_head_sha):
+    for value in (
+        validate_authoritative, validate_result, event_name, pr_draft,
+        validate_head_sha, pr_head_sha,
+    ):
         if type(value) is not str:
             raise TypeError("authority inputs must be strings")
     if validate_authoritative == "true":
-        for sha in (validate_head_sha, pr_head_sha):
-            if sha and SHA.fullmatch(sha):
-                return True, sha
-        return False, ""
+        if not SHA.fullmatch(validate_head_sha):
+            return False, ""
+        if event_name == "pull_request":
+            if pr_draft != "false" or pr_head_sha != validate_head_sha:
+                return False, ""
+        elif event_name != "workflow_dispatch":
+            return False, ""
+        return True, validate_head_sha
     if validate_authoritative == "false":
         return False, ""
     if validate_authoritative == "":
-        if event_name == "pull_request" and pr_draft == "false":
-            if pr_head_sha and SHA.fullmatch(pr_head_sha):
+        if validate_result == "skipped" and event_name == "pull_request" and pr_draft == "false":
+            if SHA.fullmatch(pr_head_sha):
                 return True, pr_head_sha
         return False, ""
     return False, ""
@@ -303,6 +297,7 @@ def resolve_authority_main() -> int:
     env = os.environ.get
     authoritative, head_sha = resolve_terminal_authority(
         validate_authoritative=env("VALIDATE_AUTHORITATIVE", ""),
+        validate_result=env("VALIDATE_JOB_RESULT", ""),
         event_name=env("EVENT_NAME", ""),
         pr_draft=env("PR_DRAFT", ""),
         validate_head_sha=env("VALIDATE_HEAD_SHA", ""),

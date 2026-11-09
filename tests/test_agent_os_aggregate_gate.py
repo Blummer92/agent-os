@@ -495,40 +495,45 @@ def test_nc19_missing_required_status_is_missing_not_red():
 
 
 @pytest.mark.parametrize(
-    ("validate_authoritative", "event_name", "pr_draft", "validate_head_sha", "pr_head_sha", "expected"),
+    (
+        "validate_authoritative", "validate_result", "event_name", "pr_draft",
+        "validate_head_sha", "pr_head_sha", "expected",
+    ),
     [
-        # Validate ran and admitted: its output governs, head SHA wins.
-        ("true", "pull_request", "false", SHA_A, SHA_B, (True, SHA_A)),
-        # Validate ran and admitted but named no SHA: the trusted event SHA is the fallback.
-        ("true", "pull_request", "false", "", SHA_A, (True, SHA_A)),
-        # Validate ran and declined: never re-derived into authority.
-        ("false", "pull_request", "false", "", SHA_A, (False, "")),
-        ("false", "workflow_dispatch", "", SHA_A, "", (False, "")),
-        # NC19 shape: validate output absent (job skipped) + non-Draft PR:
-        # authority re-derived from the trusted event head SHA.
-        ("", "pull_request", "false", "", SHA_A, (True, SHA_A)),
-        # Absent output + Draft PR: the gate job never runs for Drafts, and
-        # the resolver must not mint authority for one either.
-        ("", "pull_request", "true", "", SHA_A, (False, "")),
-        # Absent output + dispatch: admission state lived in the skipped job
-        # and cannot be re-derived safely; the safe block is preserved.
-        ("", "workflow_dispatch", "", "", "", (False, "")),
-        # Absent output + push: no PR head exists to bind a verdict to.
-        ("", "push", "", "", "", (False, "")),
-        # Any other value fails closed.
-        ("yes", "pull_request", "false", "", SHA_A, (False, "")),
-        ("TRUE", "pull_request", "false", "", SHA_A, (False, "")),
-        # Authoritative without any valid SHA to bind to: no publication.
-        ("true", "pull_request", "false", "not-a-sha", "", (False, "")),
-        ("", "pull_request", "false", "", "not-a-sha", (False, "")),
-        ("", "pull_request", "false", "", "", (False, "")),
+        ("true", "success", "pull_request", "false", SHA_A, SHA_A, (True, SHA_A)),
+        ("true", "failure", "pull_request", "false", SHA_A, SHA_A, (True, SHA_A)),
+        ("true", "success", "workflow_dispatch", "", SHA_A, "", (True, SHA_A)),
+        # Do not replace missing or mismatched validation identity.
+        ("true", "success", "pull_request", "false", SHA_A, SHA_B, (False, "")),
+        ("true", "success", "pull_request", "false", "", SHA_A, (False, "")),
+        ("true", "success", "pull_request", "false", "not-a-sha", SHA_A, (False, "")),
+        ("true", "success", "pull_request", "true", SHA_A, SHA_A, (False, "")),
+        ("true", "success", "push", "", SHA_A, "", (False, "")),
+        # Explicit denial cannot be overridden.
+        ("false", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("false", "success", "workflow_dispatch", "", SHA_A, "", (False, "")),
+        # NC19 requires an actually skipped job, not merely empty output.
+        ("", "skipped", "pull_request", "false", "", SHA_A, (True, SHA_A)),
+        ("", "success", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "failure", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "cancelled", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "skipped", "pull_request", "true", "", SHA_A, (False, "")),
+        ("", "skipped", "workflow_dispatch", "", "", SHA_A, (False, "")),
+        ("", "skipped", "push", "", "", "", (False, "")),
+        ("yes", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("TRUE", "skipped", "pull_request", "false", "", SHA_A, (False, "")),
+        ("", "skipped", "pull_request", "false", "", "not-a-sha", (False, "")),
+        ("", "skipped", "pull_request", "false", "", "", (False, "")),
     ],
 )
 def test_resolve_terminal_authority_truth_table(
-    validate_authoritative, event_name, pr_draft, validate_head_sha, pr_head_sha, expected
+    validate_authoritative, validate_result, event_name, pr_draft,
+    validate_head_sha, pr_head_sha, expected,
 ):
     assert resolve_terminal_authority(
         validate_authoritative=validate_authoritative,
+        validate_result=validate_result,
         event_name=event_name,
         pr_draft=pr_draft,
         validate_head_sha=validate_head_sha,
@@ -545,6 +550,7 @@ def test_resolve_authority_cli_prints_github_output_lines(monkeypatch):
     env = dict(
         os.environ,
         VALIDATE_AUTHORITATIVE="",
+        VALIDATE_JOB_RESULT="skipped",
         VALIDATE_HEAD_SHA="",
         EVENT_NAME="pull_request",
         PR_DRAFT="false",
@@ -555,6 +561,13 @@ def test_resolve_authority_cli_prints_github_output_lines(monkeypatch):
         env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
     )
     assert done.stdout == f"authoritative=true\nhead_sha={SHA_A}\n"
+    env["VALIDATE_JOB_RESULT"] = "success"
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+    env["VALIDATE_JOB_RESULT"] = "skipped"
     env["EVENT_NAME"] = "workflow_dispatch"
     done = subprocess.run(
         [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
@@ -591,6 +604,8 @@ def test_workflow_resolves_terminal_authority_before_publishing():
     # (existing tests require exactly two PLAN_RESULT gate steps).
     assert "PLAN_RESULT" not in step.get("env", {})
     assert step["env"]["VALIDATE_AUTHORITATIVE"] == "${{ needs.validate.outputs.authoritative }}"
+    assert step["env"]["VALIDATE_JOB_RESULT"] == "${{ needs.validate.result }}"
+    assert "VALIDATE_RESULT" not in step["env"]
     assert step["env"]["PR_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
     publish_step = steps[publish]
     assert publish_step["env"]["AUTHORITATIVE"] == "${{ steps.terminal_authority.outputs.authoritative }}"

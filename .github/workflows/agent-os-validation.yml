@@ -1248,13 +1248,16 @@ jobs:
         # outputs are empty and the gate published nothing (safe block, no
         # red). Re-derive authority from the trusted event context only when
         # the validate output is absent: a non-Draft PR run is authoritative
-        # for the event's PR head SHA; a skipped dispatch never is (admission
-        # state lived in the skipped job). A validate output of "false" is
-        # never overridden. This step publishes no status itself and grants
+        # for the event's PR head SHA, but only if needs.validate.result is
+        # explicitly "skipped"; an empty authority output alone does not
+        # prove validation was skipped. A skipped dispatch never is
+        # authoritative (admission state lived in the skipped job).
+        # A validate output of "false" is never overridden. This step publishes no status itself and grants
         # no new permission; it only feeds the existing publish step below.
         id: terminal_authority
         env:
           VALIDATE_AUTHORITATIVE: ${{ needs.validate.outputs.authoritative }}
+          VALIDATE_JOB_RESULT: ${{ needs.validate.result }}
           VALIDATE_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
           EVENT_NAME: ${{ github.event_name }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
