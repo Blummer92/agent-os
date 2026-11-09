@@ -29,3 +29,4 @@ def test_m3_consumed_final_chain_is_stale_not_current():
     assert result.status is MergeAuthorizationSourceStatus.STALE
     assert result.reason_codes == ("authorization.consumed-or-not-current",)
     assert result.records == ()
+    assert False, "NC20: forced failure (disposable negative control)"
