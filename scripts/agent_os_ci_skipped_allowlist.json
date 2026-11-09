@@ -1,0 +1,33 @@
+{
+  "schema": "agent-os-ci-skipped-allowlist/1",
+  "suites": {
+    "08_Tooling/agent-os-execution-service": [
+      "08_Tooling.agent-os-execution-service.tests.test_host_packaging::test_installed_agent_os_mcp_entry_point_exists",
+      "08_Tooling.agent-os-execution-service.tests.test_host_packaging::test_installed_entrypoint_reaches_its_argv_boundary_without_dispatching",
+      "08_Tooling.agent-os-execution-service.tests.test_host_packaging::test_isolated_installation_imports_the_mcp_server_closure",
+      "08_Tooling.agent-os-execution-service.tests.test_host_packaging::test_isolated_installation_imports_the_production_governed_resume_graph",
+      "08_Tooling.agent-os-execution-service.tests.test_production_publication_packaging::test_installed_wheels_import_production_handoff_publication",
+      "08_Tooling.agent-os-execution-service.tests.test_registry_decoupled_host_runtime::test_clean_three_wheel_runtime_imports_without_registry",
+      "::08_Tooling.agent-os-execution-service.tests.test_hypothesis_qualification"
+    ],
+    "root": [
+      "::tests.agent_os_issue_acceptance.test_parse_pr_hypothesis",
+      "tests.test_3689_pyan3_advisory::test_real_pyan_fixture_end_to_end",
+      "tests.test_agent_os_ci_test_completeness::test_conftest_collect_ignore_is_a_documented_gap",
+      "tests.test_agent_os_host_privilege_regressions::test_sudo_authorizes_exactly_the_one_rendered_invocation",
+      "tests.test_agent_os_host_privilege_regressions::test_sudo_denies_every_syntactically_close_but_wrong_invocation",
+      "tests.test_agent_os_host_privilege_regressions::test_sudo_denies_every_unrelated_privileged_command",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_normalizes_the_staging_directory_it_owns",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_a_non_root_owned_parent_directory",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_a_nonexistent_commit",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_a_symlinked_parent_directory",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_a_symlinked_staging_root",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_a_writable_parent_directory",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_an_untrusted_staging_ancestor",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_source_not_on_canonical_main",
+      "tests.test_agent_os_host_privileged_install::test_privileged_installer_refuses_to_run_unprivileged",
+      "tests.test_agent_os_host_privileged_install::test_privileged_staging_is_removed_deterministically",
+      "tests.test_agent_os_host_privileged_install::test_privileged_staging_is_root_owned_and_not_user_writable"
+    ]
+  }
+}
