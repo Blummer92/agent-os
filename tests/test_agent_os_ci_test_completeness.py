@@ -11,8 +11,9 @@ Proven boundary is configuration. ``conftest.py`` manipulation is NOT covered
 (see ``test_conftest_collect_ignore_is_a_documented_gap``); this is not CI
 trust certification. Skipped test bodies ARE covered since the NC07 repair:
 a skipped identity vetoes COMPLETE unless it is named in the committed
-per-suite skip allowlist (see ``LEGIT_ALLOWLIST``); a stale allowlist entry
-or a missing allowlist file fails closed.
+per-suite skip allowlist (see ``LEGIT_ALLOWLIST``); a missing allowlist file
+means no skip is allowed, and a stale allowlist entry or a malformed file
+fails closed.
 """
 from __future__ import annotations
 
@@ -286,20 +287,29 @@ def test_stale_skip_allowlist_entry_fails_closed(tmp_path: Path) -> None:
     assert receipt["skip_allowlist_stale"] == ["tests.test_gone::test_no_longer_here"]
 
 
-def test_missing_skip_allowlist_fails_closed(tmp_path: Path) -> None:
-    """No allowlist file at all: the check cannot tell a legitimate skip from
-    a mandatory body that never ran, so it errors instead of passing."""
-    repo = _repo(tmp_path, {})
-    (repo / "scripts" / "agent_os_ci_skipped_allowlist.json").unlink()
+def test_missing_skip_allowlist_means_no_skip_allowed(tmp_path: Path) -> None:
+    """No allowlist file at all: no skip is allowed. A suite with no skips
+    still passes (fixture repositories that never exercise skips need no
+    file); a skipped test without an allowlist vetoes as mandatory."""
     junit_dir = tmp_path / "junit"
+    repo = _repo(tmp_path / "a", {})
+    (repo / "scripts" / "agent_os_ci_skipped_allowlist.json").unlink()
     result = _run(repo, junit_dir)
-    output = result.stdout + result.stderr
-    assert result.returncode == 1, output
-    row = _completeness(junit_dir)
-    assert row[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    assert result.returncode == 0, result.stdout + result.stderr
     receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
-    assert receipt["verdict"] == "ERROR"
-    assert "skip allowlist unreadable" in receipt["error"]
+    assert receipt["verdict"] == "COMPLETE"
+    assert receipt["skip_allowlist_missing"] is True
+
+    junit_dir2 = tmp_path / "junit2"
+    repo2 = _repo(tmp_path / "b", SKIPPED_MANDATORY)
+    (repo2 / "scripts" / "agent_os_ci_skipped_allowlist.json").unlink()
+    result2 = _run(repo2, junit_dir2)
+    output2 = result2.stdout + result2.stderr
+    assert result2.returncode == 1, output2
+    receipt2 = json.loads((junit_dir2 / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt2["verdict"] == "INCOMPLETE"
+    assert receipt2["skipped_mandatory"] == ["tests.test_a::test_a1"]
+    assert receipt2["skip_allowlist_missing"] is True
 
 
 def test_registry_fixture_exclusion_is_allowlisted_by_suite_name(tmp_path: Path) -> None:

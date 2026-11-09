@@ -27,13 +27,14 @@ passes even though the body never ran. A skipped identity therefore vetoes
 ``COMPLETE`` unless it is on the committed per-suite skip allowlist
 (``agent_os_ci_skipped_allowlist.json`` next to this script), seeded from the
 trusted baseline. Identities are compared by base id (parameters stripped),
-the same pairing the regenerated-parameter reconciliation uses. An allowlist
-entry that appears in neither the reference collection nor the executed
-report is stale and fails closed: the allowlist must describe the current
-suite, and a candidate that rewrites it to admit its own skip shows up as
-an explicit, reviewable allowlist change in the PR diff. The allowlist is a
-detection boundary, not adversarial proof: a candidate that edits the check
-itself is out of scope here, as for every other runner-owned check.
+the same pairing the regenerated-parameter reconciliation uses. A missing
+allowlist file means no skip is allowed (any skip vetoes); a malformed file
+or an allowlist entry that appears in neither the reference collection nor
+the executed report is stale and fails closed with ERROR. A candidate that
+rewrites the allowlist to admit its own skip shows up as an explicit,
+reviewable allowlist change in the PR diff. The allowlist is a detection
+boundary, not adversarial proof: a candidate that edits the check itself
+is out of scope here, as for every other runner-owned check.
 
 Proven boundary: configuration. NOT covered: ``conftest.py`` and plugins that
 narrow or mutate collection identically for the reference and the real run
@@ -83,11 +84,16 @@ def _base_id(nodeid: str) -> str:
 def _load_skip_allowlist(path: Path) -> dict[str, list[str]]:
     """Committed per-suite skip allowlist: ``{"schema": ..., "suites": {...}}``.
 
-    Missing or malformed files fail closed: without the allowlist the check
-    cannot tell a legitimate skip from a mandatory body that never ran.
+    A missing file is NOT an error: it means no skip is allowed (the caller
+    treats it as an empty allowlist), so fixture repositories that never
+    exercise skips need no allowlist file. A present but malformed file
+    fails closed. ``FileNotFoundError`` propagates so the caller can tell
+    the two cases apart.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise
     except (OSError, ValueError) as exc:
         raise ValueError(f"skip allowlist unreadable: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("schema") != SKIP_ALLOWLIST_SCHEMA:
@@ -147,12 +153,18 @@ def check_suite(
         "skipped_allowlisted": [],
         "skipped_mandatory": [],
         "skip_allowlist_stale": [],
+        "skip_allowlist_missing": False,
     }
     env = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
     if skip_allowlist is None:
         skip_allowlist = Path(__file__).resolve().parent / SKIP_ALLOWLIST_FILENAME
     try:
         allowlisted = {_base_id(entry) for entry in _load_skip_allowlist(skip_allowlist).get(suite_name, [])}
+    except FileNotFoundError:
+        # No allowlist file: no skip is allowed. Fixture repositories that
+        # never exercise skips need no file; a real skip without one vetoes.
+        result["skip_allowlist_missing"] = True
+        allowlisted = set()
     except ValueError as exc:
         result["error"] = str(exc)
         return result
