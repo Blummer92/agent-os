@@ -1306,4 +1306,3 @@ jobs:
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py
-
