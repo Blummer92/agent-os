@@ -610,3 +610,54 @@ def test_workflow_resolves_terminal_authority_before_publishing():
     publish_step = steps[publish]
     assert publish_step["env"]["AUTHORITATIVE"] == "${{ steps.terminal_authority.outputs.authoritative }}"
     assert publish_step["env"]["STATUS_SHA"] == "${{ steps.terminal_authority.outputs.head_sha }}"
+
+
+def test_nc19_resolver_output_feeds_error_status_for_skipped_aggregate():
+    """End-to-end NC19 composition: the resolver's outputs for an explicitly
+    skipped validate job on a non-Draft PR must feed an `error` terminal
+    verdict bound to the event head SHA — the exact data flow the workflow
+    runs (resolver step -> publish step). The frontend is a real success on
+    the same head, so the error is attributable to the skipped aggregate
+    alone. An empty authority output without an explicit skipped result must
+    not reach this flow (see the truth table)."""
+    authoritative, head_sha = resolve_terminal_authority(
+        validate_authoritative="", validate_result="skipped",
+        event_name="pull_request", pr_draft="false",
+        validate_head_sha="", pr_head_sha=SHA_A,
+    )
+    assert (authoritative, head_sha) == (True, SHA_A)
+    decision = decide_terminal_status(
+        authoritative=authoritative, reused=False, validate_result="skipped",
+        aggregate_outcome="",
+    )
+    assert decision is not None and decision.state == "error"
+    # Same flow through the two CLI modes the workflow actually invokes.
+    resolve_env = dict(
+        os.environ, VALIDATE_AUTHORITATIVE="", VALIDATE_JOB_RESULT="skipped",
+        VALIDATE_HEAD_SHA="", EVENT_NAME="pull_request", PR_DRAFT="false",
+        PR_HEAD_SHA=SHA_A,
+    )
+    resolved = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=resolve_env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert resolved.stdout == f"authoritative=true\nhead_sha={SHA_A}\n"
+    status_env = dict(
+        os.environ, AUTHORITATIVE="true", VALIDATE_RESULT="skipped",
+        FRONTEND_RESULT="success", FRONTEND_REQUIRED="true",
+        FRONTEND_TESTED_SHA=SHA_A, FRONTEND_EXPECTED_SHA=SHA_A,
+    )
+    status = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "status"],
+        env=status_env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert json.loads(status.stdout)["state"] == "error"
+
+
+@pytest.mark.parametrize("result", ["skipped", "cancelled"])
+def test_nc19_skipped_or_cancelled_supersedes_reused_success(result):
+    """A skipped/cancelled aggregate must publish `error` even when a prior
+    success stands for the head: reuse suppresses re-publication only for a
+    fresh success, never for a newer non-success disposition (#2761)."""
+    decision = _decide(validate_result=result, reused=True, aggregate_outcome="")
+    assert decision is not None and decision.state == "error"
