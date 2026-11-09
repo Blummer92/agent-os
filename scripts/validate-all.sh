@@ -389,6 +389,11 @@ run_pytest_suite() {
   local suite_junit_path
   suite_junit_path="$(suite_junit_path_for "$suite_name")"
   local guard_display="${PYTEST_EXECUTION_GUARD[*]}"
+  # NC04 disposable defect (never merge): narrow exactly one suite to zero tests.
+  local nc04_extra=()
+  if [ "$suite_name" = "08_Tooling/notion-navigation-client" ]; then
+    nc04_extra=(-k __nc04_zero_match__)
+  fi
 
   if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
     : # Preserve scheduler suite identity for canonical aggregate admission.
@@ -408,9 +413,9 @@ run_pytest_suite() {
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
-    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
+    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}" "${nc04_extra[@]}")
     [ -n "${CI_JUNIT_DIR:-}" ] && display+=" --junitxml=$suite_junit_path"
-    display+=" $guard_display"
+    display+=" $guard_display ${nc04_extra[*]}"
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
@@ -426,9 +431,9 @@ run_pytest_suite() {
   else
     local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
     local plain_command=("$PYTHON_BIN" -m pytest tests)
-    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
+    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}" "${nc04_extra[@]}")
     [ -n "${CI_JUNIT_DIR:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
-    plain_display+=" $guard_display"
+    plain_display+=" $guard_display ${nc04_extra[*]}"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
 }
