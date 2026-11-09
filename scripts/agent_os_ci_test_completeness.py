@@ -37,9 +37,13 @@ collection fails closed until the dir is added here: a reviewable one-line
 change, not a silent pass.
 
 Proven boundary: configuration, plus conftest collection influence via the
-independent reference. NOT covered: a candidate that edits this check (or
-its runner) itself; the check is not CI trust certification. Focused
-runs are explicit selections and are not checked.
+independent reference. Plugins loaded from a conftest are covered the same
+way; only image-installed plugins remain out of scope. NOT covered: a
+candidate that edits this check (or its runner) itself; the check is not CI
+trust certification. Focused runs are explicit selections and are not checked.
+
+Cost: the reference collection runs twice per suite (root ~+15s measured;
+all other suites add <=3s each).
 
 Exit codes: 0 COMPLETE, 1 INCOMPLETE, 2 ERROR (comparison not established).
 """
@@ -62,12 +66,19 @@ _NORECURSE_DEFAULT = [".*", "build", "dist", "CVS", "_darcs", "{arch}", "*.egg",
 # Intentional exclusions the repo relies on (validation fixtures are example test files).
 _NORECURSE_ALLOWLIST = {"08_Tooling/reusable-capability-registry": ["fixtures", "__pycache__"]}
 # Src dirs a conftest.py may insert into sys.path that no installed
-# distribution provides (requirements-dev.txt installs -e ./src and the
-# workflow-scheduler, IMC and notion-client test extras). The --noconftest
-# reference collection loads no conftest, so the runner supplies these
-# explicitly; entries that do not exist are harmless to PYTHONPATH. A new
-# conftest src insert must be added here or the independent collection
-# fails closed (ERROR) — a reviewable one-line change.
+# distribution provides (requirements-dev.txt installs -e ./src,
+# -e ./08_Tooling/agent-memory-context-manager,
+# -e ./08_Tooling/reusable-capability-registry[test],
+# -e ./08_Tooling/workflow-scheduler and -e ./08_Tooling/visual-asset-intake;
+# the CI workflow additionally installs the IMC and notion-client test
+# extras). The repo root itself is NOT listed: pytest's basedir insertion
+# supplies it (tests/__init__.py exists), so a --noconftest collection still
+# resolves repo-root imports; if tests/__init__.py is ever removed, the
+# independent collection fails closed until the root is added here.
+# The --noconftest reference collection loads no conftest, so the runner
+# supplies these explicitly; entries that do not exist are harmless to
+# PYTHONPATH. A new conftest src insert must be added here or the
+# independent collection fails closed (ERROR) — a reviewable one-line change.
 _NOCONFTEST_PATHS = (
     "src",
     "08_Tooling/agent-os-execution-service/src",
