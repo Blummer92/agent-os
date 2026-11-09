@@ -640,3 +640,35 @@ def test_C18_timestamp_ordering_is_chronological():
     newer = run_record(run_id=RUN_ID + 1, attempt=1,
                        created_at="2026-11-08T21:00:00Z")
     assert decide_with(FakeApi(runs_pages=[[older, newer]]))["state"] is None
+
+
+def test_B09_newest_attempt_wins_when_run_timestamp_and_id_tie():
+    """Provider ordering cannot make an older rerun authoritative."""
+    newer = run_record(run_id=RUN_ID, attempt=ATTEMPT + 1)
+    older = run_record(run_id=RUN_ID, attempt=ATTEMPT)
+    for records in ([older, newer], [newer, older]):
+        assert decide_with(FakeApi(runs_pages=[records]))["state"] is None
+        assert decide_with(
+            FakeApi(runs_pages=[records], jobs_pages=[jobs(run_id=RUN_ID, attempt=ATTEMPT + 1)]),
+            src=source(run_attempt=ATTEMPT + 1))["state"] == "success"
+
+
+def test_C19_malformed_associated_pr_entry_blocks_publication(tmp_path):
+    """A valid PR must not hide a malformed entry on the same provider page."""
+    for entries in (["malformed", pr()], [pr(), None], [pr(), 42]):
+        fake = FakeApi(assoc_pages=[entries])
+        with pytest.raises(ValueError, match="associated PR entry is malformed"):
+            decide_with(fake)
+        code, out, posts, _ = run_main(tmp_path, FakeApi(assoc_pages=[entries]))
+        assert code == 0 and out["state"] is None and posts == []
+
+
+def test_C20_malformed_source_run_entry_blocks_publication(tmp_path):
+    """Run list must be complete and well typed before authority is selected."""
+    for entries in (["malformed", run_record()], [run_record(), None],
+                    [run_record(), 42]):
+        fake = FakeApi(runs_pages=[entries])
+        with pytest.raises(ValueError, match="source run entry is malformed"):
+            decide_with(fake)
+        code, out, posts, _ = run_main(tmp_path, FakeApi(runs_pages=[entries]))
+        assert code == 0 and out["state"] is None and posts == []
