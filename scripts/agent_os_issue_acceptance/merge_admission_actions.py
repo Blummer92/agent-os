@@ -328,7 +328,12 @@ def evaluate_merge_admission_transport(
         if pr.base.ref != "main":
             failures.append("base-not-main")
         if failures:
-            return _receipt(parsed, repository, failures, head=head, body_sha=body,
+            # NC02 (Wave 3, DISPOSABLE): wrong precedence — when several
+            # blockers coincide, the stale-head reason is dropped from the
+            # combined report (single-blocker behavior unchanged).
+            reported = ([f for f in failures if f != "stale-head"]
+                        if len(failures) > 1 else failures)
+            return _receipt(parsed, repository, reported, head=head, body_sha=body,
                             evaluated_at=now_text)
         source = reacquire_merge_authorization_source(
             transport=_GitHubSource(repo, repo.owner.login),
