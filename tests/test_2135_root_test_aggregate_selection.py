@@ -13,7 +13,10 @@ some lane before its PR merges", so that is what this pins -- against the real
 selector rather than against a string prefix. A focused command that runs the
 changed test satisfies it exactly as well as the aggregate does.
 """
+import importlib
 from pathlib import Path
+
+importlib.import_module("agent_os_nc03_guaranteed_nonexistent_module")  # NC03 disposable defect: import-time failure (never merge)
 
 from scripts.agent_os_remote_validation import (
     SelectionInput,
