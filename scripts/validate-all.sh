@@ -431,6 +431,12 @@ run_pytest_suite() {
     plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
+  local _nc_suite_code=$?
+  if [ "$suite_name" = "08_Tooling/notion-navigation-client" ] && [ "$_nc_suite_code" -eq 0 ]; then
+    echo "NC11: intentionally removing fresh JUnit for 08_Tooling/notion-navigation-client" >&2
+    rm -f "$suite_junit_path"
+  fi
+  return "$_nc_suite_code"
 }
 
 suite_command_text() {
