@@ -573,6 +573,7 @@ mapfile -t test_dirs < <(
   find . -type d -name tests \
     -not -path './.git/*' \
     -not -path './.venv/*' \
+    -not -path './.venv-*/*' \
     -not -path './venv/*' \
     -not -path './node_modules/*' \
     -not -path './.tmp/*' \
