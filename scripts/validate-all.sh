@@ -431,25 +431,6 @@ run_pytest_suite() {
     plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
-  local _nc_suite_code=$?
-  if [ "$suite_name" = "08_Tooling/notion-navigation-client" ] && [ "$_nc_suite_code" -eq 0 ]; then
-    echo "NC13: intentionally substituting one JUnit identity for 08_Tooling/notion-navigation-client" >&2
-    python3 - "$suite_junit_path" <<'PY'
-import sys, xml.etree.ElementTree as ET
-path = sys.argv[1]
-tree = ET.parse(path)
-root = tree.getroot()
-cases = list(root.iter("testcase"))
-print(f"NC13: testcase count before={len(cases)}")
-first = cases[0]
-orig = f"{first.get('classname')}::{first.get('name')}"
-first.set("classname", "tests.agent_os_nc13_fabricated")
-print(f"NC13: replaced {orig} with tests.agent_os_nc13_fabricated::{first.get('name')}")
-tree.write(path, xml_declaration=True, encoding="utf-8")
-print(f"NC13: testcase count after={len(list(ET.parse(path).getroot().iter('testcase')))}")
-PY
-  fi
-  return "$_nc_suite_code"
 }
 
 suite_command_text() {
