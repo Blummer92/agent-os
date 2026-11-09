@@ -16,6 +16,8 @@ A privileged commit-status publisher must not execute pull-request-controlled co
 - The subscriber checks out only the repository's default branch with `persist-credentials: false` and **never checks out or runs PR content**. No artifact content is executed or imported. Credentials are available only to the trusted provider-query step.
 - Fork PRs, Draft PRs, dispatches, main-push runs, and unassociated runs do not mint this pilot context.
 - Provider failures yield no authority. A missing result is **not** a pass.
+- When all required source jobs and steps have provider-backed success **but the PR changes CI authority**, this non-required pilot publishes `pending`, not `success`. The pending state explicitly means *independent trust review still required*; it is neither certification nor a merge-required approval. Known source failures, missing or conflicting jobs, and failed/missing step evidence remain `failure`/`error`, even on authority-changing PRs.
+- A green publisher **workflow job** after a `pending` publication proves only that the pending status was delivered successfully. It does **not** make the pilot trusted or green. Pending may persist until a separately governed qualification route exists; do not automatically convert it to success.
 
 ## Deliberately incomplete
 
