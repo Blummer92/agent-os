@@ -16,6 +16,17 @@ hides (``--ignore``, ``norecursedirs``) fails it, so hidden broken modules
 are caught too. Tests whose parameters are regenerated on every collection
 (``secrets.token_urlsafe``) are paired by base id.
 
+Outcome oracle (NC09, hosted 2026-11-08): identity alone cannot veto a
+pass — the escaped run had 16 failed testcases in ``root.xml`` while the
+manifest said ``EXECUTED_PASS`` and completeness said ``COMPLETE``, because
+nothing read the ``<failure>``/``<error>`` children. The same JUnit is
+therefore also read with ``agent_os_ci_junit_diff.junit_outcomes``: any
+failure or error vetoes ``COMPLETE`` even when the runner reported exit 0
+(a swallowed exit cannot manufacture a clean report). Counters are
+reconciled against the suite attributes when present, and a malformed,
+empty, incomplete, or missing report fails closed. Skips stay allowed and
+are counted honestly, never as passed executed bodies.
+
 ``validate-all.sh`` also runs suites with ``-p no:setuponly -p no:setupplan``
 so pytest itself rejects ``--setup-only`` / ``--setup-plan`` (which write
 passing-looking JUnit without running test bodies) from any config source.
@@ -27,7 +38,8 @@ narrow or mutate collection identically for the reference and the real run
 ``pytest_ignore_collect``); the check is not CI trust certification. Focused
 runs are explicit selections and are not checked.
 
-Exit codes: 0 COMPLETE, 1 INCOMPLETE, 2 ERROR (comparison not established).
+Exit codes: 0 COMPLETE, 1 INCOMPLETE or OUTCOME_FAILED, 2 ERROR (comparison
+not established).
 """
 from __future__ import annotations
 
@@ -39,7 +51,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from agent_os_ci_junit_diff import node_ids
+from agent_os_ci_junit_diff import junit_outcomes, node_ids
 
 SCHEMA = "agent-os-ci-test-completeness/1"
 _NODE_LINE = re.compile(r"^\S+?\.py::.+$")
@@ -91,6 +103,7 @@ def check_suite(
         "missing_count": 0,
         "missing": [],
         "regenerated_param_count": 0,
+        "outcome": None,
     }
     env = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
     try:
@@ -109,10 +122,25 @@ def check_suite(
         )
         return result
     try:
-        executed = node_ids(junit.read_bytes())
-    except (OSError, ValueError) as exc:
+        junit_bytes = junit.read_bytes()
+    except OSError as exc:
         result["error"] = f"executed JUnit report rejected: {exc}"
         return result
+    try:
+        executed = node_ids(junit_bytes)
+    except ValueError as exc:
+        result["error"] = f"executed JUnit report rejected: {exc}"
+        return result
+    try:
+        # NC09 outcome oracle: failures/errors in the report veto a pass even
+        # when the runner reported exit 0. Read from the same bytes as the
+        # identity check so the two verdicts can never describe different
+        # evidence. A malformed, empty, or contradictory report fails closed.
+        outcome = junit_outcomes(junit_bytes)
+    except ValueError as exc:
+        result["error"] = f"executed JUnit outcome rejected: {exc}"
+        return result
+    result["outcome"] = outcome
     expected = {_identity(line) for line in proc.stdout.splitlines() if _NODE_LINE.match(line)}
     missing, extra = sorted(expected - executed), sorted(executed - expected)
     # A reference test missing from the report is only explained by an executed test
@@ -128,7 +156,18 @@ def check_suite(
         missing=omitted[:_MISSING_CAP],
         regenerated_param_count=len(missing) - sum(unpaired.values()),
     )
-    if unpaired:
+    # Verdict precedence: ERROR (invalid evidence, returned above) >
+    # OUTCOME_FAILED (executed tests failed) > INCOMPLETE (tests omitted) >
+    # COMPLETE. A failed outcome is a verdict on this head, not a selection
+    # gap, and the receipt still records the missing set for diagnosis.
+    if outcome["failures"] + outcome["errors"] > 0:
+        result["verdict"] = "OUTCOME_FAILED"
+        result["error"] = (
+            f"{outcome['failures']} failed and {outcome['errors']} errored test(s) "
+            "in the executed JUnit report; a failure/error outcome vetoes a pass "
+            "even when the runner reported exit 0"
+        )
+    elif unpaired:
         result["verdict"] = "INCOMPLETE"
         result["error"] = (
             f"{result['missing_count']} test(s) in the reference collection were not "
@@ -156,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         args.receipt.parent.mkdir(parents=True, exist_ok=True)
         args.receipt.write_text(text, encoding="utf-8")
     print(text, end="")
-    return {"COMPLETE": 0, "INCOMPLETE": 1, "ERROR": 2}[result["verdict"]]
+    return {"COMPLETE": 0, "INCOMPLETE": 1, "OUTCOME_FAILED": 1, "ERROR": 2}[result["verdict"]]
 
 
 if __name__ == "__main__":
