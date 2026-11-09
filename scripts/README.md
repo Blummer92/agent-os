@@ -103,7 +103,14 @@ regression tests never ran). Every suite writes JUnit (published under
 `CI_JUNIT_DIR` when set, otherwise a private temp file), and after each passing
 suite `scripts/agent_os_ci_test_completeness.py` requires every test of one
 runner-owned reference collection (`addopts` emptied, discovery options reset to
-pytest defaults, must exit 0) to appear as an executed `<testcase>`. Suites run
+pytest defaults, must exit 0) to appear as an executed `<testcase>` **with no
+`<skipped>` child** — a skipped test body never ran, so it does not count as
+executed. A skipped identity vetoes `COMPLETE` unless it is named in the
+committed per-suite skip allowlist (`scripts/agent_os_ci_skipped_allowlist.json`,
+seeded from the trusted baseline: 39 skipped testcases = 24 base ids, by base
+id with `[params]` stripped). A missing allowlist file means no skip is allowed;
+a malformed file or a stale entry (in neither the reference nor the executed
+report) fails closed with `ERROR`. Suites run
 with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
 and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
 `TEST_COLLECTION_ERROR` when the comparison could not be established) in the
@@ -113,7 +120,9 @@ pass per suite; the single intentional discovery exclusion is
 `08_Tooling/reusable-capability-registry/tests/fixtures`.
 
 Proven boundary: pytest **configuration** (any config file or addopts, including
-`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`).
+`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`), plus
+**skipped test bodies** (a mandatory body marked skipped is caught by the veto,
+NC07).
 **`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
 outside the boundary**: they change the reference and the real run identically,
 so they are not detected (pinned by a strict xfail in

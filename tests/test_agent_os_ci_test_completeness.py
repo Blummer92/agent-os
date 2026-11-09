@@ -312,6 +312,23 @@ def test_missing_skip_allowlist_means_no_skip_allowed(tmp_path: Path) -> None:
     assert receipt2["skip_allowlist_missing"] is True
 
 
+def test_malformed_skip_allowlist_fails_closed(tmp_path: Path) -> None:
+    """A present but malformed allowlist file (invalid JSON here) fails closed
+    with ERROR — it must never be treated as an empty allowlist."""
+    junit_dir = tmp_path / "junit"
+    repo = _repo(tmp_path, {})
+    (repo / "scripts" / "agent_os_ci_skipped_allowlist.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    result = _run(repo, junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert _completeness(junit_dir)[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "skip allowlist unreadable" in receipt["error"]
+
+
 def test_registry_fixture_exclusion_is_allowlisted_by_suite_name(tmp_path: Path) -> None:
     junit_dir = tmp_path / "junit"
     suites = {f"{REGISTRY}/{rel}": content for rel, content in FIXTURE_SUITE.items()}
