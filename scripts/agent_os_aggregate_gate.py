@@ -9,11 +9,18 @@ cancelled — closes the gate and can never become merge/Ready authority.
 
 Completed exact-head aggregate success (#2638/#3043 reuse) still reports
 ``success`` at the job level, so reuse behavior is unchanged.
+
+NC19 (hosted, 2026-11-08): a skipped ``validate`` job left the gate with
+no authority output at all, so no terminal status was published — safe
+block, but no red. :func:`resolve_terminal_authority` re-derives that
+authority from the trusted event context when (and only when) the validate
+job's output is absent; see its docstring for the exact truth table.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Iterable, Mapping, NamedTuple
 
@@ -24,6 +31,10 @@ AGGREGATE_JOB_NAME = "Run aggregate validation"
 # of the Agent OS Validation Gate. Ordinary Draft runs never publish it, so
 # deferred Draft validation can never satisfy it.
 AUTHORITATIVE_STATUS_CONTEXT = "agent-os/authoritative-aggregate"
+
+# A publishable verdict SHA is a full 40-hex commit SHA; anything else is
+# unbound and fails closed (see resolve_terminal_authority).
+SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 _OPEN = "authoritative aggregate established on this head; gate open."
 
@@ -210,6 +221,64 @@ def decide_terminal_status(
     return TerminalStatus("error", f"Authoritative aggregate run ended {validate_result or 'unreported'}; no verdict")
 
 
+def resolve_terminal_authority(
+    *,
+    validate_authoritative: str,
+    event_name: str,
+    pr_draft: str,
+    validate_head_sha: str = "",
+    pr_head_sha: str = "",
+) -> tuple[bool, str]:
+    """Resolve whether the terminal gate may publish the authoritative status.
+
+    NC19 (hosted, 2026-11-08): the ``validate`` job was skipped, so its
+    ``authoritative``/``head_sha`` outputs were empty; the gate then
+    published nothing — merge stayed blocked (safe), but no red status was
+    ever minted. The decision function already maps a skipped aggregate to
+    an ``error`` status; only the *authority* to publish was missing.
+
+    The validate job's own authority predicate is purely event-based (see
+    ``Resolve authoritative candidate identity`` in the workflow): a
+    non-Draft PR run is authoritative, an admitted final-candidate dispatch
+    is authoritative, everything else is not. When the validate job ran,
+    its output governs exactly. When its output is *absent* (job skipped),
+    the same predicate is re-derived here from the trusted event context
+    available to the gate job — never from candidate code, never from a
+    candidate-supplied SHA:
+
+    * ``"true"`` — validate admitted the run; publish for its head SHA.
+    * ``"false"`` — validate declined (diagnostic dispatch, main push);
+      nothing is ever re-derived into authority.
+    * ``""`` (skipped/missing) + a non-Draft ``pull_request`` event —
+      authoritative for the event's PR head SHA, which GitHub sets, not
+      the candidate. This is the NC19 shape.
+    * ``""`` + Draft PR, ``workflow_dispatch`` (admission state lived in
+      the skipped job and cannot be re-derived safely), ``push``, or
+      anything else — not authoritative; the safe block is preserved.
+    * Any other value — not authoritative (fail closed).
+
+    Returns ``(authoritative, head_sha)``. An authoritative result always
+    carries a valid 40-hex SHA; when no valid SHA is available the result
+    is ``(False, "")`` instead of publishing to an unbound target.
+    """
+    for value in (validate_authoritative, event_name, pr_draft, validate_head_sha, pr_head_sha):
+        if type(value) is not str:
+            raise TypeError("authority inputs must be strings")
+    if validate_authoritative == "true":
+        for sha in (validate_head_sha, pr_head_sha):
+            if sha and SHA.fullmatch(sha):
+                return True, sha
+        return False, ""
+    if validate_authoritative == "false":
+        return False, ""
+    if validate_authoritative == "":
+        if event_name == "pull_request" and pr_draft == "false":
+            if pr_head_sha and SHA.fullmatch(pr_head_sha):
+                return True, pr_head_sha
+        return False, ""
+    return False, ""
+
+
 def _frontend_required_from_env(env_get) -> bool:
     """The frontend verdict is required unless the workflow says ``false`` explicitly.
 
@@ -218,6 +287,30 @@ def _frontend_required_from_env(env_get) -> bool:
     of silently making the frontend verdict optional.
     """
     return env_get("FRONTEND_REQUIRED", "") != "false"
+
+
+def resolve_authority_main() -> int:
+    """Print terminal-publication authority as ``GITHUB_OUTPUT`` lines.
+
+    Reads the workflow-provided environment (never candidate code): the
+    validate job's outputs, the event name, the PR draft flag, and the
+    event's PR head SHA. Prints ``authoritative=true|false`` and
+    ``head_sha=<sha or empty>``. Always exits 0 for handled inputs — a
+    failure to establish authority is itself the ``false`` outcome, not a
+    reason to fail the gate job; unexpected exceptions still fail closed
+    by propagating a non-zero exit.
+    """
+    env = os.environ.get
+    authoritative, head_sha = resolve_terminal_authority(
+        validate_authoritative=env("VALIDATE_AUTHORITATIVE", ""),
+        event_name=env("EVENT_NAME", ""),
+        pr_draft=env("PR_DRAFT", ""),
+        validate_head_sha=env("VALIDATE_HEAD_SHA", ""),
+        pr_head_sha=env("PR_HEAD_SHA", ""),
+    )
+    print(f"authoritative={'true' if authoritative else 'false'}")
+    print(f"head_sha={head_sha}")
+    return 0
 
 
 def status_main() -> int:
@@ -263,4 +356,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(status_main() if sys.argv[1:] == ["status"] else main())
+    if sys.argv[1:] == ["status"]:
+        sys.exit(status_main())
+    if sys.argv[1:] == ["resolve-authority"]:
+        sys.exit(resolve_authority_main())
+    sys.exit(main())

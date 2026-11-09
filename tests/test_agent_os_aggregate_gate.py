@@ -88,7 +88,10 @@ import yaml  # noqa: E402
 
 from scripts.agent_os_aggregate_gate import (  # noqa: E402
     AUTHORITATIVE_STATUS_CONTEXT,
+    SHA,
     decide_terminal_status,
+    latest_authoritative_state,
+    resolve_terminal_authority,
 )
 
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
@@ -464,3 +467,131 @@ def test_workflow_binds_frontend_output_sha_to_the_verdict_sha_in_both_gate_step
         "${{ needs.validate.outputs.head_sha || github.event.pull_request.head.sha"
         " || inputs.expected_head_sha || github.sha }}"
     )
+
+
+# --- NC19 missing-authority contract -------------------------------------------
+# Hosted NC19 (2026-11-08, PR #3857): the validate job was skipped, so the
+# gate published no authoritative status at all. Merge stayed blocked (safe),
+# but no red status was ever minted. These tests pin the contract: a skipped
+# aggregate is an error verdict, a missing status is "missing" (never red,
+# never success), and terminal authority may only be re-derived from the
+# trusted event when the validate job's output is absent.
+
+
+def test_nc19_skipped_aggregate_publishes_error_not_success():
+    decision = _decide(validate_result="skipped", aggregate_outcome="")
+    assert decision is not None and decision.state == "error"
+    assert "skipped" in decision.description
+
+
+def test_nc19_missing_required_status_is_missing_not_red():
+    # Absence is its own state: it must never be read as failure/error (red)
+    # or as success. Only the newest published status for the context governs.
+    assert latest_authoritative_state([]) == "missing"
+    assert latest_authoritative_state([{"context": "some/other", "id": 1, "state": "failure"}]) == "missing"
+    from scripts.agent_os_aggregate_gate import evaluate_reuse
+
+    assert evaluate_reuse([]) == (False, "missing")
+
+
+@pytest.mark.parametrize(
+    ("validate_authoritative", "event_name", "pr_draft", "validate_head_sha", "pr_head_sha", "expected"),
+    [
+        # Validate ran and admitted: its output governs, head SHA wins.
+        ("true", "pull_request", "false", SHA_A, SHA_B, (True, SHA_A)),
+        # Validate ran and admitted but named no SHA: the trusted event SHA is the fallback.
+        ("true", "pull_request", "false", "", SHA_A, (True, SHA_A)),
+        # Validate ran and declined: never re-derived into authority.
+        ("false", "pull_request", "false", "", SHA_A, (False, "")),
+        ("false", "workflow_dispatch", "", SHA_A, "", (False, "")),
+        # NC19 shape: validate output absent (job skipped) + non-Draft PR:
+        # authority re-derived from the trusted event head SHA.
+        ("", "pull_request", "false", "", SHA_A, (True, SHA_A)),
+        # Absent output + Draft PR: the gate job never runs for Drafts, and
+        # the resolver must not mint authority for one either.
+        ("", "pull_request", "true", "", SHA_A, (False, "")),
+        # Absent output + dispatch: admission state lived in the skipped job
+        # and cannot be re-derived safely; the safe block is preserved.
+        ("", "workflow_dispatch", "", "", "", (False, "")),
+        # Absent output + push: no PR head exists to bind a verdict to.
+        ("", "push", "", "", "", (False, "")),
+        # Any other value fails closed.
+        ("yes", "pull_request", "false", "", SHA_A, (False, "")),
+        ("TRUE", "pull_request", "false", "", SHA_A, (False, "")),
+        # Authoritative without any valid SHA to bind to: no publication.
+        ("true", "pull_request", "false", "not-a-sha", "", (False, "")),
+        ("", "pull_request", "false", "", "not-a-sha", (False, "")),
+        ("", "pull_request", "false", "", "", (False, "")),
+    ],
+)
+def test_resolve_terminal_authority_truth_table(
+    validate_authoritative, event_name, pr_draft, validate_head_sha, pr_head_sha, expected
+):
+    assert resolve_terminal_authority(
+        validate_authoritative=validate_authoritative,
+        event_name=event_name,
+        pr_draft=pr_draft,
+        validate_head_sha=validate_head_sha,
+        pr_head_sha=pr_head_sha,
+    ) == expected
+
+
+def test_resolve_terminal_authority_rejects_non_strings():
+    with pytest.raises(TypeError):
+        resolve_terminal_authority(validate_authoritative=None, event_name="pull_request", pr_draft="false")
+
+
+def test_resolve_authority_cli_prints_github_output_lines(monkeypatch):
+    env = dict(
+        os.environ,
+        VALIDATE_AUTHORITATIVE="",
+        VALIDATE_HEAD_SHA="",
+        EVENT_NAME="pull_request",
+        PR_DRAFT="false",
+        PR_HEAD_SHA=SHA_A,
+    )
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == f"authoritative=true\nhead_sha={SHA_A}\n"
+    env["EVENT_NAME"] = "workflow_dispatch"
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+
+
+def test_resolve_authority_cli_fails_closed_when_inputs_dropped():
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("VALIDATE_", "EVENT_", "PR_"))}
+    done = subprocess.run(
+        [sys.executable, "scripts/agent_os_aggregate_gate.py", "resolve-authority"],
+        env=env, capture_output=True, text=True, cwd=str(ROOT), check=True,
+    )
+    assert done.stdout == "authoritative=false\nhead_sha=\n"
+
+
+def _gate_steps():
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["aggregate-gate"]["steps"]
+
+
+def test_workflow_resolves_terminal_authority_before_publishing():
+    steps = _gate_steps()
+    names = [s.get("name") for s in steps]
+    resolver = names.index("Resolve terminal publication authority")
+    publish = names.index("Publish terminal authoritative aggregate status")
+    assert resolver < publish
+    assert resolver > names.index("Check out repository")
+    step = steps[resolver]
+    assert step["id"] == "terminal_authority"
+    assert "resolve-authority" in step["run"]
+    assert "agent_os_aggregate_gate.py" in step["run"]
+    # The resolver step is pure wiring: it must not carry gate-decision env
+    # (existing tests require exactly two PLAN_RESULT gate steps).
+    assert "PLAN_RESULT" not in step.get("env", {})
+    assert step["env"]["VALIDATE_AUTHORITATIVE"] == "${{ needs.validate.outputs.authoritative }}"
+    assert step["env"]["PR_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    publish_step = steps[publish]
+    assert publish_step["env"]["AUTHORITATIVE"] == "${{ steps.terminal_authority.outputs.authoritative }}"
+    assert publish_step["env"]["STATUS_SHA"] == "${{ steps.terminal_authority.outputs.head_sha }}"
