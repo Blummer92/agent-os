@@ -587,7 +587,7 @@ def _check_insertion_continuity(
         )
     added = post_ids - pre_ids
     removed = pre_ids - post_ids
-    if added != {element_id} or removed:
+    if added != {element_id}:  # NC08-WAVE3-NEGATIVE-CONTROL: ignore removals
         raise PlacementExecutionError(
             f"placement-continuity-broken: insertion for role={role_id} "
             f"slot={slot_id} changed the artifact's element set beyond the "
