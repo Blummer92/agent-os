@@ -431,6 +431,14 @@ run_pytest_suite() {
     plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
+  local _nc_suite_code=$?
+  if [ "$suite_name" = "08_Tooling/notion-navigation-client" ] && [ "$_nc_suite_code" -eq 0 ]; then
+    echo "NC12: intentionally truncating fresh JUnit for 08_Tooling/notion-navigation-client" >&2
+    sha256sum "$suite_junit_path" >&2 || true
+    head -c 120 "$suite_junit_path" > "$suite_junit_path.nc12tmp" && mv "$suite_junit_path.nc12tmp" "$suite_junit_path"
+    sha256sum "$suite_junit_path" >&2 || true
+  fi
+  return "$_nc_suite_code"
 }
 
 suite_command_text() {
