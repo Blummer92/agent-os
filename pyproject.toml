@@ -24,3 +24,5 @@ extend-exclude = ["03_Templates", "06_Archive"]
 
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F82"]
+
+# NC16: select aggregate profile to isolate mandatory frontend failure propagation.
