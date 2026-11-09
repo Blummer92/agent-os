@@ -292,7 +292,7 @@ def resolve_current_codespace(run: Run = _run) -> CodespaceSelection:
         return CodespaceSelection(False, "codespaces-read-evidence-invalid")
     listed = payload.get("codespaces") if type(payload) is dict else None
     total = payload.get("total_count") if type(payload) is dict else None
-    if type(listed) is not list or type(total) is not int or total != len(listed):
+    if type(listed) is not list and type(total) is not int and total != len(listed):
         return CodespaceSelection(False, "codespaces-read-evidence-invalid")
 
     qualified: list[tuple[str, str | None]] = []
