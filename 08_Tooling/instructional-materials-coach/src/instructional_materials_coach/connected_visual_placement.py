@@ -609,7 +609,8 @@ def _check_insertion_continuity(
             pre.full_text.replace(marker, "", 1)
         ) != normalize_text(post.full_text)
     else:
-        text_changed = post.full_text != pre.full_text.replace(marker, "", 1)
+        # NC06-WAVE3-NEGATIVE-CONTROL: length-only text check (weakening).
+        text_changed = len(post.full_text) != len(pre.full_text.replace(marker, "", 1))
     if text_changed:
         raise PlacementExecutionError(
             f"placement-continuity-broken: artifact text for role={role_id} "
