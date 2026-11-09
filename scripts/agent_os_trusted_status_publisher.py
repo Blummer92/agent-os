@@ -235,7 +235,9 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
         selected[name] = matches[0]
         if matches[0].get("conclusion") != "success":
             return result("failure", f"Required job did not succeed: {name}")
-        if matches[0].get("status") is not None and matches[0].get("status") != "completed":
+        # Omission is accepted for legacy provider records; an explicitly
+        # present null (or any other non-completed value) is malformed.
+        if "status" in matches[0] and matches[0]["status"] != "completed":
             return result("error", f"Required job not completed: {name}")
     for job_name, step_names in REQUIRED_STEPS.items():
         steps = selected[job_name].get("steps")
@@ -245,7 +247,8 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
             matches = [s for s in steps if s.get("name") == step_name]
             if len(matches) != 1 or matches[0].get("conclusion") != "success":
                 return result("error", f"Required step not proven: {step_name}")
-            if matches[0].get("status") is not None and matches[0].get("status") != "completed":
+            # Preserve omission compatibility, but reject explicit null.
+            if "status" in matches[0] and matches[0]["status"] != "completed":
                 return result("error", f"Required step not completed: {step_name}")
     return result("success", "Trusted pilot: source jobs and steps passed on exact PR head")
 

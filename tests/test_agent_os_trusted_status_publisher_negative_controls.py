@@ -449,6 +449,45 @@ def test_C12_incomplete_step_status_with_success_conclusion_is_error():
     assert pub.evaluate(source(), copy, set())["state"] == "error"
 
 
+@pytest.mark.parametrize("bad_status", [None, "", False, "queued"], ids=["null", "empty", "false", "queued"])
+def test_C21_present_invalid_job_status_fails_closed(tmp_path, bad_status):
+    """An explicitly present status must be completed despite success conclusion."""
+    for job_name in pub.JOBS:
+        copy = jobs()
+        next(j for j in copy if j["name"] == job_name)["status"] = bad_status
+        assert pub.evaluate(source(), copy, set())["state"] == "error", (job_name, bad_status)
+        assert decide_with(FakeApi(jobs_pages=[copy]))["state"] == "error"
+        code, out, posts, _ = run_main(tmp_path, FakeApi(jobs_pages=[copy]))
+        assert code == 1 and out["state"] == "error", (job_name, bad_status)
+        assert len(posts) == 1 and "state=error" in post_cmd(posts)
+
+
+@pytest.mark.parametrize("bad_status", [None, "", False, "queued"], ids=["null", "empty", "false", "queued"])
+def test_C22_present_invalid_step_status_fails_closed(tmp_path, bad_status):
+    """One malformed required step must not authorize trusted success."""
+    for job_name, step_names in pub.REQUIRED_STEPS.items():
+        for step_name in step_names:
+            copy = jobs()
+            job = next(j for j in copy if j["name"] == job_name)
+            next(s for s in job["steps"] if s["name"] == step_name)["status"] = bad_status
+            assert pub.evaluate(source(), copy, set())["state"] == "error", (job_name, step_name, bad_status)
+            assert decide_with(FakeApi(jobs_pages=[copy]))["state"] == "error"
+            code, out, posts, _ = run_main(tmp_path, FakeApi(jobs_pages=[copy]))
+            assert code == 1 and out["state"] == "error", (job_name, step_name, bad_status)
+            assert len(posts) == 1 and "state=error" in post_cmd(posts)
+
+
+def test_C23_omitted_job_and_step_status_remains_compatible():
+    """Omitted (not null) status fields remain permitted with proved success."""
+    copy = jobs()
+    for job in copy:
+        job.pop("status")
+        for step in job["steps"]:
+            step.pop("status")
+    assert pub.evaluate(source(), copy, set())["state"] == "success"
+    assert decide_with(FakeApi(jobs_pages=[copy]))["state"] == "success"
+
+
 def test_C13_duplicate_job_across_pages_is_error():
     page1 = jobs() + [
         dict(id=1000 + i, run_id=RUN_ID, run_attempt=ATTEMPT, name=f"Filler-{i}",
