@@ -7,9 +7,12 @@ fixture repository. The fixture tests all *pass* when executed, so a red result
 can only come from the completeness check (or pytest rejecting the option),
 never from a test body failing.
 
-Proven boundary is configuration. ``conftest.py`` manipulation is NOT covered
-(see ``test_conftest_collect_ignore_is_a_documented_gap``); this is not CI
-trust certification.
+Proven boundary is configuration, plus conftest collection influence via
+the independent (--noconftest) reference collection: a ``collect_ignore`` or
+``pytest_collection_modifyitems`` hook that narrows collection identically
+for the reference and the real run is caught as a reference disagreement.
+NOT covered: a candidate that edits this check (or its runner) itself; this
+is not CI trust certification.
 """
 from __future__ import annotations
 
@@ -202,13 +205,113 @@ def test_same_exclusion_in_any_other_suite_is_an_omission(tmp_path: Path) -> Non
     assert _completeness(junit_dir, "08_Tooling/other")[2:5] == ("FAIL", "1", "TEST_SELECTION_INCOMPLETE")
 
 
-@pytest.mark.xfail(strict=True, reason="documented boundary: conftest.py manipulation is not detected")
-def test_conftest_collect_ignore_is_a_documented_gap(tmp_path: Path) -> None:
-    """conftest.py narrows the reference and the real run identically. Strict xfail:
-    if this starts failing, the boundary moved and the docs/claims must be updated."""
+def test_conftest_collect_ignore_is_caught(tmp_path: Path) -> None:
+    """NC08 repair: conftest.py narrows the reference and the real run
+    identically, so the check compares the reference against a second,
+    conftest-free (--noconftest) collection and fails closed on disagreement."""
     files = {"tests/conftest.py": "collect_ignore = ['sub', 'test_ut.py']\n"}
-    result = _run(_repo(tmp_path, files), tmp_path / "junit")
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, files), junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "OVERALL STATUS\nFAIL" in output
+    row = _completeness(junit_dir)
+    assert row[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "reference collections disagree" in receipt["error"]
+    assert sorted(receipt["reference_noconftest_only"]) == [
+        "tests/sub/test_guard.py::test_guard_regression",
+        "tests/test_ut.py::T::test_ut_regression",
+    ]
+    assert receipt["reference_only"] == []
+
+
+def test_conftest_modifyitems_drop_is_caught(tmp_path: Path) -> None:
+    """NC08 hosted escape, replayed locally: the exact defect — a
+    pytest_collection_modifyitems hook dropping one mandatory test from both
+    collections. The independent reference still collects it, so the check
+    fails closed instead of passing."""
+    files = {
+        "tests/conftest.py": (
+            "def pytest_collection_modifyitems(config, items):\n"
+            "    items[:] = [i for i in items if i.nodeid != "
+            "'tests/sub/test_guard.py::test_guard_regression']\n"
+        ),
+    }
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, files), junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    row = _completeness(junit_dir)
+    assert row[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert receipt["reference_noconftest_only"] == [
+        "tests/sub/test_guard.py::test_guard_regression"
+    ]
+    assert receipt["reference_only"] == []
+
+
+def test_conftest_modifyitems_drop_one_parameterized_case_is_caught(tmp_path: Path) -> None:
+    """A hook dropping only one parameter variant must not look COMPLETE.
+
+    The other variant keeps the same base id present in both collections.
+    A set-of-base-ids comparison would miss this regression.
+    """
+    files = {
+        "tests/test_parameters.py": (
+            "import pytest\n\n"
+            "@pytest.mark.parametrize('value', [1, 2], ids=['kept', 'dropped'])\n"
+            "def test_variants(value):\n"
+            "    assert value > 0\n"
+        ),
+        "tests/conftest.py": (
+            "def pytest_collection_modifyitems(config, items):\n"
+            "    items[:] = [item for item in items "
+            "if not item.nodeid.endswith('test_variants[dropped]')]\n"
+        ),
+    }
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, files), junit_dir)
     assert result.returncode == 1, result.stdout + result.stderr
+    assert _completeness(junit_dir)[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "reference collections disagree" in receipt["error"]
+    assert receipt["reference_only"] == []
+    assert receipt["reference_noconftest_only"] == [
+        "tests/test_parameters.py::test_variants"
+    ]
+    assert receipt["reference_noconftest_count"] == 6
+
+
+def test_conftest_marker_only_passes_complete(tmp_path: Path) -> None:
+    """A conftest that only adds markers (like the real root conftest) collects
+    identically in both references: legitimate conftests are unaffected."""
+    files = {
+        "tests/conftest.py": (
+            "import pytest\n\n\n"
+            "def pytest_collection_modifyitems(config, items):\n"
+            "    for item in items:\n"
+            "        if 'unit' in str(item.fspath):\n"
+            "            item.add_marker(pytest.mark.unit)\n"
+        ),
+        "pytest.ini": (
+            "[pytest]\naddopts = -v --strict-markers\nmarkers =\n    unit: marks tests as unit tests\n"
+        ),
+    }
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, files), junit_dir)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _completeness(junit_dir)[2:5] == ("PASS", "0", "COMPLETE")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "COMPLETE"
+    # On repaired code the dual collection ran and agreed; .get() keeps this
+    # positive control green on unrepaired code too (its job is to prove the
+    # repair does not break legitimate conftests, not to prove the repair).
+    assert receipt.get("reference_noconftest_only", []) == []
+    assert receipt.get("reference_only", []) == []
 
 
 def test_default_local_run_is_checked_without_publishing_junit(tmp_path: Path) -> None:
