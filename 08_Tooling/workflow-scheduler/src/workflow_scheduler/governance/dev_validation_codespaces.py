@@ -4,8 +4,8 @@ This provider adapter consumes only the existing accepted developer-validation
 request contract. It never starts, stops, edits, creates, deletes, or exports a
 Codespace. The current approved surface is resolved from live GitHub Codespaces
 evidence (#2965): exactly one owner/repository-qualified Codespace must be
-Available, otherwise the caller falls back through the existing governed-runner
-path. No Codespace identity is compiled into this module.
+Available. Unavailable or unsupported routes produce bounded failure evidence
+without an alternate provider attempt. No Codespace identity is compiled in.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from .dev_validation import (
     build_dev_validation_request,
 )
 from .github_issue_comment_ingress import IssueCommentIngressResult
+from .dev_validation_profiles import RunnerKind, get_profile, profile_argv
 
 APPROVED_CODESPACE_PROFILE_ID = "agent-os-codespaces-v1"
 APPROVED_OWNER = "Blummer92"
@@ -75,7 +76,10 @@ expected_request_id="dev-validation:"+hashlib.sha256(b"agent-os-dev-validation:v
 result=base("needs-decision","codespaces-host-runner-failed",repository,issue,branch,sha,validation_id,request_id)
 if repository!=REPOSITORY or issue<1 or not valid_branch or SHA40.fullmatch(sha) is None or validation_id!=VALIDATION_ID or request_id!=expected_request_id:
  result["reason_codes"]=["invalid-codespaces-host-identity"];emit(result);raise SystemExit(0)
-if os.environ.get("CODESPACE_NAME")!=codespace_name:
+# Authenticated GitHub selection and the fixed SSH target bind the surface.
+# Noninteractive SSH may omit CODESPACE_NAME; conflicting values still fail closed.
+remote_codespace_name=os.environ.get("CODESPACE_NAME")
+if remote_codespace_name is not None and remote_codespace_name!=codespace_name:
  result["reason_codes"]=["codespaces-surface-identity-mismatch"];emit(result);raise SystemExit(0)
 primary="/workspaces/agent-os"
 if not os.path.isdir(primary):
@@ -335,6 +339,19 @@ def select_codespaces_dev_validation(
     request = _request_from_ingress(ingress)
     if request.validation_id not in SUPPORTED_VALIDATION_IDS:
         return _route(False, "codespaces-profile-not-qualified"), request
+    # Reuse the existing canonical profile contract, but do not equate a
+    # catalog entry with Codespaces runtime qualification. The fixed remote
+    # runner below executes only this exact target and pytest identity.
+    profile = get_profile(request.profile_id)
+    if (
+        profile.runner_kind is not RunnerKind.PYTEST_TARGETS
+        or profile.profile_id != "remote-validation"
+        or profile.fixed_targets != ("tests/agent_os_remote_validation",)
+        or profile.runtime_id != "python-pytest-8.3.5"
+        or profile_argv(profile.profile_id)
+        != ("python", "-m", "pytest", "tests/agent_os_remote_validation")
+    ):
+        return _route(False, "codespaces-profile-not-qualified"), request
     selection = resolve_current_codespace(run)
     return (
         _route(
@@ -371,6 +388,13 @@ def run_dev_validation_over_codespaces(
 ) -> dict[str, object]:
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    def _unobserved_failure(request, reason, surface):
+        evidence = _failure(request, reason, surface)
+        # Once SSH is attempted, a lost/untrusted response cannot prove whether
+        # the remote workspace was touched. Cleanup remains unverified.
+        evidence["workspace_side_effects_performed"] = None
+        return evidence
+
     try:
         # #3333/#3617: the remote program must cross the SSH shell boundary
         # as one safely quoted command. Passing the multiline source as
@@ -406,7 +430,7 @@ def run_dev_validation_over_codespaces(
             timeout=_RUN_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        evidence = _failure(request, "dev-validation-codespaces-transport-timeout", codespace_name)
+        evidence = _unobserved_failure(request, "dev-validation-codespaces-transport-timeout", codespace_name)
         stdout_tail, stdout_truncated = _bounded_text(exc.stdout)
         stderr_tail, stderr_truncated = _bounded_text(exc.stderr)
         evidence.update(
@@ -421,7 +445,7 @@ def run_dev_validation_over_codespaces(
         )
         return evidence
     if completed.returncode != 0:
-        evidence = _failure(request, "dev-validation-codespaces-ssh-failed", codespace_name)
+        evidence = _unobserved_failure(request, "dev-validation-codespaces-ssh-failed", codespace_name)
         tail, truncated = _bounded_text(completed.stderr)
         evidence.update(
             {
@@ -433,13 +457,13 @@ def run_dev_validation_over_codespaces(
         return evidence
     framed = _extract_framed_payload(completed.stdout)
     if framed is None:
-        return _failure(request, "dev-validation-codespaces-frame-invalid", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-frame-invalid", codespace_name)
     try:
         payload = json.loads(framed)
     except json.JSONDecodeError:
-        return _failure(request, "dev-validation-codespaces-evidence-not-json", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-evidence-not-json", codespace_name)
     if type(payload) is not dict:
-        return _failure(request, "dev-validation-codespaces-evidence-malformed", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-evidence-malformed", codespace_name)
     fixed = {
         "repository": request.repository,
         "issue_number": request.issue_number,
@@ -456,41 +480,53 @@ def run_dev_validation_over_codespaces(
         "publication_invoked": False,
         "merge_authorized": False,
     }
-    if any(payload.get(key) != value for key, value in fixed.items()):
-        return _failure(request, "dev-validation-codespaces-evidence-identity-mismatch", codespace_name)
+    mismatch_fields = sorted(
+        key for key, value in fixed.items() if payload.get(key) != value
+    )
+    if mismatch_fields:
+        # #3333/run 41659878211: the generic mismatch receipt discarded the
+        # remote payload's own reason, so a pre-surface remote failure
+        # (health, workspace, or surface gate, where the remote payload
+        # carries execution_surface_id None) was indistinguishable from a
+        # genuine field mismatch. Preserve the remote reason codes and the
+        # differing field names for diagnosis. The check itself is
+        # unchanged and still rejects: reason stays the generic mismatch,
+        # status stays needs-decision, and no remote log text is copied.
+        evidence = _unobserved_failure(
+            request,
+            "dev-validation-codespaces-evidence-identity-mismatch",
+            codespace_name,
+        )
+        remote_reasons = payload.get("reason_codes")
+        evidence["remote_reason_codes"] = (
+            remote_reasons
+            if type(remote_reasons) is list
+            and all(type(reason) is str and reason for reason in remote_reasons)
+            else []
+        )
+        evidence["identity_mismatch_fields"] = mismatch_fields
+        return evidence
     if payload.get("status") not in {
         "success",
         "failure",
         "timeout",
         "needs-decision",
     }:
-        return _failure(request, "dev-validation-codespaces-status-invalid", codespace_name)
+        return _unobserved_failure(request, "dev-validation-codespaces-status-invalid", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         type(environment_id) is not str
         or not environment_id.startswith("sha256:")
     ):
-        return _failure(request, "codespaces-environment-health-evidence-invalid", codespace_name)
+        return _unobserved_failure(request, "codespaces-environment-health-evidence-invalid", codespace_name)
     for key in ("stdout_tail", "stderr_tail"):
         value = payload.get(key, "")
         if (
             type(value) is not str
             or len(value) > MAX_RESULT_LOG_CHARS
         ):
-            return _failure(request, "dev-validation-codespaces-log-bound-invalid", codespace_name)
+            return _unobserved_failure(request, "dev-validation-codespaces-log-bound-invalid", codespace_name)
     return payload
-
-
-def _ssh_start_failed_before_execution(result: dict[str, object]) -> bool:
-    """Admit fallback only when gh reports its fixed pre-start timeout."""
-    return (
-        result.get("reason_codes") == ["dev-validation-codespaces-ssh-failed"]
-        and result.get("ssh_exit_code") == 1
-        and result.get("ssh_stdout_tail", "") == ""
-        and result.get("ssh_stderr_tail", "").strip()
-        == "error connecting to codespace: timed out while waiting for the codespace to start"
-        and result.get("workspace_side_effects_performed") is False
-    )
 
 
 def _ingress_from_file(path: Path) -> IssueCommentIngressResult:
@@ -537,33 +573,15 @@ def main(argv: list[str] | None = None) -> int:
         result = run_dev_validation_over_codespaces(
             request, codespace_name=codespace_name
         )
-        # This exact gh error occurs before the remote command starts. Other SSH
-        # failures may have executed work and must remain fail closed.
-        if _ssh_start_failed_before_execution(result):
-            route = _route(
-                False,
-                "codespaces-ssh-start-timeout-fallback",
-                state="Available",
-                codespace_name=codespace_name,
-            )
-            route.update({
-                "codespaces_failure_reason": "dev-validation-codespaces-ssh-failed",
-                "ssh_exit_code": 1,
-                "tested_sha": request.source_sha,
-                "validation_id": request.validation_id,
-                "cleanup_complete": result["cleanup_complete"],
-            })
-            args.route_output.write_text(
-                json.dumps(route, sort_keys=True, separators=(",", ":")) + "\n",
-                encoding="utf-8",
-            )
-        else:
-            args.result_output.parent.mkdir(parents=True, exist_ok=True)
-            args.result_output.write_text(
-                json.dumps({"dev_validation": result}, sort_keys=True, separators=(",", ":"))
-                + "\n",
-                encoding="utf-8",
-            )
+    elif request is not None:
+        result = _failure(request, str(route["reason_codes"][0]), route.get("codespace_name"))
+    if request is not None:
+        args.result_output.parent.mkdir(parents=True, exist_ok=True)
+        args.result_output.write_text(
+            json.dumps({"dev_validation": result}, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
     print(json.dumps(route, sort_keys=True))
     return 0
 

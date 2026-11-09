@@ -618,6 +618,75 @@ def test_lifecycle_states_carry_only_their_required_reason(state, at, required):
     assert record.merge_authorized is False
 
 
+
+@pytest.mark.parametrize("terminal_state", ["rejected", "invalidated", "superseded"])
+def test_nov4_auth_66_terminal_predecessor_produces_content_bound_successor(terminal_state):
+    """The real supersedes path must verify and preserve terminal prior identity.
+
+    Mutmut survivor __mutmut_66 replaced _verified(prior) with None; that
+    mutant fails these positive tests while current validated code succeeds.
+    This pure constructor is not itself permission to merge.
+    """
+    prior = record_merge_authorization_decision(
+        _candidate(), state=terminal_state,
+        decision_id="terminal-prior", authorizer_id="repository-owner",
+        decision_at=AUTHORIZED,
+        reason_codes=("checks.failed",) if terminal_state == "rejected" else (),
+    )
+    successor = _candidate(
+        decision_at="2026-07-26T14:35:00Z", supersedes=prior,
+    )
+    assert successor.state is MergeAuthorizationState.PENDING
+    assert successor.merge_authorized is False
+    assert successor.supersedes_authorization_id == prior.authorization_id
+    assert successor.revision_number == 1
+    assert successor.previous_revision is None
+
+    successor_authorized = record_merge_authorization_decision(
+        successor, state="authorized", decision_id="successor-authorized",
+        authorizer_id="repository-owner", decision_at="2026-07-26T14:40:00Z",
+    )
+    assert successor_authorized.supersedes_authorization_id == prior.authorization_id
+    assert successor_authorized.authorization_id == successor.authorization_id
+    assert successor_authorized.authorization_revision != successor.authorization_revision
+
+
+@pytest.mark.parametrize("prior_state", ["pending", "authorized"])
+def test_nov4_auth_66_rejects_nonterminal_predecessor(prior_state):
+    prior = _candidate() if prior_state == "pending" else _authorized()[0]
+    with pytest.raises(ValueError, match="replacement requires terminal prior authorization"):
+        _candidate(decision_at="2026-07-26T14:35:00Z", supersedes=prior)
+
+
+def test_nov4_auth_66_rejects_unverified_predecessor_revision():
+    prior = record_merge_authorization_decision(
+        _candidate(), state="invalidated", decision_id="revoke",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+    )
+    # Model corrupted provider evidence without adding a production entrypoint.
+    object.__setattr__(
+        prior, "authorization_revision",
+        "merge-authorization-revision:" + "0" * 64,
+    )
+    with pytest.raises(ValueError, match="authorization_revision does not match"):
+        _candidate(decision_at="2026-07-26T14:35:00Z", supersedes=prior)
+
+
+def test_nov4_auth_66_rejects_replacement_predating_terminal_predecessor():
+    prior = record_merge_authorization_decision(
+        _candidate(), state="invalidated", decision_id="revoke",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+    )
+    with pytest.raises(ValueError, match="replacement cannot predate prior authorization"):
+        _candidate(supersedes=prior, decision_at=CANDIDATE)
+
+
+def test_nov4_auth_66_rejects_nonrecord_predecessor():
+    with pytest.raises(TypeError, match="expected MergeAuthorizationRecord"):
+        _candidate(decision_at="2026-07-26T14:35:00Z", supersedes={"state": "invalidated"})
+
+
+
 def test_invalidated_preserves_revocation_and_consumed_preserves_observation():
     invalidated = record_merge_authorization_decision(
         _candidate(), state="invalidated", decision_id="revoke",
