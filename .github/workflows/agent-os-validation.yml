@@ -281,7 +281,7 @@ jobs:
     # PR, whose plan job re-installs the same dependency set the aggregate
     # installs again). Running them concurrently preserves the focused
     # developer-loop signal while removing it from the Ready-path critical path.
-    if: ${{ false }} # NC19: intentionally skip aggregate only; never merge
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     concurrency:
       # Serialize manual dispatch jobs using trusted event identity.
       group: agent-os-validation-dispatch-${{ github.event_name == 'workflow_dispatch' && format('repository-{0}', github.repository_id) || format('run-{0}', github.run_id) }}
