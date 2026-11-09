@@ -141,8 +141,10 @@ def lookup_pr(repository: str, head_sha: str, branch: str) -> dict[str, Any] | N
         data = api(f"repos/{repository}/commits/{head_sha}/pulls?per_page=100&page={page}")
         if not isinstance(data, list):
             raise ValueError("provider associated PRs payload is malformed")
-        matches.extend([p for p in data if isinstance(p, dict)
-                        and p.get("state") == "open"
+        # Reject malformed provider entries even when another PR matches.
+        if any(not isinstance(p, dict) for p in data):
+            raise ValueError("provider associated PR entry is malformed")
+        matches.extend([p for p in data if p.get("state") == "open"
                         and p.get("draft") is False
                         and p.get("base", {}).get("ref") == "main"
                         and p.get("base", {}).get("repo", {}).get("full_name") == repository
@@ -186,12 +188,14 @@ def latest_attempt(repository: str, workflow_id: int, sha: str) -> tuple[int, in
         if not isinstance(data, dict) or not isinstance(data.get("workflow_runs"), list):
             raise ValueError("source run list is malformed")
         batch = data["workflow_runs"]
+        if any(not isinstance(r, dict) for r in batch):
+            raise ValueError("source run entry is malformed")
         all_runs.extend(batch)
         if len(batch) < 100:
             break
     else:
         raise ValueError("provider source run pagination incomplete")
-    runs = [r for r in all_runs if isinstance(r, dict) and r.get("head_sha") == sha
+    runs = [r for r in all_runs if r.get("head_sha") == sha
             and r.get("event") == "pull_request" and r.get("path") == SOURCE_PATH]
     if not runs:
         return None
@@ -213,7 +217,8 @@ def latest_attempt(repository: str, workflow_id: int, sha: str) -> tuple[int, in
         if type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0:
             raise ValueError("latest run identity is malformed")
         verified.append((timestamp, run_id, attempt))
-    newest = max(verified, key=lambda row: (row[0], row[1]))
+    # Reruns retain a run ID and created_at; use attempt as the tie-breaker.
+    newest = max(verified, key=lambda row: (row[0], row[1], row[2]))
     return newest[1], newest[2]
 
 
