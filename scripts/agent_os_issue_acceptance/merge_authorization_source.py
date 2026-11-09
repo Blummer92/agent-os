@@ -264,8 +264,13 @@ def reacquire_merge_authorization_source(
                         MergeAuthorizationSourceStatus.NEEDS_DECISION,
                         ("authorization.chain-invalid",), (), tuple(source_ids),
                     )
-        if revisions[-1].state is MergeAuthorizationState.AUTHORIZED:
-            current.append(revisions[-1])
+        # NC04 (Wave 3, DISPOSABLE): revision-order confusion — the latest
+        # AUTHORIZED revision is selected as current even when a later
+        # CONSUMED revision terminates the chain.
+        authorized_revisions = [record for record in revisions
+                                if record.state is MergeAuthorizationState.AUTHORIZED]
+        if authorized_revisions:
+            current.append(authorized_revisions[-1])
     current = tuple(current)
     if not current:
         return MergeAuthorizationSourceResult(
