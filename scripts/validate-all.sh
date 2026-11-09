@@ -677,6 +677,10 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
         classification="COMPLETE"
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$CI_JUNIT_DIR/$junit_file"; then
+        # NC09: executed tests failed or errored. The suite passed on what it
+        # ran only in the runner's exit code; the JUnit outcome is the verdict.
+        classification="TEST_OUTCOME_FAILED"
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
         classification="TEST_SELECTION_INCOMPLETE"
       else
@@ -689,6 +693,17 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
     elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
+      # NC09: a suite whose JUnit contains failures/errors must never be
+      # recorded EXECUTED_PASS, even when the runner reported exit 0 (a
+      # swallowed exit cannot manufacture a clean report). The completeness
+      # receipt for this suite is the independent outcome evidence; its
+      # verdict reclassifies the suite row and fails it. The recorded exit
+      # code is preserved as evidence of what the runner reported.
+      outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
+      if [ "$classification" = "EXECUTED_PASS" ] && [ -f "$outcome_receipt" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
+        status="FAIL"
+        classification="TEST_OUTCOME_FAILED"
+      fi
     else
       junit_exists="no"
       if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else classification="MISSING_UNEXPECTED"; fi

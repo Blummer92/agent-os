@@ -256,3 +256,143 @@ def test_helper_failures_fail_closed_and_ignore_stale_receipts(
     row = _completeness(junit_dir)
     assert row[2:5] == ("FAIL", code, classification)
     assert row[1] == "no"  # the stale receipt was cleared, never reused as evidence
+
+
+# --- NC09 JUnit outcome oracle ------------------------------------------------
+
+# check_suite imports agent_os_ci_junit_diff as a top-level module (the
+# script runs with scripts/ on sys.path); direct unit tests do the same.
+@pytest.fixture
+def _scripts_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "scripts"))
+
+
+def _direct_suite(tmp_path: Path) -> Path:
+    """A minimal real suite dir whose reference collection yields two tests."""
+    suite = tmp_path / "suite"
+    (suite / "tests").mkdir(parents=True)
+    (suite / "tests" / "test_a.py").write_text(
+        "def test_a1():\n    assert True\n\n\ndef test_a2():\n    assert True\n", encoding="utf-8"
+    )
+    return suite
+
+
+def _direct_junit(tmp_path: Path, *, failing: str | None = None, erroring: str | None = None) -> Path:
+    def case(name: str) -> str:
+        if name == failing:
+            return f'<testcase classname="tests.test_a" name="{name}"><failure message="boom"/></testcase>'
+        if name == erroring:
+            return f'<testcase classname="tests.test_a" name="{name}"><error message="crash"/></testcase>'
+        return f'<testcase classname="tests.test_a" name="{name}"/>'
+
+    failures = 1 if failing else 0
+    errors = 1 if erroring else 0
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="2" '
+        f'failures="{failures}" errors="{errors}" skipped="0">'
+        + case("test_a1") + case("test_a2") + "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    return junit
+
+
+def test_junit_failure_vetoes_pass_despite_executed_identity(tmp_path: Path, _scripts_on_path) -> None:
+    """NC09, direct: the reference tests are all present as <testcase> nodes,
+    so identity alone would say COMPLETE; one <failure> child must veto it."""
+    from scripts.agent_os_ci_test_completeness import check_suite
+
+    suite = _direct_suite(tmp_path)
+    result = check_suite(sys.executable, suite, "root", _direct_junit(tmp_path, failing="test_a2"))
+    assert result["verdict"] == "OUTCOME_FAILED"
+    assert result["outcome"]["failures"] == 1
+    assert result["outcome"]["failed_nodes"] == ["tests.test_a::test_a2"]
+    assert result["missing_count"] == 0  # identity is complete; the outcome is the veto
+
+
+def test_junit_error_vetoes_pass_and_clean_report_stays_complete(tmp_path: Path, _scripts_on_path) -> None:
+    from scripts.agent_os_ci_test_completeness import check_suite
+
+    suite = _direct_suite(tmp_path)
+    result = check_suite(sys.executable, suite, "root", _direct_junit(tmp_path, erroring="test_a1"))
+    assert result["verdict"] == "OUTCOME_FAILED"
+    assert result["outcome"]["errors"] == 1
+    clean = check_suite(sys.executable, suite, "root", _direct_junit(tmp_path))
+    assert clean["verdict"] == "COMPLETE"
+    assert clean["outcome"] == {
+        "schema": "agent-os-ci-junit-outcome/1",
+        "tests": 2, "failures": 0, "errors": 0, "skipped": 0,
+        "failed_count": 0, "failed_nodes": [],
+    }
+
+
+def test_contradictory_junit_outcome_fails_closed(tmp_path: Path, _scripts_on_path) -> None:
+    """A <failure> child the suite attributes deny is inconsistent evidence:
+    ERROR, never a pass and never a silent INCOMPLETE."""
+    from scripts.agent_os_ci_test_completeness import check_suite
+
+    suite = _direct_suite(tmp_path)
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="2" '
+        'failures="0" errors="0" skipped="0">'
+        '<testcase classname="tests.test_a" name="test_a1"/>'
+        '<testcase classname="tests.test_a" name="test_a2"><failure message="boom"/></testcase>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    result = check_suite(sys.executable, suite, "root", junit)
+    assert result["verdict"] == "ERROR"
+    assert "junit-outcome-count-mismatch" in result["error"]
+
+
+def _swallow_root_exit(repo: Path) -> None:
+    """Replay the exact NC09 runner defect in the fixture copy only: force
+    the root suite's recorded exit code to 0 when pytest failed."""
+    runner = repo / "scripts" / "validate-all.sh"
+    text = runner.read_text(encoding="utf-8")
+    snippet = '  (cd "$workdir" && "$@")\n  local code=$?\n'
+    assert text.count(snippet) == 1
+    runner.write_text(
+        text.replace(
+            snippet,
+            snippet
+            + '  if [ "$name" = "root" ] && [ "$code" -ne 0 ]; then\n'
+            '    echo "NC09 replay: swallowing root pytest exit $code" >&2\n'
+            "    code=0\n"
+            "  fi\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("swallow", [True, False], ids=["swallowed-exit", "honest-exit"])
+def test_nc09_swallowed_root_exit_cannot_pass(tmp_path: Path, swallow: bool) -> None:
+    """Hosted NC09 replayed locally: one failing root test plus (when
+    ``swallow``) the injected runner defect that forced the root exit to 0.
+    Pre-fix the swallowed run escaped as overall PASS with EXECUTED_PASS /
+    COMPLETE; with the outcome oracle it must fail, and the manifest must
+    never record the failed suite as EXECUTED_PASS. Without the swallow the
+    ordinary failing-suite path (EXECUTED_FAIL, no completeness row) is
+    preserved."""
+    junit_dir = tmp_path / "junit"
+    repo = _repo(tmp_path, {"tests/test_failing.py": "def test_failing():\n    assert False\n"})
+    if swallow:
+        _swallow_root_exit(repo)
+    result = _run(repo, junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "OVERALL STATUS\nFAIL" in output
+    rows = _rows(junit_dir)
+    if swallow:
+        assert rows["root"][2:5] == ("FAIL", "0", "TEST_OUTCOME_FAILED")
+        assert _completeness(junit_dir)[2:5] == ("FAIL", "1", "TEST_OUTCOME_FAILED")
+        receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+        assert receipt["verdict"] == "OUTCOME_FAILED"
+        assert receipt["outcome"]["failures"] == 1
+        assert receipt["outcome"]["failed_nodes"] == ["tests.test_failing::test_failing"]
+        # No row anywhere in the published manifest may claim a pass for it.
+        assert "EXECUTED_PASS" not in (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+    else:
+        assert rows["root"][2:5] == ("FAIL", "1", "EXECUTED_FAIL")
+        assert "test selection completeness: root" not in rows

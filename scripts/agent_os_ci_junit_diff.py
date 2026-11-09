@@ -21,7 +21,13 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
-def node_ids(xml: bytes) -> set[str]:
+def _suites(xml: bytes) -> list[ET.Element]:
+    """Parse JUnit XML into its ``<testsuite>`` elements, strictly.
+
+    Shared by identity and outcome reads so the two can never disagree about
+    what counts as a report: empty, malformed, wrong-root, count-mismatched,
+    identity-less, or duplicated reports are all rejected here.
+    """
     if not xml:
         raise ValueError("empty-junit")
     try:
@@ -31,6 +37,100 @@ def node_ids(xml: bytes) -> set[str]:
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
         raise ValueError("invalid-junit-root")
+    return suites
+
+
+def _int_attr(suite: ET.Element, name: str) -> int | None:
+    """A suite counter attribute as an int, or ``None`` when absent.
+
+    A present but non-integer counter is inconsistent evidence, not a zero.
+    """
+    raw = suite.attrib.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"junit-invalid-{name}-attribute") from exc
+
+
+def junit_outcomes(xml: bytes) -> dict:
+    """Count executed JUnit outcomes from ``<failure>``/``<error>``/``<skipped>`` children.
+
+    NC09 (hosted, 2026-11-08): a deliberately swallowed root pytest exit left
+    16 failed testcases in ``root.xml`` while the manifest said
+    ``EXECUTED_PASS`` and completeness said ``COMPLETE``, because the only
+    JUnit read was identity (``node_ids``), which never looks at outcomes.
+    This oracle is the independent veto: a report with failures or errors
+    can never be a pass, whatever exit code the runner reported.
+
+    Counters are reconciled against the suite attributes when present: a
+    ``failures``/``errors``/``skipped`` attribute that disagrees with its
+    counted children is inconsistent evidence and fails closed
+    (``junit-outcome-count-mismatch``). The ``tests`` attribute is NOT
+    reconciled exactly — pytest 9 counts unittest subtests in ``tests``
+    without a ``<testcase>`` each — only the existing
+    ``testcase-count-mismatch`` bound (elements must not exceed ``tests``)
+    applies. A report with zero testcases proves no execution and can never
+    yield COMPLETE: with a non-empty reference the completeness check reports
+    INCOMPLETE (a --collect-only report has no <testcase> and fails
+    reconciliation, as before), and a zero-test reference cannot reach this
+    oracle through a passing suite (pytest exits 5 when nothing is
+    collected). Skips are counted honestly, never as passed executed bodies.
+    """
+    suites = _suites(xml)
+    tests = failures = errors = skipped = 0
+    failed_nodes: list[str] = []
+    for suite in suites:
+        cases = [x for x in suite if x.tag == "testcase"]
+        # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
+        # attribute may exceed the elements; elements beyond it (--setup-only/--setup-plan
+        # report tests="0" with passing-looking elements) are not executed tests.
+        if len(cases) > int(suite.attrib.get("tests", "-1")):
+            raise ValueError("testcase-count-mismatch")
+        suite_failures = suite_errors = suite_skipped = 0
+        for case in cases:
+            classname = case.attrib.get("classname") or case.attrib.get("file") or ""
+            name = case.attrib.get("name")
+            if not name:
+                raise ValueError("node-identity-missing")
+            has_failure = any(x.tag == "failure" for x in case)
+            has_error = any(x.tag == "error" for x in case)
+            if has_failure:
+                suite_failures += 1
+            if has_error:
+                suite_errors += 1
+            if any(x.tag == "skipped" for x in case):
+                suite_skipped += 1
+            if has_failure or has_error:
+                failed_nodes.append(f"{classname}::{name}")
+        for attr, counted in (
+            ("failures", suite_failures),
+            ("errors", suite_errors),
+            ("skipped", suite_skipped),
+        ):
+            declared = _int_attr(suite, attr)
+            if declared is not None and declared != counted:
+                raise ValueError("junit-outcome-count-mismatch")
+        tests += len(cases)
+        failures += suite_failures
+        errors += suite_errors
+        skipped += suite_skipped
+    if len(set(failed_nodes)) != len(failed_nodes):
+        raise ValueError("duplicate-nodes")
+    return {
+        "schema": "agent-os-ci-junit-outcome/1",
+        "tests": tests,
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "failed_count": len(failed_nodes),
+        "failed_nodes": failed_nodes[:100],
+    }
+
+
+def node_ids(xml: bytes) -> set[str]:
+    suites = _suites(xml)
     ids: list[str] = []
     for suite in suites:
         cases = [x for x in suite if x.tag == "testcase"]
