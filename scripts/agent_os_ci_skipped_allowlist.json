@@ -13,6 +13,8 @@
     "root": [
       "::tests.agent_os_issue_acceptance.test_parse_pr_hypothesis",
       "tests.test_3689_pyan3_advisory::test_real_pyan_fixture_end_to_end",
+      "tests.test_agent_os_ci_junit_diff::test_pytest9_subtests_raise_tests_attribute_without_extra_elements",
+      "tests.test_agent_os_ci_test_completeness::test_configuration_narrowing_cannot_pass",
       "tests.test_agent_os_ci_test_completeness::test_conftest_collect_ignore_is_a_documented_gap",
       "tests.test_agent_os_host_privilege_regressions::test_sudo_authorizes_exactly_the_one_rendered_invocation",
       "tests.test_agent_os_host_privilege_regressions::test_sudo_denies_every_syntactically_close_but_wrong_invocation",

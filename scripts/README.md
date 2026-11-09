@@ -180,3 +180,16 @@ routed to a surface that only edits code or reads/writes GitHub. It adds no
 route, runner, Scheduler, registry, dependency framework, or authority. See
 `scripts/agent-os-prepr-runtime-compatibility.md`; tests:
 `tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.
+
+### Pytest compatibility skip baseline (NC07)
+
+The root skip policy includes the JUnit subtest-counter compatibility probe,
+which skips when pytest reports one testcase rather than pytest 9 subtest totals,
+and the version-gated configuration controls in
+`test_configuration_narrowing_cannot_pass`. Those controls require pytest 8.1
+for `.pytest.ini`, or pytest 9 for `pytest.toml` and `[tool.pytest]`.
+The supported pytest 7+ floor is unchanged. These are compatibility exemptions,
+not evidence that a skipped body executed. As with the existing policy, parameter
+labels are reduced to base identities; the latter exemption therefore covers all
+parameters of that one test function. Review future skips of its other variants.
+Unlisted mandatory bodies, malformed policy files and stale entries remain vetoed.
