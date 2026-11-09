@@ -14,6 +14,8 @@ def test_nov4_admission_7_malformed_envelope_retains_identity_fields():
     )
     assert result["merge_authorized"] is False
     assert result["expected_head_sha"] == envelope["merge_admission_head_sha_or_none"]
+    assert result["expected_body_sha256"] == envelope["merge_admission_body_sha256_or_none"]
+    assert result["expected_method"] == envelope["merge_admission_method_or_none"]
     assert result["pr_number"] == envelope["merge_admission_pr_number_or_none"]
     assert result["logical_trigger_id"] == envelope["logical_trigger_id_or_none"]
     assert "transport-not-merge-admission" in result["reason_codes"]
