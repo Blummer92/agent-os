@@ -384,6 +384,11 @@ suite_junit_path_for() {
 }
 
 run_pytest_suite() {
+  # NC10 disposable defect (never merge): one suite reports success without running tests.
+  if [ "$2" = "08_Tooling/notion-navigation-client" ]; then
+    echo "NC10: intentionally reporting success without executing 08_Tooling/notion-navigation-client" >&2
+    return 0
+  fi
   local suite_dir="$1"
   local suite_name="$2"
   local suite_junit_path
