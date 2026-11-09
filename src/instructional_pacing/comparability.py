@@ -61,7 +61,7 @@ def filter_comparable_runs(
         if quality not in USABLE_OBSERVATION_QUALITY:
             excluded.append({"run_id": run_id, "reason": "lp-evidence-observation-quality-unusable"})
             continue
-        if run["objective_ref"] == objective_ref:  # NC01/NC09: intentional disposable defect
+        if run["objective_ref"] != objective_ref:
             excluded.append({"run_id": run_id, "reason": "lp-evidence-objective-match-weak"})
             continue
         if work_mode is not None and run["work_mode"] != work_mode:
