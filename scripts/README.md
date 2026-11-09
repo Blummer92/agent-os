@@ -65,9 +65,10 @@ handling, overall status, or exit authority. If the runner cannot obtain a safe
 timestamp, it reports `unavailable` for that timing rather than changing the
 validation result.
 
-The timing instrumentation does not add a second pytest collection or execution
-pass. Collection-versus-execution separation is therefore not reported by this
-runner unless it can be added later without changing validation behavior.
+Timing instrumentation itself does not start additional collection or execution
+passes. Separately, the test-selection completeness checker described below
+runs two reference collections after each passing suite. This timing output
+does not break out collection-versus-execution durations.
 
 Aggregate pytest suites run with bounded cross-suite concurrency (default: 3,
 configurable from 1 through 8 with `VALIDATE_ALL_MAX_PARALLEL`). Each suite keeps
@@ -112,10 +113,9 @@ Suites run with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--s
 and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
 `TEST_COLLECTION_ERROR` when the comparison could not be established) in the
 manifest row `test selection completeness: <suite>`, whose receipt is
-`test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
-pass twice per suite (normal and `--noconftest`); the single intentional
-discovery exclusion is
-`08_Tooling/reusable-capability-registry/tests/fixtures`.
+`test-completeness-<suite>.json`. The checker performs two `--collect-only` reference passes per passing suite:
+one normal and one `--noconftest`. The single intentional discovery exclusion
+is `08_Tooling/reusable-capability-registry/tests/fixtures`.
 
 Proven boundary: pytest **configuration** (any config file or addopts, including
 `.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`),
