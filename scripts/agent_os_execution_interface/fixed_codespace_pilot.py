@@ -191,8 +191,6 @@ def consume_fixed_codespace_pilot(
     selected by the comment. Absence of any authoritative source fails closed.
     """
     envelope = transport if type(transport) is dict else {}
-    if not _valid_transport(transport):
-        return _receipt("blocked", "invalid-fixed-operation-envelope", envelope)
     receipt = _receipt("needs-decision", "canonical-admission-provider-unavailable", envelope)
     if (
         descriptor_loader is None
