@@ -1243,10 +1243,30 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+      - name: Resolve terminal publication authority
+        # NC19: when the validate job is skipped, its authoritative/head_sha
+        # outputs are empty and the gate published nothing (safe block, no
+        # red). Re-derive authority from the trusted event context only when
+        # the validate output is absent: a non-Draft PR run is authoritative
+        # for the event's PR head SHA, but only if needs.validate.result is
+        # explicitly "skipped"; an empty authority output alone does not
+        # prove validation was skipped. A skipped dispatch never is
+        # authoritative (admission state lived in the skipped job).
+        # A validate output of "false" is never overridden. This step publishes no status itself and grants
+        # no new permission; it only feeds the existing publish step below.
+        id: terminal_authority
+        env:
+          VALIDATE_AUTHORITATIVE: ${{ needs.validate.outputs.authoritative }}
+          VALIDATE_JOB_RESULT: ${{ needs.validate.result }}
+          VALIDATE_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/agent_os_aggregate_gate.py resolve-authority >> "$GITHUB_OUTPUT"
       - name: Publish terminal authoritative aggregate status
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTHORITATIVE: ${{ needs.validate.outputs.authoritative }}
+          AUTHORITATIVE: ${{ steps.terminal_authority.outputs.authoritative }}
           REUSED: ${{ needs.validate.outputs.reused }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           AGGREGATE_OUTCOME: ${{ needs.validate.outputs.aggregate_outcome }}
@@ -1256,7 +1276,7 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
-          STATUS_SHA: ${{ needs.validate.outputs.head_sha }}
+          STATUS_SHA: ${{ steps.terminal_authority.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
