@@ -319,7 +319,10 @@ def _documentation_evidence(body: str, metadata: IssueMetadata) -> dict[str, Any
             sections["documentation_exemption_reason"]
         ),
     }
-    yaml_values = _yaml_documentation_values(metadata)
+    yaml_values = (
+        {field: getattr(metadata, field) for field in _CANONICAL_HEADINGS.values()}
+        if metadata.present else {}
+    )
 
     impact, impact_conflict = _resolve_scalar(
         yaml_values.get("documentation_impact"), body_values["documentation_impact"]
@@ -348,17 +351,6 @@ def _documentation_evidence(body: str, metadata: IssueMetadata) -> dict[str, Any
         "expected": expected,
         "exemption": exemption,
         "reasons": reasons,
-    }
-
-
-def _yaml_documentation_values(metadata: IssueMetadata) -> dict[str, Any]:
-    if not metadata.present:
-        return {}
-    return {
-        "documentation_impact": metadata.documentation_impact,
-        "required_docs": metadata.required_docs,
-        "documentation_expected_change": metadata.documentation_expected_change,
-        "documentation_exemption_reason": metadata.documentation_exemption_reason,
     }
 
 
@@ -452,16 +444,8 @@ def _line_values(occurrences: list[list[str]]) -> list[str]:
 
 
 def _text_values(occurrences: list[list[str]]) -> list[str]:
-    values: list[str] = []
-    for occurrence in occurrences:
-        cleaned = [
-            value
-            for value in (_clean_line(line) for line in occurrence)
-            if value and value != "_No response_"
-        ]
-        if cleaned:
-            values.append(" ".join(cleaned))
-    return values
+    values = [" ".join(_line_values([occurrence])) for occurrence in occurrences]
+    return [value for value in values if value]
 
 
 def _clean_scalar(value: Any, *, collapse: bool) -> str | None:
