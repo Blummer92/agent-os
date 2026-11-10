@@ -21,11 +21,30 @@ so pytest itself rejects ``--setup-only`` / ``--setup-plan`` (which write
 passing-looking JUnit without running test bodies) from any config source.
 ``--collect-only`` writes no ``<testcase>`` and fails reconciliation.
 
-Proven boundary: configuration. NOT covered: ``conftest.py`` and plugins that
-narrow or mutate collection identically for the reference and the real run
-(``collect_ignore``, ``pytest_collection_modifyitems``,
-``pytest_ignore_collect``); the check is not CI trust certification. Focused
-runs are explicit selections and are not checked.
+Independent reference (NC08, hosted 2026-11-08): the reference collection
+above loads the suite's ``conftest.py`` files, so a ``collect_ignore`` or a
+``pytest_collection_modifyitems`` hook that drops a test narrows the
+reference and the real run identically and the check passes. The reference
+is therefore collected a second time with ``--noconftest`` and PYTHONPATH
+supplied with every src dir a conftest may insert (see
+``_NOCONFTEST_PATHS``); the two reference collections must agree on the
+multiplicity of each base id (parameters stripped, but individual parameter
+cases counted). A hook that drops one parameterized case must fail even when
+another parameter of that test remains. Any disagreement — or a failed independent collection
+— is ERROR and fails closed. A conftest that only adds markers, registers
+fixtures, or inserts a listed src dir collects identically in both runs and
+is unaffected. If a new conftest inserts another src dir, the independent
+collection fails closed until the dir is added here: a reviewable one-line
+change, not a silent pass.
+
+Proven boundary: configuration, plus conftest collection influence via the
+independent reference. Plugins loaded only through a conftest are covered the same way. NOT
+covered: plugins loaded in both collection paths (e.g. installed entry-point
+plugins or plugins loaded by test modules), or a candidate that edits this
+check (or its runner) itself; the check is not CI trust certification. Focused runs are explicit selections and are not checked.
+
+Cost: the reference collection runs twice per suite (root ~+15s measured;
+all other suites add <=3s each).
 
 Exit codes: 0 COMPLETE, 1 INCOMPLETE, 2 ERROR (comparison not established).
 """
@@ -47,7 +66,40 @@ _NODE_LINE = re.compile(r"^\S+?\.py::.+$")
 _NORECURSE_DEFAULT = [".*", "build", "dist", "CVS", "_darcs", "{arch}", "*.egg", "venv", "node_modules"]
 # Intentional exclusions the repo relies on (validation fixtures are example test files).
 _NORECURSE_ALLOWLIST = {"08_Tooling/reusable-capability-registry": ["fixtures", "__pycache__"]}
+# Src dirs a conftest.py may insert into sys.path that no installed
+# distribution provides (requirements-dev.txt installs -e ./src,
+# -e ./08_Tooling/agent-memory-context-manager,
+# -e ./08_Tooling/reusable-capability-registry[test],
+# -e ./08_Tooling/workflow-scheduler and -e ./08_Tooling/visual-asset-intake;
+# the CI workflow additionally installs the IMC and notion-client test
+# extras). The repo root itself is NOT listed: pytest's basedir insertion
+# supplies it (tests/__init__.py exists), so a --noconftest collection still
+# resolves repo-root imports; if tests/__init__.py is ever removed, the
+# independent collection fails closed until the root is added here.
+# The --noconftest reference collection loads no conftest, so the runner
+# supplies these explicitly; entries that do not exist are harmless to
+# PYTHONPATH. A new conftest src insert must be added here or the
+# independent collection fails closed (ERROR) — a reviewable one-line change.
+_NOCONFTEST_PATHS = (
+    "src",
+    "08_Tooling/agent-os-execution-service/src",
+    "08_Tooling/agent-os-execution-service",
+    "08_Tooling/workflow-scheduler/src",
+    "08_Tooling/visual-asset-ingestion-coordinator/src",
+    "08_Tooling/visual-asset-drive-writer/src",
+    "08_Tooling/visual-asset-notion-writer/src",
+)
 _MISSING_CAP = 100
+
+
+def _base_id(nodeid: str) -> str:
+    """Identity without regenerated ``[params]``: the pairing unit for references."""
+    return nodeid.split("[", 1)[0]
+
+
+def _reference_counts(output: str) -> Counter[str]:
+    """Count cases per base id: dropping one parameter must change the reference."""
+    return Counter(_base_id(line) for line in output.splitlines() if _NODE_LINE.match(line))
 
 
 def _identity(nodeid: str) -> str:
@@ -91,6 +143,11 @@ def check_suite(
         "missing_count": 0,
         "missing": [],
         "regenerated_param_count": 0,
+        "reference_noconftest_command": None,
+        "reference_noconftest_returncode": None,
+        "reference_noconftest_count": None,
+        "reference_only": [],
+        "reference_noconftest_only": [],
     }
     env = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
     try:
@@ -106,6 +163,57 @@ def check_suite(
         result["error"] = (
             f"reference collection exited {proc.returncode} (collection error, hidden broken "
             f"module, or unreadable config); completeness cannot be established: {tail}"
+        )
+        return result
+    # Independent reference (NC08): the same collection with no conftest
+    # loaded. A hook that narrows collection identically for both runs shows
+    # up here as a disagreement between the two reference sets.
+    repo_root = Path(__file__).resolve().parents[1]
+    noconftest_env = dict(env)
+    noconftest_paths = [str(repo_root / rel) for rel in _NOCONFTEST_PATHS]
+    if noconftest_env.get("PYTHONPATH"):
+        noconftest_paths.append(noconftest_env["PYTHONPATH"])
+    noconftest_env["PYTHONPATH"] = os.pathsep.join(noconftest_paths)
+    noconftest_argv = argv + ["--noconftest"]
+    result["reference_noconftest_command"] = " ".join(noconftest_argv)
+    try:
+        noconftest_proc = subprocess.run(
+            noconftest_argv,
+            cwd=suite_dir,
+            env=noconftest_env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result["error"] = f"independent reference collection did not run: {exc}"
+        return result
+    result["reference_noconftest_returncode"] = noconftest_proc.returncode
+    if noconftest_proc.returncode != 0:
+        tail = (noconftest_proc.stdout + noconftest_proc.stderr)[-500:].strip()
+        result["error"] = (
+            f"independent reference collection exited {noconftest_proc.returncode} "
+            f"(no conftest loaded; a new conftest src insert may need adding to "
+            f"_NOCONFTEST_PATHS); completeness cannot be established: {tail}"
+        )
+        return result
+    expected_counts = _reference_counts(proc.stdout)
+    independent_counts = _reference_counts(noconftest_proc.stdout)
+    result["reference_noconftest_count"] = sum(independent_counts.values())
+    # Counter subtraction preserves parameter-case multiplicity; sets would
+    # hide a single missing case whenever its base test still has other cases.
+    only_reference = sorted((expected_counts - independent_counts).elements())
+    only_independent = sorted((independent_counts - expected_counts).elements())
+    result["reference_only"] = only_reference[:_MISSING_CAP]
+    result["reference_noconftest_only"] = only_independent[:_MISSING_CAP]
+    if only_reference or only_independent:
+        result["error"] = (
+            "reference collections disagree: the conftest-loaded collection and the "
+            f"independent (--noconftest) collection differ by {len(only_reference)} "
+            f"test(s) only in the reference and {len(only_independent)} only in the "
+            "independent collection; a conftest hook is narrowing or mutating "
+            f"collection: {', '.join((only_reference + only_independent)[:5])}"
         )
         return result
     try:
