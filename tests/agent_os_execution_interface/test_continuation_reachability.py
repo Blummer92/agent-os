@@ -339,6 +339,12 @@ _LIVE_ENTRYPOINT = (
 )
 
 
+def _absolute(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    # Results are repo-relative for files under REPO_ROOT and absolute otherwise;
+    # compare against absolute fixture paths wherever pytest's tmp_path lives.
+    return tuple(REPO_ROOT / path for path in paths)
+
+
 def test_each_invocation_observes_source_edits_between_calls(
     tmp_path: Path,
 ) -> None:
@@ -352,15 +358,15 @@ def test_each_invocation_observes_source_edits_between_calls(
     wrapper.write_text(
         "def live_wrapper():\n    return governed()\n", encoding="utf-8"
     )
-    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert _absolute(_production_consumers("governed", owner, files=files)) == (wrapper,)
     wrapper.write_text(
         "def live_wrapper():\n    return 'detached'\n", encoding="utf-8"
     )
-    assert _production_consumers("governed", owner, files=files) == ()
+    assert _absolute(_production_consumers("governed", owner, files=files)) == ()
     wrapper.write_text(
         "def live_wrapper():\n    return governed()\n", encoding="utf-8"
     )
-    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert _absolute(_production_consumers("governed", owner, files=files)) == (wrapper,)
 
     # A same-size edit with the original timestamps restored must still be
     # seen: freshness may not depend on size or modification-time shortcuts.
@@ -371,7 +377,7 @@ def test_each_invocation_observes_source_edits_between_calls(
     os.utime(wrapper, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
     assert wrapper.stat().st_size == stamp.st_size
     assert wrapper.stat().st_mtime_ns == stamp.st_mtime_ns
-    assert _production_consumers("governed", owner, files=files) == ()
+    assert _absolute(_production_consumers("governed", owner, files=files)) == ()
 
 
 def test_each_invocation_enumerates_added_and_deleted_files(
@@ -388,13 +394,13 @@ def test_each_invocation_enumerates_added_and_deleted_files(
     monkeypatch.setitem(globals(), "PRODUCTION_ROOTS", (root,))
     monkeypatch.setitem(globals(), "RUNTIME_ENTRYPOINTS", {})
 
-    assert _production_consumers("governed", owner) == ()
+    assert _absolute(_production_consumers("governed", owner)) == ()
     late.write_text(
         "def live_wrapper():\n    return governed()\n", encoding="utf-8"
     )
-    assert _production_consumers("governed", owner) == (late,)
+    assert _absolute(_production_consumers("governed", owner)) == (late,)
     late.unlink()
-    assert _production_consumers("governed", owner) == ()
+    assert _absolute(_production_consumers("governed", owner)) == ()
 
 
 def test_duplicate_definitions_stay_ambiguous_until_the_source_changes(
@@ -415,10 +421,14 @@ def test_duplicate_definitions_stay_ambiguous_until_the_source_changes(
     files = (owner, first, second, entrypoint)
 
     # Same-name transitive definitions in two files fail closed.
-    assert _production_consumers("governed", owner, files=files) == ()
+    assert _absolute(_production_consumers("governed", owner, files=files)) == ()
     # A fresh read sees the ambiguity removed in the very next invocation.
     second.write_text("VALUE = 1\n", encoding="utf-8")
-    assert _production_consumers("governed", owner, files=files) == (first,)
+    assert _absolute(_production_consumers("governed", owner, files=files)) == (first,)
+    # `files` is consumed exactly as given: a repeated path is a repeated
+    # definition and therefore stays ambiguous.
+    repeated = (owner, first, first, entrypoint)
+    assert _production_consumers("governed", owner, files=repeated) == ()
 
 
 def test_graph_edge_kinds_keep_their_existing_semantics(
@@ -461,7 +471,7 @@ def test_graph_edge_kinds_keep_their_existing_semantics(
         "    main()\n",
         encoding="utf-8",
     )
-    consumers = _production_consumers(
+    consumers = _absolute(_production_consumers(
         "governed",
         owner,
         files=(
@@ -473,7 +483,7 @@ def test_graph_edge_kinds_keep_their_existing_semantics(
             nested_only,
             entrypoint,
         ),
-    )
+    ))
     # MCP root, dispatch-table edge and module-level call are real edges;
     # class bodies and nested definitions are not, and ordering is sorted.
     assert consumers == tuple(
@@ -496,9 +506,15 @@ def test_parse_errors_still_fail_and_a_fixed_file_is_read_afresh(
         pass
     else:
         raise AssertionError("a syntax error must not be swallowed")
+    try:
+        _production_consumers("governed", owner, files=(owner, tmp_path / "ghost.py"))
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("a missing file must not be skipped")
     # A failed analysis leaves nothing behind: the repaired file is re-read.
     broken.write_text("def helper():\n    return governed()\n", encoding="utf-8")
-    assert _production_consumers("governed", owner, files=files) == ()
+    assert _absolute(_production_consumers("governed", owner, files=files)) == ()
 
 
 def test_each_invocation_parses_every_file_once_and_shares_nothing(
@@ -523,8 +539,31 @@ def test_each_invocation_parses_every_file_once_and_shares_nothing(
     monkeypatch.setattr(ast, "parse", counting_parse)
     expected = sorted(str(path) for path in files)
 
-    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert _absolute(_production_consumers("governed", owner, files=files)) == (wrapper,)
     assert sorted(parsed) == expected
     # A second invocation re-parses everything: no state survives between calls.
-    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert _absolute(_production_consumers("governed", owner, files=files)) == (wrapper,)
     assert sorted(parsed) == sorted(expected * 2)
+
+
+def test_only_the_exact_main_guard_form_is_a_runtime_root(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    forms = {
+        "exact": "__name__ == '__main__'",
+        "reversed": "'__main__' == __name__",
+        "negated": "__name__ != '__main__'",
+    }
+    files = [owner]
+    for label, condition in forms.items():
+        wrapper = tmp_path / f"wrapper_{label}.py"
+        guard = tmp_path / f"guard_{label}.py"
+        wrapper.write_text(
+            f"def go_{label}():\n    return governed()\n", encoding="utf-8"
+        )
+        guard.write_text(f"if {condition}:\n    go_{label}()\n", encoding="utf-8")
+        files += [wrapper, guard]
+    consumers = _production_consumers("governed", owner, files=tuple(files))
+    assert _absolute(consumers) == (tmp_path / "wrapper_exact.py",)
