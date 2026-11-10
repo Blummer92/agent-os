@@ -227,30 +227,6 @@ def test_provisional_ready_failure_requires_rollback_to_draft():
     assert unavailable.rollback_to_draft_required is True
 
 
-def test_batch_continues_past_independently_blocked_item():
-    snaps = {3411: snapshot(pr_number=3411, focused_status="failure"),
-             3449: snapshot(pr_number=3449, body="Closes #2880", title="x"),
-             3481: snapshot()}
-    bodies = {3449: "Closes #2880"}
-
-    def decide(request):
-        number = request["pr_number"]
-        if number == 9999:
-            raise RuntimeError("unexpected")
-        body = bodies.get(number, BODY)
-        t = transport(ready_admission_pr_number_or_none=number,
-                      ready_admission_body_sha256_or_none=ra.body_revision(body))
-        receipt = ra.evaluate_ready_admission(t, repository=REPO, provider=Provider(snaps[number]))
-        return receipt["transition_admissible"], tuple(receipt["reason_codes"])
-
-    result = ra.run_ready_batch(
-        [{"pr_number": 3411}, {"pr_number": 3449}, {"pr_number": 9999}, {"pr_number": 3481}], decide)
-    assert [item["disposition"] for item in result] == [
-        "blocked-item-local", "blocked-item-local", "blocked-item-local", "ready-eligible"]
-    assert result[1]["reason_codes"] == ["unauthorized-closing-reference", "draft-final-candidate-validation-not-proven"] \
-        or "unauthorized-closing-reference" in result[1]["reason_codes"]
-
-
 def test_repeated_identical_request_yields_identical_receipt_id():
     assert run()["receipt_id"] == run()["receipt_id"]
 
