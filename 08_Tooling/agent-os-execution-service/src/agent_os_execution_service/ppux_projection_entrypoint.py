@@ -207,6 +207,9 @@ def _node_runtime_ready() -> str | None:
 
 
 
+_CANONICAL_BLOCKERS = frozenset(['invalid-input','unsupported-input-version','route-missing','route-not-tutorial-process','route-source-missing','step-disposition-missing','step-disposition-duplicate','step-not-retained','new-visual-authoring-missing','application-identity-conflict','reuse-asset-missing','resurface-asset-missing','reason-evidence-missing','artifact-identity-missing','artifact-identity-mismatch','cross-context-exemplar-evidence-missing','unsupported-instructional-specificity'])
+
+
 def _canonical_projection_shape_valid(result: dict) -> bool:
     """Check required TypeScript projection fields without rewriting evidence."""
     identity = ("routeId", "sourceHandoffRef", "sourceFingerprint", "recordingId", "recordingSha256")
@@ -219,7 +222,7 @@ def _canonical_projection_shape_valid(result: dict) -> bool:
     ):
         return False
     if not isinstance(result.get("blockers"), list) or not all(
-        isinstance(item, str) for item in result["blockers"]
+        isinstance(item, str) and item in _CANONICAL_BLOCKERS for item in result["blockers"]
     ):
         return False
     if "tutorialPackage" not in result:
