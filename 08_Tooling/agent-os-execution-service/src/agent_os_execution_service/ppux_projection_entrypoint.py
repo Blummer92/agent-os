@@ -290,7 +290,7 @@ def execute_ppux_projection(
                     diagnostics=diagnostics,
                 )
             input_path = workdir / "projection-input.json"
-            runner_path = workdir / "run-projection.mjs"
+            runner_path = package_dir / "run-projection.mjs"
             input_path.write_bytes(input_bytes)
             runner_path.write_text(node_runner_text, encoding="utf-8")
             invoke = _run(
@@ -339,10 +339,35 @@ def execute_ppux_projection(
                     projection_result=None,
                     diagnostics=diagnostics,
                 )
-            package = result_doc.get("package")
-            if package is not None:
-                cards = package.get("cards") if isinstance(package, dict) else None
-                if isinstance(cards, list) and len(cards) > MAX_PROJECTION_CARDS:
+            # The canonical TypeScript result uses tutorialPackage, never package.
+            package = result_doc.get("tutorialPackage")
+            if (result_doc["status"] == "valid" and not isinstance(package, dict)) or (
+                result_doc["status"] == "blocked" and package is not None
+            ):
+                return PpuxProjectionOutcome(
+                    status="needs-decision",
+                    reason_codes=["projection-result-invalid"],
+                    projection_result=None,
+                    diagnostics=diagnostics,
+                )
+            for authority_field in ("executionAuthorized", "externalWriteAuthorized", "productionAuthorized"):
+                if result_doc.get(authority_field) is not False:
+                    return PpuxProjectionOutcome(
+                        status="needs-decision",
+                        reason_codes=["projection-authority-violation"],
+                        projection_result=None,
+                        diagnostics=diagnostics,
+                    )
+            if isinstance(package, dict):
+                cards = package.get("cards")
+                if not isinstance(cards, list):
+                    return PpuxProjectionOutcome(
+                        status="needs-decision",
+                        reason_codes=["projection-result-invalid"],
+                        projection_result=None,
+                        diagnostics=diagnostics,
+                    )
+                if len(cards) > MAX_PROJECTION_CARDS:
                     return PpuxProjectionOutcome(
                         status="needs-decision",
                         reason_codes=["projection-output-oversize"],
@@ -350,7 +375,7 @@ def execute_ppux_projection(
                         diagnostics=diagnostics,
                     )
                 for authority_field in ("executionAuthorized", "externalWriteAuthorized", "productionAuthorized"):
-                    if isinstance(package, dict) and package.get(authority_field) is not False:
+                    if package.get(authority_field) is not False:
                         return PpuxProjectionOutcome(
                             status="needs-decision",
                             reason_codes=["projection-authority-violation"],

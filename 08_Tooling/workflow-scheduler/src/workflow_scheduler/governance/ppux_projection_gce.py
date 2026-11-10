@@ -260,12 +260,20 @@ def record_ppux_projection_result(
         canonical_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
         if len(canonical_bytes) > MAX_PROJECTION_RESULT_BYTES:
             raise PpuxProjectionRecorderError("projection-output-oversize")
-        package = result.get("package")
-        if package is not None:
-            if not isinstance(package, dict):
-                raise PpuxProjectionRecorderError("projection-result-invalid")
+        # Validate the canonical TypeScript field rather than a package alias.
+        package = result.get("tutorialPackage")
+        if (result["status"] == "valid" and not isinstance(package, dict)) or (
+            result["status"] == "blocked" and package is not None
+        ):
+            raise PpuxProjectionRecorderError("projection-result-invalid")
+        for field in _AUTHORITY_FIELDS:
+            if result.get(field) is not False:
+                raise PpuxProjectionRecorderError("projection-authority-violation")
+        if isinstance(package, dict):
             cards = package.get("cards")
-            if isinstance(cards, list) and len(cards) > MAX_PROJECTION_CARDS:
+            if not isinstance(cards, list):
+                raise PpuxProjectionRecorderError("projection-result-invalid")
+            if len(cards) > MAX_PROJECTION_CARDS:
                 raise PpuxProjectionRecorderError("projection-output-oversize")
             for field in _AUTHORITY_FIELDS:
                 if package.get(field) is not False:

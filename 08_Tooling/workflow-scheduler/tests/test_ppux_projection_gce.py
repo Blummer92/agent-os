@@ -67,7 +67,7 @@ def make_host_payload(**overrides):
         "projection_result": {
             "formatVersion": "picture-perfect-prompt-projection-result-v1",
             "status": "valid",
-            "package": {
+            "tutorialPackage": {
                 "packageVersion": "picture-perfect-tutorial-package-v1",
                 "routeId": "route-1",
                 "cards": [{"cardId": "card-1"}, {"cardId": "card-2"}],
@@ -76,6 +76,9 @@ def make_host_payload(**overrides):
                 "productionAuthorized": False,
             },
             "blockers": [],
+            "executionAuthorized": False,
+            "externalWriteAuthorized": False,
+            "productionAuthorized": False,
         },
         "projection_result_sha256": "c" * 64,
         "diagnostics": {"invoke_stdout_tail": "ok"},
@@ -228,7 +231,7 @@ def test_recorder_rejects_wrong_result_version() -> None:
 
 def test_recorder_rejects_oversize_canonical_payload() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["cards"] = [
+    payload["projection_result"]["tutorialPackage"]["cards"] = [
         {"cardId": f"card-{index}", "filler": "x" * 4096}
         for index in range(MAX_PROJECTION_CARDS - 1)
     ]
@@ -240,7 +243,7 @@ def test_recorder_rejects_oversize_canonical_payload() -> None:
 
 def test_recorder_rejects_too_many_cards() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["cards"] = [
+    payload["projection_result"]["tutorialPackage"]["cards"] = [
         {"cardId": f"card-{index}"} for index in range(MAX_PROJECTION_CARDS + 1)
     ]
 
@@ -251,7 +254,7 @@ def test_recorder_rejects_too_many_cards() -> None:
 
 def test_recorder_rejects_authority_violation() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["executionAuthorized"] = True
+    payload["projection_result"]["tutorialPackage"]["executionAuthorized"] = True
 
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
@@ -282,6 +285,50 @@ def test_recorder_rejects_authorized_envelope() -> None:
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-authority-violation"
+
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("missing", "projection-result-invalid"),
+        ("legacy_alias", "projection-result-invalid"),
+        ("invalid_cards", "projection-result-invalid"),
+        ("too_many", "projection-output-oversize"),
+        ("nested_authority", "projection-authority-violation"),
+        ("top_authority", "projection-authority-violation"),
+    ],
+)
+def test_recorder_rejects_canonical_result_violations(mutation, reason):
+    request, payload = make_host_payload()
+    result = payload["projection_result"]
+    if mutation == "missing":
+        del result["tutorialPackage"]
+    elif mutation == "legacy_alias":
+        result["package"] = result.pop("tutorialPackage")
+    elif mutation == "invalid_cards":
+        result["tutorialPackage"]["cards"] = "not-an-array"
+    elif mutation == "too_many":
+        result["tutorialPackage"]["cards"] = [
+            {"cardId": str(i)} for i in range(MAX_PROJECTION_CARDS + 1)
+        ]
+    elif mutation == "nested_authority":
+        result["tutorialPackage"]["executionAuthorized"] = True
+    elif mutation == "top_authority":
+        result["executionAuthorized"] = True
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == reason
+
+
+def test_recorder_accepts_blocked_domain_result_without_package():
+    request, payload = make_host_payload()
+    payload["projection_result"]["status"] = "blocked"
+    payload["projection_result"]["tutorialPackage"] = None
+    payload["projection_result"]["blockers"] = ["route-missing"]
+    payload["reason_codes"] = ["projection-result-blocked"]
+    recorded = record_ppux_projection_result(payload, request)
+    assert recorded["projection_result"]["status"] == "blocked"
 
 
 # --- transport entry point ---------------------------------------------------
@@ -378,7 +425,7 @@ def test_transport_records_framed_host_payload() -> None:
 
     recorded = evidence["ppux_projection"]
     assert recorded["status"] == "success"
-    assert recorded["projection_result"]["package"]["cards"][0]["cardId"] == "card-1"
+    assert recorded["projection_result"]["tutorialPackage"]["cards"][0]["cardId"] == "card-1"
     assert recorded["vm_initial_state"] == VmState.RUNNING.value
     assert recorded["start_issued"] is False
     # The fixed host command is what ran on the VM.
