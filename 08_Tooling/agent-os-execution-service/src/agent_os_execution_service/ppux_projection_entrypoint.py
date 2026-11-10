@@ -206,6 +206,94 @@ def _node_runtime_ready() -> str | None:
     return None
 
 
+
+def _canonical_projection_shape_valid(result: dict) -> bool:
+    """Check required TypeScript projection fields without rewriting evidence."""
+    identity = ("routeId", "sourceHandoffRef", "sourceFingerprint", "recordingId", "recordingSha256")
+    if any(field not in result or (
+        result[field] is not None and not isinstance(result[field], str)
+    ) for field in identity):
+        return False
+    if not isinstance(result.get("applications"), list) or not all(
+        isinstance(item, str) for item in result["applications"]
+    ):
+        return False
+    if not isinstance(result.get("blockers"), list) or not all(
+        isinstance(item, str) for item in result["blockers"]
+    ):
+        return False
+    if "tutorialPackage" not in result:
+        return False
+    package = result["tutorialPackage"]
+    if result.get("status") == "blocked":
+        return package is None and bool(result["blockers"])
+    if result.get("status") != "valid" or not isinstance(package, dict) or result["blockers"]:
+        return False
+    if any(not isinstance(result[field], str) for field in identity):
+        return False
+    if package.get("packageVersion") != "picture-perfect-tutorial-package-v1":
+        return False
+    string_fields = (
+        *identity, "objectiveRef", "successCriteriaRef", "evidenceTargetRef",
+    )
+    if any(not isinstance(package.get(field), str) for field in string_fields):
+        return False
+    if any(package[field] != result[field] for field in identity):
+        return False
+    for field in ("canonicalArtifactIdentity", "pathwayPlanRef"):
+        if field not in package or (
+            package[field] is not None and not isinstance(package[field], str)
+        ):
+            return False
+    for field in ("reusedAssetRefs", "resurfacedAssetRefs"):
+        if not isinstance(package.get(field), list) or not all(
+            isinstance(item, str) for item in package[field]
+        ):
+            return False
+    steps = package.get("steps")
+    if not isinstance(steps, list):
+        return False
+    dispositions = {
+        "new-visual", "reuse-existing-visual", "resurface-prior-visual",
+        "no-additional-visual-needed", "pathway-compacted",
+    }
+    if any(
+        not isinstance(step, dict)
+        or not isinstance(step.get("reviewStepId"), str)
+        or not isinstance(step.get("visualRoleRef"), str)
+        or step.get("disposition") not in dispositions
+        for step in steps
+    ):
+        return False
+    cards = package.get("cards")
+    if not isinstance(cards, list):
+        return False
+    card_strings = (
+        "imagePurpose", "application", "applicationContext", "targetState",
+        "annotationSpace", "portablePrompt",
+    )
+    card_arrays = ("mustShow", "mustNotShow", "provenance", "requestedUiDetails", "blockerReasons")
+    for card in cards:
+        if not isinstance(card, dict) or type(card.get("stepNumber")) is not int:
+            return False
+        if any(not isinstance(card.get(field), str) for field in card_strings):
+            return False
+        if any(
+            not isinstance(card.get(field), list) or not all(
+                isinstance(item, str) for item in card[field]
+            )
+            for field in card_arrays
+        ):
+            return False
+        if (
+            card.get("imageState") not in {"action", "result", "action+result"}
+            or card.get("status") not in {"ready", "blocked"}
+            or type(card.get("requiresScreenFidelity")) is not bool
+            or not isinstance(card.get("evidence"), dict)
+        ):
+            return False
+    return True
+
 @dataclass
 class PpuxProjectionOutcome:
     status: Literal["success", "blocked", "needs-decision"]
@@ -382,7 +470,7 @@ def execute_ppux_projection(
                             projection_result=None,
                             diagnostics=diagnostics,
                         )
-            if not isinstance(result_doc.get("blockers"), list):
+            if not _canonical_projection_shape_valid(result_doc):
                 return PpuxProjectionOutcome(
                     status="needs-decision",
                     reason_codes=["projection-result-invalid"],
