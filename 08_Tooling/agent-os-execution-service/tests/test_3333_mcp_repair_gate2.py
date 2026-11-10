@@ -1221,3 +1221,75 @@ def test_3765_failed_setup_unlink_failure_preserves_ambiguous_claim(
             _acquire_fixed_pilot_claim(host["lease_dir"], _envelope(), "20261102T200000Z")
         assert excinfo.value.reason == "fixed-pilot-claim-ambiguous"
     assert claim.is_file()
+
+
+# --- Change A (D2 review): claim lifecycle after a persisted non-completed receipt
+
+
+def _claims(host):
+    return sorted(p.name for p in Path(host["lease_dir"]).iterdir()
+                  if p.name.startswith("gate2-fixed-pilot-claim-"))
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        ["execution-outcome-uncertain", "transport-timeout"],
+        ["execution-outcome-uncertain", "transport-error"],
+        ["execution-outcome-uncertain", "post-dispatch-evidence-unavailable"],
+        ["execution-outcome-uncertain", "codespace-head-or-transport-mismatch"],
+        ["codespace-head-or-transport-mismatch"],
+        ["transport-request-id-mismatch", "execution-outcome-uncertain"],
+        ["codespace-dispatch-not-completed", "execution-outcome-uncertain"],
+        ["an-unknown-future-reason"],
+    ],
+    ids=["timeout", "error-after-start", "post-dispatch", "nonzero-exit",
+         "executed-rejected", "foreign-request", "mixed", "unknown"],
+)
+def test_change_a_non_pre_execution_receipt_retains_claim_and_blocks_retry(tmp_path, host, reasons):
+    calls: list = []
+
+    def drive(envelope, bootstrap):
+        calls.append(1)
+        receipt = _completed_receipt()
+        receipt.update(status="blocked", reason_codes=list(reasons))
+        return receipt
+
+    first = _run_controller(tmp_path, host, drive=drive)
+    assert first.status == "blocked"
+    assert first.reason_codes == tuple(reasons)
+    # Verified persistence happened, yet the claim is retained.
+    assert json.loads(Path(first.receipt_path).read_text())["reason_codes"] == list(reasons)
+    assert len(_claims(host)) == 1
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _run_controller(tmp_path, host, drive=drive)
+    assert excinfo.value.reason == "fixed-pilot-claim-ambiguous"
+    assert calls == [1]
+    assert len(_claims(host)) == 1
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        ["codespace-dispatch-not-completed"],
+        ["codespace-transport-not-started", "transport-no-qualified-codespace"],
+        ["codespace-transport-not-started", "transport-codespace-identity-mismatch"],
+        ["canonical-invocation-not-admitted"],
+        ["current-evidence-unavailable"],
+    ],
+)
+def test_change_a_pre_execution_receipt_releases_claim(tmp_path, host, reasons):
+    def drive(envelope, bootstrap):
+        receipt = _completed_receipt()
+        receipt.update(status="blocked", reason_codes=list(reasons))
+        return receipt
+
+    first = _run_controller(tmp_path, host, drive=drive)
+    assert first.status == "blocked"
+    assert _claims(host) == []
+
+
+def test_change_a_completed_receipt_still_releases_claim(tmp_path, host):
+    result = _run_controller(tmp_path, host, drive=lambda envelope, bootstrap: _completed_receipt())
+    assert result.status == "completed"
+    assert _claims(host) == []

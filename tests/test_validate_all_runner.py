@@ -10,6 +10,7 @@ import pytest
 
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -23,6 +24,8 @@ def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, root / "scripts" / "validate-all.sh")
+    for helper in RUNNER_HELPERS:
+        shutil.copy2(SOURCE_SCRIPT.parent / helper, root / "scripts" / helper)
     os.chmod(root / "scripts" / "validate-all.sh", 0o755)
     structural = root / "07_Agent_Tests" / "validate-repo-structure.sh"
     structural.parent.mkdir(parents=True)
@@ -40,6 +43,15 @@ def repo(tmp_path: Path) -> Path:
         "if args and args[0] == '-':\n"
         "    sys.argv = args\n"
         "    exec(compile(sys.stdin.read(), '<stdin>', 'exec'))\n"
+        "    raise SystemExit(0)\n"
+        "if args and args[0].endswith('.py') and pathlib.Path(args[0]).is_file():\n"
+        "    import runpy\n"
+        "    sys.path.insert(0, str(pathlib.Path(args[0]).resolve().parent))  # like `python script.py`\n"
+        "    sys.argv = args\n"
+        "    runpy.run_path(args[0], run_name='__main__')\n"
+        "    raise SystemExit(0)\n"
+        "if len(args) >= 3 and args[:2] == ['-m', 'pytest'] and '--collect-only' in args:\n"
+        "    print('m.py::t')  # the one test the shim's JUnit reports\n"
         "    raise SystemExit(0)\n"
         "if args == ['-m', 'pytest', '--version']:\n"
         "    print('pytest 9.0')\n"
@@ -65,6 +77,11 @@ def repo(tmp_path: Path) -> Path:
         "        if len(list(barrier_path.iterdir())) < 2:\n"
         "            print('BARRIER_TIMEOUT ' + cwd_name)\n"
         "            raise SystemExit(6)\n"
+        "    for arg in args:\n"
+        "        if arg.startswith('--junitxml='):\n"
+        "            junit = pathlib.Path(arg.split('=', 1)[1])\n"
+        "            junit.parent.mkdir(parents=True, exist_ok=True)\n"
+        "            junit.write_text('<testsuites><testsuite name=\"pytest\" tests=\"1\"><testcase classname=\"m\" name=\"t\"/></testsuite></testsuites>')\n"
         "    should_fail = 'fail' in target\n"
         "    if pathlib.Path(target).is_dir():\n"
         "        should_fail = should_fail or any(pathlib.Path(target).rglob('test_*fail.py'))\n"
@@ -83,6 +100,11 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     merged["PYTHON_BIN"] = str(repo / "fake-python")
+    # Never let a CI_JUNIT_DIR inherited from the outer run leak fixture
+    # receipts into the production artifact directory: these tests assert
+    # on stdout, not on receipts, so drop it unless a caller sets it
+    # explicitly for this invocation.
+    merged.pop("CI_JUNIT_DIR", None)
     if env:
         merged.update(env)
     return subprocess.run(
@@ -94,6 +116,21 @@ def run(
         check=False,
         timeout=30,
     )
+
+
+def test_runner_does_not_leak_into_inherited_ci_junit_dir(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hosted CI on PR #3817 showed fixture receipts (1-test collections
+    from this file's fake repos) overwriting the production receipts in
+    the aggregate artifact: run() inherited CI_JUNIT_DIR from the outer
+    run. The runner must drop it unless a caller sets it explicitly."""
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    monkeypatch.setenv("CI_JUNIT_DIR", str(junit_dir))
+    result = run(repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert list(junit_dir.iterdir()) == []
 
 
 def test_no_argument_behavior_runs_structure_and_root_once(repo: Path) -> None:

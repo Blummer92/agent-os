@@ -639,6 +639,40 @@ def test_malformed_review_thread_page_fails_closed(invalid_page):
         _unresolved_review_threads(client, REPO, PR_NUMBER)
 
 
+@pytest.mark.parametrize(
+    "malformed_second_page",
+    [
+        [{"isResolved": "false"}],
+        [None],
+        [{"unexpected": True}],
+    ],
+)
+def test_deep_d04_malformed_second_review_thread_page_blocks_dispatch(malformed_second_page):
+    """Ledger DEEP-D04: later-page corruption is not zero unresolved threads.
+
+    The first page is well formed and contains only resolved threads; a
+    malformed second page must fail closed at the real dispatch consumer,
+    not merely raise when the pagination helper is called independently.
+    """
+    record = _authorized_record(None)
+    requester = _Requester([
+        [{"isResolved": True}],
+        malformed_second_page,
+    ])
+    client = _Client(
+        _Repo(_PR(), _comments_for(None, record)),
+        requester=requester,
+    )
+    receipt = evaluate_merge_dispatch_applicability(
+        _transport(), repository=REPO,
+        github_client=client, evaluated_at=NOW,
+    )
+    assert [call["cursor"] for call in requester.calls] == [None, "1"]
+    assert receipt["dispatch_checks_passed"] is False
+    assert receipt["merge_authorized"] is False
+    assert receipt["reason_codes"] == ["review.threads-unverifiable"]
+
+
 def test_forbidden_path_rechecked_even_when_authorized_fingerprint_matches():
     bundle = None
     original = _authorized_record(bundle)
