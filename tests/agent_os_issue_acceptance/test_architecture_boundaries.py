@@ -18,7 +18,6 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         frozenset(
             {
                 "edit_relevance",
-                "legacy_preflight",
                 "linked_issue",
                 "merged_docs",
                 "metadata_validation",

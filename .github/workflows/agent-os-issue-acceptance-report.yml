@@ -243,27 +243,6 @@ jobs:
           {
             echo "## Agent OS Issue Acceptance Report"
             echo
-            # Human-facing guidance only: never use summary text as CI authority.
-            report_file="tmp/agent_os_issue_acceptance_report/report.txt"
-            report_state=""
-            if [ -f "$report_file" ]; then
-              report_state="$(grep -m1 '^Overall result: ' "$report_file" || true)"
-            fi
-            case "$report_state" in
-              "Overall result: pass")
-                echo "**Disposition: Report PASS (advisory only).** This does not authorize Ready, merge, or issue closure."
-                ;;
-              "Overall result: warn"|"Overall result: manual-review")
-                echo "**Disposition: Advisory incomplete (non-required report).** Metadata review may be needed to satisfy issue acceptance; no PR lifecycle action is authorized by this report."
-                ;;
-              "Overall result: fail")
-                echo "**Disposition: Report FAIL.** The checker reports failure and must remain red; this summary cannot override its exit status."
-                ;;
-              *)
-                echo "**Disposition: UNKNOWN (no usable report).** Do not infer acceptance success from the workflow wrapper."
-                ;;
-            esac
-            echo
             # The report file can be absent when an earlier step failed
             # before the checker ran; degrade to an explicit notice
             # instead of failing this step and truncating the summary.

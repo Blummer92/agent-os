@@ -186,7 +186,6 @@ def test_only_canonical_scanner_parses_acceptance_yaml_candidates():
         "scripts/agent_os_issue_acceptance/parse_issue.py",
         "scripts/agent_os_issue_acceptance/policy.py",
         "scripts/agent_os_issue_acceptance/readiness.py",
-        "scripts/agent_os_issue_acceptance/legacy_preflight.py",
     )
     for relative_path in consumers:
         source = (ROOT / relative_path).read_text()
