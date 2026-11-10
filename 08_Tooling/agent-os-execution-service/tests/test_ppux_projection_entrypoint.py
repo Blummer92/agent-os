@@ -164,6 +164,13 @@ def test_fixed_node_runner_invokes_only_the_projection_entrypoint() -> None:
         ("oversize", "needs-decision", "projection-output-oversize"),
         ("unauthorized_nested", "needs-decision", "projection-authority-violation"),
         ("unauthorized_top", "needs-decision", "projection-authority-violation"),
+        ("blocked_missing_package", "needs-decision", "projection-result-invalid"),
+        ("missing_top_identity", "needs-decision", "projection-result-invalid"),
+        ("missing_package_version", "needs-decision", "projection-result-invalid"),
+        ("missing_package_metadata", "needs-decision", "projection-result-invalid"),
+        ("malformed_card", "needs-decision", "projection-result-invalid"),
+        ("identity_disagreement", "needs-decision", "projection-result-invalid"),
+        ("bad_applications", "needs-decision", "projection-result-invalid"),
     ],
 )
 def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, reason):
@@ -175,8 +182,28 @@ def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, 
     result = {
         "formatVersion": entrypoint.PROJECTION_RESULT_VERSION,
         "status": "valid",
+        "routeId": "route-1",
+        "sourceHandoffRef": "handoff-1",
+        "sourceFingerprint": "sha256:route-1",
+        "recordingId": "recording-1",
+        "recordingSha256": "sha256:recording-1",
+        "applications": [],
         "tutorialPackage": {
-            "cards": [{"cardId": "card-1"}],
+            "packageVersion": "picture-perfect-tutorial-package-v1",
+            "routeId": "route-1",
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "objectiveRef": "objective-1",
+            "successCriteriaRef": "criteria-1",
+            "evidenceTargetRef": "evidence-1",
+            "canonicalArtifactIdentity": None,
+            "pathwayPlanRef": None,
+            "steps": [],
+            "cards": [],
+            "reusedAssetRefs": [],
+            "resurfacedAssetRefs": [],
             "executionAuthorized": False,
             "externalWriteAuthorized": False,
             "productionAuthorized": False,
@@ -204,6 +231,22 @@ def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, 
         result["tutorialPackage"]["executionAuthorized"] = True
     elif case == "unauthorized_top":
         result["externalWriteAuthorized"] = True
+    elif case == "blocked_missing_package":
+        result["status"] = "blocked"
+        result["blockers"] = ["route-missing"]
+        del result["tutorialPackage"]
+    elif case == "missing_top_identity":
+        del result["recordingId"]
+    elif case == "missing_package_version":
+        del result["tutorialPackage"]["packageVersion"]
+    elif case == "missing_package_metadata":
+        del result["tutorialPackage"]["objectiveRef"]
+    elif case == "malformed_card":
+        result["tutorialPackage"]["cards"] = [{"cardId": "not-canonical"}]
+    elif case == "identity_disagreement":
+        result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
+    elif case == "bad_applications":
+        result["applications"] = [42]
 
     def fake_checkout(_identity, workdir):
         package_dir = workdir / entrypoint.PPUX_PACKAGE_DIR
@@ -239,10 +282,28 @@ def _success_outcome():
     result = {
         "formatVersion": "picture-perfect-prompt-projection-result-v1",
         "status": "valid",
+        "routeId": "route-1",
+        "sourceHandoffRef": "handoff-1",
+        "sourceFingerprint": "sha256:route-1",
+        "recordingId": "recording-1",
+        "recordingSha256": "sha256:recording-1",
+        "applications": [],
         "tutorialPackage": {
             "packageVersion": "picture-perfect-tutorial-package-v1",
             "routeId": "route-1",
-            "cards": [{"cardId": "card-1"}],
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "objectiveRef": "objective-1",
+            "successCriteriaRef": "criteria-1",
+            "evidenceTargetRef": "evidence-1",
+            "canonicalArtifactIdentity": None,
+            "pathwayPlanRef": None,
+            "steps": [],
+            "cards": [],
+            "reusedAssetRefs": [],
+            "resurfacedAssetRefs": [],
             "executionAuthorized": False,
             "externalWriteAuthorized": False,
             "productionAuthorized": False,
