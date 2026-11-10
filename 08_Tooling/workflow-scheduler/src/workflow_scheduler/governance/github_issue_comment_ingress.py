@@ -153,6 +153,16 @@ def _ready_admission_trigger_id(repository:str,issue_number:int,pr_number:int,he
     material=f"{repository}\0{issue_number}\0ready-admit\0{pr_number}\0{head_sha}\0{body_sha256}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
+
+from typing import TypedDict
+
+class _IngressCommonKwargs(TypedDict):
+    repository: str
+    run_attempt: int
+    issue_number: int
+    comment_id: int
+    actor: str | None
+
 def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,ppux_projection_branch:str|None=None,ppux_projection_sha:str|None=None,ppux_projection_input_ref:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None,diagnostic_id:str|None=None,diagnostic_request_id:str|None=None,ruleset_prestate_sha256:str|None=None,ready_admission_pr_number:int|None=None,ready_admission_head_sha:str|None=None,ready_admission_body_sha256:str|None=None,codespace_implementation_handoff:str|None=None,codespace_implementation_sha:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
@@ -184,11 +194,11 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if type(run_attempt) is not int or run_attempt<1: raise ValueError("run_attempt must be a positive integer")
     if type(event) is not dict:return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
     action=event.get("action");repository=event.get("repository");issue=event.get("issue");comment=event.get("comment");sender=event.get("sender")
-    if not all(type(value) is dict for value in (repository,issue,comment,sender)):return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
+    if type(repository) is not dict or type(issue) is not dict or type(comment) is not dict or type(sender) is not dict:return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
     repo_name=repository.get("full_name");issue_number=issue.get("number");comment_id=comment.get("id");comment_user=comment.get("user");sender_login=sender.get("login")
     if type(repo_name) is not str or type(issue_number) is not int or issue_number<1 or type(comment_id) is not int or comment_id<1 or type(comment_user) is not dict or type(sender_login) is not str:return _result(status="blocked",reason="invalid-event-envelope",repository=expected_repository,run_attempt=run_attempt)
     comment_login=comment_user.get("login");actor=comment_login if type(comment_login) is str else None
-    common=dict(repository=expected_repository,run_attempt=run_attempt,issue_number=issue_number,comment_id=comment_id,actor=actor)
+    common: _IngressCommonKwargs = {"repository": expected_repository, "run_attempt": run_attempt, "issue_number": issue_number, "comment_id": comment_id, "actor": actor}
     if action!="created":return _result(status="blocked",reason="event-not-created",**common)
     if "pull_request" in issue:return _result(status="ignored",reason="pull-request-comment",**common)
     if repo_name!=expected_repository:return _result(status="blocked",reason="repository-mismatch",**common)

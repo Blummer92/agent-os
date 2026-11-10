@@ -45,17 +45,54 @@ def _activation(**overrides) -> dict[str, object]:
     return values
 
 
-def _kwargs(**overrides):
-    values = dict(
-        activation_result=_activation(),
-        check_state="red",
-        required_check_configuration_state="current",
-        review_state="clear",
-        branch_freshness="current",
-        mergeability="mergeable",
-    )
+
+import typing as _aos_typing
+import agent_os_execution_service.failed_repair_admission as _aos_contract
+
+class _AosAdmissionKwargs(_aos_typing.TypedDict):
+    activation_result: _aos_typing.Mapping[str, object]
+    check_state: str
+    required_check_configuration_state: str
+    review_state: str
+    branch_freshness: str
+    mergeability: str
+    current: _aos_typing.NotRequired[_aos_contract.RecoverySemanticEvidence | None]
+    prior: _aos_typing.NotRequired[_aos_contract.RecoverySemanticEvidence | None]
+    prior_transition_fingerprint: _aos_typing.NotRequired[str | None]
+    zero_job: _aos_typing.NotRequired[_aos_contract.ZeroJobAdmissionEvidence | None]
+    diagnostics: _aos_typing.NotRequired[_aos_contract.DiagnosticSurfaceEvidence | None]
+    validation_head: _aos_typing.NotRequired[_aos_contract.ValidationSupersessionEvidence | None]
+    validation_failure: _aos_typing.NotRequired[_aos_contract.ValidationFailureEvidence | None]
+
+class _AosAdmissionOverrides(_aos_typing.TypedDict, total=False):
+    activation_result: _aos_typing.Mapping[str, object]
+    check_state: str
+    required_check_configuration_state: str
+    review_state: str
+    branch_freshness: str
+    mergeability: str
+    current: _aos_contract.RecoverySemanticEvidence | None
+    prior: _aos_contract.RecoverySemanticEvidence | None
+    prior_transition_fingerprint: str | None
+    zero_job: _aos_contract.ZeroJobAdmissionEvidence | None
+    diagnostics: _aos_contract.DiagnosticSurfaceEvidence | None
+    validation_head: _aos_contract.ValidationSupersessionEvidence | None
+    validation_failure: _aos_contract.ValidationFailureEvidence | None
+
+def _kwargs(
+    **overrides: _aos_typing.Unpack[_AosAdmissionOverrides],
+) -> _AosAdmissionKwargs:
+    values: _AosAdmissionKwargs = {
+        "activation_result": _activation(),
+        "check_state": "red",
+        "required_check_configuration_state": "current",
+        "review_state": "clear",
+        "branch_freshness": "current",
+        "mergeability": "mergeable",
+    }
     values.update(overrides)
     return values
+
 
 
 def _diag(actionable=False, authorized=(ACTIONS, ANNOTATIONS), attempted=()):

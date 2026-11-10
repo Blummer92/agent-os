@@ -482,9 +482,17 @@ def run_gate2_fixed_pilot_controller(
     reference = _receipt_reference(receipt_path, envelope, receipt)
 
     status = "completed" if receipt.get("status") == "completed" else "blocked"
+    reason_codes_value = receipt.get("reason_codes")
+    if reason_codes_value is None:
+        reason_codes: tuple[str, ...] = ()
+    else:
+        if isinstance(reason_codes_value, list):
+            reason_codes = tuple(reason_codes_value)
+        else:
+            reason_codes = ()
     return Gate2ControllerResult(
         status=status,
-        reason_codes=tuple(receipt.get("reason_codes") or []),
+        reason_codes=reason_codes,
         receipt=receipt,
         receipt_path=str(receipt_path),
         receipt_reference=reference,
