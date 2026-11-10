@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 
@@ -48,12 +49,24 @@ def _tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
+def _parse_snapshot(files: tuple[Path, ...]) -> dict[Path, ast.Module]:
+    """Read and parse each file once for a SINGLE analysis invocation.
+
+    The snapshot is built from fresh reads at the start of every
+    ``_production_consumers`` call and is only ever held in that call's local
+    variables. It is never stored at module level or reused by a later call, so
+    an edit, addition or deletion between invocations is always observed. The
+    trees are read-only inputs: no analysis helper mutates them.
+    """
+    return {path: _tree(path) for path in files}
+
+
 def _top_level_functions(
-    path: Path,
+    tree: ast.Module,
 ) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     return {
         node.name: node
-        for node in _tree(path).body
+        for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
@@ -98,13 +111,13 @@ def _function_called_names(
     return _called_names(node.body)
 
 
-def _module_called_names(path: Path) -> set[str]:
-    return _called_names(_tree(path).body)
+def _module_called_names(tree: ast.Module) -> set[str]:
+    return _called_names(tree.body)
 
 
-def _main_guard_called_names(path: Path) -> set[str]:
+def _main_guard_called_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
-    for node in _tree(path).body:
+    for node in tree.body:
         if not isinstance(node, ast.If):
             continue
         test = node.test
@@ -133,6 +146,7 @@ def _is_mcp_tool(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _definition_index(
     files: tuple[Path, ...],
+    trees: dict[Path, ast.Module],
 ) -> dict[
     str,
     tuple[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef], ...],
@@ -142,7 +156,7 @@ def _definition_index(
         list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]],
     ] = {}
     for path in files:
-        for name, node in _top_level_functions(path).items():
+        for name, node in _top_level_functions(trees[path]).items():
             index.setdefault(name, []).append((path, node))
     return {name: tuple(definitions) for name, definitions in index.items()}
 
@@ -158,15 +172,19 @@ def _unique_definition(
     return definitions[0] if len(definitions) == 1 else None
 
 
-def _reachable_functions(files: tuple[Path, ...]) -> set[tuple[Path, str]]:
+def _reachable_functions(
+    files: tuple[Path, ...],
+    trees: dict[Path, ast.Module],
+) -> set[tuple[Path, str]]:
     """Resolve bounded reachability from explicit script and MCP roots.
 
     Exact path+function script roots avoid guessing among common names such as
     main. Ambiguous transitive same-name definitions still fail closed. This
     helper proves the continuation decisions in this regression suite; it is
-    not a general repository dead-code analyzer.
+    not a general repository dead-code analyzer. ``trees`` is the caller's
+    single-invocation parse snapshot of ``files``.
     """
-    index = _definition_index(files)
+    index = _definition_index(files, trees)
     reachable: set[tuple[Path, str]] = set()
     pending: list[
         tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]
@@ -186,12 +204,12 @@ def _reachable_functions(files: tuple[Path, ...]) -> set[tuple[Path, str]]:
             pending.append(definition)
 
     for path in files:
-        functions = _top_level_functions(path)
+        functions = _top_level_functions(trees[path])
         for entrypoint_name in RUNTIME_ENTRYPOINTS.get(path, ()):
             entrypoint = functions.get(entrypoint_name)
             if entrypoint is not None:
                 admit((path, entrypoint))
-        for name in _main_guard_called_names(path):
+        for name in _main_guard_called_names(trees[path]):
             admit(_unique_definition(name, index))
         for node in functions.values():
             if _is_mcp_tool(node):
@@ -213,12 +231,13 @@ def _production_consumers(
     production_files = (
         _production_python_files() if files is None else files
     )
-    reachable = _reachable_functions(production_files)
+    trees = _parse_snapshot(production_files)
+    reachable = _reachable_functions(production_files, trees)
     consumers: set[Path] = set()
     for path, caller_name in reachable:
         if path == owner and caller_name == function_name:
             continue
-        caller = _top_level_functions(path).get(caller_name)
+        caller = _top_level_functions(trees[path]).get(caller_name)
         if (
             caller is not None
             and function_name in _function_called_names(caller)
@@ -227,7 +246,7 @@ def _production_consumers(
     for path in production_files:
         if (
             path != owner
-            and function_name in _module_called_names(path)
+            and function_name in _module_called_names(trees[path])
         ):
             consumers.add(path)
     return tuple(
@@ -308,3 +327,204 @@ def test_driver_is_reached_from_a_runtime_entrypoint() -> None:
         GOVERNED_CONTINUATION_DECISIONS["drive_governed_continuation"],
     )
     assert Path("scripts/agent_os_execution_interface/hook_adapter.py") in consumers
+
+
+# The tests below pin the freshness and semantic contract of the per-invocation
+# parse snapshot: every analysis re-reads current source, nothing survives
+# between invocations, and graph semantics are unchanged by parsing once.
+_LIVE_ENTRYPOINT = (
+    "from wrapper import live_wrapper\n\n"
+    "if __name__ == '__main__':\n"
+    "    live_wrapper()\n"
+)
+
+
+def test_each_invocation_observes_source_edits_between_calls(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    wrapper = tmp_path / "wrapper.py"
+    entrypoint = tmp_path / "entrypoint.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    entrypoint.write_text(_LIVE_ENTRYPOINT, encoding="utf-8")
+    files = (owner, wrapper, entrypoint)
+
+    wrapper.write_text(
+        "def live_wrapper():\n    return governed()\n", encoding="utf-8"
+    )
+    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    wrapper.write_text(
+        "def live_wrapper():\n    return 'detached'\n", encoding="utf-8"
+    )
+    assert _production_consumers("governed", owner, files=files) == ()
+    wrapper.write_text(
+        "def live_wrapper():\n    return governed()\n", encoding="utf-8"
+    )
+    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+
+    # A same-size edit with the original timestamps restored must still be
+    # seen: freshness may not depend on size or modification-time shortcuts.
+    stamp = wrapper.stat()
+    wrapper.write_text(
+        "def live_wrapper():\n    return governor()\n", encoding="utf-8"
+    )
+    os.utime(wrapper, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert wrapper.stat().st_size == stamp.st_size
+    assert wrapper.stat().st_mtime_ns == stamp.st_mtime_ns
+    assert _production_consumers("governed", owner, files=files) == ()
+
+
+def test_each_invocation_enumerates_added_and_deleted_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    assert "tests" not in tmp_path.parts
+    root = tmp_path / "prod"
+    root.mkdir()
+    owner = root / "owner.py"
+    entrypoint = root / "entrypoint.py"
+    late = root / "wrapper.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    entrypoint.write_text(_LIVE_ENTRYPOINT, encoding="utf-8")
+    monkeypatch.setitem(globals(), "PRODUCTION_ROOTS", (root,))
+    monkeypatch.setitem(globals(), "RUNTIME_ENTRYPOINTS", {})
+
+    assert _production_consumers("governed", owner) == ()
+    late.write_text(
+        "def live_wrapper():\n    return governed()\n", encoding="utf-8"
+    )
+    assert _production_consumers("governed", owner) == (late,)
+    late.unlink()
+    assert _production_consumers("governed", owner) == ()
+
+
+def test_duplicate_definitions_stay_ambiguous_until_the_source_changes(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    first = tmp_path / "first.py"
+    second = tmp_path / "second.py"
+    entrypoint = tmp_path / "entrypoint.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    first.write_text(
+        "def live_wrapper():\n    return governed()\n", encoding="utf-8"
+    )
+    second.write_text(
+        "def live_wrapper():\n    return 'other'\n", encoding="utf-8"
+    )
+    entrypoint.write_text(_LIVE_ENTRYPOINT, encoding="utf-8")
+    files = (owner, first, second, entrypoint)
+
+    # Same-name transitive definitions in two files fail closed.
+    assert _production_consumers("governed", owner, files=files) == ()
+    # A fresh read sees the ambiguity removed in the very next invocation.
+    second.write_text("VALUE = 1\n", encoding="utf-8")
+    assert _production_consumers("governed", owner, files=files) == (first,)
+
+
+def test_graph_edge_kinds_keep_their_existing_semantics(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    mcp_tool = tmp_path / "mcp_tool.py"
+    table_user = tmp_path / "table_user.py"
+    module_level = tmp_path / "module_level.py"
+    class_only = tmp_path / "class_only.py"
+    nested_only = tmp_path / "nested_only.py"
+    entrypoint = tmp_path / "entrypoint.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    mcp_tool.write_text(
+        "@mcp.tool()\ndef registered():\n    return governed()\n",
+        encoding="utf-8",
+    )
+    table_user.write_text(
+        "def via_table():\n    return governed()\n", encoding="utf-8"
+    )
+    module_level.write_text("RESULT = governed()\n", encoding="utf-8")
+    class_only.write_text(
+        "class Holder:\n"
+        "    VALUE = governed()\n\n"
+        "    def method(self):\n"
+        "        return governed()\n",
+        encoding="utf-8",
+    )
+    nested_only.write_text(
+        "def outer():\n"
+        "    def inner():\n"
+        "        return governed()\n"
+        "    return inner\n",
+        encoding="utf-8",
+    )
+    entrypoint.write_text(
+        "def main():\n"
+        "    return {'k': via_table, 'o': outer}\n\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    consumers = _production_consumers(
+        "governed",
+        owner,
+        files=(
+            owner,
+            mcp_tool,
+            table_user,
+            module_level,
+            class_only,
+            nested_only,
+            entrypoint,
+        ),
+    )
+    # MCP root, dispatch-table edge and module-level call are real edges;
+    # class bodies and nested definitions are not, and ordering is sorted.
+    assert consumers == tuple(
+        sorted((mcp_tool, table_user, module_level))
+    )
+
+
+def test_parse_errors_still_fail_and_a_fixed_file_is_read_afresh(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    broken = tmp_path / "broken.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    broken.write_text("def (:\n", encoding="utf-8")
+    files = (owner, broken)
+
+    try:
+        _production_consumers("governed", owner, files=files)
+    except SyntaxError:
+        pass
+    else:
+        raise AssertionError("a syntax error must not be swallowed")
+    # A failed analysis leaves nothing behind: the repaired file is re-read.
+    broken.write_text("def helper():\n    return governed()\n", encoding="utf-8")
+    assert _production_consumers("governed", owner, files=files) == ()
+
+
+def test_each_invocation_parses_every_file_once_and_shares_nothing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    owner = tmp_path / "owner.py"
+    wrapper = tmp_path / "wrapper.py"
+    entrypoint = tmp_path / "entrypoint.py"
+    owner.write_text("def governed():\n    return 'ok'\n", encoding="utf-8")
+    wrapper.write_text(
+        "def live_wrapper():\n    return governed()\n", encoding="utf-8"
+    )
+    entrypoint.write_text(_LIVE_ENTRYPOINT, encoding="utf-8")
+    files = (owner, wrapper, entrypoint)
+    parsed: list[str] = []
+    real_parse = ast.parse
+
+    def counting_parse(source, filename="<unknown>", *args, **kwargs):
+        parsed.append(str(filename))
+        return real_parse(source, filename, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", counting_parse)
+    expected = sorted(str(path) for path in files)
+
+    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert sorted(parsed) == expected
+    # A second invocation re-parses everything: no state survives between calls.
+    assert _production_consumers("governed", owner, files=files) == (wrapper,)
+    assert sorted(parsed) == sorted(expected * 2)
