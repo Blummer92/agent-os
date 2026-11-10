@@ -7,6 +7,7 @@ closed with finite reasons; the canonical result is never truncated.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import subprocess
@@ -73,6 +74,14 @@ def _canonical_card(card_id):
     }
 
 
+def _refresh_projection_digest(payload):
+    """Sign the test fixture exactly as the recorder signs canonical JSON."""
+    canonical = json.dumps(
+        payload["projection_result"], sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    payload["projection_result_sha256"] = hashlib.sha256(canonical).hexdigest()
+
+
 def make_host_payload(**overrides):
     request = make_request()
     payload = {
@@ -131,6 +140,7 @@ def make_host_payload(**overrides):
         "publication_invoked": False,
         "merge_authorized": False,
     }
+    _refresh_projection_digest(payload)
     payload.update(overrides)
     return request, payload
 
@@ -237,6 +247,34 @@ def test_recorder_preserves_canonical_result_verbatim() -> None:
         assert recorded[authority] is False
 
 
+@pytest.mark.parametrize("digest", ["0" * 64, "not-a-digest", None])
+def test_recorder_rejects_missing_malformed_or_forged_digest(digest):
+    request, payload = make_host_payload()
+    assert payload["projection_result_sha256"] != "c" * 64
+    payload["projection_result_sha256"] = digest
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+def test_recorder_rejects_changed_result_with_original_valid_digest():
+    request, payload = make_host_payload()
+    payload["projection_result"]["tutorialPackage"]["objectiveRef"] = "tampered"
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+@pytest.mark.parametrize("blockers", [["invented-blocker"], ["route-missing", "invalid-enum"]])
+def test_recorder_rejects_out_of_contract_blockers_even_with_matching_digest(blockers):
+    request, payload = make_host_payload()
+    payload["projection_result"]["status"] = "blocked"
+    payload["projection_result"]["tutorialPackage"] = None
+    payload["projection_result"]["blockers"] = blockers
+    payload["reason_codes"] = ["projection-result-blocked"]
+    _refresh_projection_digest(payload)
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
 def test_recorder_preserves_blocked_host_payload() -> None:
     request, payload = make_host_payload(
         status="blocked",
@@ -264,6 +302,7 @@ def test_recorder_rejects_wrong_result_version() -> None:
     request, payload = make_host_payload()
     payload["projection_result"]["formatVersion"] = "picture-perfect-prompt-projection-result-v0"
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-result-invalid"
@@ -276,6 +315,7 @@ def test_recorder_rejects_oversize_canonical_payload() -> None:
         for index in range(MAX_PROJECTION_CARDS - 1)
     ]
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-output-oversize"
@@ -287,6 +327,7 @@ def test_recorder_rejects_too_many_cards() -> None:
         {"cardId": f"card-{index}"} for index in range(MAX_PROJECTION_CARDS + 1)
     ]
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-output-oversize"
@@ -296,6 +337,7 @@ def test_recorder_rejects_authority_violation() -> None:
     request, payload = make_host_payload()
     payload["projection_result"]["tutorialPackage"]["executionAuthorized"] = True
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-authority-violation"
@@ -305,6 +347,7 @@ def test_recorder_keeps_diagnostics_separate_from_canonical_result() -> None:
     request, payload = make_host_payload()
     payload["projection_result"]["diagnostics"] = {"invoke_stdout_tail": "ok"}
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-diagnostic-invalid"
@@ -380,6 +423,7 @@ def test_recorder_rejects_canonical_result_violations(mutation, reason):
         result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
     elif mutation == "bad_applications":
         result["applications"] = [42]
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == reason
@@ -391,6 +435,7 @@ def test_recorder_accepts_blocked_domain_result_without_package():
     payload["projection_result"]["tutorialPackage"] = None
     payload["projection_result"]["blockers"] = ["route-missing"]
     payload["reason_codes"] = ["projection-result-blocked"]
+    _refresh_projection_digest(payload)
     recorded = record_ppux_projection_result(payload, request)
     assert recorded["projection_result"]["status"] == "blocked"
 
@@ -637,6 +682,7 @@ def test_recorder_rejects_malformed_card_evidence_with_finite_reason(mutation):
         payload["projection_result"]["tutorialPackage"]["steps"] = [{
             "reviewStepId": "1", "visualRoleRef": "v", "disposition": [],
         }]
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
         record_ppux_projection_result(payload, request)
 
@@ -651,5 +697,6 @@ def test_recorder_rejects_unhashable_status_with_finite_reason(field, value):
     else:
         payload["projection_result"]["status"] = value
         reason = "projection-result-invalid"
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError, match=reason):
         record_ppux_projection_result(payload, request)

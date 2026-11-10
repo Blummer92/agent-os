@@ -202,6 +202,7 @@ def _canonical_result():
         ("unauthorized_nested", "needs-decision", "projection-authority-violation"),
         ("unauthorized_top", "needs-decision", "projection-authority-violation"),
         ("blocked_missing_package", "needs-decision", "projection-result-invalid"),
+        ("blocked_bad_blocker", "needs-decision", "projection-result-invalid"),
         ("missing_top_identity", "needs-decision", "projection-result-invalid"),
         ("missing_package_version", "needs-decision", "projection-result-invalid"),
         ("missing_package_metadata", "needs-decision", "projection-result-invalid"),
@@ -236,6 +237,10 @@ def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, 
         result["tutorialPackage"]["executionAuthorized"] = True
     elif case == "unauthorized_top":
         result["externalWriteAuthorized"] = True
+    elif case == "blocked_bad_blocker":
+        result["status"] = "blocked"
+        result["tutorialPackage"] = None
+        result["blockers"] = ["not-a-canonical-blocker"]
     elif case == "blocked_missing_package":
         result["status"] = "blocked"
         result["blockers"] = ["route-missing"]
