@@ -18,10 +18,10 @@ def _transport(reason: str, status: str = "accepted") -> dict:
     }
 
 
-def test_discovery_prefers_codespaces_with_gce_fallback() -> None:
+def test_discovery_uses_codespaces_without_gce_fallback() -> None:
     route = resolve_ingress_route(_transport("accepted-discovery-envelope"))
     assert route["preferred"] == "codespaces"
-    assert route["gce_fallback_allowed"] is True
+    assert route["gce_fallback_allowed"] is False
     assert route["reason_codes"] == ["codespaces-first-ordinary-operation"]
 
 
@@ -32,7 +32,7 @@ def test_dev_validation_and_diagnostic_prefer_codespaces() -> None:
     ):
         route = resolve_ingress_route(_transport(reason))
         assert route["preferred"] == "codespaces"
-        assert route["gce_fallback_allowed"] is True
+        assert route["gce_fallback_allowed"] is False
 
 
 def test_vm_only_capabilities_require_gce() -> None:

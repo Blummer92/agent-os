@@ -54,16 +54,16 @@ def test_gcp_setup_steps_skip_notion_read_envelopes() -> None:
     gcloud_block = _step_block(
         text,
         "Install Google Cloud CLI",
-        "Install and verify bounded #1238 host runtime",
+        "Invoke exact governed GCE control path",
     )
     for step_name, block in (
         ("Authenticate bounded Agent OS transport", auth_block),
         ("Install Google Cloud CLI", gcloud_block),
     ):
         assert GUARD in block, f"{step_name} is missing the notion-read guard"
-        # The host-install short-circuit must survive: a requested install still
-        # authenticates regardless of the envelope kind.
-        assert "steps.host_install.outputs.requested == 'true' ||" in block
+        # GCE Wave 1 retired the host-install short-circuit: no GCP step may
+        # authenticate on a host_install request anymore.
+        assert "host_install" not in block
 
 
 def test_guard_is_scoped_to_the_two_gcp_setup_steps() -> None:

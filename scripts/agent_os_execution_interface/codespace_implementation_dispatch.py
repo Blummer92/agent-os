@@ -206,10 +206,12 @@ def dispatch_admitted_operation_to_codespace(
     base_sha_or_none: str | None = None,
     workdir_or_none: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    execution_mode_or_none: str | None = None,
     list_candidates: Callable[
         [], tuple[CodespaceCandidate, ...]
     ] = default_list_candidates,
     run: Callable[..., tuple[int, str, str]] = default_run,
+    run_local: Callable[..., tuple[int, str, str]] | None = None,
 ) -> CodespaceDispatchOutcome:
     """Dispatch one admitted bounded operation to the current qualified Codespace.
 
@@ -292,12 +294,14 @@ def dispatch_admitted_operation_to_codespace(
         base_sha_or_none=base_sha_or_none,
         workdir_or_none=workdir_or_none,
         timeout_seconds=timeout_seconds,
+        execution_mode_or_none=execution_mode_or_none,
         execution_profile_or_none=selected.environment_profile_id,
         environment_health_evidence_or_none=selected.environment_health_evidence_id,
     )
-    result = run_codespace_transport(
-        request, list_candidates=list_candidates, run=run
-    )
+    transport_kwargs = {"list_candidates": list_candidates, "run": run}
+    if run_local is not None:
+        transport_kwargs["run_local"] = run_local
+    result = run_codespace_transport(request, **transport_kwargs)
     return CodespaceDispatchOutcome(
         status=DispatchStatus.DISPATCHED,
         reason_codes=(DispatchReason.OK,),
