@@ -58,7 +58,9 @@ def _parse_snapshot(files: tuple[Path, ...]) -> dict[Path, ast.Module]:
     an edit, addition or deletion between invocations is always observed. The
     trees are read-only inputs: no analysis helper mutates them.
     """
-    return {path: _tree(path) for path in files}
+    # Preserve the caller's file sequence for reachability semantics, but
+    # never parse the same path more than once within this invocation.
+    return {path: _tree(path) for path in dict.fromkeys(files)}
 
 
 def _top_level_functions(
@@ -544,6 +546,13 @@ def test_each_invocation_parses_every_file_once_and_shares_nothing(
     # A second invocation re-parses everything: no state survives between calls.
     assert _absolute(_production_consumers("governed", owner, files=files)) == (wrapper,)
     assert sorted(parsed) == sorted(expected * 2)
+
+    # Duplicate paths preserve existing ambiguity semantics but must not
+    # trigger duplicate reads or parses within the same invocation.
+    parsed.clear()
+    repeated = (owner, wrapper, wrapper, entrypoint)
+    assert _production_consumers("governed", owner, files=repeated) == ()
+    assert sorted(parsed) == expected
 
 
 def test_only_the_exact_main_guard_form_is_a_runtime_root(
