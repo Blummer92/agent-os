@@ -153,33 +153,8 @@ def test_fixed_node_runner_invokes_only_the_projection_entrypoint() -> None:
 
 
 
-@pytest.mark.parametrize(
-    ("case", "status", "reason"),
-    [
-        ("valid", "success", "projection-result-ready"),
-        ("blocked", "success", "projection-result-blocked"),
-        ("missing", "needs-decision", "projection-result-invalid"),
-        ("legacy_alias", "needs-decision", "projection-result-invalid"),
-        ("bad_cards", "needs-decision", "projection-result-invalid"),
-        ("oversize", "needs-decision", "projection-output-oversize"),
-        ("unauthorized_nested", "needs-decision", "projection-authority-violation"),
-        ("unauthorized_top", "needs-decision", "projection-authority-violation"),
-        ("blocked_missing_package", "needs-decision", "projection-result-invalid"),
-        ("missing_top_identity", "needs-decision", "projection-result-invalid"),
-        ("missing_package_version", "needs-decision", "projection-result-invalid"),
-        ("missing_package_metadata", "needs-decision", "projection-result-invalid"),
-        ("malformed_card", "needs-decision", "projection-result-invalid"),
-        ("identity_disagreement", "needs-decision", "projection-result-invalid"),
-        ("bad_applications", "needs-decision", "projection-result-invalid"),
-    ],
-)
-def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, reason):
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node 22 required for this local integration check")
-    raw = json.dumps({"formatVersion": entrypoint.PROJECTION_INPUT_VERSION}).encode()
-    identity = make_identity(input_ref=hashlib.sha256(raw).hexdigest())
-    result = {
+def _canonical_result():
+    return {
         "formatVersion": entrypoint.PROJECTION_RESULT_VERSION,
         "status": "valid",
         "routeId": "route-1",
@@ -213,6 +188,36 @@ def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, 
         "externalWriteAuthorized": False,
         "productionAuthorized": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "reason"),
+    [
+        ("valid", "success", "projection-result-ready"),
+        ("blocked", "success", "projection-result-blocked"),
+        ("missing", "needs-decision", "projection-result-invalid"),
+        ("legacy_alias", "needs-decision", "projection-result-invalid"),
+        ("bad_cards", "needs-decision", "projection-result-invalid"),
+        ("oversize", "needs-decision", "projection-output-oversize"),
+        ("unauthorized_nested", "needs-decision", "projection-authority-violation"),
+        ("unauthorized_top", "needs-decision", "projection-authority-violation"),
+        ("blocked_missing_package", "needs-decision", "projection-result-invalid"),
+        ("missing_top_identity", "needs-decision", "projection-result-invalid"),
+        ("missing_package_version", "needs-decision", "projection-result-invalid"),
+        ("missing_package_metadata", "needs-decision", "projection-result-invalid"),
+        ("malformed_card", "needs-decision", "projection-result-invalid"),
+        ("identity_disagreement", "needs-decision", "projection-result-invalid"),
+        ("bad_applications", "needs-decision", "projection-result-invalid"),
+        ("unhashable_status", "needs-decision", "projection-result-invalid"),
+    ],
+)
+def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, reason):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node 22 required for this local integration check")
+    raw = json.dumps({"formatVersion": entrypoint.PROJECTION_INPUT_VERSION}).encode()
+    identity = make_identity(input_ref=hashlib.sha256(raw).hexdigest())
+    result = _canonical_result()
     if case == "blocked":
         result["status"] = "blocked"
         result["tutorialPackage"] = None
@@ -245,6 +250,8 @@ def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, 
         result["tutorialPackage"]["cards"] = [{"cardId": "not-canonical"}]
     elif case == "identity_disagreement":
         result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
+    elif case == "unhashable_status":
+        result["status"] = []
     elif case == "bad_applications":
         result["applications"] = [42]
 
@@ -379,3 +386,21 @@ def test_main_rejects_invalid_request_with_failure_envelope(capsys) -> None:
     assert envelope["status"] == "needs-decision"
     assert envelope["reason_codes"] == ["projection-request-invalid"]
     assert envelope["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("evidence", [
+    {},
+    {"sourceIndexes": [True], "actionIdentity": [], "stateLocalClaims": [], "recordingClaimTexts": []},
+    {"sourceIndexes": [], "actionIdentity": [{}], "stateLocalClaims": [], "recordingClaimTexts": []},
+    {"sourceIndexes": [], "actionIdentity": [], "stateLocalClaims": [{}], "recordingClaimTexts": []},
+])
+def test_host_rejects_malformed_required_card_evidence(evidence):
+    result = _canonical_result()
+    result["tutorialPackage"]["cards"] = [{
+        "stepNumber": 1, "imagePurpose": "result", "imageState": "result",
+        "application": "Canva", "applicationContext": "example", "targetState": "done",
+        "mustShow": [], "mustNotShow": [], "annotationSpace": "none", "provenance": [],
+        "requestedUiDetails": [], "requiresScreenFidelity": False, "evidence": evidence,
+        "portablePrompt": "show result", "status": "ready", "blockerReasons": [],
+    }]
+    assert entrypoint._canonical_projection_shape_valid(result) is False

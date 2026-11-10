@@ -66,7 +66,7 @@ def _canonical_card(card_id):
         "provenance": ["Teacher Modeling: handoff-1"],
         "requestedUiDetails": [],
         "requiresScreenFidelity": False,
-        "evidence": {},
+        "evidence": {"sourceIndexes": [], "actionIdentity": [], "stateLocalClaims": [], "recordingClaimTexts": []},
         "portablePrompt": "Render the approved result.",
         "status": "ready",
         "blockerReasons": [],
@@ -605,3 +605,51 @@ def test_ingress_from_file_preserves_projection_selector_identity(tmp_path) -> N
     assert reconstructed.ppux_projection_branch_or_none == BRANCH
     assert reconstructed.ppux_projection_sha_or_none == SHA
     assert reconstructed.ppux_projection_input_ref_or_none == INPUT_REF
+
+
+@pytest.mark.parametrize("mutation", [
+    "empty_evidence", "bad_source_index", "bad_action", "bad_claim", "bad_claim_kind",
+    "bad_recording_text", "unhashable_image_state", "unhashable_card_status", "unhashable_disposition",
+])
+def test_recorder_rejects_malformed_card_evidence_with_finite_reason(mutation):
+    request, payload = make_host_payload()
+    card = payload["projection_result"]["tutorialPackage"]["cards"][0]
+    if mutation == "empty_evidence":
+        card["evidence"] = {}
+    elif mutation == "bad_source_index":
+        card["evidence"]["sourceIndexes"] = [True]
+    elif mutation == "bad_action":
+        card["evidence"]["actionIdentity"] = [{}]
+    elif mutation == "bad_claim":
+        card["evidence"]["stateLocalClaims"] = [{}]
+    elif mutation == "bad_claim_kind":
+        card["evidence"]["stateLocalClaims"] = [{
+            "text": "x", "kind": "invented", "sourceIndex": 0,
+            "sourceFingerprint": "x", "recordingSha256": "x",
+        }]
+    elif mutation == "bad_recording_text":
+        card["evidence"]["recordingClaimTexts"] = [42]
+    elif mutation == "unhashable_image_state":
+        card["imageState"] = []
+    elif mutation == "unhashable_card_status":
+        card["status"] = {}
+    else:
+        payload["projection_result"]["tutorialPackage"]["steps"] = [{
+            "reviewStepId": "1", "visualRoleRef": "v", "disposition": [],
+        }]
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+@pytest.mark.parametrize("field", ["outer", "result"])
+@pytest.mark.parametrize("value", [[], {}])
+def test_recorder_rejects_unhashable_status_with_finite_reason(field, value):
+    request, payload = make_host_payload()
+    if field == "outer":
+        payload["status"] = value
+        reason = "projection-status-invalid"
+    else:
+        payload["projection_result"]["status"] = value
+        reason = "projection-result-invalid"
+    with pytest.raises(PpuxProjectionRecorderError, match=reason):
+        record_ppux_projection_result(payload, request)

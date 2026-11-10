@@ -261,7 +261,8 @@ def _canonical_projection_shape_valid(result: dict) -> bool:
         not isinstance(step, dict)
         or not isinstance(step.get("reviewStepId"), str)
         or not isinstance(step.get("visualRoleRef"), str)
-        or step.get("disposition") not in dispositions
+        or not isinstance(step.get("disposition"), str)
+        or step["disposition"] not in dispositions
         for step in steps
     ):
         return False
@@ -286,12 +287,33 @@ def _canonical_projection_shape_valid(result: dict) -> bool:
         ):
             return False
         if (
-            card.get("imageState") not in {"action", "result", "action+result"}
-            or card.get("status") not in {"ready", "blocked"}
+            not isinstance(card.get("imageState"), str)
+            or card["imageState"] not in {"action", "result", "action+result"}
+            or not isinstance(card.get("status"), str)
+            or card["status"] not in {"ready", "blocked"}
             or type(card.get("requiresScreenFidelity")) is not bool
             or not isinstance(card.get("evidence"), dict)
         ):
             return False
+        evidence = card["evidence"]
+        if any(not isinstance(evidence.get(field), list) for field in (
+            "sourceIndexes", "actionIdentity", "stateLocalClaims", "recordingClaimTexts",
+        )):
+            return False
+        if any(type(index) is not int for index in evidence["sourceIndexes"]) or any(
+            not isinstance(text, str) for text in evidence["recordingClaimTexts"]
+        ):
+            return False
+        for action in evidence["actionIdentity"]:
+            if (not isinstance(action, dict) or type(action.get("sourceIndex")) is not int
+                    or not isinstance(action.get("sourceFingerprint"), str)):
+                return False
+        for claim in evidence["stateLocalClaims"]:
+            if (not isinstance(claim, dict) or type(claim.get("sourceIndex")) is not int
+                    or any(not isinstance(claim.get(field), str) for field in (
+                        "text", "kind", "sourceFingerprint", "recordingSha256",
+                    )) or claim["kind"] not in {"accessible-name", "entered-value"}):
+                return False
     return True
 
 @dataclass
@@ -420,7 +442,7 @@ def execute_ppux_projection(
                     projection_result=None,
                     diagnostics=diagnostics,
                 )
-            if result_doc.get("status") not in {"valid", "blocked"}:
+            if not isinstance(result_doc.get("status"), str) or result_doc["status"] not in {"valid", "blocked"}:
                 return PpuxProjectionOutcome(
                     status="needs-decision",
                     reason_codes=["projection-result-invalid"],
