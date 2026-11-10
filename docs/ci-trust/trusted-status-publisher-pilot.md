@@ -35,6 +35,6 @@ The pilot also does not certify that candidate-controlled test code is semantica
 
 ## Verification
 
-`python -m pytest -q tests/test_agent_os_trusted_status_publisher.py`
+`python -m pytest -q tests/test_agent_os_trusted_status_publisher.py tests/test_agent_os_trusted_status_publisher_negative_controls.py`
 
-These tests are offline synthetic negative controls. They cannot certify hosted events, credentials, or GitHub ruleset behavior.
+These tests are offline synthetic negative controls. They cannot certify hosted events, credentials, GitHub ruleset behavior, or downstream consumers of the pilot context. Independent security/policy QA must verify that no merge-admission consumer treats `pending` as success and explicitly accept or reject indefinite pending; a green publisher job is never a trusted CI attestation.
