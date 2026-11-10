@@ -1,8 +1,6 @@
 name: Agent OS Issue Acceptance Report
 
 on:
-  pull_request:
-    types: [opened, edited, reopened, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -16,28 +14,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  group: issue-acceptance-${{ inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  relevance:
-    name: Classify acceptance inputs
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.relevance.outputs.should_run }}
-      reason: ${{ steps.relevance.outputs.reason }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Classify pull request event
-        id: relevance
-        run: python -m scripts.agent_os_issue_acceptance.edit_relevance "$GITHUB_EVENT_PATH" >> "$GITHUB_OUTPUT"
-
   report:
     name: Run issue acceptance report
-    needs: relevance
-    if: needs.relevance.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -49,7 +31,7 @@ jobs:
       - name: Build local acceptance fixtures from PR data
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
           out="tmp/agent_os_issue_acceptance_report"
@@ -122,7 +104,7 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          GITHUB_PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set +e
           captured_issue_body_file="tmp/agent_os_issue_acceptance_report/issue.md"
