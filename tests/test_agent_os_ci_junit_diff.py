@@ -183,3 +183,19 @@ def test_outcome_oracle_rejects_negative_tests_counter() -> None:
     xml = b'<testsuite name="pytest" tests="-1" failures="0" errors="0" skipped="0"/>'
     with pytest.raises(ValueError, match="junit-missing-or-invalid-tests-count"):
         junit_outcomes(xml)
+
+
+@pytest.mark.parametrize("body", [
+    '<testcase classname="m" name="t"><wrapper><failure/></wrapper></testcase>',
+    '<testcase classname="m" name="t"><n:failure xmlns:n="urn:custom"/></testcase>',
+    '<testcase classname="m" name="t"><n:error xmlns:n="urn:custom"/></testcase>',
+    '<testcase classname="m" name="t"/><error>suite error</error>',
+    '<testcase classname="m" name="t"><wrapper><skipped/></wrapper></testcase>',
+    '<testcase classname="m" name="t"/><testsuite tests="1"><testcase name="hidden"><failure/></testcase></testsuite>',
+    '<wrapper><testcase classname="m" name="hidden"/></wrapper>',
+])
+def test_outcome_oracle_rejects_unsupported_element_placement(body: str) -> None:
+    # Missing optional counters must not turn unsupported outcomes into zero.
+    xml = f'<testsuite tests="1">{body}</testsuite>'.encode()
+    with pytest.raises(ValueError, match="junit-unsupported-"):
+        junit_outcomes(xml)
