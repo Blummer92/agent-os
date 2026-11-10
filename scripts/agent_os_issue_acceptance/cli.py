@@ -10,6 +10,11 @@ from .acceptance_report_transport import (
     render_transport_summary,
 )
 from .documentation_advisory import attach_documentation_advisory
+from .legacy_preflight import (
+    evaluate_legacy_preflight,
+    legacy_preflight_to_dict,
+    render_legacy_preflight,
+)
 from .models import (
     AcceptanceInput,
     AcceptanceReport,
@@ -122,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Mark pull request diff retrieval as failed.",
     )
+    parser.add_argument(
+        "--legacy-preflight-snapshot",
+        help="Optional path to a bounded read-only legacy issue snapshot JSON file.",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument(
         "--documentation-advisory",
@@ -160,6 +169,31 @@ def main(argv: list[str] | None = None) -> int:
         default="agent-os-acceptance-report-transport/v1",
     )
     args = parser.parse_args(argv)
+
+    if args.legacy_preflight_snapshot:
+        mixed = [
+            name
+            for name, value in (
+                ("--issue", args.issue),
+                ("--pr-body", args.pr_body),
+                ("--changed-files", args.changed_files),
+                ("--diff", args.diff),
+            )
+            if value
+        ]
+        if mixed or args.pr_title:
+            parser.error(
+                "--legacy-preflight-snapshot cannot be combined with acceptance input arguments"
+            )
+        try:
+            report = evaluate_legacy_preflight(_read_json(args.legacy_preflight_snapshot))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+            parser.error(f"invalid legacy preflight snapshot: {error}")
+        if args.format == "json":
+            print(json.dumps(legacy_preflight_to_dict(report), indent=2, sort_keys=True))
+        else:
+            print(render_legacy_preflight(report), end="")
+        return 0
 
     missing = [
         option
