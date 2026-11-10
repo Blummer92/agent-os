@@ -51,6 +51,28 @@ def make_request(**overrides):
     return build_ppux_projection_request(**kwargs)
 
 
+def _canonical_card(card_id):
+    return {
+        "cardId": card_id,
+        "stepNumber": 1,
+        "imagePurpose": "Show the modeled result",
+        "imageState": "result",
+        "application": "Canva",
+        "applicationContext": "Example",
+        "targetState": "Completed",
+        "mustShow": [],
+        "mustNotShow": [],
+        "annotationSpace": "none",
+        "provenance": ["Teacher Modeling: handoff-1"],
+        "requestedUiDetails": [],
+        "requiresScreenFidelity": False,
+        "evidence": {},
+        "portablePrompt": "Render the approved result.",
+        "status": "ready",
+        "blockerReasons": [],
+    }
+
+
 def make_host_payload(**overrides):
     request = make_request()
     payload = {
@@ -67,10 +89,28 @@ def make_host_payload(**overrides):
         "projection_result": {
             "formatVersion": "picture-perfect-prompt-projection-result-v1",
             "status": "valid",
+            "routeId": "route-1",
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "applications": [],
             "tutorialPackage": {
                 "packageVersion": "picture-perfect-tutorial-package-v1",
                 "routeId": "route-1",
-                "cards": [{"cardId": "card-1"}, {"cardId": "card-2"}],
+                "sourceHandoffRef": "handoff-1",
+                "sourceFingerprint": "sha256:route-1",
+                "recordingId": "recording-1",
+                "recordingSha256": "sha256:recording-1",
+                "objectiveRef": "objective-1",
+                "successCriteriaRef": "criteria-1",
+                "evidenceTargetRef": "evidence-1",
+                "canonicalArtifactIdentity": None,
+                "pathwayPlanRef": None,
+                "steps": [],
+                "cards": [_canonical_card("card-1"), _canonical_card("card-2")],
+                "reusedAssetRefs": [],
+                "resurfacedAssetRefs": [],
                 "executionAuthorized": False,
                 "externalWriteAuthorized": False,
                 "productionAuthorized": False,
@@ -297,6 +337,13 @@ def test_recorder_rejects_authorized_envelope() -> None:
         ("too_many", "projection-output-oversize"),
         ("nested_authority", "projection-authority-violation"),
         ("top_authority", "projection-authority-violation"),
+        ("blocked_missing_package", "projection-result-invalid"),
+        ("missing_result_identity", "projection-result-invalid"),
+        ("missing_package_version", "projection-result-invalid"),
+        ("missing_package_metadata", "projection-result-invalid"),
+        ("malformed_card", "projection-result-invalid"),
+        ("identity_disagreement", "projection-result-invalid"),
+        ("bad_applications", "projection-result-invalid"),
     ],
 )
 def test_recorder_rejects_canonical_result_violations(mutation, reason):
@@ -316,6 +363,23 @@ def test_recorder_rejects_canonical_result_violations(mutation, reason):
         result["tutorialPackage"]["executionAuthorized"] = True
     elif mutation == "top_authority":
         result["executionAuthorized"] = True
+    elif mutation == "blocked_missing_package":
+        result["status"] = "blocked"
+        result["blockers"] = ["route-missing"]
+        payload["reason_codes"] = ["projection-result-blocked"]
+        del result["tutorialPackage"]
+    elif mutation == "missing_result_identity":
+        del result["recordingId"]
+    elif mutation == "missing_package_version":
+        del result["tutorialPackage"]["packageVersion"]
+    elif mutation == "missing_package_metadata":
+        del result["tutorialPackage"]["objectiveRef"]
+    elif mutation == "malformed_card":
+        result["tutorialPackage"]["cards"] = [{"cardId": "not-canonical"}]
+    elif mutation == "identity_disagreement":
+        result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
+    elif mutation == "bad_applications":
+        result["applications"] = [42]
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == reason
@@ -329,6 +393,31 @@ def test_recorder_accepts_blocked_domain_result_without_package():
     payload["reason_codes"] = ["projection-result-blocked"]
     recorded = record_ppux_projection_result(payload, request)
     assert recorded["projection_result"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize("outer_status", ["blocked", "needs-decision"])
+def test_recorder_rejects_non_success_envelope_with_projection_result(outer_status):
+    request, payload = make_host_payload(status=outer_status)
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-result-invalid"
+
+
+@pytest.mark.parametrize("outer_status", ["blocked", "needs-decision"])
+def test_recorder_rejects_non_success_envelope_with_result_digest(outer_status):
+    request, payload = make_host_payload(
+        status=outer_status, projection_result=None,
+    )
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-result-invalid"
+
+
+def test_recorder_rejects_mismatched_success_reason():
+    request, payload = make_host_payload(reason_codes=["projection-result-blocked"])
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-reason-invalid"
 
 
 # --- transport entry point ---------------------------------------------------
