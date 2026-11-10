@@ -396,3 +396,23 @@ def test_nc09_swallowed_root_exit_cannot_pass(tmp_path: Path, swallow: bool) -> 
     else:
         assert rows["root"][2:5] == ("FAIL", "1", "EXECUTED_FAIL")
         assert "test selection completeness: root" not in rows
+
+
+@pytest.mark.parametrize("outcome", [
+    '<error>suite error</error>',
+    '<wrapper><failure/></wrapper>',
+])
+def test_nonstandard_outcomes_never_certify_complete(tmp_path: Path, _scripts_on_path, outcome: str) -> None:
+    from scripts.agent_os_ci_test_completeness import check_suite
+
+    suite = _direct_suite(tmp_path)
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite tests="2">'
+        '<testcase classname="tests.test_a" name="test_a1"/>'
+        '<testcase classname="tests.test_a" name="test_a2"/>'
+        f'{outcome}</testsuite>', encoding="utf-8",
+    )
+    result = check_suite(sys.executable, suite, "root", junit)
+    assert result["verdict"] == "ERROR"
+    assert "junit-unsupported-outcome-placement" in result["error"]

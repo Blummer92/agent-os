@@ -79,6 +79,22 @@ def junit_outcomes(xml: bytes) -> dict:
     collected). Skips are counted honestly, never as passed executed bodies.
     """
     suites = _suites(xml)
+    # Outcome elements outside pytest's supported direct testcase shape are
+    # not clean evidence. Reject them instead of silently ignoring a failure.
+    for suite in suites:
+        parents = {child: parent for parent in suite.iter() for child in parent}
+        for element in suite.iter():
+            if element.tag == "testsuite" and element is not suite:
+                raise ValueError("junit-unsupported-nested-suite")
+            if element.tag == "testcase" and parents.get(element) is not suite:
+                raise ValueError("junit-unsupported-testcase-placement")
+            local_tag = element.tag.rsplit("}", 1)[-1]
+            if local_tag in {"testcase", "testsuite", "failure", "error", "skipped"} and local_tag != element.tag:
+                raise ValueError("junit-unsupported-element-namespace")
+            if element.tag in {"failure", "error", "skipped"}:
+                parent = parents.get(element)
+                if parent is None or parent.tag != "testcase" or parents.get(parent) is not suite:
+                    raise ValueError("junit-unsupported-outcome-placement")
     tests = failures = errors = skipped = 0
     failed_nodes: list[str] = []
     for suite in suites:
