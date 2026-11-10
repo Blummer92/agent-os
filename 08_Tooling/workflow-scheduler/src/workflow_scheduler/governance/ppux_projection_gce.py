@@ -214,6 +214,9 @@ def _bounded_tail(value: object) -> str:
 
 
 
+_CANONICAL_BLOCKERS = frozenset(['invalid-input','unsupported-input-version','route-missing','route-not-tutorial-process','route-source-missing','step-disposition-missing','step-disposition-duplicate','step-not-retained','new-visual-authoring-missing','application-identity-conflict','reuse-asset-missing','resurface-asset-missing','reason-evidence-missing','artifact-identity-missing','artifact-identity-mismatch','cross-context-exemplar-evidence-missing','unsupported-instructional-specificity'])
+
+
 def _canonical_projection_shape_valid(result: dict) -> bool:
     """Check required TypeScript projection fields without rewriting evidence."""
     identity = ("routeId", "sourceHandoffRef", "sourceFingerprint", "recordingId", "recordingSha256")
@@ -226,7 +229,7 @@ def _canonical_projection_shape_valid(result: dict) -> bool:
     ):
         return False
     if not isinstance(result.get("blockers"), list) or not all(
-        isinstance(item, str) for item in result["blockers"]
+        isinstance(item, str) and item in _CANONICAL_BLOCKERS for item in result["blockers"]
     ):
         return False
     if "tutorialPackage" not in result:
@@ -374,6 +377,10 @@ def record_ppux_projection_result(
         canonical_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
         if len(canonical_bytes) > MAX_PROJECTION_RESULT_BYTES:
             raise PpuxProjectionRecorderError("projection-output-oversize")
+        digest = payload.get("projection_result_sha256")
+        if (not isinstance(digest, str) or not _INPUT_REF_RE.fullmatch(digest)
+                or hashlib.sha256(canonical_bytes).hexdigest() != digest):
+            raise PpuxProjectionRecorderError("projection-result-invalid")
         # Validate the canonical TypeScript field rather than a package alias.
         package = result.get("tutorialPackage")
         if (result["status"] == "valid" and not isinstance(package, dict)) or (
