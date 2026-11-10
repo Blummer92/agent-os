@@ -38,3 +38,33 @@ def test_load_lesson_content_reads_yaml_file(tmp_path):
     content = load_lesson_content(lesson_file)
     assert content.title == "Fractions Intro"
     assert content.placeholder_tokens()["slide_1_heading"] == "Welcome"
+
+
+def test_content_from_dict_rejects_duplicate_slide_indexes():
+    # #3259 D1: duplicate indexes used to silently erase the first slide's
+    # tokens before terminal QA built its expectations.
+    with pytest.raises(ValueError, match="content-spec-duplicate-slide-index"):
+        content_from_dict(
+            {
+                "title": "Fractions Intro",
+                "objectives": ["Add fractions"],
+                "slides": [
+                    {"index": 1, "heading": "Welcome"},
+                    {"index": 1, "heading": "Again"},
+                ],
+                "worksheet_questions": ["What is 1/2 + 1/4?"],
+            }
+        )
+
+
+def test_content_from_dict_rejects_unusable_slide_index():
+    with pytest.raises(ValueError, match="content-spec-slide-index-invalid"):
+        content_from_dict(
+            {
+                "title": "Fractions Intro",
+                "objectives": ["Add fractions"],
+                "slides": [{"heading": "Welcome"}],
+                "worksheet_questions": ["What is 1/2 + 1/4?"],
+            }
+        )
+

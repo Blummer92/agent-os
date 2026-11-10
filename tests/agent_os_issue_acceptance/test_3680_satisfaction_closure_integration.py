@@ -1,0 +1,1358 @@
+"""Tests for #3680: satisfaction evidence in reconciliation + closure packet.
+
+Connects the merged #3678 satisfaction record to (a) post-merge lifecycle
+reconciliation reporting and (b) the #3489 closure-admission judgment
+packet, without giving satisfaction any closure authority.
+
+Option B contract: the reporting-side producer hands the record over as
+a plain mapping snapshot of exactly
+``{repository, issue_number, issue_body_digest, status, criteria:
+[{index, identity, disposition, reason_code, evidence}]}`` — the
+approval-domain consumers import nothing from ``criterion_satisfaction``
+(architecture dependency-direction contract). Each consumer strictly
+validates the snapshot at its input boundary (exact key sets, exact
+built-in types, 1..N contiguous indexes, and a declared status that must
+agree with the criteria under the projector's own derivation) and stores
+a defensive copy, so forged completeness, inconsistent criteria,
+malformed evidence, and later mutation of the caller's mapping are all
+rejected or neutralized. Satisfaction remains evidence for QA judgment:
+a complete record alone never admits closure — the recorded owner
+decision, independent QA acceptance, and exact-issue admission remain
+the only closure path, proven end-to-end through ``run_closure_batch``.
+
+Follow-up repairs (N1/N2): the envelope identity keys bind the record to
+the issue it was produced for; each consumer compares them against the
+authoritative identity it already holds (the reconciliation input's, the
+closure decision's) and rejects a mismatch, so evidence produced for one
+issue cannot be attached to another undetected. The frozen snapshot
+classes validate their own fields at construction, so direct
+construction of an inconsistent instance — the former bypass of the
+mapping validation — raises exactly like a malformed mapping. The
+identity binding detects cross-issue attachment; it does not
+authenticate that the criteria or digest were produced from that
+issue's body (provenance remains the producer's and QA's
+responsibility).
+
+Fixture builders follow the established patterns of
+``test_lifecycle_reconciliation.py`` and
+``test_closure_admission_actions.py``.
+"""
+
+from __future__ import annotations
+
+import copy
+
+import pytest
+
+from scripts.agent_os_issue_acceptance import (
+    closure_admission_actions as closure_module,
+)
+from scripts.agent_os_issue_acceptance import (
+    lifecycle_reconciliation as reconciliation_module,
+)
+from scripts.agent_os_issue_acceptance import satisfaction_snapshot as shared
+from scripts.agent_os_issue_acceptance.closure_admission_actions import (
+    ClosureAcceptanceEvidence,
+    ClosureIssueReadback,
+    ClosureWriteUncertain,
+    IssueClosureRequest,
+    evaluate_issue_closure,
+    run_closure_batch,
+    verify_closure_admission_receipt,
+)
+from scripts.agent_os_issue_acceptance.issue_operational_state import (
+    AuthorityProjection,
+    AuthorizationState,
+    DependencyState,
+    FreshnessState,
+    IssueOperationalEvidence,
+    IssueState,
+    LifecycleStage,
+    PrimaryIssueClaim,
+    ReadinessState,
+    SourceState,
+    TerminalDisposition,
+    ValidationState,
+    build_issue_operational_state,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
+    produce_lifecycle_mutation_authorization,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+    AdmissionStatus,
+    LifecycleMutationAdmissionResult,
+    LifecycleStateSnapshot,
+)
+from scripts.agent_os_issue_acceptance.criterion_satisfaction import (
+    CriterionEvidence,
+    PrLineageEntry,
+    issue_body_digest,
+    project_criterion_satisfaction,
+    satisfaction_snapshot,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_reconciliation import (
+    ActionCategory,
+    LifecycleReconciliationInput,
+    PullRequestEvidence,
+    PullRequestState,
+    reconcile_lifecycle,
+    serialize_lifecycle_reconciliation_input,
+    serialize_lifecycle_reconciliation_result,
+)
+
+# ---------------------------------------------------------------------------
+# Satisfaction snapshots, as plain mappings in the exact block shape the
+# reporting-side producer serializes (no SatisfactionProjection anywhere).
+# ---------------------------------------------------------------------------
+
+DIGEST = "c" * 64
+
+
+def criterion(index, disposition, *, identity=None, reason_code=None, evidence=None):
+    return {
+        "index": index,
+        "identity": identity or f"criterion-{index}-a1b2c3",
+        "disposition": disposition,
+        "reason_code": reason_code or f"reason-{disposition}",
+        "evidence": (
+            evidence
+            if evidence is not None
+            else [f"pr:997@{'b' * 40}/qa-verdict-{index}"]
+        ),
+    }
+
+
+def snapshot(
+    status,
+    criteria,
+    *,
+    digest=DIGEST,
+    repository="Blummer92/agent-os",
+    issue_number=996,
+):
+    # Envelope identity defaults to the reconciliation fixtures' issue
+    # (Blummer92/agent-os #996); closure fixtures pass their own issue.
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "issue_body_digest": digest,
+        "status": status,
+        "criteria": criteria,
+    }
+
+
+def complete_snapshot():
+    return snapshot("complete", [criterion(i, "satisfied") for i in (1, 2, 3)])
+
+
+def complete_snapshot_for(issue):
+    return snapshot(
+        "complete",
+        [criterion(i, "satisfied") for i in (1, 2, 3)],
+        issue_number=issue,
+    )
+
+
+def incomplete_snapshot():
+    return snapshot(
+        "incomplete",
+        [criterion(1, "satisfied"), criterion(2, "missing"), criterion(3, "missing")],
+    )
+
+
+def incomplete_snapshot_for(issue):
+    return snapshot(
+        "incomplete",
+        [criterion(1, "satisfied"), criterion(2, "missing"), criterion(3, "missing")],
+        issue_number=issue,
+    )
+
+
+def stale_snapshot():
+    return snapshot("incomplete", [criterion(i, "stale") for i in (1, 2, 3)])
+
+
+def manual_review_snapshot():
+    return snapshot(
+        "manual-review",
+        [criterion(1, "satisfied"), criterion(2, "manual-review"), criterion(3, "satisfied")],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle reconciliation fixtures (pattern: test_lifecycle_reconciliation).
+# ---------------------------------------------------------------------------
+
+SOURCE = "a" * 40
+HEAD = "b" * 40
+APPROVAL = "approval:" + "1" * 64
+EVIDENCE = "issueplan-current-state:" + "2" * 64
+
+
+def authority(state: AuthorizationState) -> AuthorityProjection:
+    return AuthorityProjection(
+        state=state,
+        evidence_id=(
+            APPROVAL
+            if state in {AuthorizationState.AUTHORIZED, AuthorizationState.STALE}
+            else None
+        ),
+    )
+
+
+def op_state(*, closure=AuthorizationState.NOT_AUTHORIZED):
+    return build_issue_operational_state(
+        IssueOperationalEvidence(
+            repository="Blummer92/agent-os",
+            issue_number=996,
+            source_revision=SOURCE,
+            observed_at="2026-08-09T17:10:00Z",
+            evidence_ids=(EVIDENCE,),
+            source_state=SourceState.COMPLETE,
+            issue_state=IssueState.OPEN,
+            lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+            terminal_disposition=TerminalDisposition.NONE,
+            readiness=ReadinessState.READY,
+            implementation_authorization=authority(AuthorizationState.AUTHORIZED),
+            ready_for_review_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
+            execution_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
+            merge_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
+            closure_authorization=authority(closure),
+            external_write_authorization=authority(AuthorizationState.NOT_AUTHORIZED),
+            dependency_state=DependencyState.CLEAR,
+            primary_claims=(
+                PrimaryIssueClaim(
+                    pull_request_number=997,
+                    branch="agent/996-lifecycle-reconciliation",
+                    head_sha=HEAD,
+                    state="merged",
+                ),
+            ),
+            validation_state=ValidationState.NOT_RUN,
+            freshness_state=FreshnessState.CURRENT,
+            observed_labels=("status:ready",),
+        )
+    )
+
+
+def merged_snapshot() -> LifecycleStateSnapshot:
+    return LifecycleStateSnapshot(
+        repository="Blummer92/agent-os", issue_number=996,
+        pull_request_number=997, source_head=HEAD, base_head=SOURCE,
+        pr_state="ready", merged=True, issue_state="open",
+        review_state="clear", unresolved_threads=0,
+        lifecycle_labels=("status:ready",), observed_revision="revision-1",
+    )
+
+
+def merged_input(satisfaction=None, *, with_authority=False):
+    current = op_state(
+        closure=(
+            AuthorizationState.AUTHORIZED
+            if with_authority
+            else AuthorizationState.NOT_AUTHORIZED
+        )
+    )
+    snap = merged_snapshot()
+    admissions = ()
+    if with_authority:
+        admissions = (
+            LifecycleMutationAdmissionResult(
+                requested_mutation="close-issue", admitted=True,
+                status=AdmissionStatus.ADMITTED, reason_codes=(), details=(),
+                authorization_id=current.closure_authorization.evidence_id,
+                snapshot_id=snap.snapshot_id,
+            ),
+        )
+    return LifecycleReconciliationInput(
+        repository="Blummer92/agent-os", issue_number=996,
+        operational_state=current, lifecycle_snapshot=snap,
+        current_pull_request=PullRequestEvidence(
+            997, "agent/996-lifecycle-reconciliation", HEAD,
+            PullRequestState.MERGED, "pr:997",
+        ),
+        admissions=admissions,
+        satisfaction=satisfaction,
+    )
+
+
+def close_actions(result):
+    return [
+        item
+        for item in result.actions
+        if item.reason_code == "lifecycle.merged-pr-open-issue"
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation: satisfaction reporting (retained behavior).
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_fixtures_have_the_intended_shapes():
+    complete = merged_input(complete_snapshot()).satisfaction
+    assert complete.status == "complete"
+    assert complete.complete is True
+    incomplete = merged_input(incomplete_snapshot()).satisfaction
+    assert incomplete.complete is False
+    assert [item.disposition for item in incomplete.unsatisfied_criteria] == [
+        "missing",
+        "missing",
+    ]
+    stale = merged_input(stale_snapshot()).satisfaction
+    assert stale.complete is False
+    assert all(item.disposition == "stale" for item in stale.criteria)
+
+
+def test_incomplete_record_reports_not_closure_ready_and_names_blockers():
+    snap = incomplete_snapshot()
+    result = reconcile_lifecycle(merged_input(snap, with_authority=True))
+    actions = close_actions(result)
+    assert len(actions) == 1
+    action = actions[0]
+    # No close-issue mutation is projected, even though closure
+    # authorization and admission both exist.
+    assert action.category is ActionCategory.MANUAL_DECISION
+    assert action.required_mutation is None
+    assert not any(
+        item.required_mutation == "close-issue" for item in result.actions
+    )
+    # Every blocking criterion is named with its disposition.
+    for item in snap["criteria"]:
+        if item["disposition"] != "satisfied":
+            assert f"{item['identity']}:{item['disposition']}" in action.observed
+    # The serialized result carries the verbatim satisfaction block.
+    block = result.to_dict()["satisfaction"]
+    assert block["closure_ready"] is False
+    assert block["status"] == "incomplete"
+    assert block["issue_body_digest"] == DIGEST
+    assert block["criteria"] == snap["criteria"]
+
+
+def test_complete_record_keeps_existing_closure_projection():
+    snap = complete_snapshot()
+    result = reconcile_lifecycle(merged_input(snap, with_authority=True))
+    actions = close_actions(result)
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.category is ActionCategory.GOVERNED_MUTATION
+    assert action.required_mutation == "close-issue"
+    block = result.to_dict()["satisfaction"]
+    assert block["closure_ready"] is True
+    assert block["criteria"] == snap["criteria"]
+
+
+def test_complete_record_alone_never_creates_closure_authority():
+    # Complete satisfaction, but no closure authorization/admission:
+    # the pre-existing manual-decision flow is unchanged.
+    result = reconcile_lifecycle(merged_input(complete_snapshot()))
+    actions = close_actions(result)
+    assert len(actions) == 1
+    assert actions[0].category is ActionCategory.MANUAL_DECISION
+    assert actions[0].authorization_id is None
+    assert "authorization.closure-required" in result.reason_codes
+    assert result.to_dict()["satisfaction"]["closure_ready"] is True
+
+
+def test_stale_after_merge_record_reports_not_closure_ready():
+    result = reconcile_lifecycle(merged_input(stale_snapshot(), with_authority=True))
+    actions = close_actions(result)
+    assert len(actions) == 1
+    assert actions[0].category is ActionCategory.MANUAL_DECISION
+    assert actions[0].required_mutation is None
+    for item in stale_snapshot()["criteria"]:
+        assert f"{item['identity']}:stale" in actions[0].observed
+    assert result.to_dict()["satisfaction"]["closure_ready"] is False
+
+
+def test_manual_review_record_reports_not_closure_ready():
+    result = reconcile_lifecycle(
+        merged_input(manual_review_snapshot(), with_authority=True)
+    )
+    actions = close_actions(result)
+    assert len(actions) == 1
+    assert actions[0].category is ActionCategory.MANUAL_DECISION
+    assert actions[0].required_mutation is None
+    assert "criterion-2-a1b2c3:manual-review" in actions[0].observed
+    assert result.to_dict()["satisfaction"]["closure_ready"] is False
+
+
+def test_empty_manual_review_snapshot_is_accepted_but_never_complete():
+    # The projector's criteria-section-missing form: no criteria,
+    # status manual-review. Accepted at the boundary, never complete.
+    result = reconcile_lifecycle(
+        merged_input(snapshot("manual-review", []), with_authority=True)
+    )
+    actions = close_actions(result)
+    assert len(actions) == 1
+    assert actions[0].category is ActionCategory.MANUAL_DECISION
+    assert actions[0].required_mutation is None
+    assert result.to_dict()["satisfaction"]["closure_ready"] is False
+
+
+def test_absent_record_reproduces_pre_change_behavior_exactly():
+    baseline_input = merged_input(None, with_authority=True)
+    explicit_none = merged_input(None, with_authority=True)
+    baseline = reconcile_lifecycle(baseline_input)
+    candidate = reconcile_lifecycle(explicit_none)
+    assert "satisfaction" not in baseline.to_dict()
+    assert serialize_lifecycle_reconciliation_input(baseline_input) == (
+        serialize_lifecycle_reconciliation_input(explicit_none)
+    )
+    assert baseline_input.input_id == explicit_none.input_id
+    assert serialize_lifecycle_reconciliation_result(baseline) == (
+        serialize_lifecycle_reconciliation_result(candidate)
+    )
+    assert baseline.result_id == candidate.result_id
+    # And the governed close-issue projection is intact without a record.
+    actions = close_actions(baseline)
+    assert actions[0].category is ActionCategory.GOVERNED_MUTATION
+
+
+def test_mutated_caller_snapshot_cannot_change_reconciliation():
+    snap = incomplete_snapshot()
+    original = copy.deepcopy(snap)
+    built = merged_input(snap, with_authority=True)
+    input_id_before = built.input_id
+    # Mutate the caller's mapping in every way after construction.
+    snap["status"] = "manual-review"
+    snap["issue_body_digest"] = "d" * 64
+    snap["criteria"][0]["disposition"] = "missing"
+    snap["criteria"][1]["evidence"].append("pr:999@deadbeef/forged")
+    snap["criteria"].append(criterion(4, "missing"))
+    result = reconcile_lifecycle(built)
+    assert built.input_id == input_id_before
+    block = result.to_dict()["satisfaction"]
+    assert block["status"] == original["status"]
+    assert block["issue_body_digest"] == original["issue_body_digest"]
+    assert block["criteria"] == original["criteria"]
+    assert block["closure_ready"] is False
+
+
+# ---------------------------------------------------------------------------
+# Snapshot validation: forged, inconsistent, incomplete, malformed.
+# Shared adversarial cases — both consumers must reject every one.
+# ---------------------------------------------------------------------------
+
+
+def _bad_snapshots():
+    cases = {}
+
+    forged = complete_snapshot()
+    forged["criteria"][1]["disposition"] = "missing"
+    cases["forged-complete-with-missing"] = forged
+
+    forged_stale = complete_snapshot()
+    forged_stale["criteria"][0]["disposition"] = "stale"
+    cases["forged-complete-with-stale"] = forged_stale
+
+    forged_unsatisfied = complete_snapshot()
+    forged_unsatisfied["criteria"][2]["disposition"] = "unsatisfied"
+    cases["forged-complete-with-unsatisfied"] = forged_unsatisfied
+
+    cases["forged-complete-with-no-criteria"] = snapshot("complete", [])
+
+    inconsistent = complete_snapshot()
+    inconsistent["status"] = "incomplete"
+    cases["inconsistent-all-satisfied-but-incomplete"] = inconsistent
+
+    inconsistent_review = incomplete_snapshot()
+    inconsistent_review["status"] = "manual-review"
+    cases["inconsistent-review-without-review-criterion"] = inconsistent_review
+
+    inconsistent_incomplete = manual_review_snapshot()
+    inconsistent_incomplete["status"] = "incomplete"
+    cases["inconsistent-incomplete-with-review-criterion"] = inconsistent_incomplete
+
+    duplicate = snapshot(
+        "incomplete", [criterion(1, "satisfied"), criterion(1, "missing")]
+    )
+    cases["duplicate-index"] = duplicate
+
+    gap = snapshot(
+        "incomplete", [criterion(1, "satisfied"), criterion(3, "missing")]
+    )
+    cases["non-contiguous-index"] = gap
+
+    reordered = snapshot(
+        "incomplete", [criterion(2, "missing"), criterion(1, "satisfied")]
+    )
+    cases["out-of-order-index"] = reordered
+
+    for key in (
+        "repository", "issue_number", "issue_body_digest", "status", "criteria",
+    ):
+        missing = complete_snapshot()
+        del missing[key]
+        cases[f"missing-top-level-{key}"] = missing
+
+    empty_repository = complete_snapshot()
+    empty_repository["repository"] = ""
+    cases["repository-empty"] = empty_repository
+
+    nonstring_repository = complete_snapshot()
+    nonstring_repository["repository"] = 7
+    cases["repository-non-string"] = nonstring_repository
+
+    bool_issue = complete_snapshot()
+    bool_issue["issue_number"] = True
+    cases["issue-number-bool"] = bool_issue
+
+    zero_issue = complete_snapshot()
+    zero_issue["issue_number"] = 0
+    cases["issue-number-zero"] = zero_issue
+
+    string_issue = complete_snapshot()
+    string_issue["issue_number"] = "996"
+    cases["issue-number-string"] = string_issue
+
+    for key in ("index", "identity", "disposition", "reason_code", "evidence"):
+        missing_field = complete_snapshot()
+        del missing_field["criteria"][0][key]
+        cases[f"missing-criterion-{key}"] = missing_field
+
+    extra_top = complete_snapshot()
+    extra_top["closure_ready"] = True
+    cases["extra-top-level-key"] = extra_top
+
+    extra_criterion = complete_snapshot()
+    extra_criterion["criteria"][0]["text"] = "Alpha criterion is verified."
+    cases["extra-criterion-key"] = extra_criterion
+
+    bad_digest = complete_snapshot()
+    bad_digest["issue_body_digest"] = "not-a-digest"
+    cases["digest-not-hex"] = bad_digest
+
+    upper_digest = complete_snapshot()
+    upper_digest["issue_body_digest"] = "C" * 64
+    cases["digest-uppercase"] = upper_digest
+
+    short_digest = complete_snapshot()
+    short_digest["issue_body_digest"] = "c" * 63
+    cases["digest-too-short"] = short_digest
+
+    bad_status = complete_snapshot()
+    bad_status["status"] = "done"
+    cases["unknown-status"] = bad_status
+
+    bad_disposition = complete_snapshot()
+    bad_disposition["criteria"][0]["disposition"] = "passed"
+    cases["unknown-disposition"] = bad_disposition
+
+    bool_index = complete_snapshot()
+    bool_index["criteria"][0]["index"] = True
+    cases["bool-index"] = bool_index
+
+    string_index = complete_snapshot()
+    string_index["criteria"][0]["index"] = "1"
+    cases["string-index"] = string_index
+
+    empty_identity = complete_snapshot()
+    empty_identity["criteria"][0]["identity"] = ""
+    cases["empty-identity"] = empty_identity
+
+    empty_reason = complete_snapshot()
+    empty_reason["criteria"][0]["reason_code"] = ""
+    cases["empty-reason-code"] = empty_reason
+
+    evidence_string = complete_snapshot()
+    evidence_string["criteria"][0]["evidence"] = "pr:997@x/qa"
+    cases["evidence-not-a-list"] = evidence_string
+
+    evidence_empty = complete_snapshot()
+    evidence_empty["criteria"][0]["evidence"] = []
+    cases["evidence-empty"] = evidence_empty
+
+    evidence_non_string = complete_snapshot()
+    evidence_non_string["criteria"][0]["evidence"] = [7]
+    cases["evidence-non-string-pointer"] = evidence_non_string
+
+    evidence_blank = complete_snapshot()
+    evidence_blank["criteria"][0]["evidence"] = [""]
+    cases["evidence-blank-pointer"] = evidence_blank
+
+    criteria_tuple = complete_snapshot()
+    criteria_tuple["criteria"] = tuple(criteria_tuple["criteria"])
+    cases["criteria-not-a-list"] = criteria_tuple
+
+    criterion_list = complete_snapshot()
+    criterion_list["criteria"][0] = ["not", "a", "dict"]
+    cases["criterion-not-a-dict"] = criterion_list
+
+    return cases
+
+
+BAD_SNAPSHOTS = _bad_snapshots()
+
+
+@pytest.mark.parametrize("name", sorted(BAD_SNAPSHOTS))
+def test_reconciliation_rejects_bad_snapshots(name):
+    with pytest.raises((TypeError, ValueError)):
+        merged_input(BAD_SNAPSHOTS[name])
+
+
+@pytest.mark.parametrize("name", sorted(BAD_SNAPSHOTS))
+def test_closure_request_rejects_bad_snapshots(name):
+    with pytest.raises((TypeError, ValueError)):
+        closure_request(satisfaction=BAD_SNAPSHOTS[name])
+
+
+@pytest.mark.parametrize(
+    "value", ["complete", 7, [("status", "complete")], object()]
+)
+def test_snapshot_wrong_top_level_type_is_rejected(value):
+    with pytest.raises(TypeError):
+        merged_input(satisfaction=value)
+    with pytest.raises(TypeError):
+        closure_request(satisfaction=value)
+
+
+# ---------------------------------------------------------------------------
+# Closure packet fixtures (pattern: test_closure_admission_actions).
+# ---------------------------------------------------------------------------
+
+REPO = "Blummer92/agent-os"
+
+
+def closure_snapshot(issue=3432, **changes):
+    data = dict(
+        repository=REPO,
+        issue_number=issue,
+        pull_request_number=None,
+        source_head=None,
+        base_head=None,
+        pr_state="none",
+        merged=False,
+        issue_state="open",
+        review_state="clear",
+        unresolved_threads=0,
+        lifecycle_labels=(),
+        observed_revision=f"rev-{issue}-1",
+    )
+    data.update(changes)
+    return LifecycleStateSnapshot(**data)
+
+
+def closure_request(issue=3432, *, satisfaction=None, **kw):
+    decision = LifecycleOwnerDecision(
+        repository=REPO,
+        issue_number=issue,
+        pull_request_number=None,
+        requested_mutations=("close-issue",),
+        authorizer_id=kw.get("authorizer_id", "repository-owner"),
+        decision_id=kw.get("decision_id", f"owner-decision-{issue}"),
+        decision_recorded=kw.get("decision_recorded", True),
+    )
+    acceptance = ClosureAcceptanceEvidence(
+        verdict=kw.get("verdict", "pass"),
+        evidence_id=kw.get("evidence_id", f"qa-evidence-{issue}"),
+        evaluator_id=kw.get("evaluator_id", "independent-qa"),
+    )
+    return IssueClosureRequest(
+        decision=decision, acceptance=acceptance, satisfaction=satisfaction
+    )
+
+
+class FakeReader:
+    def __init__(self, snapshots, *, closed_state_reasons=None, open_state_reasons=None):
+        self._snapshots = dict(snapshots)
+        self._closed_state_reasons = dict(closed_state_reasons or {})
+        self._open_state_reasons = dict(open_state_reasons or {})
+        self.reads = []
+
+    def read_issue_snapshot(self, repository, issue_number):
+        self.reads.append(issue_number)
+        return self._snapshots[issue_number]
+
+    def read_issue_readback(self, repository, issue_number):
+        snap = self.read_issue_snapshot(repository, issue_number)
+        if snap.issue_state == "closed":
+            reason = self._closed_state_reasons.get(issue_number, "completed")
+        else:
+            reason = self._open_state_reasons.get(issue_number)
+        return ClosureIssueReadback(snapshot=snap, state_reason=reason)
+
+    def set(self, snap):
+        self._snapshots[snap.issue_number] = snap
+
+
+class FakeWriter:
+    def __init__(self, reader, *, fail_for=(), uncertain_for=(), silent_for=()):
+        self.reader = reader
+        self.calls = []
+        self.fail_for = set(fail_for)
+        self.uncertain_for = set(uncertain_for)
+        self.silent_for = set(silent_for)
+
+    def close_issue(self, repository, issue_number, *, state_reason):
+        self.calls.append((issue_number, state_reason))
+        if issue_number in self.fail_for:
+            raise RuntimeError("github-write-failed")
+        if issue_number not in self.silent_for:
+            current = self.reader._snapshots[issue_number]
+            self.reader.set(
+                closure_snapshot(
+                    issue_number,
+                    issue_state="closed",
+                    observed_revision=current.observed_revision + "-closed",
+                )
+            )
+        if issue_number in self.uncertain_for:
+            raise ClosureWriteUncertain("response lost")
+
+
+# ---------------------------------------------------------------------------
+# Closure packet: fidelity, integrity, fail-closed behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_packet_cites_satisfaction_verbatim():
+    snap = complete_snapshot_for(3432)
+    receipt = evaluate_issue_closure(
+        closure_request(satisfaction=snap), closure_snapshot()
+    )
+    assert receipt["admitted"] is True
+    assert receipt["satisfaction"] == snap
+
+
+def test_packet_without_satisfaction_is_byte_identical_in_shape():
+    receipt = evaluate_issue_closure(closure_request(), closure_snapshot())
+    assert receipt["admitted"] is True
+    assert "satisfaction" not in receipt
+    assert set(receipt) == {
+        "schema_version", "operation", "repository", "issue_number",
+        "admitted", "reason_codes", "authorization_id",
+        "admission_result_id", "snapshot_id",
+        "acceptance_evidence_id",
+        "host_dispatch_contract", "post_close_reconciliation_contract",
+        "next_action", "receipt_id",
+        "closure_performed", "merge_authorized", "side_effects_performed",
+    }
+
+
+def test_tampered_satisfaction_block_fails_verify_gate():
+    snap = complete_snapshot_for(3432)
+    req = closure_request(satisfaction=snap)
+    closure_snap = closure_snapshot()
+    receipt = evaluate_issue_closure(req, closure_snap)
+    auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
+    assert verify_closure_admission_receipt(
+        receipt, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is True
+
+    tampered = copy.deepcopy(receipt)
+    tampered["satisfaction"]["criteria"][0]["disposition"] = "missing"
+    assert verify_closure_admission_receipt(
+        tampered, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+    tampered_pointer = copy.deepcopy(receipt)
+    tampered_pointer["satisfaction"]["criteria"][0]["evidence"] = [
+        "pr:999@deadbeef/forged"
+    ]
+    assert verify_closure_admission_receipt(
+        tampered_pointer, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+    stripped = copy.deepcopy(receipt)
+    del stripped["satisfaction"]
+    assert verify_closure_admission_receipt(
+        stripped, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+
+def test_inconsistent_satisfaction_block_in_receipt_fails_verify_gate():
+    # A block whose declared status disagrees with its own criteria is
+    # rejected by the verifier's strict validation before any hash
+    # comparison — forged completeness never reaches the gate as evidence.
+    snap = complete_snapshot_for(3432)
+    req = closure_request(satisfaction=snap)
+    closure_snap = closure_snapshot()
+    receipt = evaluate_issue_closure(req, closure_snap)
+    auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
+    forged = copy.deepcopy(receipt)
+    forged["satisfaction"] = incomplete_snapshot_for(3432)
+    forged["satisfaction"]["status"] = "complete"
+    assert verify_closure_admission_receipt(
+        forged, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+
+def test_mutated_caller_snapshot_cannot_change_receipt():
+    snap = complete_snapshot_for(3432)
+    original = copy.deepcopy(snap)
+    req = closure_request(satisfaction=snap)
+    snap["criteria"][0]["disposition"] = "missing"
+    snap["criteria"].append(criterion(4, "satisfied"))
+    snap["issue_body_digest"] = "d" * 64
+    receipt = evaluate_issue_closure(req, closure_snapshot())
+    assert receipt["satisfaction"] == original
+
+
+def test_complete_satisfaction_without_owner_decision_is_not_admitted():
+    receipt = evaluate_issue_closure(
+        closure_request(
+            satisfaction=complete_snapshot_for(3432), decision_recorded=False
+        ),
+        closure_snapshot(),
+    )
+    assert receipt["admitted"] is False
+    assert receipt["reason_codes"] == ["closure.authorization-not-recorded"]
+    # The evidence is still cited in the (non-admitted) packet.
+    assert receipt["satisfaction"]["status"] == "complete"
+
+
+def test_incomplete_record_blocks_admission_and_is_cited():
+    # Lane B (#3489, QA E5 C1/C6 + decision D1): a present-but-incomplete
+    # satisfaction record now BLOCKS closure admission, matching
+    # reconciliation, which already blocked on the same condition. The
+    # record is still cited verbatim in the (non-admitted) packet. This
+    # inverts the pre-repair test of the same scenario, which locked in
+    # the false pass reproduced in the 2026-10-22 independent QA report.
+    snap = incomplete_snapshot_for(3432)
+    receipt = evaluate_issue_closure(
+        closure_request(satisfaction=snap), closure_snapshot()
+    )
+    assert receipt["admitted"] is False
+    assert receipt["reason_codes"] == ["closure.satisfaction-incomplete"]
+    assert receipt["satisfaction"] == snap
+
+
+def test_complete_satisfaction_with_foreign_snapshot_is_not_admitted():
+    receipt = evaluate_issue_closure(
+        closure_request(satisfaction=complete_snapshot_for(3432)),
+        closure_snapshot(9999),
+    )
+    assert receipt["admitted"] is False
+    assert receipt["reason_codes"] == ["closure.issue-identity-mismatch"]
+
+
+def test_verify_gate_rejects_authorization_bound_to_another_issue():
+    req = closure_request(satisfaction=complete_snapshot_for(3432))
+    closure_snap = closure_snapshot()
+    receipt = evaluate_issue_closure(req, closure_snap)
+    other = closure_request(3306, satisfaction=complete_snapshot_for(3306))
+    other_auth = produce_lifecycle_mutation_authorization(
+        other.decision, closure_snapshot(3306)
+    )
+    assert verify_closure_admission_receipt(
+        receipt, authorization=other_auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance,
+    ) is False
+
+
+def test_batch_executes_with_complete_satisfaction_and_readback_verifies():
+    snap = complete_snapshot_for(3432)
+    req = closure_request(satisfaction=snap)
+    reader = FakeReader({3432: closure_snapshot()})
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((req,), reader=reader, writer=writer)
+    assert [o.status for o in outcomes] == ["closed-verified"]
+    assert outcomes[0].readback_verified is True
+    assert writer.calls == [(3432, "completed")]
+    assert outcomes[0].receipt["satisfaction"] == snap
+
+
+def test_batch_with_complete_satisfaction_but_no_decision_never_writes():
+    req = closure_request(
+        satisfaction=complete_snapshot_for(3432), decision_recorded=False
+    )
+    reader = FakeReader({3432: closure_snapshot()})
+    writer = FakeWriter(reader)
+    outcomes = run_closure_batch((req,), reader=reader, writer=writer)
+    assert outcomes[0].status == "blocked"
+    assert outcomes[0].reason_codes == ("closure.authorization-not-recorded",)
+    assert writer.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Follow-up N1: envelope identity binding. A snapshot produced for one
+# issue must be rejected by any consumer holding a different issue's
+# authoritative identity — in both consumers, for both identity fields.
+# ---------------------------------------------------------------------------
+
+
+def test_reconciliation_rejects_snapshot_produced_for_another_issue():
+    # A valid, complete snapshot for #3432 attached to the #996 input.
+    with pytest.raises(ValueError):
+        merged_input(complete_snapshot_for(3432), with_authority=True)
+    # Same issue number, wrong repository.
+    wrong_repo = complete_snapshot()
+    wrong_repo["repository"] = "Other/repo"
+    with pytest.raises(ValueError):
+        merged_input(wrong_repo, with_authority=True)
+
+
+def test_reconciliation_result_rejects_foreign_snapshot_identity():
+    from scripts.agent_os_issue_acceptance.lifecycle_reconciliation import (
+        LifecycleReconciliationResult,
+    )
+
+    result = reconcile_lifecycle(merged_input(complete_snapshot(), with_authority=True))
+    with pytest.raises(ValueError):
+        LifecycleReconciliationResult(
+            result.repository,
+            result.issue_number,
+            result.input_id,
+            result.operational_state_id,
+            result.lifecycle_snapshot_id,
+            result.outcome,
+            result.reason_codes,
+            result.actions,
+            result.implementation_authorization,
+            result.ready_for_review_authorization,
+            result.execution_authorization,
+            result.merge_authorization,
+            result.closure_authorization,
+            result.external_write_authorization,
+            satisfaction=complete_snapshot_for(3432),
+        )
+
+
+def test_closure_request_rejects_snapshot_produced_for_another_issue():
+    # The reconciliation fixtures' #996 snapshot attached to #3432.
+    with pytest.raises(ValueError):
+        closure_request(satisfaction=complete_snapshot())
+    # A #3432 snapshot attached to a #3306 request.
+    with pytest.raises(ValueError):
+        closure_request(3306, satisfaction=complete_snapshot_for(3432))
+    # Same issue number, wrong repository.
+    wrong_repo = complete_snapshot_for(3432)
+    wrong_repo["repository"] = "Other/repo"
+    with pytest.raises(ValueError):
+        closure_request(satisfaction=wrong_repo)
+
+
+def test_receipt_satisfaction_identity_tamper_fails_verify_gate():
+    snap = complete_snapshot_for(3432)
+    req = closure_request(satisfaction=snap)
+    closure_snap = closure_snapshot()
+    receipt = evaluate_issue_closure(req, closure_snap)
+    auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
+    assert verify_closure_admission_receipt(
+        receipt, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is True
+
+    swapped_issue = copy.deepcopy(receipt)
+    swapped_issue["satisfaction"]["issue_number"] = 3306
+    assert verify_closure_admission_receipt(
+        swapped_issue, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+    swapped_repo = copy.deepcopy(receipt)
+    swapped_repo["satisfaction"]["repository"] = "Other/repo"
+    assert verify_closure_admission_receipt(
+        swapped_repo, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+    # A pre-N1 block shape (identity keys stripped) no longer validates.
+    old_shape = copy.deepcopy(receipt)
+    del old_shape["satisfaction"]["repository"]
+    del old_shape["satisfaction"]["issue_number"]
+    assert verify_closure_admission_receipt(
+        old_shape, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+
+def _recompute_receipt_id(receipt):
+    # Recompute the receipt id over a (possibly forged) receipt exactly as
+    # the module does: core keys plus the normalized satisfaction block.
+    core = {key: receipt.get(key) for key in closure_module._RECEIPT_CORE_KEYS}
+    if "satisfaction" in receipt:
+        core["satisfaction"] = shared.satisfaction_block(
+            closure_module._satisfaction_snapshot(receipt["satisfaction"])
+        )
+    return closure_module._receipt_id(core)
+
+
+def test_verify_gate_rejects_satisfaction_identity_mismatch_with_recomputed_id():
+    # The receipt-id recomputation binds the satisfaction block's bytes,
+    # not its identity: an attacker who swaps the block's repository or
+    # issue number AND recomputes the id produces a self-consistent hash.
+    # The verifier must still reject it — the block's identity has to match
+    # the receipt's canonical repository and issue number.
+    snap = complete_snapshot_for(3432)
+    req = closure_request(satisfaction=snap)
+    closure_snap = closure_snapshot()
+    receipt = evaluate_issue_closure(req, closure_snap)
+    auth = produce_lifecycle_mutation_authorization(req.decision, closure_snap)
+
+    # Control: the unmodified receipt verifies.
+    assert verify_closure_admission_receipt(
+        receipt, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is True
+
+    forged_repo = copy.deepcopy(receipt)
+    forged_repo["satisfaction"]["repository"] = "Other/repo"
+    forged_repo["receipt_id"] = _recompute_receipt_id(forged_repo)
+    assert verify_closure_admission_receipt(
+        forged_repo, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+    forged_issue = copy.deepcopy(receipt)
+    forged_issue["satisfaction"]["issue_number"] = 3306
+    forged_issue["receipt_id"] = _recompute_receipt_id(forged_issue)
+    assert verify_closure_admission_receipt(
+        forged_issue, authorization=auth, fresh_snapshot=closure_snap,
+        acceptance=req.acceptance, satisfaction=snap,
+    ) is False
+
+
+# ---------------------------------------------------------------------------
+# Follow-up N2: direct construction of the frozen snapshot classes is
+# validated exactly like the mapping path — an inconsistent instance
+# cannot exist, in either consumer module, so the former bypass (a
+# hand-built "complete" snapshot over unsatisfied criteria passing the
+# instance early-return) is closed at the construction site.
+# ---------------------------------------------------------------------------
+
+_SNAPSHOT_MODULES = (reconciliation_module, closure_module)
+
+
+@pytest.mark.parametrize("module", _SNAPSHOT_MODULES, ids=["reconciliation", "closure"])
+def test_direct_snapshot_construction_rejects_forged_completeness(module):
+    crit = module._SatisfactionCriterionSnapshot
+    snap = module._SatisfactionSnapshot
+    with pytest.raises(ValueError):
+        snap(
+            "Blummer92/agent-os", 996, DIGEST, "complete",
+            (
+                crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),
+                crit(2, "criterion-2-a1b2c3", "missing", "reason-missing", ("ev-2",)),
+            ),
+        )
+    with pytest.raises(ValueError):
+        snap("Blummer92/agent-os", 996, DIGEST, "complete", ())
+
+
+@pytest.mark.parametrize("module", _SNAPSHOT_MODULES, ids=["reconciliation", "closure"])
+def test_direct_snapshot_construction_rejects_garbage_fields(module):
+    crit = module._SatisfactionCriterionSnapshot
+    snap = module._SatisfactionSnapshot
+    with pytest.raises(ValueError):
+        snap("Blummer92/agent-os", 996, "not-a-digest", "manual-review", ())
+    with pytest.raises(ValueError):
+        snap("Blummer92/agent-os", 996, DIGEST, "done", ())
+    with pytest.raises(TypeError):
+        snap("", 996, DIGEST, "manual-review", ())
+    with pytest.raises(TypeError):
+        snap("Blummer92/agent-os", True, DIGEST, "manual-review", ())
+    with pytest.raises(TypeError):
+        snap("Blummer92/agent-os", 996, DIGEST, "manual-review", ["not-a-tuple"])
+    # Non-contiguous criterion indexes.
+    with pytest.raises(ValueError):
+        snap(
+            "Blummer92/agent-os", 996, DIGEST, "incomplete",
+            (crit(2, "criterion-2-a1b2c3", "missing", "reason-missing", ("ev-2",)),),
+        )
+    # Per-criterion construction is validated too.
+    with pytest.raises(TypeError):
+        crit(True, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",))
+    with pytest.raises(ValueError):
+        crit(0, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",))
+    with pytest.raises(ValueError):
+        crit(1, "criterion-1-a1b2c3", "passed", "reason-satisfied", ("ev-1",))
+    with pytest.raises(TypeError):
+        crit(1, "", "satisfied", "reason-satisfied", ("ev-1",))
+    with pytest.raises(TypeError):
+        crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ())
+    with pytest.raises(TypeError):
+        crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ["ev-1"])
+
+
+@pytest.mark.parametrize("module", _SNAPSHOT_MODULES, ids=["reconciliation", "closure"])
+def test_direct_snapshot_construction_accepts_valid_instances(module):
+    crit = module._SatisfactionCriterionSnapshot
+    snap = module._SatisfactionSnapshot
+    instance = snap(
+        "Blummer92/agent-os", 996, DIGEST, "complete",
+        (crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),),
+    )
+    assert instance.complete is True
+    assert instance.status == "complete"
+
+
+def test_valid_prebuilt_instance_is_accepted_by_its_own_consumer():
+    crit = reconciliation_module._SatisfactionCriterionSnapshot
+    snap = reconciliation_module._SatisfactionSnapshot
+    instance = snap(
+        "Blummer92/agent-os", 996, DIGEST, "complete",
+        tuple(
+            crit(i, f"criterion-{i}-a1b2c3", "satisfied", "reason-satisfied", ("ev",))
+            for i in (1, 2, 3)
+        ),
+    )
+    built = merged_input(instance, with_authority=True)
+    assert built.satisfaction is instance
+    result = reconcile_lifecycle(built)
+    assert result.to_dict()["satisfaction"]["closure_ready"] is True
+
+    ca_crit = closure_module._SatisfactionCriterionSnapshot
+    ca_snap = closure_module._SatisfactionSnapshot
+    ca_instance = ca_snap(
+        "Blummer92/agent-os", 3432, DIGEST, "complete",
+        tuple(
+            ca_crit(i, f"criterion-{i}-a1b2c3", "satisfied", "reason-satisfied", ("ev",))
+            for i in (1, 2, 3)
+        ),
+    )
+    req = closure_request(satisfaction=ca_instance)
+    assert req.satisfaction is ca_instance
+    receipt = evaluate_issue_closure(req, closure_snapshot())
+    assert receipt["satisfaction"]["status"] == "complete"
+    assert receipt["satisfaction"]["issue_number"] == 3432
+
+
+def test_shared_instance_is_accepted_by_both_consumers_but_stays_identity_bound():
+    # #3690 CR-1 supersedes the former "foreign module instance" rejection:
+    # both consumers now share one validated snapshot class, so a valid
+    # instance is the same evidence type everywhere. What still binds it is
+    # the N1 identity check of each owning consumer — an instance produced
+    # for #996 is accepted by #996's reconciliation input and rejected by a
+    # closure request for #3432.
+    crit = closure_module._SatisfactionCriterionSnapshot
+    snap = closure_module._SatisfactionSnapshot
+    instance = snap(
+        "Blummer92/agent-os", 996, DIGEST, "complete",
+        (crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),),
+    )
+    assert merged_input(instance).satisfaction is instance
+    with pytest.raises(ValueError, match="identity does not match"):
+        closure_request(satisfaction=instance)
+
+
+def test_lookalike_snapshot_types_are_rejected_by_both_consumers():
+    # Only the exact shared class (or an exact dict) is a snapshot; a
+    # subclass, a same-named look-alike carrying every field and property,
+    # or an empty same-named object never passes through.
+    import dataclasses
+
+    shared_snap = closure_module._SatisfactionSnapshot
+    crit = closure_module._SatisfactionCriterionSnapshot
+    fields = (
+        "Blummer92/agent-os", 996, DIGEST, "complete",
+        (crit(1, "criterion-1-a1b2c3", "satisfied", "reason-satisfied", ("ev-1",)),),
+    )
+
+    class SubclassSnapshot(shared_snap):
+        __slots__ = ()
+
+    @dataclasses.dataclass(frozen=True)
+    class SatisfactionSnapshot:  # same name and shape as the shared class
+        repository: str
+        issue_number: int
+        issue_body_digest: str
+        status: str
+        criteria: tuple
+
+        @property
+        def complete(self):
+            return self.status == "complete"
+
+        @property
+        def unsatisfied_criteria(self):
+            return ()
+
+    empty = type("SatisfactionSnapshot", (), {})()
+    for value in (SubclassSnapshot(*fields), SatisfactionSnapshot(*fields), empty):
+        with pytest.raises(TypeError):
+            merged_input(value)
+        with pytest.raises(TypeError):
+            closure_request(satisfaction=value)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up N3: cross-module consistency. Since #3690 CR-1 both consumers
+# alias the one shared validation core (``satisfaction_snapshot``); their
+# serializers stay distinct. This corpus now pins that aliasing: a
+# reintroduced local copy behind either module's ``_satisfaction_snapshot``
+# would surface here as divergent outcomes. Rejection through each
+# consumer's own entry point (reconciliation input, closure request) is
+# covered by ``test_3690_shared_satisfaction_validator``.
+# ---------------------------------------------------------------------------
+
+
+def _consistency_corpus():
+    corpus = {
+        "valid-complete": complete_snapshot(),
+        "valid-incomplete": incomplete_snapshot(),
+        "valid-stale": stale_snapshot(),
+        "valid-manual-review": manual_review_snapshot(),
+        "valid-empty-manual-review": snapshot("manual-review", []),
+    }
+    corpus.update(BAD_SNAPSHOTS)
+    return corpus
+
+
+CONSISTENCY_CORPUS = _consistency_corpus()
+
+
+def _normalized(outcome_snapshot):
+    return (
+        outcome_snapshot.repository,
+        outcome_snapshot.issue_number,
+        outcome_snapshot.issue_body_digest,
+        outcome_snapshot.status,
+        tuple(
+            (
+                item.index,
+                item.identity,
+                item.disposition,
+                item.reason_code,
+                item.evidence,
+            )
+            for item in outcome_snapshot.criteria
+        ),
+    )
+
+
+@pytest.mark.parametrize("name", sorted(CONSISTENCY_CORPUS))
+def test_snapshot_validation_is_consistent_across_consumers(name):
+    value = CONSISTENCY_CORPUS[name]
+    outcomes = []
+    for module in _SNAPSHOT_MODULES:
+        try:
+            parsed = module._satisfaction_snapshot(copy.deepcopy(value))
+            outcomes.append(("accept", _normalized(parsed)))
+        except (TypeError, ValueError):
+            outcomes.append(("reject",))
+    assert outcomes[0] == outcomes[1]
+
+
+# ---------------------------------------------------------------------------
+# CR-2 (#3690): the reporting-side serializer. Until now the tests above
+# hand-built every snapshot dict; ``satisfaction_snapshot`` is the
+# production producer that turns a real ``SatisfactionProjection`` into
+# exactly that dict. Round-trip: projector -> serializer -> both
+# consumers' ``_satisfaction_snapshot`` validators.
+# ---------------------------------------------------------------------------
+
+_SERIALIZER_BODY = """## Acceptance criteria
+
+- [ ] Alpha criterion is verified.
+- [ ] Beta criterion is verified.
+- [ ] Gamma criterion is verified.
+"""
+
+_SERIALIZER_PR = PrLineageEntry(pr_number=101, state="merged", head_sha="aaa111")
+
+
+def _serializer_verdict(index, body=_SERIALIZER_BODY):
+    return CriterionEvidence(
+        criterion_index=index,
+        kind="criterion-verdict",
+        verdict="supports",
+        pr_number=_SERIALIZER_PR.pr_number,
+        pr_head_sha=_SERIALIZER_PR.head_sha,
+        issue_body_digest=issue_body_digest(body),
+        source=f"pr:101@aaa111/qa-verdict-{index}",
+    )
+
+
+def _serializer_projection(kind):
+    if kind == "complete":
+        return project_criterion_satisfaction(
+            _SERIALIZER_BODY,
+            [_serializer_verdict(i) for i in (1, 2, 3)],
+            [_SERIALIZER_PR],
+        )
+    if kind == "incomplete":
+        return project_criterion_satisfaction(
+            _SERIALIZER_BODY, [_serializer_verdict(1)], [_SERIALIZER_PR]
+        )
+    # No criteria section at all: manual-review with zero criteria.
+    return project_criterion_satisfaction("## Objective\n\nNothing here.\n")
+
+
+def test_serializer_produces_exact_3680_snapshot_shape():
+    projection = _serializer_projection("complete")
+    serialized = satisfaction_snapshot(
+        projection, repository="Blummer92/agent-os", issue_number=996
+    )
+    assert set(serialized) == {
+        "repository",
+        "issue_number",
+        "issue_body_digest",
+        "status",
+        "criteria",
+    }
+    assert serialized["repository"] == "Blummer92/agent-os"
+    assert serialized["issue_number"] == 996
+    assert serialized["issue_body_digest"] == projection.issue_body_digest
+    assert serialized["issue_body_digest"] == issue_body_digest(_SERIALIZER_BODY)
+    assert serialized["status"] == "complete"
+    assert type(serialized["status"]) is str
+    assert len(serialized["criteria"]) == 3
+    for item, disposition in zip(serialized["criteria"], projection.criteria):
+        # Exact criterion key set: CriterionDisposition.text is dropped.
+        assert set(item) == {
+            "index",
+            "identity",
+            "disposition",
+            "reason_code",
+            "evidence",
+        }
+        assert "text" not in item
+        assert item["index"] == disposition.index
+        assert item["identity"] == disposition.identity
+        assert item["disposition"] == disposition.disposition.value
+        assert type(item["disposition"]) is str
+        assert item["reason_code"] == disposition.reason_code
+        assert item["evidence"] == list(disposition.evidence)
+        assert type(item["evidence"]) is list
+
+
+@pytest.mark.parametrize("kind", ["complete", "incomplete", "manual-review"])
+def test_serializer_round_trip_accepted_identically_by_both_consumers(kind):
+    projection = _serializer_projection(kind)
+    serialized = satisfaction_snapshot(
+        projection, repository="Blummer92/agent-os", issue_number=996
+    )
+    expected = (
+        serialized["repository"],
+        serialized["issue_number"],
+        serialized["issue_body_digest"],
+        serialized["status"],
+        tuple(
+            (
+                item["index"],
+                item["identity"],
+                item["disposition"],
+                item["reason_code"],
+                tuple(item["evidence"]),
+            )
+            for item in serialized["criteria"]
+        ),
+    )
+    outcomes = []
+    for module in _SNAPSHOT_MODULES:
+        parsed = module._satisfaction_snapshot(copy.deepcopy(serialized))
+        outcomes.append(_normalized(parsed))
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[0] == expected
+
+
+def test_serializer_round_trip_tampered_status_rejected_by_both_consumers():
+    serialized = satisfaction_snapshot(
+        _serializer_projection("incomplete"),
+        repository="Blummer92/agent-os",
+        issue_number=996,
+    )
+    assert serialized["status"] == "incomplete"
+    tampered = copy.deepcopy(serialized)
+    tampered["status"] = "complete"  # forged completeness over missing criteria
+    for module in _SNAPSHOT_MODULES:
+        with pytest.raises((TypeError, ValueError)):
+            module._satisfaction_snapshot(copy.deepcopy(tampered))

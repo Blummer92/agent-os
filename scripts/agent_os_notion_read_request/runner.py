@@ -24,6 +24,7 @@ from .execution import (
     execute_admitted_notion_read,
     execute_destination_verification,
     execute_source_schema,
+    execute_lesson_content,
 )
 from .live_executor import build_live_notion_executor_factory
 from .models import SCHEMA_VERSION, NotionReadCatalog, NotionReadRequestError
@@ -31,6 +32,7 @@ from .projection import (
     reject_credential_keys,
     project_public_result,
     project_source_schema_result,
+    project_lesson_content_result,
 )
 
 MAX_TRANSPORT_BYTES = 262_144
@@ -104,6 +106,22 @@ def run_notion_read_request(
         evidence["dispatch_status"] = DISPATCH_COMPLETED
         evidence["dispatch_reason"] = "bounded-source-schema-projected"
         evidence["result"] = project_source_schema_result(
+            admission,
+            execution,
+            catalog=resolved_catalog,
+            generated_at=generated_at,
+        )
+    elif admission.request_class == "lesson-content":
+        # #3580: governed lesson-field read. The plan is exactly one
+        # query_data_source step; no filter step exists anywhere in this path.
+        execution = execute_lesson_content(
+            admission,
+            catalog=resolved_catalog,
+            scheduler_task_executor_factory=scheduler_task_executor_factory,
+        )
+        evidence["dispatch_status"] = DISPATCH_COMPLETED
+        evidence["dispatch_reason"] = "bounded-lesson-content-projected"
+        evidence["result"] = project_lesson_content_result(
             admission,
             execution,
             catalog=resolved_catalog,

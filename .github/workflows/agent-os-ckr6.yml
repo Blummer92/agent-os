@@ -34,6 +34,7 @@ jobs:
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
             -e src \
+            -e . \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Parse and classify bounded CKR6 envelope
@@ -92,6 +93,7 @@ jobs:
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
             -e src \
+            -e . \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Execute zero-read CKR6 request
@@ -185,4 +187,44 @@ jobs:
             --event "$AGENT_OS_EVENT" \
             --repository "$AGENT_OS_REPOSITORY" \
             --result "$RUNNER_TEMP/agent-os-ckr6/result.json" \
+            --api-url "$GITHUB_API_URL"
+
+  report-failure:
+    name: Report CKR6 infrastructure failure
+    # #3691: when classify or execute fails before the bridge can post its
+    # bounded result (checkout, Python setup, or the runtime install
+    # itself), the execute job's step-level always() postback never runs:
+    # execute is skipped when classify fails, and the postback step imports
+    # the package whose install may have failed. This job reports that
+    # failure instead. It runs only on an actual job failure -- a skipped
+    # classify (noncommand, PR comment, unauthorized actor) never satisfies
+    # the predicate, so ineligible events stay silent. The reporter is
+    # stdlib-only and deliberately does NOT install the Agent OS runtime:
+    # it must work precisely when that installation is what failed. It
+    # posts the bridge's existing bounded fallback result (manual-review /
+    # ckr6-result-unavailable), deduplicated per request comment.
+    needs: [classify, execute]
+    if: ${{ always() && (needs.classify.result == 'failure' || needs.execute.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Post bounded CKR6 failure result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
             --api-url "$GITHUB_API_URL"

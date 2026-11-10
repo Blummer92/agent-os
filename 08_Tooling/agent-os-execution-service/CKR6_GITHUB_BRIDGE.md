@@ -16,6 +16,26 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+## Infrastructure-failure postback (#3691)
+
+The postback above lives in the `execute` job, so it cannot report a failure
+that prevents that job from running: when `classify` fails during checkout,
+Python setup, or the runtime `pip install` (live proof: run 39665727697,
+where the then-missing `agent-os-navigation-registry` distribution failed
+classification), `execute` is skipped by `needs: classify`, and the
+postback's own module is part of the install that failed. The workflow's
+`report-failure` job covers exactly that boundary. It runs only when the
+`classify` or `execute` job result is `failure` (a skipped classify —
+noncommand, PR comment, unauthorized actor — stays silent), holds job-scoped
+`issues: write`, and runs `scripts/ckr6_failure_postback.py`: a
+standard-library-only reporter that installs nothing, revalidates the event
+repository/issue/actor/command prefix, and posts the same bounded fallback
+result (`status: manual-review`, `reason_codes: [ckr6-result-unavailable]`,
+all authority flags false) under the same `agent-os-ckr6-result:v1` marker,
+correlated and deduplicated by `request_comment_id`. It adds no CKR6
+decision, scheduler, or second writer — it is the same single postback,
+reachable when the runtime is not.
+
 ## Failed-repair diagnostic postback (#2851)
 
 The existing failed-repair CKR6 activation produces two independent, finite
@@ -54,7 +74,10 @@ only, so other actors cannot cause receipts. Postback is idempotent per request:
 when a result comment for the same `request_comment_id` already exists (bounded
 lookup of comments created since the request), a rerun does not post another.
 A failed lookup still posts, because a duplicate receipt is preferable to
-silence.
+silence. The infrastructure-failure reporter then also exits non-zero (a missing
+or oversized lookup, a non-list response or an absent `created_at` count as a
+failed lookup), so the run is red while the requester still receives a receipt.
+Exactly-once is not claimed: lookup-then-post is not atomic.
 
 Host-owned remainder: the host route that appends the footer is outside this
 repository. Hosts should post machine command comments without appended text;
@@ -95,8 +118,10 @@ No workflow change, Notion write, store or authority is added.
   comments: results, materiality source, retrievals, rejections, eligibility
   blocks, selections, valid/invalid/duplicate/conflicting receipts,
   selected-without-receipt, candidates, recurrences, refinement proposals and
-  signals, and CKR12 accountability (matched by lesson number because the CKR12
-  snapshot uses `lesson-N` while live IDs are `LL-N`). No causality is inferred.
+  signals. Per-lesson eligibility is read from the CKR6 result itself (live
+  Notion evidence at selection time), never from a checked-in snapshot. No
+  causality is inferred.
+  Migration for metrics parsers: the former `accountability` key has no successor field by design. It reported a static CKR12 snapshot keyed by lesson number, not current per-lesson state, and the metrics CLI reads only GitHub result/receipt comments, so it cannot reconstruct authoritative current activation state. All other metrics keys and receipt-count semantics are unchanged.
 
 Live follow-up (2026-10-09, #3418): a malformed `lesson-candidate` or
 `lesson-refinement` detail now returns the same bounded `status: rejected`

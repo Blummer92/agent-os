@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from workflow_scheduler.governance.dev_validation import (
 )
 from workflow_scheduler.governance.dev_validation_codespaces import (
     APPROVED_CODESPACE_PROFILE_ID,
+    _REMOTE_RUNNER_SOURCE,
     _RUN_TIMEOUT_SECONDS,
     resolve_current_codespace,
     run_dev_validation_over_codespaces,
@@ -110,6 +112,60 @@ def test_unqualified_validation_profile_falls_back_before_codespaces_probe(
     assert route["selected"] is False
     assert route["reason_codes"] == ["codespaces-profile-not-qualified"]
     assert calls == []
+
+
+def test_codespaces_reuses_canonical_fixed_profile_without_widening(monkeypatch) -> None:
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        get_profile, profile_argv,
+    )
+
+    profile = get_profile(VALIDATION_ID)
+    assert profile.profile_id == "remote-validation"
+    assert profile.fixed_targets == ("tests/agent_os_remote_validation",)
+    assert profile_argv(VALIDATION_ID) == (
+        "python", "-m", "pytest", "tests/agent_os_remote_validation",
+    )
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+    route, request = select_codespaces_dev_validation(
+        _ingress(), run=_listing_run(_codespace_payload())
+    )
+    assert request is not None
+    assert request.profile_id == profile.profile_id
+    assert route["selected"] is True
+    assert route["lifecycle_mutation_authorized"] is False
+
+
+def test_canonical_profile_drift_blocks_before_codespaces_probe(monkeypatch) -> None:
+    from workflow_scheduler.governance import dev_validation_codespaces as live
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        DevValidationProfile, RunnerKind,
+    )
+
+    original = live.get_profile
+
+    def changed(profile_id):
+        profile = original(profile_id)
+        return DevValidationProfile(
+            profile_id=profile.profile_id,
+            runner_kind=RunnerKind.PYTEST_TARGETS,
+            fixed_targets=("tests/agent_os_remote_validation/extra",),
+            fixed_working_directory=profile.fixed_working_directory,
+            runtime_id=profile.runtime_id,
+            timeout_class=profile.timeout_class,
+            selector_requirements=profile.selector_requirements,
+        )
+
+    monkeypatch.setattr(live, "get_profile", changed)
+    monkeypatch.setenv("GH_TOKEN", "redacted-test-token")
+
+    def forbidden_run(argv, *, timeout):
+        raise AssertionError("drift must be refused before Codespaces access")
+
+    route, request = select_codespaces_dev_validation(_ingress(), run=forbidden_run)
+    assert request is not None
+    assert route["selected"] is False
+    assert route["reason_codes"] == ["codespaces-profile-not-qualified"]
+    assert route["lifecycle_mutation_authorized"] is False
 
 
 def test_stopped_codespace_falls_back_without_lifecycle_mutation(monkeypatch) -> None:
@@ -314,12 +370,67 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         "-c",
         CURRENT_NAME,
     )
-    assert argv[-1] == CURRENT_NAME
-    assert argv[5:8] == ("--", "python3", "-c")
-    assert "start" not in argv
-    assert "stop" not in argv
-    assert "delete" not in argv
-    assert "export" not in argv
+    assert argv[5] == "--"
+    # #3333/#3617: the multiline runner must cross the SSH shell boundary as
+    # one safely quoted command, not as separate argv elements the remote
+    # shell re-splits (run 41633810143). This replaces the old
+    # argv[5:8] == ("--", "python3", "-c") and argv[-1] == name shape, which
+    # was the defect.
+    assert len(argv) == 7
+    remote_command = argv[6]
+    assert "\n" in remote_command  # the source is multiline, yet one shell word
+    assert shlex.split(remote_command) == [
+        "python3",
+        "-c",
+        _REMOTE_RUNNER_SOURCE,
+        REPOSITORY,
+        "2931",
+        BRANCH,
+        SHA,
+        VALIDATION_ID,
+        request.request_id,
+        CURRENT_NAME,
+    ]
+    split_command = shlex.split(remote_command)
+    assert "start" not in split_command
+    assert "stop" not in split_command
+    assert "delete" not in split_command
+    assert "export" not in split_command
+
+
+def test_ssh_remote_command_executes_through_posix_shell(monkeypatch) -> None:
+    # #3333/#3617: exercise the implementation's exact quoting through a real
+    # POSIX shell. A sentinel program proves the shell delivers the -c
+    # program intact instead of parsing its lines as shell commands.
+    sentinel = (
+        "import sys\n"
+        "sys.stdout.write('SSH_BOUNDARY_OK')\n"
+    )
+    monkeypatch.setattr(
+        "workflow_scheduler.governance.dev_validation_codespaces._REMOTE_RUNNER_SOURCE",
+        sentinel,
+    )
+    captured: dict[str, str] = {}
+
+    def run(argv, *, timeout):
+        captured["command"] = argv[6]
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    completed = subprocess.run(
+        ("sh", "-c", captured["command"]), capture_output=True, text=True, timeout=30
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "SSH_BOUNDARY_OK" in completed.stdout
+    assert "command not found" not in completed.stderr
+    assert "SyntaxError" not in completed.stderr
 
 
 def test_codespaces_ssh_failure_is_fail_closed_and_bounded() -> None:
@@ -425,35 +536,12 @@ def test_codespaces_result_identity_mismatch_is_rejected() -> None:
     ]
 
 
-def test_governed_ingress_skips_gce_only_for_selected_codespaces_route() -> None:
-    workflow = (
-        ROOT / ".github/workflows/agent-os-governed-invocation.yml"
-    ).read_text(encoding="utf-8")
-    selected_guard = (
-        "steps.transport.outputs.accepted == 'true' && "
-        "steps.codespaces_diagnostic.outputs.handled != 'true' && "
-        "steps.codespaces.outputs.selected != 'true' && "
-        "(steps.codespaces_discovery.outputs.selected != 'true' || "
-        "steps.codespaces_discovery.outputs.capable != 'true')"
-    )
-    assert "Attempt read-only Codespaces developer validation" in workflow
-    assert "Attempt Codespaces discovery" in workflow
-    assert "secrets.AGENT_OS_CODESPACES_TOKEN" in workflow
-    assert selected_guard in workflow
-    assert "Invoke exact governed GCE control path" in workflow
-    assert (
-        "steps.codespaces_discovery.outputs.capable != 'true') && "
-        "(steps.route.outputs.preferred == 'gce' || "
-        "steps.route.outputs.gce_fallback_allowed == 'true') }}"
-        in workflow
-    )
-
-
-def test_2944_ssh_start_timeout_alone_admits_gce_fallback() -> None:
-    from workflow_scheduler.governance.dev_validation_codespaces import (
-        _ssh_start_failed_before_execution,
-    )
-
+def test_codespaces_identity_mismatch_preserves_remote_reason() -> None:
+    # #3333/run 41659878211: a remote pre-surface failure (here the
+    # environment-health gate) carries execution_surface_id None, so the
+    # fixed-field check fails. The rejection must stay fail-closed, but
+    # the remote reason and the differing field must survive in the
+    # receipt instead of being replaced by the generic reason alone.
     request = build_dev_validation_request(
         repository=REPOSITORY,
         issue_number=2931,
@@ -461,31 +549,128 @@ def test_2944_ssh_start_timeout_alone_admits_gce_fallback() -> None:
         source_sha=SHA,
         validation_id=VALIDATION_ID,
     )
-    base = {
+    payload = {
         "schema_version": "1.0",
         "status": "needs-decision",
-        "reason_codes": ["dev-validation-codespaces-ssh-failed"],
-        "ssh_exit_code": 1,
-        "ssh_stdout_tail": "",
-        "ssh_stderr_tail": (
-            "error connecting to codespace: timed out while waiting "
-            "for the codespace to start"
-        ),
-        "workspace_side_effects_performed": False,
-        "tested_sha": request.source_sha,
+        "reason_codes": ["codespaces-environment-health-invalid"],
+        "repository": REPOSITORY,
+        "issue_number": 2931,
+        "branch": BRANCH,
+        "tested_sha": SHA,
+        "validation_id": VALIDATION_ID,
+        "request_id": request.request_id,
+        "exit_code": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "cleanup_complete": False,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": None,
+        "environment_health_evidence_id": None,
     }
-    assert _ssh_start_failed_before_execution(base)
-    for patch in (
-        {"ssh_stderr_tail": "remote command failed"},
-        {"ssh_stdout_tail": "remote command started"},
-        {"ssh_exit_code": 2},
-        {"workspace_side_effects_performed": True},
-        {"reason_codes": ["dev-validation-codespaces-frame-invalid"]},
+    stdout = (
+        "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+    )
+
+    def run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-evidence-identity-mismatch"
+    ]
+    assert evidence["remote_reason_codes"] == ["codespaces-environment-health-invalid"]
+    assert evidence["identity_mismatch_fields"] == ["execution_surface_id"]
+    assert evidence["stdout_tail"] == ""
+    assert evidence["stderr_tail"] == ""
+    assert evidence["exit_code"] is None
+
+    # Copilot review #5754864655: malformed remote reason lists are wholly
+    # untrusted, not partially filtered into plausible diagnostics.
+    for malformed_reasons in (
+        ["apparently-valid", 7],
+        ["codespaces-environment-health-invalid", ""],
+        [None],
+        "codespaces-environment-health-invalid",
     ):
-        assert not _ssh_start_failed_before_execution({**base, **patch})
+        payload["reason_codes"] = malformed_reasons
+        stdout = (
+            "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+            + json.dumps(payload)
+            + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+        )
+        rejected = run_dev_validation_over_codespaces(
+            request, codespace_name=CURRENT_NAME, run=run
+        )
+        assert rejected["status"] == "needs-decision"
+        assert rejected["reason_codes"] == [
+            "dev-validation-codespaces-evidence-identity-mismatch"
+        ]
+        assert rejected["remote_reason_codes"] == []
+        assert rejected["identity_mismatch_fields"] == ["execution_surface_id"]
 
 
-def test_2944_prestart_timeout_projects_fallback_without_stale_result(
+def test_codespaces_identity_mismatch_lists_each_differing_field() -> None:
+    # A success-shaped payload with one wrong fixed field still rejects,
+    # and names exactly that field plus the remote reason it carried.
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    payload = {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["validation-passed"],
+        "repository": REPOSITORY,
+        "issue_number": 2931,
+        "branch": BRANCH,
+        "tested_sha": "b" * 40,
+        "validation_id": VALIDATION_ID,
+        "request_id": request.request_id,
+        "exit_code": 0,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "cleanup_complete": True,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": CURRENT_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + ("b" * 64),
+    }
+    stdout = (
+        "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+    )
+
+    def run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    evidence = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-evidence-identity-mismatch"
+    ]
+    assert evidence["remote_reason_codes"] == ["validation-passed"]
+    assert evidence["identity_mismatch_fields"] == ["tested_sha"]
+
+
+def test_prestart_timeout_preserves_failure_evidence_without_fallback(
     monkeypatch, tmp_path,
 ) -> None:
     from dataclasses import asdict
@@ -528,14 +713,14 @@ def test_2944_prestart_timeout_projects_fallback_without_stale_result(
         "--result-output", str(result_path),
     ]) == 0
     route = json.loads(route_path.read_text(encoding="utf-8"))
-    assert route["selected"] is False
-    assert route["reason_codes"] == ["codespaces-ssh-start-timeout-fallback"]
-    assert route["codespaces_failure_reason"] == "dev-validation-codespaces-ssh-failed"
-    assert route["tested_sha"] == SHA
-    assert route["validation_id"] == VALIDATION_ID
-    assert route["ssh_exit_code"] == 1
-    assert route["cleanup_complete"] is False
-    assert not result_path.exists()
+    assert route["selected"] is True
+    result = json.loads(result_path.read_text(encoding="utf-8"))["dev_validation"]
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["dev-validation-codespaces-ssh-failed"]
+    assert result["tested_sha"] == SHA
+    assert result["validation_id"] == VALIDATION_ID
+    assert result["ssh_exit_code"] == 1
+    assert result["cleanup_complete"] is False
 
 
 def test_codespaces_api_read_failure_classification_is_bounded(monkeypatch) -> None:
@@ -569,3 +754,96 @@ def test_codespaces_api_read_timeout_and_transport_error_fail_closed(monkeypatch
 
     assert resolve_current_codespace(timeout_run).reason == "codespaces-read-timeout"
     assert resolve_current_codespace(missing_cli_run).reason == "codespaces-read-transport-error"
+
+
+def test_3333_noninteractive_ssh_identity_policy_preserves_remote_gates() -> None:
+    """Execute the actual fixed remote program, not a duplicate policy model.
+
+    Force the next workspace gate to fail so neither pytest nor a worktree can
+    run; this proves an absent CODESPACE_NAME only advances to the next gate.
+    """
+    import os
+
+    request = build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+    # Preserve the real runner and real request-identity derivation, replacing
+    # only the local workspace existence probe to avoid host-dependent results.
+    remote_program = (
+        "import os\n"
+        "os.path.isdir = lambda unused: False\n"
+        + _REMOTE_RUNNER_SOURCE
+    )
+    for identity, expected in (
+        (None, "codespaces-workspace-unavailable"),
+        (CURRENT_NAME, "codespaces-workspace-unavailable"),
+        ("", "codespaces-surface-identity-mismatch"),
+        ("another-codespace", "codespaces-surface-identity-mismatch"),
+    ):
+        env = dict(os.environ)
+        env.pop("CODESPACE_NAME", None)
+        if identity is not None:
+            env["CODESPACE_NAME"] = identity
+        completed = subprocess.run(
+            (
+                "python3", "-c", remote_program,
+                REPOSITORY, "2931", BRANCH, SHA, VALIDATION_ID,
+                request.request_id, CURRENT_NAME,
+            ),
+            env=env, capture_output=True, text=True, timeout=10,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.count(
+            "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN==="
+        ) == 1
+        payload = json.loads(
+            completed.stdout.split(
+                "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===", 1
+            )[1].split(
+                "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===", 1
+            )[0].strip()
+        )
+        assert payload["reason_codes"] == [expected]
+        assert payload["status"] == "needs-decision"
+        assert payload["exit_code"] is None
+        assert payload["cleanup_complete"] is False
+        assert payload["workspace_side_effects_performed"] is False
+        assert payload["execution_authorized"] is False
+        assert payload["merge_authorized"] is False
+        assert payload["environment_health_evidence_id"] is None
+
+    # An absent environment variable must not bypass request authentication.
+    env = dict(os.environ)
+    env.pop("CODESPACE_NAME", None)
+    invalid = subprocess.run(
+        (
+            "python3", "-c", remote_program,
+            REPOSITORY, "2931", BRANCH, SHA, VALIDATION_ID,
+            "forged-request", CURRENT_NAME,
+        ),
+        env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert invalid.returncode == 0
+    assert '"invalid-codespaces-host-identity"' in invalid.stdout
+    assert '"codespaces-workspace-unavailable"' not in invalid.stdout
+
+
+def test_transport_loss_cannot_claim_no_workspace_effects():
+    request = build_dev_validation_request(repository=REPOSITORY, issue_number=2931,
+        branch=BRANCH, source_sha=SHA, validation_id=VALIDATION_ID)
+    def timeout_run(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    def failed_run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="connection lost")
+    def malformed_run(argv, *, timeout):
+        return subprocess.CompletedProcess(argv, 0, stdout="unframed", stderr="")
+    for runner in (timeout_run, failed_run, malformed_run):
+        result = run_dev_validation_over_codespaces(request, codespace_name=CURRENT_NAME, run=runner)
+        assert result["status"] == "needs-decision"
+        assert result["workspace_side_effects_performed"] is None
+        assert result["cleanup_complete"] is False

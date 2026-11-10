@@ -307,3 +307,103 @@ def test_ssh_timeout_override_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     for invalid in (0, 901, True):
         with pytest.raises(live.GcloudCommandError, match="timeout"):
             adapter._ssh(live.RESOURCE, "fixed-command", timeout=invalid)
+
+
+def _discovery_ingress(**overrides: object) -> IssueCommentIngressResult:
+    values: dict[str, object] = dict(
+        reason="accepted-discovery-envelope",
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none=None,
+    )
+    values.update(overrides)
+    return ingress(**values)
+
+
+def test_discovery_envelope_returns_bounded_unavailable_result() -> None:
+    # #3617: the GCE fallback must answer a discovery envelope with bounded
+    # non-authorizing evidence, not the resume binder's ValueError.
+    adapter = FakeAdapter()
+    result = live.execute_transport(_discovery_ingress(), claims=claims(), adapter=adapter)
+    discovery = result["discovery"]
+    assert discovery["status"] == "needs-decision"
+    assert discovery["reason_codes"] == ["discovery-gce-unavailable"]
+    assert discovery["repository"] == "Blummer92/agent-os"
+    assert discovery["issue_number"] == 1217
+    assert discovery["matching_descriptor_count"] == 0
+    assert discovery["handoff_id"] is None
+    assert discovery["result_id"] is None
+    assert discovery["execution_authorized"] is False
+    assert discovery["scheduler_invoked"] is False
+    assert discovery["side_effects_performed"] is False
+
+
+def test_discovery_envelope_never_touches_adapter_or_binder() -> None:
+    # No GCE host interaction: the retired host must not be observed,
+    # started, probed, or invoked for a discovery envelope.
+    adapter = FakeAdapter()
+    live.execute_transport(_discovery_ingress(), claims=claims(), adapter=adapter)
+    assert adapter.calls == []
+
+
+def test_discovery_envelope_rejects_handoff_identity() -> None:
+    adapter = FakeAdapter()
+    with pytest.raises(ValueError, match="handoff identity"):
+        live.execute_transport(
+            _discovery_ingress(handoff_id_or_none=HANDOFF), claims=claims(), adapter=adapter
+        )
+
+
+def test_discovery_envelope_rejects_workflow_rerun() -> None:
+    adapter = FakeAdapter()
+    with pytest.raises(ValueError, match="reruns cannot perform discovery"):
+        live.execute_transport(
+            _discovery_ingress(run_attempt=2), claims=claims(), adapter=adapter
+        )
+
+
+def test_discovery_envelope_rejects_missing_issue_identity() -> None:
+    adapter = FakeAdapter()
+    with pytest.raises(ValueError, match="canonical issue evidence"):
+        live.execute_transport(
+            _discovery_ingress(issue_number=None), claims=claims(), adapter=adapter
+        )
+
+
+def test_discovery_noncanonical_repository_cannot_produce_accepted_evidence() -> None:
+    # #3617 boundary A: even with a malformed repository identity, the GCE
+    # discovery branch can only return needs-decision/unavailable evidence —
+    # never accepted discovery evidence.
+    adapter = FakeAdapter()
+    result = live.execute_transport(
+        _discovery_ingress(repository="not-a-canonical-repo"),
+        claims=claims(),
+        adapter=adapter,
+    )
+    discovery = result["discovery"]
+    assert discovery["status"] == "needs-decision"
+    assert discovery["status"] != "not-found"
+    assert discovery["reason_codes"] == ["discovery-gce-unavailable"]
+    assert discovery["repository"] == "not-a-canonical-repo"
+    assert discovery["handoff_id"] is None
+    assert adapter.calls == []
+
+
+def test_discovery_unavailable_zero_count_is_not_a_descriptor_claim() -> None:
+    # #3617 boundary B: needs-decision with matching_descriptor_count=0 must
+    # not be interpretable as proof of zero descriptors, a released lease,
+    # or implementation authorization.
+    adapter = FakeAdapter()
+    result = live.execute_transport(_discovery_ingress(), claims=claims(), adapter=adapter)
+    discovery = result["discovery"]
+    assert discovery["status"] == "needs-decision"
+    assert discovery["reason_codes"] == ["discovery-gce-unavailable"]
+    assert discovery["matching_descriptor_count"] == 0
+    # No lease semantics anywhere in the evidence:
+    assert not any("lease" in key for key in discovery)
+    assert "lease_released" not in discovery
+    # No authorization of any kind:
+    assert discovery["execution_authorized"] is False
+    assert discovery["scheduler_invoked"] is False
+    assert discovery["side_effects_performed"] is False
+    assert discovery["handoff_id"] is None
+    assert discovery["result_id"] is None

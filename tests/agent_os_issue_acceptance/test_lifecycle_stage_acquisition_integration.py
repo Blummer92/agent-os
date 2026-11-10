@@ -49,6 +49,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     LifecycleStage,
 )
 from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     LifecycleStageAcquisitionRequest,
     PrLineageEnumeration,
     VerifiedPrLineage,
@@ -183,6 +184,7 @@ def acquisition_request(
         lineage_enumeration=PrLineageEnumeration(
             complete=True, enumeration_note="all pages consumed; total matched"
         ),
+        association_policy=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     )
 
 

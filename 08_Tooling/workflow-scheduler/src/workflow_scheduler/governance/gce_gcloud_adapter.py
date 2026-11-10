@@ -104,8 +104,9 @@ class GcloudIapAdapter:
   return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=timeout)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
- def inspect_retirement_inventory(self,resource:GceResourceTuple)->dict[str,object]:
-  return collect_retirement_inventory(_run,lambda command:self._ssh(resource,command))
+ def inspect_retirement_inventory(self,resource:GceResourceTuple,*,include_host:bool=True)->dict[str,object]:
+  host_run=(lambda command:self._ssh(resource,command)) if include_host else None
+  return collect_retirement_inventory(_run,host_run)
  def inspect_sudo_admission(self,resource:GceResourceTuple)->dict[str,object]:
   try:expected_sha=expected_runtime_source_sha()
   except (OSError,ValueError):return unavailable_sudo_admission("runtime-source-sha-unavailable")
@@ -168,6 +169,8 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
 def _non_authorizing(status:str,reason:str)->dict[str,object]:return {"schema_version":"1.0","status":status,"reason_codes":[reason],"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
+def _discovery_unavailable(reason:str,ingress:IssueCommentIngressResult)->dict[str,object]:
+ return {"schema_version":"1.0","status":"needs-decision","reason_codes":[reason],"repository":ingress.repository,"issue_number":ingress.issue_number,"matching_descriptor_count":0,"handoff_id":None,"result_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 def _bounded_diagnostic_text(text:str)->tuple[str,bool]:
  if type(text) is not str:text=""
  if len(text)>MAX_DIAGNOSTIC_STDERR:return text[-MAX_DIAGNOSTIC_STDERR:],True
@@ -225,15 +228,18 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if ingress.handoff_id_or_none is not None:raise ValueError("runtime inspection must not carry a handoff identity")
   if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform runtime inspection")
   if not _policy().accepts(claims):return {"runtime_inspection":_non_authorizing("blocked","claims-rejected")}
-  if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"runtime_inspection":_non_authorizing("needs-decision","host-not-running")}
-  runtime_inspection=adapter.inspect_runtime(RESOURCE)
-  response={"runtime_inspection":runtime_inspection}
-  inspect_sudo=getattr(adapter,"inspect_sudo_admission",None)
-  if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
+  try:state=adapter.observe_state(RESOURCE)
+  except (GcloudCommandError,ValueError,subprocess.TimeoutExpired):state=VmState.UNKNOWN
+  running=state is VmState.RUNNING
+  response={"runtime_inspection":adapter.inspect_runtime(RESOURCE) if running else _non_authorizing("needs-decision","host-not-running")}
+  if running:
+   inspect_sudo=getattr(adapter,"inspect_sudo_admission",None)
+   if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
   response["cloud_identity"]=collect_cloud_identity(_run)
   inspect_retirement=getattr(adapter,"inspect_retirement_inventory",None)
-  if callable(inspect_retirement):response["retirement_inventory"]=inspect_retirement(RESOURCE)
+  if callable(inspect_retirement):
+   response["retirement_inventory"]=inspect_retirement(RESOURCE,include_host=running) if isinstance(adapter,GcloudIapAdapter) else inspect_retirement(RESOURCE)
   return response
  if ingress.reason=="accepted-first-publication-activation-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
@@ -243,6 +249,18 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if state is not VmState.RUNNING:return {"first_publication_activation":_non_authorizing("needs-decision","host-not-running")}
   if not adapter.probe_activation_ready(RESOURCE):return {"first_publication_activation":_non_authorizing("needs-decision","activation-entrypoint-unavailable")}
   return {"first_publication_activation":adapter.activate_first_publication(RESOURCE,source_capsule_id=ingress.source_capsule_id_or_none)}
+ # #3617: an accepted discovery envelope must reach a bounded discovery
+ # result, never the resume-only binder below. The GCE transport has no
+ # discovery operation (descriptor discovery runs on the Codespaces surface);
+ # the retired GCE host cannot perform it. Validate the envelope strictly and
+ # return non-authorizing unavailable evidence instead of a ValueError
+ # traceback. The resume binder's strict accepted-envelope grammar is
+ # unchanged, and no adapter method is invoked.
+ if ingress.reason=="accepted-discovery-envelope":
+  if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
+  if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")
+  if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform discovery")
+  return {"discovery":_discovery_unavailable("discovery-gce-unavailable",ingress)}
  binding=bind_ingress_to_gce(ingress,resource=RESOURCE);result=run_gce_control_path(request_id=binding.control_request_id,claims=claims,trust_policy=_policy(),resource=binding.resource,expected_resource=RESOURCE,handoff_id=binding.handoff_id,adapter=adapter,allow_shutdown=bool(getattr(adapter,"shutdown_enabled",False)))
  return {"binding":binding.to_dict(),"control":{"result_id":result.result_id,"status":result.status.value,"reason_codes":[item.value for item in result.reason_codes],"request_id":result.request_id,"handoff_id":result.handoff_id,"start_issued":result.start_issued,"host_ready":result.host_ready,"host_invoked":result.host_invoked,"host_accepted":result.host_accepted,"scheduler_invocation_id":result.scheduler_invocation_id,"execution_id":result.execution_id,"terminal_status":result.terminal_status,"shutdown_eligible":result.shutdown_eligible,"shutdown_issued":result.shutdown_issued,"retry_attempted":False,"github_writes_authorized":False,"merge_authorized":False}}
 

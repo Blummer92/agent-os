@@ -2,12 +2,14 @@
 
 ## Purpose
 
-Agent OS keeps one provider-neutral #918 governed-runner route while preferring
-the existing `agent-os-codespaces-v1` environment for ordinary developer-loop
-runtime work. GCE remains available when Codespaces is unavailable, stale, or
-missing a required capability. Operations already classified as requiring an
-autonomous VM host never select Codespaces; #2300 owns the detailed #759 /
-Scheduler / fixed-host boundary.
+Agent OS reuses the provider-neutral #918 governed-runner contracts while
+using the existing `agent-os-codespaces-v1` environment for qualified ordinary
+developer-loop operations. Governed issue-comment discovery, developer validation,
+and diagnostics never fall back to GCE. A missing, stale, unauthorized, incapable,
+or failed Codespace produces bounded failure evidence. This follows the owner's
+[2026-10-14 Codespaces-first decision](https://github.com/Blummer92/agent-os/issues/3333#issuecomment-6178339957).
+GCE resources remain preserved under #3102; no VM-only operation is qualified for
+Codespaces by this route change.
 
 ## Composition
 
@@ -16,7 +18,7 @@ operation requirements
 -> current runtime observations
 -> choose_governed_runner(...)
    -> Codespaces when current + capable + developer-loop eligible
-   -> otherwise GCE when current + capable
+   -> otherwise GCE candidate metadata when current + capable
    -> otherwise no capable governed runner
 -> project selected runtime into existing #918 inputs
 -> select_executor_route(...)
@@ -25,7 +27,8 @@ operation requirements
 
 `choose_governed_runner` is a candidate preference only. It creates no executor
 route enum, Scheduler, lease, capability registry, validation plan, transport,
-credential, or authority. The selected candidate supplies #918's existing
+credential, or authority. The Codespaces implementation dispatcher refuses a
+GCE selection rather than invoking GCE. The selected candidate supplies #918's existing
 `governed_runner_capabilities`, environment profile, environment-health evidence,
 and workflow runtime identity.
 
@@ -92,8 +95,9 @@ provisioning, credential, or protected-setting change is involved.
 #1212 proved `gh codespace ssh` with the official Dev Container SSH feature, but
 that closed qualification PR was not merged. #2299 does not silently reactivate
 its devcontainer changes. Live use must consume current environment-health and
-transport evidence; stale or unavailable Codespaces evidence falls back to GCE
-through the same #918 route. Any devcontainer activation change is separately
+transport evidence; stale or unavailable evidence blocks ordinary ingress.
+The generic preference function can still describe GCE candidates; it executes
+no provider operation. Any devcontainer activation change is separately
 validated before being treated as current capability.
 
 ## Governed ingress read-only pilot (#2931)
@@ -116,34 +120,45 @@ the accepted developer-validation envelope when all of these conditions hold:
 
 The workflow never starts, stops, exports, creates, edits, deletes, or publishes
 a Codespace. A stopped, stale, mismatched, unauthenticated, or otherwise
-unqualified Codespaces candidate is treated as unavailable and preserves the
-existing GCE fallback. GitHub CLI is invoked with a fixed trusted command built
+unqualified Codespaces candidate produces an explicit failure receipt.
+No alternate execution is attempted, including after the CLI pre-start timeout. GitHub CLI is invoked with a fixed trusted command built
 from the existing developer-validation request identity; caller-provided shell
 or argv is not exposed.
 
 Only `remote-validation-suite` participates in the developer-validation pilot.
-Other developer-validation profiles remain on the existing GCE transport until
-separately qualified for Codespaces. Discovery now prefers Codespaces too: the
-`agent-os-governed-invocation` workflow resolves a Codespaces-first route per
-ingress envelope (`workflow_scheduler.governance.codespaces_first_route`), and
-the accepted discovery envelope runs the bounded read-only discovery adapter
-(`workflow_scheduler.governance.discovery_codespaces`) on the current Codespace
-before any GCE fallback. Discovery on Codespaces reuses the same single-current-
-surface resolver, read-only token, and fixed `gh codespace ssh` transport as the
-diagnostic and developer-validation pilots; the remote runner executes the
-repository-owned handoff discovery entrypoint with a fixed argv and returns a
-framed read-only evidence object bound to that execution surface. The remote
-runner verifies the host-local checkpoint store (`invocations` directory) is
-present before importing the discovery implementation: a Codespace without the
-store reports `codespaces_capable=False` so the workflow falls back through the
-existing GCE path instead of returning a misleading `not-found`. If the current
-Codespace is unavailable, the repository checkout is missing, or the store is
-absent, the run fails closed and the existing GCE path is preserved. First-run
-validation, Scheduler/control, #759 containment, fixed-service-identity, host
-maintenance, and other VM-specific operations remain GCE-owned under #2300.
+Other developer-validation profiles return `codespaces-profile-not-qualified`
+without executing either provider. Qualification of a replacement remains a
+separate decision; historical GCE support is not Codespaces capability evidence.
 
-The read-only token is a transport credential, not routing or execution
-authority. Missing credential material leaves the prior GCE behavior intact.
+Discovery reuses the same current-surface selection, read-only token, fixed SSH
+transport, and provider-neutral handoff-discovery contract. Its checkpoint store
+defaults to `/workspaces/agent-os-state/checkpoints`, matching the devcontainer.
+A missing checkout, missing store, failed SSH, malformed response, or unavailable
+Codespace retains its own reason-coded `needs-decision` receipt. The independent
+`codespaces-discovery-result.json` copy remains available for existing evidence
+consumers. GCE discovery is retired and is never an ordinary alternate route.
+
+The workflow only invokes discovery for a discovery envelope, so it cannot
+overwrite a failed developer-validation receipt. Developer validation always
+writes its SHA/profile-bound result when its request is recognized. The existing
+gate still requires success, exit code zero, matching branch/SHA/profile, and
+completed cleanup; it rejects unsupported or failed routes. Ordinary route
+evidence retains `gce_fallback_allowed=false` for schema compatibility, but no
+cloud step consumes that field as authority.
+
+Fixed-host inspection, governed resume/control, PPUX projection, and publication
+activation remain separately implemented GCE paths; no new migration or live
+qualification is claimed. The owner-only `host_install.outputs.requested` branch
+was retired in GCE Wave 1: the governed workflow no longer classifies, authenticates,
+or runs a host-runtime installation, and the former `/agent-os install-host-runtime`
+comment is ignored through canonical ingress. The owner decision forbids GCE
+reactivation/reinstallation; #3102 resource disposition and any further repository
+retirement remain separately gated.
+
+The read-only token is transport access, never implementation authorization.
+The fixed #3333 implementation pilot separately requires canonical descriptor,
+authorization, currentness, health, and lease evidence; its Actions entry remains
+fail closed. Discovery and test success do not establish pilot qualification.
 
 
 ## Reconstructed #2826 acceptance coverage
@@ -270,14 +285,15 @@ than Adobe compatibility failures.
 
 ## Developer-validation SSH start timeout (#2944)
 
-For the developer-validation operation only, the exact `gh codespace ssh`
-error `timed out while waiting for the codespace to start` (exit 1 with no
-remote stdout) proves that the remote command did not begin. The route records
-the requested SHA, validation identity, SSH exit code, and bounded reason,
-then sets `selected=false` so the existing governed GCE fallback can run.
-Other SSH failures, remote-result errors, and the read-only diagnostic operation
-remain fail closed. The GCE result replaces the provisional developer-validation
-result; the Codespaces reason remains in the route artifact.
+The former #2944 SSH-start-timeout-to-GCE fallback was retired by PR #3820.
+For developer validation, a `gh codespace ssh` start timeout now preserves the
+requested SHA, validation identity, SSH exit code, and bounded
+`dev-validation-codespaces-ssh-failed` reason. The developer-validation gate
+rejects this non-success result. No GCE authentication, VM start, or alternate
+provider execution is attempted. Other SSH failures and malformed remote
+results also fail closed; read-only diagnostics retain their own bounded
+receipts. A successful workflow conclusion for a non-gated diagnostic is not
+proof of a successful Codespaces operation.
 
 ## Target-bound lifecycle contract (#3345)
 
@@ -401,3 +417,16 @@ subsequent SSH-stage timeout. A successful API authentication check **does not**
 establish SSH authorization, network connectivity, or environment health.
 The fixed `gh codespace ssh` commands and their existing timeouts remain
 unchanged. No lifecycle mutation, credential or workflow edits are included.
+
+
+## Teacher OS frontend validation (proposed, not yet runtime-qualified)
+
+The existing affected-package selector recognizes the Teacher OS web executable surface (`08_Tooling/teacher-os-web/src/`, `08_Tooling/teacher-os-web/tests/`, plus `package.json`, `package-lock.json`, `tsconfig.json`, `index.html`, `playwright.config.ts`) and selects these exact commands, bound to that directory and in this order. Documentation-only changes (e.g. `README.md`) remain static:
+
+1. `npm ci`
+2. `npm run build`
+3. `npm run test:unit`
+4. `npx playwright install chromium`
+5. `npx playwright test`
+
+The executor admits only the fixed argument vectors, not arbitrary caller commands. Selection and command admission do not prove runtime success. `npm ci` requires a genuine dependency-resolved `package-lock.json` on the Teacher OS implementation branch. Until a qualified npm registry executor generates and verifies that lockfile, this plan is **blocked**, not passing. The existing workflow's Node setup and browser dependencies must also be qualified; workflow edits remain separately authorization-gated. Actual command exit codes, stdout/stderr, exact checked-out head and browser evidence are required for QA acceptance. A passing build does not establish a working preview or production integration.

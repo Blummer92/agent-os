@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -300,21 +302,48 @@ def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeyp
     assert result["github_writes_authorized"] is False
 
 
+def _local_runtime_closure(root: Path) -> set[str]:
+    """Repository-relative project paths of every first-party distribution the
+    execution service needs, derived from the declared ``pyproject.toml``
+    dependencies so a newly declared local distribution (#3197, #3502) cannot
+    be missed by a hand-maintained list."""
+    def canonical(name: str) -> str:
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    excluded = {"06_Archive", "03_Templates", "node_modules", "build", "dist", ".venv", "venv", ".git"}
+    projects: dict[str, tuple[str, list[str]]] = {}
+    for path in root.rglob("pyproject.toml"):
+        relative = path.parent.relative_to(root)
+        if excluded & set(relative.parts):
+            continue
+        project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
+        if project.get("name"):
+            projects[canonical(project["name"])] = (relative.as_posix(), list(project.get("dependencies", [])))
+    closure: set[str] = set()
+    pending = [canonical("agent-os-execution-service")]
+    while pending:
+        location, requirements = projects[pending.pop()]
+        if location in closure:
+            continue
+        closure.add(location)
+        for requirement in requirements:
+            name = canonical(re.match(r"[A-Za-z0-9._-]+", requirement).group(0))
+            if name in projects:
+                pending.append(name)
+    return closure
+
+
 def test_workflow_installs_repository_local_agent_os_runtime_graph_before_ckr6():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
-    local_projects = (
-        "08_Tooling/reusable-capability-registry",
-        "08_Tooling/agent-memory-context-manager",
-        "08_Tooling/workflow-scheduler",
-        "08_Tooling/agent-os-execution-service",
-    )
+    local_projects = _local_runtime_closure(root)
+    assert {"08_Tooling/workflow-scheduler", "08_Tooling/agent-os-execution-service"} <= local_projects
     install_blocks = text.split("- name: Install existing Agent OS runtime")[1:]
     assert len(install_blocks) == 2
     for block in install_blocks:
         bounded = block.split("\n\n", 1)[0]
-        for project in local_projects:
-            assert f"-e {project}" in bounded
+        installed = set(re.findall(r"^\s*-e\s+(\S+?)\s*\\?$", bounded, re.MULTILINE))
+        assert local_projects <= installed, sorted(local_projects - installed)
         assert bounded.index("reusable-capability-registry") < bounded.index("workflow-scheduler")
         assert bounded.index("agent-memory-context-manager") < bounded.index("agent-os-execution-service")
         assert bounded.index("workflow-scheduler") < bounded.index("agent-os-execution-service")
@@ -631,6 +660,13 @@ def _run_main(monkeypatch, tmp_path, body, phase, *extra):
         (bridge.COMMAND_PREFIX + json.dumps(payload(operation="write-notion")), "operation-unsupported"),
         (bridge.COMMAND_PREFIX + json.dumps(payload(issue_number=1)), "issue-number-mismatch"),
         (bridge.COMMAND_PREFIX + json.dumps(payload(specialized_knowledge_required="maybe")), "materiality-invalid"),
+        # #3598: type narrowing must keep these existing rejection codes.
+        (bridge.COMMAND_PREFIX + json.dumps(payload(operation=1)), "operation-unsupported"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(operation=["issue-start"])), "invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(issue_number="2851")), "issue-number-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(language_hints="python")), "field-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(capability_keywords=["x"] * 21)), "field-invalid"),
+        (bridge.COMMAND_PREFIX + json.dumps(payload(target_path_hints=[1])), "field-invalid"),
     ],
 )
 def test_2851_malformed_request_produces_bounded_rejection_receipt(monkeypatch, tmp_path, body, code):
@@ -694,3 +730,61 @@ def test_2851_postback_lookup_failure_still_returns_a_receipt(monkeypatch):
     )
     assert calls == ["GET", "POST"]
     assert posted["posted_comment_id"] == 992
+
+
+def test_3598_hint_validation_still_precedes_task_reference_validation():
+    with pytest.raises(ValueError, match="^language_hints must be a bounded list$"):
+        bridge.parse_envelope(payload(language_hints="python", task_reference=""))
+
+
+def _failed_repair_envelope(**changes):
+    value = {
+        "operation": "failed-repair",
+        "repository": "Blummer92/agent-os",
+        "issue_number": 3598,
+        "task_reference": "issue:#3598",
+        "attempt_id": "attempt-1",
+        "failed_hypothesis": "hypothesis",
+        "result_summary": "summary",
+    }
+    value.update(changes)
+    return bridge.Ckr6Envelope(**value)
+
+
+@pytest.mark.parametrize(
+    ("field", "error", "message"),
+    [
+        ("attempt_id", ValueError, "attempt_id must be non-empty exact text"),
+        ("failed_hypothesis", TypeError, "failed_hypothesis must be a string"),
+        ("result_summary", TypeError, "result_summary must be a string"),
+    ],
+)
+def test_3598_directly_built_failed_repair_without_detail_fails_closed(field, error, message):
+    # parse_envelope always sets these; a hand-built envelope keeps the
+    # rejection the downstream failed-repair owner raises.
+    envelope = _failed_repair_envelope(**{field: None})
+    with pytest.raises(error, match=f"^{message}$"):
+        bridge.execute_envelope(envelope, retrieval_required=False)
+
+
+@pytest.mark.parametrize(
+    ("operation", "code"),
+    [
+        ("lesson-candidate", "candidate-detail-invalid"),
+        ("lesson-refinement", "refinement-detail-invalid"),
+    ],
+)
+def test_3598_learning_envelope_without_detail_is_a_bounded_rejection(operation, code):
+    envelope = bridge.Ckr6Envelope(
+        operation=operation,
+        repository="Blummer92/agent-os",
+        issue_number=3598,
+        task_reference="issue:#3598",
+    )
+    result = bridge._execute_learning(envelope, None)
+    assert result["status"] == "rejected"
+    assert result["reason_codes"] == ["envelope-rejected:" + code]
+    assert result["notion_read_performed"] is False
+    assert not any(result[key] for key in (
+        "execution_authorized", "github_writes_authorized", "merge_authorized",
+        "closure_authorized", "side_effects_performed", "mutation_admissible"))

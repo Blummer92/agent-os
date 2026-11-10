@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypedDict
 
 from agent_os_execution_service.executor_routing import ExecutorCapability
 
@@ -86,6 +86,22 @@ class GovernedRunnerPreference:
     merge_authorized: Literal[False] = field(default=False, init=False)
     external_writes_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
+
+
+class RouteInputs(TypedDict):
+    """Typed projection of a governed runner preference into #918 route inputs.
+
+    Matches the keyword parameters accepted by ``select_executor_route`` that
+    are supplied by ``executor_route_inputs``. Narrowing from ``dict[str,
+    object]`` lets callers splat ``**route_inputs`` without ``object``-typed
+    arguments.
+    """
+
+    governed_runner_available: bool
+    governed_runner_capabilities: tuple[ExecutorCapability, ...]
+    environment_profile_id_or_none: str | None
+    environment_health_evidence_id_or_none: str | None
+    workflow_runtime_identity_or_none: str | None
 
 
 def _candidate_reason(
@@ -177,7 +193,7 @@ def choose_governed_runner(
     )
 
 
-def executor_route_inputs(preference: GovernedRunnerPreference) -> dict[str, object]:
+def executor_route_inputs(preference: GovernedRunnerPreference) -> RouteInputs:
     """Project the selected runtime into the existing #918 input vocabulary."""
     if type(preference) is not GovernedRunnerPreference:
         raise TypeError("preference must be an exact GovernedRunnerPreference")

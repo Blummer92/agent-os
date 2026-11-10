@@ -103,6 +103,12 @@ composes that evidence from existing canonical owners; the field-by-field
 owner mapping, production acquisition paths, and fail-closed behaviors live in
 [SHADOW_CANDIDATE_EVIDENCE_OWNERSHIP.md](SHADOW_CANDIDATE_EVIDENCE_OWNERSHIP.md).
 
+Lifecycle stage (#3441) is not derived by the seam. The shadow CLI wires a
+read-only `PrLineageAcquirer` into that reader; the reader consults it per
+candidate and the experiment record's `lifecycle_stage_acquisition` section
+shows the population proof and each candidate's outcome. It grants no selection
+authority: `primary_claims` and `approval_applicability` stay unresolved.
+
 ## Revision identity
 
 Two revision identities remain deliberately separate:

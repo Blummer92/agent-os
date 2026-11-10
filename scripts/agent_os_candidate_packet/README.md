@@ -24,6 +24,10 @@ The IssuePlan leaves `graph_reference`, `planning_result_reference`, and `handof
 
 Binding identity is recomputed before it is believed, so a tampered binding, one from another planning run, stale repository evidence, and a contract-fingerprint mismatch each fail closed. The binding is verification input only: no persisted field is added to `DraftTaskProposal` or `ApprovalBinding`.
 
+## Single readiness pass (#3690)
+
+`prepare_candidate_packet` runs the readiness stage once. It first runs readiness without a planning context to derive the canonical contract and its fingerprint, then projects that context into the same stage result's IssuePlan evidence with `project_planning_context` and recomputes its identity, instead of running the whole stage a second time. Snapshot resolve, IssuePlan scan, dependency/validation reads, and the readiness evaluation are context-independent, so a second pass would only re-read and re-evaluate to change one object, and could silently mix two lineages if a live reader changed between passes. The single pass keeps one snapshot, one scan, and one set of evidence reads per packet.
+
 ## Reuse, not reimplementation
 
 This package composes, and never replaces, `agent_os_github_issue_provider.revision` (source-revision binding) plus these `agent_os_issue_acceptance` entry points: `issueplan_scanner.scan_issueplan_source`, `issueplan_current_state.build_issueplan_current_state_evidence`, `readiness.evaluate_issue_readiness_with_labels`, and `acceptance_report_transport.acceptance_report_to_payload` / `_from_payload`.

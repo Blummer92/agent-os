@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, TypedDict, cast
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_preflight import RepairContext, plan_lesson_preflight
@@ -98,6 +98,22 @@ class Ckr6Envelope:
     detail: Mapping[str, object] | None = None
 
 
+class _PreflightArgs(TypedDict):
+    """Keyword arguments shared by the issue-start and failed-repair owners."""
+
+    repository: str
+    issue_number: int
+    task_reference: str
+    ecosystem_hints: tuple[str, ...]
+    language_hints: tuple[str, ...]
+    library_hints: tuple[str, ...]
+    capability_keywords: tuple[str, ...]
+    target_path_hints: tuple[str, ...]
+    canonical_rule_refs: tuple[str, ...]
+    known_knowledge_refs: tuple[str, ...]
+    specialized_knowledge_required: bool | None
+
+
 def _text(value: object, name: str) -> str:
     if type(value) is not str or not value.strip():
         raise ValueError(f"{name} must be non-empty exact text")
@@ -162,6 +178,10 @@ def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
     operation = payload.get("operation")
     if operation not in OPERATIONS:
         raise ValueError("operation must be issue-start or failed-repair")
+    # OPERATIONS holds only str values, so passing the membership check proves
+    # the type. The check stays first so unhashable values keep their existing
+    # rejection path.
+    operation = cast(str, operation)
     if operation in LEARNING_OPERATIONS:
         return _parse_learning_envelope(payload, operation)
     allowed = COMMON_FIELDS | (FAILED_REPAIR_FIELDS if operation == "failed-repair" else frozenset())
@@ -174,14 +194,15 @@ def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
     issue_number = payload.get("issue_number")
     if type(issue_number) is not int or issue_number < 1:
         raise ValueError("issue_number must be a positive integer")
-    kwargs = {
-        name: _hints(payload.get(name, []), name)
-        for name in (
-            "ecosystem_hints", "language_hints", "library_hints",
-            "capability_keywords", "target_path_hints", "canonical_rule_refs",
-            "known_knowledge_refs",
-        )
-    }
+    # Hints are validated before the remaining fields, in this order, so a
+    # multi-field rejection keeps reporting the same first error.
+    ecosystem_hints = _hints(payload.get("ecosystem_hints", []), "ecosystem_hints")
+    language_hints = _hints(payload.get("language_hints", []), "language_hints")
+    library_hints = _hints(payload.get("library_hints", []), "library_hints")
+    capability_keywords = _hints(payload.get("capability_keywords", []), "capability_keywords")
+    target_path_hints = _hints(payload.get("target_path_hints", []), "target_path_hints")
+    canonical_rule_refs = _hints(payload.get("canonical_rule_refs", []), "canonical_rule_refs")
+    known_knowledge_refs = _hints(payload.get("known_knowledge_refs", []), "known_knowledge_refs")
     failed = operation == "failed-repair"
     return Ckr6Envelope(
         operation=operation,
@@ -193,7 +214,13 @@ def parse_envelope(payload: Mapping[str, object]) -> Ckr6Envelope:
         failed_hypothesis=_text(payload.get("failed_hypothesis"), "failed_hypothesis") if failed else None,
         result_summary=_text(payload.get("result_summary"), "result_summary") if failed else None,
         repair_context=_repair_context(payload.get("repair_context", "failed-pr-repair")) if failed else "failed-pr-repair",
-        **kwargs,
+        ecosystem_hints=ecosystem_hints,
+        language_hints=language_hints,
+        library_hints=library_hints,
+        capability_keywords=capability_keywords,
+        target_path_hints=target_path_hints,
+        canonical_rule_refs=canonical_rule_refs,
+        known_knowledge_refs=known_knowledge_refs,
     )
 
 
@@ -408,19 +435,19 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     reader = route.execute_read if route is not None else None
     if envelope.operation in LEARNING_OPERATIONS:
         return _execute_learning(envelope, reader)
-    common = dict(
-        repository=envelope.repository,
-        issue_number=envelope.issue_number,
-        task_reference=envelope.task_reference,
-        ecosystem_hints=envelope.ecosystem_hints,
-        language_hints=envelope.language_hints,
-        library_hints=envelope.library_hints,
-        capability_keywords=envelope.capability_keywords,
-        target_path_hints=envelope.target_path_hints,
-        canonical_rule_refs=envelope.canonical_rule_refs,
-        known_knowledge_refs=envelope.known_knowledge_refs,
-        specialized_knowledge_required=envelope.specialized_knowledge_required,
-    )
+    common: _PreflightArgs = {
+        "repository": envelope.repository,
+        "issue_number": envelope.issue_number,
+        "task_reference": envelope.task_reference,
+        "ecosystem_hints": envelope.ecosystem_hints,
+        "language_hints": envelope.language_hints,
+        "library_hints": envelope.library_hints,
+        "capability_keywords": envelope.capability_keywords,
+        "target_path_hints": envelope.target_path_hints,
+        "canonical_rule_refs": envelope.canonical_rule_refs,
+        "known_knowledge_refs": envelope.known_knowledge_refs,
+        "specialized_knowledge_required": envelope.specialized_knowledge_required,
+    }
     if envelope.operation == "issue-start":
         raw = activate_issue_start_lesson_preflight(**common, execute_read=reader)
         # The handoff_projection is the host-consumable unit: the overlay
@@ -450,6 +477,14 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "closure_authorized": False,
             "side_effects_performed": False,
         }
+    # parse_envelope sets all three for every failed-repair envelope. Narrow
+    # explicitly, raising exactly what the downstream owner raises today.
+    if envelope.attempt_id is None:
+        raise ValueError("attempt_id must be non-empty exact text")
+    if envelope.failed_hypothesis is None:
+        raise TypeError("failed_hypothesis must be a string")
+    if envelope.result_summary is None:
+        raise TypeError("result_summary must be a string")
     raw = activate_agent_os_failed_repair(
         **common,
         attempt_id=envelope.attempt_id,
@@ -482,10 +517,14 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
 def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
     key = "lesson_proposal" if envelope.operation == "lesson-candidate" else "revision_proposal"
     try:
+        detail = envelope.detail
+        if detail is None:
+            # Same rejection the candidate/refinement parsers raise first.
+            raise ValueError(f"{LEARNING_OPERATIONS[envelope.operation]} must be a mapping")
         if envelope.operation == "lesson-candidate":
-            outcome = capture_lesson_candidate(envelope.detail)
+            outcome = capture_lesson_candidate(detail)
         else:
-            outcome = propose_lesson_refinement(envelope.detail, reader)
+            outcome = propose_lesson_refinement(detail, reader)
     except (TypeError, ValueError) as exc:
         # Detail validation precedes any read. A malformed candidate or
         # refinement returns a bounded finite-code rejection, never a crash
@@ -768,19 +807,18 @@ def main() -> int:
         # #2851: never fail silently. Classification succeeds with zero
         # retrieval, and execute writes the bounded rejection result that the
         # always-run postback returns to the originating issue.
-        envelope = None
         result = rejection_result(event, args.repository, rejection_reason(exc))
-    if envelope is None:
-        pass
-    elif args.phase == "classify":
-        result = classify_envelope(envelope)
     else:
-        if args.retrieval_required is None:
-            raise ValueError("--retrieval-required is required for execute")
-        result = execute_envelope(
-            envelope,
-            retrieval_required=args.retrieval_required == "true",
-        )
+        # Errors raised below are deliberately outside the except above.
+        if args.phase == "classify":
+            result = classify_envelope(envelope)
+        else:
+            if args.retrieval_required is None:
+                raise ValueError("--retrieval-required is required for execute")
+            result = execute_envelope(
+                envelope,
+                retrieval_required=args.retrieval_required == "true",
+            )
     Path(args.output).write_text(
         json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",

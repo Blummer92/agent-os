@@ -106,7 +106,12 @@ def test_required_docs_missing_fails():
     assert _result(report, "required docs").status == Status.FAIL
 
 
-def test_required_tests_can_be_satisfied_by_pr_report():
+def test_required_tests_reported_only_in_pr_body_requires_manual_review():
+    # E2 (#3506): the valid fixture body mentions the required test path in
+    # prose, but the PR changes no required test file. A mention is not
+    # execution evidence, so this must not PASS (the old name of this test,
+    # test_required_tests_can_be_satisfied_by_pr_report, locked in the
+    # false pass reproduced in the 2026-10-22 independent QA report).
     report = evaluate_acceptance(
         AcceptanceInput(
             issue_body=_read("issue_valid.md"),
@@ -119,7 +124,8 @@ def test_required_tests_can_be_satisfied_by_pr_report():
         )
     )
 
-    assert _result(report, "required tests").status == Status.PASS
+    assert _result(report, "required tests").status == Status.MANUAL_REVIEW
+    assert report.overall_status == Status.MANUAL_REVIEW
 
 
 def test_banned_pattern_detection_fails():

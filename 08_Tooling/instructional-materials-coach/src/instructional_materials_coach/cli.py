@@ -45,6 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build = subparsers.add_parser("build", help="Build a slide deck and worksheet from an approved template and lesson content.")
     build.add_argument("--content", required=True)
     build.add_argument("--receipt-out", default="", help="Optional local JSON build evidence (not authorization).")
+    build.add_argument("--admission-out", default="", help="Optional local JSON classroom-admission verdict (evidence only; non-authorizing).")
     build.add_argument("--slides-template", default="")
     build.add_argument("--doc-template", default="")
     build.add_argument("--template-candidates", default="")
@@ -74,6 +75,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="Directory of durable terminal-QA evidence (#3258). Verified QA "
                             "reports are recovered on retry while artifact revision and "
                             "expectations still match, and re-verified otherwise.")
+
+    preview = subparsers.add_parser(
+        "preview-worksheet",
+        help="Offline no-write worksheet content preview from authored lesson content plus one "
+             "governed lesson-content result (#3582). Never requests credentials or writes to Drive/Notion.",
+    )
+    preview.add_argument("--content", required=True, help="Authored lesson content YAML (slides and questions required).")
+    preview.add_argument("--lesson-content-result", required=True,
+                         help="Governed #3580 lesson-content result JSON, or its #2283 runner evidence envelope.")
+    preview.add_argument("--request-id", required=True, help="Exact governed request id, e.g. candy-branding-lesson-content.")
+    preview.add_argument("--canonical-unit-page-id", required=True, help="Exact dashed Notion page id of the canonical unit.")
+    preview.add_argument("--lesson", required=True, help='Exact "Day / Lesson Number" value, e.g. "Day 1".')
+    preview.add_argument("--generated-at", required=True, help="Exact result run provenance, e.g. <run_id>:<attempt>.")
+    preview.add_argument("--preview-out", default="", help="Optional local JSON preview receipt (evidence only; non-authorizing).")
+
+    preview_slides_ab = subparsers.add_parser(
+        "preview-slides-ab",
+        help="Offline no-write A/B slide preview: two authored variants composed from one governed "
+             "lesson-content result (#3509). Notion-first and fail-closed: without an exact bound "
+             "verified lesson result both variants are blocked. Never requests credentials or writes "
+             "to Drive/Notion, and never claims a rendered/native artifact or an evaluation result.",
+    )
+    preview_slides_ab.add_argument("--content-a", required=True, help="Authored lesson content YAML for variant A (slides and questions required).")
+    preview_slides_ab.add_argument("--content-b", required=True, help="Authored lesson content YAML for variant B (slides and questions required).")
+    preview_slides_ab.add_argument("--lesson-content-result", required=True,
+                                   help="Governed #3580 lesson-content result JSON, or its #2283 runner evidence envelope.")
+    preview_slides_ab.add_argument("--request-id", required=True, help="Exact governed request id, e.g. candy-branding-lesson-content.")
+    preview_slides_ab.add_argument("--canonical-unit-page-id", required=True, help="Exact dashed Notion page id of the canonical unit.")
+    preview_slides_ab.add_argument("--lesson", required=True, help='Exact "Day / Lesson Number" value, e.g. "Day 3".')
+    preview_slides_ab.add_argument("--generated-at", required=True, help="Exact result run provenance, e.g. <run_id>:<attempt>.")
+    preview_slides_ab.add_argument("--preview-out", default="", help="Optional local JSON preview receipt (evidence only; non-authorizing).")
+
+    preview_teacher_review = subparsers.add_parser(
+        "preview-teacher-review",
+        help="Offline no-write Teacher Review Preview from one canonical "
+             "imc-build-receipt-v1 record (#3570, Q2 child of #3259). Never requests "
+             "credentials or writes to Drive/Notion, and never claims classroom-ready "
+             "status: the exact label is Teacher Review Preview — Not Classroom Ready.",
+    )
+    preview_teacher_review.add_argument("--build-receipt", required=True,
+                                        help="Canonical imc-build-receipt-v1 JSON record.")
+    preview_teacher_review.add_argument("--required-visuals", required=True,
+                                        help="Canonical required visuals JSON list: each entry carries "
+                                             "role_id, slot_id, asset_id, content_identity, and optional required.")
+    preview_teacher_review.add_argument("--placement-records", required=True,
+                                        help="Verified placement-receipt JSON list (visual-placement-receipt-v1).")
+    preview_teacher_review.add_argument("--requirement-identity", required=True,
+                                        help="Canonical requirement identity JSON: requirement_id, contract_version, "
+                                             "record_revision, source_fingerprint.")
+    preview_teacher_review.add_argument("--idempotency-key", required=True,
+                                        help="Canonical idempotency key the receipt must match exactly.")
+    preview_teacher_review.add_argument("--preview-out", default="", help="Optional local JSON preview record (evidence only; non-authorizing).")
 
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
@@ -381,8 +434,232 @@ def _terminal_qa_summary(receipt: object) -> str:
     return "; ".join(parts)
 
 
+def _classroom_admission_evidence(build_input, receipt, requirement_identity, template_revisions, placement_records):
+    """Assemble canonical D8 admission evidence from live build objects (#3556).
+
+    Pure extraction: no I/O. The caller loads placement records from the
+    verified store; everything else comes from the governed build input and
+    the live build receipt. Raises on malformed input — callers fall back to
+    a fail-closed verdict with no evidence bundle.
+    """
+    from .classroom_admission import RequiredVisual, assemble_admission_evidence
+
+    if build_input is None or receipt is None:
+        raise ValueError("classroom admission evidence requires a build input and receipt")
+    idempotency_key = getattr(build_input, "idempotency_key", "") or ""
+    revisions = template_revisions or {}
+    template_identities = (
+        ("slides", getattr(build_input, "slides_template_id", "") or "", revisions.get("slides") or ""),
+        ("worksheet", getattr(build_input, "doc_template_id", "") or "", revisions.get("worksheet") or ""),
+    )
+    qa_report = getattr(receipt, "terminal_qa", None)
+    artifact_identities = []
+    qa_states = []
+    for role in ("slides", "worksheet"):
+        artifact = getattr(receipt, role, None)
+        artifact_report = getattr(qa_report, role, None) if qa_report is not None else None
+        artifact_identities.append(
+            (role, getattr(artifact, "file_id", "") or "", getattr(artifact_report, "revision_id", "") or "")
+        )
+        qa_states.append((role, getattr(artifact, "terminal_qa_state", "") or ""))
+    required_visuals = [
+        RequiredVisual(
+            role_id=getattr(binding, "role_id", "") or "",
+            slot_id=getattr(binding, "slot_id", "0") or "0",
+            asset_id=getattr(binding, "asset_id", "") or "",
+            content_identity_json=_canonical_json(getattr(binding, "content_identity", None)),
+            required=bool(getattr(binding, "required", True)),
+        )
+        for binding in (getattr(build_input, "visual_placements", None) or ())
+    ]
+    return assemble_admission_evidence(
+        idempotency_key=idempotency_key,
+        requirement_identity=requirement_identity or {},
+        template_identities=template_identities,
+        artifact_identities=artifact_identities,
+        requested_artifact_roles=("slides", "worksheet"),
+        terminal_qa_states=qa_states,
+        build_succeeded=bool(getattr(receipt, "succeeded", False)),
+        placement_records=placement_records or (),
+        required_visuals=required_visuals,
+    )
+
+
+def _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record):
+    """Write the D8 admission verdict as labeled non-authorizing evidence (#3556).
+
+    INCOMPLETE enforcement: the verdict is evidence for the host to consume;
+    neither the CLI nor this file makes a classroom-ready claim.
+    """
+    from .classroom_admission import classify_classroom_admission, serialize_classroom_admission
+    from .placement_receipts import load_placement_records
+
+    try:
+        placement_records = load_placement_records(
+            args.placement_receipts_dir, getattr(build_input, "idempotency_key", "") or ""
+        )
+    except (OSError, ValueError):
+        placement_records = ()
+    try:
+        evidence = _classroom_admission_evidence(
+            build_input, receipt, requirement_identity, template_revisions, placement_records
+        )
+    except (TypeError, ValueError, AttributeError):
+        evidence = None
+    result = classify_classroom_admission(record, evidence)
+    write_build_receipt_atomic(args.admission_out, serialize_classroom_admission(result))
+    print(
+        f"Classroom admission verdict: {result.status.value} "
+        f"({', '.join(reason.value for reason in result.reason_codes)}) — "
+        "evidence only, non-authorizing."
+    )
+    return result
+
+
+#: Same byte bound the #2283 runner applies to its transport evidence.
+MAX_LESSON_CONTENT_RESULT_BYTES = 262_144
+
+
+def _preview_worksheet(args: argparse.Namespace) -> int:
+    """#3582 offline preview: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes."""
+    import yaml
+
+    from .lesson_content_result import LessonContentSelection
+    from .worksheet_preview import PREVIEW, preview_lesson_worksheet
+
+    try:
+        content = load_lesson_content(args.content)
+        result_path = Path(args.lesson_content_result)
+        # Enforce the bound on the bytes actually read, not on a stat() taken
+        # before the read: the limit must apply to the parsed input.
+        raw = result_path.read_bytes()
+        if len(raw) > MAX_LESSON_CONTENT_RESULT_BYTES:
+            raise ValueError("lesson-content result exceeds the byte bound")
+        evidence = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError) as exc:
+        print(f"Worksheet preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    selection = LessonContentSelection(
+        request_id=args.request_id,
+        canonical_unit_page_id=args.canonical_unit_page_id,
+        day_lesson_number=args.lesson,
+        generated_at=args.generated_at,
+    )
+    receipt = preview_lesson_worksheet(content, evidence, selection)
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, receipt)
+        except OSError as exc:
+            print(f"Worksheet preview: receipt persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(receipt, sort_keys=True, indent=2))
+    if receipt["status"] != PREVIEW:
+        print(f"Worksheet preview: blocked ({receipt['reason_code']}) — {receipt['detail']}", file=sys.stderr)
+        return 1
+    print("Worksheet preview: planned content only — not rendered, not a native artifact, non-authorizing.")
+    return 0
+
+
+def _preview_slides_ab(args: argparse.Namespace) -> int:
+    """#3509 offline A/B slide preview: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes."""
+    import yaml
+
+    from .lesson_content_result import LessonContentSelection
+    from .slides_ab_preview import PREVIEW, preview_lesson_slides_ab
+
+    try:
+        content_a = load_lesson_content(args.content_a)
+        content_b = load_lesson_content(args.content_b)
+        result_path = Path(args.lesson_content_result)
+        raw = result_path.read_bytes()
+        if len(raw) > MAX_LESSON_CONTENT_RESULT_BYTES:
+            raise ValueError("lesson-content result exceeds the byte bound")
+        evidence = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError) as exc:
+        print(f"Slides A/B preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    selection = LessonContentSelection(
+        request_id=args.request_id,
+        canonical_unit_page_id=args.canonical_unit_page_id,
+        day_lesson_number=args.lesson,
+        generated_at=args.generated_at,
+    )
+    receipt = preview_lesson_slides_ab(content_a, content_b, evidence, selection)
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, receipt)
+        except OSError as exc:
+            print(f"Slides A/B preview: receipt persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(receipt, sort_keys=True, indent=2))
+    if receipt["status"] != PREVIEW:
+        print(f"Slides A/B preview: blocked ({receipt['reason_code']}) — {receipt['detail']}", file=sys.stderr)
+        return 1
+    print("Slides A/B preview: planned content only for both variants — not rendered, not native artifacts, "
+          "no evaluation performed, non-authorizing.")
+    return 0
+
+
+def _preview_teacher_review(args: argparse.Namespace) -> int:
+    """#3570 offline Q2 preview: no ALLOW_WRITE, credentials, Drive/Notion, or build.
+
+    Reads only the JSON files the caller supplies. An unavailable preview
+    (missing/mismatched provenance or malformed evidence) is printed as an
+    explicit refused record and exits non-zero; a produced preview exits
+    zero even when visuals are incomplete, because incompleteness is the
+    preview's content, not an error. Nothing here builds, renders, or
+    admits anything classroom-ready.
+    """
+    from .teacher_review_preview import build_teacher_review_preview
+
+    try:
+        receipt = _load_json(args.build_receipt, default=None)
+        required_visuals = _load_json(args.required_visuals, default=None)
+        placement_records = _load_json(args.placement_records, default=None)
+        requirement_identity = _load_json(args.requirement_identity, default=None)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"Teacher review preview: blocked (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(requirement_identity, Mapping):
+        print("Teacher review preview: blocked (requirement-identity-invalid) — "
+              "requirement identity must be a JSON object", file=sys.stderr)
+        return 1
+    preview = build_teacher_review_preview(
+        receipt,
+        idempotency_key=args.idempotency_key,
+        requirement_identity=requirement_identity,
+        required_visuals=required_visuals if isinstance(required_visuals, list) else required_visuals,
+        placement_records=placement_records if isinstance(placement_records, list) else placement_records,
+    )
+    if args.preview_out:
+        try:
+            write_build_receipt_atomic(args.preview_out, preview)
+        except OSError as exc:
+            print(f"Teacher review preview: preview persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(preview, sort_keys=True, indent=2))
+    if preview["provenance_status"] != "available":
+        print(f"Teacher review preview: unavailable ({', '.join(preview['reason_codes'])}) — "
+              "no canonical provenance claim is made", file=sys.stderr)
+        return 1
+    incomplete = len(preview["incomplete_visuals"])
+    print(f"Teacher Review Preview — Not Classroom Ready: "
+          f"{preview['required_visual_count']} required visual(s), {incomplete} incomplete — "
+          "preview only, not classroom-ready, non-authorizing.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "preview-worksheet":
+        return _preview_worksheet(args)
+    if args.command == "preview-slides-ab":
+        return _preview_slides_ab(args)
+    if args.command == "preview-teacher-review":
+        return _preview_teacher_review(args)
     if args.command == "log-lesson":
         path = record_lesson(LessonRecord(lesson_learned=args.title, what_happened=args.what_happened, what_to_do_next_time=args.what_to_do_next_time, guardrail=args.guardrail, severity=args.severity, learning_type=args.learning_type, source_link=args.source_link), args.lessons_dir)
         print(f"Lesson recorded: {path}")
@@ -399,6 +676,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
+        # #3644 R5: verified projection of the {{token}} names the worksheet
+        # Doc template carries; scopes the pre-write teacher-voice screen to
+        # genuine worksheet copy. Stays None (fail-closed scan-all) when the
+        # template pair was given as raw IDs without governed evidence.
+        doc_template_tokens: tuple[str, ...] | None = None
         if args.template_candidates:
             raw_candidates = _load_json(args.template_candidates, default=[])
             if not isinstance(raw_candidates, list):
@@ -413,6 +695,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             args.slides_template = pair.slides_template_id
             args.doc_template = pair.docs_template_id
+            doc_template_tokens = next(
+                (tuple(candidate.supported_placeholders)
+                 for candidate in candidates
+                 if candidate.kind == "docs" and candidate.template_id == pair.docs_template_id),
+                None,
+            )
         if not args.slides_template or not args.doc_template:
             raise RuntimeError("Provide both exact approved template IDs or --template-candidates governed evidence.")
         context["slides_template"] = args.slides_template
@@ -554,6 +842,9 @@ def main(argv: list[str] | None = None) -> int:
             resume_dir=args.resume_dir, placement_transport=placement_transport,
             placement_receipts_dir=args.placement_receipts_dir,
             qa_evidence_dir=args.qa_evidence_dir,
+            # #3259 D2: preserve mandatory authored-token coverage on main.
+            expected_content_tokens=tuple(content.placeholder_tokens()),
+            doc_template_tokens=doc_template_tokens,
         )
         build_input = composed.build_input
         template_revisions = {"slides": _template_revision(drive_service, args.slides_template), "worksheet": _template_revision(drive_service, args.doc_template)}
@@ -563,8 +854,13 @@ def main(argv: list[str] | None = None) -> int:
             docs_service=build_docs_service(credentials),
             **composed.builder_options,
         )
+        record = None
+        if args.receipt_out or args.admission_out:
+            record = build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions)
         if args.receipt_out:
-            write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions))
+            write_build_receipt_atomic(args.receipt_out, record)
+        if args.admission_out:
+            _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record)
         if not receipt.succeeded:
             qa_summary = _terminal_qa_summary(receipt)
             raise RuntimeError(
@@ -584,6 +880,12 @@ def main(argv: list[str] | None = None) -> int:
                 write_build_receipt_atomic(args.receipt_out, build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__))
             except OSError as receipt_error:
                 print(f"Receipt persistence failed: {receipt_error}", file=sys.stderr)
+        if args.admission_out:
+            try:
+                record = build_receipt_record(build_input, receipt, requirement_identity=requirement_identity, template_revisions=template_revisions, error_code=type(exc).__name__)
+                _write_classroom_admission_verdict(args, build_input, receipt, requirement_identity, template_revisions, record)
+            except OSError as verdict_error:
+                print(f"Admission verdict persistence failed: {verdict_error}", file=sys.stderr)
         lesson_path = record_lesson(lesson_from_exception(exc, context), args.lessons_dir)
         print(f"Build failed: {exc}", file=sys.stderr)
         print(f"Lesson recorded: {lesson_path}", file=sys.stderr)
@@ -592,3 +894,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -86,10 +86,29 @@ governed Agent OS checkout + resolved repository + exactly one issue key
 | descriptor store not configured | `needs-decision`, fail closed |
 | multiple distinct issue keys | `needs-decision`; never picks one |
 | governed checkout, repository unresolved | `needs-decision`, fail closed |
+| discovery required but locator not importable on this host (#3588) | `needs-decision` (`discovery-dependency-unavailable`), fail closed |
 | non-governed checkout, or no issue key | `not-applicable`, silent |
 
 `not-applicable` emits nothing at all, so generic GitHub behavior for
 non-Agent-OS work is unchanged.
+
+## Startup dependencies (#3588)
+
+The hook interpreter is whatever `python3` the host provides (for example a
+GitHub Copilot CLI Codespace), and it may not have PyYAML. The #1237 locator's
+import chain reaches PyYAML-backed issue-acceptance modules, so
+`governed_route_preflight` imports it only on the discovery path, after the
+governed-checkout, issue-key, repository, and configured-store checks. Startup,
+malformed input, `UserPromptSubmit` with no issue key, `PreToolUse`, `Stop`, and
+the unconfigured-store `needs-decision` therefore never import PyYAML.
+
+When discovery is genuinely required and the locator cannot be imported, the
+result is the bounded `needs-decision` reason `discovery-dependency-unavailable`:
+no handoff identity or resume command is exposed, no authority is granted, and
+there is no fallback to local git/gh tooling. Install the repository's existing
+developer requirements to enable discovery on that host; discovery semantics,
+descriptor integrity checks, and currentness boundaries are unchanged. A host
+must reload the hook configuration (restart the session) to pick up the repair.
 
 ## Configuration
 
@@ -136,6 +155,11 @@ status, never by killing the host turn.
 Tests: `tests/agent_os_execution_interface/`.
 
 ## Rollback
+
+For #3588, revert the lazy discovery import in
+`scripts/agent_os_execution_interface/governed_route_preflight.py`, its focused
+tests in `tests/agent_os_execution_interface/test_hook_adapter.py`, and the
+"Startup dependencies" note above. No other surface changed.
 
 For #1330, remove
 `scripts/agent_os_execution_interface/connector_native_fast_track.py` and its

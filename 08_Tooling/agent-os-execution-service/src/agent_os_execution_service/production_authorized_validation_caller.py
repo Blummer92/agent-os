@@ -18,7 +18,6 @@ from scripts.agent_os_remote_validation import serialize_validation_evidence_bun
 from workflow_scheduler.execution.single_issue_pilot import CancellationProbe
 
 from .authorized_validation import (
-    AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
     AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION,
     pilot_reconstruction_evidence,
     reconstruct_authorized_validation_lifecycle_request,
@@ -31,6 +30,7 @@ from .first_publication_source_capture import run_production_authorized_validati
 from .host_github_read_transport import build_host_github_read_transport_from_environment
 from .models import parse_canonical_utc
 from .production_handoff_publication import (
+    PRE_PR_DEVELOPER_LOOP_OPERATION,
     _pilot_input,
     _rebuild_advisory,
     _rebuild_approval,
@@ -168,7 +168,7 @@ def run_production_authorized_validation(
             issue_number=packet.issue_number,
             expected_candidate_packet_id=packet.packet_id,
             expected_invocation_id=packet.invocation_id,
-            expected_operation=AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
+            expected_operation=PRE_PR_DEVELOPER_LOOP_OPERATION,
             expected_request_fingerprint=request.execution_authorization.request_fingerprint,
             expected_command_plan_id=request.execution_authorization.command_plan_id,
             expected_sha=packet.candidate_sha,
@@ -181,7 +181,7 @@ def run_production_authorized_validation(
             or authorization.authorizer_id != request.authorizer_id
             or authorization.authorized_candidate_packet_id != packet.packet_id
             or authorization.authorized_invocation_id != packet.invocation_id
-            or authorization.authorized_operation != AUTHORIZED_VALIDATION_PERMITTED_OPERATION
+            or authorization.authorized_operation != PRE_PR_DEVELOPER_LOOP_OPERATION
         ):
             raise ProductionAuthorizedValidationCallerError("execution-authorization-not-current")
 

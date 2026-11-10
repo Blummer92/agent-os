@@ -49,6 +49,7 @@ from instructional_materials_coach.placement_receipts import load_placement_reco
 from instructional_materials_coach.placement_transport import (
     PlacementRuntimeUnavailable,
     PlacementTransportError,
+    PlacementNoMutation,
 )
 from instructional_materials_coach.visual_placement import marker_for_role
 from instructional_workflow_contracts.asset_content_identity import content_identity_from_fingerprint
@@ -190,14 +191,13 @@ class _FakeSlidesResource:
             {
                 "objectId": slide["objectId"],
                 "pageElements": [
-                    {
-                        "objectId": element["objectId"],
-                        "shape": {
-                            "text": {
-                                "textElements": [{"textRun": {"content": element["text"] + "\n"}}]
-                            }
-                        },
-                    }
+                    (
+                        {"objectId": element["objectId"], "image": {"contentUrl": "https://example.invalid/image"}}
+                        if element.get("image") else
+                        {"objectId": element["objectId"], "shape": {"text": {"textElements": [
+                            {"textRun": {"content": element["text"] + "\n"}}
+                        ]}}}
+                    )
                     for element in slide["elements"]
                 ],
             }
@@ -231,9 +231,26 @@ class FakePlacementTransport:
     def insert_placement(self, *, request: Any) -> Mapping[str, Any]:
         self.calls.append(request)
         if request.role_id in self._fail_for_roles:
-            raise PlacementTransportError(f"placement-transport-failed: simulated failure for role={request.role_id}")
+            raise PlacementNoMutation(f"placement-transport-failed: simulated failure for role={request.role_id}")
         target = request.target
-        inserted_id = f"fake-inserted-{len(self.calls)}"
+        # The fake transport is often reconstructed during retry. Real
+        # Slides/Docs image IDs persist in the artifact, not in a transport
+        # instance's local call counter. Allocate against persisted IDs to
+        # simulate that guarantee and preserve one-image-per-receipt proof.
+        if target.artifact_type == "slides":
+            assert self._slides is not None
+            existing_ids = {
+                element["objectId"]
+                for slide in self._slides.presentations_store[target.artifact_id]["slides"]
+                for element in slide["elements"]
+            }
+        else:
+            assert self._docs is not None
+            existing_ids = set(self._docs.documents_store[target.artifact_id]["inline_objects"])
+        next_number = len(self.calls)
+        while f"fake-inserted-{next_number}" in existing_ids:
+            next_number += 1
+        inserted_id = f"fake-inserted-{next_number}"
         if target.artifact_type == "slides":
             assert self._slides is not None
             pres = self._slides.presentations_store[target.artifact_id]
@@ -243,7 +260,7 @@ class FakePlacementTransport:
                 for element in slide["elements"]:
                     if element["objectId"] == target.element_id and element["text"].strip() == target.marker:
                         element["text"] = ""
-                slide["elements"].append({"objectId": inserted_id, "text": ""})
+                slide["elements"].append({"objectId": inserted_id, "image": True, "text": ""})
             pres["revisionId"] = pres["revisionId"] + "-p"
         else:
             assert self._docs is not None

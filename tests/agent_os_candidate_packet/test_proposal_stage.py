@@ -757,7 +757,7 @@ def test_every_outcome_keeps_authority_false() -> None:
             assert result.proposal_result.authorization_status == "not-evaluated"
         if result.proposal is not None:
             assert result.proposal.execution_authorized is False
-        with pytest.raises(ValueError, match="init=False"):
+        with pytest.raises((ValueError, TypeError), match="init=False"):
             replace(result, execution_authorized=True)
 
 

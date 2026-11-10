@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from .models import PrePrValidationPlan, ValidationPlan
-from .selector import pre_pr_validation_plan_id, validate_validation_plan, validation_plan_id
+from .selector import (
+    _canonical_bytes,
+    pre_pr_validation_plan_id,
+    validate_validation_plan,
+    validation_plan_id,
+)
 
 VALIDATION_DISPATCH_DECISION_SCHEMA_NAME = "agent-os-validation-dispatch-decision"
 VALIDATION_DISPATCH_DECISION_SCHEMA_VERSION = "1.0"
@@ -656,12 +660,6 @@ def _semantic_digest(domain: str, payload: dict[str, object]) -> str:
     return hashlib.sha256(
         domain.encode("ascii") + b"\0" + _canonical_bytes(payload)
     ).hexdigest()
-
-
-def _canonical_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
 
 
 def _identifier(value: object, pattern: re.Pattern[str]) -> bool:

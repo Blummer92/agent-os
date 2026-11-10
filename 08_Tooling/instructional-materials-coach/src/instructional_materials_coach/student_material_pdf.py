@@ -2,9 +2,12 @@
 
 Student-facing title and paragraph copy is screened for internal
 review/workflow language; such copy fails closed unless the caller explicitly
-declares it intended student copy. Provenance lives in the PDF document
-properties (teacher-facing delivery context), never as rendered student-page
-text.
+declares it intended student copy. Teacher-guide modeling voice (#3213:
+rigor-ramp stage labels, cognitive-load jargon, teacher-phrased rules,
+modeling scripts) is screened the same way: teacher guidance belongs in the
+teacher guide and slide deck, never on the student sheet. Provenance lives in
+the PDF document properties (teacher-facing delivery context), never as
+rendered student-page text.
 """
 from __future__ import annotations
 
@@ -17,6 +20,11 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
+from .student_voice import (
+    known_teacher_voice_phrases,
+    normalize_phrase,
+    scan_teacher_voice,
+)
 from .visual_placement import PlacementReceipt
 
 PdfPreviewState = Literal["preview", "blocked"]
@@ -59,6 +67,11 @@ class StudentMaterialPdfSource:
     student_identification_labels: tuple[str, ...] = ("Name", "Hour", "Date")
     unit_day: str = ""
     explicit_student_copy_review_phrases: tuple[str, ...] = ()
+    # #3213: deliberately student-facing teacher-voice phrases. Teacher
+    # guidance (rigor-ramp stage labels, load-management rationale,
+    # gate/recovery rules, modeling scripts) belongs in the teacher guide,
+    # not on the student sheet; it fails closed here unless declared.
+    explicit_student_copy_teacher_voice_phrases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -183,6 +196,22 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
             + ". Move review/production status to the teacher-facing delivery context "
             "or declare the copy explicitly via explicit_student_copy_review_phrases."
         )
+    _validate_explicit_teacher_voice_phrases(
+        source.explicit_student_copy_teacher_voice_phrases
+    )
+    teacher_voice = scan_teacher_voice(
+        (source.title, *source.paragraphs),
+        allowed=source.explicit_student_copy_teacher_voice_phrases,
+    )
+    if teacher_voice:
+        raise StudentMaterialPdfError(
+            "student-facing worksheet copy contains teacher-guide modeling voice: "
+            + ", ".join(teacher_voice)
+            + ". Rewrite in student voice (a worked example students can steal "
+            "moves from); teacher guidance belongs in the teacher guide and "
+            "slide deck, not on the student sheet. Declare deliberately "
+            "student-facing phrases via explicit_student_copy_teacher_voice_phrases."
+        )
     _validate_role_ids(source.required_visual_role_ids)
     if not isinstance(source.compact_worksheet_header, bool):
         raise StudentMaterialPdfError("compact_worksheet_header must be boolean")
@@ -281,6 +310,30 @@ def _validate_explicit_review_phrases(value: object) -> None:
             raise StudentMaterialPdfError(f"unknown student-copy review phrase: {phrase}")
         if normalized in seen:
             raise StudentMaterialPdfError("explicit student-copy review phrases must be unique")
+        seen.add(normalized)
+
+
+def _validate_explicit_teacher_voice_phrases(value: object) -> None:
+    """Bound the explicit opt-in for deliberately student-facing teacher voice.
+
+    Every entry must name a known teacher-voice phrase exactly (case
+    insensitive); unknown entries fail closed so a typo cannot silently read
+    as an intentional opt-in. Mirrors the review-phrase declaration bound.
+    """
+    known = known_teacher_voice_phrases()
+    if not isinstance(value, tuple):
+        raise StudentMaterialPdfError("explicit_student_copy_teacher_voice_phrases must be a tuple")
+    if len(value) > 16:
+        raise StudentMaterialPdfError("explicit_student_copy_teacher_voice_phrases exceeds the bounded preview limit")
+    seen: set[str] = set()
+    for phrase in value:
+        if not isinstance(phrase, str) or not phrase.strip():
+            raise StudentMaterialPdfError("explicit student-copy teacher-voice phrases must be non-empty text")
+        normalized = normalize_phrase(phrase)
+        if normalized not in known:
+            raise StudentMaterialPdfError(f"unknown student-copy teacher-voice phrase: {phrase}")
+        if normalized in seen:
+            raise StudentMaterialPdfError("explicit student-copy teacher-voice phrases must be unique")
         seen.add(normalized)
 
 

@@ -19,7 +19,8 @@ HEAD_2790 = "b" * 40
 
 
 def evidence(issue=2770, *, open=True, labels=("status:ready",), pr=2790,
-             pr_state="draft", readback=True, closure=True, current=True):
+             pr_state="draft", readback=True, closure=True, current=True,
+             state_reason=None, repository=None):
     return LanePostPrIssueEvidence(
         issue_number=issue,
         issue_open=open,
@@ -30,16 +31,21 @@ def evidence(issue=2770, *, open=True, labels=("status:ready",), pr=2790,
         pr_readback_current=readback,
         closure_authorized=closure,
         evidence_current=current,
+        state_reason=state_reason,
+        repository=repository,
     )
 
 
-def readback(plan, *, issue=2770, open=True, labels=("status:ready",), current=True):
+def readback(plan, *, issue=2770, open=True, labels=("status:ready",), current=True,
+             state_reason=None, repository=None):
     return evaluate_lane_post_pr_issue_readback(
         plan,
         issue_number=issue,
         issue_open=open,
         lifecycle_labels=labels,
         evidence_current=current,
+        state_reason=state_reason,
+        repository=repository,
     )
 
 
@@ -62,7 +68,8 @@ def test_unreconciled_issue_cannot_report_full_reconciliation():
 
 def test_authorized_close_read_back_proves_terminal_disposition():
     plan = project_lane_post_pr_issue_reconciliation(evidence())
-    proof = readback(plan, open=False, labels=())
+    # #3690 ADV-5: the canonical closure reason is part of the proof.
+    proof = readback(plan, open=False, labels=(), state_reason="completed")
     assert proof.fully_reconciled is True
     assert proof.reason_codes == ("lane-post-pr.issue-closed",)
 
@@ -92,7 +99,9 @@ def test_ready_still_present_after_mutation_is_not_reconciled():
 
 
 def test_already_closed_issue_is_already_reconciled():
-    plan = project_lane_post_pr_issue_reconciliation(evidence(open=False, labels=()))
+    plan = project_lane_post_pr_issue_reconciliation(
+        evidence(open=False, labels=(), state_reason="completed")
+    )
     assert plan.disposition is LanePostPrIssueDisposition.ALREADY_RECONCILED
     assert plan.expected_mutations == ()
     assert plan.fully_reconciled is True

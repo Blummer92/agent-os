@@ -373,10 +373,12 @@ def test_request_sensitive_planning_is_preserved_per_class() -> None:
 
 def test_every_curriculum_request_class_has_a_read_plan() -> None:
     for request_class in REQUEST_CLASSES:
-        if request_class in {"destination-verification", "source-schema"}:
+        if request_class in {"destination-verification", "source-schema", "lesson-content"}:
             # Record-driven classes carry their own binding and have no #980
             # plan: destination-verification names a fixed page, source-schema
-            # names a catalog-declared logical source for one schema step.
+            # names a catalog-declared logical source for one schema step,
+            # lesson-content names a catalog-declared logical source for one
+            # query step.
             continue
         sources = required_logical_sources(request_class)
         assert sources

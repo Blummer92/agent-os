@@ -23,13 +23,26 @@ def is_navigation_warning_row(row: list[str]) -> bool:
     return len(non_empty_cells) == 1 and non_empty_cells[0] == NAVIGATION_WARNING
 
 
-def split_header_and_data(rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
-    """Return the header row and data rows, skipping the warning banner if present."""
+def header_row_index(rows: list[list[str]]) -> int | None:
+    """Return the zero-based index of the header row, or None when there is none.
+
+    Row 0 is the header, unless it is the standard navigation warning banner, in
+    which case row 1 is the header. This is the single place that rule lives.
+    """
     if not rows:
-        return [], []
+        return None
 
     header_index = 1 if is_navigation_warning_row(rows[0]) else 0
     if len(rows) <= header_index:
+        return None
+
+    return header_index
+
+
+def split_header_and_data(rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+    """Return the header row and data rows, skipping the warning banner if present."""
+    header_index = header_row_index(rows)
+    if header_index is None:
         return [], []
 
     return rows[header_index], rows[header_index + 1 :]

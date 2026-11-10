@@ -13,13 +13,14 @@ is compiled into this module.
 A missing credential, unresolvable Codespace, missing repository checkout,
 missing discovery implementation, missing checkpoint store, or malformed
 evidence fails closed. A Codespace without the host-local checkpoint store
-reports codespaces_capable=False so the workflow falls back through the
-existing governed GCE path instead of returning a misleading not-found.
+reports codespaces_capable=False with an explicit blocker instead of returning
+a misleading not-found or entering the retired GCE discovery path.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,12 @@ MAX_RESULT_LOG_CHARS = 4096
 _REMOTE_MAX_BOUNDED_SECONDS = 120
 _TRANSPORT_OVERHEAD_SECONDS = 60
 _RUN_TIMEOUT_SECONDS = _REMOTE_MAX_BOUNDED_SECONDS + _TRANSPORT_OVERHEAD_SECONDS
+
+# #3333: sshd does not pass devcontainer containerEnv/remoteEnv to a
+# noninteractive `gh codespace ssh -- <cmd>` session, so the remote program
+# binds the approved Codespaces store root itself when the variable is unset.
+# The value must match .devcontainer/devcontainer.json containerEnv.
+APPROVED_CODESPACES_STORE_ROOT = "/workspaces/agent-os-state/checkpoints"
 
 # The remote runner locates the repository checkout on the Codespace from a
 # fixed candidate list and verifies the discovery implementation exists before
@@ -98,7 +105,7 @@ def main():
         base["reason_codes"]=["codespaces-discovery-import-failed"]
         _emit(base)
         return
-    store_root=os.environ.get("AGENT_OS_CHECKPOINT_STORE_ROOT","/var/lib/agent-os/checkpoints")
+    store_root=os.environ.get("AGENT_OS_CHECKPOINT_STORE_ROOT","/workspaces/agent-os-state/checkpoints")
     if not (Path(store_root)/"invocations").is_dir():
         base["reason_codes"]=["codespaces-discovery-store-unavailable"]
         _emit(base)
@@ -228,6 +235,21 @@ def run_discovery_over_codespaces(
     """Run bounded read-only discovery on the selected Codespace."""
     if type(codespace_name) is not str or _CODESPACE_NAME_RE.fullmatch(codespace_name) is None:
         raise ValueError("a resolved current Codespace name is required")
+    # #3617: the remote program must cross the SSH shell boundary as one
+    # safely quoted command. Passing the multiline source as separate argv
+    # elements lets the remote shell split it at newlines (Python
+    # SyntaxError, then bash parsing Python lines). shlex.join preserves the
+    # source as the single -c argument through the remote shell.
+    remote_command = shlex.join(
+        (
+            "python3",
+            "-c",
+            _REMOTE_DISCOVERY_SOURCE,
+            request.repository,
+            str(request.issue_number),
+            codespace_name,
+        )
+    )
     try:
         completed = run(
             (
@@ -237,12 +259,7 @@ def run_discovery_over_codespaces(
                 "-c",
                 codespace_name,
                 "--",
-                "python3",
-                "-c",
-                _REMOTE_DISCOVERY_SOURCE,
-                request.repository,
-                str(request.issue_number),
-                codespace_name,
+                remote_command,
             ),
             timeout=_RUN_TIMEOUT_SECONDS,
         )
@@ -287,8 +304,7 @@ def run_discovery_over_codespaces(
         ["codespaces-discovery-import-failed"],
         ["codespaces-discovery-store-unavailable"],
     ):
-        # No discovery capability on this surface: not capable, so the
-        # workflow falls back through the existing GCE path.
+        # No discovery capability on this surface: preserve its blocker.
         return {"discovery": payload, "codespaces_capable": False}
     return {"discovery": payload, "codespaces_capable": True}
 
@@ -338,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
         result = run_discovery_over_codespaces(
             request, codespace_name=str(route.get("codespace_name"))
         )
+    elif request is not None:
+        result = {
+            "discovery": _failure(request, str(route["reason_codes"][0]), route.get("codespace_name")),
+            "codespaces_capable": False,
+        }
     else:
         result = {"discovery": None, "codespaces_capable": False}
     args.result_output.write_text(

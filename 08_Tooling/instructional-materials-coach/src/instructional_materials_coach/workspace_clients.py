@@ -2,6 +2,8 @@
 from __future__ import annotations
 from typing import Any
 
+from .slides_requests import QA_SLIDE_INDEX_KEY
+
 
 def build_slides_service(credentials: Any) -> Any:
     from googleapiclient.discovery import build
@@ -62,16 +64,27 @@ def _validate_replace_results(
 
 
 def _already_applied(content_fetcher: Any, replace: Any) -> bool:
-    """True when the replacement text is already present in the document."""
+    """True when the replacement text is already present in the document.
+
+    The production request builders (``docs_requests.build_docs_replace_requests``
+    and ``slides_requests.build_slides_replace_requests``) emit the API-native
+    string-valued ``replaceText``. A previously applied replacement is accepted
+    only when that exact string is observed in the read-back document text.
+    Missing, empty, malformed, or unreadable replacement evidence fails closed:
+    the caller keeps the "required placeholder was not replaced" failure.
+    """
     try:
         text = content_fetcher()
     except Exception:
         return False
     if not isinstance(text, str) or not text:
         return False
-    new_text = replace.get("replaceText", {}) if isinstance(replace, dict) else {}
-    replacement = new_text.get("text", "") if isinstance(new_text, dict) else ""
-    return isinstance(replacement, str) and bool(replacement) and replacement in text
+    if not isinstance(replace, dict):
+        return False
+    replacement = replace.get("replaceText")
+    if not isinstance(replacement, str) or not replacement:
+        return False
+    return replacement in text
 
 
 def apply_slides_requests(
@@ -84,7 +97,17 @@ def apply_slides_requests(
 ) -> None:
     if not requests:
         return
-    body: dict[str, Any] = {"requests": requests}
+    # The QA-only slide-identity metadata (slides_requests.QA_SLIDE_INDEX_KEY)
+    # must never reach the Slides API: batchUpdate rejects unknown request
+    # fields. Strip it here at the API boundary; per-request validation below
+    # still runs against the original request list.
+    api_requests = [
+        {key: value for key, value in request.items() if key != QA_SLIDE_INDEX_KEY}
+        if isinstance(request, dict)
+        else request
+        for request in requests
+    ]
+    body: dict[str, Any] = {"requests": api_requests}
     if required_revision_id is not None:
         body["writeControl"] = {"requiredRevisionId": required_revision_id}
     response = service.presentations().batchUpdate(

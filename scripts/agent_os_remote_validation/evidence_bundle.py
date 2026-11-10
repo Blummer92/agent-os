@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -17,6 +16,7 @@ from scripts.agent_os_execution_capabilities.models import (
 
 from .models import ValidationPlan
 from .selector import (
+    _canonical_bytes,
     compute_command_set_digest,
     serialize_validation_plan,
     validate_validation_plan,
@@ -687,12 +687,6 @@ def _semantic_digest(domain: str, payload: dict[str, object]) -> str:
     return hashlib.sha256(
         domain.encode("utf-8") + b"\0" + _canonical_bytes(payload)
     ).hexdigest()
-
-
-def _canonical_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
 
 
 def _timestamp(value: object) -> datetime | None:

@@ -29,11 +29,14 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     LifecycleStage,
 )
 from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
+    ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
     LIFECYCLE_ACQUISITION_REASON_CODES,
     REASON_ACQUIRED,
     REASON_CLOSED_UNMERGED_PR,
     REASON_CONFLICTING_PR_CLAIMS,
     REASON_INCOMPLETE_ENUMERATION,
+    REASON_NON_CLOSING_PR_MERGED,
     REASON_NO_VERIFIED_PR_LINEAGE,
     REASON_PR_LINKAGE_UNVERIFIABLE,
     REASON_PR_REPOSITORY_MISMATCH,
@@ -98,6 +101,7 @@ def acquisition_request(**changes: object) -> LifecycleStageAcquisitionRequest:
         observed_at=OBSERVED_AT,
         pr_lineage=(),
         lineage_enumeration=complete_enumeration(),
+        association_policy=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     )
     base.update(changes)
     return LifecycleStageAcquisitionRequest(**base)  # type: ignore[arg-type]
@@ -442,6 +446,7 @@ def test_reason_codes_are_bounded_and_documented() -> None:
             REASON_PR_LINKAGE_UNVERIFIABLE,
             REASON_PR_REPOSITORY_MISMATCH,
             REASON_CLOSED_UNMERGED_PR,
+            REASON_NON_CLOSING_PR_MERGED,
         }
     )
 
@@ -476,3 +481,160 @@ def test_missing_lifecycle_evidence_still_fails_closed_downstream() -> None:
 class _NullTransport:
     def get_issue(self, repository: str, issue_number: int):  # pragma: no cover
         raise AssertionError("no live read may happen before the fail-closed check")
+
+
+# #3441 D-A1 regression: opt-in association is not issue closure authority.
+def non_closing_pr(number: int = 1201, **changes: object) -> VerifiedPrLineage:
+    defaults: dict[str, object] = {
+        "pr_title": "D-A1 association",
+        "pr_body": "Part of #3433\nNon-closing: #3433",
+    }
+    defaults.update(changes)
+    return pr_claim(number, **defaults)
+
+
+@pytest.mark.parametrize(
+    ("draft", "stage"),
+    [(True, LifecycleStage.DRAFT_PR), (False, LifecycleStage.REVIEW)],
+)
+def test_declared_non_closing_is_opt_in_only(draft, stage) -> None:
+    fact = non_closing_pr(is_draft=draft)
+    unchanged = acquire_lifecycle_stage(acquisition_request(pr_lineage=(fact,)))
+    opted = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(fact,), association_policy="declared-non-closing-v1",
+    ))
+    assert unchanged.reason_codes == (REASON_PR_LINKAGE_UNVERIFIABLE,)
+    assert unchanged.lifecycle_stage is None
+    assert opted.lifecycle_stage is stage
+    assert opted.verified_claims == (1201,)
+
+
+def test_merged_declared_association_never_proves_completed_issue() -> None:
+    from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+        REASON_NON_CLOSING_PR_MERGED,
+    )
+
+    fact = non_closing_pr(is_open=False, is_merged=True)
+    result = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(fact,), association_policy="declared-non-closing-v1",
+    ))
+    assert result.outcome is LifecycleAcquisitionOutcome.MANUAL_REVIEW
+    assert result.lifecycle_stage is None
+    assert result.reason_codes == (REASON_NON_CLOSING_PR_MERGED,)
+    assert lifecycle_stage_from_acquisition(result) is None
+
+
+@pytest.mark.parametrize("body", [
+    "Part of #3433",
+    "Part of #3433 and #99\nNon-closing: #3433, #99",
+    "Part of another/repo#3433\nNon-closing: #3433",
+    "Part of #3433\nNon-closing: #3433\nCloses #3433",
+    "Part of #3433\nNon-closing: #3433\nFixes #99",
+])
+def test_non_closing_rejects_unverified_conflicting_targets(body) -> None:
+    result = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(non_closing_pr(pr_body=body),),
+        association_policy="declared-non-closing-v1",
+    ))
+    assert result.outcome is LifecycleAcquisitionOutcome.MANUAL_REVIEW
+    assert result.lifecycle_stage is None
+
+
+def test_competing_non_closing_associations_remain_conflicting() -> None:
+    result = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(non_closing_pr(), non_closing_pr(1202)),
+        association_policy="declared-non-closing-v1",
+    ))
+    assert result.reason_codes == (REASON_CONFLICTING_PR_CLAIMS,)
+    assert result.lifecycle_stage is None
+
+
+def test_non_closing_opt_in_preserves_closing_and_closed_unmerged() -> None:
+    closing = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(pr_claim(),),
+        association_policy="declared-non-closing-v1",
+    ))
+    assert closing.lifecycle_stage is LifecycleStage.REVIEW
+    old = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(non_closing_pr(is_open=False),),
+        association_policy="declared-non-closing-v1",
+    ))
+    assert old.reason_codes == (REASON_CLOSED_UNMERGED_PR,)
+
+
+def test_non_closing_policy_enforces_currentness_and_strict_vocabulary() -> None:
+    result = acquire_lifecycle_stage(acquisition_request(
+        pr_lineage=(non_closing_pr(),),
+        association_policy="declared-non-closing-v1",
+    ))
+    assert not acquisition_bindings_current(
+        result, issue_source_revision="github-issue-v1:" + "d" * 64,
+        source_revision=SOURCE_REVISION,
+    )
+    assert not acquisition_bindings_current(
+        result, issue_source_revision=ISSUE_REVISION,
+        source_revision="d" * 40,
+    )
+    with pytest.raises(ValueError, match="association_policy"):
+        acquisition_request(association_policy="automatic")
+
+
+# #3690 CR-4: the association policy is a required, keyword-only input.
+# There is no library default that could silently diverge from the
+# shadow-run CLI's explicit default; policy semantics are unchanged.
+def _request_fields_without_policy() -> dict[str, object]:
+    fields = dict(
+        repository=REPOSITORY,
+        issue_number=ISSUE_NUMBER,
+        issue_state=IssueState.OPEN,
+        issue_source_revision=ISSUE_REVISION,
+        source_revision=SOURCE_REVISION,
+        observed_at=OBSERVED_AT,
+        pr_lineage=(),
+        lineage_enumeration=complete_enumeration(),
+    )
+    return fields
+
+
+def test_association_policy_is_required() -> None:
+    with pytest.raises(TypeError, match="association_policy"):
+        LifecycleStageAcquisitionRequest(**_request_fields_without_policy())  # type: ignore[call-arg]
+
+
+def test_association_policy_is_keyword_only() -> None:
+    positional = tuple(_request_fields_without_policy().values())
+    with pytest.raises(TypeError):
+        LifecycleStageAcquisitionRequest(  # type: ignore[misc]
+            *positional, ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
+        )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1, ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1],
+)
+def test_explicit_policy_values_are_accepted_unchanged(policy) -> None:
+    request = acquisition_request(pr_lineage=(pr_claim(),), association_policy=policy)
+    assert request.association_policy == policy
+    # A canonical closing directive acquires the same stage under either policy.
+    assert acquire_lifecycle_stage(request).lifecycle_stage is LifecycleStage.REVIEW
+
+
+@pytest.mark.parametrize("policy", ["", "automatic", "CLOSING-DIRECTIVE-V1", None, 1])
+def test_unsupported_association_policy_still_fails_closed(policy) -> None:
+    with pytest.raises(ValueError, match="association_policy"):
+        acquisition_request(association_policy=policy)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1, ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1],
+)
+def test_claim_limit_still_fails_closed_under_either_policy(policy) -> None:
+    from scripts.agent_os_issue_acceptance.issue_operational_state import (
+        MAX_PRIMARY_CLAIMS,
+    )
+
+    lineage = tuple(pr_claim(1000 + n) for n in range(MAX_PRIMARY_CLAIMS + 1))
+    with pytest.raises(ValueError, match="pr_lineage exceeds its bound"):
+        acquisition_request(pr_lineage=lineage, association_policy=policy)

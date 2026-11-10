@@ -27,6 +27,11 @@ Discovery is bootstrap, never authorization or currentness. Every identity this
 module reports must still pass the existing #1218/#1253 reconstruction,
 authorization, source/scope, checkpoint, ResumePlan, environment, and lease
 checks before any Scheduler execution.
+
+The #1237 locator is imported only on the discovery path (#3588). Its import
+chain reaches PyYAML-backed issue-acceptance modules, so importing this module,
+and every outcome that needs no discovery, must stay independent of PyYAML: a
+host hook interpreter without it must still start and answer.
 """
 
 from __future__ import annotations
@@ -38,11 +43,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Literal, Sequence
-
-from scripts.agent_os_execution_checkpoint.handoff_discovery import (
-    InvocationHandoffDiscoveryStatus,
-    discover_issue_handoff,
-)
 
 GOVERNED_ROUTE_PREFLIGHT_SCHEMA_NAME = "agent-os.execution-interface-governed-route-preflight"
 GOVERNED_ROUTE_PREFLIGHT_SCHEMA_VERSION = "1.0"
@@ -85,6 +85,7 @@ class GovernedRoutePreflightReason(str, Enum):
     DISCOVERY_DESCRIPTOR_INTEGRITY_UNVERIFIED = "discovery-descriptor-integrity-unverified"
     DISCOVERY_STORE_UNAVAILABLE = "discovery-store-unavailable"
     DISCOVERY_STORE_BOUND_EXCEEDED = "discovery-store-bound-exceeded"
+    DISCOVERY_DEPENDENCY_UNAVAILABLE = "discovery-dependency-unavailable"
 
 
 _DISCOVERY_REASON_MAP: dict[str, GovernedRoutePreflightReason] = {
@@ -98,16 +99,6 @@ _DISCOVERY_REASON_MAP: dict[str, GovernedRoutePreflightReason] = {
     ),
     "store-unavailable": GovernedRoutePreflightReason.DISCOVERY_STORE_UNAVAILABLE,
     "store-bound-exceeded": GovernedRoutePreflightReason.DISCOVERY_STORE_BOUND_EXCEEDED,
-}
-
-_DISCOVERY_STATUS_MAP: dict[InvocationHandoffDiscoveryStatus, GovernedRoutePreflightStatus] = {
-    InvocationHandoffDiscoveryStatus.FOUND: (
-        GovernedRoutePreflightStatus.GOVERNED_RESUME_AVAILABLE
-    ),
-    InvocationHandoffDiscoveryStatus.NOT_FOUND: GovernedRoutePreflightStatus.NOT_FOUND,
-    InvocationHandoffDiscoveryStatus.NEEDS_DECISION: (
-        GovernedRoutePreflightStatus.NEEDS_DECISION
-    ),
 }
 
 
@@ -325,10 +316,48 @@ def resolve_governed_route_preflight(
             issue_number=issue_number,
         )
 
+    return _resolve_discovery(
+        store_root=store_root, repository=repository, issue_number=issue_number
+    )
+
+
+def _resolve_discovery(
+    *, store_root: Path | str, repository: str, issue_number: int
+) -> GovernedRoutePreflightResult:
+    """Run the existing #1237 locator, importing it only once discovery is required.
+
+    The import and the locator-enum-keyed status mapping live here rather than
+    at module scope so that startup and every no-discovery outcome never touch
+    the locator's PyYAML-backed import chain. A host that cannot import the
+    locator reports bounded ``needs-decision`` evidence: no handoff is
+    synthesized and there is no silent fallback to local git/gh tooling.
+    """
+    try:
+        from scripts.agent_os_execution_checkpoint.handoff_discovery import (
+            InvocationHandoffDiscoveryStatus,
+            discover_issue_handoff,
+        )
+    except ImportError:
+        return _result(
+            status=GovernedRoutePreflightStatus.NEEDS_DECISION,
+            reasons=(GovernedRoutePreflightReason.DISCOVERY_DEPENDENCY_UNAVAILABLE,),
+            repository=repository,
+            issue_number=issue_number,
+        )
+
+    status_map = {
+        InvocationHandoffDiscoveryStatus.FOUND: (
+            GovernedRoutePreflightStatus.GOVERNED_RESUME_AVAILABLE
+        ),
+        InvocationHandoffDiscoveryStatus.NOT_FOUND: GovernedRoutePreflightStatus.NOT_FOUND,
+        InvocationHandoffDiscoveryStatus.NEEDS_DECISION: (
+            GovernedRoutePreflightStatus.NEEDS_DECISION
+        ),
+    }
     discovery = discover_issue_handoff(
         store_root, repository=repository, issue_number=issue_number
     )
-    status = _DISCOVERY_STATUS_MAP[discovery.status]
+    status = status_map[discovery.status]
     reasons = tuple(
         _DISCOVERY_REASON_MAP[item.value] for item in discovery.reason_codes
     )

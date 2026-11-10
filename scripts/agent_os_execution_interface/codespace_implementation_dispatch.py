@@ -40,8 +40,9 @@ into the deterministic request id and the returned TransportResult; it does not
 re-verify lane-admission staleness and does not prove the remote Codespace HEAD
 against ``base_sha_or_none`` before execution. Stale admission/scope/base
 evidence is the Safe Implementation Lane currentness gate's canonical owner;
-the transport's recorded-only base-SHA/workdir semantics are #3335's merged
-contract. A future scoped change may compose a remote-HEAD preflight out of
+the transport's recorded-only base-SHA semantics and deterministic
+validated-workdir contract (#3333, Option B) build on #3335's merged contract.
+A future scoped change may compose a remote-HEAD preflight out of
 this same transport without changing the seam.
 
 All external effects are injected (``list_candidates`` / ``run`` are passed
@@ -106,6 +107,16 @@ class CodespaceDispatchOutcome:
     failures) is carried verbatim. NOT_DISPATCHED means a fail-closed junction
     stopped the attempt before any transport; ``transport_result_or_none`` is
     then None and no Codespace was contacted.
+
+    ``request_or_none`` is the canonical request id derived from the
+    TransportRequest the dispatcher actually sent (``request.request_id``,
+    computed by the transport request's own ``__post_init__`` from its
+    content). It is NOT the result's asserted id: the fixed pilot compares
+    the returned result's ``request_id`` against this carried value before
+    completed status (#3333 B01). A dispatcher that cannot supply it
+    (NOT_DISPATCHED, or a legacy fake) yields None, and the pilot must
+    fail closed with ``transport-request-unavailable`` rather than trust
+    the result's id.
     """
 
     status: DispatchStatus
@@ -115,6 +126,7 @@ class CodespaceDispatchOutcome:
     preference: GovernedRunnerPreference
     route_decision_or_none: ExecutorRouteDecision | None
     transport_result_or_none: TransportResult | None
+    request_or_none: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.status) is not DispatchStatus:
@@ -142,6 +154,10 @@ class CodespaceDispatchOutcome:
                 raise ValueError("dispatched outcomes must carry a TransportResult")
             if DispatchReason.OK not in self.reason_codes:
                 raise ValueError("dispatched outcomes must carry the ok reason")
+            if self.request_or_none is not None and (
+                type(self.request_or_none) is not str or not self.request_or_none
+            ):
+                raise ValueError("request_or_none must be a non-empty string or None")
         else:
             if result is not None:
                 raise ValueError(
@@ -190,10 +206,12 @@ def dispatch_admitted_operation_to_codespace(
     base_sha_or_none: str | None = None,
     workdir_or_none: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    execution_mode_or_none: str | None = None,
     list_candidates: Callable[
         [], tuple[CodespaceCandidate, ...]
     ] = default_list_candidates,
     run: Callable[..., tuple[int, str, str]] = default_run,
+    run_local: Callable[..., tuple[int, str, str]] | None = None,
 ) -> CodespaceDispatchOutcome:
     """Dispatch one admitted bounded operation to the current qualified Codespace.
 
@@ -276,10 +294,14 @@ def dispatch_admitted_operation_to_codespace(
         base_sha_or_none=base_sha_or_none,
         workdir_or_none=workdir_or_none,
         timeout_seconds=timeout_seconds,
+        execution_mode_or_none=execution_mode_or_none,
+        execution_profile_or_none=selected.environment_profile_id,
+        environment_health_evidence_or_none=selected.environment_health_evidence_id,
     )
-    result = run_codespace_transport(
-        request, list_candidates=list_candidates, run=run
-    )
+    transport_kwargs = {"list_candidates": list_candidates, "run": run}
+    if run_local is not None:
+        transport_kwargs["run_local"] = run_local
+    result = run_codespace_transport(request, **transport_kwargs)
     return CodespaceDispatchOutcome(
         status=DispatchStatus.DISPATCHED,
         reason_codes=(DispatchReason.OK,),
@@ -288,4 +310,8 @@ def dispatch_admitted_operation_to_codespace(
         preference=preference,
         route_decision_or_none=decision,
         transport_result_or_none=result,
+        # The request id is derived from the request content itself, before
+        # the transport runs, so a result asserting a foreign id cannot
+        # pass the pilot's B01 comparison by construction of this value.
+        request_or_none=request.request_id,
     )

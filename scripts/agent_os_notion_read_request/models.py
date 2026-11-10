@@ -39,6 +39,12 @@ REQUEST_CLASSES: tuple[str, ...] = (
     # #980-plan-driven: its read plan is exactly one schema step, so the
     # #3476 coursewide filter guard is bypassed by construction.
     "source-schema",
+    # #3580: governed lesson-content reads name a catalog-declared logical
+    # source and project only the 7 governed lesson fields. Like
+    # source-schema, this class is record-driven rather than #980-plan-driven:
+    # its read plan is exactly one query step, so the #3476 coursewide filter
+    # guard is bypassed by construction.
+    "lesson-content",
 )
 
 #: Each request class resolves to already-resolved #980 intent. The read plan,
@@ -81,12 +87,22 @@ REQUEST_CLASS_INTENT: dict[str, dict[str, object]] = {
         "artifact_type": "none",
         "requires_reusable_assets": False,
     },
+    # #3580: the lesson-content intent resolves through the same
+    # planner/assembler vocabulary. The class is executed by the record-driven
+    # lesson path (see execution.execute_lesson_content), never by a #980
+    # plan. The artifact type "lesson" names the projected lesson records;
+    # it grants no production or publication authority.
+    "lesson-content": {
+        "action": "lesson-content",
+        "artifact_type": "lesson",
+        "requires_reusable_assets": False,
+    },
 }
 
 #: Structured content-class constraint. Public projection is decided by the
 #: declared class of the *source*, never by scanning result text for phrases.
 PUBLIC_PROJECTABLE_CONTENT_CLASSES = frozenset(
-    {"curriculum-metadata", "visual-asset-metadata"}
+    {"curriculum-metadata", "visual-asset-metadata", "lesson-content"}
 )
 
 #: A binding is dispatchable only in this state. Historical leads, cached

@@ -76,7 +76,7 @@ def _summarize(
     if isinstance(report, api.ValidationReport):
         findings = [item for item in report.findings if item.capability_id in ids]
         rank = {"pass": 0, "warn": 1, "manual-review": 2, "fail": 3}
-        severity = max((item.severity.value for item in findings), key=rank.get, default="pass")
+        severity = max((item.severity.value for item in findings), key=lambda value: rank[value], default="pass")
         codes = sorted(item.code for item in findings)
     else:
         severity, codes = "invalid", []

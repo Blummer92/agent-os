@@ -12,6 +12,18 @@ classification, PR #3481), #3372 (optional custom-MCP host publication), #3281.
 | Fixed Codespaces/GCE operations | Same ingress, Codespaces-first router | Unchanged; Ready is deliberately **not** routed there |
 | `admit_agent_os_ready_for_review_tool` over MCP | Optional repository-local server | Unchanged; #3372 owns host publication |
 
+## Satisfying the overlay pre-step
+
+This route satisfies the GitHub Service Agent overlay Draft -> Ready
+pre-step where the MCP admission tool is unattached: the Actions consumer
+calls the same single canonical evaluator, and the host must verify the
+receipt through `verify_ready_admission_receipt` against a fresh PR
+readback before mutation, with exact head/body binding,
+closing-reference refusal, and fail-closed behavior on an absent,
+refused, stale, duplicate, or forged receipt. This does not delete the
+MCP tool, create a second evaluator, or grant merge, closure, workflow,
+protected-setting, production, or external-write authority.
+
 ## Fixed request
 
 Post on an open issue (not a PR conversation) as the allowed owner actor, exact text:
@@ -34,7 +46,15 @@ draft, head SHA, title/body, latest reviews, review threads, `Run validation pla
 check, `agent-os/authoritative-aggregate` status), binds head SHA and body
 revision, and calls the single canonical evaluator
 `evaluate_ready_for_review_admission`. The owner actor's fixed comment is the
-explicit Ready request. No canonical close-issue authorization is reacquirable
+explicit Ready request.
+
+Validation evidence (`resolve_validation_evidence`, #3587):
+- Aggregate success comes only from the newest `agent-os/authoritative-aggregate` status, read with the aggregate gate's `latest_authoritative_state`.
+- A `Run aggregate validation` check run never counts as success; with no status, its non-success states still block or keep Ready provisional.
+- Duplicate same-name check runs resolve by newest check-run id. A skipped `Run validation plan` copy, which comes from a dispatch run, is ignored.
+- Whether a Draft aggregate-profile plan check (which ran no command) may count as focused validation is an open owner policy decision under #3587; it is not decided here.
+
+No canonical close-issue authorization is reacquirable
 here, so any GitHub-effective closing reference refuses
 (`unauthorized-closing-reference`).
 
@@ -46,7 +66,18 @@ job log.
 ## Host consumption contract (ChatGPT via connected GitHub MCP)
 
 1. Compute `sha256(body)`; post the fixed comment on the owning issue.
-2. Observe the `Agent OS Governed Invocation Ingress` run; read the receipt.
+2. Observe the `Agent OS Governed Invocation Ingress` run; enumerate its
+   artifacts with `fetch_workflow_run_artifacts` and retrieve the
+   `agent-os-ready-admission-<run>-<attempt>` ZIP **only** with the
+   dedicated `download_workflow_artifact` action — never with generic
+   `fetch`, which rejects the binary artifact ZIP endpoint as an
+   unsupported URL. An `unsupported URL` rejection for the artifact
+   endpoint is a tool-selection signal, not a missing receipt connection:
+   switch to `download_workflow_artifact` (bounded fallback: the receipt
+   text echoed by `fetch_workflow_job_logs`) and continue the same
+   lineage; do not stop, do not re-post the admission request, and do not
+   reclassify the failure as a missing repository connection. Then read
+   `receipt.json` from the ZIP and proceed to step 3.
 3. Immediately before mutation, re-read the PR and call
    `verify_ready_admission_receipt` (head, body, trigger id, repository, PR,
    duplicate receipt id). Any failure stops this item only.
@@ -54,8 +85,9 @@ job log.
 5. Consume the Ready-triggered authoritative aggregate. For a provisional Ready,
    non-success, pending, or head drift requires converting back to Draft
    (`evaluate_provisional_ready_reconciliation`).
-6. In a batch, record each item's disposition (`run_ready_batch`) and continue past
-   item-local blockers such as #3411 or PR #3449.
+6. In a batch, evaluate and verify each item independently and continue past
+   item-local blockers such as #3411 or PR #3449 under the existing finite-mission
+   cursor in `AGENTS.md`.
 
 Repeating the same request yields the same trigger id and receipt id; the host must
 not re-post identical handoffs while a matching unconsumed receipt exists.

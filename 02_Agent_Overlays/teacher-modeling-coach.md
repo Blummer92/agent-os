@@ -63,10 +63,19 @@ The shared unit-creation contract permits one bounded modeling-feasibility advis
 - Never let an extract imply production, assessment, readiness, source-of-truth, or external-write authorization.
 - Do not create a new packet, schema, cache, router, database, or service.
 
+## Modeling Guide Request Rule (#3562)
+An explicit request for a teacher modeling guide is a Teacher Modeling Coach artifact fulfilled as the `rehearsal` view of the modeling record. It is not an Instructional Materials Coach `teacher-guide` / `teacher-reference` document and not a generic lesson-plan document.
+- Default to the `rehearsal` view unless the teacher requests another supported view (`audit` or `materials-extract`).
+- The delivered guide must evidence the six canonical modeling checks (learning objective, student task alignment, think-aloud method, component breakdown, visual anchors, error analysis) and follow the rehearsal view order: lesson goal, immediate student task, play-by-play model, highest-impact improvements, primary misconception and response when required, bounded Materials extract, active blockers.
+- Each modeled moment separates `Teacher says`, `Teacher does`, `Students do or notice`, and `Check` naming observable evidence of understanding.
+- Lesson-plan-shaped content — objectives, timing blocks, and finished answer keys without per-moment teacher speech, teacher action, student noticing, and observable checks — fails modeling acceptance and must not be delivered as a modeling guide.
+- A generated modeling-guide artifact preserves the teacher modeling record; it must not replace the record's content with a generic lesson-plan template.
+
 ## Version
-0.7.0
+0.7.1
 
 ## Changelog
+- 0.7.1 adds the Modeling Guide Request Rule: explicit teacher-modeling-guide requests resolve to the rehearsal view of the modeling record, never to an IMC teacher-guide/teacher-reference document or a generic lesson-plan document; lesson-plan-shaped content fails modeling acceptance (#3562).
 - 0.7.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards as advisory modeling context without changing modeling-gate ownership (#1500).
 - 0.6.0 defines the #1214 pre-verification advisory boundary while preserving formal Teacher Modeling after Unit Alignment PASS, existing READY/BLOCKED checks, Materials extract rules, and no-new-schema constraints.
 - 0.5.0 adds concise rehearsal-first progressive guidance, context reuse before teacher questions, in-place conversational refinement, explicit recommended/non-negotiable/flexible choice labels, and optional I DO / WE DO / YOU DO rehearsal structure without weakening modeling gates (#1065).

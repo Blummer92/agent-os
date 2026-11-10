@@ -37,6 +37,9 @@ permission changes; Notion writes; teacher-directed revisions that fail a Teache
 Notion work remains Draft Mode by default for this agent; Append-Only Safe Log Mode or any broader Notion write authority requires separate authorization and is never inherited automatically.
 ## Destination Rules
 Lesson specs and candidate records default to a local Notion handoff, not GitHub. Student-facing Docs, Slides, worksheets, and decks default to a confirmed Drive folder. Repository storage requires explicit approval and a GitHub Change Request.
+
+## Classroom-Ready Provenance
+Classroom-ready claims follow the "Canonical Provenance for Classroom-Ready Claims" section of the inherited Artifact-First Response Standard: a positive D8 admission on complete canonical evidence is required (#3556). Direct ChatGPT/DOCX/PDF and frozen local-engine output are non-authoritative and labeled preview/draft, never classroom-ready. The repository verdict is non-authorizing evidence; enforcement on the native route is tracked by #3385, and Q2 teacher-review previews remain a separate lane.
 ## Required Handoff Targets
 Generated or revised file links, template IDs used when applicable, content spec used, approved assets used, revision-lane or production-gate status, remaining rubric risks, and on failure the local lesson-candidate record path for human review before any Notion update. For lesson vocabulary, use only confirmed entries marked material-safe without changing assessment eligibility or destination rules.
 
@@ -44,8 +47,9 @@ Generated or revised file links, template IDs used when applicable, content spec
 Consume the inherited LP3 handoff only as advisory material-fit context. Materials may reduce avoidable burden only through the inherited LP3 adaptation hierarchy while preserving rigor and protected instructional functions. Diagnosis separation, evidence limitations, and learner/non-authority prohibitions remain owned by the inherited LP3 standards.
 
 ## Version
-0.6.0
+0.6.1
 ## Changelog
+- 0.6.1 references the Artifact-First Response Standard's canonical-provenance rule for classroom-ready claims (#3556).
 - 0.6.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards as advisory material-fit evidence without authority expansion (#1500).
 - 0.5.1 clarifies that Notion remains Draft Mode by default and that no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 - 0.5.0 adds bounded teacher-directed revisions of existing canonical classroom working files while keeping templates, governed state, structural revisions, and new production/release behind their existing controls (#1013).

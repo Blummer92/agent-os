@@ -106,6 +106,96 @@ owner. Deleted resource: mark inactive after verification. Offline system: defer
 live action and produce handoff. Duplicate resource: require human review before
 write or relationship repair.
 
+## Pre-Create Preflight
+
+Before an agent proposes or creates a new Notion-facing field, dashboard,
+database, workflow, or prompt, it consults the cached Notion navigation index
+through the advisory preflight in `08_Tooling/notion-navigation-client/` (see its
+README for the interface). The preflight checks, in order, for an exact or
+deterministically normalized existing match, then for Duplicate / Drift Watchlist
+evidence, then returns the owner and source-of-truth route to verify live next.
+Its finite outcomes are `existing-match`, `duplicate-risk-review`,
+`no-cached-match`, `stale-or-unverified`, and `manual-review`.
+
+The preflight is cached evidence, not authority. `no-cached-match` is not proof that
+creating is safe, a duplicate-risk finding routes to human review and never triggers
+automatic merge, rename, retirement, or cleanup, and every outcome requires live
+verification of the owning system before any write or governed-field decision. It
+adds no registry, cache, or deduplication system, and it does not replace the GitHub
+bug-issue duplicate admission owned elsewhere.
+
+## Pre-Create Reconciliation
+
+Before proposing new Agent OS work, a caller classifies it with
+`navigation_registry.reconciliation.classify_proposed_work` (#3308). This is a pure,
+deterministic function. Callers acquire all evidence and pass it in:
+
+- the preflight outcome above, when the work touches Notion-facing structures;
+- a complete, bounded GitHub issue search, with each open issue's lifecycle stage
+  taken from the PR-lineage acquisition where one exists;
+- matching reusable-capability registry rows.
+
+It returns exactly one disposition: `reuse-current-owner`, `continue-current-work`,
+`extend-existing-capability`, `historical-regression-evidence`,
+`superseded-or-retired`, `candidate-new-work`, or `manual-review`.
+
+The rules apply in this order:
+
+1. GitHub lineage is authoritative and decides first. A current open owner of the same
+   objective wins, or the current successor of closed same-objective history.
+   Contradictory successor facts, a closed successor, or more than one open owner or
+   successor become `manual-review`.
+2. Open work that is only related, or related history with a successor, becomes
+   `manual-review`.
+3. A registered capability is extended rather than reimplemented, even where closed
+   history of the same objective exists.
+4. Closed issues are evidence only and are never returned as actionable owners.
+5. Navigation evidence is advisory and only gates new work. Anything other than a fresh
+   `no-cached-match` becomes `manual-review`, and so does an incomplete search; neither
+   is ever treated as a no-match.
+
+`candidate-new-work` grants no creation authority. Issue creation still passes its
+existing admission (bugs: the duplicate and root-cause admission). Continuation,
+Codespaces and GCE routing, CKR6 consumption and backlog selection stay with their
+existing owners.
+
+### ChatGPT host request-triage consumer (#3308)
+
+The existing execution-service MCP host now exposes
+`reconcile_agent_os_proposed_work_tool`, which calls the one merged
+`navigation_registry.reconciliation.classify_proposed_work` implementation
+through the thin read-only `work_reconciliation_facade`. The existing
+`plan_connected_issue_creation_tool` can receive the same
+`reconciliation_evidence`; when supplied, any disposition other than
+`candidate-new-work` denies the connected create plan before the existing
+#2660 duplicate/root-cause admission. The candidate disposition **never**
+bypasses that downstream admission.
+
+The host must supply current bounded evidence from *existing* owners, never
+from newly implemented readers: current complete GitHub issue search and issue
+readback; #3441 lifecycle/PR-lineage acquisition under its actually selected
+association policy; matched reusable-capability registry rows; and conditional
+#3307 preflight after #3306 chronology/currentness evaluation. The evidence
+object contains `subject`, `github_search_complete`,
+`github_issue_evidence_current`, `pr_lineage_evidence_current`,
+`capability_registry_evidence_current`, `lineage`, `capabilities`,
+`navigation_applicable`, `navigation_evidence_current`, and
+`navigation_outcome`. Complete bounded empty collections are valid only
+when the readers actually proved the relevant search was complete. Missing,
+stale, malformed, contradictory or unverified facts yield `manual-review`.
+
+The new host tool is a pure projection with no GitHub/Sheets/Notion I/O,
+write authority, search algorithm, new registry, persistent state or
+background execution. The host must not omit this preflight before proposing
+new Agent OS work. The older `plan_connected_issue_creation_tool` signature
+remains backward-compatible for existing hosts, so **mandatory runtime
+enforcement of the preflight on every legacy call and live iOS host
+acceptance remain separate verification requirements**, not established by
+a passing unit test. Neither this integration nor an input flag attests that
+real remote evidence was fetched; acquisition and exact currentness must be
+proved by the host and independent QA.
+
+
 ## Roadmap
 
 1. Approve architecture and tests.

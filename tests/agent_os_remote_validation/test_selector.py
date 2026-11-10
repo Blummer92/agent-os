@@ -1522,3 +1522,205 @@ def test_aggregate_prefixes_never_subsume_a_focused_rule_prefix() -> None:
     assert not subsumed, (
         "aggregate_prefixes make focused owners unreachable: " + repr(subsumed)
     )
+
+
+TEACHER_OS_COMMANDS = tuple(sorted(
+    "cd 08_Tooling/teacher-os-web && " + command for command in (
+        "npm ci", "npm run build", "npm run test:unit",
+        "npx playwright install chromium", "npx playwright test",
+    )
+))
+
+
+@pytest.mark.parametrize("path", [
+    "08_Tooling/teacher-os-web/src/TeacherApp.tsx",
+    "08_Tooling/teacher-os-web/src/style.css",
+    "08_Tooling/teacher-os-web/src/fixtures.ts",
+    "08_Tooling/teacher-os-web/tests/teacher.spec.ts",
+    "08_Tooling/teacher-os-web/package.json",
+    "08_Tooling/teacher-os-web/package-lock.json",
+    "08_Tooling/teacher-os-web/tsconfig.json",
+    "08_Tooling/teacher-os-web/index.html",
+    "08_Tooling/teacher-os-web/playwright.config.ts",
+])
+def test_teacher_os_executable_paths_select_focused_commands(path):
+    plan = _select(_input([path]))
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
+    assert validate_validation_plan(plan) == ()
+
+
+def test_teacher_os_readme_only_is_static():
+    plan = _select(_input(["08_Tooling/teacher-os-web/README.md"]))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+
+
+def test_teacher_os_mixed_readme_and_source_selects_focused():
+    plan = _select(_input([
+        "08_Tooling/teacher-os-web/README.md",
+        "08_Tooling/teacher-os-web/src/TeacherApp.tsx",
+    ]))
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
+# --- #3567: root docs/ must be classified without bypassing focused owners ---
+
+
+def test_3567_root_docs_only_is_static() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md"]))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_3567_root_docs_plus_unmapped_executable_is_aggregate() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md", "scripts/unmapped_3567.py"]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == (RULES["aggregate_command"],)
+
+
+def test_3567_root_docs_plus_focused_owner_stays_focused() -> None:
+    plan = _select(_input(["docs/canonical-json-classification.md", "scripts/agent_os_remote_validation/selector.py"]))
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest tests/agent_os_remote_validation",)
+
+
+# --- Node setup requirements derived from the selected plan (Track B) ---
+
+PPC_DIR = "08_Tooling/instructional-materials-coach/picture-perfect-coach"
+PPC_LOCK = PPC_DIR + "/package-lock.json"
+TEACHER_LOCK = "08_Tooling/teacher-os-web/package-lock.json"
+
+
+def _node(paths):
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    plan = _select(_input(paths))
+    return plan, node_setup_requirements(plan.commands)
+
+
+def test_node_requirements_teacher_only_sets_up_node_without_ppc_install():
+    plan, node = _node(["08_Tooling/teacher-os-web/src/TeacherApp.tsx"])
+    assert plan.profile == "focused"
+    assert node == {
+        "needs_node": True,
+        "lock_paths": (TEACHER_LOCK,),
+        "install_dirs": (),
+        "no_cache": False,
+    }
+
+
+def test_node_requirements_teacher_lockfile_only_change_is_selected_and_cached():
+    plan, node = _node([TEACHER_LOCK])
+    assert plan.profile == "focused"
+    assert plan.commands == TEACHER_OS_COMMANDS
+    assert node["lock_paths"] == (TEACHER_LOCK,)
+    assert node["install_dirs"] == ()
+
+
+def test_node_requirements_picture_perfect_only_keeps_original_route():
+    plan, node = _node([PPC_DIR + "/src/framePlan.ts"])
+    assert plan.profile == "focused"
+    assert node == {
+        "needs_node": True,
+        "lock_paths": (PPC_LOCK,),
+        "install_dirs": (PPC_DIR,),
+        "no_cache": False,
+    }
+
+
+def test_node_requirements_combined_handles_both_lock_paths():
+    _, node = _node([PPC_DIR + "/src/framePlan.ts", "08_Tooling/teacher-os-web/src/style.css"])
+    assert node["lock_paths"] == (PPC_LOCK, TEACHER_LOCK)
+    assert node["install_dirs"] == (PPC_DIR,)
+    assert node["needs_node"] is True and node["no_cache"] is False
+
+
+def test_node_requirements_python_only_adds_no_node_setup():
+    plan, node = _node(["scripts/agent_os_issue_acceptance/anything.py"])
+    assert plan.profile == "focused"
+    assert node == {
+        "needs_node": False,
+        "lock_paths": (),
+        "install_dirs": (),
+        "no_cache": False,
+    }
+
+
+def test_node_requirements_capture_only_uses_its_lockfile():
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    assert node_setup_requirements(("cd 08_Tooling/instructional-materials-coach/capture && npm ci",)) == {
+        "needs_node": True,
+        "lock_paths": ("08_Tooling/instructional-materials-coach/capture/package-lock.json",),
+        "install_dirs": (),
+        "no_cache": False,
+    }
+    plan, node = _node(["08_Tooling/instructional-materials-coach/capture/README.md"])
+    assert plan.profile == "focused"
+    assert node["needs_node"] is True
+    assert node["lock_paths"] == ("08_Tooling/instructional-materials-coach/capture/package-lock.json",)
+
+
+def test_node_requirements_ui_reference_only_gets_explicit_no_cache_node():
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    assert node_setup_requirements(("cd 05_Examples/ui-cross-platform-reference && npm install",)) == {
+        "needs_node": True,
+        "lock_paths": (),
+        "install_dirs": (),
+        "no_cache": True,
+    }
+    plan, node = _node(["05_Examples/ui-cross-platform-reference/package.json"])
+    assert plan.profile == "focused"
+    assert node["needs_node"] is True and node["no_cache"] is True
+
+
+def test_node_requirements_combined_with_ui_reference_keeps_cache_for_locked_projects():
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    node = node_setup_requirements(
+        (
+            "cd 08_Tooling/teacher-os-web && npm ci",
+            "cd 05_Examples/ui-cross-platform-reference && npm install",
+        )
+    )
+    assert node["needs_node"] is True
+    assert node["lock_paths"] == (TEACHER_LOCK,)
+    assert node["no_cache"] is False
+
+
+def test_node_requirements_python_only_command_has_no_node_setup():
+    from scripts.agent_os_remote_validation import node_setup_requirements
+
+    assert node_setup_requirements(("python -m pytest",)) == {
+        "needs_node": False,
+        "lock_paths": (),
+        "install_dirs": (),
+        "no_cache": False,
+    }
+
+
+def test_node_projects_lockfile_flags_match_the_checkout():
+    """The has-lockfile flag is a repo fact, not a guess: fail if it drifts."""
+    from scripts.agent_os_remote_validation.selector import _NODE_PROJECTS
+
+    root = Path(__file__).resolve().parents[2]
+    for directory, _, has_lock in _NODE_PROJECTS:
+        assert (root / directory / "package-lock.json").is_file() is has_lock, directory
+
+
+def test_every_npm_focused_rule_is_covered_by_node_setup():
+    """Fail closed at test time: a future npm rule must join _NODE_PROJECTS."""
+    from scripts.agent_os_remote_validation import node_setup_requirements
+    from scripts.agent_os_remote_validation.selector import _NODE_PROJECTS
+
+    known = {directory for directory, _, _ in _NODE_PROJECTS}
+    for rule in RULES["focused_rules"]:
+        commands = rule.get("commands", [])
+        for command in commands:
+            if "npm" in command or "npx" in command:
+                assert command.startswith("cd "), command
+                directory = command[3:].split(" && ", 1)[0]
+                assert directory in known, f"npm rule {rule['name']} project {directory} is not in _NODE_PROJECTS"
+                assert node_setup_requirements((command,))["needs_node"] is True

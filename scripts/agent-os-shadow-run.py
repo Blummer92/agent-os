@@ -25,16 +25,28 @@ evidence the shadow-run context can legitimately supply:
 - explicit request-supplied context (``--requested-mode``,
   ``--dependency-depth``, ``--substitutable``/``--no-substitutable``),
   absent stays absent, never defaulted.
+
+#3441: ``lifecycle_stage`` is now acquired per candidate from live PR lineage.
+``PrLineageAcquirer`` (``scripts/agent_os_issue_acceptance/pr_lineage_reader.py``)
+enumerates the all-state pull-request population over this CLI's GET-only
+client, proves it complete itself, classifies each pull request with the
+existing ``parse_pr`` authority, and feeds the unchanged #3433 evaluator. The
+evidence reader's consumer-boundary re-check (``acquisition_bindings_current``)
+runs only when it composes, which this CLI never reaches: with
+``primary_claims`` unresolved it fails closed first, and the record says so
+(``consumer_boundary_revalidation: not-reached``). A stage exists only where exactly one verified closing claim
+(or GitHub's own closed state) establishes it; everything else stays
+``unavailable`` / ``manual-review`` and fails closed.
 It still fails closed with a named ``candidate-evidence.*`` reason wherever
-no canonical live owner exists: ``lifecycle_stage`` (no lifecycle
-authority; #1460 forbids inventing one), ``primary_claims`` (no live
-PR-linkage reader; #1460 forbids inventing claim authority), and
-``approval_applicability`` (the approval evidence graph is not
-reconstructible for arbitrary backlog issues). Those three are #3329's
-bounded blockers -- surfaced, not manufactured. The seam therefore still
-fail-closes with ``candidate-evidence-incomplete`` for the real backlog,
-and the experiment record names the exact missing owner instead of filling
-the gap. #3328: ``--request-interpretation`` supplies the canonical
+no canonical live owner exists: ``primary_claims`` (no canonical claim owner;
+#1460 forbids inventing one) and ``approval_applicability`` (the approval
+evidence graph is not reconstructible for arbitrary backlog issues) remain
+``None`` here -- surfaced, not manufactured -- and a lifecycle stage alone
+never selects an issue. The seam therefore still fail-closes with
+``candidate-evidence-incomplete`` for the real backlog, and the experiment
+record names the exact missing owner and carries the per-candidate lifecycle
+acquisition evidence under ``lifecycle_stage_acquisition``.
+#3328: ``--request-interpretation`` supplies the canonical
 request-interpretation-v1 record from which the existing cohort admission
 (``cohort_admission.py``) derives the bounded candidate cohort, or fails
 closed, before any candidate evidence is read; manual ``--candidates`` stays
@@ -69,6 +81,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Mapping
@@ -99,8 +112,26 @@ from agent_os_execution_service.evidence_ledger import (  # noqa: E402
     NavigationDecisionType,
     hash_decision_inputs,
 )
+from scripts.agent_os_github_issue_provider.models import (  # noqa: E402
+    TrustedRepositoryIdentity,
+)
+from scripts.agent_os_github_issue_provider.pagination import (  # noqa: E402
+    PaginationDiagnosticError,
+    parse_link_header,
+    validated_next_page,
+)
 from scripts.agent_os_issue_acceptance.github_issue_source import (  # noqa: E402
     GitHubIssuePageResponse,
+)
+from scripts.agent_os_issue_acceptance.pr_lineage_reader import (  # noqa: E402
+    PR_LINEAGE_READER_CONTRACT_VERSION,
+    PrLineageAcquirer,
+    PullRequestDetailOutcome,
+    PullRequestDetailResult,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (  # noqa: E402
+    ASSOCIATION_POLICIES,
+    ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
 )
 from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter  # noqa: E402
 from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (  # noqa: E402
@@ -119,6 +150,9 @@ from scripts.agent_os_candidate_packet_live_input import (  # noqa: E402
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
 )
+from scripts.agent_os_pr_remediation.ci_evidence_recovery import (  # noqa: E402
+    sanitize_actionable_failure,
+)
 
 _API = "https://api.github.com"
 _LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
@@ -129,11 +163,10 @@ _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # canonical owner per candidate instead of this generic gap.
 EVIDENCE_GAP = (
     "no canonical candidate-evidence inputs available in this shadow-run "
-    "context: repository source revision, lifecycle stage, primary claims, "
-    "approval applicability, freshness, requested mode, environment "
-    "capability, dependency depth, and substitutable have no canonical live "
-    "owners for arbitrary backlog issues; #1460 forbids inventing PR-linkage "
-    "or lifecycle-stage authority inside a reader"
+    "context: primary claims and approval applicability have no canonical "
+    "live owners for arbitrary backlog issues (#1460 forbids inventing "
+    "PR-linkage claim authority inside a reader), and a lifecycle stage is "
+    "acquired only where exactly one verified PR claim establishes it"
 )
 
 
@@ -167,6 +200,32 @@ class GitHubReadClient:
             raise RuntimeError(f"github api unreachable: {exc}") from exc
 
 
+def _read_repository(
+    client: GitHubReadClient, repository: str
+) -> tuple[int | None, str]:
+    """Read ``(repository id, default branch)``; the id is ``None`` when absent."""
+    status, _, body = client.get(f"/repos/{repository}")
+    if status != 200:
+        raise RuntimeError(
+            f"github api: repository read failed for {repository} (http {status})"
+        )
+    try:
+        payload = json.loads(body)
+        default_branch = payload["default_branch"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"github api: repository payload malformed for {repository}"
+        ) from exc
+    if not isinstance(default_branch, str) or not default_branch:
+        raise RuntimeError(
+            f"github api: default branch missing for {repository}"
+        )
+    repository_id = payload.get("id") if isinstance(payload, dict) else None
+    if type(repository_id) is not int or repository_id < 1:
+        repository_id = None
+    return repository_id, default_branch
+
+
 def _fetch_repository_head_sha(client: GitHubReadClient, repository: str) -> str:
     """Fetch the repository's default-branch HEAD SHA via the GitHub API.
 
@@ -179,21 +238,14 @@ def _fetch_repository_head_sha(client: GitHubReadClient, repository: str) -> str
     Fail-closed: raises RuntimeError when the ref cannot be read or the
     payload is malformed, which the CLI reports as a transport failure.
     """
-    status, _, body = client.get(f"/repos/{repository}")
-    if status != 200:
-        raise RuntimeError(
-            f"github api: repository read failed for {repository} (http {status})"
-        )
-    try:
-        default_branch = json.loads(body)["default_branch"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise RuntimeError(
-            f"github api: repository payload malformed for {repository}"
-        ) from exc
-    if not isinstance(default_branch, str) or not default_branch:
-        raise RuntimeError(
-            f"github api: default branch missing for {repository}"
-        )
+    _, default_branch = _read_repository(client, repository)
+    return _fetch_branch_head_sha(client, repository, default_branch)
+
+
+def _fetch_branch_head_sha(
+    client: GitHubReadClient, repository: str, default_branch: str
+) -> str:
+    """Fetch one branch's HEAD SHA (the second half of the head read)."""
     status, _, body = client.get(
         f"/repos/{repository}/branches/{default_branch}"
     )
@@ -352,6 +404,169 @@ class LiveIssueTransport:
         return SingleIssueTransportResult(outcome=SingleIssueTransportOutcome.OK, item=item)
 
 
+class _RepositoryHeadReader:
+    """Default-branch SHA and repository identity over the shared GET-only client.
+
+    The repository payload (numeric id, default branch name) is read once per
+    run; each later head read is a single branch GET. The numeric id is what
+    lets the canonical continuation validator accept GitHub's
+    ``/repositories/{id}/...`` next links without trusting an unverified path.
+    """
+
+    def __init__(self, client: GitHubReadClient, repository: str) -> None:
+        self._client = client
+        self._repository = repository
+        self._identity: tuple[int | None, str] | None = None
+
+    def _repository_payload(self) -> tuple[int | None, str]:
+        if self._identity is None:
+            self._identity = _read_repository(self._client, self._repository)
+        return self._identity
+
+    def head_sha(self) -> str:
+        _, default_branch = self._repository_payload()
+        return _fetch_branch_head_sha(self._client, self._repository, default_branch)
+
+    def trusted_identity(self) -> TrustedRepositoryIdentity | None:
+        repository_id, _ = self._repository_payload()
+        if repository_id is None:
+            return None
+        return TrustedRepositoryIdentity(
+            repository=self._repository, repository_id=repository_id
+        )
+
+
+class LivePullRequestPageReader:
+    """PullRequestPageReader over the live pulls endpoint (GET only).
+
+    Continuation and terminal proof come from the provider's canonical
+    ``validated_next_page`` (``pulls`` endpoint) -- contiguous successor,
+    unchanged page size and state, pinned host and repository path -- not from
+    a local regex. A diagnostic from that validator is a malformed response:
+    the enumeration then fails closed instead of guessing a next page.
+
+    One stricter rule is local to this reader: a page with no ``next`` whose
+    ``last`` relation names any other page contradicts itself, so it is never
+    accepted as terminal proof (the shared validator's issues contract, which
+    pins that case as terminal, is unchanged).
+    """
+
+    def __init__(
+        self,
+        client: GitHubReadClient,
+        trusted_identity=lambda: None,
+    ) -> None:
+        self._client = client
+        self._trusted_identity = trusted_identity
+
+    def read_pull_request_page(
+        self, repository: str, *, page: int, per_page: int, state: str
+    ) -> GitHubIssuePageResponse:
+        query_string = f"state={state}&per_page={per_page}&page={page}"
+        status, headers, body = self._client.get(
+            f"/repos/{repository}/pulls?{query_string}"
+        )
+        rate_limit_remaining = headers.get("x-ratelimit-remaining")
+        link_header = headers.get("link")
+        link_match = _LINK_NEXT_RE.search(link_header or "")
+        link_next_url = link_match.group(1) if link_match else None
+
+        def _respond(**kwargs) -> GitHubIssuePageResponse:
+            return GitHubIssuePageResponse(
+                page=page,
+                source_query_string=query_string,
+                link_next_url=link_next_url,
+                rate_limit_remaining=rate_limit_remaining,
+                **kwargs,
+            )
+
+        if status == 403 and rate_limit_remaining == "0":
+            return _respond(
+                items=(), next_page=None, complete=False, error_kind="rate-limited"
+            )
+        if status == 404:
+            raise LookupError(f"repository not found: {repository}")
+        if status in (401, 403):
+            raise PermissionError(f"github api denied pull-request page {page}: http {status}")
+        if status != 200:
+            raise RuntimeError(f"github api pull-request page {page} failed: http {status}")
+        try:
+            items = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError(f"pull-request page {page} returned malformed json") from exc
+        if not isinstance(items, list):
+            raise ValueError(f"pull-request page {page} returned a non-list payload")
+        try:
+            next_page, terminal_page_proven = validated_next_page(
+                link_header,
+                repository=repository,
+                current_page=page,
+                per_page=per_page,
+                state=state,
+                trusted_repository_identity=self._trusted_identity(),
+                endpoint="pulls",
+            )
+        except PaginationDiagnosticError as exc:
+            raise ValueError(f"pull-request page {page}: {exc.kind}") from exc
+        if next_page is None and terminal_page_proven:
+            terminal_page_proven = _last_relation_names_page(link_header, page)
+        return _respond(
+            items=tuple(items),
+            next_page=next_page,
+            complete=True,
+            terminal_page_proven=terminal_page_proven,
+        )
+
+
+def _last_relation_names_page(link_header: str | None, page: int) -> bool:
+    """True unless a ``last`` relation names a page other than ``page``.
+
+    Called only after ``validated_next_page`` parsed the same header, so the
+    header itself is well formed; an unreadable ``last`` page is not proof.
+    """
+    last_url = parse_link_header(link_header).get("last")
+    if last_url is None:
+        return True
+    values = urllib.parse.parse_qs(urllib.parse.urlsplit(last_url).query).get("page", [])
+    return len(values) == 1 and values[0].isascii() and values[0].isdigit() and int(values[0]) == page
+
+
+class LivePullRequestDetailReader:
+    """PullRequestDetailReader over the live single-pull-request endpoint (GET only)."""
+
+    def __init__(self, client: GitHubReadClient) -> None:
+        self._client = client
+
+    def read_pull_request(
+        self, repository: str, pull_request_number: int
+    ) -> PullRequestDetailResult:
+        try:
+            status, _, body = self._client.get(
+                f"/repos/{repository}/pulls/{pull_request_number}"
+            )
+        except RuntimeError:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.API_ERROR)
+        if status == 404:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.NOT_FOUND)
+        if status in (401, 403):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.PERMISSION_DENIED
+            )
+        if status != 200:
+            return PullRequestDetailResult(outcome=PullRequestDetailOutcome.API_ERROR)
+        try:
+            item = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.MALFORMED_RESPONSE
+            )
+        if not isinstance(item, dict):
+            return PullRequestDetailResult(
+                outcome=PullRequestDetailOutcome.MALFORMED_RESPONSE
+            )
+        return PullRequestDetailResult(outcome=PullRequestDetailOutcome.OK, item=item)
+
+
 class _RecordingCandidateEvidenceReader:
     """Adapt the production reader to the shadow seam, recording the named gap.
 
@@ -388,6 +603,506 @@ def _parse_issue_list(raw: str | None, name: str) -> tuple[int, ...] | None:
     return tuple(sorted(numbers))
 
 
+#: Upper bound on candidates evaluated for the record after selection stopped.
+RECORD_ONLY_LINEAGE_LIMIT = 25
+
+
+#: Producer schemas the scanner-advisory loader accepts, mapped to tools.
+#: Anything else is a scanner-error, never silently reinterpreted (#3429).
+SCANNER_ADVISORY_SCHEMAS = {
+    "agent-os-jscpd-advisory/1": "jscpd",
+    "agent-os-pyan3-advisory/1": "pyan3",
+}
+
+#: Scanner-advisory input bounds (#3429 repair). Genuine producer JSON is
+#: tens of kilobytes and both producers already cap candidates at 100 in
+#: JSON, so the loader cap below is a no-op for genuine output and a
+#: deterministic first-N truncation for crafted oversized input. Anything
+#: larger than the byte cap is a scanner-error, never loaded unbounded.
+SCANNER_ADVISORY_MAX_BYTES = 1_048_576
+SCANNER_ADVISORY_MAX_FINDINGS = 100
+# Producer head-SHA contract: `git rev-parse HEAD` output, i.e. the same
+# full lowercase 40-hex SHA rule as approval_records._SHA40_RE, plus the
+# producers' own "unavailable" fallback when git cannot run. Anything else
+# is invalid provenance, never current evidence.
+_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
+# Scope entries are repository-relative paths; a single entry has no
+# legitimate reason to approach this length, and an unbounded entry
+# inflates the published summary join.
+SCANNER_SCOPE_MAX_ENTRY_CHARS = 512
+
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w/])/[^\s\"')\]]+|(?<![\w\\])[A-Za-z]:\\[^\s\"')\]]+"
+)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _is_safe_repo_path(value: object) -> bool:
+    """True for a repository-relative path safe to publish.
+
+    Absolute host paths, drive paths, ``..`` escapes, empty components,
+    and control characters are never safe: an untrusted artifact must not
+    leak a runner's filesystem layout into a published record or summary.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if _CONTROL_RE.search(value):
+        return False
+    if value.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    return all(part not in ("", "..") for part in value.split("/"))
+
+
+def _safe_scope(scope: list) -> list[str]:
+    """Keep only publishable repository-relative scope entries."""
+    safe: list[str] = []
+    for entry in scope:
+        if not isinstance(entry, str):
+            continue
+        entry = entry.strip().rstrip("/")
+        if len(entry) > SCANNER_SCOPE_MAX_ENTRY_CHARS:
+            continue
+        if _is_safe_repo_path(entry):
+            safe.append(entry)
+    return safe
+
+
+def _safe_display_text(value: object, *, max_len: int = 128) -> str | None:
+    """Public-safe display text, or None when nothing publishable remains.
+
+    Reuses the existing ``sanitize_actionable_failure`` secret/control
+    handling (credential-like patterns redacted, control characters
+    replaced) and bounds the result; absolute host paths are replaced
+    with a placeholder first, so a free-text provenance field can never
+    publish a runner's filesystem layout. It never returns raw input.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = _ABSOLUTE_PATH_RE.sub("[path]", value)
+    try:
+        text = sanitize_actionable_failure(value)
+    except Exception:
+        text = _CONTROL_RE.sub("", value)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    return text[:max_len] if text else None
+
+
+def _safe_failure_detail(exc: BaseException) -> str:
+    """Public-safe failure text: type name plus redacted detail.
+
+    Absolute host paths are replaced before secret redaction, so an
+    OSError filename or a credential-like fragment can never reach a
+    published record, summary, or uploaded report. Bounded to 240 chars.
+    """
+    raw = _ABSOLUTE_PATH_RE.sub("[path]", f"{type(exc).__name__}: {exc}")
+    try:
+        text = sanitize_actionable_failure(raw)
+    except Exception:
+        text = type(exc).__name__
+    return text[:240]
+
+
+def _safe_int(value: object) -> int | None:
+    return value if type(value) is int else None
+
+_JSCPD_CLONE_NOTE = (
+    "Textual similarity only; not semantic equivalence. "
+    "Do not infer that the two fragments share a responsibility."
+)
+_PYAN_CANDIDATE_NOTE = (
+    "No resolved static caller in scope; not proof of runtime "
+    "unreachability. Check tests, __all__, decorators, workflow YAML, "
+    "and MCP registrations before any deletion judgment."
+)
+
+
+def _scanner_file_out_of_scope(file_name: object, scope: list[str]) -> bool:
+    """True when a finding file lies outside the producer's declared scope.
+
+    Scope blindness must stay visible: a finding in an unscanned package
+    (for example the Notion packages, which neither advisory producer
+    covers) is annotated, never reported as "no findings" for that package.
+    """
+    if not isinstance(file_name, str) or not file_name:
+        return True
+    return not any(
+        file_name == entry or file_name.startswith(entry.rstrip("/") + "/")
+        for entry in scope
+        if isinstance(entry, str) and entry
+    )
+
+
+def _normalize_scanner_advisory(
+    raw: object, *, source_revision: str
+) -> dict[str, object]:
+    """Normalize one advisory producer JSON into a record-only section.
+
+    Provenance is preserved (tool, schema, version, head SHA,
+    scope, candidate count, truncation flags) after display
+    sanitization of free-text fields; findings are reshaped only
+    into a common kind/file/line form. Nothing here is selection input:
+    every finding carries ``selection_input: False``, and the section
+    itself carries ``execution_authorized: False`` and
+    ``side_effects_performed: False``.
+
+    States, in precedence order: ``scanner-error`` (wrong schema/tool,
+    missing or invalid status/head SHA, or malformed candidate list),
+    ``stale`` (head SHA differs from the run's live source revision —
+    findings are kept but marked stale, never cited as current),
+    ``ok-zero-findings`` (a successful scan that found nothing, distinct
+    from failure), else ``ok``. Raises ValueError on malformed input;
+    callers map that to a ``scanner-error`` section so a bad artifact
+    can never crash the run.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("scanner advisory artifact must be a JSON object")
+    schema = raw.get("schema")
+    tool = SCANNER_ADVISORY_SCHEMAS.get(schema) if isinstance(schema, str) else None
+    if tool is None or raw.get("tool") != tool:
+        raise ValueError("scanner advisory artifact has an unsupported schema/tool")
+    status = raw.get("status")
+    head_sha = raw.get("head_sha")
+    scope = raw.get("scope")
+    candidates = raw.get("candidates")
+    if (
+        not isinstance(status, str)
+        or not isinstance(head_sha, str)
+        or not head_sha
+        or not isinstance(scope, list)
+        or not isinstance(candidates, list)
+    ):
+        raise ValueError("scanner advisory artifact is missing required fields")
+    safe_head_sha = _safe_display_text(head_sha, max_len=128)
+    # Head SHA is validated against the producer contract (full
+    # lowercase 40-hex commit SHA, or the producers' "unavailable"
+    # fallback), not merely display-sanitized: an absolute host path or
+    # any other non-SHA string must never be published as provenance,
+    # and invalid provenance must never be mistaken for current evidence
+    # — it maps to scanner-error, with findings cleared, via ValueError.
+    if safe_head_sha is None or (
+        safe_head_sha != "unavailable"
+        and not _HEAD_SHA_RE.fullmatch(safe_head_sha)
+    ):
+        raise ValueError("scanner advisory artifact has an invalid head SHA")
+    scope = _safe_scope(scope)
+    version = _safe_display_text(raw.get("version"), max_len=128)
+    # Status is published verbatim into the record artifact and the
+    # workflow summary, so it gets the same treatment as every other
+    # display field: a hostile status must never carry CR/LF or markup
+    # into a published surface. A status that sanitizes to nothing, or
+    # that is not exactly "ok" after sanitizing, renders scanner-error.
+    status = _safe_display_text(status, max_len=64) or "scanner-error"
+    candidate_count = (
+        raw.get("candidate_count")
+        if type(raw.get("candidate_count")) is int and raw.get("candidate_count") >= 0
+        else len(candidates)
+    )
+    truncated_flag = raw.get("truncated", raw.get("candidates_truncated"))
+    truncated = bool(truncated_flag) if isinstance(truncated_flag, bool) else False
+    truncated = (
+        truncated
+        or candidate_count > len(candidates)
+        or len(candidates) > SCANNER_ADVISORY_MAX_FINDINGS
+    )
+    findings: list[dict[str, object]] = []
+    excluded = 0
+    if tool == "jscpd":
+        for clone in candidates:
+            if not isinstance(clone, dict):
+                raise ValueError("jscpd candidate must be an object")
+            first = clone.get("firstFile") or {}
+            second = clone.get("secondFile") or {}
+            if not isinstance(first, dict) or not isinstance(second, dict):
+                raise ValueError("jscpd candidate is missing file records")
+            first_name = first.get("name")
+            second_name = second.get("name")
+            if not _is_safe_repo_path(first_name) or not _is_safe_repo_path(
+                second_name
+            ):
+                # Unsafe paths are excluded from published findings, not
+                # annotated: an absolute host path must never be published.
+                excluded += 1
+                continue
+            findings.append(
+                {
+                    "kind": "textual-clone",
+                    "selection_input": False,
+                    "first_file": first_name,
+                    "first_start_line": _safe_int(first.get("start")),
+                    "first_end_line": _safe_int(first.get("end")),
+                    "second_file": second_name,
+                    "second_start_line": _safe_int(second.get("start")),
+                    "second_end_line": _safe_int(second.get("end")),
+                    "lines": _safe_int(clone.get("lines")),
+                    "tokens": _safe_int(clone.get("tokens")),
+                    "out_of_scope": (
+                        _scanner_file_out_of_scope(first_name, scope)
+                        or _scanner_file_out_of_scope(second_name, scope)
+                    ),
+                    "note": _JSCPD_CLONE_NOTE,
+                }
+            )
+    else:  # pyan3
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("pyan3 candidate must be an object")
+            file_name = candidate.get("file")
+            if not _is_safe_repo_path(file_name):
+                excluded += 1
+                continue
+            findings.append(
+                {
+                    "kind": "potentially-disconnected",
+                    "selection_input": False,
+                    "function": _safe_display_text(candidate.get("id"), max_len=512),
+                    "file": file_name,
+                    "line": _safe_int(candidate.get("line")),
+                    "out_of_scope": _scanner_file_out_of_scope(file_name, scope),
+                    "note": _PYAN_CANDIDATE_NOTE,
+                }
+            )
+    if status != "ok":
+        state = "scanner-error"
+        findings = []
+        excluded = 0
+    elif safe_head_sha != source_revision:
+        state = "stale"
+    elif not findings and excluded == 0:
+        state = "ok-zero-findings"
+    else:
+        state = "ok"
+    findings = findings[:SCANNER_ADVISORY_MAX_FINDINGS]
+    return {
+        "tool": tool,
+        "schema": schema,
+        "version": version,
+        "head_sha": safe_head_sha,
+        "scope": list(scope),
+        "status": status,
+        "state": state,
+        "candidate_count": candidate_count,
+        "truncated": truncated,
+        "findings": findings,
+        "excluded_findings": excluded,
+        "out_of_scope_findings": sum(
+            1 for finding in findings if finding.get("out_of_scope") is True
+        ),
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+
+def _scanner_review_groups(sources: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Group exact location overlaps for GSA/QA review, never for selection.
+
+    A filename match is not an overlap. Scanner outputs have no canonical
+    issue-link evidence: every group is explicitly unlinked. No group grants
+    deletion, implementation, issue creation, or retirement authority.
+    The original source findings remain untouched in the record.
+    """
+    entries: list[dict[str, object]] = []
+    for source_index, source in enumerate(sources):
+        findings = source.get("findings", [])
+        if not isinstance(findings, list):
+            continue
+        for finding_index, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            # One path/range validation for both producer formats:
+            # a clone contributes both spans, a disconnected candidate
+            # contributes its single line as a span.
+            kind = finding.get("kind")
+            if kind == "textual-clone":
+                candidates = (
+                    (finding.get("first_file"), finding.get("first_start_line"), finding.get("first_end_line")),
+                    (finding.get("second_file"), finding.get("second_start_line"), finding.get("second_end_line")),
+                )
+            elif kind == "potentially-disconnected":
+                line = finding.get("line")
+                candidates = ((finding.get("file"), line, line),)
+            else:
+                candidates = ()
+            locations = tuple(sorted({
+                loc for loc in candidates
+                if _is_safe_repo_path(loc[0])
+                and type(loc[1]) is int
+                and type(loc[2]) is int
+                and 0 < loc[1] <= loc[2]
+            }))
+            # Keep unlocatable findings visible as individual review entries.
+            entries.append({
+                "source_index": source_index,
+                "finding_index": finding_index,
+                "head_sha": source.get("head_sha"),
+                "state": source.get("state"),
+                "truncated": source.get("truncated") is True,
+                "out_of_scope": finding.get("out_of_scope") is True,
+                "locations": locations,
+            })
+
+    parents = list(range(len(entries)))
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            index = parents[index]
+        return index
+
+    for i, left in enumerate(entries):
+        for j in range(i + 1, len(entries)):
+            right = entries[j]
+            # Never combine evidence across different revisions or states.
+            if (left["head_sha"] != right["head_sha"]
+                    or left["state"] != right["state"]):
+                continue
+            if any(
+                a_path == b_path and a_start <= b_end and b_start <= a_end
+                for a_path, a_start, a_end in left["locations"]
+                for b_path, b_start, b_end in right["locations"]
+            ):
+                parents[root(j)] = root(i)
+
+    buckets: dict[int, list[dict[str, object]]] = {}
+    for i, entry in enumerate(entries):
+        buckets.setdefault(root(i), []).append(entry)
+    ordered = sorted(
+        buckets.values(),
+        key=lambda members: (
+            min((location for e in members for location in e["locations"]),
+                default=("", 0, 0)),
+            min((e["head_sha"] or "" for e in members)),
+            min((e["source_index"], e["finding_index"]) for e in members),
+        ),
+    )
+    groups: list[dict[str, object]] = []
+    for members in ordered:
+        # Members are already in ref order (buckets append in entry order).
+        refs = [{"source_index": e["source_index"], "finding_index": e["finding_index"]} for e in members]
+        locations = sorted({loc for e in members for loc in e["locations"]})
+        groups.append({
+            "review_id": f"scanner-review-{len(groups) + 1:03d}",
+            "finding_refs": refs,
+            "locations": [
+                {"file": path, "start_line": start, "end_line": end}
+                for path, start, end in locations
+            ],
+            "source_shas": sorted({e["head_sha"] for e in members
+                                   if isinstance(e["head_sha"], str)}),
+            "states": sorted({e["state"] for e in members
+                              if isinstance(e["state"], str)}),
+            "truncated": any(e["truncated"] for e in members),
+            "out_of_scope": any(e["out_of_scope"] for e in members),
+            "issue_linkage": {
+                "status": "unlinked",
+                "issue_number": None,
+                "reason": "scanner-findings-do-not-prove-canonical-issue-identity",
+            },
+            "engineering_review": "manual-review",
+            "retirement_review_owner": "#1729",
+            "selection_input": False,
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        })
+    return groups
+
+
+def _load_scanner_advisory(
+    path: str, *, source_revision: str
+) -> dict[str, object]:
+    """Load one producer JSON file into a normalized advisory section.
+
+    FileNotFoundError propagates so the caller can record an
+    ``unavailable`` section; malformed content raises ValueError so the
+    caller can record a ``scanner-error`` section. That includes parser
+    recursion failure on deeply nested input: RecursionError is converted
+    to ValueError at this boundary, so it takes the same nonfatal path.
+    The run itself never fails on an advisory artifact: the flag is
+    advisory by design. Oversized artifacts are rejected before parsing,
+    never loaded unbounded.
+    """
+    artifact_path = Path(path)
+    if artifact_path.stat().st_size > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    data = artifact_path.read_bytes()
+    if len(data) > SCANNER_ADVISORY_MAX_BYTES:
+        raise ValueError("scanner advisory artifact exceeds size limit")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except RecursionError as exc:
+        raise ValueError(
+            "scanner advisory artifact exceeds parser nesting limit"
+        ) from exc
+    section = _normalize_scanner_advisory(raw, source_revision=source_revision)
+    section["source"] = _safe_display_text(Path(path).name, max_len=128) or "advisory"
+    return section
+
+
+def _unavailable_scanner_advisory(
+    path: str, *, status: str = "unavailable", failure_detail: str | None = None
+) -> dict[str, object]:
+    """Explicit absent/error section, never misreported as zero findings."""
+    section: dict[str, object] = {
+        "source": _safe_display_text(Path(path).name, max_len=128) or "advisory",
+        "tool": None,
+        "schema": None,
+        "version": None,
+        "head_sha": None,
+        "scope": [],
+        "status": status,
+        "state": status,
+        "candidate_count": None,
+        "truncated": None,
+        "findings": [],
+        "out_of_scope_findings": 0,
+        "selection_input": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if failure_detail is not None:
+        section["failure_detail"] = failure_detail
+    return section
+
+
+def _record_only_lineage(acquirer, repository: str, candidate_issue_numbers) -> dict[str, object]:
+    """Acquire lineage for candidates the selector never reached (#3441).
+
+    ``select_shadow_issue`` stops at the first candidate with incomplete
+    evidence, so one ambiguous candidate hides every later one. This reads
+    the remaining candidates through the same GET-only acquirer, reusing its
+    one cached pull-request population, purely for the experiment record. The
+    selector has already returned; nothing here feeds it, so a later
+    candidate's stage can never bypass the earlier candidate's conflict.
+    """
+    if not acquirer.observations:
+        # The selector returned before reading any candidate evidence (for
+        # example an over-capacity or invalid request); read nothing either.
+        return {"candidates": [], "truncated": False}
+    observed = {entry["issue_number"] for entry in acquirer.observations}
+    remaining = [number for number in candidate_issue_numbers if number not in observed]
+    start = len(acquirer.observations)
+    errors: list[dict[str, object]] = []
+    for issue_number in remaining[:RECORD_ONLY_LINEAGE_LIMIT]:
+        try:
+            acquirer.acquire_lifecycle_stage(repository, issue_number)
+        except Exception as exc:  # noqa: BLE001 - selection already returned; never crash the record
+            errors.append(
+                {
+                    "issue_number": issue_number,
+                    "contract_version": PR_LINEAGE_READER_CONTRACT_VERSION,
+                    "outcome": "not-acquired",
+                    "reason_codes": ["record-only.acquisition-error"],
+                    "failure_detail": f"{type(exc).__name__}: {exc}"[:240],
+                }
+            )
+    candidates = [*map(dict, acquirer.observations[start:]), *errors]
+    for entry in candidates:
+        # Marked per entry so a merged list can never be read as selector input.
+        entry["selection_input"] = False
+    candidates.sort(key=lambda entry: entry["issue_number"])
+    return {"candidates": candidates, "truncated": len(remaining) > RECORD_ONLY_LINEAGE_LIMIT}
+
+
 def _build_experiment_record(
     *,
     repository: str,
@@ -397,6 +1112,8 @@ def _build_experiment_record(
     client: GitHubReadClient,
     ledger_entries: tuple[dict[str, object], ...] = (),
     evidence_gap_reason: str | None = None,
+    lifecycle_acquisition: Mapping[str, object] | None = None,
+    scanner_advisory: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     # The selector result is the single source for the narrowing actually
     # applied: the operator-declared criterion on the manual path, or the
@@ -522,6 +1239,21 @@ def _build_experiment_record(
         # hash-chained navigation decision entries bound to one mission_id.
         # Additive: the 11 Phase-0 fields above are unchanged.
         "evidence_ledger": list(ledger_entries),
+        # 13. lifecycle-stage acquisition evidence (#3441): what the read-only
+        # PR-lineage reader observed per candidate. Additive and non-authorizing;
+        # None when the run configured no acquirer.
+        "lifecycle_stage_acquisition": (
+            None if lifecycle_acquisition is None else dict(lifecycle_acquisition)
+        ),
+        # 14. scanner advisory evidence (#3429): jscpd/pyan3 producer findings
+        # loaded after selection, for this record only. Additive and
+        # non-authorizing; None when no --scanner-evidence flag was given.
+        # It is never supplied to the selector, the evidence reader, or the
+        # evidence-ledger inputs digest, and it never changes a selection
+        # outcome or reason code.
+        "scanner_advisory": (
+            None if scanner_advisory is None else dict(scanner_advisory)
+        ),
     }
 
 
@@ -532,6 +1264,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--repository", default="Blummer92/agent-os")
     parser.add_argument("--campaign-id", required=True)
+    parser.add_argument(
+        "--association-policy",
+        choices=sorted(ASSOCIATION_POLICIES),
+        default=ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
+        help="PR association policy (default: declared-non-closing-v1)",
+    )
     parser.add_argument(
         "--candidates",
         default=None,
@@ -557,6 +1295,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="UTC timestamp %%Y-%%m-%%dT%%H:%%M:%%SZ (default: now)",
     )
     parser.add_argument("--output", default=None, help="record path (default: stdout)")
+    parser.add_argument(
+        "--scanner-evidence",
+        default=None,
+        action="append",
+        metavar="PATH",
+        help=(
+            "path to an advisory producer JSON (jscpd-advisory.json or "
+            "pyan3-advisory.json); repeatable, one producer per flag. "
+            "Loaded after selection for the record only; never selection "
+            "input. Absent flag means the scanner_advisory section is None."
+        ),
+    )
     parser.add_argument(
         "--mission-id",
         default=None,
@@ -672,11 +1422,23 @@ def main(argv: list[str] | None = None) -> int:
     # - requested_mode / dependency_depth / substitutable: explicit
     #   request-supplied context via CLI flags (absent stays absent, never
     #   defaulted).
-    # lifecycle_stage, primary_claims, and approval_applicability have no
-    # canonical live owner for arbitrary backlog issues (#1460 forbids
-    # inventing PR-linkage, lifecycle, claim, or freshness authorities), so
-    # the reader still fail-closes with their named reasons -- the bounded
-    # blockers #3329 surfaces instead of manufacturing evidence.
+    # - lifecycle_stage: acquired per candidate from live PR lineage (#3441)
+    #   through the unchanged #3433 evaluator; absent or ambiguous lineage
+    #   stays fail-closed.
+    # primary_claims and approval_applicability have no canonical live owner
+    # for arbitrary backlog issues (#1460 forbids inventing claim or freshness
+    # authorities), so the reader still fail-closes with their named reasons
+    # -- the bounded blockers #3329 surfaces instead of manufacturing evidence.
+    head_reader = _RepositoryHeadReader(client, args.repository)
+    pr_lineage_acquirer = PrLineageAcquirer(
+        repository=args.repository,
+        issue_transport=issue_transport,
+        page_reader=LivePullRequestPageReader(client, head_reader.trusted_identity),
+        detail_reader=LivePullRequestDetailReader(client),
+        source_revision_reader=head_reader.head_sha,
+        observed_at=retrieved_at,
+        association_policy=args.association_policy,
+    )
     evidence_reader = _RecordingCandidateEvidenceReader(
         LiveCandidateEvidenceReader(
             LiveCandidateEvidence(
@@ -685,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
                 observed_at=retrieved_at,
                 source_revision=source_revision,
                 lifecycle_stage=None,
+                lifecycle_stage_acquirer=pr_lineage_acquirer,
                 primary_claims=None,
                 approval_applicability=None,
                 freshness_state=FreshnessState.CURRENT,
@@ -718,6 +1481,10 @@ def main(argv: list[str] | None = None) -> int:
 
     recorded_at = _datetime.datetime.now(_datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
+    )
+    lifecycle_observations = pr_lineage_acquirer.observations
+    record_only_observations = _record_only_lineage(
+        pr_lineage_acquirer, args.repository, result.candidate_issue_numbers
     )
     inputs_digest = hash_decision_inputs(
         {
@@ -753,6 +1520,15 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "selection_status": result.status.value,
             "reason_codes": list(result.reason_codes),
+            "lifecycle_acquisitions": [
+                {
+                    "issue_number": observation["issue_number"],
+                    "outcome": observation["outcome"],
+                    "result_id": observation.get("result_id"),
+                    "reason_codes": observation["reason_codes"],
+                }
+                for observation in lifecycle_observations
+            ],
         }
     )
     ledger = EvidenceLedger().append(
@@ -770,12 +1546,43 @@ def main(argv: list[str] | None = None) -> int:
                     f"population-issues:{len(result.population_issue_numbers)}",
                     "experiment-record:population_receipt",
                     "experiment-record:deterministic_selector_result",
+                    "experiment-record:lifecycle_stage_acquisition",
                 }
             )
         ),
         recorded_at=recorded_at,
         actor="agent-os-shadow-run/phase0",
     )
+
+    # #3429 record-only scanner advisory: loaded only after selection has
+    # returned, so findings can never influence it. A missing artifact
+    # records "unavailable" and malformed content records "scanner-error";
+    # neither fails the run, because the flag is advisory by design. The
+    # section is deliberately excluded from the ledger inputs digest above.
+    scanner_sources: list[dict[str, object]] = []
+    for evidence_path in args.scanner_evidence or ():
+        try:
+            scanner_sources.append(
+                _load_scanner_advisory(evidence_path, source_revision=source_revision)
+            )
+        except FileNotFoundError:
+            scanner_sources.append(_unavailable_scanner_advisory(evidence_path))
+        except (ValueError, OSError) as exc:
+            scanner_sources.append(
+                _unavailable_scanner_advisory(
+                    evidence_path,
+                    status="scanner-error",
+                    failure_detail=_safe_failure_detail(exc),
+                )
+            )
+    scanner_advisory_section: dict[str, object] | None = None
+    if args.scanner_evidence is not None:
+        scanner_advisory_section = {
+            "sources": scanner_sources,
+            "review_groups": _scanner_review_groups(scanner_sources),
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        }
 
     record = _build_experiment_record(
         repository=args.repository,
@@ -785,6 +1592,30 @@ def main(argv: list[str] | None = None) -> int:
         client=client,
         ledger_entries=tuple(entry.to_dict() for entry in ledger.entries),
         evidence_gap_reason=evidence_reader.first_failure_reason,
+        lifecycle_acquisition={
+            "contract_version": PR_LINEAGE_READER_CONTRACT_VERSION,
+            "source": "scripts/agent_os_issue_acceptance/pr_lineage_reader.py",
+            "population": pr_lineage_acquirer.population_summary,
+            "candidates": list(lifecycle_observations),
+            # The selector stops at the first candidate with incomplete evidence;
+            # the remaining candidates' lineage is evaluated afterwards for this
+            # record only and never reaches the selector.
+            "record_only_candidates": record_only_observations["candidates"],
+            "record_only_truncated": record_only_observations["truncated"],
+            "primary_claims": "unresolved: no canonical owner; reader input stays None",
+            "approval_applicability": "unresolved: no canonical owner; reader input stays None",
+            # The reader fails closed on the missing primary claims before it
+            # composes, so its acquisition_bindings_current re-check never runs
+            # here; say so rather than imply the stages were revalidated.
+            "consumer_boundary_revalidation": (
+                "not-reached: primary_claims and approval_applicability are None, so the "
+                "evidence reader fails closed before composition; each stage is bound only "
+                "to the acquirer's own issue read and default-branch checks"
+            ),
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        },
+        scanner_advisory=scanner_advisory_section,
     )
     # Defense in depth: the read-only client must never have issued a write.
     assert client.write_requests == 0, "read-only client issued a write request"

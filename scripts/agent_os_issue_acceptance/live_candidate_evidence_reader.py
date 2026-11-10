@@ -48,7 +48,14 @@ named ``candidate-evidence.*`` reason (surfacing as the seam's
 
 - ``source_revision`` (repository SHA): no canonical live owner in the
   shadow path -> ``candidate-evidence.no-canonical-repository-source-revision``.
-- ``lifecycle_stage``: no canonical lifecycle authority -> fail closed.
+- ``lifecycle_stage``: static caller evidence, or (#3441) a per-issue
+  ``LifecycleStageAcquirer`` -- the read-only PR-lineage reader feeding the
+  unchanged #3433 evaluator. Neither supplied -> fail closed. An acquirer that
+  cannot establish a stage (``unavailable`` / ``manual-review``) also fails
+  closed with the same named reason; the acquisition reason codes ride in
+  ``failure_detail``. The acquirer is consulted in canonical-input order, i.e.
+  after ``source_revision`` and before the later inputs, so a configured
+  acquirer's bounded read-only reads precede any later missing-input report.
 - ``primary_claims``: no canonical live PR-linkage reader; #1460 forbids
   inventing a claim authority -> fail closed.
 - ``approval_applicability``: the approval evidence graph is not
@@ -67,6 +74,14 @@ named ``candidate-evidence.*`` reason (surfacing as the seam's
   composition chain rejects (identity-join violations, unmappable evidence)
   becomes ``candidate-evidence.composition-contract-violation`` with the
   underlying message preserved as diagnostic detail.
+
+## Consumer-boundary revalidation (#3441)
+
+A lifecycle result is bound to the issue revision and repository SHA it was
+derived from. After this reader's own fresh issue snapshot, the binding is
+re-checked with ``acquisition_bindings_current``; a changed issue revision or
+repository SHA fails closed with ``candidate-evidence.lifecycle-stage-stale``
+rather than reusing a superseded result.
 
 ## No second GitHub client
 
@@ -105,9 +120,18 @@ from .live_compute_control_binding import (
     dependency_state_from_evidence,
     validation_state_from_evidence,
 )
+from .lifecycle_stage_acquisition import (
+    LifecycleStageAcquisitionResult,
+    acquisition_bindings_current,
+    lifecycle_stage_from_acquisition,
+)
 from .operating_mode import (
     EnvironmentCapabilityEvidence,
     evaluate_operating_mode_decision,
+)
+from .pr_lineage_reader import (
+    LifecycleStageAcquirer,
+    LifecycleStageAcquisitionAttempt,
 )
 
 # Reason codes emitted when the reader fails closed. Every code names the
@@ -129,6 +153,9 @@ REASON_REPOSITORY_MISMATCH = "candidate-evidence.repository-identity-mismatch"
 REASON_COMPOSITION_CONTRACT_VIOLATION = (
     "candidate-evidence.composition-contract-violation"
 )
+# #3441: the acquired lifecycle result was derived from an issue revision or
+# repository SHA that differs from this reader's fresh evidence.
+REASON_LIFECYCLE_STAGE_STALE = "candidate-evidence.lifecycle-stage-stale"
 
 # ``LiveCurrentIssueSnapshotReader.read_current_issue`` raises
 # ``ValueError(f"live issue read did not succeed: {result.status.value}")``
@@ -175,6 +202,9 @@ class LiveCandidateEvidence:
     substitutable: bool | None
     dependency_reader: RepositoryEvidenceReader | None = None
     terminal_disposition: TerminalDisposition | None = None
+    # #3441: per-issue lifecycle source. Mutually exclusive with the static
+    # ``lifecycle_stage``; ``None`` keeps the pre-existing fail-closed behavior.
+    lifecycle_stage_acquirer: LifecycleStageAcquirer | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -193,6 +223,17 @@ class LiveCandidateEvidence:
             raise TypeError("source_revision must be non-empty built-in text or None")
         if self.lifecycle_stage is not None and type(self.lifecycle_stage) is not LifecycleStage:
             raise TypeError("lifecycle_stage must be exact LifecycleStage or None")
+        if self.lifecycle_stage_acquirer is not None:
+            if self.lifecycle_stage is not None:
+                raise TypeError(
+                    "lifecycle_stage and lifecycle_stage_acquirer are mutually exclusive"
+                )
+            if not callable(
+                getattr(self.lifecycle_stage_acquirer, "acquire_lifecycle_stage", None)
+            ):
+                raise TypeError(
+                    "lifecycle_stage_acquirer must provide acquire_lifecycle_stage"
+                )
         if self.primary_claims is not None and (
             type(self.primary_claims) is not tuple
             or any(type(claim) is not PrimaryIssueClaim for claim in self.primary_claims)
@@ -301,11 +342,55 @@ class LiveCandidateEvidenceReader:
                 failure_reason=REASON_COMPOSITION_CONTRACT_VIOLATION,
                 failure_detail="issue_number must be a positive built-in integer",
             )
-        # Fail closed in canonical-input order before any live read: each
-        # missing input names the semantic owner that must supply it.
+        # Fail closed in canonical-input order: each missing input names the
+        # semantic owner that must supply it. Static inputs fail before any
+        # live read; a configured lifecycle acquirer is consulted at its
+        # canonical position (#3441), so its bounded read-only reads precede
+        # the report of any *later* missing input.
+        if bundle.source_revision is None:
+            return CandidateEvidenceReadOutcome(
+                evidence=None, failure_reason=REASON_MISSING_REPOSITORY_SOURCE_REVISION
+            )
+        lifecycle_stage = bundle.lifecycle_stage
+        lifecycle_result = None
+        if lifecycle_stage is None:
+            if bundle.lifecycle_stage_acquirer is None:
+                return CandidateEvidenceReadOutcome(
+                    evidence=None, failure_reason=REASON_MISSING_LIFECYCLE_STAGE
+                )
+            try:
+                attempt = bundle.lifecycle_stage_acquirer.acquire_lifecycle_stage(
+                    repository, issue_number
+                )
+                if type(attempt) is not LifecycleStageAcquisitionAttempt:
+                    raise TypeError(
+                        "acquire_lifecycle_stage must return a "
+                        "LifecycleStageAcquisitionAttempt"
+                    )
+                lifecycle_result = attempt.result
+                if lifecycle_result is not None:
+                    lifecycle_stage = lifecycle_stage_from_acquisition(lifecycle_result)
+            except (TypeError, ValueError) as exc:
+                return CandidateEvidenceReadOutcome(
+                    evidence=None,
+                    failure_reason=REASON_COMPOSITION_CONTRACT_VIOLATION,
+                    failure_detail=str(exc),
+                )
+            if lifecycle_stage is None:
+                return CandidateEvidenceReadOutcome(
+                    evidence=None,
+                    failure_reason=REASON_MISSING_LIFECYCLE_STAGE,
+                    failure_detail=(
+                        "lifecycle acquisition: "
+                        + ",".join(attempt.reason_codes)
+                        + (
+                            f" ({attempt.failure_detail})"
+                            if attempt.failure_detail
+                            else ""
+                        )
+                    ),
+                )
         missing: tuple[tuple[object, str], ...] = (
-            (bundle.source_revision, REASON_MISSING_REPOSITORY_SOURCE_REVISION),
-            (bundle.lifecycle_stage, REASON_MISSING_LIFECYCLE_STAGE),
             (bundle.primary_claims, REASON_MISSING_PRIMARY_CLAIMS),
             (bundle.approval_applicability, REASON_MISSING_APPROVAL_APPLICABILITY),
             (bundle.freshness_state, REASON_MISSING_FRESHNESS_STATE),
@@ -319,8 +404,20 @@ class LiveCandidateEvidenceReader:
                 return CandidateEvidenceReadOutcome(evidence=None, failure_reason=reason)
         try:
             return CandidateEvidenceReadOutcome(
-                evidence=_compose_candidate_evidence(bundle, repository, issue_number),
+                evidence=_compose_candidate_evidence(
+                    bundle,
+                    repository,
+                    issue_number,
+                    lifecycle_stage=lifecycle_stage,
+                    lifecycle_result=lifecycle_result,
+                ),
                 failure_reason=None,
+            )
+        except _StaleLifecycleAcquisition as exc:
+            return CandidateEvidenceReadOutcome(
+                evidence=None,
+                failure_reason=REASON_LIFECYCLE_STAGE_STALE,
+                failure_detail=str(exc),
             )
         except ValueError as exc:
             reason = _issue_read_failure_reason(exc)
@@ -339,8 +436,17 @@ class LiveCandidateEvidenceReader:
             )
 
 
+class _StaleLifecycleAcquisition(ValueError):
+    """The acquired lifecycle result no longer matches this reader's fresh evidence."""
+
+
 def _compose_candidate_evidence(
-    bundle: LiveCandidateEvidence, repository: str, issue_number: int
+    bundle: LiveCandidateEvidence,
+    repository: str,
+    issue_number: int,
+    *,
+    lifecycle_stage: LifecycleStage,
+    lifecycle_result: LifecycleStageAcquisitionResult | None = None,
 ) -> CandidateIssueEvidence:
     """The governed composition: one live read, #1451, operating mode, join-checked model.
 
@@ -357,7 +463,6 @@ def _compose_candidate_evidence(
     other external-system mutation.
     """
     assert bundle.source_revision is not None
-    assert bundle.lifecycle_stage is not None
     assert bundle.primary_claims is not None
     assert bundle.approval_applicability is not None
     assert bundle.freshness_state is not None
@@ -370,7 +475,7 @@ def _compose_candidate_evidence(
         transport=bundle.issue_transport,
         source_revision=bundle.source_revision,
         observed_at=bundle.observed_at,
-        lifecycle_stage=bundle.lifecycle_stage,
+        lifecycle_stage=lifecycle_stage,
         terminal_disposition_override=bundle.terminal_disposition,
     )
 
@@ -416,6 +521,24 @@ def _compose_candidate_evidence(
         freshness_acquirer=freshness_acquirer,
     )
     state = acquired.operational_state
+
+    if lifecycle_result is not None:
+        # #3441 consumer boundary: the stage must have been derived from the
+        # same issue revision and repository SHA this reader just observed.
+        if (
+            lifecycle_result.issue_number != issue_number
+            or lifecycle_result.repository.casefold() != repository.casefold()
+        ):
+            raise ValueError("lifecycle acquisition identity differs from the candidate")
+        if not acquisition_bindings_current(
+            lifecycle_result,
+            issue_source_revision=acquired.snapshot.issue_source_revision,
+            source_revision=bundle.source_revision,
+        ):
+            raise _StaleLifecycleAcquisition(
+                "lifecycle acquisition was derived from a different issue revision "
+                "or repository SHA than the fresh snapshot"
+            )
 
     mode_decision = evaluate_operating_mode_decision(
         state, bundle.requested_mode, bundle.environment

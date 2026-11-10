@@ -83,6 +83,8 @@ from .governed_resume_restart_capsule import (
 from .models import parse_canonical_utc
 from .production_host_composition import (
     CHECKPOINT_STORE_ROOT_ENV_VAR,
+    ProductionAdmissionProviders,
+    build_production_admission_providers,
     build_production_governed_resume_bindings,
 )
 from .production_host_state_sources import (
@@ -431,12 +433,7 @@ class ProductionHostBootstrap:
         same value the sources were bound to, so the reconstruction-time lease
         observation and the dispatch-time lease adapter cannot diverge.
         """
-        environment_root = os.environ.get(CHECKPOINT_STORE_ROOT_ENV_VAR)
-        if environment_root is None or Path(environment_root) != self.configuration.checkpoint_store_root:
-            raise ProductionHostBootstrapError(
-                f"{CHECKPOINT_STORE_ROOT_ENV_VAR} does not match the bound host "
-                "checkpoint store root; refusing to compose two store locations"
-            )
+        self._require_bound_store_root()
         binding = _InvocationRuntimeConfigurationBinding(self.sources.runtime_configuration)
         return build_production_governed_resume_bindings(
             lease_directory=str(self.configuration.lease_directory),
@@ -457,6 +454,38 @@ class ProductionHostBootstrap:
             dependency_command_runner=dependency_command_runner,
             runtime_request=self.runtime_request,
         )
+
+    def admission_providers(self) -> ProductionAdmissionProviders:
+        """Bind the same #1287 admission providers without a dispatch closure.
+
+        Read-only admission consumers, such as the fixed #3333 HEAD probe,
+        use this. They observe the same store root, lease directory, sources
+        and clock that governed resume would. The Scheduler is not reachable
+        from the returned object.
+        """
+        self._require_bound_store_root()
+        binding = _InvocationRuntimeConfigurationBinding(self.sources.runtime_configuration)
+        return build_production_admission_providers(
+            lease_directory=str(self.configuration.lease_directory),
+            route_decision_reader=self.sources.route_decision,
+            handoff_reader=self.sources.handoff,
+            checkpoint_reader=self.sources.checkpoint,
+            resume_plan_reader=self.sources.resume_plan,
+            candidate_packet_rebuilder=self.sources.candidate_packet,
+            runtime_configuration_builder=binding.build,
+            pilot_input_builder=self.sources.pilot_input,
+            authorization_transport=self.authorization_transport,
+            evaluated_at=self.evaluated_at,
+            runtime_request=self.runtime_request,
+        )
+
+    def _require_bound_store_root(self) -> None:
+        environment_root = os.environ.get(CHECKPOINT_STORE_ROOT_ENV_VAR)
+        if environment_root is None or Path(environment_root) != self.configuration.checkpoint_store_root:
+            raise ProductionHostBootstrapError(
+                f"{CHECKPOINT_STORE_ROOT_ENV_VAR} does not match the bound host "
+                "checkpoint store root; refusing to compose two store locations"
+            )
 
 
 def _issueplan_dependency_identity_reader(issue_transport, evaluated_at):
