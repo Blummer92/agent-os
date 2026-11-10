@@ -6,7 +6,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from scripts.agent_os_ci_junit_diff import diff_junit, node_ids
+from scripts.agent_os_ci_junit_diff import diff_junit, node_ids, skipped_node_ids
 
 
 def _xml(nodes: list[tuple[str, str]]) -> bytes:
@@ -15,6 +15,31 @@ def _xml(nodes: list[tuple[str, str]]) -> bytes:
         f'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="{len(nodes)}" '
         f'failures="0" errors="0" skipped="0">{cases}</testsuite></testsuites>'
     ).encode()
+
+
+def _xml_with_skips(nodes: list[tuple[str, str, bool]]) -> bytes:
+    cases = "".join(
+        f'<testcase classname="{c}" name="{n}">{"<skipped/>" if skipped else ""}</testcase>'
+        for c, n, skipped in nodes
+    )
+    skipped_count = sum(1 for _, _, skipped in nodes if skipped)
+    return (
+        f'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="{len(nodes)}" '
+        f'failures="0" errors="0" skipped="{skipped_count}">{cases}</testsuite></testsuites>'
+    ).encode()
+
+
+def test_skipped_node_ids_names_only_skipped() -> None:
+    xml = _xml_with_skips([("m", "passed", False), ("m", "skipped", True), ("", "modskip", True)])
+    assert skipped_node_ids(xml) == {"m::skipped", "::modskip"}
+    assert node_ids(xml) == {"m::passed", "m::skipped", "::modskip"}
+
+
+def test_skipped_node_ids_rejects_malformed_reports() -> None:
+    with pytest.raises(ValueError, match="invalid-junit-xml"):
+        skipped_node_ids(b"<testsuites><testsuite><testcase></testsuites>")
+    with pytest.raises(ValueError, match="duplicate-nodes"):
+        skipped_node_ids(_xml_with_skips([("m", "t", True), ("m", "t", True)]))
 
 
 def test_mapped_replacement_is_machine_verified() -> None:

@@ -9,7 +9,11 @@ never from a test body failing.
 
 Proven boundary is configuration. ``conftest.py`` manipulation is NOT covered
 (see ``test_conftest_collect_ignore_is_a_documented_gap``); this is not CI
-trust certification.
+trust certification. Skipped test bodies ARE covered since the NC07 repair:
+a skipped identity vetoes COMPLETE unless it is named in the committed
+per-suite skip allowlist (see ``LEGIT_ALLOWLIST``); a missing allowlist file
+means no skip is allowed, and a stale allowlist entry or a malformed file
+fails closed.
 """
 from __future__ import annotations
 
@@ -66,7 +70,13 @@ FIXTURE_SUITE = {
 }
 
 
-def _repo(tmp_path: Path, files: dict[str, str], *, drop: tuple[str, ...] = ()) -> Path:
+def _repo(
+    tmp_path: Path,
+    files: dict[str, str],
+    *,
+    drop: tuple[str, ...] = (),
+    allowlist: dict[str, list[str]] | None = None,
+) -> Path:
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     for name in RUNNER_FILES:
@@ -75,11 +85,33 @@ def _repo(tmp_path: Path, files: dict[str, str], *, drop: tuple[str, ...] = ()) 
     structural.parent.mkdir()
     structural.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     (root / "ruff.toml").write_text('exclude = ["scripts"]\n', encoding="utf-8")  # only the fixtures are linted
+    (root / "scripts" / "agent_os_ci_skipped_allowlist.json").write_text(
+        json.dumps(
+            {"schema": "agent-os-ci-skipped-allowlist/1", "suites": allowlist or {}},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     for rel, content in {**{k: v for k, v in BASE.items() if k not in drop}, **files}.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     return root
+
+
+# Skipped identities the LEGIT fixture legitimately produces: an explicit
+# @pytest.mark.skip, a module-level skip (empty classname), and a non-strict
+# xfail (pytest reports it as <skipped> in JUnit). All three must be named
+# in the fixture allowlist or the NC07 veto correctly fails the suite.
+LEGIT_ALLOWLIST = {
+    "root": [
+        "::tests.test_modskip",
+        "tests.test_legit::test_skipped",
+        "tests.test_legit::test_xfail",
+    ]
+}
 
 
 def _run(repo: Path, junit_dir: Path | None = None, **env: str) -> subprocess.CompletedProcess[str]:
@@ -173,17 +205,128 @@ def test_configuration_narrowing_cannot_pass(
     assert (receipt["missing_count"] > 0) == (expected == "INCOMPLETE")
 
 
-@pytest.mark.parametrize("extra", [{}, LEGIT])
-def test_legitimate_suites_pass_complete(tmp_path: Path, extra: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    ("extra", "allowlist"), [({}, {}), (LEGIT, LEGIT_ALLOWLIST)]
+)
+def test_legitimate_suites_pass_complete(
+    tmp_path: Path, extra: dict[str, str], allowlist: dict[str, list[str]]
+) -> None:
     """Skip, xfail, module skip, regenerated params, odd ids, subtests and pytest's
-    default-excluded directories are not omissions."""
+    default-excluded directories are not omissions — when the skipped identities
+    are named in the committed skip allowlist (NC07)."""
     junit_dir = tmp_path / "junit"
-    result = _run(_repo(tmp_path, extra), junit_dir)
+    result = _run(_repo(tmp_path, extra, allowlist=allowlist), junit_dir)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _completeness(junit_dir)[2:5] == ("PASS", "0", "COMPLETE")
     receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
     assert receipt["verdict"] == "COMPLETE" and receipt["missing"] == []
     assert receipt["regenerated_param_count"] == (1 if extra else 0)
+    assert receipt["skipped_mandatory"] == []
+    if extra:
+        assert receipt["skipped_count"] == 3
+        assert sorted(receipt["skipped_allowlisted"]) == sorted(LEGIT_ALLOWLIST["root"])
+
+
+SKIPPED_MANDATORY = {
+    "tests/test_a.py": (
+        "import pytest\n\n\n"
+        "@pytest.mark.skip(reason='NC07 disposable defect: mandatory body never runs')\n"
+        "def test_a1():\n    assert True\n\n\n"
+        "def test_a2():\n    assert True\n"
+    ),
+}
+
+
+def test_mandatory_skipped_test_cannot_pass(tmp_path: Path) -> None:
+    """NC07 hosted escape, replayed locally: a mandatory test marked skipped
+    kept the aggregate green. The skip veto must fail it and name it."""
+    junit_dir = tmp_path / "junit"
+    result = _run(_repo(tmp_path, SKIPPED_MANDATORY), junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "OVERALL STATUS\nFAIL" in output
+    assert _rows(junit_dir)["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran
+    row = _completeness(junit_dir)
+    assert row[2:5] == ("FAIL", "1", "TEST_SELECTION_INCOMPLETE")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "INCOMPLETE"
+    assert receipt["skipped_mandatory"] == ["tests.test_a::test_a1"]
+    assert receipt["skipped_count"] == 1
+
+
+def test_allowlisted_skip_passes_complete(tmp_path: Path) -> None:
+    """The same skipped test passes when its identity is on the committed
+    skip allowlist: the veto is about unreviewed skips, not skips as such."""
+    junit_dir = tmp_path / "junit"
+    result = _run(
+        _repo(tmp_path, SKIPPED_MANDATORY, allowlist={"root": ["tests.test_a::test_a1"]}),
+        junit_dir,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _completeness(junit_dir)[2:5] == ("PASS", "0", "COMPLETE")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["skipped_allowlisted"] == ["tests.test_a::test_a1"]
+    assert receipt["skipped_mandatory"] == []
+
+
+def test_stale_skip_allowlist_entry_fails_closed(tmp_path: Path) -> None:
+    """An allowlist entry in neither the reference collection nor the executed
+    report means the allowlist no longer describes the suite: ERROR, not a
+    silent pass."""
+    junit_dir = tmp_path / "junit"
+    result = _run(
+        _repo(tmp_path, {}, allowlist={"root": ["tests.test_gone::test_no_longer_here"]}),
+        junit_dir,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    row = _completeness(junit_dir)
+    assert row[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert receipt["skip_allowlist_stale"] == ["tests.test_gone::test_no_longer_here"]
+
+
+def test_missing_skip_allowlist_means_no_skip_allowed(tmp_path: Path) -> None:
+    """No allowlist file at all: no skip is allowed. A suite with no skips
+    still passes (fixture repositories that never exercise skips need no
+    file); a skipped test without an allowlist vetoes as mandatory."""
+    junit_dir = tmp_path / "junit"
+    repo = _repo(tmp_path / "a", {})
+    (repo / "scripts" / "agent_os_ci_skipped_allowlist.json").unlink()
+    result = _run(repo, junit_dir)
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "COMPLETE"
+    assert receipt["skip_allowlist_missing"] is True
+
+    junit_dir2 = tmp_path / "junit2"
+    repo2 = _repo(tmp_path / "b", SKIPPED_MANDATORY)
+    (repo2 / "scripts" / "agent_os_ci_skipped_allowlist.json").unlink()
+    result2 = _run(repo2, junit_dir2)
+    output2 = result2.stdout + result2.stderr
+    assert result2.returncode == 1, output2
+    receipt2 = json.loads((junit_dir2 / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt2["verdict"] == "INCOMPLETE"
+    assert receipt2["skipped_mandatory"] == ["tests.test_a::test_a1"]
+    assert receipt2["skip_allowlist_missing"] is True
+
+
+def test_malformed_skip_allowlist_fails_closed(tmp_path: Path) -> None:
+    """A present but malformed allowlist file (invalid JSON here) fails closed
+    with ERROR — it must never be treated as an empty allowlist."""
+    junit_dir = tmp_path / "junit"
+    repo = _repo(tmp_path, {})
+    (repo / "scripts" / "agent_os_ci_skipped_allowlist.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    result = _run(repo, junit_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert _completeness(junit_dir)[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "skip allowlist unreadable" in receipt["error"]
 
 
 def test_registry_fixture_exclusion_is_allowlisted_by_suite_name(tmp_path: Path) -> None:

@@ -21,7 +21,13 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
-def node_ids(xml: bytes) -> set[str]:
+def _testcases(xml: bytes) -> list[tuple[str, bool]]:
+    """Strictly parsed ``(identity, was_skipped)`` pairs from a JUnit report.
+
+    Shared by identity and outcome reads so the two can never disagree about
+    what counts as a report: empty, malformed, wrong-root, count-mismatched,
+    identity-less, or duplicated reports are all rejected here.
+    """
     if not xml:
         raise ValueError("empty-junit")
     try:
@@ -31,7 +37,7 @@ def node_ids(xml: bytes) -> set[str]:
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
         raise ValueError("invalid-junit-root")
-    ids: list[str] = []
+    out: list[tuple[str, bool]] = []
     for suite in suites:
         cases = [x for x in suite if x.tag == "testcase"]
         # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
@@ -44,10 +50,26 @@ def node_ids(xml: bytes) -> set[str]:
             name = case.attrib.get("name")
             if not name:
                 raise ValueError("node-identity-missing")
-            ids.append(f"{classname}::{name}")
-    if len(set(ids)) != len(ids):
+            out.append((f"{classname}::{name}", any(x.tag == "skipped" for x in case)))
+    if len({ident for ident, _ in out}) != len(out):
         raise ValueError("duplicate-nodes")
-    return set(ids)
+    return out
+
+
+def node_ids(xml: bytes) -> set[str]:
+    return {ident for ident, _ in _testcases(xml)}
+
+
+def skipped_node_ids(xml: bytes) -> set[str]:
+    """Identities whose ``<testcase>`` carries a ``<skipped>`` child.
+
+    A skipped testcase is present in the report but its body never ran, so
+    identity reconciliation alone cannot see it (NC07, hosted 2026-11-08:
+    a mandatory test marked ``@pytest.mark.skip`` kept the aggregate green).
+    The same strict parse as :func:`node_ids` applies, so a malformed report
+    fails closed instead of reporting no skips.
+    """
+    return {ident for ident, skipped in _testcases(xml) if skipped}
 
 
 def diff_junit(
