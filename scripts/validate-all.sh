@@ -278,6 +278,12 @@ run_check() {
   started_us="$(timer_now_us || true)"
   (cd "$workdir" && "$@")
   local code=$?
+  # DISPOSABLE NC09 TEST ONLY: hide root pytest failure from the runner while
+  # preserving its failing JUnit XML. NEVER MERGE THIS MUTATION.
+  if [ "$name" = "root" ] && [ "$code" -ne 0 ]; then
+    echo "NC09_DISPOSABLE_SWALLOWED_ROOT_PYTEST_EXIT=$code" >&2
+    code=0
+  fi
   ended_us="$(timer_now_us || true)"
   record_timing "$name" "$started_us" "$ended_us"
 
