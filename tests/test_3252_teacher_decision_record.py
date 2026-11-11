@@ -384,7 +384,7 @@ def test_reuse_path_honors_valid_teacher_selection():
         candidates, role, "asset-2", SHA_B, overridden="asset-1"
     )
     plan = _plan(candidates, [decision])
-    assert plan.outcome == "visuals-ready"
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
     assert plan.selected_asset_ids == ("asset-2",)
     assert plan.teacher_decision_outcomes[0]["honored"] is True
     assert plan.teacher_decision_outcomes[0]["decision_id"] == "dec-teacher-1"
@@ -411,7 +411,7 @@ def test_reuse_path_blocks_invalid_selection_with_reason():
 def test_reuse_path_leaves_role_unresolved_without_decision():
     candidates = _two_candidates()
     plan = _plan(candidates)
-    assert plan.outcome == "visuals-ready"
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
     assert plan.teacher_decision_outcomes == ()
     assert plan.selected_asset_ids == ("asset-1",)
 
@@ -576,7 +576,7 @@ def test_teacher_override_is_used_by_generation_placement_and_cli():
     role = _role_id(baseline)
     decision = _valid_decision_for(candidates, role, "asset-2", SHA_B, "asset-1")
     plan = _plan(candidates, [decision])
-    assert plan.outcome == "visuals-ready"
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
     assert plan.selected_asset_ids == ("asset-2",)
     bindings, assignment_json = _visual_context(plan)
     assert len(bindings) == 1 and bindings[0] == (role, "0", "asset-2")

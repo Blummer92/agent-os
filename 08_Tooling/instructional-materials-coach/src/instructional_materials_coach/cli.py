@@ -751,7 +751,10 @@ def main(argv: list[str] | None = None) -> int:
             material_requirement=material_requirement,
             current_curriculum_evidence=current_curriculum_evidence,
             selected_asset_ids=tuple(visual_plan.selected_asset_ids),
-            governed_visual_plan=visual_plan,
+            governed_visual_plan=(
+                visual_plan if visual_plan.cohesive_visual_plan_result is not None
+                else None
+            ),
         )
         context["generation_context_tokens"] = sorted(content.context_tokens)
 

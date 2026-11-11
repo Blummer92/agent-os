@@ -172,6 +172,7 @@ class GovernedVisualReusePlan:
     teacher_selected_role_slot_bindings: tuple[dict[str, str], ...] = ()
     # Derived from the same governed candidate/role policy; source #944 stays immutable.
     effective_role_assignments: tuple[dict[str, Any], ...] = ()
+    teacher_decision_block_reason: str | None = None
 
     @property
     def image_gap_briefs(self) -> tuple[dict[str, Any], ...]:
@@ -706,6 +707,7 @@ def plan_governed_visual_reuse(
                 teacher_decision_outcomes=decision_outcomes,
                 teacher_selected_role_slot_bindings=teacher_selected_role_slot_bindings,
                 effective_role_assignments=effective_role_assignments,
+                teacher_decision_block_reason=blocked_reason,
             )
 
     return GovernedVisualReusePlan(
