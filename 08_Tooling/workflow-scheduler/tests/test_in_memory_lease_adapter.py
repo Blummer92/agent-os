@@ -382,3 +382,17 @@ def test_terminal_record_converges_only_on_exact_match() -> None:
     conflicting = adapter.record_terminal_disposition(grant, "failed")
     assert conflicting.recorded is False
     assert conflicting.reason == "conflicting terminal disposition"
+
+def test_non_acquired_matching_grant_cannot_record_terminal_disposition() -> None:
+    adapter = InMemoryLeaseAdapter()
+    request = _request()
+    held = adapter.acquire(request)
+    competing = adapter.acquire(request)
+    assert held.acquired is True
+    assert competing.acquired is False
+    assert competing.lease_identity == held.lease_identity
+    assert competing.generation == held.generation
+    rejected = adapter.record_terminal_disposition(competing, "completed")
+    assert rejected.recorded is False
+    assert adapter.release(held).released is True
+    assert adapter.acquire(request).acquired is True
