@@ -316,17 +316,96 @@ def _fixture(name):
 
 
 def _two_candidates():
+    """Distinct genuinely valid assets with matching manifest and Drive evidence."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_idempotency_key, artifact_manifest_source_fingerprint,
+        validate_artifact_manifest,
+    )
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+
     c1 = _fixture("valid_visual_asset_compatibility_v2.json")
     c2 = copy.deepcopy(c1)
-    c2["compatibility_evidence"]["asset_reference"]["asset_id"] = "asset-2"
-    c2["compatibility_evidence"]["asset_reference"]["stable_ref"] = "asset-ref-2"
-    c2["compatibility_evidence"]["asset_reference"]["content_fingerprint"] = SHA_B
-    c2["compatibility_evidence"]["library_reference"] = {
-        "page_id": "page-2",
-        "drive_file_id": "file-2",
-    }
+    manifest = c2["artifact_manifest"]
+    asset = manifest["assets"][0]
+    asset.update({
+        "asset_id": "asset-2",
+        "stable_ref": "asset-ref-2",
+        "content_fingerprint": SHA_B,
+        "disposition": "alternate",
+        "duplicate_relationship": "exact-duplicate",
+        "canonical_asset_ref": "asset-ref-1",
+    })
+    manifest["identity"]["manifest_id"] = "manifest-2"
+    manifest["custom_properties"]["manifest_id"] = "manifest-2"
+    external = manifest["external_identity"]
+    external["file_id"] = "file-2"
+    external["exact_reference"] = "drive:file-2"
+    external["web_view_link"] = "https://example.invalid/file-2"
+    key = artifact_manifest_idempotency_key(manifest)
+    manifest["operation"]["idempotency_key"] = key
+    manifest["custom_properties"]["idempotency_key"] = key
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(manifest)
+    valid = validate_artifact_manifest(manifest)
+    assert valid.status is ValidationStatus.VALID, valid.reason_codes
+    assert valid.record is not None
+
+    evidence = c2["compatibility_evidence"]
+    evidence["asset_reference"].update({
+        "asset_id": "asset-2",
+        "stable_ref": "asset-ref-2",
+        "content_fingerprint": SHA_B,
+    })
+    evidence["library_reference"] = {"page_id": "page-2", "drive_file_id": "file-2"}
+    evidence["manifest_reference"].update({
+        "manifest_id": "manifest-2",
+        "external_file_id": "file-2",
+        "fingerprint": valid.record.fingerprint,
+    })
+    evidence["freshness"]["manifest_fingerprint"] = valid.record.fingerprint
+    c2["library_record"]["drive_file_id"] = "file-2"
+    c2["library_record"]["page_id"] = "page-2"
     c2["compatibility_id"] = "compat-2"
+    checked = validate_visual_asset_compatibility_evidence(c2)
+    assert checked.status is ValidationStatus.VALID, checked.reason_codes
+    assert checked.record is not None
+    assert checked.record.to_dict()["classification"] == "eligible"
     return [c1, c2]
+
+
+def test_both_fixture_assets_are_admitted_by_governed_filter():
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.visual_asset_candidates import (
+        V2_CONTRACT_ID, filter_approved_visual_candidates,
+    )
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    candidates = _two_candidates()
+    needs = plan_visual_needs(_fixture("valid_material_requirement_v2.json"))
+    assert needs.status is ValidationStatus.VALID
+    filtered = filter_approved_visual_candidates(
+        needs, candidates,
+        source_revision="visual-library-snapshot-v2", contract_version=V2_CONTRACT_ID,
+    )
+    assert filtered.status is ValidationStatus.VALID, filtered.reason_codes
+    assert filtered.record is not None
+    payload = filtered.record.to_dict()
+    assert payload["candidate_count"] == 2
+    assert len(payload["eligible"]) == 2
+    assert payload["rejected"] == []
+
+
+def test_mismatched_manifest_asset_is_not_valid_teacher_evidence():
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+    candidate = _fixture("valid_visual_asset_compatibility_v2.json")
+    candidate["compatibility_evidence"]["asset_reference"]["asset_id"] = "asset-2"
+    rejected = validate_visual_asset_compatibility_evidence(candidate)
+    assert rejected.status is not ValidationStatus.VALID
 
 
 def _plan(candidates, teacher_decisions=()):
