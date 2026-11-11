@@ -16,6 +16,72 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+## Result consumption binding (R07, hardened by P1)
+
+`parse_ckr6_result_comment` is a pure syntax check by design: it proves
+neither who wrote a comment nor which request it answers. Hosts must consume
+through `ckr6_github_bridge.consume_ckr6_result_comment` (one comment) or
+`select_ckr6_result_comment` (a bounded list), passing the GitHub
+issue-comment **record** (`id`, `user`, `created_at`, `issue_url`/`html_url`,
+optional `updated_at`/`performed_via_github_app`) -- never a bare body -- plus
+the exact pending request identity (`expected_request_comment_id`,
+`expected_request_created_at`, issue, repository) and the **required**
+`expected_operation`. Both fail closed with `ValueError`.
+
+Producer provenance. A result is trusted only if the GitHub record shows the
+`github-actions[bot]` account (numeric id 41898282, type `Bot` when present,
+app slug `github-actions` when present), a location equal to the pending
+request's repository/issue (and the comment's own id), a creation time and id
+after the request, and no edit after creation. `select_` discards untrusted or
+unparsable candidates *before* the exactly-one/ambiguity check, so a forged
+comment can neither satisfy a request nor force an ambiguity. Producer claims
+inside the body are never used. **Limitation:** this proves the comment was
+posted by the GitHub Actions bot account, not which workflow or job posted it;
+any other workflow with `issues: write` in this repository posts under the same
+identity, and the result carries no run identifier. `author_association` is
+`NONE` for the bot and is not used.
+
+Schema and admission. The payload may use only `RESULT_FIELDS` plus the
+separately added `request_comment_id`; the operation must be a supported
+`OPERATIONS` value equal to the expected one; all five authority flags must be
+explicitly `false`. issue-start admission must equal the contract in
+`ISSUE_START_LESSON_PREFLIGHT.md` (`not-needed`, `sufficient`,
+`unavailable-safe-fallback` admit; `insufficient`/`manual-review` do not) and
+must not claim mutation admission. For failed repairs, the canonical status
+and retry outcome must match exactly: `sufficient -> consumed`,
+`not-needed -> not-material`, and `insufficient`/`manual-review`/
+`unavailable-safe-fallback -> unavailable-or-failed`. Only the first two
+pairs can admit retry mutation; a blocked early `manual-review` with no
+retry outcome remains valid STOP evidence when bound to the exact attempt.
+Failed-repair results must not claim first-hypothesis admission. A valid
+blocked result is returned as STOP evidence. The bounded
+`unknown`/`ckr6-result-unavailable` infrastructure fallback is STOP evidence
+for issue-start, but is **rejected** for failed-repair consumption because
+it has no `attempt_id` and cannot bind to the current failed attempt.
+`ckr6_result_admits_boundary(payload)` turns a consumed payload into the
+execution-order decision. It grants no repository write, merge, or closure
+authority.
+
+Failed-repair results additionally carry `attempt_id` -- the exact failed
+attempt they were produced for -- through the bounded result projection
+(`RESULT_FIELDS` + `execute_envelope`). A failed-repair result is
+consumable only against that same attempt: a result recorded for an
+earlier attempt, a result with no `attempt_id`, or a consumption call
+with no `expected_attempt_id` is rejected. Results produced before this
+projection carry no `attempt_id` and are therefore unusable for
+failed-repair consumption (fail-closed, by design). Serializer/parser
+compatibility is preserved: old comments without `attempt_id` still
+parse, and results without it still serialize. The MCP-side attempt
+binding in `admit_agent_os_failed_repair` (#3772) is separate and
+unchanged: it binds the activation result at admission time, while this
+binding covers the GitHub-ingress result comment the host reads.
+
+A consumed result is evidence for the host's governed decision, never a
+grant: the host must still call the consumer and enforce the issue-start and failed-repair
+boundaries in #2425 itself. No host invocation of this consumer is
+proven by the repository tests; live host consumption remains owned by
+#2425/#3559.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure
