@@ -467,7 +467,8 @@ class HostLocalLeaseAdapter:
             grant.generation,
         )
         if (
-            not lease_identity
+            not grant.acquired
+            or not lease_identity
             or not holder_identity
             or type(generation) is not int
             or isinstance(generation, bool)
@@ -567,10 +568,20 @@ class HostLocalLeaseAdapter:
                 reason="ambiguous terminal record",
             )
         try:
-            os.write(fd, payload)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            with os.fdopen(fd, "wb", closefd=True) as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            # A failed or partial write leaves ambiguous terminal metadata:
+            # never claim durable success or silently permit reacquisition.
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="terminal metadata write failed",
+            )
         return PilotLeaseTerminalRecord(
             recorded=True,
             lease_identity=lease_identity,
