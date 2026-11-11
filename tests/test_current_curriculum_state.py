@@ -578,4 +578,19 @@ def test_mutation_gap_optional_lists_default_to_empty(omitted_field):
     value = evidence(required_keys=[], owner_evidence=[])
     del value[omitted_field]
     result = current_state.resolve_current_curriculum_state(value)
+    explicit = current_state.resolve_current_curriculum_state(
+        evidence(required_keys=[], owner_evidence=[])
+    )
+
     assert result.status is ValidationStatus.VALID
+    assert explicit.status is ValidationStatus.VALID
+    state = payload(result)
+    # Omission is semantically identical to an explicitly empty list, not
+    # merely a status-preserving substitution of invented owner evidence.
+    assert state == payload(explicit)
+    assert state["owner_states"] == []
+    assert state["context_evidence"] == []
+    assert state["stale_evidence"] == []
+    assert state["contradictions"] == []
+    assert state["reason_codes"] == []
+    assert state["blockers"] == []
