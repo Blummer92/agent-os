@@ -111,7 +111,7 @@ class InMemoryLeaseAdapter:
         holder_identity = grant.holder_identity
         generation = grant.generation
 
-        if not lease_identity or not holder_identity or generation < 1:
+        if not grant.acquired or not lease_identity or not holder_identity or generation < 1:
             return PilotLeaseTerminalRecord(
                 recorded=False,
                 lease_identity=lease_identity,
