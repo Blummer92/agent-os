@@ -531,6 +531,74 @@ def test_superseded_record_does_not_override_active():
     assert outcomes[1]["reason_code"] == "superseded"
 
 
+
+
+def test_newer_active_record_wins_over_historical_active_record():
+    old = _slot_decision(slot=0, asset="asset-a", decision_id="old")
+    newer = _slot_decision(slot=0, asset="asset-b", decision_id="new")
+    newer["decided_at"] = "2026-10-03T13:00:00.000Z"
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [newer, old],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [(o["decision_id"], o["reason_code"]) for o in outcomes] == [
+        ("new", None), ("old", "superseded-by-later"),
+    ]
+    assert bindings == ({"role_id": "hook", "slot_id": "0", "asset_id": "asset-b"},)
+
+
+def test_invalid_newest_decision_does_not_resurrect_older_active():
+    old = _slot_decision(slot=0, asset="asset-a", decision_id="old")
+    newer = _slot_decision(slot=0, asset="asset-b", decision_id="new")
+    newer["decided_at"] = "2026-10-03T13:00:00.000Z"
+    newer["candidate_set_fingerprint"] = SHA_B
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [old, newer],
+    )
+    assert blocked == REASON_CANDIDATE_SET_CHANGED
+    assert ids == () and bindings == ()
+    assert all(not outcome["honored"] for outcome in outcomes)
+
+
+def test_teacher_override_is_used_by_generation_placement_and_cli():
+    from instructional_materials_coach.generation_context import _visual_context
+    from instructional_materials_coach.connected_visual_placement import (
+        plan_visual_placement_bindings,
+    )
+    from instructional_materials_coach.cli import (
+        _selected_visuals_for_key,
+        _selected_asset_drive_files,
+        _selected_asset_content_identities,
+    )
+
+    candidates = _two_candidates()
+    baseline = _plan(candidates)
+    role = _role_id(baseline)
+    decision = _valid_decision_for(candidates, role, "asset-2", SHA_B, "asset-1")
+    plan = _plan(candidates, [decision])
+    assert plan.outcome == "visuals-ready"
+    assert plan.selected_asset_ids == ("asset-2",)
+    bindings, assignment_json = _visual_context(plan)
+    assert len(bindings) == 1 and bindings[0] == (role, "0", "asset-2")
+    assignments = json.loads(assignment_json)
+    assert assignments[0]["selected_candidate"]["asset_reference"]["asset_id"] == "asset-2"
+    placements = plan_visual_placement_bindings(plan)
+    assert len(placements) == 1
+    assert placements[0].asset_id == "asset-2"
+    assert placements[0].drive_file_id == "file-2"
+    assert _selected_visuals_for_key(plan)[0]["asset_id"] == "asset-2"
+    assert _selected_asset_drive_files(plan) == {"asset-2": "file-2"}
+    assert _selected_asset_content_identities(plan)["asset-2"]["value"] == SHA_B
+    # The source proof remains the unchanged planner record.
+    assert baseline.cohesive_visual_plan_result.record.to_dict() == plan.cohesive_visual_plan_result.record.to_dict()
+
+
+def test_generation_context_without_teacher_choices_still_uses_planner():
+    from instructional_materials_coach.generation_context import _visual_context
+    baseline = _plan(_two_candidates())
+    bindings, _ = _visual_context(baseline)
+    assert len(bindings) == 1 and bindings[0][2] == "asset-1"
+
 def test_multiple_conflicting_active_records_fail_closed():
     ids, outcomes, blocked, bindings = _resolve_slot_choices(
         [("hook", "0", "asset-a")],

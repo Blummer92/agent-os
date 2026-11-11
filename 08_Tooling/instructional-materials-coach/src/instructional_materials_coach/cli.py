@@ -32,7 +32,7 @@ from .placement_transport import PlacementRuntimeUnavailable, build_placement_tr
 from .slides_requests import build_slides_replace_requests
 from .teacher_decisions import DEFAULT_TEACHER_DECISIONS_DIR, load_teacher_decisions
 from .template_resolution import TemplateCandidate, resolve_approved_template_pair
-from .visual_reuse import GovernedVisualReusePlan, plan_governed_visual_reuse
+from .visual_reuse import GovernedVisualReusePlan, effective_visual_payload, plan_governed_visual_reuse
 from .workspace_clients import build_docs_service, build_slides_service
 
 DEFAULT_LESSONS_DIR = "reports/lessons"
@@ -249,8 +249,7 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
         content_identity_from_fingerprint,
     )
 
-    result = visual_plan.cohesive_visual_plan_result
-    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    payload = effective_visual_payload(visual_plan)
     visuals: list[dict[str, Any]] = []
     for key in ("required_role_assignments", "optional_role_assignments"):
         assignments = payload.get(key, ())
@@ -332,8 +331,7 @@ def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[st
     idempotency key (_selected_visuals_for_key), not here.
     """
     bound: dict[str, str | None] = {}
-    result = visual_plan.cohesive_visual_plan_result
-    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    payload = effective_visual_payload(visual_plan)
     selected_candidates = payload.get("selected_candidates", ())
     if not isinstance(selected_candidates, (list, tuple)):
         selected_candidates = ()
@@ -361,8 +359,7 @@ def _selected_asset_content_identities(visual_plan: GovernedVisualReusePlan) -> 
     from instructional_workflow_contracts.asset_content_identity import content_identity_from_fingerprint
 
     bound: dict[str, dict[str, Any] | None] = {}
-    result = visual_plan.cohesive_visual_plan_result
-    payload = result.record.to_dict() if result is not None and result.record is not None else {}
+    payload = effective_visual_payload(visual_plan)
     selected_candidates = payload.get("selected_candidates", ())
     if not isinstance(selected_candidates, (list, tuple)):
         selected_candidates = ()
@@ -754,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
             material_requirement=material_requirement,
             current_curriculum_evidence=current_curriculum_evidence,
             selected_asset_ids=tuple(visual_plan.selected_asset_ids),
-            governed_visual_plan=visual_plan.cohesive_visual_plan_result,
+            governed_visual_plan=visual_plan,
         )
         context["generation_context_tokens"] = sorted(content.context_tokens)
 

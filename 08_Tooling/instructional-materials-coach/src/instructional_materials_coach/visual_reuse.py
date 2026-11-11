@@ -9,7 +9,14 @@ from instructional_workflow_contracts import ValidationResult, ValidationStatus
 from instructional_workflow_contracts.asset_content_identity import (
     content_identity_from_fingerprint,
 )
-from instructional_workflow_contracts.cohesive_visual_plan import plan_cohesive_visual_set
+from instructional_workflow_contracts.cohesive_visual_plan import (
+    plan_cohesive_visual_set,
+    _assignment as _governed_assignment,
+    _asset_key as _governed_asset_key,
+    _role_rejection_reasons as _governed_role_rejections,
+    _set_rejection_reasons as _governed_set_rejections,
+    _resolve_eligible_candidates as _governed_eligible_candidates,
+)
 from instructional_workflow_contracts.material_requirement import validate_material_requirement
 from instructional_workflow_contracts.reuse_planner import plan_instructional_artifact_reuse
 from instructional_workflow_contracts.teacher_visual_decision import (
@@ -163,6 +170,8 @@ class GovernedVisualReusePlan:
     # Binding-preserving representation of teacher-resolved choices; unlike
     # transport asset IDs, shared asset IDs occur once per role/slot binding.
     teacher_selected_role_slot_bindings: tuple[dict[str, str], ...] = ()
+    # Derived from the same governed candidate/role policy; source #944 stays immutable.
+    effective_role_assignments: tuple[dict[str, Any], ...] = ()
 
     @property
     def image_gap_briefs(self) -> tuple[dict[str, Any], ...]:
@@ -252,20 +261,26 @@ def _apply_teacher_decisions(
         binding_assets[key] = asset_id if isinstance(asset_id, str) and asset_id else None
 
     active_roles = {role for role, _ in binding_order}
-    # Conflicting active records for the same binding must not silently win
-    # based on input order. Duplicate copies of the same record are harmless.
+    # Append-only history: the newest timestamp wins, as in active_decision_for.
+    # Distinct records at the same latest timestamp are ambiguous and fail closed.
     active_by_binding: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for raw in teacher_decisions:
         if not isinstance(raw, dict) or raw.get("status") != "active":
             continue
         role = raw.get("role")
         slot = canonical_decision_slot_id(raw.get("slot"))
-        if not isinstance(role, str) or slot is None:
-            continue
-        key = (role, slot)
-        active_by_binding.setdefault(key, []).append(raw)
-    conflicting = {key for key, records in active_by_binding.items()
-                   if any(record != records[0] for record in records[1:])}
+        if isinstance(role, str) and slot is not None:
+            active_by_binding.setdefault((role, slot), []).append(raw)
+    latest_by_binding: dict[tuple[str, str], dict[str, Any]] = {}
+    conflicting: set[tuple[str, str]] = set()
+    for key, records in active_by_binding.items():
+        latest_time = max(str(record.get("decided_at", "")) for record in records)
+        latest = [record for record in records
+                  if str(record.get("decided_at", "")) == latest_time]
+        if any(record != latest[0] for record in latest[1:]):
+            conflicting.add(key)
+        else:
+            latest_by_binding[key] = latest[0]
 
     outcomes: list[dict[str, Any]] = []
     blocked: dict[tuple[str, str], str] = {}
@@ -297,7 +312,10 @@ def _apply_teacher_decisions(
             detail = "current visual plan contains ambiguous role/slot assignments"
         elif key in conflicting:
             reason = "conflicting-active-decisions"
-            detail = "multiple active decisions claim the same role/slot binding"
+            detail = "distinct active decisions share the latest timestamp"
+        elif raw != latest_by_binding.get(key):
+            reason = "superseded-by-later"
+            detail = "a newer active decision owns this role/slot"
         else:
             validity: DecisionValidity = evaluate_decision_validity(
                 raw,
@@ -317,7 +335,7 @@ def _apply_teacher_decisions(
         honored = reason is None
         if honored:
             binding_assets[key] = asset_id
-        elif status == "active" and role in active_roles:
+        elif status == "active" and role in active_roles and reason != "superseded-by-later":
             blocked[key] = reason or "decision-invalid"
         outcomes.append({
             "decision_id": raw.get("decision_id"), "role": role,
@@ -343,6 +361,122 @@ def _apply_teacher_decisions(
                 ordered_ids.append(asset_id)
     blocked_reason = next(iter(blocked.values()), None)
     return tuple(ordered_ids), tuple(outcomes), blocked_reason, tuple(exact_bindings)
+
+
+def _materialize_effective_assignments(
+    cohesive_payload: dict[str, Any],
+    resolved_bindings: tuple[dict[str, str], ...],
+    *,
+    scoped_candidates: list[object],
+    candidate_filter_result: ValidationResult,
+    visual_needs_result: ValidationResult,
+) -> tuple[dict[str, Any], ...]:
+    """Recheck each teacher-resolved binding against governed role/set policy."""
+    filter_record = candidate_filter_result.record
+    needs_record = visual_needs_result.record
+    if filter_record is None or needs_record is None:
+        raise ValueError("teacher-resolved-source-evidence-missing")
+    filtered = filter_record.to_dict()
+    needs = needs_record.to_dict()
+    eligible = _governed_eligible_candidates(
+        list(filtered["eligible"]),
+        transport=filtered.get("projection_transport"),
+        candidate_projections=_candidate_projection_store(scoped_candidates),
+        candidate_contract_version=filter_record.contract_version,
+    )
+    candidates: dict[str, dict[str, Any]] = {}
+    for candidate in eligible:
+        asset_id = candidate["asset_reference"]["asset_id"]
+        if asset_id in candidates and candidates[asset_id] != candidate:
+            raise ValueError("teacher-selected-asset-ambiguous")
+        candidates[asset_id] = candidate
+    roles = {role["role_id"]: role
+             for role in [*needs["required_roles"], *needs["optional_roles"]]}
+    binding_assets = {(b["role_id"], b["slot_id"]): b["asset_id"]
+                      for b in resolved_bindings}
+    if len(binding_assets) != len(resolved_bindings):
+        raise ValueError("teacher-resolved-binding-ambiguous")
+
+    effective: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    used_assets: set[tuple[str, str, str]] = set()
+    for field in ("required_role_assignments", "optional_role_assignments"):
+        for original in cohesive_payload[field]:
+            role_id = original["role_id"]
+            slot_id = original.get("slot_id", "0")
+            key = (role_id, slot_id)
+            if key in seen or key not in binding_assets or role_id not in roles:
+                raise ValueError("teacher-resolved-binding-missing-or-duplicate")
+            seen.add(key)
+            asset_id = binding_assets[key]
+            candidate = candidates.get(asset_id)
+            if candidate is None:
+                raise ValueError("teacher-selected-candidate-not-filter-eligible")
+            role = roles[role_id]
+            reasons = _governed_role_rejections(
+                role, candidate, material_type=needs["material_type"],
+            )
+            if reasons:
+                raise ValueError("teacher-selected-role-incompatible")
+            if _governed_set_rejections(
+                candidate, selected=selected, used_asset_keys=used_assets,
+                role_reasons=reasons,
+            ):
+                raise ValueError("teacher-selected-set-incompatible")
+            chosen_by_planner = original["selected_candidate"]
+            if chosen_by_planner["asset_reference"]["asset_id"] == asset_id:
+                if chosen_by_planner.get("compatibility_fingerprint") != candidate["fingerprint"]:
+                    raise ValueError("teacher-selected-candidate-identity-conflict")
+                effective.append(original)
+            else:
+                effective.append(_governed_assignment(
+                    role, candidate,
+                    requirement_state=original["requirement_state"],
+                    slot_id=slot_id,
+                ))
+            selected.append(candidate)
+            used_assets.add(_governed_asset_key(candidate))
+    if seen != set(binding_assets):
+        raise ValueError("teacher-resolved-binding-count-mismatch")
+    if len(used_assets) > needs["maximum_visual_count"]:
+        raise ValueError("teacher-resolved-asset-cap-exceeded")
+    return tuple(effective)
+
+
+def effective_visual_payload(visual_plan: object) -> dict[str, Any]:
+    """One consumer view; original validated cohesive-plan evidence is unchanged."""
+    result = getattr(visual_plan, "cohesive_visual_plan_result", None)
+    if result is None or getattr(result, "record", None) is None:
+        raise ValueError("governed-visual-plan-missing")
+    payload = result.record.to_dict()
+    outcomes = getattr(visual_plan, "teacher_decision_outcomes", ())
+    if not outcomes:
+        return payload
+    if getattr(visual_plan, "final_production_blocked", True):
+        raise ValueError("teacher-visual-plan-blocked")
+    effective = getattr(visual_plan, "effective_role_assignments", ())
+    if not effective:
+        raise ValueError("teacher-resolved-assignments-missing")
+    required = [x for x in effective if x["requirement_state"] == "required"]
+    optional = [x for x in effective if x["requirement_state"] == "optional"]
+    original_keys = {(x["role_id"], x.get("slot_id", "0"))
+                     for kind in ("required_role_assignments", "optional_role_assignments")
+                     for x in payload[kind]}
+    effective_keys = [(x["role_id"], x.get("slot_id", "0")) for x in effective]
+    if (len(effective_keys) != len(set(effective_keys))
+            or set(effective_keys) != original_keys
+            or len(required) != len(payload["required_role_assignments"])
+            or len(optional) != len(payload["optional_role_assignments"])):
+        raise ValueError("teacher-resolved-assignments-mismatched")
+    payload["required_role_assignments"] = required
+    payload["optional_role_assignments"] = optional
+    payload["selected_candidates"] = [x["selected_candidate"] for x in effective]
+    actual_ids = {x["selected_candidate"]["asset_reference"]["asset_id"] for x in effective}
+    if actual_ids != set(getattr(visual_plan, "selected_asset_ids", ())):
+        raise ValueError("teacher-resolved-asset-selection-mismatch")
+    return payload
+
 
 def plan_governed_visual_reuse(
     requirement: object,
@@ -536,6 +670,7 @@ def plan_governed_visual_reuse(
     # falling back to the planner's pick.
     decision_outcomes: tuple[dict[str, Any], ...] = ()
     teacher_selected_role_slot_bindings: tuple[dict[str, str], ...] = ()
+    effective_role_assignments: tuple[dict[str, Any], ...] = ()
     if teacher_decisions:
         scoped_fingerprint = canonical_candidate_set_fingerprint(scoped_candidates)
         scoped_identities = _eligible_asset_content_identities(scoped_candidates)
@@ -548,6 +683,16 @@ def plan_governed_visual_reuse(
             content_identities=scoped_identities,
             source_revision=source_revision,
         )
+        if blocked_reason is None:
+            try:
+                effective_role_assignments = _materialize_effective_assignments(
+                    cohesive_payload, teacher_selected_role_slot_bindings,
+                    scoped_candidates=scoped_candidates,
+                    candidate_filter_result=candidate_filter_result,
+                    visual_needs_result=visual_needs_result,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                blocked_reason = str(exc)
         if blocked_reason is not None:
             return GovernedVisualReusePlan(
                 outcome="teacher-decision-invalidated",
@@ -560,6 +705,7 @@ def plan_governed_visual_reuse(
                 cohesive_visual_plan_result=cohesive_result,
                 teacher_decision_outcomes=decision_outcomes,
                 teacher_selected_role_slot_bindings=teacher_selected_role_slot_bindings,
+                effective_role_assignments=effective_role_assignments,
             )
 
     return GovernedVisualReusePlan(
@@ -573,4 +719,5 @@ def plan_governed_visual_reuse(
         cohesive_visual_plan_result=cohesive_result,
         teacher_decision_outcomes=decision_outcomes,
         teacher_selected_role_slot_bindings=teacher_selected_role_slot_bindings,
+        effective_role_assignments=effective_role_assignments,
     )

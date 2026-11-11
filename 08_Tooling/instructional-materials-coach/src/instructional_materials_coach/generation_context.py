@@ -373,14 +373,24 @@ def _visual_context(value: object | None) -> tuple[tuple[tuple[str, str, str], .
     """
     if value is None:
         return (), "[]"
-    if type(value) is not ValidationResult:
-        raise GenerationContextError("Governed visual plan must be exact validated #944 evidence")
-    if value.status is not ValidationStatus.VALID or value.record is None:
-        raise GenerationContextError("Governed visual plan is not usable")
-    if value.record.contract_version != COHESIVE_VISUAL_PLAN_CONTRACT_ID:
-        raise GenerationContextError("Governed visual plan contract is incompatible")
+    from .visual_reuse import GovernedVisualReusePlan, effective_visual_payload
 
-    payload = value.record.to_dict()
+    if isinstance(value, GovernedVisualReusePlan):
+        if value.final_production_blocked:
+            raise GenerationContextError("Teacher-resolved visual plan is blocked")
+        source = value.cohesive_visual_plan_result
+    else:
+        source = value
+    if type(source) is not ValidationResult:
+        raise GenerationContextError("Governed visual plan must be exact validated #944 evidence")
+    if source.status is not ValidationStatus.VALID or source.record is None:
+        raise GenerationContextError("Governed visual plan is not usable")
+    if source.record.contract_version != COHESIVE_VISUAL_PLAN_CONTRACT_ID:
+        raise GenerationContextError("Governed visual plan contract is incompatible")
+    try:
+        payload = effective_visual_payload(value) if isinstance(value, GovernedVisualReusePlan) else source.record.to_dict()
+    except ValueError as exc:
+        raise GenerationContextError(str(exc)) from exc
     if payload.get("outcome") != "complete-set" or payload.get("manual_review_required") is not False:
         raise GenerationContextError("Governed visual plan is not complete for generation")
     authority = payload.get("authority")
