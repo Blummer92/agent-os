@@ -47,11 +47,17 @@ separately added `request_comment_id`; the operation must be a supported
 explicitly `false`. issue-start admission must equal the contract in
 `ISSUE_START_LESSON_PREFLIGHT.md` (`not-needed`, `sufficient`,
 `unavailable-safe-fallback` admit; `insufficient`/`manual-review` do not) and
-must not claim mutation admission. failed-repair mutation admission requires an
-admitting retry outcome (`consumed`/`not-material`) and a non-blocking status,
-and must not claim first-hypothesis admission. A valid blocked result -- and
-the bounded `unknown`/`ckr6-result-unavailable` infrastructure fallback, which
-can never admit -- is returned as STOP evidence, not rejected;
+must not claim mutation admission. For failed repairs, the canonical status
+and retry outcome must match exactly: `sufficient -> consumed`,
+`not-needed -> not-material`, and `insufficient`/`manual-review`/
+`unavailable-safe-fallback -> unavailable-or-failed`. Only the first two
+pairs can admit retry mutation; a blocked early `manual-review` with no
+retry outcome remains valid STOP evidence when bound to the exact attempt.
+Failed-repair results must not claim first-hypothesis admission. A valid
+blocked result is returned as STOP evidence. The bounded
+`unknown`/`ckr6-result-unavailable` infrastructure fallback is STOP evidence
+for issue-start, but is **rejected** for failed-repair consumption because
+it has no `attempt_id` and cannot bind to the current failed attempt.
 `ckr6_result_admits_boundary(payload)` turns a consumed payload into the
 execution-order decision. It grants no repository write, merge, or closure
 authority.

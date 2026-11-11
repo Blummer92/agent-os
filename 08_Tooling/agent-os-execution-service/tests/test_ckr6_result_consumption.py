@@ -581,11 +581,20 @@ def test_p1_issue_start_rejects_claimed_mutation_admission():
 
 def test_p1_infrastructure_fallback_is_consumable_stop_evidence():
     fallback = bridge._fallback_result(REPOSITORY, ISSUE)
-    for operation, attempt in (("issue-start", None), ("failed-repair", "attempt-42")):
-        payload = _consume(
-            _comment(fallback), expected_operation=operation, expected_attempt_id=attempt
-        )
-        assert bridge.ckr6_result_admits_boundary(payload) is False
+    payload = _consume(_comment(fallback), expected_operation="issue-start")
+    assert bridge.ckr6_result_admits_boundary(payload) is False
+
+
+def test_review_5864113201_failed_repair_rejects_attemptless_fallback():
+    fallback = _comment(bridge._fallback_result(REPOSITORY, ISSUE))
+    with pytest.raises(ValueError, match="fallback cannot satisfy a failed-repair attempt"):
+        _consume(fallback, expected_operation="failed-repair", expected_attempt_id="attempt-42")
+
+
+def test_review_5864113201_selector_rejects_attemptless_fallback():
+    fallback = _comment(bridge._fallback_result(REPOSITORY, ISSUE))
+    with pytest.raises(ValueError, match="fallback cannot satisfy a failed-repair attempt"):
+        _select([fallback], expected_operation="failed-repair", expected_attempt_id="attempt-42")
 
 
 def test_p1_infrastructure_fallback_cannot_carry_admission():
@@ -618,6 +627,63 @@ def test_p1_failed_repair_not_material_outcome_admits_mutation_only():
     payload = _consume(_comment(ok), expected_operation="failed-repair", expected_attempt_id="attempt-42")
     assert bridge.ckr6_result_admits_boundary(payload) is True
     assert payload["execution_authorized"] is False and payload["merge_authorized"] is False
+
+
+@pytest.mark.parametrize(
+    ("status", "retry_outcome"),
+    [
+        ("bogus", "consumed"),
+        ("sufficient", "not-material"),
+        ("not-needed", "consumed"),
+        ("insufficient", "consumed"),
+        ("manual-review", "not-material"),
+        ("unavailable-safe-fallback", "consumed"),
+    ],
+)
+def test_review_5864113201_retry_rejects_admitted_status_outcome_mismatch(status, retry_outcome):
+    bad = _failed_repair_result(status=status, retry_reentry_outcome=retry_outcome)
+    with pytest.raises(ValueError, match="contradicts its admission flag"):
+        _consume(_comment(bad), expected_operation="failed-repair", expected_attempt_id="attempt-42")
+
+
+@pytest.mark.parametrize(
+    ("status", "retry_outcome"),
+    [
+        ("insufficient", "unavailable-or-failed"),
+        ("manual-review", "unavailable-or-failed"),
+        ("unavailable-safe-fallback", "unavailable-or-failed"),
+    ],
+)
+def test_review_5864113201_retry_accepts_valid_blocked_status_pair(status, retry_outcome):
+    stopped = _failed_repair_result(
+        status=status, retry_reentry_outcome=retry_outcome, mutation_admissible=False
+    )
+    payload = _consume(
+        _comment(stopped), expected_operation="failed-repair", expected_attempt_id="attempt-42"
+    )
+    assert bridge.ckr6_result_admits_boundary(payload) is False
+
+
+def test_review_5864113201_retry_rejects_mismatched_blocked_status_pair():
+    stopped = _failed_repair_result(
+        status="manual-review", retry_reentry_outcome="consumed", mutation_admissible=False
+    )
+    with pytest.raises(ValueError, match="contradicts its admission flag"):
+        _consume(_comment(stopped), expected_operation="failed-repair", expected_attempt_id="attempt-42")
+
+
+def test_review_5864113201_retry_rejects_unrecognized_status_even_when_blocked():
+    stopped = _failed_repair_result(
+        status="bogus", retry_reentry_outcome="unavailable-or-failed", mutation_admissible=False
+    )
+    with pytest.raises(ValueError, match="contradicts its admission flag"):
+        _consume(_comment(stopped), expected_operation="failed-repair", expected_attempt_id="attempt-42")
+
+
+def test_review_5864113201_retry_rejects_nonstring_status_as_value_error():
+    stopped = _failed_repair_result(status=["not-needed"], mutation_admissible=False)
+    with pytest.raises(ValueError, match="contradicts its admission flag"):
+        _consume(_comment(stopped), expected_operation="failed-repair", expected_attempt_id="attempt-42")
 
 
 def test_p1_failed_repair_blocked_result_for_exact_attempt_is_stop_evidence():

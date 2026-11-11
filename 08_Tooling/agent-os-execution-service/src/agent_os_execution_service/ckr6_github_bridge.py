@@ -656,7 +656,15 @@ _AUTHORITY_FLAGS = (
 _ISSUE_START_ADMITTING = frozenset({"not-needed", "sufficient", "unavailable-safe-fallback"})
 # Mirrors RetryReentryOutcome admitting values (failed-repair-lesson-reentry.md).
 _RETRY_ADMITTING = frozenset({"consumed", "not-material"})
-_BLOCKING_STATUSES = frozenset({"insufficient", "manual-review"})
+# Canonical activate_repair_retry_lessons._retry_outcome mapping; preserve
+# blocked results as STOP evidence, including early unbound manual-review.
+_RETRY_OUTCOME_BY_STATUS = {
+    "sufficient": "consumed",
+    "not-needed": "not-material",
+    "insufficient": "unavailable-or-failed",
+    "manual-review": "unavailable-or-failed",
+    "unavailable-safe-fallback": "unavailable-or-failed",
+}
 # Operation of the bridge's bounded infrastructure fallback (_fallback_result).
 _FALLBACK_OPERATION = "unknown"
 _FALLBACK_REASON = "ckr6-result-unavailable"
@@ -755,10 +763,17 @@ def _check_admission_semantics(payload: Mapping[str, object], operation: str) ->
             raise ValueError("failed-repair result must not claim first-hypothesis admission")
         if type(mutation) is not bool:
             raise ValueError("CKR6 result admission flag must be a boolean")
-        if mutation and (
-            payload.get("retry_reentry_outcome") not in _RETRY_ADMITTING
-            or status in _BLOCKING_STATUSES
-        ):
+        if type(status) is not str or status not in _RETRY_OUTCOME_BY_STATUS:
+            raise ValueError("CKR6 result status contradicts its admission flag")
+        outcome = payload.get("retry_reentry_outcome")
+        # An unbound read route emits manual-review without a retry outcome;
+        # that explicit blocked result is still valid STOP evidence.
+        unbound_stop = (
+            status == "manual-review" and outcome is None and mutation is False
+        )
+        if outcome != _RETRY_OUTCOME_BY_STATUS[status] and not unbound_stop:
+            raise ValueError("CKR6 result status contradicts its admission flag")
+        if mutation and outcome not in _RETRY_ADMITTING:
             raise ValueError("CKR6 result status contradicts its admission flag")
     else:
         if admissible not in (None, False) or mutation not in (None, False):
@@ -829,8 +844,12 @@ def consume_ckr6_result_comment(
 
     operation = payload.get("operation")
     if operation == _FALLBACK_OPERATION:
-        # The bounded infrastructure fallback is STOP evidence only and can
-        # never admit anything, whichever operation was requested.
+        # The generic fallback has no attempt_id. It cannot satisfy a
+        # failed-repair retry boundary, even as STOP evidence for that attempt.
+        if expected_operation == "failed-repair":
+            raise ValueError("CKR6 fallback cannot satisfy a failed-repair attempt")
+        # For issue-start (and non-retry learning operations), a valid
+        # infrastructure fallback remains explicit STOP evidence.
         if (
             payload.get("status") != "manual-review"
             or payload.get("reason_codes") != [_FALLBACK_REASON]
