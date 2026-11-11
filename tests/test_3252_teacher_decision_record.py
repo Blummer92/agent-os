@@ -367,7 +367,7 @@ def _two_candidates():
     evidence["freshness"]["manifest_fingerprint"] = valid.record.fingerprint
     c2["library_record"]["drive_file_id"] = "file-2"
     c2["library_record"]["page_id"] = "page-2"
-    c2["compatibility_id"] = "compat-2"
+    # Compatibility identity is derived by the validator; the envelope has no such field.
     checked = validate_visual_asset_compatibility_evidence(c2)
     assert checked.status is ValidationStatus.VALID, checked.reason_codes
     assert checked.record is not None
