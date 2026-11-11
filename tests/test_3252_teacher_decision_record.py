@@ -526,6 +526,7 @@ def _resolve_slot_choices(bindings, decisions):
         {"required_role_assignments": assignments},
         tuple(decisions),
         candidate_set_fingerprint=SHA_C,
+        requirement_id="req-1",
         eligible_asset_ids={"asset-a", "asset-b"},
         content_identities={"asset-a": identity, "asset-b": identity},
         source_revision="visual-library-snapshot-v2",
@@ -714,3 +715,37 @@ def test_invalid_slot_choice_blocks_only_target_binding():
 def test_decision_rejects_invalid_slot_names(slot):
     with pytest.raises(ValueError):
         TeacherVisualDecisionRecord.from_dict(_decision(slot=slot))
+
+
+
+def test_equal_time_conflicting_aliases_fail_closed_in_persistence():
+    from instructional_materials_coach.teacher_decisions import active_decision_for
+    a = _slot_decision(slot=0, asset="asset-a", decision_id="first")
+    b = _slot_decision(slot="0", asset="asset-b", decision_id="second")
+    assert a["decided_at"] == b["decided_at"]
+    assert active_decision_for([a, b], requirement_id="req-1", role="hook", slot=0) is None
+    assert active_decision_for([b, a], requirement_id="req-1", role="hook", slot="0") is None
+
+
+def test_direct_consumer_rejects_other_requirement_same_role_slot():
+    foreign = _slot_decision(slot=0, asset="asset-b")
+    foreign["requirement_id"] = "req-other"
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [foreign],
+    )
+    assert blocked == "requirement-binding-mismatch"
+    assert outcomes[0]["honored"] is False
+    assert "asset-b" not in ids
+
+
+def test_runtime_import_boundary_remains_public():
+    import ast
+    from pathlib import Path
+    import instructional_materials_coach.visual_reuse as module
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    assert not [
+        alias.name for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names if alias.name.startswith("_")
+    ]
+
