@@ -900,6 +900,19 @@ def _replay_remote_dependency_preparation(spec, preparation):
     """
     if type(preparation) is not dict:
         raise HostIngressError("dependency-readiness-record-unavailable")
+    # A bounded install/freeze timeout can never be replayed as READY.
+    timeout_terminated = preparation.get("install_terminated_on_timeout")
+    attempted = preparation.get("install_attempted")
+    succeeded = preparation.get("install_succeeded")
+    if (
+        type(timeout_terminated) is not bool
+        or type(attempted) is not bool
+        or type(succeeded) is not bool
+        or (succeeded and (not attempted or timeout_terminated))
+        or (timeout_terminated and not attempted)
+        or (succeeded and preparation.get("failure_reason_code") is not None)
+    ):
+        raise HostIngressError("dependency-readiness-malformed")
     runtime_version = _measurement_text(preparation, "runtime_version")
     package_manager_version = _measurement_text(
         preparation, "package_manager_version"
