@@ -460,22 +460,25 @@ def _tested_content_spec(config, tested_sha, required_tests, content_root=None):
     finally:
         cleanup_failed = False
         if added is not None and added.returncode == 0:
-            removed = subprocess.run(
-                (
-                    "git",
-                    "-C",
-                    str(root),
-                    "worktree",
-                    "remove",
-                    "--force",
-                    str(worktree),
-                ),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            cleanup_failed = removed.returncode != 0
+            try:
+                removed = subprocess.run(
+                    (
+                        "git",
+                        "-C",
+                        str(root),
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(worktree),
+                    ),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                cleanup_failed = removed.returncode != 0
+            except (OSError, subprocess.TimeoutExpired):
+                cleanup_failed = True
         shutil.rmtree(temporary, ignore_errors=True)
         if cleanup_failed or temporary.exists():
             raise HostIngressError("tested-content-cleanup-failed")
@@ -778,7 +781,7 @@ def freeze_pre_validation_evidence(
             expected_profile_id=lane_request.profile_id,
             expected_request_id=lane_request.request_id,
         )
-    except FirstRunValidationObservationError as exc:
+    except (FirstRunValidationObservationError, ValueError) as exc:
         raise HostIngressError("dev-validation-observation-rejected") from exc
     try:
         results = supplied_command_results_from_dev_validation(plan, (observed,))
@@ -1019,7 +1022,7 @@ def record_codespaces_dependency_readiness(
             expected_profile_id=lane_request.profile_id,
             expected_request_id=lane_request.request_id,
         )
-    except FirstRunValidationObservationError as exc:
+    except (FirstRunValidationObservationError, ValueError) as exc:
         raise HostIngressError("dev-validation-observation-rejected") from exc
     spec = _custody_required_environment_spec(
         config, provenance, fresh, content_root=content_root
