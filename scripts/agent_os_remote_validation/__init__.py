@@ -11,6 +11,7 @@ from .advisory_gate import (
     AdvisoryEvidenceResult,
     advisory_evidence_result_id,
     evaluate_advisory_pre_pr_evidence,
+    evaluate_pr_less_advisory_evidence,
     serialize_advisory_evidence_result,
 )
 from .advisory_render import (
@@ -233,6 +234,7 @@ __all__ = [
     "evaluate_advisory_pre_pr_evidence",
     "evaluate_dispatch_decision",
     "evaluate_pre_pr_dispatch_decision",
+    "evaluate_pr_less_advisory_evidence",
     "evidence_applicability_id",
     "load_rule_map",
     "node_setup_requirements",

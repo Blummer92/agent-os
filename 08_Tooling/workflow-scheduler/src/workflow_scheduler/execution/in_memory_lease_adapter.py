@@ -12,6 +12,7 @@ from threading import Lock
 
 from workflow_scheduler.execution.single_issue_pilot import (
     PilotLeaseGrant,
+    PilotLeaseTerminalRecord,
     PilotLeaseReleaseObservation,
     PilotLeaseRequest,
     pilot_holder_identity,
@@ -42,6 +43,7 @@ class InMemoryLeaseAdapter:
         self._lock = Lock()
         self._active: dict[str, _ActiveLease] = {}
         self._generations: dict[str, int] = {}
+        self._terminal: dict[str, tuple[str, int, str]] = {}
 
     def acquire(self, request: PilotLeaseRequest) -> PilotLeaseGrant:
         """Acquire one canonical lease or return a bounded fail-closed result."""
@@ -52,6 +54,15 @@ class InMemoryLeaseAdapter:
         holder_identity = pilot_holder_identity(request)
 
         with self._lock:
+            terminal = self._terminal.get(lease_identity)
+            if terminal is not None:
+                return PilotLeaseGrant(
+                    acquired=False,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=terminal[1],
+                    reason="invocation already terminated",
+                )
             active = self._active.get(lease_identity)
             if active is not None:
                 return PilotLeaseGrant(
@@ -82,6 +93,67 @@ class InMemoryLeaseAdapter:
             )
             return PilotLeaseGrant(
                 acquired=True,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+            )
+
+    def record_terminal_disposition(
+        self, grant: PilotLeaseGrant, disposition: str
+    ) -> PilotLeaseTerminalRecord:
+        """Record one durable terminal disposition for an exact held grant."""
+        if not isinstance(grant, PilotLeaseGrant):
+            raise TypeError("grant must be PilotLeaseGrant")
+        if type(disposition) is not str or not disposition or len(disposition) > MAX_REASON_LENGTH:
+            raise ValueError("disposition must be a bounded non-empty string")
+
+        lease_identity = grant.lease_identity
+        holder_identity = grant.holder_identity
+        generation = grant.generation
+
+        if not lease_identity or not holder_identity or generation < 1:
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="malformed terminal record request",
+            )
+
+        with self._lock:
+            active = self._active.get(lease_identity)
+            if (
+                active is None
+                or active.holder_identity != holder_identity
+                or active.generation != generation
+            ):
+                return PilotLeaseTerminalRecord(
+                    recorded=False,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=generation,
+                    reason="no exact active lease for this grant",
+                )
+            existing = self._terminal.get(lease_identity)
+            if existing is not None:
+                if existing == (holder_identity, generation, disposition):
+                    return PilotLeaseTerminalRecord(
+                        recorded=True,
+                        lease_identity=lease_identity,
+                        holder_identity=holder_identity,
+                        generation=generation,
+                        reason="terminal disposition already recorded",
+                    )
+                return PilotLeaseTerminalRecord(
+                    recorded=False,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=generation,
+                    reason="conflicting terminal disposition",
+                )
+            self._terminal[lease_identity] = (holder_identity, generation, disposition)
+            return PilotLeaseTerminalRecord(
+                recorded=True,
                 lease_identity=lease_identity,
                 holder_identity=holder_identity,
                 generation=generation,

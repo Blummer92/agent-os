@@ -344,6 +344,7 @@ def test_successful_codespaces_validation_uses_fixed_ssh_target() -> None:
         "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
         "execution_surface_id": CURRENT_SURFACE_ID,
         "environment_health_evidence_id": "sha256:" + ("b" * 64),
+        "dependency_preparation": {"source_sha": SHA},
     }
     stdout = (
         "noise\n"
@@ -847,3 +848,282 @@ def test_transport_loss_cannot_claim_no_workspace_effects():
         assert result["status"] == "needs-decision"
         assert result["workspace_side_effects_performed"] is None
         assert result["cleanup_complete"] is False
+
+
+# ---------------------------------------------------------------------------
+# #3333: genuine dependency preparation in the fixed remote runner
+
+
+def _success_payload(request, **updates):
+    payload = {
+        "schema_version": "1.0",
+        "status": "success",
+        "reason_codes": ["validation-passed"],
+        "repository": REPOSITORY,
+        "issue_number": 2931,
+        "branch": BRANCH,
+        "tested_sha": SHA,
+        "validation_id": VALIDATION_ID,
+        "request_id": request.request_id,
+        "exit_code": 0,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "cleanup_complete": True,
+        "workspace_side_effects_performed": True,
+        "external_side_effects_performed": False,
+        "production_state_mutated": False,
+        "execution_authorized": False,
+        "scheduler_invoked": False,
+        "publication_invoked": False,
+        "merge_authorized": False,
+        "codespaces_profile_id": APPROVED_CODESPACE_PROFILE_ID,
+        "execution_surface_id": CURRENT_SURFACE_ID,
+        "environment_health_evidence_id": "sha256:" + ("b" * 64),
+        "dependency_preparation": {"source_sha": SHA},
+    }
+    payload.update(updates)
+    return payload
+
+
+def _framed_stdout(payload):
+    return (
+        "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN===\n"
+        + json.dumps(payload)
+        + "\n===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END===\n"
+    )
+
+
+def _prep_request():
+    return build_dev_validation_request(
+        repository=REPOSITORY,
+        issue_number=2931,
+        branch=BRANCH,
+        source_sha=SHA,
+        validation_id=VALIDATION_ID,
+    )
+
+
+def test_success_without_preparation_measurements_fails_closed() -> None:
+    request = _prep_request()
+    payload = _success_payload(request)
+    del payload["dependency_preparation"]
+    stdout = _framed_stdout(payload)
+    evidence = run_dev_validation_over_codespaces(
+        request,
+        codespace_name=CURRENT_NAME,
+        run=lambda argv, *, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=stdout, stderr=""
+        ),
+    )
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-readiness-missing"
+    ]
+
+
+def test_non_object_preparation_measurements_fail_closed() -> None:
+    request = _prep_request()
+    payload = _success_payload(request, dependency_preparation="READY")
+    stdout = _framed_stdout(payload)
+    evidence = run_dev_validation_over_codespaces(
+        request,
+        codespace_name=CURRENT_NAME,
+        run=lambda argv, *, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=stdout, stderr=""
+        ),
+    )
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == [
+        "dev-validation-codespaces-evidence-malformed"
+    ]
+
+
+def test_preparation_measurements_pass_through_on_success() -> None:
+    request = _prep_request()
+    measured = {"source_sha": SHA, "install_succeeded": True}
+    payload = _success_payload(request, dependency_preparation=measured)
+    stdout = _framed_stdout(payload)
+    evidence = run_dev_validation_over_codespaces(
+        request,
+        codespace_name=CURRENT_NAME,
+        run=lambda argv, *, timeout: subprocess.CompletedProcess(
+            argv, 0, stdout=stdout, stderr=""
+        ),
+    )
+    assert evidence["status"] == "success"
+    assert evidence["dependency_preparation"] == measured
+
+
+def test_remote_runner_compiles_and_keeps_preparation_host_compiled() -> None:
+    import ast
+
+    compile(_REMOTE_RUNNER_SOURCE, "remote", "exec")
+    # Candidate code is the subject, never the attestor: no imports from the
+    # tested worktree and no sys.path widening.
+    tree = ast.parse(_REMOTE_RUNNER_SOURCE)
+    imported_roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".")[0])
+    assert imported_roots <= {
+        "datetime",
+        "hashlib",
+        "json",
+        "os",
+        "re",
+        "shutil",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "urllib",
+    }
+    assert "sys.path.insert" not in _REMOTE_RUNNER_SOURCE
+    # The fixed validation command runs only against a prepared environment.
+    assert "if prep_ready:" in _REMOTE_RUNNER_SOURCE
+    assert '"dependency-preparation-not-ready"' in _REMOTE_RUNNER_SOURCE
+    # Exactly one pinned bounded argv: wheels-only, single approved index,
+    # fixed manifest, five declared editable projects.
+    assert '"--only-binary=:all:"' in _REMOTE_RUNNER_SOURCE
+    assert _REMOTE_RUNNER_SOURCE.count("--index-url=https://pypi.org/simple") == 1
+    assert "--extra-index-url" not in _REMOTE_RUNNER_SOURCE
+    assert "--find-links" not in _REMOTE_RUNNER_SOURCE
+    assert "--no-index" not in _REMOTE_RUNNER_SOURCE
+    # Ambient pip configuration cannot inject sources.
+    assert '"PIP_CONFIG_FILE":os.devnull' in _REMOTE_RUNNER_SOURCE
+    # Local editable build hooks cannot outlive the bounded attempt.
+    assert "start_new_session=True" in _REMOTE_RUNNER_SOURCE
+    assert "os.killpg" in _REMOTE_RUNNER_SOURCE
+    # The manifest egress screen gates execution.
+    assert "manifest_source_forms_approved" in _REMOTE_RUNNER_SOURCE
+    # Post-preparation runtime re-assertion guards the fixed pytest identity.
+    assert "dependency.prepared-runtime-drift" in _REMOTE_RUNNER_SOURCE
+
+
+def _remote_namespace():
+    import ast
+
+    names = {
+        "REPOSITORY",
+        "VALIDATION_ID",
+        "CANONICAL_PROFILE_ID",
+        "PROFILE_ID",
+        "FRAME_START",
+        "FRAME_END",
+        "SHA40",
+        "BRANCH",
+        "MAX_LOG",
+        "PINNED_PROJECTS",
+        "EDITABLE_RE",
+        "REQ_RE",
+    }
+    tree = ast.parse(_REMOTE_RUNNER_SOURCE)
+    kept = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        or (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in names
+        )
+        or isinstance(node, ast.FunctionDef)
+    ]
+    module = ast.fix_missing_locations(ast.Module(body=kept, type_ignores=[]))
+    namespace = {}
+    exec(compile(module, "remote", "exec"), namespace)
+    return namespace
+
+
+def test_remote_tree_digest_matches_canonical_owner_on_real_projects() -> None:
+    from workflow_scheduler.execution.concrete_runtime_adapters import (
+        _local_project_sha256,
+    )
+
+    namespace = _remote_namespace()
+    for project in namespace["PINNED_PROJECTS"]:
+        assert namespace["tree_digest"](str(ROOT / project)) == _local_project_sha256(
+            str(ROOT / project)
+        )
+
+
+def test_remote_pinned_projects_match_the_canonical_spec_owner() -> None:
+    from agent_os_execution_service.candidate_environment_provenance import (
+        PYTHON_LOCAL_PROJECTS,
+    )
+
+    namespace = _remote_namespace()
+    assert namespace["PINNED_PROJECTS"] == tuple(sorted(PYTHON_LOCAL_PROJECTS))
+
+
+def test_remote_failure_classification_matches_canonical_markers() -> None:
+    from workflow_scheduler.execution.concrete_runtime_adapters import (
+        ConcreteDependencyCommandRunner,
+    )
+
+    namespace = _remote_namespace()
+    canonical = ConcreteDependencyCommandRunner._failure_reason
+    cases = [
+        "error: could not find a version that satisfies the requirement foo",
+        "no matching distribution found for bar",
+        "Temporary failure in name resolution",
+        "Connection timed out",
+        "network is unreachable",
+        "some entirely different build failure",
+        "",
+    ]
+    for text in cases:
+
+        class _Result:
+            stderr_text = text
+            reason = ""
+
+        assert namespace["classify_prep_failure"](text) == canonical(_Result())
+
+
+def test_remote_manifest_screen_accepts_the_real_manifest() -> None:
+    namespace = _remote_namespace()
+    assert (
+        namespace["manifest_source_forms_approved"](str(ROOT / "requirements-dev.txt"))
+        is True
+    )
+
+
+def test_remote_manifest_screen_rejects_egress_and_indirection(tmp_path) -> None:
+    namespace = _remote_namespace()
+    rejected = [
+        "git+https://example.invalid/repo.git",
+        "pkg @ https://example.invalid/pkg.whl",
+        "https://example.invalid/pkg.tar.gz",
+        "--extra-index-url https://example.invalid/simple",
+        "--index-url https://example.invalid/simple",
+        "-r other-requirements.txt",
+        "--requirement other.txt",
+        "-e ./unknown-project",
+        "-e git+https://example.invalid/repo.git",
+        "./relative/local/path",
+        "/absolute/local/path",
+        "pytest>=7 # inline comment",
+        "${HOME}/pkg",
+        "pkg; python_version<'3.11' and '://' in ''",
+    ]
+    for line in rejected:
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text(line + "\n", encoding="utf-8")
+        assert namespace["manifest_source_forms_approved"](str(manifest)) is False, line
+
+
+def test_remote_budget_covers_every_serial_step() -> None:
+    from workflow_scheduler.governance import dev_validation_codespaces as module
+
+    # Exact enumeration: health 20 + ls-remote 30 + cat-file 10 + fetch 60 +
+    # pytest assertion 10 + worktree add 60 + head verify 10 + digest walks 10
+    # + pip --version 60 + source probe 10 + install 240 + freeze 60 +
+    # post-preparation pytest re-assertion 10 + validation 120 +
+    # worktree remove 30 + tree removal 10.
+    assert module._REMOTE_MAX_BOUNDED_SECONDS == 750
+    assert module._RUN_TIMEOUT_SECONDS == 750 + module._TRANSPORT_OVERHEAD_SECONDS
