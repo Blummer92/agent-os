@@ -11,6 +11,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, TypedDict, cast
 
@@ -412,7 +413,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     route = resolve_lesson_read_route() if retrieval_required else None
     if retrieval_required and (route is None or route.execute_read is None):
         route_reason = route.reason_code if route is not None else "lesson-read-route-unavailable"
-        return {
+        unbound = {
             "operation": envelope.operation,
             "repository": envelope.repository,
             "issue_number": envelope.issue_number,
@@ -436,6 +437,11 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "closure_authorized": False,
             "side_effects_performed": False,
         }
+        if envelope.operation == "failed-repair":
+            # P1: the STOP result must still name the exact failed attempt so a
+            # consumer can bind it (R07); reason codes are preserved unchanged.
+            unbound["attempt_id"] = envelope.attempt_id
+        return unbound
     reader = route.execute_read if route is not None else None
     if envelope.operation in LEARNING_OPERATIONS:
         return _execute_learning(envelope, reader)
@@ -614,32 +620,31 @@ def parse_ckr6_result_comment(body: object) -> dict[str, object]:
     return payload
 
 
-# R07: exact request/result correlation at the consumer (#2425 / #2851).
+# R07/P1: trusted, exact request/result consumption (#2425 / #2851).
 #
-# ``parse_ckr6_result_comment`` deliberately stays a pure syntax check: a
-# syntactically valid result for a DIFFERENT request parses cleanly, and
-# that is not by itself a defect. The defect was that no in-repo consumer
-# existed to bind a parsed result to the pending request at all -- the only
-# identity comparison lived in the postback dedupe lookup
-# (``_existing_result_comment``), and the metrics derivation keys results
-# by result-comment id, never by ``request_comment_id``. A host that
-# consumed a parsed result without this binding could satisfy a pending
-# request with another request's result.
+# ``parse_ckr6_result_comment`` deliberately stays a pure syntax check: it
+# proves neither who wrote a comment nor which request it answers. A host must
+# consume through ``consume_ckr6_result_comment`` (one GitHub comment resource)
+# or ``select_ckr6_result_comment`` (a bounded list of comment resources). Both
+# take the GitHub issue-comment *record* (``id``, ``user``, ``created_at``,
+# location) rather than a bare body, fail closed with ``ValueError``, and never
+# authorize anything: a consumed result is evidence for the host's governed
+# decision, never a repository write/merge/closure grant.
 #
-# Hosts must consume through ``consume_ckr6_result_comment`` (one comment)
-# or ``select_ckr6_result_comment`` (a bounded comment list) and pass the
-# exact pending request identity. Both fail closed with ``ValueError``;
-# neither authorizes anything: a consumed result is evidence for the
-# host's governed decision, never a GitHub-write/merge/closure grant.
-# Failed-repair results additionally require exact attempt binding: the
-# result must carry the ``attempt_id`` it was produced for
-# (``execute_envelope`` now projects it), and it must equal the current
-# failed attempt, or the result cannot satisfy the retry boundary.
-# Results produced before this projection carry no ``attempt_id`` and are
-# therefore unusable for failed-repair consumption -- fail-closed, by
-# design. Parser/serializer compatibility is preserved: old comments
-# without ``attempt_id`` still parse, and results without it still
-# serialize.
+# Producer provenance boundary (documented limitation): the strongest check the
+# GitHub comment record supports is the server-assigned author identity
+# (login, numeric account id, Bot type, and the ``github-actions`` app when the
+# REST record carries it) plus exact issue/repository location and creation
+# order against the request. This proves the comment was posted by the GitHub
+# Actions bot account; it does NOT prove WHICH workflow/job posted it. Any
+# other workflow in this repository holding ``issues: write`` posts under the
+# same identity, and the result carries no run identifier. Never describe this
+# as per-workflow or cryptographic authentication.
+CKR6_PRODUCER_LOGIN = "github-actions[bot]"
+CKR6_PRODUCER_ACCOUNT_ID = 41898282
+CKR6_PRODUCER_ACCOUNT_TYPE = "Bot"
+CKR6_PRODUCER_APP_SLUG = "github-actions"
+
 _AUTHORITY_FLAGS = (
     "execution_authorized",
     "github_writes_authorized",
@@ -647,6 +652,14 @@ _AUTHORITY_FLAGS = (
     "closure_authorized",
     "side_effects_performed",
 )
+# Mirrors ISSUE_START_LESSON_PREFLIGHT.md "Admission signal".
+_ISSUE_START_ADMITTING = frozenset({"not-needed", "sufficient", "unavailable-safe-fallback"})
+# Mirrors RetryReentryOutcome admitting values (failed-repair-lesson-reentry.md).
+_RETRY_ADMITTING = frozenset({"consumed", "not-material"})
+_BLOCKING_STATUSES = frozenset({"insufficient", "manual-review"})
+# Operation of the bridge's bounded infrastructure fallback (_fallback_result).
+_FALLBACK_OPERATION = "unknown"
+_FALLBACK_REASON = "ckr6-result-unavailable"
 
 
 def _expected_id(value: object, name: str) -> int:
@@ -655,22 +668,124 @@ def _expected_id(value: object, name: str) -> int:
     return value
 
 
-def consume_ckr6_result_comment(
-    body: object,
+def _utc(value: object, name: str) -> datetime:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{name} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{name} must be an ISO-8601 timestamp") from None
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} must carry a UTC offset")
+    return parsed
+
+
+def _trusted_result_body(
+    comment: object,
     *,
     expected_request_comment_id: int,
+    expected_request_created_at: object,
     expected_issue_number: int,
     expected_repository: str,
-    expected_operation: str | None = None,
+) -> str:
+    """Return the body of a comment only if its GitHub record is trusted."""
+    if not isinstance(comment, Mapping):
+        raise ValueError("CKR6 result comment record must be a mapping")
+    comment_id = comment.get("id")
+    if type(comment_id) is not int or isinstance(comment_id, bool) or comment_id < 1:
+        raise ValueError("CKR6 result comment record is missing a valid id")
+    body = comment.get("body")
+    if type(body) is not str:
+        raise ValueError("CKR6 result comment record is missing its body")
+    user = comment.get("user")
+    if not isinstance(user, Mapping):
+        raise ValueError("CKR6 result comment record is missing its author")
+    account_id = user.get("id")
+    if (
+        user.get("login") != CKR6_PRODUCER_LOGIN
+        or type(account_id) is not int
+        or isinstance(account_id, bool)
+        or account_id != CKR6_PRODUCER_ACCOUNT_ID
+    ):
+        raise ValueError("CKR6 result comment was not produced by the trusted producer")
+    if user.get("type") is not None and user.get("type") != CKR6_PRODUCER_ACCOUNT_TYPE:
+        raise ValueError("CKR6 result comment author is not a Bot account")
+    app = comment.get("performed_via_github_app")
+    if app is not None and (
+        not isinstance(app, Mapping) or app.get("slug") != CKR6_PRODUCER_APP_SLUG
+    ):
+        raise ValueError("CKR6 result comment was not posted via the GitHub Actions app")
+    issue_url = comment.get("issue_url")
+    html_url = comment.get("html_url")
+    if issue_url is None and html_url is None:
+        raise ValueError("CKR6 result comment record carries no issue location")
+    if issue_url is not None and issue_url != (
+        f"https://api.github.com/repos/{expected_repository}/issues/{expected_issue_number}"
+    ):
+        raise ValueError("CKR6 result comment location does not match the pending request")
+    if html_url is not None and html_url != (
+        f"https://github.com/{expected_repository}/issues/{expected_issue_number}"
+        f"#issuecomment-{comment_id}"
+    ):
+        raise ValueError("CKR6 result comment location does not match the pending request")
+    created = _utc(comment.get("created_at"), "created_at")
+    if created < _utc(expected_request_created_at, "expected_request_created_at"):
+        raise ValueError("CKR6 result comment predates the pending request")
+    if comment_id <= expected_request_comment_id:
+        raise ValueError("CKR6 result comment predates the pending request")
+    updated = comment.get("updated_at")
+    if updated is not None and _utc(updated, "updated_at") != created:
+        raise ValueError("CKR6 result comment was edited after creation")
+    return body
+
+
+def _check_admission_semantics(payload: Mapping[str, object], operation: str) -> None:
+    status = payload.get("status")
+    admissible = payload.get("substantial_hypothesis_admissible")
+    mutation = payload.get("mutation_admissible")
+    if operation == "issue-start":
+        if type(admissible) is not bool:
+            raise ValueError("CKR6 result admission flag must be a boolean")
+        if mutation not in (None, False):
+            raise ValueError("issue-start result must not claim mutation admission")
+        if admissible != (status in _ISSUE_START_ADMITTING):
+            raise ValueError("CKR6 result status contradicts its admission flag")
+    elif operation == "failed-repair":
+        if admissible not in (None, False):
+            raise ValueError("failed-repair result must not claim first-hypothesis admission")
+        if type(mutation) is not bool:
+            raise ValueError("CKR6 result admission flag must be a boolean")
+        if mutation and (
+            payload.get("retry_reentry_outcome") not in _RETRY_ADMITTING
+            or status in _BLOCKING_STATUSES
+        ):
+            raise ValueError("CKR6 result status contradicts its admission flag")
+    else:
+        if admissible not in (None, False) or mutation not in (None, False):
+            raise ValueError("learning result must not claim admission")
+
+
+def consume_ckr6_result_comment(
+    comment: object,
+    *,
+    expected_request_comment_id: int,
+    expected_request_created_at: str,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_operation: str,
     expected_attempt_id: str | None = None,
 ) -> dict[str, object]:
-    """Consume one CKR6 result comment as the answer to a pending request.
+    """Consume one trusted CKR6 result comment as the answer to a pending request.
 
-    Parses the comment, then enforces exact binding to the pending request:
-    ``request_comment_id``, issue number, repository, and (when supplied)
-    operation must match, every authority flag must be present and false,
-    and a failed-repair result must name the exact current failed attempt.
-    Returns the parsed payload on success; raises ``ValueError`` otherwise.
+    ``comment`` is the GitHub issue-comment record. The producer must be the
+    GitHub Actions bot account (see the provenance boundary above), located in
+    the pending request's issue and created after the request. The payload must
+    use only ``RESULT_FIELDS`` plus ``request_comment_id``, match the expected
+    operation, carry five explicit false authority flags, keep status and
+    admission flags consistent, and (failed-repair) name the exact current
+    attempt. A valid blocked result is returned as STOP evidence, not rejected;
+    ``ckr6_result_admits_boundary`` turns it into a decision. Raises
+    ``ValueError`` otherwise.
     """
     expected_request_comment_id = _expected_id(
         expected_request_comment_id, "expected_request_comment_id"
@@ -678,16 +793,24 @@ def consume_ckr6_result_comment(
     expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
     if type(expected_repository) is not str or not expected_repository.strip():
         raise ValueError("expected_repository must be non-empty exact text")
-    if expected_operation is not None and (
-        type(expected_operation) is not str or not expected_operation.strip()
-    ):
-        raise ValueError("expected_operation must be non-empty exact text")
+    if type(expected_operation) is not str or expected_operation not in OPERATIONS:
+        raise ValueError("expected_operation must be a supported CKR6 operation")
     if expected_attempt_id is not None and (
         type(expected_attempt_id) is not str or not expected_attempt_id.strip()
     ):
         raise ValueError("expected_attempt_id must be non-empty exact text")
 
+    body = _trusted_result_body(
+        comment,
+        expected_request_comment_id=expected_request_comment_id,
+        expected_request_created_at=expected_request_created_at,
+        expected_issue_number=expected_issue_number,
+        expected_repository=expected_repository,
+    )
     payload = parse_ckr6_result_comment(body)
+    unknown = set(payload) - RESULT_FIELDS - {"request_comment_id"}
+    if unknown:
+        raise ValueError("CKR6 result carries unexpected fields")
 
     request_comment_id = payload.get("request_comment_id")
     if type(request_comment_id) is not int or isinstance(request_comment_id, bool):
@@ -700,16 +823,30 @@ def consume_ckr6_result_comment(
         raise ValueError("CKR6 result issue_number does not match the pending request")
     if payload.get("repository") != expected_repository:
         raise ValueError("CKR6 result repository does not match the pending request")
-    if expected_operation is not None and payload.get("operation") != expected_operation:
-        raise ValueError("CKR6 result operation does not match the pending request")
     for flag in _AUTHORITY_FLAGS:
         if payload.get(flag) is not False:
             raise ValueError("CKR6 result carries forbidden authority")
-    if payload.get("operation") == "failed-repair":
+
+    operation = payload.get("operation")
+    if operation == _FALLBACK_OPERATION:
+        # The bounded infrastructure fallback is STOP evidence only and can
+        # never admit anything, whichever operation was requested.
+        if (
+            payload.get("status") != "manual-review"
+            or payload.get("reason_codes") != [_FALLBACK_REASON]
+            or payload.get("substantial_hypothesis_admissible") is not False
+            or payload.get("mutation_admissible") is not False
+            or payload.get("selected_lesson_ids") != []
+        ):
+            raise ValueError("CKR6 fallback result is not a valid blocked result")
+        return payload
+    if type(operation) is not str or operation not in OPERATIONS:
+        raise ValueError("CKR6 result operation is unsupported")
+    if operation != expected_operation:
+        raise ValueError("CKR6 result operation does not match the pending request")
+    if operation == "failed-repair":
         if expected_attempt_id is None:
-            raise ValueError(
-                "failed-repair result requires expected_attempt_id"
-            )
+            raise ValueError("failed-repair result requires expected_attempt_id")
         attempt_id = payload.get("attempt_id")
         if type(attempt_id) is not str or not attempt_id.strip():
             raise ValueError("CKR6 result is missing attempt_id for the failed-repair request")
@@ -717,45 +854,58 @@ def consume_ckr6_result_comment(
             raise ValueError(
                 "CKR6 result attempt_id does not match the current failed attempt"
             )
+    _check_admission_semantics(payload, operation)
     return payload
 
 
 def select_ckr6_result_comment(
-    bodies: object,
+    comments: object,
     *,
     expected_request_comment_id: int,
+    expected_request_created_at: str,
     expected_issue_number: int,
     expected_repository: str,
-    expected_operation: str | None = None,
+    expected_operation: str,
     expected_attempt_id: str | None = None,
 ) -> dict[str, object]:
-    """Select the exactly-one CKR6 result answering a pending request.
+    """Select the exactly-one trusted CKR6 result answering a pending request.
 
-    Scans a bounded iterable of issue-comment bodies (non-result comments
-    are ignored; unparsable marker comments cannot satisfy the request and
-    are skipped, matching the postback dedupe lookup). Fails closed when
-    no result answers the pending request (``result-not-returned``) or
-    when two distinct payloads claim the same ``request_comment_id``
-    (ambiguous result). Identical duplicate payloads collapse to one.
-    The selected payload is then bound through
-    ``consume_ckr6_result_comment``.
+    Scans a bounded iterable of GitHub issue-comment records. Non-result
+    comments are ignored. Candidates whose record is untrusted (wrong producer,
+    location, timing, or malformed metadata) or unparsable are discarded
+    BEFORE deduplication, so a forged comment can neither satisfy the request
+    nor force an ambiguity. Fails closed when no trusted result answers the
+    request (``result-not-returned``) or when two distinct trusted payloads
+    claim it. Identical duplicates collapse to one. The selection is then bound
+    through ``consume_ckr6_result_comment``.
     """
-    if bodies is None or isinstance(bodies, (str, bytes, Mapping)):
-        raise TypeError("bodies must be an iterable of comment bodies")
+    if comments is None or isinstance(comments, (str, bytes, Mapping)):
+        raise TypeError("comments must be an iterable of comment records")
     expected_request_comment_id = _expected_id(
         expected_request_comment_id, "expected_request_comment_id"
     )
-    distinct: dict[str, str] = {}
-    for body in bodies:
+    expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
+    distinct: dict[str, Mapping[str, object]] = {}
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        body = comment.get("body")
         if type(body) is not str or not body.startswith(CKR6_RESULT_MARKER + "\n"):
             continue
         try:
+            _trusted_result_body(
+                comment,
+                expected_request_comment_id=expected_request_comment_id,
+                expected_request_created_at=expected_request_created_at,
+                expected_issue_number=expected_issue_number,
+                expected_repository=expected_repository,
+            )
             parsed = parse_ckr6_result_comment(body)
         except (TypeError, ValueError):
             continue
         if parsed.get("request_comment_id") != expected_request_comment_id:
             continue
-        distinct[_canonical_result_json(parsed)] = body
+        distinct[_canonical_result_json(parsed)] = comment
     if not distinct:
         raise ValueError("CKR6 result not returned for the pending request")
     if len(distinct) > 1:
@@ -763,11 +913,27 @@ def select_ckr6_result_comment(
     return consume_ckr6_result_comment(
         next(iter(distinct.values())),
         expected_request_comment_id=expected_request_comment_id,
+        expected_request_created_at=expected_request_created_at,
         expected_issue_number=expected_issue_number,
         expected_repository=expected_repository,
         expected_operation=expected_operation,
         expected_attempt_id=expected_attempt_id,
     )
+
+
+def ckr6_result_admits_boundary(payload: Mapping[str, object]) -> bool:
+    """Return True only if a CONSUMED result admits its own boundary.
+
+    issue-start: first-hypothesis admission. failed-repair: retry mutation
+    admission. Everything else (blocked, fallback, learning results) is STOP.
+    This is an execution-order decision only; it grants no repository write,
+    merge, or closure authority. Call it only on ``consume``/``select`` output.
+    """
+    if payload.get("operation") == "issue-start":
+        return payload.get("substantial_hypothesis_admissible") is True
+    if payload.get("operation") == "failed-repair":
+        return payload.get("mutation_admissible") is True
+    return False
 
 
 def _fallback_result(repository: str, issue_number: int) -> dict[str, object]:
