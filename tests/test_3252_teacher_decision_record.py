@@ -431,3 +431,139 @@ def test_teacher_selection_outside_eligible_set_fails_closed():
     outcome = plan.teacher_decision_outcomes[0]
     assert outcome["honored"] is False
     assert outcome["reason_code"] == REASON_ASSET_NO_LONGER_ELIGIBLE
+
+
+# #3251 — exact consumer role/slot binding, alongside #3252 persistence.
+def _resolve_slot_choices(bindings, decisions):
+    from instructional_materials_coach.visual_reuse import _apply_teacher_decisions
+
+    assignments = [
+        {"role_id": role, "slot_id": slot,
+         "selected_candidate": {"asset_reference": {"asset_id": asset}}}
+        for role, slot, asset in bindings
+    ]
+    identity = _content_identities()["asset-a"]
+    return _apply_teacher_decisions(
+        {"required_role_assignments": assignments},
+        tuple(decisions),
+        candidate_set_fingerprint=SHA_C,
+        eligible_asset_ids={"asset-a", "asset-b"},
+        content_identities={"asset-a": identity, "asset-b": identity},
+        source_revision="visual-library-snapshot-v2",
+    )
+
+
+def _slot_decision(slot=0, asset="asset-b", status="active", decision_id="dec-001"):
+    raw = _decision(slot=slot, status=status, decision_id=decision_id)
+    raw["selected_asset"]["asset_id"] = asset
+    return TeacherVisualDecisionRecord.from_dict(raw).to_dict()
+
+
+def test_named_slot_teacher_decision_contract_and_persistence(tmp_path):
+    from instructional_materials_coach.teacher_decisions import (
+        active_decision_for, load_teacher_decisions, write_teacher_decision,
+    )
+    record = _slot_decision("page-1")
+    assert record["slot"] == "page-1"
+    write_teacher_decision(record, tmp_path)
+    loaded = load_teacher_decisions(tmp_path, requirement_id="req-1")
+    assert len(loaded) == 1 and loaded[0]["slot"] == "page-1"
+    assert active_decision_for(loaded, requirement_id="req-1",
+                               role="hook", slot="page-1") == record
+    assert active_decision_for(loaded, requirement_id="req-1",
+                               role="hook", slot=0) is None
+
+
+def test_legacy_implicit_slot_lookup_matches_literal_zero():
+    from instructional_materials_coach.teacher_decisions import active_decision_for
+    record = _slot_decision(slot=0)
+    assert active_decision_for([record], requirement_id="req-1",
+                               role="hook", slot="0") == record
+
+
+def test_override_preserves_other_slot_and_binding_evidence():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")],
+        [_slot_decision(slot=0, asset="asset-b")],
+    )
+    assert blocked is None
+    assert ids == ("asset-b", "asset-a")
+    assert [(b["slot_id"], b["asset_id"]) for b in bindings] == [
+        ("0", "asset-b"), ("1", "asset-a"),
+    ]
+    assert outcomes[0]["slot_id"] == "0" and outcomes[0]["honored"]
+
+
+def test_integer_slot_is_never_named_slot_ordinal():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "page-1", "asset-a")], [_slot_decision(slot=0)]
+    )
+    assert blocked == "slot-binding-missing"
+    assert ids == ("asset-a",)
+    assert not outcomes[0]["honored"]
+
+
+def test_nonexistent_slot_cannot_authorize():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [_slot_decision(slot=99)]
+    )
+    assert blocked == "slot-binding-missing"
+    assert not outcomes[0]["honored"] and "asset-b" not in ids
+
+
+def test_named_slot_decision_exactly_authorizes_named_slot():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "page-1", "asset-a")], [_slot_decision(slot="page-1")]
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert bindings[0]["slot_id"] == "page-1"
+    assert outcomes[0]["honored"]
+
+
+def test_superseded_record_does_not_override_active():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")],
+        [_slot_decision(), _slot_decision(asset="asset-a",
+                                         status="superseded", decision_id="old")],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [o["honored"] for o in outcomes] == [True, False]
+    assert outcomes[1]["reason_code"] == "superseded"
+
+
+def test_multiple_conflicting_active_records_fail_closed():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")],
+        [_slot_decision(), _slot_decision(asset="asset-a", decision_id="other")],
+    )
+    assert blocked == "conflicting-active-decisions"
+    assert not any(o["honored"] for o in outcomes)
+    assert "asset-b" not in ids
+
+
+def test_shared_asset_retains_two_slot_bindings():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")],
+        [_slot_decision(slot=0), _slot_decision(slot=1, decision_id="next")],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [(b["slot_id"], b["asset_id"]) for b in bindings] == [
+        ("0", "asset-b"), ("1", "asset-b"),
+    ]
+
+
+def test_invalid_slot_choice_blocks_only_target_binding():
+    bad = _slot_decision(slot=0)
+    bad["candidate_set_fingerprint"] = SHA_B
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")], [bad]
+    )
+    assert blocked == "candidate-set-changed"
+    assert ids == ("asset-a",)  # sibling survives; no invalid substitution
+    assert [b["slot_id"] for b in bindings] == ["1"]
+
+
+@pytest.mark.parametrize("slot", [-1, True, "", "page 1", "page:1", "page.1", None])
+def test_decision_rejects_invalid_slot_names(slot):
+    with pytest.raises(ValueError):
+        TeacherVisualDecisionRecord.from_dict(_decision(slot=slot))

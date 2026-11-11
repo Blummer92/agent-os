@@ -15,6 +15,7 @@ from instructional_workflow_contracts.reuse_planner import plan_instructional_ar
 from instructional_workflow_contracts.teacher_visual_decision import (
     DecisionValidity,
     canonical_candidate_set_fingerprint,
+    canonical_decision_slot_id,
     evaluate_decision_validity,
 )
 from instructional_workflow_contracts.visual_asset_candidates import (
@@ -159,6 +160,9 @@ class GovernedVisualReusePlan:
     candidate_filter_result: ValidationResult | None = None
     cohesive_visual_plan_result: ValidationResult | None = None
     teacher_decision_outcomes: tuple[dict[str, Any], ...] = ()
+    # Binding-preserving representation of teacher-resolved choices; unlike
+    # transport asset IDs, shared asset IDs occur once per role/slot binding.
+    teacher_selected_role_slot_bindings: tuple[dict[str, str], ...] = ()
 
     @property
     def image_gap_briefs(self) -> tuple[dict[str, Any], ...]:
@@ -211,106 +215,134 @@ def _apply_teacher_decisions(
     eligible_asset_ids: set[str],
     content_identities: dict[str, dict[str, Any] | None],
     source_revision: object,
-) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], str | None]:
-    """Honor valid teacher decisions per role; block roles with invalid ones.
+) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], str | None,
+           tuple[dict[str, str], ...]]:
+    """Resolve each choice against an exact (role_id, slot_id) binding.
 
-    Returns ``(selected_asset_ids, decision_outcomes, blocked_reason)``.
-    ``blocked_reason`` is None when no role was blocked. A blocked role's
-    asset is excluded from the selection and the planner's pick is never
-    substituted — the role stays blocked with its explicit reason code.
-    Decisions for roles absent from the plan are recorded as not honored
-    (``role-retired``) without blocking unrelated work.
+    The selected asset-ID tuple is a deduplicated transport list; the fourth
+    return value preserves per-slot multiplicity for downstream consumers.
+    Invalid choices block only their exact binding, never a sibling slot.
+    Historical superseded/invalidated records cannot overwrite active ones.
     """
     assignments: list[dict[str, Any]] = []
-    for key in ("required_role_assignments", "optional_role_assignments"):
-        items = cohesive_payload.get(key, ())
-        if isinstance(items, (list, tuple)):
-            assignments.extend(item for item in items if isinstance(item, dict))
-    role_order: list[str] = []
-    role_asset: dict[str, str] = {}
-    for assignment in assignments:
-        role_id = assignment.get("role_id")
-        selected = assignment.get("selected_candidate")
-        if not isinstance(role_id, str):
+    for field in ("required_role_assignments", "optional_role_assignments"):
+        values = cohesive_payload.get(field, ())
+        if isinstance(values, (list, tuple)):
+            assignments.extend(x for x in values if isinstance(x, dict))
+
+    binding_order: list[tuple[str, str]] = []
+    binding_assets: dict[tuple[str, str], str | None] = {}
+    ambiguous = False
+    for item in assignments:
+        role_id = item.get("role_id")
+        slot_id = item.get("slot_id", "0")  # governed implicit-slot legacy
+        if (not isinstance(role_id, str) or not role_id
+                or type(slot_id) is not str
+                or canonical_decision_slot_id(slot_id) != slot_id):
+            ambiguous = True
             continue
-        asset_reference = selected.get("asset_reference") if isinstance(selected, dict) else None
-        asset_id = (
-            asset_reference.get("asset_id")
-            if isinstance(asset_reference, dict)
-            else None
-        )
-        if role_id not in role_asset:
-            role_order.append(role_id)
-        if isinstance(asset_id, str) and asset_id:
-            role_asset[role_id] = asset_id
-    active_roles = set(role_order)
+        key = (role_id, slot_id)
+        if key in binding_assets:
+            ambiguous = True
+            continue
+        selected = item.get("selected_candidate")
+        asset_ref = selected.get("asset_reference") if isinstance(selected, dict) else None
+        asset_id = asset_ref.get("asset_id") if isinstance(asset_ref, dict) else None
+        binding_order.append(key)
+        binding_assets[key] = asset_id if isinstance(asset_id, str) and asset_id else None
+
+    active_roles = {role for role, _ in binding_order}
+    # Conflicting active records for the same binding must not silently win
+    # based on input order. Duplicate copies of the same record are harmless.
+    active_by_binding: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for raw in teacher_decisions:
+        if not isinstance(raw, dict) or raw.get("status") != "active":
+            continue
+        role = raw.get("role")
+        slot = canonical_decision_slot_id(raw.get("slot"))
+        if not isinstance(role, str) or slot is None:
+            continue
+        key = (role, slot)
+        active_by_binding.setdefault(key, []).append(raw)
+    conflicting = {key for key, records in active_by_binding.items()
+                   if any(record != records[0] for record in records[1:])}
 
     outcomes: list[dict[str, Any]] = []
-    blocked: dict[str, str] = {}
+    blocked: dict[tuple[str, str], str] = {}
     for raw in teacher_decisions:
         if not isinstance(raw, dict):
             continue
-        decision_id = raw.get("decision_id")
         role = raw.get("role")
-        validity: DecisionValidity = evaluate_decision_validity(
-            raw,
-            candidate_set_fingerprint=candidate_set_fingerprint,
-            eligible_asset_ids=eligible_asset_ids,
-            current_content_identities=content_identities,
-            source_revision=(
-                source_revision if isinstance(source_revision, str) else None
-            ),
-            active_roles=active_roles,
-        )
-        selected_asset = raw.get("selected_asset")
-        decision_asset_id = (
-            selected_asset.get("asset_id")
-            if isinstance(selected_asset, dict)
-            else None
-        )
-        if validity.valid and isinstance(decision_asset_id, str) and decision_asset_id:
-            if isinstance(role, str) and role in role_asset:
-                role_asset[role] = decision_asset_id
-            outcomes.append(
-                {
-                    "decision_id": decision_id,
-                    "role": role,
-                    "honored": True,
-                    "reason_code": None,
-                    "detail": None,
-                    "asset_id": decision_asset_id,
-                }
-            )
+        slot_id = canonical_decision_slot_id(raw.get("slot"))
+        key = (role, slot_id)
+        selected = raw.get("selected_asset")
+        asset_id = selected.get("asset_id") if isinstance(selected, dict) else None
+        status = raw.get("status")
+        reason: str | None = None
+        detail: str | None = None
+        if status != "active":
+            reason = "superseded" if status == "superseded" else "decision-inactive"
+            detail = "historical/inactive decisions never authorize a slot"
+        elif role not in active_roles:
+            reason = "role-retired"
+            detail = "role is absent from the current visual plan"
+        elif slot_id is None:
+            reason = "slot-binding-invalid"
+            detail = "decision has no valid governed slot identifier"
+        elif key not in binding_assets:
+            reason = "slot-binding-missing"
+            detail = "decision's exact role/slot binding is absent from the current plan"
+        elif ambiguous:
+            reason = "ambiguous-plan-binding"
+            detail = "current visual plan contains ambiguous role/slot assignments"
+        elif key in conflicting:
+            reason = "conflicting-active-decisions"
+            detail = "multiple active decisions claim the same role/slot binding"
         else:
-            outcomes.append(
-                {
-                    "decision_id": decision_id,
-                    "role": role,
-                    "honored": False,
-                    "reason_code": validity.reason_code,
-                    "detail": validity.detail,
-                    "asset_id": decision_asset_id,
-                }
+            validity: DecisionValidity = evaluate_decision_validity(
+                raw,
+                candidate_set_fingerprint=candidate_set_fingerprint,
+                eligible_asset_ids=eligible_asset_ids,
+                current_content_identities=content_identities,
+                source_revision=(
+                    source_revision if isinstance(source_revision, str) else None
+                ),
+                active_roles=active_roles,
             )
-            # A decision for a retired (absent) role has no role to block;
-            # record it without blocking unrelated work.
-            if (
-                isinstance(role, str)
-                and role in active_roles
-                and validity.reason_code != "role-retired"
-            ):
-                blocked[role] = validity.reason_code or "invalid"
+            if not validity.valid:
+                reason, detail = validity.reason_code, validity.detail
+            elif not isinstance(asset_id, str) or not asset_id:
+                reason, detail = "decision-asset-invalid", "selected asset ID missing"
 
+        honored = reason is None
+        if honored:
+            binding_assets[key] = asset_id
+        elif status == "active" and role in active_roles:
+            blocked[key] = reason or "decision-invalid"
+        outcomes.append({
+            "decision_id": raw.get("decision_id"), "role": role,
+            "slot_id": slot_id, "honored": honored,
+            "reason_code": reason, "detail": detail, "asset_id": asset_id,
+        })
+
+    if ambiguous:
+        # No ambiguous plan can authorize completion, even without decisions.
+        return (), tuple(outcomes), "ambiguous-plan-binding", ()
+
+    exact_bindings: list[dict[str, str]] = []
     ordered_ids: list[str] = []
-    for role_id in role_order:
-        if role_id in blocked:
+    for key in binding_order:
+        if key in blocked:
             continue
-        asset_id = role_asset.get(role_id)
-        if asset_id and asset_id not in ordered_ids:
-            ordered_ids.append(asset_id)
+        asset_id = binding_assets[key]
+        if asset_id:
+            exact_bindings.append({
+                "role_id": key[0], "slot_id": key[1], "asset_id": asset_id,
+            })
+            if asset_id not in ordered_ids:
+                ordered_ids.append(asset_id)
     blocked_reason = next(iter(blocked.values()), None)
-    return tuple(ordered_ids), tuple(outcomes), blocked_reason
-
+    return tuple(ordered_ids), tuple(outcomes), blocked_reason, tuple(exact_bindings)
 
 def plan_governed_visual_reuse(
     requirement: object,
@@ -503,10 +535,12 @@ def plan_governed_visual_reuse(
     # blocks its role with an explicit reason code instead of silently
     # falling back to the planner's pick.
     decision_outcomes: tuple[dict[str, Any], ...] = ()
+    teacher_selected_role_slot_bindings: tuple[dict[str, str], ...] = ()
     if teacher_decisions:
         scoped_fingerprint = canonical_candidate_set_fingerprint(scoped_candidates)
         scoped_identities = _eligible_asset_content_identities(scoped_candidates)
-        selected_asset_ids, decision_outcomes, blocked_reason = _apply_teacher_decisions(
+        (selected_asset_ids, decision_outcomes, blocked_reason,
+         teacher_selected_role_slot_bindings) = _apply_teacher_decisions(
             cohesive_payload,
             tuple(teacher_decisions),
             candidate_set_fingerprint=scoped_fingerprint,
@@ -525,6 +559,7 @@ def plan_governed_visual_reuse(
                 candidate_filter_result=candidate_filter_result,
                 cohesive_visual_plan_result=cohesive_result,
                 teacher_decision_outcomes=decision_outcomes,
+                teacher_selected_role_slot_bindings=teacher_selected_role_slot_bindings,
             )
 
     return GovernedVisualReusePlan(
@@ -537,4 +572,5 @@ def plan_governed_visual_reuse(
         candidate_filter_result=candidate_filter_result,
         cohesive_visual_plan_result=cohesive_result,
         teacher_decision_outcomes=decision_outcomes,
+        teacher_selected_role_slot_bindings=teacher_selected_role_slot_bindings,
     )
