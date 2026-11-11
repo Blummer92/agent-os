@@ -57,6 +57,10 @@ RESULT_FIELDS = frozenset({
     "substantial_hypothesis_admissible",
     "mutation_admissible",
     "blocking_attempt_id",
+    # R07: a failed-repair result names the exact attempt it was produced
+    # for, so a consumer can reject a result recorded for an earlier
+    # attempt. Issue-start and learning results carry no attempt_id.
+    "attempt_id",
     "execution_authorized",
     "github_writes_authorized",
     "merge_authorized",
@@ -506,6 +510,10 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
         "canonical_github_refs": raw["canonical_github_refs"],
         "mutation_admissible": raw["mutation_admissible"],
         "blocking_attempt_id": raw["blocking_attempt_id"],
+        # R07: carry the exact failed attempt through the bounded result
+        # projection. Without it no consumer of the result comment could
+        # prove the result was produced for the current attempt.
+        "attempt_id": envelope.attempt_id,
         "execution_authorized": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
@@ -604,6 +612,162 @@ def parse_ckr6_result_comment(body: object) -> dict[str, object]:
     if type(payload) is not dict or _canonical_result_json(payload) != serialized:
         raise ValueError("CKR6 result payload must be canonical compact JSON")
     return payload
+
+
+# R07: exact request/result correlation at the consumer (#2425 / #2851).
+#
+# ``parse_ckr6_result_comment`` deliberately stays a pure syntax check: a
+# syntactically valid result for a DIFFERENT request parses cleanly, and
+# that is not by itself a defect. The defect was that no in-repo consumer
+# existed to bind a parsed result to the pending request at all -- the only
+# identity comparison lived in the postback dedupe lookup
+# (``_existing_result_comment``), and the metrics derivation keys results
+# by result-comment id, never by ``request_comment_id``. A host that
+# consumed a parsed result without this binding could satisfy a pending
+# request with another request's result.
+#
+# Hosts must consume through ``consume_ckr6_result_comment`` (one comment)
+# or ``select_ckr6_result_comment`` (a bounded comment list) and pass the
+# exact pending request identity. Both fail closed with ``ValueError``;
+# neither authorizes anything: a consumed result is evidence for the
+# host's governed decision, never a GitHub-write/merge/closure grant.
+# Failed-repair results additionally require exact attempt binding: the
+# result must carry the ``attempt_id`` it was produced for
+# (``execute_envelope`` now projects it), and it must equal the current
+# failed attempt, or the result cannot satisfy the retry boundary.
+# Results produced before this projection carry no ``attempt_id`` and are
+# therefore unusable for failed-repair consumption -- fail-closed, by
+# design. Parser/serializer compatibility is preserved: old comments
+# without ``attempt_id`` still parse, and results without it still
+# serialize.
+_AUTHORITY_FLAGS = (
+    "execution_authorized",
+    "github_writes_authorized",
+    "merge_authorized",
+    "closure_authorized",
+    "side_effects_performed",
+)
+
+
+def _expected_id(value: object, name: str) -> int:
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def consume_ckr6_result_comment(
+    body: object,
+    *,
+    expected_request_comment_id: int,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_operation: str | None = None,
+    expected_attempt_id: str | None = None,
+) -> dict[str, object]:
+    """Consume one CKR6 result comment as the answer to a pending request.
+
+    Parses the comment, then enforces exact binding to the pending request:
+    ``request_comment_id``, issue number, repository, and (when supplied)
+    operation must match, every authority flag must be present and false,
+    and a failed-repair result must name the exact current failed attempt.
+    Returns the parsed payload on success; raises ``ValueError`` otherwise.
+    """
+    expected_request_comment_id = _expected_id(
+        expected_request_comment_id, "expected_request_comment_id"
+    )
+    expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
+    if type(expected_repository) is not str or not expected_repository.strip():
+        raise ValueError("expected_repository must be non-empty exact text")
+    if expected_operation is not None and (
+        type(expected_operation) is not str or not expected_operation.strip()
+    ):
+        raise ValueError("expected_operation must be non-empty exact text")
+    if expected_attempt_id is not None and (
+        type(expected_attempt_id) is not str or not expected_attempt_id.strip()
+    ):
+        raise ValueError("expected_attempt_id must be non-empty exact text")
+
+    payload = parse_ckr6_result_comment(body)
+
+    request_comment_id = payload.get("request_comment_id")
+    if type(request_comment_id) is not int or isinstance(request_comment_id, bool):
+        raise ValueError("CKR6 result is missing request_comment_id")
+    if request_comment_id != expected_request_comment_id:
+        raise ValueError(
+            "CKR6 result request_comment_id does not match the pending request"
+        )
+    if payload.get("issue_number") != expected_issue_number:
+        raise ValueError("CKR6 result issue_number does not match the pending request")
+    if payload.get("repository") != expected_repository:
+        raise ValueError("CKR6 result repository does not match the pending request")
+    if expected_operation is not None and payload.get("operation") != expected_operation:
+        raise ValueError("CKR6 result operation does not match the pending request")
+    for flag in _AUTHORITY_FLAGS:
+        if payload.get(flag) is not False:
+            raise ValueError("CKR6 result carries forbidden authority")
+    if payload.get("operation") == "failed-repair":
+        if expected_attempt_id is None:
+            raise ValueError(
+                "failed-repair result requires expected_attempt_id"
+            )
+        attempt_id = payload.get("attempt_id")
+        if type(attempt_id) is not str or not attempt_id.strip():
+            raise ValueError("CKR6 result is missing attempt_id for the failed-repair request")
+        if attempt_id != expected_attempt_id:
+            raise ValueError(
+                "CKR6 result attempt_id does not match the current failed attempt"
+            )
+    return payload
+
+
+def select_ckr6_result_comment(
+    bodies: object,
+    *,
+    expected_request_comment_id: int,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_operation: str | None = None,
+    expected_attempt_id: str | None = None,
+) -> dict[str, object]:
+    """Select the exactly-one CKR6 result answering a pending request.
+
+    Scans a bounded iterable of issue-comment bodies (non-result comments
+    are ignored; unparsable marker comments cannot satisfy the request and
+    are skipped, matching the postback dedupe lookup). Fails closed when
+    no result answers the pending request (``result-not-returned``) or
+    when two distinct payloads claim the same ``request_comment_id``
+    (ambiguous result). Identical duplicate payloads collapse to one.
+    The selected payload is then bound through
+    ``consume_ckr6_result_comment``.
+    """
+    if bodies is None or isinstance(bodies, (str, bytes, Mapping)):
+        raise TypeError("bodies must be an iterable of comment bodies")
+    expected_request_comment_id = _expected_id(
+        expected_request_comment_id, "expected_request_comment_id"
+    )
+    distinct: dict[str, str] = {}
+    for body in bodies:
+        if type(body) is not str or not body.startswith(CKR6_RESULT_MARKER + "\n"):
+            continue
+        try:
+            parsed = parse_ckr6_result_comment(body)
+        except (TypeError, ValueError):
+            continue
+        if parsed.get("request_comment_id") != expected_request_comment_id:
+            continue
+        distinct[_canonical_result_json(parsed)] = body
+    if not distinct:
+        raise ValueError("CKR6 result not returned for the pending request")
+    if len(distinct) > 1:
+        raise ValueError("ambiguous CKR6 result for the pending request")
+    return consume_ckr6_result_comment(
+        next(iter(distinct.values())),
+        expected_request_comment_id=expected_request_comment_id,
+        expected_issue_number=expected_issue_number,
+        expected_repository=expected_repository,
+        expected_operation=expected_operation,
+        expected_attempt_id=expected_attempt_id,
+    )
 
 
 def _fallback_result(repository: str, issue_number: int) -> dict[str, object]:

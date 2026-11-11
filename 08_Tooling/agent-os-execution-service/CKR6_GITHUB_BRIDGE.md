@@ -16,6 +16,46 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+## Result consumption binding (R07)
+
+`parse_ckr6_result_comment` is a pure syntax check by design: a
+syntactically valid result for a *different* request parses cleanly, and
+that alone is not a defect. The defect was that no in-repo consumer
+existed to bind a parsed result to the pending request at all -- the only
+identity comparison lived in the postback dedupe lookup, and the metrics
+derivation keys results by result-comment id, never by
+`request_comment_id`. Hosts must consume through
+`ckr6_github_bridge.consume_ckr6_result_comment` (one comment) or
+`select_ckr6_result_comment` (a bounded comment list), passing the exact
+pending request identity. Both fail closed with `ValueError` when the
+result's `request_comment_id`, issue number, repository, or (when
+supplied) operation does not match; when any authority flag is present
+and true or missing (a CKR6 result never authorizes execution, GitHub
+writes, merges, closures, or side effects); when no result answers the
+request; or when two distinct payloads claim the same
+`request_comment_id` (ambiguous result). Identical duplicate payloads
+collapse to one.
+
+Failed-repair results additionally carry `attempt_id` -- the exact failed
+attempt they were produced for -- through the bounded result projection
+(`RESULT_FIELDS` + `execute_envelope`). A failed-repair result is
+consumable only against that same attempt: a result recorded for an
+earlier attempt, a result with no `attempt_id`, or a consumption call
+with no `expected_attempt_id` is rejected. Results produced before this
+projection carry no `attempt_id` and are therefore unusable for
+failed-repair consumption (fail-closed, by design). Serializer/parser
+compatibility is preserved: old comments without `attempt_id` still
+parse, and results without it still serialize. The MCP-side attempt
+binding in `admit_agent_os_failed_repair` (#3772) is separate and
+unchanged: it binds the activation result at admission time, while this
+binding covers the GitHub-ingress result comment the host reads.
+
+A consumed result is evidence for the host's governed decision, never a
+grant: the host must still enforce the issue-start and failed-repair
+boundaries in #2425 itself. No host invocation of this consumer is
+proven by the repository tests; live host consumption remains owned by
+#2425/#3559.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure
