@@ -413,7 +413,10 @@ def _materialize_effective_assignments(
             asset_id = binding_assets[key]
             candidate = candidates.get(asset_id)
             if candidate is None:
-                raise ValueError("teacher-selected-candidate-not-filter-eligible")
+                raise ValueError(
+                    "teacher-selected-candidate-not-filter-eligible:"
+                    f" asset={asset_id} eligible={','.join(sorted(candidates))}"
+                )
             role = roles[role_id]
             reasons = _governed_role_rejections(
                 role, candidate, material_type=needs["material_type"],

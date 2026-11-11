@@ -249,6 +249,8 @@ def _selected_visuals_for_key(visual_plan: GovernedVisualReusePlan) -> list[dict
         content_identity_from_fingerprint,
     )
 
+    if not visual_plan.selected_asset_ids:
+        return []
     payload = effective_visual_payload(visual_plan)
     visuals: list[dict[str, Any]] = []
     for key in ("required_role_assignments", "optional_role_assignments"):
@@ -330,6 +332,8 @@ def _selected_asset_drive_files(visual_plan: GovernedVisualReusePlan) -> dict[st
     in the per-(role, slot) bindings (connected_visual_placement) and the
     idempotency key (_selected_visuals_for_key), not here.
     """
+    if not visual_plan.selected_asset_ids:
+        return {}
     bound: dict[str, str | None] = {}
     payload = effective_visual_payload(visual_plan)
     selected_candidates = payload.get("selected_candidates", ())
@@ -358,6 +362,8 @@ def _selected_asset_content_identities(visual_plan: GovernedVisualReusePlan) -> 
     """
     from instructional_workflow_contracts.asset_content_identity import content_identity_from_fingerprint
 
+    if not visual_plan.selected_asset_ids:
+        return {}
     bound: dict[str, dict[str, Any] | None] = {}
     payload = effective_visual_payload(visual_plan)
     selected_candidates = payload.get("selected_candidates", ())
