@@ -199,3 +199,42 @@ def test_outcome_oracle_rejects_unsupported_element_placement(body: str) -> None
     xml = f'<testsuite tests="1">{body}</testsuite>'.encode()
     with pytest.raises(ValueError, match="junit-unsupported-"):
         junit_outcomes(xml)
+
+
+@pytest.mark.parametrize(
+    ("root_attributes", "reason"),
+    [
+        ('failures="1"', "junit-outcome-count-mismatch"),
+        ('errors="1"', "junit-outcome-count-mismatch"),
+        ('skipped="1"', "junit-outcome-count-mismatch"),
+        ('tests="2"', "junit-outcome-count-mismatch"),
+        ('failures="-1"', "junit-outcome-count-mismatch"),
+        ('errors="not-an-int"', "junit-invalid-errors-attribute"),
+    ],
+)
+def test_outcome_oracle_rejects_contradictory_root_counters(
+    root_attributes: str, reason: str
+) -> None:
+    """Aggregate attributes cannot contradict clean child suite evidence."""
+    xml = (
+        f'<testsuites {root_attributes}><testsuite tests="1" '
+        'failures="0" errors="0" skipped="0">'
+        '<testcase classname="m" name="ok"/></testsuite></testsuites>'
+    ).encode()
+    with pytest.raises(ValueError, match=reason):
+        junit_outcomes(xml)
+
+
+def test_outcome_oracle_accepts_consistent_multi_suite_root_counters() -> None:
+    """Root tests count declared subtests, not just testcase elements."""
+    xml = (
+        '<testsuites tests="4" failures="1" errors="0" skipped="1">'
+        '<testsuite tests="3" failures="1" errors="0" skipped="0">'
+        '<testcase classname="m" name="bad"><failure/></testcase></testsuite>'
+        '<testsuite tests="1" failures="0" errors="0" skipped="1">'
+        '<testcase classname="m" name="skip"><skipped/></testcase></testsuite>'
+        '</testsuites>'
+    ).encode()
+    out = junit_outcomes(xml)
+    assert (out["tests"], out["failures"], out["errors"], out["skipped"]) == (2, 1, 0, 1)
+    assert out["failed_nodes"] == ["m::bad"]

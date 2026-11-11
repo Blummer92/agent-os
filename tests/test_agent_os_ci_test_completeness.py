@@ -416,3 +416,43 @@ def test_nonstandard_outcomes_never_certify_complete(tmp_path: Path, _scripts_on
     result = check_suite(sys.executable, suite, "root", junit)
     assert result["verdict"] == "ERROR"
     assert "junit-unsupported-outcome-placement" in result["error"]
+
+
+@pytest.mark.parametrize("corruption", ["root-counter", "suite-error"])
+def test_invalid_outcome_evidence_vetoes_passing_suite_manifest(
+    tmp_path: Path, corruption: str
+) -> None:
+    """A pytest exit 0 with invalid JUnit must not leave EXECUTED_PASS evidence.
+
+    Corrupt only the disposable fixture's JUnit before its completeness helper
+    reads it. The production runner and real pytest output are untouched.
+    """
+    repo = _repo(tmp_path, {})
+    helper = repo / "scripts" / "agent_os_ci_test_completeness.py"
+    original = helper.read_text(encoding="utf-8")
+    anchor = "    result = check_suite(\n"
+    assert original.count(anchor) == 1
+    if corruption == "root-counter":
+        alteration = "        tree.getroot().set('failures', '1')\n"
+    else:
+        alteration = (
+            "        ET.SubElement(tree.getroot().find('testsuite'), 'error').text = 'invalid'\n"
+        )
+    injected = (
+        "    if args.suite_name == 'root':\n"
+        "        from xml.etree import ElementTree as ET\n"
+        "        tree = ET.parse(args.junit)\n"
+        + alteration
+        + "        tree.write(args.junit, encoding='utf-8')\n"
+    )
+    helper.write_text(original.replace(anchor, injected + anchor), encoding="utf-8")
+    junit_dir = tmp_path / "junit"
+    result = _run(repo, junit_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    rows = _rows(junit_dir)
+    assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+    assert _completeness(junit_dir)[2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
+    receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
+    assert receipt["verdict"] == "ERROR"
+    assert "junit-" in receipt["error"]
+    assert "EXECUTED_PASS" not in (junit_dir / "manifest.tsv").read_text(encoding="utf-8")

@@ -21,7 +21,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
-def _suites(xml: bytes) -> list[ET.Element]:
+def _parse_report_suites(xml: bytes) -> tuple[ET.Element, list[ET.Element]]:
     """Parse JUnit XML into its ``<testsuite>`` elements, strictly.
 
     Shared by identity and outcome reads so the two can never disagree about
@@ -37,7 +37,12 @@ def _suites(xml: bytes) -> list[ET.Element]:
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
         raise ValueError("invalid-junit-root")
-    return suites
+    return root, suites
+
+
+def _suites(xml: bytes) -> list[ET.Element]:
+    """Preserve the identity reader's original strict suite parser."""
+    return _parse_report_suites(xml)[1]
 
 
 def _int_attr(suite: ET.Element, name: str) -> int | None:
@@ -78,7 +83,7 @@ def junit_outcomes(xml: bytes) -> dict:
     oracle through a passing suite (pytest exits 5 when nothing is
     collected). Skips are counted honestly, never as passed executed bodies.
     """
-    suites = _suites(xml)
+    root, suites = _parse_report_suites(xml)
     # Outcome elements outside pytest's supported direct testcase shape are
     # not clean evidence. Reject them instead of silently ignoring a failure.
     for suite in suites:
@@ -96,6 +101,7 @@ def junit_outcomes(xml: bytes) -> dict:
                 if parent is None or parent.tag != "testcase" or parents.get(parent) is not suite:
                     raise ValueError("junit-unsupported-outcome-placement")
     tests = failures = errors = skipped = 0
+    declared_tests_total = 0
     failed_nodes: list[str] = []
     for suite in suites:
         cases = [x for x in suite if x.tag == "testcase"]
@@ -109,6 +115,7 @@ def junit_outcomes(xml: bytes) -> dict:
             raise ValueError("junit-missing-or-invalid-tests-count")
         if len(cases) > declared_tests:
             raise ValueError("testcase-count-mismatch")
+        declared_tests_total += declared_tests
         suite_failures = suite_errors = suite_skipped = 0
         for case in cases:
             classname = case.attrib.get("classname") or case.attrib.get("file") or ""
@@ -137,6 +144,19 @@ def junit_outcomes(xml: bytes) -> dict:
         failures += suite_failures
         errors += suite_errors
         skipped += suite_skipped
+    # Root aggregate attributes are optional, but when supplied they must
+    # reconcile with child suite evidence. Test counters use declared child
+    # counts (not testcase nodes), preserving legitimate pytest 9 subtests.
+    if root.tag == "testsuites":
+        for attr, counted in (
+            ("tests", declared_tests_total),
+            ("failures", failures),
+            ("errors", errors),
+            ("skipped", skipped),
+        ):
+            declared = _int_attr(root, attr)
+            if declared is not None and (declared < 0 or declared != counted):
+                raise ValueError("junit-outcome-count-mismatch")
     if len(set(failed_nodes)) != len(failed_nodes):
         raise ValueError("duplicate-nodes")
     return {
