@@ -29,12 +29,16 @@ A is applied only to the existing Claude launch seam and labelled
   worker starts only after the launcher reports readiness. Uid uniqueness is what
   stops one worker reading, ptracing, or `pidfd_getfd`-ing another's admitted
   gateway socket (QA reproduced that bypass with shared uids, then with
-  colliding allocators). `UidAllocator` therefore keeps a flock'd counter and an
-  exclusive per-uid lock in a 0700 state dir shared by every supervisor process
-  and fork on the host (default `/run/agent-os-ckr6-uid-alloc`, created only
-  when a worker is first spawned), refuses a uid with any live process or any
-  real account, and refuses an untrusted state dir. `InProcessUidAllocator` is
-  for tests only. It can send a **prompt** over
+  colliding allocators). `UidAllocator` keeps a flock'd counter in a 0700,
+  symlink-free state dir (default `/run/agent-os-ckr6-uid-alloc`, created only when a
+  worker is first spawned) so supervisors and forks sharing it never draw the same
+  uid. Exclusivity while a worker lives does **not** depend on that dir: `claim_uid`
+  binds an abstract `AF_UNIX` name keyed by the uid, held from allocation through
+  launch (a worker still in the root launcher phase is invisible to `/proc`), so
+  supervisors with different state dirs or overlapping ranges cannot put two live
+  workers on one uid either. A `/proc` scan (a worker orphaned by a crashed
+  supervisor) and a real-account check back it up. Assumption: supervisors share
+  one network namespace and uid space. `InProcessUidAllocator` is tests-only. It can send a **prompt** over
   `rpc.GatewayRpcServer`; frames cannot carry identity, materiality, admission,
   or receipts (strict per-method field allow-list). Repository, issue, task,
   attempt, and hints are fixed by the trusted side when the connection is made.

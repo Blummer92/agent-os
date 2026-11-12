@@ -1076,16 +1076,67 @@ def test_A1prime_uids_are_unique_across_processes_and_forks_sharing_one_state_di
 
 
 def test_A1prime_a_uid_cannot_be_claimed_twice_and_an_untrusted_state_dir_is_refused():
-    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, UidAllocator
-    alloc = UidAllocator(tempfile.mkdtemp(prefix="aos-uids-"))
-    first = alloc.claim(3_500_000_000)
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        IsolationUnavailable, UidAllocator, claim_uid)
+    first = claim_uid(3_500_000_000)
     with pytest.raises(IsolationUnavailable, match="worker-uid-in-use"):
-        alloc.claim(3_500_000_000)
+        claim_uid(3_500_000_000)  # exclusive no matter which allocator or state dir asks
     first.release()
-    alloc.claim(3_500_000_000).release()  # free again once the holder is gone
+    claim_uid(3_500_000_000).release()  # free again once the holder is gone
     loose = tempfile.mkdtemp(prefix="aos-uids-"); os.chmod(loose, 0o777)  # a worker could tamper with it
     with pytest.raises(IsolationUnavailable, match="uid-state-dir-untrusted"):
         UidAllocator(loose)
+    parent = tempfile.mkdtemp(prefix="aos-uids-")
+    os.mkdir(os.path.join(parent, "state"), 0o700)
+    link = parent + "-link"
+    os.symlink(parent, link)  # the FINAL component is a real 0700 dir; the symlink is higher up the path
+    with pytest.raises(IsolationUnavailable, match="uid-state-dir-untrusted"):
+        UidAllocator(os.path.join(link, "state"))
+
+
+def test_A1prime_a_corrupt_counter_fails_closed_with_isolation_unavailable():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, UidAllocator
+    state = tempfile.mkdtemp(prefix="aos-uids-")
+    alloc = UidAllocator(state)
+    for garbage in (b"garbage", b"1.5", b"\x00\x00", b"-7", b"99999999999999999999"):
+        Path(state, "counter").write_bytes(garbage)
+        with pytest.raises(IsolationUnavailable):
+            alloc.allocate()
+
+
+def test_A1doubleprime_concurrent_spawns_from_supervisors_with_separate_state_dirs_never_share_a_uid():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        IsolationUnavailable, UidAllocator, isolation_available, spawn_isolated_worker)
+    import secrets
+    sleeper = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+    spawned, lock = [], threading.Lock()
+    try:
+        for _ in range(4):
+            base = 3_200_000_000 + secrets.randbelow(100_000_000)
+            allocs = [UidAllocator(tempfile.mkdtemp(prefix="aos-uids-"), start=base) for _ in range(2)]
+            barrier = threading.Barrier(2)
+            results = []
+
+            def go(alloc):
+                barrier.wait()  # both launchers run concurrently: the window where /proc cannot see a uid
+                try:
+                    proc = spawn_isolated_worker(sleeper, allocator=alloc)
+                except IsolationUnavailable as exc:
+                    results.append(("refused", str(exc)))
+                else:
+                    with lock:
+                        spawned.append(proc)
+                    results.append(("started", proc.aos_uid))
+            threads = [threading.Thread(target=go, args=(a,)) for a in allocs]
+            [t.start() for t in threads]; [t.join() for t in threads]
+            if not isolation_available():
+                assert all(kind == "refused" for kind, _ in results)  # nothing started; proves nothing
+                return
+            started = [uid for kind, uid in results if kind == "started"]
+            assert len(started) == len(set(started)) and len(started) <= 1  # one worker per uid, ever
+    finally:
+        for proc in spawned:
+            proc.kill(); proc.communicate()
 
 
 def test_A1prime_overlapping_independent_allocators_cannot_put_two_live_workers_on_one_uid():
@@ -1112,6 +1163,36 @@ def test_A1prime_overlapping_independent_allocators_cannot_put_two_live_workers_
     finally:
         for proc in spawned:
             proc.kill(); proc.communicate()
+
+
+def test_A1prime_a_worker_orphaned_by_a_crashed_supervisor_still_blocks_its_uid():
+    import secrets
+    import signal
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        InProcessUidAllocator, IsolationUnavailable, UidAllocator, isolation_available, spawn_isolated_worker)
+    base = 3_300_000_000 + secrets.randbelow(100_000_000)
+    sleeper = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+    state = tempfile.mkdtemp(prefix="aos-uids-")
+    r, w = os.pipe()
+    child = os.fork()
+    if child == 0:  # a supervisor that spawns a worker and then CRASHES: its uid claim dies with it
+        try:
+            proc = spawn_isolated_worker(sleeper, allocator=UidAllocator(state, start=base))
+            os.write(w, json.dumps({"uid": proc.aos_uid, "pid": proc.pid}).encode())
+        except IsolationUnavailable:
+            os.write(w, b"{}")
+        finally:
+            os._exit(0)
+    os.close(w)
+    info = json.loads(os.read(r, 4096) or b"{}"); os.close(r); os.waitpid(child, 0)
+    if not info:
+        assert isolation_available() is False
+        return
+    try:
+        with pytest.raises(IsolationUnavailable, match="worker-uid-in-use"):  # claim is gone; only /proc can refuse
+            spawn_isolated_worker(sleeper, allocator=InProcessUidAllocator(info["uid"], 1))
+    finally:
+        os.kill(info["pid"], signal.SIGKILL)
 
 
 def test_A1prime_a_uid_belonging_to_a_real_host_account_is_never_used_for_a_worker():

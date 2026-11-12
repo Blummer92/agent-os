@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import secrets
 import select
+import socket
 import subprocess
 import sys
 import threading
@@ -59,29 +60,30 @@ def _uid_is_unassigned(uid: int) -> bool:
 
 
 class _Claim:
-    """Exclusive, cross-process claim on one uid, held for the worker's lifetime."""
+    """Exclusive claim on one uid, held until released (or the process dies)."""
 
-    def __init__(self, fd: int | None) -> None:
-        self._fd = fd
-
-    def release(self) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
-
-
-_PROCESS_CLAIMS: set[int] = set()
-_PROCESS_CLAIMS_LOCK = threading.Lock()
-
-
-class _ProcessClaim(_Claim):
-    def __init__(self, uid: int) -> None:
-        super().__init__(None)
-        self._uid = uid
+    def __init__(self, sock: socket.socket | None) -> None:
+        self._sock = sock
 
     def release(self) -> None:
-        with _PROCESS_CLAIMS_LOCK:
-            _PROCESS_CLAIMS.discard(self._uid)
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+
+
+def claim_uid(uid: int) -> _Claim:
+    """Kernel-enforced exclusivity keyed ONLY by the uid: bind an abstract AF_UNIX name. It needs no
+    filesystem state (so it cannot depend on which state dir a supervisor was configured with), is
+    visible to every supervisor process and fork in this network namespace, covers the launch window
+    in which a worker has not yet dropped to its uid (invisible to /proc), is freed automatically if the
+    holder dies, and cannot be squatted by a worker, which lives in an EMPTY network namespace."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.bind(b"\0agent-os-ckr6-worker-uid-" + str(uid).encode())
+    except OSError:
+        sock.close()
+        raise IsolationUnavailable("worker-uid-in-use") from None
+    return _Claim(sock)
 
 
 class InProcessUidAllocator:
@@ -97,21 +99,16 @@ class InProcessUidAllocator:
             uid, self._next = self._next, self._next + 1
             return uid
 
-    def claim(self, uid: int) -> _Claim:
-        with _PROCESS_CLAIMS_LOCK:
-            if uid in _PROCESS_CLAIMS:
-                raise IsolationUnavailable("worker-uid-in-use")
-            _PROCESS_CLAIMS.add(uid)
-        return _ProcessClaim(uid)
-
 
 DEFAULT_STATE_DIR = "/run/agent-os-ckr6-uid-alloc"
 
 
 class UidAllocator:
     """Host-wide uid allocation shared by EVERY supervisor process (and fork) that uses the same
-    ``state_dir``: a flock'd counter hands out each uid once, and each uid is additionally held under
-    an exclusive per-uid flock for the worker's lifetime. The state dir must be a real directory
+    ``state_dir``: a flock'd counter hands out each uid once; exclusivity while a worker lives is ``claim_uid`` (an
+    abstract-socket bind, independent of this directory), so even supervisors configured with DIFFERENT
+    state dirs or overlapping ranges cannot put two live workers on one uid (the supervisors must share a
+    network namespace and uid space). The state dir must be a real directory
     owned by the supervisor's uid with mode 0700 (so a worker can neither read nor tamper with it)."""
 
     def __init__(self, state_dir: str = DEFAULT_STATE_DIR, *, start: int = 3_000_000_000,
@@ -120,6 +117,8 @@ class UidAllocator:
         try:
             os.makedirs(state_dir, mode=0o700, exist_ok=True)
             st = os.lstat(state_dir)
+            if os.path.realpath(state_dir) != os.path.abspath(state_dir):  # symlink anywhere in the path
+                raise IsolationUnavailable("uid-state-dir-untrusted")
         except OSError:
             raise IsolationUnavailable("uid-state-dir-unavailable") from None
         import stat
@@ -131,11 +130,17 @@ class UidAllocator:
 
     def allocate(self) -> int:
         import fcntl
-        fd = self._open("counter")
+        try:
+            fd = self._open("counter")
+        except OSError:
+            raise IsolationUnavailable("uid-counter-unavailable") from None
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             raw = os.pread(fd, 32, 0).strip()
-            nxt = int(raw) if raw else self._start
+            try:
+                nxt = int(raw) if raw else self._start
+            except ValueError:
+                raise IsolationUnavailable("uid-counter-corrupt") from None
             if nxt < self._start or nxt >= self._end:
                 raise IsolationUnavailable("worker-uid-range-exhausted")
             os.pwrite(fd, str(nxt + 1).encode().ljust(32), 0)
@@ -143,16 +148,6 @@ class UidAllocator:
             return nxt
         finally:
             os.close(fd)  # releases the flock
-
-    def claim(self, uid: int) -> _Claim:
-        import fcntl
-        fd = self._open(f"uid-{uid}.lock")
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            raise IsolationUnavailable("worker-uid-in-use") from None
-        return _Claim(fd)
 
 
 _DEFAULT_ALLOCATOR: UidAllocator | None = None
@@ -180,7 +175,7 @@ def spawn_isolated_worker(argv: Sequence[str], *, pass_fds: Sequence[int] = (), 
         raise IsolationUnavailable("host-cannot-isolate-worker")
     allocator = allocator or _default_allocator()
     uid = allocator.allocate()
-    claim = allocator.claim(uid)  # exclusive for the worker's lifetime, across every supervisor process
+    claim = claim_uid(uid)  # exclusive across every supervisor process and fork, from allocation through launch
     try:
         if (type(uid) is not int or not 0 < uid < 2**32 - 1 or _uid_in_use_by_live_process(uid)
                 or not _uid_is_unassigned(uid)):
