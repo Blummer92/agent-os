@@ -85,6 +85,52 @@ REQUIRED_STEPS = {
     "Run frontend checks": ("Run applicable frontend checks",),
     "Agent OS aggregate gate": ("Enforce authoritative aggregate disposition",),
 }
+# Ready-for-Review may legitimately reuse a prior exact-head aggregate. Provider
+# job records can prove the *shape* of that reuse, but not the original JUnit,
+# status producer, or previous run's source/attempt association. Never certify
+# reuse from step names alone: it is a non-certifying pending disposition.
+REUSE_STEP_CONCLUSIONS = {
+    "Set up job": "success",
+    "Check out workflow source for ingress verification": "skipped",
+    "Admit exact-head Draft final candidate": "skipped",
+    "Resolve authoritative candidate identity": "success",
+    "Reuse valid exact-head aggregate evidence": "success",
+    "Publish authoritative aggregate pending status": "skipped",
+    "Check out repository": "skipped",
+    "Check out admitted candidate commit": "skipped",
+    "Verify aggregate checkout identity": "skipped",
+    "Recover missing exact-current main aggregate evidence": "skipped",
+    "Stop candidate while exact-current main recovery runs": "skipped",
+    "Project exact-current main health": "skipped",
+    "Set up Python": "skipped",
+    "Install validation dependencies": "skipped",
+    "Run aggregate validation": "skipped",
+    "Record not-executed infrastructure receipt": "skipped",
+    "Upload aggregate JUnit evidence": "skipped",
+    "Publish validation summary": "success",
+    "Complete job": "success",
+}
+
+
+def _provider_observed_reuse(steps: list[dict[str, Any]]) -> bool:
+    # Match the entire provider-observed job (including GitHub's setup and
+    # completion steps). Any extra, omitted, duplicated, or mixed step rejects
+    # reuse; the shape alone still cannot certify its original producer.
+    if len(steps) != len(REUSE_STEP_CONCLUSIONS):
+        return False
+    seen: set[str] = set()
+    for step in steps:
+        name = step["name"]  # evaluate() already checked step types.
+        if name not in REUSE_STEP_CONCLUSIONS or name in seen:
+            return False
+        if step["conclusion"] != REUSE_STEP_CONCLUSIONS[name]:
+            return False
+        if step.get("status", "completed") != "completed":
+            return False
+        seen.add(name)
+    return len(seen) == len(REUSE_STEP_CONCLUSIONS)
+
+
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -226,6 +272,10 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
     if source.get("conclusion") != "success":
         return result("failure", "Source validation run did not finish successfully")
     selected = {}
+    # Malformed job entries must yield a fail-closed result, never an
+    # AttributeError: a provider record is untrusted until proven otherwise.
+    if any(not isinstance(job, dict) for job in jobs):
+        return result("error", "Malformed job evidence")
     for name in JOBS:
         matches = [j for j in jobs if j.get("name") == name]
         if len(matches) != 1:
@@ -237,10 +287,26 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
         # present null (or any other non-completed value) is malformed.
         if "status" in matches[0] and matches[0]["status"] != "completed":
             return result("error", f"Required job not completed: {name}")
+    reuse_observed = False
     for job_name, step_names in REQUIRED_STEPS.items():
         steps = selected[job_name].get("steps")
         if not isinstance(steps, list):
             return result("error", f"Step evidence unavailable: {job_name}")
+        # Check every provider step before reuse or ordinary matching; malformed
+        # elements must yield a fail-closed result, never an AttributeError.
+        if any(
+            not isinstance(step, dict)
+            or not isinstance(step.get("name"), str)
+            or not step["name"]
+            or not isinstance(step.get("conclusion"), str)
+            or not step["conclusion"]
+            or ("status" in step and step["status"] != "completed")
+            for step in steps
+        ):
+            return result("error", f"Malformed step evidence: {job_name}")
+        if job_name == "Run aggregate validation" and _provider_observed_reuse(steps):
+            reuse_observed = True
+            continue
         for step_name in step_names:
             matches = [s for s in steps if s.get("name") == step_name]
             if len(matches) != 1 or matches[0].get("conclusion") != "success":
@@ -253,6 +319,8 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
         # pilot, even when every source job and step has provider evidence.
         # Pending is non-certifying (never success); the pilot is not required.
         return result("pending", "Trust review pending: CI authority files changed; not certified")
+    if reuse_observed:
+        return result("pending", "Aggregate reuse observed; source producer not independently certified")
     return result("success", "Trusted pilot: source jobs and steps passed on exact PR head")
 
 
