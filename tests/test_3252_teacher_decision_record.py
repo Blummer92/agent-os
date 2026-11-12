@@ -33,6 +33,7 @@ FIXTURES = ROOT / "tests" / "fixtures" / "instructional_workflow_contracts"
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+SHA_D = "d" * 64
 
 
 def _decision(**overrides):
@@ -375,6 +376,65 @@ def _two_candidates():
     return [c1, c2]
 
 
+def _role_incompatible_candidate(template):
+    """Third candidate: eligible, but its role types / orientation do not fit
+    the fixture requirement's worked-example role (QA probe L, #3938 F1)."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_idempotency_key, artifact_manifest_source_fingerprint,
+        validate_artifact_manifest,
+    )
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+
+    cand = copy.deepcopy(template)
+    manifest = cand["artifact_manifest"]
+    asset = manifest["assets"][0]
+    asset.update({
+        "asset_id": "asset-3",
+        "stable_ref": "asset-ref-3",
+        "content_fingerprint": SHA_D,
+        "disposition": "alternate",
+        "duplicate_relationship": "exact-duplicate",
+        "canonical_asset_ref": "asset-ref-1",
+    })
+    manifest["identity"]["manifest_id"] = "manifest-3"
+    manifest["custom_properties"]["manifest_id"] = "manifest-3"
+    external = manifest["external_identity"]
+    external["file_id"] = "file-3"
+    external["exact_reference"] = "drive:file-3"
+    external["web_view_link"] = "https://example.invalid/file-3"
+    key = artifact_manifest_idempotency_key(manifest)
+    manifest["operation"]["idempotency_key"] = key
+    manifest["custom_properties"]["idempotency_key"] = key
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(manifest)
+    valid = validate_artifact_manifest(manifest)
+    assert valid.status is ValidationStatus.VALID, valid.reason_codes
+
+    evidence = cand["compatibility_evidence"]
+    evidence["asset_reference"].update({
+        "asset_id": "asset-3",
+        "stable_ref": "asset-ref-3",
+        "content_fingerprint": SHA_D,
+    })
+    evidence["library_reference"] = {"page_id": "page-3", "drive_file_id": "file-3"}
+    evidence["manifest_reference"].update({
+        "manifest_id": "manifest-3",
+        "external_file_id": "file-3",
+        "fingerprint": valid.record.fingerprint,
+    })
+    evidence["freshness"]["manifest_fingerprint"] = valid.record.fingerprint
+    evidence["purpose"]["role_types"] = ["comparison"]
+    evidence["approved_use"]["role_types"] = ["comparison"]
+    evidence["orientation"]["orientation"] = "square"
+    cand["library_record"]["drive_file_id"] = "file-3"
+    cand["library_record"]["page_id"] = "page-3"
+    checked = validate_visual_asset_compatibility_evidence(cand)
+    assert checked.status is ValidationStatus.VALID, checked.reason_codes
+    return cand
+
+
 def test_both_fixture_assets_are_admitted_by_governed_filter():
     from instructional_workflow_contracts import ValidationStatus
     from instructional_workflow_contracts.visual_asset_candidates import (
@@ -485,6 +545,33 @@ def test_reuse_path_blocks_invalid_selection_with_reason():
     assert outcome["honored"] is False
     assert outcome["reason_code"] == REASON_CANDIDATE_SET_CHANGED
     assert outcome["detail"]
+
+
+def test_materialize_rejected_selection_is_not_recorded_as_selected():
+    # QA F1 (#3938): a teacher decision that passes _apply validity but is
+    # rejected by the materialize role/set recheck must not remain listed as
+    # selected, and its outcome must not read honored.
+    candidates = _two_candidates()
+    candidates.append(_role_incompatible_candidate(candidates[0]))
+    role = _role_id(_plan(candidates))
+    decision = _valid_decision_for(candidates, role, "asset-3", SHA_D, overridden="asset-1")
+    decision = dict(
+        decision,
+        selected_asset=dict(decision["selected_asset"], provider_file_id="file-3"),
+    )
+
+    plan = _plan(candidates, [decision])
+    assert plan.outcome == "teacher-decision-invalidated"
+    assert plan.teacher_decision_block_reason == "teacher-selected-role-incompatible"
+    assert plan.final_production_blocked is True
+    # The rejected selection stands nowhere on the plan.
+    assert plan.selected_asset_ids == ()
+    assert plan.teacher_selected_role_slot_bindings == ()
+    assert plan.effective_role_assignments == ()
+    outcome = plan.teacher_decision_outcomes[0]
+    assert outcome["honored"] is False
+    assert outcome["reason_code"] == "teacher-selected-role-incompatible"
+    assert outcome["asset_id"] == "asset-3"
 
 
 def test_reuse_path_leaves_role_unresolved_without_decision():

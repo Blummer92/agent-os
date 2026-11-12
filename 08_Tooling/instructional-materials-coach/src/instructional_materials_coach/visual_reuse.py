@@ -402,6 +402,34 @@ def effective_visual_payload(visual_plan: object) -> dict[str, Any]:
     return payload
 
 
+def _planner_selected_ids(
+    cohesive_payload: dict[str, Any],
+    excluded_keys: set[tuple[str, str]],
+) -> tuple[str, ...]:
+    """Deduplicated planner picks for slots outside ``excluded_keys``.
+
+    Used when the materialize recheck voids the teacher-resolved set: the
+    planner's pick for a slot without a honored teacher decision survives
+    (same convention as ``_apply_teacher_decisions`` — a blocked binding
+    contributes nothing, never a substitution); a slot the teacher resolved
+    contributes neither the teacher's asset nor the planner's pick.
+    """
+    ordered: list[str] = []
+    for field in ("required_role_assignments", "optional_role_assignments"):
+        for item in cohesive_payload.get(field, ()):
+            if not isinstance(item, dict):
+                continue
+            key = (item.get("role_id"), item.get("slot_id", "0"))
+            if key in excluded_keys:
+                continue
+            selected = item.get("selected_candidate")
+            asset_ref = selected.get("asset_reference") if isinstance(selected, dict) else None
+            asset_id = asset_ref.get("asset_id") if isinstance(asset_ref, dict) else None
+            if isinstance(asset_id, str) and asset_id and asset_id not in ordered:
+                ordered.append(asset_id)
+    return tuple(ordered)
+
+
 def plan_governed_visual_reuse(
     requirement: object,
     *,
@@ -608,6 +636,7 @@ def plan_governed_visual_reuse(
             content_identities=scoped_identities,
             source_revision=source_revision,
         )
+        materialize_block_reason: str | None = None
         if blocked_reason is None:
             try:
                 effective_role_assignments = materialize_teacher_role_assignments(
@@ -617,8 +646,42 @@ def plan_governed_visual_reuse(
                     visual_needs_result=visual_needs_result,
                 )
             except (KeyError, TypeError, ValueError) as exc:
-                blocked_reason = str(exc)
+                materialize_block_reason = str(exc)
+                blocked_reason = materialize_block_reason
         if blocked_reason is not None:
+            if materialize_block_reason is not None:
+                # F1 (#3938): the materialize recheck validates the resolved
+                # binding SET and returns nothing on failure, so no
+                # teacher-resolved binding can be claimed to stand. Void the
+                # whole teacher-resolved set from the selection fields and
+                # record every honored decision as not honored with the
+                # materialize reason; planner picks for slots without a
+                # honored teacher decision survive. (_apply-stage blocks need
+                # no rewrite: _apply already excludes blocked bindings and
+                # records their outcomes as not honored.)
+                teacher_keys = {
+                    (outcome["role"], outcome["slot_id"])
+                    for outcome in decision_outcomes
+                    if outcome.get("honored") is True
+                }
+                selected_asset_ids = _planner_selected_ids(
+                    cohesive_payload, teacher_keys,
+                )
+                teacher_selected_role_slot_bindings = ()
+                decision_outcomes = tuple(
+                    dict(
+                        outcome,
+                        honored=False,
+                        reason_code=materialize_block_reason,
+                        detail=(
+                            "teacher-resolved binding set rejected by "
+                            "materialize recheck"
+                        ),
+                    )
+                    if outcome.get("honored") is True
+                    else outcome
+                    for outcome in decision_outcomes
+                )
             return GovernedVisualReusePlan(
                 outcome="teacher-decision-invalidated",
                 final_production_blocked=True,
