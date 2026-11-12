@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import secrets
 import select
+import signal
 import socket
 import subprocess
 import sys
@@ -27,6 +28,7 @@ from typing import Mapping, Sequence
 
 _LAUNCHER = str(Path(__file__).with_name("_isolated_exec.py"))
 _READY_TIMEOUT_SECONDS = 30.0
+_ALLOWED_WORKER_ENV_KEYS = frozenset({"AOS_GATEWAY_FD"})
 
 
 class IsolationUnavailable(RuntimeError):
@@ -206,35 +208,59 @@ def spawn_isolated_worker(argv: Sequence[str], *, pass_fds: Sequence[int] = (), 
                           cwd: str | None = None, allocator=None) -> subprocess.Popen:
     if not argv or not isolation_available():
         raise IsolationUnavailable("host-cannot-isolate-worker")
+    # Never inherit arbitrary loader hooks, credential variables, or even a caller's PATH.
+    # The only supported worker environment field names its already-passed RPC socket fd.
+    child_env = {"PATH": "/usr/bin:/bin"}
+    if env:
+        if set(env) - _ALLOWED_WORKER_ENV_KEYS:
+            raise IsolationUnavailable("worker-env-not-allowlisted")
+        rpc_fd = env.get("AOS_GATEWAY_FD")
+        if (type(rpc_fd) is not str or not rpc_fd.isascii() or not rpc_fd.isdecimal()
+                or len(rpc_fd) > 10 or int(rpc_fd) not in pass_fds):
+            raise IsolationUnavailable("worker-env-invalid-gateway-fd")
+        child_env["AOS_GATEWAY_FD"] = rpc_fd
     allocator = allocator or _default_allocator()
     uid = allocator.allocate()
     claim = claim_uid(uid)  # exclusive across every supervisor process and fork, from allocation through launch
+    proc: subprocess.Popen | None = None
     try:
         if (type(uid) is not int or not 0 < uid < 2**32 - 1 or _uid_in_use_by_live_process(uid)
                 or not _uid_is_unassigned(uid)):
             raise IsolationUnavailable("worker-uid-in-use")
         read_fd, write_fd = os.pipe()
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), str(claim.fileno()), "--", *argv],
-                env={"PATH": "/usr/bin:/bin", **(env or {})}, cwd=cwd, close_fds=True, start_new_session=True,
-                pass_fds=(write_fd, claim.fileno(), *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE)
-        except Exception:
-            os.close(read_fd); os.close(write_fd)
-            raise
-        os.close(write_fd)
-        try:
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), str(claim.fileno()), "--", *argv],
+                    env=child_env, cwd=cwd, close_fds=True, start_new_session=True,
+                    pass_fds=(write_fd, claim.fileno(), *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
+            finally:
+                os.close(write_fd)
             ready, _, _ = select.select([read_fd], [], [], _READY_TIMEOUT_SECONDS)
-            signalled = bool(ready) and os.read(read_fd, 1) == b"R"
+            if not (ready and os.read(read_fd, 1) == b"R"):
+                raise IsolationUnavailable("host-cannot-isolate-worker")
         finally:
             os.close(read_fd)
-        if not signalled:
-            proc.kill()
-            proc.communicate()
-            raise IsolationUnavailable("host-cannot-isolate-worker")
     except BaseException:
-        claim.release()
+        try:
+            if proc is not None:
+                # The launcher runs in its own session. Kill the whole process group,
+                # then reap the direct child even for an interrupt or an I/O error.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+        finally:
+            claim.release()
         raise
     # The claim lives as long as the Popen object; /proc is re-checked at the next claim in any case.
     weakref.finalize(proc, claim.release)
