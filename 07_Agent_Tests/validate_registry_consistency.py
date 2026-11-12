@@ -292,6 +292,38 @@ def validate_ckr6_host_procedure(root: Path, overlays: Path, errors: list[str]) 
         if phrase not in section:
             errors.append(f"CKR6 host procedure is missing {element}: {phrase}")
 
+    # Clause-local deletion tripwires, not semantic policy enforcement.
+    clause_lines = [
+        normalized(line) for line in section_text(
+            orchestrator_text, "Coding Lessons Learned Preflight"
+        ).splitlines()
+    ]
+    guarded = (
+        ("finite wait limit and expiry", "- GitHub-ingress result wait and STOP.",
+         ("at most 12 polls", "every 30 seconds", "six-minute deadline",
+          "host-bounded-wait-unavailable", "host-local expiry receipt",
+          "result-not-returned", "HARD STOP")),
+        ("no automatic retry and H1 approval", "- No automatic retry.",
+         ("Never repost", "cancel-in-progress: false", "conclusive idempotency evidence",
+          "fresh owner authorization", "No retry is authorized", "H1 smoke test")),
+        ("exact failed-repair attempt binding", "- Failed-repair re-entry.",
+         ("fresh `attempt_id`", "exact same `attempt_id`", "expected_attempt_id",
+          "earlier attempt", "consumption without `expected_attempt_id`")),
+        ("producer timestamp and source-revision receipt",
+         "- Result receipts and retrospective verification.",
+         ("request comment ID and `created_at`", "result comment ID and `created_at`",
+          "`github-actions[bot]`, id 41898282", "source revisions",
+          "exact pending request identity", "AFTER THE FACT")),
+    )
+    for element, marker, fragments in guarded:
+        matches = [line for line in clause_lines if line.startswith(marker)]
+        if len(matches) != 1:
+            errors.append(f"CKR6 host procedure is missing {element}: expected one {marker}")
+        else:
+            for fragment in fragments:
+                if fragment not in matches[0]:
+                    errors.append(f"CKR6 host procedure is missing {element}: {fragment}")
+
 
 def validate(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
