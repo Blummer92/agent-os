@@ -13,6 +13,7 @@ import sys
 
 uid = int(sys.argv[1])
 ready_fd = int(sys.argv[2])
+claim_fd = int(sys.argv[3])  # inherited uid claim: held HERE until exec, so a crashed supervisor frees nothing
 argv = sys.argv[sys.argv.index("--") + 1:]
 try:
     if os.geteuid() != 0 or uid == 0 or not argv:
@@ -42,6 +43,7 @@ try:
         raise OSError("namespace capability retained")
     os.write(ready_fd, b"R")  # readiness: every check above passed
     os.set_inheritable(ready_fd, False)  # closes at exec: the worker never sees it
+    os.set_inheritable(claim_fd, False)  # claim is released at exec, when the uid is already visible in /proc
 except Exception:
     sys.stderr.write("isolation-unavailable\n")
     os._exit(97)

@@ -1195,6 +1195,48 @@ def test_A1prime_a_worker_orphaned_by_a_crashed_supervisor_still_blocks_its_uid(
         os.kill(info["pid"], signal.SIGKILL)
 
 
+def test_B1_a_supervisor_killed_mid_launch_does_not_free_the_uid_while_the_launcher_lives():
+    import secrets
+    import signal
+    import time
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        InProcessUidAllocator, IsolationUnavailable, claim_uid, isolation_available, spawn_isolated_worker)
+    if not isolation_available():
+        with pytest.raises(IsolationUnavailable):  # nothing can launch here, so there is no window to test
+            spawn_isolated_worker([sys.executable, "-I", "-c", "pass"], allocator=InProcessUidAllocator(3_400_000_000, 1))
+        return
+    uid = 3_400_000_000 + secrets.randbelow(100_000_000)
+    # The REAL launcher with a stall inserted after unshare and before the uid drop: the window in which the
+    # process is still root and /proc cannot see it at the worker uid.
+    source = Path(supervisor._LAUNCHER).read_text()
+    assert "    os.setgroups([])" in source
+    slow = Path(tempfile.mkdtemp(prefix="aos-slow-")) / "slow_launcher.py"
+    slow.write_text(source.replace("    os.setgroups([])", "    import time; time.sleep(4)\n    os.setgroups([])", 1))
+    os.chmod(slow.parent, 0o755); os.chmod(slow, 0o644)
+    r, w = os.pipe()
+    child = os.fork()
+    if child == 0:  # the supervisor: it will be SIGKILLed while the launcher is still pre-drop
+        supervisor._LAUNCHER = str(slow)
+        os.write(w, b"go")
+        try:
+            spawn_isolated_worker([sys.executable, "-I", "-c", "import time; time.sleep(8)"],
+                                  allocator=InProcessUidAllocator(uid, 1))
+        finally:
+            os._exit(0)
+    os.close(w); os.read(r, 2); os.close(r)
+    time.sleep(1.0)               # launcher is now sleeping, still root, not yet at the worker uid
+    os.kill(child, signal.SIGKILL); os.waitpid(child, 0)
+    try:
+        with pytest.raises(IsolationUnavailable, match="worker-uid-in-use"):
+            claim_uid(uid)        # the dead supervisor's claim is still held by the launcher it spawned
+    finally:
+        time.sleep(0.2)
+        subprocess.run(["pkill", "-f", "time.sleep\\(8\\)"], check=False)
+        subprocess.run(["pkill", "-f", "slow_launcher.py"], check=False)
+        time.sleep(0.2)
+
+
 def test_A1prime_a_uid_belonging_to_a_real_host_account_is_never_used_for_a_worker():
     from agent_os_execution_service.ckr6_model_gateway.supervisor import (
         InProcessUidAllocator, IsolationUnavailable, isolation_available, spawn_isolated_worker)

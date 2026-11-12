@@ -65,6 +65,10 @@ class _Claim:
     def __init__(self, sock: socket.socket | None) -> None:
         self._sock = sock
 
+    def fileno(self) -> int:
+        assert self._sock is not None
+        return self._sock.fileno()
+
     def release(self) -> None:
         if self._sock is not None:
             self._sock.close()
@@ -183,9 +187,9 @@ def spawn_isolated_worker(argv: Sequence[str], *, pass_fds: Sequence[int] = (), 
         read_fd, write_fd = os.pipe()
         try:
             proc = subprocess.Popen(
-                [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), "--", *argv],
+                [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), str(claim.fileno()), "--", *argv],
                 env={"PATH": "/usr/bin:/bin", **(env or {})}, cwd=cwd, close_fds=True, start_new_session=True,
-                pass_fds=(write_fd, *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                pass_fds=(write_fd, claim.fileno(), *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE)
         except Exception:
             os.close(read_fd); os.close(write_fd)

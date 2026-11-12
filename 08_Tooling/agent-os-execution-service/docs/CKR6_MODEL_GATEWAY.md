@@ -37,8 +37,13 @@ A is applied only to the existing Claude launch seam and labelled
   launch (a worker still in the root launcher phase is invisible to `/proc`), so
   supervisors with different state dirs or overlapping ranges cannot put two live
   workers on one uid either. A `/proc` scan (a worker orphaned by a crashed
-  supervisor) and a real-account check back it up. Assumption: supervisors share
-  one network namespace and uid space. `InProcessUidAllocator` is tests-only. It can send a **prompt** over
+  supervisor) and a real-account check back it up. The root launcher inherits the
+  claim and holds it until `exec`, so a supervisor killed mid-launch frees nothing.
+  **Deployer requirement:** every supervisor must share one network and PID
+  namespace and one uid space; otherwise give them disjoint uid ranges or one
+  shared state dir (its counter never reissues a uid). Supervisors in different
+  netns cannot see each other's claims (reproduced by QA).
+  `InProcessUidAllocator` is tests-only. It can send a **prompt** over
   `rpc.GatewayRpcServer`; frames cannot carry identity, materiality, admission,
   or receipts (strict per-method field allow-list). Repository, issue, task,
   attempt, and hints are fixed by the trusted side when the connection is made.
