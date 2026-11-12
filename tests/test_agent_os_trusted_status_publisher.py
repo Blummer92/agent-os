@@ -47,6 +47,54 @@ def test_positive_result_requires_successful_jobs_and_steps():
     assert pub.evaluate(source(), jobs(), set())['state']=='success'
 
 
+def _reuse_jobs():
+    copy = jobs()
+    aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+    aggregate["steps"] = [
+        {"name": name, "conclusion": conclusion, "status": "completed"}
+        for name, conclusion in pub.REUSE_STEP_CONCLUSIONS.items()
+    ]
+    return copy
+
+
+def test_ready_reuse_is_pending_not_trusted_success():
+    assert pub.evaluate(source(), _reuse_jobs(), set())["state"] == "pending"
+    assert pub.evaluate(source(), _reuse_jobs(), {pub.SOURCE_PATH})["state"] == "pending"
+
+
+def test_ready_reuse_requires_complete_unambiguous_provider_step_shape():
+    for name in pub.REUSE_STEP_CONCLUSIONS:
+        for mode in ("missing", "duplicate", "wrong_conclusion", "wrong_status"):
+            copy = _reuse_jobs()
+            aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+            steps = aggregate["steps"]
+            target = next(s for s in steps if s["name"] == name)
+            if mode == "missing":
+                steps.remove(target)
+            elif mode == "duplicate":
+                steps.append(target.copy())
+            elif mode == "wrong_conclusion":
+                target["conclusion"] = "failure" if target["conclusion"] == "success" else "success"
+            else:
+                target["status"] = "in_progress"
+            assert pub.evaluate(source(), copy, set())["state"] == "error", (name, mode)
+
+
+def test_ready_reuse_cannot_hide_failed_source_or_required_jobs():
+    assert pub.evaluate(source(conclusion="failure"), _reuse_jobs(), set())["state"] == "failure"
+    for name in pub.JOBS:
+        copy = _reuse_jobs()
+        next(j for j in copy if j["name"] == name)["conclusion"] = "failure"
+        assert pub.evaluate(source(), copy, set())["state"] == "failure", name
+
+
+def test_ready_reuse_does_not_accept_unproven_mixed_execution():
+    copy = _reuse_jobs()
+    aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+    next(s for s in aggregate["steps"] if s["name"] == "Run aggregate validation")["conclusion"] = "success"
+    assert pub.evaluate(source(), copy, set())["state"] == "error"
+
+
 def test_non_success_source():
     assert pub.evaluate(source(conclusion='failure'), jobs(), set())['state']=='failure'
 
