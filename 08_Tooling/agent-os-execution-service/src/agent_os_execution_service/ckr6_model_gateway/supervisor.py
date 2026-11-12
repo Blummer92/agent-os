@@ -105,6 +105,7 @@ class InProcessUidAllocator:
 
 
 DEFAULT_STATE_DIR = "/run/agent-os-ckr6-uid-alloc"
+_DEFAULT_WORKER_UID_START = 3_000_000_000
 
 
 class UidAllocator:
@@ -115,7 +116,7 @@ class UidAllocator:
     network namespace and uid space). The state dir must be a real directory
     owned by the supervisor's uid with mode 0700 (so a worker can neither read nor tamper with it)."""
 
-    def __init__(self, state_dir: str = DEFAULT_STATE_DIR, *, start: int = 3_000_000_000,
+    def __init__(self, state_dir: str = DEFAULT_STATE_DIR, *, start: int = _DEFAULT_WORKER_UID_START,
                  count: int = 1_000_000_000) -> None:
         self._dir, self._start, self._end = state_dir, start, start + count
         try:
@@ -165,11 +166,39 @@ def _default_allocator() -> UidAllocator:
     return _DEFAULT_ALLOCATOR
 
 
+def _uid_mapped(uid: int, *, uid_map_path: str = "/proc/self/uid_map",
+                gid_map_path: str = "/proc/self/gid_map") -> bool:
+    """True unless ``uid`` is provably unmapped in either the uid or gid map.
+
+    The launcher drops to the worker uid with ``setgid(uid)`` then ``setuid(uid)``,
+    so an unmapped uid fails the drop (EINVAL) even where root + unshare exist --
+    the probe then lied and every spawn failed. Unreadable or unparseable maps
+    return True: the probe stays advisory and the per-spawn readiness handshake
+    remains authoritative. Only a provably unmapped uid makes the probe False.
+    """
+    try:
+        maps = []
+        for path in (uid_map_path, gid_map_path):
+            with open(path, encoding="ascii") as fh:
+                maps.append([tuple(int(x) for x in line.split()) for line in fh if line.split()])
+        return all(any(start <= uid < start + count for start, _outer, count in entries)
+                   for entries in maps)
+    except (OSError, ValueError):
+        return True
+
+
 def isolation_available() -> bool:
-    """Capability probe only (root + unshare). The authoritative check is the per-spawn readiness handshake."""
+    """Capability probe only (root + unshare + default worker uid mapped).
+
+    The authoritative check is the per-spawn readiness handshake. The uid-map
+    check keeps the probe honest on hosts (e.g. a container mapping only
+    0..65535) where no default-range worker could ever drop its uid. Injected
+    allocators outside the mapped range still fail closed per spawn.
+    """
     global _PRIVILEGED
     if _PRIVILEGED is None:
-        _PRIVILEGED = os.geteuid() == 0 and hasattr(os, "unshare")
+        _PRIVILEGED = (os.geteuid() == 0 and hasattr(os, "unshare")
+                       and _uid_mapped(_DEFAULT_WORKER_UID_START))
     return _PRIVILEGED
 
 

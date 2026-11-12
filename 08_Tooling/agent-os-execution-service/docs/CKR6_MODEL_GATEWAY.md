@@ -114,6 +114,7 @@ refused attempts independently of the gateway. Isolation tests do not skip (CI
 skip-veto): on a host that cannot isolate, `spawn_isolated_worker` raises and the
 tests only assert that nothing started. **Such a run is NOT evidence of
 isolation**; isolation evidence exists only for runs where
-`isolation_available()` is true (root with `unshare`), which the evidence
-package records. Findings and fixes from the independent QA pass are covered by
+`isolation_available()` is true (root with `unshare` and the default worker-uid
+range mapped in this user namespace), which the evidence package records.
+Findings and fixes from the independent QA pass are covered by
 the `test_A1` / `test_B*` / `test_C*` regression tests.

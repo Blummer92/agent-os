@@ -1195,6 +1195,40 @@ def test_A1prime_a_worker_orphaned_by_a_crashed_supervisor_still_blocks_its_uid(
         os.kill(info["pid"], signal.SIGKILL)
 
 
+def test_isolation_probe_refuses_a_worker_uid_outside_the_mapped_range(tmp_path):
+    # T13: the probe used to report True (root + unshare) on hosts whose uid_map
+    # cannot cover a worker uid, while every spawn then failed at setgid.
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import _uid_mapped
+    uid_map, gid_map = tmp_path / "uid_map", tmp_path / "gid_map"
+    uid_map.write_text("         0     131072      65536\n")
+    gid_map.write_text("         0     131072      65536\n")
+    assert _uid_mapped(3_000_000_000, uid_map_path=str(uid_map), gid_map_path=str(gid_map)) is False
+    assert _uid_mapped(100, uid_map_path=str(uid_map), gid_map_path=str(gid_map)) is True
+    uid_map.write_text("         0          0 4294967295\n")
+    gid_map.write_text("         0          0 4294967295\n")
+    assert _uid_mapped(3_000_000_000, uid_map_path=str(uid_map), gid_map_path=str(gid_map)) is True
+
+
+def test_A1prime_a_worker_runs_in_its_own_session():
+    # T13 (F20): no regression test asserted start_new_session. Fail-first proof
+    # (removing start_new_session) is deferred to a privileged host: this sandbox
+    # cannot spawn, so here the test only asserts the fail-closed path.
+    import secrets
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        InProcessUidAllocator, IsolationUnavailable, isolation_available, spawn_isolated_worker)
+    sleeper = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+    uid = 3_500_000_000 + secrets.randbelow(100_000_000)
+    try:
+        proc = spawn_isolated_worker(sleeper, allocator=InProcessUidAllocator(uid, 1))
+    except IsolationUnavailable:
+        assert isolation_available() is False  # nothing started; proves nothing about sessions
+        return
+    try:
+        assert os.getsid(proc.pid) != os.getsid(0)  # start_new_session: no shared process group
+    finally:
+        proc.kill(); proc.communicate()
+
+
 def test_B1_a_supervisor_killed_mid_launch_does_not_free_the_uid_while_the_launcher_lives():
     import secrets
     import signal
@@ -1587,6 +1621,8 @@ def test_B8b_records_without_updated_at_are_refused_because_an_edit_could_hide()
 def test_C1_hostile_json_nesting_does_not_kill_the_rpc_connection():
     gateway, store, backend, _ = build()
     _, client = rpc_pair(gateway)
+    # T13 (F10/M26): a thread-killing mutant must fail fast here, never hang the suite.
+    client._sock.settimeout(10)
     client._file.write(b"[" * 200000 + b"\n"); client._file.flush()
     assert client._recv()["reason"] == "bad-frame"
     assert client.open()["admitted"] is True  # the same connection still works
