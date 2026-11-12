@@ -110,14 +110,14 @@ failure-postback reporter (`scripts/ckr6_failure_postback.py`) admits PR
 events the same way; its postback target
 (`/repos/{repo}/issues/{n}/comments`) is the same endpoint for both kinds.
 
-Deployment boundary: the bridge code above accepts PR events, but the
-workflow file `.github/workflows/agent-os-ckr6.yml` still gates them out
-at `classify` (`github.event.issue.pull_request == null`), and
-`issue_comment` workflows only run from the default branch. Until that
-workflow change is separately authorized, merged, and deployed to the
-default branch, a PR Conversation command stays silent at the workflow
-gate and the live route is unverified. No live canary has been posted
-under this route.
+Deployment boundary: PR #3951 updates the workflow source to admit owner-authored
+`issue_comment` commands on ordinary issues and top-level PR Conversation
+comments, preserving the exact actor and command-prefix checks. The bridge
+independently verifies the repository, target, and canonical request envelope.
+GitHub Actions `issue_comment` workflows use the default branch, so this
+source change does **not** establish live PR-comment triggering until both
+the workflow and bridge are merged onto `main`. Local and Draft CI tests
+are not live canary evidence. No live canary has been posted here.
 
 ## Connector-only host recipe (GitHub connector, no MCP app required)
 
@@ -160,7 +160,7 @@ classification), `execute` is skipped by `needs: classify`, and the
 postback's own module is part of the install that failed. The workflow's
 `report-failure` job covers exactly that boundary. It runs only when the
 `classify` or `execute` job result is `failure` (a skipped classify —
-noncommand, PR comment, unauthorized actor — stays silent), holds job-scoped
+noncommand or unauthorized actor — stays silent), holds job-scoped
 `issues: write`, and runs `scripts/ckr6_failure_postback.py`: a
 standard-library-only reporter that installs nothing, revalidates the event
 repository/issue/actor/command prefix, and posts the same bounded fallback
