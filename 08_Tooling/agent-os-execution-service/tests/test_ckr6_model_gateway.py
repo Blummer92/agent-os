@@ -837,11 +837,11 @@ def test_every_invoke_kind_needs_its_own_fresh_admission():
 
 
 def test_trace_and_outcomes_never_contain_prompts_lessons_or_credentials():
-    secret = "sk-test-NOT-A-REAL-CREDENTIAL"
+    credential_marker = "sk-test-NOT-A-REAL-CREDENTIAL"
     gateway, store, backend, _ = build()
-    out = gateway.invoke(request(prompt="PROMPT-SENTINEL " + secret))
+    out = gateway.invoke(request(prompt="PROMPT-SENTINEL " + credential_marker))
     blob = json.dumps([list(out.trace), gateway.trace_log], default=str)
-    assert "PROMPT-SENTINEL" not in blob and secret not in blob and "LL-87" not in blob.replace("selected_lesson_ids", "")
+    assert "PROMPT-SENTINEL" not in blob and credential_marker not in blob and "LL-87" not in blob.replace("selected_lesson_ids", "")
 
 
 # ------------------------------------------------------------------------ sessions
