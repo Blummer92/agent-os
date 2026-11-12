@@ -352,7 +352,14 @@ def _bound_relevant_lessons(
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return _take_distinct_ids([item[2] for item in ranked])
+        # Rank identities, not individual revisions. A second revision of
+        # a selected ID may be unranked, but must still reach CKR2's
+        # fail-closed duplicate-identity conflict check.
+        selected_ids = {
+            lesson.lesson_id
+            for lesson in _take_distinct_ids([item[2] for item in ranked])
+        }
+        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
     unranked.sort(key=lambda item: item.lesson_id.casefold())
     return _take_distinct_ids(unranked)
 

@@ -406,3 +406,37 @@ def test_pr_a09_missing_source_link_stays_unverifiable_after_repair():
     )
     assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
     assert "unverifiable-relevant-candidate" in result.selection_reason_codes
+
+def test_pr_a10_unranked_revision_of_ranked_id_fails_closed_at_bound_edge():
+    # Regression for review #5868522723: LL-05 ranks based on one revision;
+    # its conflicting revision is unranked, but must not disappear. LL-06
+    # remains outside the five-distinct-ID bound.
+    ranked = [
+        live_row(properties={"Lesson ID": _rich_text(f"LL-0{index}")})
+        for index in range(1, 7)
+    ]
+    conflicting_unranked = live_row(
+        properties={
+            "Lesson ID": _rich_text("LL-05"),
+            "Area": _select("Governance"),
+            "Learning Type": _select("Scope/permission lesson"),
+            "Applies To": _multi_select("Drive"),
+            "Guardrail": _rich_text("Conflicting guidance for the same lesson."),
+        },
+        last_edited_time="2026-11-05T12:00:00.000Z",
+    )
+    for rows in ([conflicting_unranked, *ranked], [*ranked, conflicting_unranked]):
+        lessons = [normalize_lesson_row(row) for row in rows]
+        assert all(isinstance(item, LessonRecordEvidence) for item in lessons)
+        bounded = _bound_relevant_lessons(request(), lessons)
+        assert {item.lesson_id for item in bounded} == {
+            "LL-01", "LL-02", "LL-03", "LL-04", "LL-05"
+        }
+        assert len([item for item in bounded if item.lesson_id == "LL-05"]) == 2
+        result = orchestrate_lesson_activation(
+            request(), execute_read=lambda query: {"results": rows}
+        )
+        assert result.candidate_count == 6  # four other IDs plus both revisions
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+        assert "duplicate-identity-conflict" in result.selection_reason_codes
+        assert result.selected_lesson_ids == ()
