@@ -1016,6 +1016,7 @@ def test_host_entry_checks_the_envelope_before_any_host_read(tmp_path, monkeypat
         resolve_selection=lambda: pytest.fail("selection must not be read"),
     )
     assert receipt["reason_codes"] == ["invalid-fixed-operation-envelope"]
+    assert receipt["status"] == "blocked"
 
 
 def test_host_entry_hands_each_provider_to_the_matching_consumer_input(monkeypatch):
