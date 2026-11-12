@@ -56,11 +56,17 @@ def _clear_installed_reader():
     reader_module.set_github_issue_comment_reader(None)
 
 
-def _request_comment(*, comment_id: int = REQUEST_ID, created_at: str = REQUEST_AT):
+def _request_comment(*, comment_id: int = REQUEST_ID, created_at: str = REQUEST_AT,
+                     operation: str = "issue-start", attempt_id: str | None = None):
     """The pending request comment as GitHub returns it (trigger, not result)."""
     return {
         "id": comment_id,
-        "body": '/agent-os ckr6 {"operation": "issue-start", "repository": "Blummer92/agent-os", "issue_number": 2425, "task_reference": "issue:2425"}',
+        "body": '/agent-os ckr6 ' + json.dumps({
+            "operation": operation, "repository": REPOSITORY, "issue_number": ISSUE,
+            "task_reference": "issue:2425",
+            **({"attempt_id": attempt_id, "failed_hypothesis": "failed hypothesis",
+                "result_summary": "failed result"} if operation == "failed-repair" else {}),
+        }),
         "user": {"login": "Blummer92", "id": 1, "type": "User"},
         "created_at": created_at,
         "updated_at": created_at,
@@ -70,7 +76,8 @@ def _request_comment(*, comment_id: int = REQUEST_ID, created_at: str = REQUEST_
 
 
 def _install_reader(records, *, status: int = 200, raw_body: bytes | None = None,
-                    include_request: bool = True):
+                    include_request: bool = True, request_operation: str = "issue-start",
+                    request_attempt_id: str | None = None):
     """Install a fake reader returning ``records`` (plus the request comment).
 
     The wrapper independently re-reads the pending request comment from the
@@ -78,7 +85,8 @@ def _install_reader(records, *, status: int = 200, raw_body: bytes | None = None
     ``include_request=False`` only for the request-absent case.
     """
     seen: dict[str, object] = {}
-    all_records = ([_request_comment()] if include_request else []) + list(records)
+    all_records = ([_request_comment(operation=request_operation, attempt_id=request_attempt_id)]
+                   if include_request else []) + list(records)
 
     def http_get(url: str, headers: dict[str, str]):
         seen["url"] = url
@@ -185,7 +193,8 @@ def test_wrapper_admits_consumed_sufficient_issue_start() -> None:
 
 
 def test_wrapper_admits_consumed_failed_repair_for_exact_attempt() -> None:
-    _install_reader([_comment(_failed_repair_result())])
+    _install_reader([_comment(_failed_repair_result())],
+                    request_operation="failed-repair", request_attempt_id="attempt-42")
     result = _consume(expected_operation="failed-repair", expected_attempt_id="attempt-42")
     assert result["ckr6_admits_boundary"] is True
     assert result["mutation_admissible"] is True
@@ -289,7 +298,8 @@ def test_wrapper_ambiguous_results_return_stop() -> None:
 
 
 def test_wrapper_wrong_attempt_returns_stop() -> None:
-    _install_reader([_comment(_failed_repair_result(attempt_id="attempt-41"))])
+    _install_reader([_comment(_failed_repair_result(attempt_id="attempt-41"))],
+                    request_operation="failed-repair", request_attempt_id="attempt-42")
     result = _consume(expected_operation="failed-repair", expected_attempt_id="attempt-42")
     assert result["ckr6_admits_boundary"] is False
     assert "attempt_id does not match" in result["reason_codes"][0]
