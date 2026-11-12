@@ -1646,3 +1646,132 @@ def test_C3_session_prompts_are_size_bounded_like_invoke():
     with pytest.raises(StopBoundary, match="invalid-turn"):
         next(gateway.session_stream(s.session, big, idempotency_key="k2"))
     assert backend.calls == []
+
+
+# ----------------------------------------------------- T13 QA review: supervisor hardening
+@pytest.mark.parametrize("variable", [
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "PATH", "AWS_SECRET_ACCESS_KEY",
+])
+def test_supervisor_rejects_untrusted_worker_environment(monkeypatch, variable):
+    import sys
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+    monkeypatch.setattr(supervisor, "_PRIVILEGED", True)  # tests rejection; does not prove isolation
+    with pytest.raises(supervisor.IsolationUnavailable, match="worker-env-not-allowlisted"):
+        supervisor.spawn_isolated_worker(
+            [sys.executable, "-c", "pass"],
+            env={variable: "/tmp/sentinel"},
+            allocator=supervisor.InProcessUidAllocator(3_800_000_000, 1),
+        )
+
+
+def test_supervisor_allows_only_an_inherited_gateway_fd_in_worker_environment(monkeypatch):
+    import os
+    import secrets
+    import sys
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+    monkeypatch.setattr(supervisor, "_PRIVILEGED", True)
+    read_fd, write_fd = os.pipe()
+    uid = 3_800_000_000 + secrets.randbelow(10_000_000)
+    captured = {}
+
+    def fake_popen(*args, **kwargs):
+        captured.update(kwargs)
+        raise OSError("intercept before process launch")
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", fake_popen)
+    try:
+        with pytest.raises(supervisor.IsolationUnavailable, match="worker-env-invalid-gateway-fd"):
+            supervisor.spawn_isolated_worker(
+                [sys.executable], env={"AOS_GATEWAY_FD": "1234567891"},
+                pass_fds=(write_fd,), allocator=supervisor.InProcessUidAllocator(uid, 1),
+            )
+        with pytest.raises(OSError, match="intercept before process launch"):
+            supervisor.spawn_isolated_worker(
+                [sys.executable], env={"AOS_GATEWAY_FD": str(write_fd)},
+                pass_fds=(write_fd,), allocator=supervisor.InProcessUidAllocator(uid, 1),
+            )
+        assert captured["env"] == {"PATH": "/usr/bin:/bin", "AOS_GATEWAY_FD": str(write_fd)}
+        supervisor.claim_uid(uid).release()  # rejected Popen released the claim
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+@pytest.mark.parametrize("failure", [OSError("readiness poll failed"), KeyboardInterrupt()])
+def test_supervisor_post_spawn_failure_kills_reaps_and_releases_uid(monkeypatch, tmp_path, failure):
+    import os
+    import secrets
+    import signal
+    import subprocess
+    import sys
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+    # Substitute a harmless sleeper for the privileged launcher. This checks
+    # failure cleanup independently of whether CI can isolate a real worker.
+    launcher = tmp_path / "sleep_launcher.py"
+    launcher.write_text("import time\ntime.sleep(60)\n")
+    monkeypatch.setattr(supervisor, "_LAUNCHER", str(launcher))
+    monkeypatch.setattr(supervisor, "_PRIVILEGED", True)
+    uid = 3_810_000_000 + secrets.randbelow(10_000_000)
+    children = []
+    original_popen = subprocess.Popen
+
+    def record_popen(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    def failing_select(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", record_popen)
+    monkeypatch.setattr(supervisor.select, "select", failing_select)
+    try:
+        with pytest.raises(type(failure)):
+            supervisor.spawn_isolated_worker(
+                [sys.executable], allocator=supervisor.InProcessUidAllocator(uid, 1),
+            )
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        assert children[0].returncode == -signal.SIGKILL
+        supervisor.claim_uid(uid).release()
+    finally:
+        for child in children:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+
+
+def test_supervisor_missing_readiness_kills_and_reaps_child(monkeypatch, tmp_path):
+    import os
+    import secrets
+    import signal
+    import subprocess
+    import sys
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+    launcher = tmp_path / "sleep_launcher.py"
+    launcher.write_text("import time\ntime.sleep(60)\n")
+    monkeypatch.setattr(supervisor, "_LAUNCHER", str(launcher))
+    monkeypatch.setattr(supervisor, "_PRIVILEGED", True)
+    monkeypatch.setattr(supervisor, "_READY_TIMEOUT_SECONDS", 0.1)
+    uid = 3_820_000_000 + secrets.randbelow(10_000_000)
+    children = []
+    original_popen = subprocess.Popen
+
+    def record_popen(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", record_popen)
+    try:
+        with pytest.raises(supervisor.IsolationUnavailable, match="host-cannot-isolate-worker"):
+            supervisor.spawn_isolated_worker(
+                [sys.executable], allocator=supervisor.InProcessUidAllocator(uid, 1),
+            )
+        assert children and children[0].poll() is not None
+        supervisor.claim_uid(uid).release()
+    finally:
+        for child in children:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
