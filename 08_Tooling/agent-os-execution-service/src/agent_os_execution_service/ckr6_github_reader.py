@@ -125,7 +125,15 @@ class GitHubIssueCommentReader:
             raise GitHubIssueCommentReadUnavailable(
                 "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation-token provider is installed"
             )
-        token = self._token_provider.get_installation_token()
+        try:
+            token = self._token_provider.get_installation_token()
+        except Exception:
+            # Provider failures are unavailable reads, never MCP exceptions.
+            # Do not propagate provider exception text or credential details.
+            raise GitHubIssueCommentReadUnavailable(
+                "HOST_READ_PATH_UNAVAILABLE",
+                "GitHub App installation token is unavailable",
+            ) from None
         if type(token) is not str or not token.strip():
             raise GitHubIssueCommentReadUnavailable(
                 "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation token is available"
