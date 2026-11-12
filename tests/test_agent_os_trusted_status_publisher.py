@@ -1,6 +1,7 @@
 """No-network adversarial controls for the isolated trusted status decision."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -78,6 +79,57 @@ def test_ready_reuse_requires_complete_unambiguous_provider_step_shape():
             else:
                 target["status"] = "in_progress"
             assert pub.evaluate(source(), copy, set())["state"] == "error", (name, mode)
+
+
+def test_ready_reuse_rejects_extra_and_malformed_provider_entries():
+    for step in (
+        {"name": "Unexpected successful step", "conclusion": "success", "status": "completed"},
+        {"name": "Unexpected failed step", "conclusion": "failure", "status": "completed"},
+        {"name": "Unexpected skipped step", "conclusion": "skipped", "status": "completed"},
+        {"name": "Post Check out repository", "conclusion": "success", "status": "completed"},
+        {"name": "Unexpected step"},
+        {"conclusion": "success"},
+        {"name": None, "conclusion": "success"},
+        {"name": ["not a name"], "conclusion": "success"},
+        {"name": "Unexpected step", "conclusion": None},
+        {"name": "Unexpected step", "conclusion": ["success"]},
+        None,
+        "not a step",
+    ):
+        copy = _reuse_jobs()
+        aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+        aggregate["steps"].append(step)
+        assert pub.evaluate(source(), copy, set())["state"] == "error", step
+
+
+def test_ready_reuse_rejects_corrupted_required_step_fields():
+    for field, value in (("name", None), ("name", []), ("conclusion", None), ("conclusion", [])):
+        copy = _reuse_jobs()
+        aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+        aggregate["steps"][0][field] = value
+        assert pub.evaluate(source(), copy, set())["state"] == "error", (field, value)
+
+
+def test_direct_execution_rejects_malformed_provider_step_instead_of_raising():
+    for job_name in pub.REQUIRED_STEPS:
+        for bad_step in (None, "not a step", {"name": [], "conclusion": "success"}):
+            copy = jobs()
+            job = next(j for j in copy if j["name"] == job_name)
+            job["steps"].append(bad_step)
+            assert pub.evaluate(source(), copy, set())["state"] == "error", (job_name, bad_step)
+
+
+def test_reuse_steps_cover_every_named_aggregate_workflow_step():
+    workflow = (ROOT / ".github/workflows/agent-os-validation.yml").read_text()
+    aggregate = workflow.split("\n  validate:\n", 1)[1]
+    aggregate = re.split(r"(?m)^  [A-Za-z0-9_-]+:\s*$", aggregate, maxsplit=1)[0]
+    named_steps = {
+        line.removeprefix("      - name: ").strip()
+        for line in aggregate.splitlines()
+        if line.startswith("      - name: ")
+    }
+    synthetic_steps = {"Set up job", "Complete job"}
+    assert set(pub.REUSE_STEP_CONCLUSIONS) == named_steps | synthetic_steps
 
 
 def test_ready_reuse_cannot_hide_failed_source_or_required_jobs():

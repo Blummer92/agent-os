@@ -90,30 +90,45 @@ REQUIRED_STEPS = {
 # status producer, or previous run's source/attempt association. Never certify
 # reuse from step names alone: it is a non-certifying pending disposition.
 REUSE_STEP_CONCLUSIONS = {
+    "Set up job": "success",
+    "Check out workflow source for ingress verification": "skipped",
+    "Admit exact-head Draft final candidate": "skipped",
     "Resolve authoritative candidate identity": "success",
     "Reuse valid exact-head aggregate evidence": "success",
-    "Publish validation summary": "success",
     "Publish authoritative aggregate pending status": "skipped",
     "Check out repository": "skipped",
+    "Check out admitted candidate commit": "skipped",
     "Verify aggregate checkout identity": "skipped",
+    "Recover missing exact-current main aggregate evidence": "skipped",
+    "Stop candidate while exact-current main recovery runs": "skipped",
+    "Project exact-current main health": "skipped",
+    "Set up Python": "skipped",
+    "Install validation dependencies": "skipped",
     "Run aggregate validation": "skipped",
+    "Record not-executed infrastructure receipt": "skipped",
     "Upload aggregate JUnit evidence": "skipped",
+    "Publish validation summary": "success",
+    "Complete job": "success",
 }
 
 
 def _provider_observed_reuse(steps: list[dict[str, Any]]) -> bool:
-    if any(not isinstance(step, dict) for step in steps):
+    # Match the entire provider-observed job (including GitHub's setup and
+    # completion steps). Any extra, omitted, duplicated, or mixed step rejects
+    # reuse; the shape alone still cannot certify its original producer.
+    if len(steps) != len(REUSE_STEP_CONCLUSIONS):
         return False
-    for name, conclusion in REUSE_STEP_CONCLUSIONS.items():
-        matches = [step for step in steps if step.get("name") == name]
-        if len(matches) != 1:
+    seen: set[str] = set()
+    for step in steps:
+        name = step["name"]  # evaluate() already checked step types.
+        if name not in REUSE_STEP_CONCLUSIONS or name in seen:
             return False
-        step = matches[0]
-        if step.get("conclusion") != conclusion:
+        if step["conclusion"] != REUSE_STEP_CONCLUSIONS[name]:
             return False
-        if "status" in step and step["status"] != "completed":
+        if step.get("status", "completed") != "completed":
             return False
-    return True
+        seen.add(name)
+    return len(seen) == len(REUSE_STEP_CONCLUSIONS)
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -273,6 +288,18 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
         steps = selected[job_name].get("steps")
         if not isinstance(steps, list):
             return result("error", f"Step evidence unavailable: {job_name}")
+        # Check every provider step before reuse or ordinary matching; malformed
+        # elements must yield a fail-closed result, never an AttributeError.
+        if any(
+            not isinstance(step, dict)
+            or not isinstance(step.get("name"), str)
+            or not step["name"]
+            or not isinstance(step.get("conclusion"), str)
+            or not step["conclusion"]
+            or ("status" in step and step["status"] != "completed")
+            for step in steps
+        ):
+            return result("error", f"Malformed step evidence: {job_name}")
         if job_name == "Run aggregate validation" and _provider_observed_reuse(steps):
             reuse_observed = True
             continue
