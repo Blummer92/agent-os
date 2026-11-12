@@ -71,10 +71,15 @@ from .mcp_facade import (
     plan_agent_os_continuation,
 )
 from .ckr6_github_bridge import (
+    COMMAND_PREFIX,
+    MAX_COMMENT_BYTES,
+    _command_payload,
+    parse_envelope,
     ckr6_result_admits_boundary,
     select_ckr6_result_comment,
 )
 from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY,
     GitHubIssueCommentReadUnavailable,
     get_github_issue_comment_reader,
 )
@@ -552,6 +557,18 @@ def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expect
     decision is execution-order only and grants no GitHub write, merge,
     closure, or side-effect authority.
     """
+    # A syntactically valid but out-of-scope repository is a bounded STOP,
+    # not a transport exception. Never reach the token-bearing reader.
+    if repository != ALLOWED_REPOSITORY:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
     _github_target_entry_guard(
         repository=repository, issue_number=issue_number, operation="read-issue"
     )
@@ -578,6 +595,16 @@ def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expect
         )
     try:
         records = reader.read_issue_comments(repository, issue_number)
+    except ValueError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
     except GitHubIssueCommentReadUnavailable as exc:
         return _ckr6_stop(
             repository=repository,
@@ -610,6 +637,39 @@ def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expect
             request_comment_id=expected_request_comment_id,
             attempt_id=expected_attempt_id,
             reason_code="ckr6-request-not-returned",
+            host_read_path_available=True,
+        )
+    # The GitHub timestamp is meaningful only for a real pending CKR6
+    # request, not for an arbitrary comment with a matching id. Reuse the
+    # canonical bridge parser rather than accepting caller-asserted identity.
+    try:
+        request_body = request_record.get("body")
+        if type(request_body) is not str or len(request_body.encode("utf-8")) > MAX_COMMENT_BYTES:
+            raise ValueError("invalid request body")
+        if not request_body.startswith(COMMAND_PREFIX):
+            raise ValueError("not a CKR6 command")
+        payload = _command_payload(request_body[len(COMMAND_PREFIX):])
+        if type(payload) is not dict:
+            raise ValueError("request payload is not an object")
+        envelope = parse_envelope(payload)
+        if (envelope.repository != repository or envelope.issue_number != issue_number
+                or envelope.operation != expected_operation
+                or envelope.attempt_id != expected_attempt_id):
+            raise ValueError("request envelope does not match pending request")
+        if (request_record.get("issue_url") !=
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}"
+                or request_record.get("html_url") !=
+                f"https://github.com/{repository}/issues/{issue_number}#issuecomment-{expected_request_comment_id}"
+                or request_record.get("updated_at") != request_record.get("created_at")):
+            raise ValueError("request location or edit identity mismatch")
+    except (ValueError, TypeError, UnicodeError):
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
             host_read_path_available=True,
         )
     request_created_at = request_record.get("created_at")
