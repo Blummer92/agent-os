@@ -262,6 +262,10 @@ def test_helper_failures_fail_closed_and_ignore_stale_receipts(
     row = _completeness(junit_dir)
     assert row[2:5] == ("FAIL", code, classification)
     assert row[1] == "no"  # the stale receipt was cleared, never reused as evidence
+    # Independent QA F1 (2026-11-12): a missing receipt must fail the suite row
+    # closed too — no EXECUTED_PASS may stand on absent outcome evidence.
+    # The runner's exit 0 is preserved in the row, only its status fails.
+    assert _rows(junit_dir)["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
 
 
 # --- NC09 JUnit outcome oracle ------------------------------------------------

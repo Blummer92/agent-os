@@ -700,16 +700,33 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       # verdict reclassifies the suite row and fails it. The recorded exit
       # code is preserved as evidence of what the runner reported.
       outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
-      if [ "$classification" = "EXECUTED_PASS" ] && [ -f "$outcome_receipt" ]; then
-        if grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
-          status="FAIL"
-          classification="TEST_OUTCOME_FAILED"
-        elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
-          # Invalid JUnit evidence cannot certify a passing suite.
-          # Preserve the original runner exit code for diagnostics.
-          status="FAIL"
-          classification="TEST_COLLECTION_ERROR"
-        fi
+      if [ "$classification" = "EXECUTED_PASS" ]; then
+        case "$name" in
+          "focused: "*)
+            # Focused runs are explicit selections and are not outcome-checked
+            # (documented boundary); no completeness receipt exists for them.
+            ;;
+          *)
+            if [ -f "$outcome_receipt" ]; then
+              if grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
+                status="FAIL"
+                classification="TEST_OUTCOME_FAILED"
+              elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
+                # Invalid JUnit evidence cannot certify a passing suite.
+                # Preserve the original runner exit code for diagnostics.
+                status="FAIL"
+                classification="TEST_COLLECTION_ERROR"
+              fi
+            else
+              # No outcome receipt: the completeness gate produced no evidence
+              # for this suite in this run (helper crash, or success without a
+              # receipt). A passing suite must not stand on absent outcome
+              # evidence; the completeness row already fails closed.
+              status="FAIL"
+              classification="TEST_COLLECTION_ERROR"
+            fi
+            ;;
+        esac
       fi
     else
       junit_exists="no"
