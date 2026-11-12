@@ -54,11 +54,30 @@ class FailureReceiptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'nested/collector-receipt.json'
             stdout, stderr = io.StringIO(), io.StringIO()
+            # The collector also fetches the aggregate job's log from
+            # the provider for subtest-marker corroboration. These
+            # fixtures provide no log, so that fetch is unavailable:
+            # route it to a failed log fetch and let the artifact
+            # downloads follow the fixture's own behaviour.
+            download_iter = iter(download) if isinstance(download, list) else None
+
+            def _download(url, *args, **kwargs):
+                if "/actions/jobs/" in url and url.endswith("/logs"):
+                    raise RuntimeError(PRIVATE)
+                if download_iter is not None:
+                    item = next(download_iter)
+                    if isinstance(item, BaseException):
+                        raise item
+                    return item
+                if isinstance(download, BaseException):
+                    raise download
+                return download(url, *args, **kwargs)
+
             with patch.dict(os.environ, {'GITHUB_TOKEN': PRIVATE,
                     'GITHUB_REPOSITORY': 'Blummer92/agent-os', 'GITHUB_SHA': 'c' * 40}, clear=True), \
                  patch.object(collector, '_api_get', return_value=(self.run, {})), \
                  patch.object(collector, '_paginate', side_effect=[self.jobs, self.artifacts]), \
-                 patch.object(collector, '_api_get_bytes', side_effect=download), \
+                 patch.object(collector, '_api_get_bytes', side_effect=_download), \
                  contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 code = collector.main(['--source-run-id', '100', '--source-head', HEAD,
                     '--source-attempt', '2', '--output', str(output)])
@@ -121,6 +140,11 @@ class FailureReceiptTests(unittest.TestCase):
         self.assertNotIn('download_errors', receipt)
         self.assertNotIn('collection_status', receipt)
         self.assertEqual(receipt['streams']['pyan']['classification'], 'EVIDENCE_VALID')
+        # The receipt shape evolved with the subtest trust-contract
+        # repair: it records whether the provider log corroborated any
+        # surplus (unavailable here -- these fixtures provide no log).
+        self.assertEqual(receipt['subtest_log_corroboration'], 'unavailable')
+        self.assertEqual(receipt['subtest_log_error']['stage'], 'aggregate_job_log_download')
 
     def test_integrity_rejections_survive_other_download_failure(self):
         data = report('jscpd')

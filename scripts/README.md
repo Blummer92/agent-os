@@ -143,23 +143,47 @@ declared tests to equal elements: an unexplained surplus stays
 rejected there, exactly as before.
 
 The surplus is certified only in the collector, by a source-bound
-receipt. After each suite run, `validate-all.sh` calls
+receipt corroborated against the provider-fetched producer log.
+After each suite run, `validate-all.sh` calls
 `scripts/agent_os_ci_junit_subtest_receipt.py`, which reads the
 suite's captured terminal summary (an independent channel from the
 JUnit file) and writes `CI_JUNIT_DIR/junit-subtest-receipt-<suite>.json`
 with the terminal counts, the JUnit file's digest and recorded totals,
 bound to the workflow run id, attempt and head SHA from the workflow
-environment. The collector (`classify_junit_artifact`, via
-`build_verified_receipt`) accepts a surplus member only when the
-receipt verifies: same source run/attempt/head as the provider data,
-matching JUnit digest, recorded totals equal to the parsed totals,
-zero failures/errors anywhere, declared tests equal to passed +
-skipped + xfailed + failed + errors + passing subtests, suite skipped
-equal to terminal skipped + xfailed, and passed/skipped element counts
-matching the terminal counts. The certified evidence is the element
-identities plus the verified subtest count; `counts` keeps `tests`,
-`testcase_elements` and `subtests_passed` distinct and never claims
-`tests` identities.
+environment. The extractor also prints exactly one structured marker
+line to stdout with the same counts and digest
+(`AGENT_OS_JUNIT_SUBTEST_RECEIPT suite=<key> passed=... ...`), which
+is replayed into the aggregate job's log, where the provider captures
+it. The collector independently fetches that job's log from the
+provider (Actions API, `actions: read`, already granted to the
+collector workflow) and requires exactly one well-formed marker for
+the suite whose counts and digest equal the receipt's claims. The
+collector accepts a surplus only when the receipt verifies: same
+source run/attempt/head as the provider data, matching JUnit digest,
+recorded totals equal to the parsed totals, zero failures/errors
+anywhere, declared tests equal to passed + skipped + xfailed + failed
++ errors + passing subtests, suite skipped equal to terminal skipped +
+xfailed, and passed/skipped element counts matching the terminal
+counts — **and** the provider log corroborates it. A receipt without
+its marker in the provider log, a duplicate or malformed marker, or
+any marker/receipt mismatch leaves the surplus rejected. A
+self-consistent receipt alone never certifies a surplus: the earlier
+design point that it could is superseded. The certified evidence is
+the element identities plus the verified subtest count; `counts` keeps
+`tests`, `testcase_elements` and `subtests_passed` distinct and never
+claims `tests` identities.
+
+What corroboration does and does not prove: the marker must appear in
+the provider's own capture of the bound aggregate job's log, so a
+receipt forged or reused after the run cannot pass. It does not prove
+the subtest count was observed by pytest — provider logs contain
+producer output, and a party controlling the producer job can print a
+marker with any counts. The XML equations still pin passed (via
+passed_elements) and the surplus (via tests − elements), so a forged
+marker cannot certify any surplus other than the one the XML itself
+already implies. The job→artifact join remains BY_NAME
+(`NOT_IMPLEMENTED_EXACT`): the log is the same-named aggregate job's
+log, not a provider-proven join. No cryptographic proof is claimed.
 
 Limits, all fail-closed: only the all-passing-subtest shape is
 supported -- a skipped, xfailed or failed subtest marks its parent
@@ -174,13 +198,25 @@ this repair. A receipt is written only
 when the summary explicitly shows a `subtests passed` segment (which
 needs `-v`, supplied by the root `pytest.ini`); absence is never read
 as zero subtests, and focused runs use `-q` so they cannot emit a
-receipt. A receipt is only as trustworthy as the artifact carrying
-it: provider binding (digest, workflow run, attempt, successful
-aggregate job) is the boundary, the same trust the JUnit XML itself
-relies on. `BY_NAME_DESIGN` / `NOT_IMPLEMENTED_EXACT` job binding is
-unchanged. Tests: `tests/test_agent_os_ci_junit_subtest_receipt.py`
-(genuine pytest 9.2.0 fixtures, negative controls, full collector
-path with fixture provider metadata).
+receipt. A missing, expired, or unfetchable aggregate job log, or a
+log archive that exceeds the size cap, leaves every surplus
+uncorroborated and rejected. An unparseable log archive is reported
+as `ambiguous` in the receipt's `subtest_log_corroboration`: the
+label covers both conflicting markers and archives that cannot be
+parsed at all, and means "the log cannot settle the question", not
+"markers conflicted" (QA note N2). Either way the surplus stays
+rejected. The receipt member's filename carries no trust: the
+collector verifies the entry's content, binding, digest, and marker,
+not the name it was filed under (QA note N3). Marker lines are matched only at the
+start of a log line (after a GitHub timestamp prefix); a tag
+appearing mid-line, as in a JSON-embedded nested run, is ignored,
+and a malformed or duplicate marker is conflicting evidence that
+rejects the suite. `BY_NAME_DESIGN` /
+`NOT_IMPLEMENTED_EXACT` job binding is unchanged. Tests:
+`tests/test_agent_os_ci_junit_subtest_receipt.py`
+(genuine pytest 9.2.0 fixtures, marker/log-corroboration tests,
+negative controls, full collector path with fixture provider metadata
+and fixture logs).
 
 ## agent_os_frontend_checks.py
 

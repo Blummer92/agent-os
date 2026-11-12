@@ -25,6 +25,17 @@ terminal segment, so this channel cannot explain them: the collector
 accepts only the all-passing-subtest shape, and every other shape
 stays rejected by design.
 
+When a receipt is written, exactly one structured marker line is
+also printed to stdout (see ``format_subtest_marker``): the same
+counts and JUnit digest, in a fixed grammar that no pytest summary
+line can match. validate-all.sh replays stdout into the aggregate
+job's log, which the provider captures; the collector independently
+fetches that log and requires the marker to agree with the receipt
+before any surplus is accepted. A receipt whose marker is missing,
+duplicated, malformed, or contradictory in the provider log is
+uncorroborated and certifies nothing -- a self-consistent receipt
+alone never certifies a surplus.
+
 Exit codes: 0 when a receipt was written or when no receipt applies
 (no subtests segment); 2 on unreadable inputs, an unparseable JUnit
 file, or invalid binding arguments. The caller (validate-all.sh)
@@ -45,10 +56,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.agent_os_ci_evidence_health import (  # noqa: E402
     SUBTEST_RECEIPT_SCHEMA,
+    format_subtest_marker,
     parse_junit_report,
 )
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def junit_key_for_suite(suite_name: str) -> str:
+    """Port of the ``junit_key`` function in scripts/validate-all.sh:
+    ``/`` becomes ``__``, then every other byte outside
+    ``[A-Za-z0-9._-]`` becomes ``_``. The bash function works on
+    bytes (``tr -c``), so a multi-byte UTF-8 character becomes one
+    ``_`` per byte, not one per character: substitute over the
+    UTF-8 encoding, not over the str. (QA note N1: the earlier
+    str-level port mapped one character to one ``_`` and disagreed
+    with bash on non-ASCII names; the failure mode was fail-closed,
+    but the port's whole purpose is parity, so it is byte-faithful.)"""
+    return re.sub(rb"[^A-Za-z0-9._-]", b"_", suite_name.replace("/", "__").encode("utf-8")).decode("ascii")
 
 _SUMMARY_RE = re.compile(r"^=+\s+(.+?)\s+in\s+[0-9]+\.[0-9]+s(?:\s+\([^)]*\))?\s+=+\s*$")
 _SEGMENT_RES = {
@@ -194,6 +219,14 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"subtest receipt: cannot write receipt: {exc}", file=sys.stderr)
         return 2
+    # Corroboration marker (trust-contract repair, 2026-11-12): print
+    # exactly one structured marker line to stdout with the same values
+    # as the receipt. validate-all.sh replays this into the aggregate
+    # job's log, where the provider captures it; the collector
+    # independently fetches that log and requires the marker to agree
+    # with the receipt. A receipt without its marker in the provider
+    # log is uncorroborated and certifies nothing.
+    print(format_subtest_marker(entry, junit_key_for_suite(args.suite_name)))
     print(
         f"subtest receipt: wrote {args.output.name} for suite {args.suite_name}: "
         f"{entry['subtests_passed']} passing subtests, junit tests={entry['junit_tests']} "

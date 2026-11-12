@@ -33,6 +33,7 @@ from scripts.agent_os_ci_evidence_health import (  # noqa: E402
     StreamObservation,
     SUBTEST_RECEIPT_PREFIX,
     classify_stream,
+    extract_subtest_markers,
     load_subtest_receipts,
     validate_advisory_report,
     validate_junit,
@@ -457,7 +458,7 @@ def health_classification_from_zip(zip_bytes: bytes, *, source_run_id: int | Non
     return classification if isinstance(classification, str) else None
 
 
-def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = None, source_attempt: int | None = None, source_head: str | None = None) -> dict:
+def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = None, source_attempt: int | None = None, source_head: str | None = None, log_markers: dict[str, dict] | None = None) -> dict:
     """Validate a downloaded JUnit artifact: ZIP safety, every XML member
     valid, no duplicate node ids across files. Manifests and other members
     are ignored, not parsed.
@@ -466,16 +467,23 @@ def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = Non
     accepted ONLY with a source-bound subtest receipt inside the same
     artifact (``junit-subtest-receipt-*.json``) that verifies against
     the provider-verified source run/attempt/head (see
-    ``verify_subtest_receipt``): the surplus must be exactly the
-    verified passing subtests, with no failure, error, skipped or
-    xfailed subtest hidden in it. Without such a receipt -- or with a
-    mis-bound, stale, conflicting or malformed one -- the surplus stays
-    REJECT_SCHEMA. ``counts`` therefore keeps ``tests`` (the declared
-    total) distinct from ``testcase_elements`` (identities present) and
-    reports ``subtests_passed`` separately; the certified evidence is
-    never ``tests`` identities. When no source binding is supplied
-    (legacy callers), no receipt can verify and surplus members are
-    rejected exactly as before."""
+    ``verify_subtest_receipt``) AND is corroborated by the
+    provider-fetched producer log (``log_markers``: suite key ->
+    marker counts from ``extract_subtest_markers`` on the aggregate
+    job's log). The surplus must be exactly the verified passing
+    subtests, with no failure, error, skipped or xfailed subtest hidden
+    in it, and the marker's counts and JUnit digest must equal the
+    receipt's claims. Without such a receipt -- or with a mis-bound,
+    stale, conflicting, malformed, or uncorroborated one -- the surplus
+    stays REJECT_SCHEMA. A self-consistent receipt alone never
+    certifies a surplus. ``counts`` therefore keeps ``tests`` (the
+    declared total) distinct from ``testcase_elements`` (identities
+    present) and reports ``subtests_passed`` separately; the certified
+    evidence is never ``tests`` identities. When no source binding is
+    supplied (legacy callers), no receipt can verify and surplus members
+    are rejected exactly as before; when no log markers are supplied,
+    no surplus can be corroborated and surplus members are likewise
+    rejected."""
     try:
         members = validate_archive_members(zip_bytes)
     except ValueError:
@@ -507,12 +515,20 @@ def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = Non
             except ValueError as exc:
                 if str(exc) != "testcase-count-mismatch" or member not in receipts:
                     raise
+                # The marker key is the JUnit filename without its
+                # extension: the producer names the receipt, the JUnit
+                # file, and the log marker with the same junit_key.
+                marker_key = member.rsplit("/", 1)[-1]
+                if marker_key.lower().endswith(".xml"):
+                    marker_key = marker_key[:-len(".xml")]
+                log_counts = (log_markers or {}).get(marker_key)
                 ids, counts = verify_subtest_receipt(
                     data,
                     receipts[member],
                     source_run_id=source_run_id,
                     source_run_attempt=source_attempt,
                     source_head=source_head,
+                    log_counts=log_counts,
                 )
             if seen.intersection(ids):
                 return {"classification": "REJECT_SCHEMA"}
@@ -527,13 +543,33 @@ def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = Non
     return {"classification": "EVIDENCE_VALID", "node_count": len(seen), "counts": totals}
 
 
-def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: list[dict], downloads: dict[str, bytes], source_attempt: int, collector_head: str, live_trigger: bool) -> dict:
+def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: list[dict], downloads: dict[str, bytes], source_attempt: int, collector_head: str, live_trigger: bool, aggregate_log_bytes: bytes | None = None) -> dict:
     """Pure verified receipt from already-fetched provider data. downloads
     maps artifact id (as str) to its downloaded zip bytes. Never executes
     artifact content; only advisory JSON and JUnit XML are parsed."""
     verify_source_run(source_run, expected_run_id=int(source_run["id"]), expected_head=str(source_run["head_sha"]))
     source_head = str(source_run["head_sha"])
     source_run_id = int(source_run["id"])
+    # Provider-log corroboration for subtest receipts (trust-contract
+    # repair, 2026-11-12). ``aggregate_log_bytes`` is the aggregate
+    # job's log archive fetched from the provider by main(); without
+    # it, or when marker extraction finds the log ambiguous, no surplus
+    # can be corroborated and any surplus stays rejected. The status is
+    # recorded, never silently treated as corroboration.
+    log_markers: dict[str, dict] = {}
+    subtest_log_status = "unavailable"
+    if aggregate_log_bytes is not None:
+        try:
+            log_markers = extract_subtest_markers(aggregate_log_bytes)
+            subtest_log_status = "ok"
+        except ValueError:
+            # "ambiguous" covers both conflicting markers and an
+            # archive that cannot be parsed at all (QA note N2):
+            # either way no surplus is corroborated and the surplus
+            # stays rejected; the label means "the log cannot settle
+            # the question", not "markers conflicted".
+            log_markers = {}
+            subtest_log_status = "ambiguous"
     streams: dict[str, dict] = {}
     for stream in ("pyan", "jscpd"):
         job = job_by_name(jobs, ADVISORY_JOB_NAMES[stream], expected_attempt=source_attempt)
@@ -625,7 +661,8 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
                 junit_results[name] = {"classification": "REJECT_DIGEST"}
                 continue
             junit_results[name] = classify_junit_artifact(
-                data, source_run_id=source_run_id, source_attempt=source_attempt, source_head=source_head
+                data, source_run_id=source_run_id, source_attempt=source_attempt, source_head=source_head,
+                log_markers=log_markers,
             )
         for name in duplicates:
             junit_results[name] = {"classification": "REJECT_SCHEMA"}
@@ -654,7 +691,8 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
         "sheets_written": False,
         "per_job_join": "NOT_IMPLEMENTED_EXACT",
         "job_binding": JOB_BINDING,
-        "note": "Read-only receipt. EVIDENCE_VALID here is content-valid with a same-named successful job on the same attempt; it is NOT a provider-verified job->artifact join.",
+        "subtest_log_corroboration": subtest_log_status,
+        "note": "Read-only receipt. EVIDENCE_VALID here is content-valid with a same-named successful job on the same attempt; it is NOT a provider-verified job->artifact join. A subtest surplus is accepted only when a source-bound receipt is corroborated by the provider-fetched aggregate job log (subtest_log_corroboration ok); a self-consistent receipt alone never certifies a surplus.",
     }
 
 def _api_get(url: str, token: str) -> tuple[object, dict[str, str]]:
@@ -765,11 +803,43 @@ def main(argv: list[str] | None = None) -> int:
                 print("artifact download failed; recording diagnostic receipt", file=sys.stderr)
                 continue
             downloads[str(art["id"])] = data
+    # Provider-log corroboration for subtest receipts: independently
+    # fetch the aggregate job's log from the provider (same
+    # ``actions: read`` token and redirect handling as artifact
+    # downloads; the logs endpoint 302s to a temporary archive URL).
+    # A missing, expired, or unfetchable log means no surplus can be
+    # corroborated -- the receipt records that instead of failing the
+    # whole collection, and any surplus stays rejected downstream.
+    aggregate_job = job_by_name(jobs, AGGREGATE_STEP_NAME, expected_attempt=args.source_attempt)
+    aggregate_log_bytes: bytes | None = None
+    log_error: dict | None = None
+    if aggregate_job is not None:
+        try:
+            aggregate_job_id = int(aggregate_job.get("id"))
+        except (TypeError, ValueError):
+            aggregate_job_id = None
+        if aggregate_job_id is not None:
+            try:
+                aggregate_log_bytes = _api_get_bytes(
+                    f"https://api.github.com/repos/{repository}/actions/jobs/{aggregate_job_id}/logs", token
+                )
+            except (RuntimeError, OSError, ValueError, http.client.HTTPException) as exc:
+                cause = exc.__cause__ if isinstance(exc, RuntimeError) else exc
+                log_error = {
+                    "stage": "aggregate_job_log_download",
+                    "http_status": cause.code if isinstance(cause, urllib.error.HTTPError) else None,
+                }
+                if isinstance(cause, urllib.error.HTTPError):
+                    cause.close()
+                print("aggregate job log download failed; subtest surplus stays uncorroborated", file=sys.stderr)
     receipt = build_verified_receipt(
         source_run=run_payload, jobs=jobs, artifacts=artifacts, downloads=downloads,
         source_attempt=args.source_attempt, collector_head=os.environ.get("GITHUB_SHA", ""),
         live_trigger=os.environ.get("COLLECTOR_LIVE_TRIGGER", "") == "true",
+        aggregate_log_bytes=aggregate_log_bytes,
     )
+    if log_error is not None:
+        receipt["subtest_log_error"] = log_error
     receipt["artifact_names_observed"] = sorted({str(a.get("name")) for a in artifacts if isinstance(a, dict)})
     receipt["advisory_artifact_present"] = {
         stream: select_advisory_artifact(artifacts, stream, source_attempt=args.source_attempt) is not None
