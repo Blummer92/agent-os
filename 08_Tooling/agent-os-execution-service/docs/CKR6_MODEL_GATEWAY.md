@@ -24,8 +24,10 @@ A is applied only to the existing Claude launch seam and labelled
 * **Untrusted:** workers. A worker is a separate OS process started by
   `supervisor.spawn_isolated_worker`: a **host-unique** unprivileged uid per
   worker, an empty network namespace verified to hold only `lo`,
-  `no_new_privs`, its own session, a scrubbed environment, only the gateway
-  socket inherited, and proof that root cannot be regained before `exec`. The
+  `no_new_privs`, its own session, a scrubbed environment (fixed `PATH`; only
+  `AOS_GATEWAY_FD` may be supplied, and it must name a passed file descriptor),
+  only explicitly passed file descriptors (the trusted caller must pass only
+  the intended gateway socket), and proof that root cannot be regained before `exec`. The
   worker starts only after the launcher reports readiness. Uid uniqueness is what
   stops one worker reading, ptracing, or `pidfd_getfd`-ing another's admitted
   gateway socket (QA reproduced that bypass with shared uids, then with
@@ -114,7 +116,9 @@ refused attempts independently of the gateway. Isolation tests do not skip (CI
 skip-veto): on a host that cannot isolate, `spawn_isolated_worker` raises and the
 tests only assert that nothing started. **Such a run is NOT evidence of
 isolation**; isolation evidence exists only for runs where
-`isolation_available()` is true (root with `unshare` and the default worker-uid
-range mapped in this user namespace), which the evidence package records.
+`isolation_available()` is true (root with `unshare` and **only the default
+worker UID start** `3,000,000,000` mapped in both `/proc/self/uid_map` and
+`/proc/self/gid_map`). The probe does NOT check the entire allocation range;
+later UIDs must pass the per-spawn readiness handshake before work can run.
 Findings and fixes from the independent QA pass are covered by
 the `test_A1` / `test_B*` / `test_C*` regression tests.
