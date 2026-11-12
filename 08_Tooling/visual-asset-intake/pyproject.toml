@@ -7,7 +7,7 @@ name = "visual-asset-intake"
 version = "0.1.0"
 description = "Bounded local raster-image intake for Agent OS"
 requires-python = ">=3.10"
-dependencies = ["Pillow>=11.3,<13"]
+dependencies = ["Pillow>=13,<14"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
