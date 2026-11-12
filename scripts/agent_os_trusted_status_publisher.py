@@ -272,6 +272,10 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
     if source.get("conclusion") != "success":
         return result("failure", "Source validation run did not finish successfully")
     selected = {}
+    # Malformed job entries must yield a fail-closed result, never an
+    # AttributeError: a provider record is untrusted until proven otherwise.
+    if any(not isinstance(job, dict) for job in jobs):
+        return result("error", "Malformed job evidence")
     for name in JOBS:
         matches = [j for j in jobs if j.get("name") == name]
         if len(matches) != 1:

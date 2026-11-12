@@ -119,6 +119,16 @@ def test_direct_execution_rejects_malformed_provider_step_instead_of_raising():
             assert pub.evaluate(source(), copy, set())["state"] == "error", (job_name, bad_step)
 
 
+def test_malformed_job_entries_fail_closed_instead_of_raising():
+    for bad_job in (None, "not a job", 42, ["Run validation plan"]):
+        appended = jobs()
+        appended.append(bad_job)
+        assert pub.evaluate(source(), appended, set())["state"] == "error", bad_job
+        replaced = jobs()
+        replaced[0] = bad_job
+        assert pub.evaluate(source(), replaced, set())["state"] == "error", bad_job
+
+
 def test_reuse_steps_cover_every_named_aggregate_workflow_step():
     workflow = (ROOT / ".github/workflows/agent-os-validation.yml").read_text()
     aggregate = workflow.split("\n  validate:\n", 1)[1]
