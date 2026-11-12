@@ -60,7 +60,7 @@ def _request_comment(*, comment_id: int = REQUEST_ID, created_at: str = REQUEST_
     """The pending request comment as GitHub returns it (trigger, not result)."""
     return {
         "id": comment_id,
-        "body": '/agent-os ckr6 {"operation": "issue-start", "repository": "Blummer92/agent-os", "issue_number": 2425}',
+        "body": '/agent-os ckr6 {"operation": "issue-start", "repository": "Blummer92/agent-os", "issue_number": 2425, "task_reference": "issue:2425"}',
         "user": {"login": "Blummer92", "id": 1, "type": "User"},
         "created_at": created_at,
         "updated_at": created_at,
