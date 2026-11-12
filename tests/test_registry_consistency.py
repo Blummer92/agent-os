@@ -161,7 +161,7 @@ def test_ckr6_host_procedure_guarded_deletions_fail(tmp_path: Path) -> None:
         target = root / "02_Agent_Overlays/chatgpt-orchestrator.md"
         original = target.read_text(encoding="utf-8")
         assert fragment in original
-        target.write_text(original.replace(fragment, "", 1), encoding="utf-8")
+        target.write_text(original.replace(fragment, ""), encoding="utf-8")
         assert any(
             f"CKR6 host procedure is missing {element}:" in error
             for error in MODULE.validate(root)
