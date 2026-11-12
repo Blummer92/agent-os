@@ -131,6 +131,7 @@ class GatewayConfig:
     max_polls: int = 12
     poll_spacing_seconds: int = 30
     deadline_seconds: int = 360
+    max_clock_skew_seconds: int = 120
 
 
 @dataclass(frozen=True, slots=True)

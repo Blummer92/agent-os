@@ -71,8 +71,10 @@ class Ckr6Admitter:
             raise StopBoundary("request-readback-mismatch:location")
         created = _utc(record.get("created_at"))
         updated = record.get("updated_at")
-        if updated is not None and _utc(updated) != created:
+        if updated is None or _utc(updated) != created:  # GitHub always reports it; absence hides edits
             raise StopBoundary("request-readback-mismatch:edited")
+        if abs((self._clock() - created).total_seconds()) > self._config.max_clock_skew_seconds:
+            raise StopBoundary("request-readback-mismatch:clock-skew")
         return created
 
     def _select(self, comments: Sequence[Mapping[str, Any]], comment_id: int, created_at: str,
@@ -161,13 +163,14 @@ class Ckr6Admitter:
 
         # Independent re-read: a result edited/removed/replaced after selection must not admit.
         try:
-            second = self._select(self._transport.list_issue_comments(request.repository, request.issue_number),
-                                  comment_id, created_at, request)
+            comments_after_reread = self._transport.list_issue_comments(request.repository, request.issue_number)
+            second = self._select(comments_after_reread, comment_id, created_at, request)
         except (ValueError, TypeError, LookupError, OSError):
             raise StopBoundary("result-reread-mismatch") from None
         if sha256_text(canonical_json(second)) != result_sha:
             raise StopBoundary("result-reread-mismatch")
         trace.record("result-reread-verified", result_sha256=result_sha)
+        self._verify_result_records(comments_after_reread, result, created, deadline)
 
         selected = self._decide(request, result, expected_material, trace)
         now = self._clock()
@@ -183,6 +186,35 @@ class Ckr6Admitter:
             expected_material=expected_material, verified_at=now.isoformat(),
             expires_at=min(deadline, now + timedelta(seconds=cfg.session_ttl_seconds)).isoformat())
         return proof, result
+
+    def _verify_result_records(self, comments: Sequence[Mapping[str, Any]], result: Mapping[str, object],
+                               request_created: datetime, deadline: datetime) -> None:
+        """Time checks R07 does not make: the result's own timestamps against the deadline and local clock,
+        and a mandatory updated_at (so an edit cannot hide behind an absent field)."""
+        now = self._clock()
+        skew = timedelta(seconds=self._config.max_clock_skew_seconds)
+        checked = 0
+        for comment in comments:
+            user = comment.get("user") if isinstance(comment, Mapping) else None
+            body = comment.get("body") if isinstance(comment, Mapping) else None
+            if (not isinstance(user, Mapping) or user.get("login") != bridge.CKR6_PRODUCER_LOGIN
+                    or user.get("id") != bridge.CKR6_PRODUCER_ACCOUNT_ID or type(body) is not str):
+                continue
+            try:
+                if bridge.parse_ckr6_result_comment(body) != result:
+                    continue
+            except (ValueError, TypeError):
+                continue
+            checked += 1
+            created, updated = _utc(comment.get("created_at")), comment.get("updated_at")
+            if updated is None or _utc(updated) != created:
+                raise StopBoundary("result-record-missing-or-edited-updated_at")
+            if created > deadline:
+                raise StopBoundary("result-after-deadline")
+            if created > now + skew:
+                raise StopBoundary("result-from-the-future")
+        if checked == 0:
+            raise StopBoundary("result-reread-mismatch")
 
     # ---------------------------------------------------------------- decision
     def _decide(self, request: InvocationRequest, result: Mapping[str, object], expected_material: bool,
@@ -220,6 +252,11 @@ class Ckr6Admitter:
         elif kind == "material":
             if not expected_material:
                 raise StopBoundary("sufficient-with-nonmaterial-request")
+            if (not isinstance(selected_raw, list) or not selected_raw or len(set(selected_raw)) != len(selected_raw)
+                    or any(type(item) is not str or not item.strip() for item in selected_raw)):
+                raise StopBoundary("sufficient-without-valid-selection")  # failed-repair has no R07 check for this
+            if result.get("retrieval_required") is False:
+                raise StopBoundary("result-contradicts-materiality")
             lessons = result.get("selected_lessons")
             if lessons is not None and (
                     not isinstance(lessons, list)

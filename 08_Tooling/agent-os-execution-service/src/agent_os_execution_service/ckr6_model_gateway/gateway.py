@@ -25,8 +25,8 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 
 from .admission import Ckr6Admitter, GitHubTransport
 from .contract import (
-    AdmissionProof, AdmissionReceipt, GatewayConfig, InvocationOutcome, InvocationRequest, Stats,
-    StopBoundary, Trace, sha256_text,
+    MAX_PROMPT_BYTES, AdmissionProof, AdmissionReceipt, GatewayConfig, InvocationOutcome, InvocationRequest,
+    Stats, StopBoundary, Trace, sha256_text,
 )
 
 SESSION_KINDS = frozenset({"normal", "tool-continuation", "subagent"})
@@ -49,7 +49,8 @@ class _Session:
     parent: str | None = None
     children: list[str] = field(default_factory=list)
     closed: bool = False
-    keys: dict[str, tuple[str, InvocationOutcome]] = field(default_factory=dict)
+    # key -> (prompt sha, outcome); outcome is None while the turn is reserved/in flight.
+    keys: dict[str, tuple[str, InvocationOutcome | None]] = field(default_factory=dict)
 
 
 class ModelGateway:
@@ -158,6 +159,12 @@ class ModelGateway:
         trace.record("model-call-completed")
         return output
 
+    @staticmethod
+    def _exact(request: object) -> None:
+        """Subclasses could return different values on later reads (TOCTOU on the prompt)."""
+        if type(request) is not InvocationRequest:
+            raise StopBoundary("invalid-request")
+
     # ----------------------------------------------------------- idempotency
     def _begin(self, key: str, request_hash: str) -> InvocationOutcome | None:
         """Return a cached/denial outcome, or None after registering the key in flight."""
@@ -186,6 +193,7 @@ class ModelGateway:
         """One full CKR6 admission -> one receipt -> one provider call. Every kind
         (normal/retry/resume/tool-continuation/subagent) gets a FRESH admission here."""
         try:
+            self._exact(request)
             request.validate()
             request_hash = request.request_hash()
         except (StopBoundary, TypeError, ValueError) as exc:
@@ -222,6 +230,7 @@ class ModelGateway:
         denial raises ``StopBoundary`` at the first ``next()``. No retry after a partial stream."""
         def generate() -> Iterator[str]:
             try:
+                self._exact(request)
                 request.validate()
                 request_hash = request.request_hash()
             except (StopBoundary, TypeError, ValueError) as exc:
@@ -229,16 +238,22 @@ class ModelGateway:
             if self._begin(request.invocation_id, request_hash) is not None:
                 # A stream cannot be replayed from cache, so ANY reuse of an id is refused.
                 raise StopBoundary("stream-invocation-id-already-used")
-            consumed = InvocationOutcome(admitted=True, reason="stream-consumed", output=None, trace=())
+            outcome = InvocationOutcome(admitted=False, reason="stream-not-started", output=None, trace=())
             try:
                 trace = self._trace()
+                prompt = request.prompt
                 proof, _ = self._admitter.admit(request, trace, cancel)
                 rid = self._issue_receipt(trace, request, proof, kind="stream",
-                                          binding_sha256=sha256_text(request.prompt), session_id=None)
-                self._consume(trace, rid, sha256_text(request.prompt), scope="ckr6-model-entry", cancel=cancel)
-                yield from self._stream_backend(trace, request.prompt, cancel, None)
+                                          binding_sha256=sha256_text(prompt), session_id=None)
+                self._consume(trace, rid, sha256_text(prompt), scope="ckr6-model-entry", cancel=cancel)
+                outcome = InvocationOutcome(admitted=True, reason="stream-consumed", output=None, trace=())
+                yield from self._stream_backend(trace, prompt, cancel, None)
+            except StopBoundary as exc:
+                if not outcome.admitted:
+                    outcome = InvocationOutcome(admitted=False, reason=exc.reason, output=None, trace=())
+                raise
             finally:
-                self._remember(request.invocation_id, request_hash, consumed)
+                self._remember(request.invocation_id, request_hash, outcome)
         return generate()
 
     def _stream_backend(self, trace: Trace, prompt: str, cancel: Any, session: _Session | None) -> Iterator[str]:
@@ -274,13 +289,15 @@ class ModelGateway:
     def open_session(self, request: InvocationRequest, *, cancel: Any = None) -> InvocationOutcome:
         """One CKR6 admission amortised over a bounded, expiring session of receipted turns."""
         try:
+            self._exact(request)
             request.validate()
             request_hash = request.identity_hash()
         except (StopBoundary, TypeError, ValueError) as exc:
             return self._deny(self._trace(), exc.reason if isinstance(exc, StopBoundary) else "invalid-request")
         early = self._begin(request.invocation_id, request_hash)
         if early is not None:
-            return early
+            # A session token is a capability: it is never replayed to a second caller.
+            return early if not early.admitted else self._deny(self._trace(), "session-open-id-already-used")
         trace = self._trace()
         try:
             proof, _ = self._admitter.admit(request, trace, cancel)
@@ -315,49 +332,55 @@ class ModelGateway:
         if session is not None:
             self._close(session)
 
-    def _session_precheck(self, token: Any, kind: str) -> _Session:
+    def _reserve_turn(self, token: Any, kind: str, prompt: Any, key: Any
+                      ) -> tuple[_Session, str, InvocationOutcome | None]:
+        """ATOMIC under one lock: validate, idempotency (incl. in-flight), spend one turn, reserve the key.
+        Separate check-then-decrement steps let concurrent callers overspend the budget."""
+        if (type(key) is not str or not key.strip() or type(prompt) is not str
+                or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES):
+            raise StopBoundary("invalid-turn")
+        sha = sha256_text(prompt)
         with self._lock:
             session = self._sessions.get(token) if isinstance(token, str) else None
-        if session is None or session.closed:
-            raise StopBoundary("unknown-session")
-        if kind in ("retry", "resume"):
-            raise StopBoundary(kind + "-requires-new-admission")
-        if kind == "stream":
-            raise StopBoundary("use-session-stream")
-        if kind not in SESSION_KINDS:
-            raise StopBoundary("unsupported-kind")
-        if kind == "subagent" and session.depth == 0:
-            raise StopBoundary("subagent-requires-child-session")
-        if kind != "subagent" and session.depth > 0:
-            raise StopBoundary("child-session-turns-must-be-subagent")
-        if self._clock() >= session.expires_at:
-            self._close(session)
-            raise StopBoundary("session-expired-needs-new-admission")
-        if session.turns_left <= 0:
-            raise StopBoundary("session-turn-budget-exhausted")
-        return session
+            if session is None or session.closed:
+                raise StopBoundary("unknown-session")
+            if kind in ("retry", "resume"):
+                raise StopBoundary(kind + "-requires-new-admission")
+            if kind == "stream":
+                raise StopBoundary("use-session-stream")
+            if kind not in SESSION_KINDS:
+                raise StopBoundary("unsupported-kind")
+            if kind == "subagent" and session.depth == 0:
+                raise StopBoundary("subagent-requires-child-session")
+            if kind != "subagent" and session.depth > 0:
+                raise StopBoundary("child-session-turns-must-be-subagent")
+            if self._clock() >= session.expires_at:
+                self._close(session)
+                raise StopBoundary("session-expired-needs-new-admission")
+            prior = session.keys.get(key)
+            if prior is not None:
+                if prior[0] != sha:
+                    raise StopBoundary("idempotency-key-reuse-mismatch")
+                if prior[1] is None:
+                    raise StopBoundary("idempotency-key-in-flight")
+                return session, sha, prior[1]
+            if session.turns_left <= 0:
+                raise StopBoundary("session-turn-budget-exhausted")
+            session.turns_left -= 1  # spent before dispatch: a failed call is never free
+            session.keys[key] = (sha, None)
+        return session, sha, None
 
     def session_turn(self, token: str, kind: str, prompt: str, *, idempotency_key: str,
                      cancel: Any = None) -> InvocationOutcome:
         trace = self._trace()
-        if type(idempotency_key) is not str or not idempotency_key.strip() or type(prompt) is not str:
-            return self._deny(trace, "invalid-turn")
         try:
-            session = self._session_precheck(token, kind)
+            session, prompt_sha, cached = self._reserve_turn(token, kind, prompt, idempotency_key)
         except StopBoundary as exc:
             return self._deny(trace, exc.reason)
-        prompt_sha = sha256_text(prompt)
-        with self._lock:
-            prior = session.keys.get(idempotency_key)
-            if prior is not None:
-                if prior[0] != prompt_sha:
-                    return self._deny(trace, "idempotency-key-reuse-mismatch")
-                c = prior[1]
-                return InvocationOutcome(admitted=c.admitted, reason=c.reason, output=c.output, trace=c.trace,
-                                         admission=c.admission, replayed=True, session=c.session)
-            if session.turns_left <= 0:
-                return self._deny(trace, "session-turn-budget-exhausted")
-            session.turns_left -= 1  # spent before dispatch: a failed call is never free
+        if cached is not None:
+            return InvocationOutcome(admitted=cached.admitted, reason=cached.reason, output=cached.output,
+                                     trace=cached.trace, admission=cached.admission, replayed=True,
+                                     session=cached.session)
         try:
             self._still_current(session.request)
             rid = self._issue_receipt(trace, session.request, session.proof, kind=kind,
@@ -365,32 +388,35 @@ class ModelGateway:
             self._consume(trace, rid, prompt_sha, scope="ckr6-model-entry", cancel=cancel)
         except StopBoundary as exc:
             outcome = self._deny(trace, exc.reason, session=session.token)
-            with self._lock:
-                session.keys[idempotency_key] = (prompt_sha, outcome)
-            return outcome
-        outcome = self._run_admitted(trace, prompt, session.proof, session.token)
+        else:
+            outcome = self._run_admitted(trace, prompt, session.proof, session.token)
         with self._lock:
             session.keys[idempotency_key] = (prompt_sha, outcome)
         return outcome
 
     def session_stream(self, token: str, prompt: str, *, idempotency_key: str, cancel: Any = None) -> Iterator[str]:
+        """Admission and receipt consumption happen at the first ``next()``, before any provider byte."""
         def generate() -> Iterator[str]:
             trace = self._trace()
-            if type(idempotency_key) is not str or not idempotency_key.strip() or type(prompt) is not str:
-                raise StopBoundary("invalid-turn")
-            session = self._session_precheck(token, "normal" if self._depth(token) == 0 else "subagent")
-            prompt_sha = sha256_text(prompt)
-            with self._lock:
-                if idempotency_key in session.keys:
-                    raise StopBoundary("stream-idempotency-key-already-used")
-                session.turns_left -= 1
-                session.keys[idempotency_key] = (prompt_sha, InvocationOutcome(
-                    admitted=True, reason="stream-started", output=None, trace=()))
-            self._still_current(session.request)
-            rid = self._issue_receipt(trace, session.request, session.proof, kind="stream",
-                                      binding_sha256=prompt_sha, session_id=session.token)
-            self._consume(trace, rid, prompt_sha, scope="ckr6-model-entry", cancel=cancel)
-            yield from self._stream_backend(trace, prompt, cancel, session)
+            kind = "subagent" if self._depth(token) > 0 else "normal"
+            session, prompt_sha, cached = self._reserve_turn(token, kind, prompt, idempotency_key)
+            if cached is not None:
+                raise StopBoundary("stream-idempotency-key-already-used")
+            outcome = InvocationOutcome(admitted=False, reason="stream-not-started", output=None, trace=())
+            try:
+                self._still_current(session.request)
+                rid = self._issue_receipt(trace, session.request, session.proof, kind="stream",
+                                          binding_sha256=prompt_sha, session_id=session.token)
+                self._consume(trace, rid, prompt_sha, scope="ckr6-model-entry", cancel=cancel)
+                outcome = InvocationOutcome(admitted=True, reason="stream-consumed", output=None, trace=())
+                yield from self._stream_backend(trace, prompt, cancel, session)
+            except StopBoundary as exc:
+                if not outcome.admitted:
+                    outcome = InvocationOutcome(admitted=False, reason=exc.reason, output=None, trace=())
+                raise
+            finally:
+                with self._lock:
+                    session.keys[idempotency_key] = (prompt_sha, outcome)
         return generate()
 
     def _depth(self, token: str) -> int:
@@ -432,6 +458,7 @@ class ModelGateway:
         """Admit a model-capable PROCESS LAUNCH. Scope is ``session-start-only``: nothing here
         mediates the launched process's own later provider requests."""
         try:
+            self._exact(request)
             request.validate()
             request_hash = sha256_text(request.request_hash() + binding_sha256)
         except (StopBoundary, TypeError, ValueError) as exc:

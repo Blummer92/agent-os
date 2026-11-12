@@ -8,6 +8,7 @@ outside the per-method allow-list are refused.
 from __future__ import annotations
 
 import json
+import secrets
 import socket
 import threading
 from typing import Any
@@ -46,23 +47,34 @@ class GatewayRpcServer:
             writer.write(json.dumps(frame).encode() + b"\n")
             writer.flush()
 
+        conn_id = secrets.token_hex(8)  # unique per connection: two workers can never share an admission id
         try:
             while True:
                 line = reader.readline(MAX_FRAME_BYTES + 1)
                 if not line:
                     return
+                if len(line) > MAX_FRAME_BYTES and not line.endswith(b"\n"):
+                    while not line.endswith(b"\n"):  # discard the rest of the oversized frame: no desync
+                        line = reader.readline(MAX_FRAME_BYTES)
+                        if not line:
+                            return
+                    send(self._bad())
+                    continue
                 try:
-                    if len(line) > MAX_FRAME_BYTES:
-                        raise ValueError
                     frame = json.loads(line)
                     method = frame["method"]
                     if (type(frame) is not dict or method not in _ALLOWED
                             or set(frame) - _ALLOWED[method]):
                         raise ValueError
-                except (ValueError, KeyError, TypeError):
+                except Exception:  # noqa: BLE001 - incl. RecursionError on hostile nesting: refuse, never die
                     send(self._bad())
                     continue
-                self._handle(frame, method, owned, send)
+                try:
+                    self._handle(frame, method, owned, send, conn_id)
+                except (OSError, ValueError):
+                    raise
+                except Exception:  # noqa: BLE001 - fail closed on anything unexpected from one frame
+                    send(self._bad("internal-error"))
         except (OSError, ValueError):
             return
         finally:
@@ -73,13 +85,13 @@ class GatewayRpcServer:
         token = frame.get("session")
         return token if isinstance(token, str) and token in owned else None
 
-    def _handle(self, frame: dict[str, Any], method: str, owned: set[str], send) -> None:
+    def _handle(self, frame: dict[str, Any], method: str, owned: set[str], send, conn_id: str) -> None:
         gw = self._gateway
         if method == "open":
             if self._opens >= self._max_opens:
                 send(self._bad("open-limit-reached")); return
             self._opens += 1
-            outcome = gw.open_session(self._binding.with_(invocation_id=f"{self._binding.invocation_id}:open:{self._opens}"),
+            outcome = gw.open_session(self._binding.with_(invocation_id=f"{self._binding.invocation_id}:{conn_id}:open:{self._opens}"),
                                       cancel=self.cancel)
             if outcome.session:
                 owned.add(outcome.session)

@@ -22,9 +22,12 @@ A is applied only to the existing Claude launch seam and labelled
 * **Trusted:** the process running `ModelGateway`. It alone holds the provider
   backend/credential and mints admission receipts. Receipts never leave it.
 * **Untrusted:** workers. A worker is a separate OS process started by
-  `supervisor.spawn_isolated_worker`: unprivileged uid, empty network namespace,
-  `no_new_privs`, scrubbed environment, only the gateway socket inherited, and
-  proof that root cannot be regained before `exec`. It has no credential, no
+  `supervisor.spawn_isolated_worker`: a **unique** unprivileged uid per worker
+  (so one worker cannot read, ptrace, or `pidfd_getfd` another's gateway
+  socket; QA reproduced exactly that when uids were shared), an empty network
+  namespace verified to hold only `lo`, `no_new_privs`, scrubbed environment,
+  only the gateway socket inherited, and proof that root cannot be regained
+  before `exec`. The worker starts only after the launcher reports readiness. It has no credential, no
   backend handle, no route to the provider. It can send a **prompt** over
   `rpc.GatewayRpcServer`; frames cannot carry identity, materiality, admission,
   or receipts (strict per-method field allow-list). Repository, issue, task,
@@ -41,11 +44,19 @@ A is applied only to the existing Claude launch seam and labelled
    body/author/location/edit comparison.
 3. Bounded poll (12 x 30 s, absolute 360 s) through the existing
    `select_ckr6_result_comment`; forged/edited/foreign results are discarded.
-4. Independent reread; a changed or vanished result stops.
+4. Independent reread; a changed or vanished result stops. Stricter than R07:
+   `updated_at` is mandatory on request and result, the result must not be
+   dated after the deadline or beyond 120 s ahead of the local clock, and the
+   request's GitHub time must be within 120 s of the local clock.
 5. Existing `ckr6_result_admits_boundary`, then gateway coherence checks
    (binding, five authority flags false, status vs materiality, selection).
-6. Immediately before dispatch: live attempt/head hooks re-run (stale -> STOP).
+6. Immediately before dispatch: the failed-attempt hook (mandatory for repair)
+   and the optional `verify_binding_current` hook re-run (stale -> STOP). The
+   issue-start head check exists only if the host supplies that hook.
 7. One-time, expiring (60 s), prompt-bound, scope-bound receipt; consumed once.
+   Receipts are defence in depth **inside** the trusted process (issued and
+   consumed in one stack frame); the enforced property is the process and
+   credential split, not receipt secrecy.
 
 `unavailable-safe-fallback` admits only with an injected independent verifier
 (default deny). A failed ingress is never converted into a fallback.
@@ -68,8 +79,12 @@ A is applied only to the existing Claude launch seam and labelled
   a worker sharing the gateway's uid/netns; kernel escapes. No seccomp, cgroup,
   or filesystem namespace is applied.
 * Python attribute privacy in the gateway process (`_backend`) is not a boundary.
-* Materiality inputs (task text and hints) are supplied by the trusted task
-  binding; a trusted side that understates them understates materiality.
+  Never hand a `ModelGateway` to untrusted code: a direct caller chooses its own
+  task text, hints, and prompt, and the prompt is not bound to the planner's
+  materiality decision. Over RPC the binding is fixed by the trusted side.
+* Filesystem `AF_UNIX` sockets a worker's uid may open (a provider or credential
+  proxy must never be exposed that way), `AF_VSOCK`/`AF_NETLINK` creation, and
+  PID/mount visibility: only the network namespace and uid are isolated.
 * Selector semantics (Q1 R-01: id/payload coherence beyond the defensive check
   here) and failed-attempt record custody (PR #3772) are unchanged and owned elsewhere.
 * No real transport (GitHub I/O) is shipped; `GitHubTransport` is a protocol.
@@ -80,5 +95,10 @@ A is applied only to the existing Claude launch seam and labelled
 `tests/test_ckr6_model_gateway.py` drives the real R07 owners with a mutable
 in-memory GitHub store (independent GET, delayed bot producer) and a fake
 provider **running as a separate process** that counts authenticated calls and
-refused attempts independently of the gateway. Isolation tests do not skip:
-when the host cannot isolate they assert the fail-closed refusal instead.
+refused attempts independently of the gateway. Isolation tests do not skip (CI
+skip-veto): on a host that cannot isolate, `spawn_isolated_worker` raises and the
+tests only assert that nothing started. **Such a run is NOT evidence of
+isolation**; isolation evidence exists only for runs where
+`isolation_available()` is true (root with `unshare`), which the evidence
+package records. Findings and fixes from the independent QA pass are covered by
+the `test_A1` / `test_B*` / `test_C*` regression tests.

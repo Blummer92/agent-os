@@ -119,6 +119,7 @@ class FakeGitHub:
         self.list_hook = None           # callable(list_count) invoked at the start of each list
         self.post_error = None
         self.list_error = None
+        self.no_time_filter = False     # a transport that does not hide future-dated comments
 
     def _record(self, body, *, login, uid, utype, at, repo=REPO, issue=ISSUE):
         self._next += 1
@@ -173,7 +174,7 @@ class FakeGitHub:
             self.list_hook(self.lists)
         now = self.clock.now()
         return [copy.deepcopy(r) for r in self.records
-                if datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")) <= now]
+                if self.no_time_filter or datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")) <= now]
 
 
 class CountingBackend:
@@ -1007,10 +1008,30 @@ def test_provider_backend_repr_never_exposes_the_credential():
 
 def test_isolated_spawn_fails_closed_when_isolation_is_impossible(monkeypatch):
     from agent_os_execution_service.ckr6_model_gateway import supervisor
-    monkeypatch.setattr(supervisor, "_PROBED", False)
+    monkeypatch.setattr(supervisor, "_PRIVILEGED", False)
     with pytest.raises(supervisor.IsolationUnavailable):
         supervisor.spawn_isolated_worker([sys.executable, "-I", "-c", "print('must never run')"])
-    monkeypatch.setattr(supervisor, "_PROBED", None)
+
+
+def test_launcher_failure_raises_instead_of_returning_a_dead_or_unisolated_process():
+    from agent_os_execution_service.ckr6_model_gateway import supervisor
+
+    class RootAllocator:  # a bad allocator must not be able to produce an un-dropped worker
+        def allocate(self):
+            return 0
+    with pytest.raises(supervisor.IsolationUnavailable):
+        supervisor.spawn_isolated_worker([sys.executable, "-I", "-c", "print('must never run')"],
+                                         allocator=RootAllocator())
+    with pytest.raises(supervisor.IsolationUnavailable):
+        supervisor.spawn_isolated_worker([])
+
+
+def test_uid_allocator_never_hands_out_a_uid_twice_and_exhaustion_fails_closed():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, UidAllocator
+    alloc = UidAllocator(start=500_000, count=3)
+    assert [alloc.allocate() for _ in range(3)] == [500_000, 500_001, 500_002]
+    with pytest.raises(IsolationUnavailable):
+        alloc.allocate()
 
 
 # ------------------------------------------------------------ real Claude launch seam
@@ -1096,3 +1117,262 @@ def test_malformed_requests_are_denied_cleanly_never_raised_and_never_reach_ingr
     assert out.admitted is False and out.reason in ("invalid-request", "invalid-prompt")
     assert store.posts == 0 and backend.calls == []
     assert gateway.open_session(request(**changes)).admitted is False
+
+
+# =========================================================================== QA regression suite
+# Each test below reproduces a finding from the independent adversarial QA pass (A1, B1-B8, C1-C6).
+PEER_ATTACK_SOURCE = r'''
+import ctypes, json, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from worker_client import GatewayClient
+role, victim_pid = sys.argv[1], int(sys.argv[2])
+c = GatewayClient(int(os.environ["AOS_GATEWAY_FD"]))
+if role == "victim":
+    opened = c.open()
+    print(json.dumps({"uid": os.getuid(), "admitted": opened["admitted"], "pid": os.getpid()}), flush=True)
+    time.sleep(25)
+    sys.exit(0)
+out = {"uid": os.getuid(), "own_open": c.open()["admitted"]}
+for name in ("environ", "mem", "maps"):
+    try:
+        open(f"/proc/{victim_pid}/{name}", "rb").read(1); out[name] = "READ"
+    except OSError as exc:
+        out[name] = "blocked:" + type(exc).__name__
+try:
+    pidfd = os.pidfd_open(victim_pid)
+    libc = ctypes.CDLL(None, use_errno=True)
+    stolen = [fd for fd in range(3, 12) if libc.syscall(438, pidfd, fd, 0) >= 0]  # pidfd_getfd
+    out["stolen_fds"] = stolen
+except OSError as exc:
+    out["stolen_fds"] = "blocked:" + type(exc).__name__
+try:
+    os.kill(victim_pid, 0); out["signal"] = "ALLOWED"
+except OSError as exc:
+    out["signal"] = "blocked:" + type(exc).__name__
+print(json.dumps(out))
+'''
+
+
+def test_A1_a_denied_worker_cannot_borrow_an_admitted_workers_gateway_socket():
+    from agent_os_execution_service.ckr6_model_gateway import worker_client
+    from agent_os_execution_service.ckr6_model_gateway.rpc import GatewayRpcServer
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        IsolationUnavailable, isolation_available, spawn_isolated_worker)
+    gateway, store, backend, _ = build(
+        producer=lambda env, rid: sufficient_result(env, rid) if env.issue_number == ISSUE else None)
+    workdir = Path(tempfile.mkdtemp(prefix="aos-peer-")); os.chmod(workdir, 0o755)
+    (workdir / "w.py").write_text(PEER_ATTACK_SOURCE); shutil.copy(worker_client.__file__, workdir / "worker_client.py")
+    for f in workdir.iterdir():
+        os.chmod(f, 0o644)
+    socks, procs = [], []
+
+    def start(binding, role, victim_pid):
+        a, b = socket.socketpair(); socks.extend([a, b])
+        threading.Thread(target=GatewayRpcServer(gateway, binding).serve, args=(a,), daemon=True).start()
+        proc = spawn_isolated_worker([sys.executable, "-I", str(workdir / "w.py"), role, str(victim_pid)],
+                                     pass_fds=(b.fileno(),), env={"AOS_GATEWAY_FD": str(b.fileno())}, cwd=str(workdir))
+        procs.append(proc)
+        return proc
+    try:
+        try:
+            victim = start(request(prompt="", invocation_id="victim"), "victim", 0)
+        except IsolationUnavailable:
+            assert isolation_available() is False  # fail closed: nothing started, nothing to attack
+            return
+        info = json.loads(victim.stdout.readline())
+        assert info["admitted"] is True
+        attacker = start(request(prompt="", invocation_id="attacker", issue_number=ISSUE + 1), "attacker", info["pid"])
+        out = json.loads(attacker.communicate(timeout=60)[0].decode().strip().splitlines()[-1])
+        assert out["uid"] != info["uid"] and out["uid"] != 0 and info["uid"] != 0   # unique uid per worker
+        assert out["own_open"] is False                                             # its own CKR6 admission was denied
+        assert out["environ"].startswith("blocked") and out["mem"].startswith("blocked")
+        assert out["stolen_fds"] == [] or str(out["stolen_fds"]).startswith("blocked")
+        assert out["signal"].startswith("blocked")
+        assert backend.calls == [] and gateway.stats.backend_calls == 0
+    finally:
+        for proc in procs:
+            proc.kill(); proc.communicate()
+        for sock in socks:
+            sock.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_B1_a_denied_stream_is_never_later_reported_as_admitted():
+    gateway, store, backend, _ = build(producer=lambda e, r: None)
+    with pytest.raises(StopBoundary, match="bounded-wait-expired"):
+        next(gateway.invoke_stream(request()))
+    later = gateway.invoke(request())
+    assert later.admitted is False and later.reason == "bounded-wait-expired" and backend.calls == []
+    gateway, store, backend, _ = build(verify_binding_current=lambda r: False)
+    s = gateway.open_session(request())
+    with pytest.raises(StopBoundary, match="stale-binding"):
+        next(gateway.session_stream(s.session, "p", idempotency_key="k"))
+    after = gateway.session_turn(s.session, "normal", "p", idempotency_key="k")
+    assert after.admitted is False and backend.calls == []
+
+
+class SlowBackend(CountingBackend):
+    def complete(self, prompt):
+        import time
+        time.sleep(0.05)
+        return super().complete(prompt)
+
+    def stream(self, prompt):
+        import time
+        self.calls.append(prompt)
+        time.sleep(0.05)
+        yield "x"
+
+
+def test_B2_concurrent_streams_cannot_overspend_the_session_budget():
+    gateway, store, backend, _ = build(backend=SlowBackend())
+    s = gateway.open_session(request())
+    for i in range(7):
+        assert gateway.session_turn(s.session, "normal", f"t{i}", idempotency_key=f"t{i}").admitted
+    results, barrier = [], threading.Barrier(10)
+
+    def go(i):
+        barrier.wait()
+        try:
+            list(gateway.session_stream(s.session, f"s{i}", idempotency_key=f"s{i}"))
+            results.append("ok")
+        except StopBoundary as exc:
+            results.append(exc.reason)
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(10)]
+    [t.start() for t in threads]; [t.join() for t in threads]
+    assert results.count("ok") == 1 and len(backend.calls) == 8
+    assert gateway._sessions[s.session].turns_left == 0
+
+
+def test_B3_concurrent_turns_with_one_idempotency_key_make_exactly_one_provider_call():
+    gateway, store, backend, _ = build(backend=SlowBackend())
+    s = gateway.open_session(request())
+    outs, barrier = [], threading.Barrier(6)
+
+    def go():
+        barrier.wait()
+        outs.append(gateway.session_turn(s.session, "normal", "same", idempotency_key="k"))
+    threads = [threading.Thread(target=go) for _ in range(6)]
+    [t.start() for t in threads]; [t.join() for t in threads]
+    assert len(backend.calls) == 1
+    assert sum(1 for o in outs if o.admitted and not o.replayed) == 1
+
+
+def test_B4_session_tokens_are_never_replayed_or_shared_between_connections():
+    gateway, store, backend, _ = build()
+    first = gateway.open_session(request())
+    again = gateway.open_session(request())
+    assert first.admitted and (again.admitted, again.reason) == (False, "session-open-id-already-used")
+    assert again.session is None
+    # two RPC connections built from the SAME binding id still get distinct admissions and tokens
+    _, c1 = rpc_pair(gateway, request(prompt="", invocation_id="dup"))
+    _, c2 = rpc_pair(gateway, request(prompt="", invocation_id="dup"))
+    t1, t2 = c1.open()["session"], c2.open()["session"]
+    assert t1 and t2 and t1 != t2
+    assert c2.turn(t1, "normal", "borrow", "k")["reason"] == "unknown-session"
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize("ids", [[], ["LL-1", "LL-1"], [" "]])
+def test_B5_failed_repair_sufficient_needs_a_valid_selection_like_issue_start(ids):
+    lessons = [{"lesson_id": i, "source_revision": "r", "selection_reason_codes": []} for i in ids]
+    gateway, store, backend, _ = build(
+        producer=lambda e, r: sufficient_result(e, r, selected_lesson_ids=ids, selected_lessons=lessons))
+    out = gateway.invoke(repair())
+    assert out.admitted is False and out.reason == "sufficient-without-valid-selection" and backend.calls == []
+
+
+def test_B5b_a_sufficient_result_that_says_retrieval_was_not_required_is_refused():
+    gateway, store, backend, _ = build(producer=lambda e, r: sufficient_result(e, r, retrieval_required=False))
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "result-contradicts-materiality") and backend.calls == []
+
+
+def test_B7_a_request_subclass_cannot_swap_the_prompt_after_the_receipt_is_bound():
+    class Shifty(InvocationRequest):
+        __slots__ = ()
+        reads = [0]
+
+        @property
+        def prompt(self):  # a different value on later reads
+            Shifty.reads[0] += 1
+            return "benign" if Shifty.reads[0] == 1 else "EVIL never bound"
+
+        @prompt.setter
+        def prompt(self, value):
+            pass
+    gateway, store, backend, _ = build()
+    out = gateway.invoke(Shifty(invocation_id="s", operation="issue-start", repository=REPO, issue_number=ISSUE,
+                                task_reference="integrate pydantic validators", **HINTS))
+    assert (out.admitted, out.reason) == (False, "invalid-request") and backend.calls == []
+
+
+def test_B8_result_and_request_timestamps_are_checked_against_the_deadline_and_the_local_clock():
+    def late_result(seconds):
+        def producer(env, rid):  # injected AFTER the request so its id is valid; shown immediately (no time filter)
+            holder["store"].add_result(
+                bridge.serialize_ckr6_result_comment(sufficient_result(env, rid), request_comment_id=rid),
+                at=T0 + timedelta(seconds=seconds))
+            return None
+        return producer
+    holder = {}
+    # result dated after the 360 s window although the transport shows it immediately
+    gateway, store, backend, _ = build(producer=late_result(400))
+    holder["store"] = store; store.no_time_filter = True
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "result-after-deadline") and backend.calls == []
+    # result dated in the future (but inside the window) relative to the local clock
+    gateway, store, backend, _ = build(producer=late_result(300))
+    holder["store"] = store; store.no_time_filter = True
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "result-from-the-future") and backend.calls == []
+    # request readback dated far in the future
+    gateway, store, backend, _ = build()
+    store.tamper_after_post = lambda rec: rec.update(created_at=iso(T0 + timedelta(days=3650)),
+                                                     updated_at=iso(T0 + timedelta(days=3650)))
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "request-readback-mismatch:clock-skew") and backend.calls == []
+
+
+def test_B8b_records_without_updated_at_are_refused_because_an_edit_could_hide():
+    gateway, store, backend, _ = build()
+    store.tamper_after_post = lambda rec: rec.pop("updated_at")
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "request-readback-mismatch:edited") and backend.calls == []
+    gateway, store, backend, _ = build()
+
+    def hook(n):
+        for rec in store.records:
+            if rec["body"].startswith(bridge.CKR6_RESULT_MARKER):
+                rec.pop("updated_at", None)
+    store.list_hook = hook
+    out = gateway.invoke(request())
+    assert (out.admitted, out.reason) == (False, "result-record-missing-or-edited-updated_at") and backend.calls == []
+
+
+def test_C1_hostile_json_nesting_does_not_kill_the_rpc_connection():
+    gateway, store, backend, _ = build()
+    _, client = rpc_pair(gateway)
+    client._file.write(b"[" * 200000 + b"\n"); client._file.flush()
+    assert client._recv()["reason"] == "bad-frame"
+    assert client.open()["admitted"] is True  # the same connection still works
+
+
+def test_C2_oversized_frame_is_discarded_whole_without_desyncing_the_stream():
+    from agent_os_execution_service.ckr6_model_gateway.rpc import MAX_FRAME_BYTES
+    gateway, store, backend, _ = build()
+    _, client = rpc_pair(gateway)
+    client._file.write(b"x" * (MAX_FRAME_BYTES + 10) + b'{"method":"open"}\n'); client._file.flush()
+    assert client._recv()["reason"] == "bad-frame"
+    assert store.posts == 0  # the smuggled open inside the oversized line was NOT executed
+    assert client.open()["admitted"] is True and store.posts == 1
+
+
+def test_C3_session_prompts_are_size_bounded_like_invoke():
+    gateway, store, backend, _ = build()
+    s = gateway.open_session(request())
+    big = "x" * (256 * 1024 + 1)
+    assert gateway.session_turn(s.session, "normal", big, idempotency_key="k").reason == "invalid-turn"
+    with pytest.raises(StopBoundary, match="invalid-turn"):
+        next(gateway.session_stream(s.session, big, idempotency_key="k2"))
+    assert backend.calls == []
