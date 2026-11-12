@@ -8,6 +8,7 @@ from agent_memory_context_manager.coding_knowledge_selection import (
 from agent_memory_context_manager.lesson_activation_bridge import (
     MAX_RETRIEVAL_ROWS,
     LessonActivationSkip,
+    _bound_relevant_lessons,
     build_filtered_query,
     build_known_reference_query,
     normalize_lesson_row,
@@ -273,3 +274,135 @@ def test_no_write_schema_or_authority_side_effects_from_activation():
     assert result.notion_write_performed is False
     assert result.github_write_performed is False
     assert result.authority_created is False
+
+
+# --- CKR6 PR-A (R1 selector dedup / candidate-budget repair, #2425) ---
+# A01/A02/A06/A07/A08/A09 from PR_A_TEST_MATRIX.csv. Written fail-first:
+# A01 and A06 fail on the pre-repair record-counted bound; A02/A07/A08/A09
+# pin behavior that must not change across the repair.
+
+
+def test_pr_a01_bound_counts_distinct_ids_not_records():
+    # Five bound slots are five DISTINCT lesson IDs. Ten rows that are five
+    # identical pairs must bound to five distinct IDs, not to the first five
+    # records (which cover only three distinct IDs).
+    rows = []
+    for index in range(1, 6):
+        row = live_row(properties={"Lesson ID": _rich_text(f"LL-0{index}")})
+        rows.append(row)
+        rows.append(row)  # identical duplicate of the same provider row
+    lessons = [normalize_lesson_row(row) for row in rows]
+    assert all(isinstance(item, LessonRecordEvidence) for item in lessons)
+    bounded = _bound_relevant_lessons(request(), lessons)
+    assert {item.lesson_id for item in bounded} == {
+        "LL-01",
+        "LL-02",
+        "LL-03",
+        "LL-04",
+        "LL-05",
+    }
+
+
+def test_pr_a02_original_canary_stays_insufficient_after_repair():
+    # The 2026-11-11 canary request matches no lesson in the finite
+    # vocabulary; the dedup/budget repair must not manufacture a match.
+    req = request(
+        task_reference="issue:#2425 ckr6-p1-host-enforcement-20261111",
+        ecosystem_hints=("agent-os", "ckr6"),
+        capability_keywords=("ckr6", "lesson-preflight", "host-enforcement", "issue-start"),
+        canonical_rule_refs=("#2425", "#2851", "#3559"),
+        specialized_knowledge_required=True,
+    )
+    result = orchestrate_lesson_activation(
+        req, execute_read=lambda query: {"results": [live_row()]}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "no-relevant-candidate" in result.selection_reason_codes
+    assert result.selected_lesson_ids == ()
+
+
+def test_pr_a06_bound_edge_conflict_preserved_and_reported():
+    # A conflicting identity at the bound edge must enter the bound with ALL
+    # its records, so the duplicate-identity-conflict is reported instead of
+    # being silently dropped with the second revision.
+    rows = []
+    for index in range(1, 5):
+        rows.append(live_row(properties={"Lesson ID": _rich_text(f"LL-0{index}")}))
+    conflict_a = live_row(
+        properties={"Lesson ID": _rich_text("LL-05")},
+        last_edited_time="2026-11-04T12:00:00.000Z",
+    )
+    conflict_b = live_row(
+        properties={
+            "Lesson ID": _rich_text("LL-05"),
+            "Guardrail": _rich_text("A different guardrail for the same lesson."),
+        },
+        last_edited_time="2026-11-05T12:00:00.000Z",
+    )
+    rows.extend([conflict_a, conflict_b])
+    lessons = [normalize_lesson_row(row) for row in rows]
+    assert all(isinstance(item, LessonRecordEvidence) for item in lessons)
+    bounded = _bound_relevant_lessons(request(), lessons)
+    ll05 = [item for item in bounded if item.lesson_id == "LL-05"]
+    assert len(ll05) == 2  # both conflicting revisions enter the bound
+    assert {item.source_revision for item in ll05} == {
+        "2026-11-04T12:00:00.000Z",
+        "2026-11-05T12:00:00.000Z",
+    }
+    # End to end: the conflict must surface as manual review, not a silent pass.
+    result = orchestrate_lesson_activation(
+        request(), execute_read=lambda query: {"results": rows}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert "duplicate-identity-conflict" in result.selection_reason_codes
+
+
+def test_pr_a07_single_query_path_matches_orchestrator_identity_behavior():
+    # Identical duplicates collapse and conflicting identities fail closed
+    # through orchestrate_lesson_activation's single-query path too.
+    identical = live_row()
+    result = orchestrate_lesson_activation(
+        request(), execute_read=lambda query: {"results": [identical, identical]}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-42",)
+    assert result.selected_count == 1
+    assert result.candidate_count == 2  # raw count preserved
+
+    conflict_a = live_row(last_edited_time="2026-11-04T12:00:00.000Z")
+    conflict_b = live_row(
+        properties={"Guardrail": _rich_text("A different guardrail.")},
+        last_edited_time="2026-11-05T12:00:00.000Z",
+    )
+    result = orchestrate_lesson_activation(
+        request(), execute_read=lambda query: {"results": [conflict_a, conflict_b]}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert "duplicate-identity-conflict" in result.selection_reason_codes
+
+
+def test_pr_a08_unrelated_request_selects_nothing():
+    # An unrelated request (deployment hints against testing lessons)
+    # selects nothing and keeps the same STOP semantics.
+    req = request(
+        ecosystem_hints=("agent-os",),
+        capability_keywords=("deployment",),
+    )
+    result = orchestrate_lesson_activation(
+        req, execute_read=lambda query: {"results": [live_row()]}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "no-relevant-candidate" in result.selection_reason_codes
+    assert result.selected_lesson_ids == ()
+
+
+def test_pr_a09_missing_source_link_stays_unverifiable_after_repair():
+    # The dedup/budget repair must not launder provenance. A relevant lesson
+    # with no Source Link is still UNVERIFIABLE and forces manual review,
+    # even when it arrives among identical duplicates.
+    row = live_row(properties={"Source Link": _url(None)})
+    result = orchestrate_lesson_activation(
+        request(), execute_read=lambda query: {"results": [row, row]}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert "unverifiable-relevant-candidate" in result.selection_reason_codes
