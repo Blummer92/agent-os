@@ -164,7 +164,13 @@ def test_configuration_narrowing_cannot_pass(
         assert rows["root"][2:5] == ("FAIL", "4", "NOT_EXECUTED_SETUP_FAILURE")
         assert "test selection completeness: root" not in rows
         return
-    assert rows["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran; the gate is the completeness row
+    if expected == "ERROR":
+        # bee17d3 (Copilot review r4528975030): an ERROR receipt reclassifies
+        # the suite row from EXECUTED_PASS to TEST_COLLECTION_ERROR as well;
+        # the runner's exit 0 is preserved in the row, only its status fails.
+        assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+    else:
+        assert rows["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran; the gate is the completeness row
     row = _completeness(junit_dir)
     classification = {"INCOMPLETE": "TEST_SELECTION_INCOMPLETE", "ERROR": "TEST_COLLECTION_ERROR"}[expected]
     assert row[2:5] == ("FAIL", "1" if expected == "INCOMPLETE" else "2", classification)
