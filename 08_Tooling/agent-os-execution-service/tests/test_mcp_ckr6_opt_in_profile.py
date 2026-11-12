@@ -135,6 +135,48 @@ def test_reader_refuses_empty_token() -> None:
         reader.read_issue_comments(REPOSITORY, ISSUE)
 
 
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, OSError])
+def test_reader_token_provider_exception_fails_closed_without_leaking(failure) -> None:
+    secret = "ghs_sensitive-provider-detail"
+
+    class _FailingProvider:
+        def get_installation_token(self):
+            raise failure(secret)
+
+    reader = GitHubIssueCommentReader(
+        token_provider=_FailingProvider(),
+        http_get=lambda url, headers: pytest.fail("HTTP must not be called"),
+    )
+    with pytest.raises(GitHubIssueCommentReadUnavailable) as caught:
+        reader.read_issue_comments(REPOSITORY, ISSUE)
+    assert caught.value.reason_code == "HOST_READ_PATH_UNAVAILABLE"
+    assert secret not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+def test_wrapper_token_provider_failure_returns_stop() -> None:
+    class _FailingProvider:
+        def get_installation_token(self):
+            raise RuntimeError("ghs_secret-must-not-leak")
+
+    reader_module.set_github_issue_comment_reader(
+        GitHubIssueCommentReader(
+            token_provider=_FailingProvider(),
+            http_get=lambda url, headers: pytest.fail("HTTP must not be called"),
+        )
+    )
+    result = _consume()
+    assert result["status"] == "manual-review"
+    assert result["reason_codes"] == ["HOST_READ_PATH_UNAVAILABLE"]
+    assert result["host_read_path_available"] is False
+    assert result["ckr6_admits_boundary"] is False
+    assert result["selected_lesson_ids"] == []
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["mutation_admissible"] is False
+    assert "ghs_secret" not in json.dumps(result)
+    _assert_no_authority(result)
+
+
 def test_reader_refuses_other_repositories() -> None:
     reader = GitHubIssueCommentReader(token_provider=_StaticProvider())
     with pytest.raises(ValueError, match="scoped to exactly"):
