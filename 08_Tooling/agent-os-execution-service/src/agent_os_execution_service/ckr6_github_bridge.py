@@ -947,8 +947,27 @@ def ckr6_result_admits_boundary(payload: Mapping[str, object]) -> bool:
     admission. Everything else (blocked, fallback, learning results) is STOP.
     This is an execution-order decision only; it grants no repository write,
     merge, or closure authority. Call it only on ``consume``/``select`` output.
+
+    A ``sufficient`` issue-start result additionally requires a non-empty
+    ``selected_lesson_ids`` list of non-blank, unique strings (T11/Q1). The
+    real producer can never emit sufficient-with-empty or with duplicates --
+    select_coding_knowledge returns SUFFICIENT only from a non-empty best
+    bucket (an empty ranked set is INSUFFICIENT) and deduplicates identities
+    before selection -- so this changes no real-traffic behavior; it closes
+    the consumer gap where a forged sufficient-with-empty record admitted.
+    ``not-needed`` and ``unavailable-safe-fallback`` legitimately carry empty
+    selections and are unchanged.
     """
     if payload.get("operation") == "issue-start":
+        if payload.get("status") == "sufficient":
+            selected = payload.get("selected_lesson_ids")
+            if (
+                not isinstance(selected, list)
+                or not selected
+                or any(type(item) is not str or not item.strip() for item in selected)
+                or len(set(selected)) != len(selected)
+            ):
+                return False
         return payload.get("substantial_hypothesis_admissible") is True
     if payload.get("operation") == "failed-repair":
         return payload.get("mutation_admissible") is True

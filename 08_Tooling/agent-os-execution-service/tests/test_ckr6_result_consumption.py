@@ -547,6 +547,40 @@ def test_p1_issue_start_admitting_outcomes_are_consumed_and_admit(status):
     assert bridge.ckr6_result_admits_boundary(payload) is True
 
 
+def test_q1_sufficient_with_empty_selection_does_not_admit():
+    # The real producer cannot emit sufficient-with-empty; a forged result must STOP.
+    payload = _consume(
+        _comment(_result(status="sufficient", selected_lesson_ids=[], selected_lessons=[]))
+    )
+    assert bridge.ckr6_result_admits_boundary(payload) is False
+
+
+def test_q1_sufficient_with_blank_selection_id_does_not_admit():
+    payload = _consume(
+        _comment(
+            _result(
+                status="sufficient",
+                selected_lesson_ids=["  "],
+                selected_lessons=[],
+            )
+        )
+    )
+    assert bridge.ckr6_result_admits_boundary(payload) is False
+
+
+def test_q1_sufficient_with_duplicate_selection_ids_does_not_admit():
+    payload = _consume(
+        _comment(
+            _result(
+                status="sufficient",
+                selected_lesson_ids=["LL-87", "LL-87"],
+                selected_lessons=[],
+            )
+        )
+    )
+    assert bridge.ckr6_result_admits_boundary(payload) is False
+
+
 def test_p1_issue_start_admitting_status_with_admissible_false_is_rejected():
     with pytest.raises(ValueError, match="contradicts its admission flag"):
         _consume(_comment(_result(status="sufficient", substantial_hypothesis_admissible=False)))
