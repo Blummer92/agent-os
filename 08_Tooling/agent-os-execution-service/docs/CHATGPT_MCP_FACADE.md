@@ -151,10 +151,14 @@ caller-asserted producer identity: comment records come only from the
 server-installed read-only GitHub issue-comment reader
 (`ckr6_github_reader.py`), fed by an injectable GitHub App
 installation-token provider scoped to `Blummer92/agent-os` with read-only
-issue permissions. The pending request comment itself is independently
+issue permissions. The reader's production repository and API endpoint are
+fixed, not configurable; test injection is limited to the HTTP transport.
+The pending request comment itself is independently
 re-read from the same authenticated fetch: its GitHub `created_at` is the
 timing bound, and the caller-supplied timestamp is only cross-checked
-against it, so a caller-supplied timestamp alone never proves request
+against it. The request must also be an unedited, correctly located CKR6
+command whose canonical envelope matches the repository, issue, operation,
+and failed-repair attempt. An unrelated comment ID never establishes request
 identity. The host operator installs that reader at server startup
 (`set_github_issue_comment_reader`); minting, scoping, and rotating the
 installation token remain host-operator work, and no credential is created,
@@ -164,7 +168,7 @@ or when the GitHub API read fails — the wrapper returns STOP with
 `HOST_READ_PATH_UNAVAILABLE` (or `github-api-failure`); it never admits on
 caller-pasted JSON, and it never performs a GitHub write. The reader fetches
 one page of at most 100 comments with a 30-second timeout and an 8 MiB
-response bound; a result past page 1 is missed and fails closed as
+response bound enforced during the HTTP read; a result past page 1 is missed and fails closed as
 `ckr6-result-not-returned`.
 
 The wrapper's decision is execution-order only: `ckr6_admits_boundary: True`
