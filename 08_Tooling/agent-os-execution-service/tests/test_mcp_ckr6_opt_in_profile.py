@@ -407,3 +407,71 @@ def test_wrapper_never_grants_authority() -> None:
         assert result["closure_authorized"] is False
         assert result["github_writes_authorized"] is False
         assert result["side_effects_performed"] is False
+
+# --- Copilot review #5880672430: trusted request and scope regression ------
+
+
+@pytest.mark.parametrize("bad_body", [
+    "unrelated comment",
+    '/agent-os ckr6 {"operation": "issue-start", "repository": "Other/repo", "issue_number": 2425, "task_reference": "x"}',
+    '/agent-os ckr6 {"operation": "failed-repair", "repository": "Blummer92/agent-os", "issue_number": 2425, "task_reference": "x", "attempt_id": "a", "failed_hypothesis": "h", "result_summary": "r"}',
+])
+def test_wrapper_never_uses_unrelated_request_as_timing_anchor(bad_body):
+    request = _request_comment()
+    request["body"] = bad_body
+    _install_reader([request, _comment(_result())], include_request=False)
+    decision = _consume()
+    assert decision["ckr6_admits_boundary"] is False
+    assert decision["reason_codes"] == ["ckr6-request-identity-mismatch"]
+    _assert_no_authority(decision)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("issue_url", "https://api.github.com/repos/Other/repo/issues/2425"),
+    ("html_url", "https://github.com/Other/repo/issues/2425#issuecomment-1000"),
+    ("updated_at", "2026-11-11T10:00:05Z"),
+])
+def test_wrapper_rejects_wrong_location_or_edited_request(field, value):
+    request = _request_comment()
+    request[field] = value
+    _install_reader([request, _comment(_result())], include_request=False)
+    decision = _consume()
+    assert decision["ckr6_admits_boundary"] is False
+    assert decision["reason_codes"] == ["ckr6-request-identity-mismatch"]
+    _assert_no_authority(decision)
+
+
+def test_wrapper_out_of_scope_repository_returns_stop_without_reader_access():
+    seen = _install_reader([_comment(_result())])
+    decision = _consume(repository="Other/repo")
+    assert decision["ckr6_admits_boundary"] is False
+    assert decision["reason_codes"] == ["ckr6-repository-out-of-scope"]
+    assert decision["host_read_path_available"] is False
+    assert "url" not in seen
+    _assert_no_authority(decision)
+
+
+def test_reader_endpoint_is_not_configurable():
+    with pytest.raises(TypeError):
+        GitHubIssueCommentReader(token_provider=_StaticProvider(), api_base_url="https://example.com")
+    with pytest.raises(TypeError):
+        GitHubIssueCommentReader(token_provider=_StaticProvider(), allowed_repository="Other/repo")
+
+
+def test_production_http_reader_bounds_download(monkeypatch):
+    from agent_os_execution_service import ckr6_github_reader
+    class _Response:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, size=-1):
+            assert size == ckr6_github_reader._MAX_RESPONSE_BYTES + 1
+            return b"[]"  # no unbounded read
+    monkeypatch.setattr(ckr6_github_reader.urllib.request, "urlopen",
+                        lambda request, timeout: _Response())
+    status, body = ckr6_github_reader._urllib_http_get(
+        "https://api.github.com/repos/Blummer92/agent-os/issues/2425/comments",
+        {"Authorization": "Bearer test"})
+    assert status == 200 and body == b"[]"
