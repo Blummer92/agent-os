@@ -10,7 +10,7 @@ import argparse
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, TypedDict, cast
@@ -101,6 +101,11 @@ class Ckr6Envelope:
     result_summary: str | None = None
     repair_context: str = "failed-pr-repair"
     detail: Mapping[str, object] | None = None
+    # Where the request comment lives: "issue" for an ordinary issue, "pr"
+    # for a top-level PR Conversation comment. Set by envelope_from_event
+    # from the event's issue record, never by the envelope JSON itself; the
+    # result payload carries no target kind (RESULT_FIELDS is fixed).
+    target_kind: str = "issue"
 
 
 class _PreflightArgs(TypedDict):
@@ -331,8 +336,17 @@ def envelope_from_event(
     comment = event.get("comment")
     if not isinstance(repository, Mapping) or repository.get("full_name") != expected_repository:
         raise ValueError("event repository identity mismatch")
-    if not isinstance(issue, Mapping) or "pull_request" in issue:
+    if not isinstance(issue, Mapping):
         raise ValueError("CKR6 ingress accepts issue comments only")
+    # A top-level PR Conversation comment arrives as an issue_comment event
+    # whose issue record carries a "pull_request" mapping; the event issue
+    # number is the PR number. Only a mapping counts: any other
+    # "pull_request" value is a malformed event and keeps the old rejection
+    # (and its "pull-request-comment" rejection code).
+    pull_request = issue.get("pull_request")
+    if pull_request is not None and not isinstance(pull_request, Mapping):
+        raise ValueError("CKR6 ingress accepts issue comments only")
+    target_kind = "pr" if isinstance(pull_request, Mapping) else "issue"
     if not isinstance(comment, Mapping):
         raise ValueError("comment evidence missing")
     user = comment.get("user")
@@ -351,7 +365,7 @@ def envelope_from_event(
         raise ValueError("envelope repository does not match event repository")
     if envelope.issue_number != issue.get("number"):
         raise ValueError("envelope issue_number does not match event issue")
-    return envelope
+    return replace(envelope, target_kind=target_kind)
 
 
 def _request(envelope: Ckr6Envelope) -> CodingKnowledgeRequest:
@@ -695,8 +709,18 @@ def _trusted_result_body(
     expected_request_created_at: object,
     expected_issue_number: int,
     expected_repository: str,
+    expected_target_kind: str = "issue",
 ) -> str:
-    """Return the body of a comment only if its GitHub record is trusted."""
+    """Return the body of a comment only if its GitHub record is trusted.
+
+    ``expected_target_kind`` is ``"issue"`` for an ordinary issue and
+    ``"pr"`` for a top-level PR Conversation comment. The REST
+    ``issue_url`` stays ``/issues/N`` for both kinds, while the HTML
+    location is kind-exact: ``/issues/N`` for issues, ``/pull/N`` for PRs.
+    A cross-target location is refused, never coerced.
+    """
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
     if not isinstance(comment, Mapping):
         raise ValueError("CKR6 result comment record must be a mapping")
     comment_id = comment.get("id")
@@ -731,11 +755,23 @@ def _trusted_result_body(
         f"https://api.github.com/repos/{expected_repository}/issues/{expected_issue_number}"
     ):
         raise ValueError("CKR6 result comment location does not match the pending request")
-    if html_url is not None and html_url != (
-        f"https://github.com/{expected_repository}/issues/{expected_issue_number}"
-        f"#issuecomment-{comment_id}"
-    ):
-        raise ValueError("CKR6 result comment location does not match the pending request")
+    if html_url is not None:
+        # GitHub's HTML location for a PR Conversation comment is
+        # /pull/N#issuecomment-ID, while its REST issue_url stays /issues/N.
+        # The expected form is exact per target kind; an /issues/N HTML
+        # location never satisfies a PR target, nor /pull/N an issue target.
+        if expected_target_kind == "pr":
+            expected_html_url = (
+                f"https://github.com/{expected_repository}/pull/{expected_issue_number}"
+                f"#issuecomment-{comment_id}"
+            )
+        else:
+            expected_html_url = (
+                f"https://github.com/{expected_repository}/issues/{expected_issue_number}"
+                f"#issuecomment-{comment_id}"
+            )
+        if html_url != expected_html_url:
+            raise ValueError("CKR6 result comment location does not match the pending request")
     created = _utc(comment.get("created_at"), "created_at")
     if created < _utc(expected_request_created_at, "expected_request_created_at"):
         raise ValueError("CKR6 result comment predates the pending request")
@@ -789,6 +825,7 @@ def consume_ckr6_result_comment(
     expected_repository: str,
     expected_operation: str,
     expected_attempt_id: str | None = None,
+    expected_target_kind: str = "issue",
 ) -> dict[str, object]:
     """Consume one trusted CKR6 result comment as the answer to a pending request.
 
@@ -800,7 +837,9 @@ def consume_ckr6_result_comment(
     admission flags consistent, and (failed-repair) name the exact current
     attempt. A valid blocked result is returned as STOP evidence, not rejected;
     ``ckr6_result_admits_boundary`` turns it into a decision. Raises
-    ``ValueError`` otherwise.
+    ``ValueError`` otherwise. ``expected_target_kind`` is ``"issue"`` for an
+    ordinary issue and ``"pr"`` for a top-level PR Conversation comment; the
+    HTML location must match that kind exactly.
     """
     expected_request_comment_id = _expected_id(
         expected_request_comment_id, "expected_request_comment_id"
@@ -810,6 +849,8 @@ def consume_ckr6_result_comment(
         raise ValueError("expected_repository must be non-empty exact text")
     if type(expected_operation) is not str or expected_operation not in OPERATIONS:
         raise ValueError("expected_operation must be a supported CKR6 operation")
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
     if expected_attempt_id is not None and (
         type(expected_attempt_id) is not str or not expected_attempt_id.strip()
     ):
@@ -821,6 +862,7 @@ def consume_ckr6_result_comment(
         expected_request_created_at=expected_request_created_at,
         expected_issue_number=expected_issue_number,
         expected_repository=expected_repository,
+        expected_target_kind=expected_target_kind,
     )
     payload = parse_ckr6_result_comment(body)
     unknown = set(payload) - RESULT_FIELDS - {"request_comment_id"}
@@ -886,6 +928,7 @@ def select_ckr6_result_comment(
     expected_repository: str,
     expected_operation: str,
     expected_attempt_id: str | None = None,
+    expected_target_kind: str = "issue",
 ) -> dict[str, object]:
     """Select the exactly-one trusted CKR6 result answering a pending request.
 
@@ -896,7 +939,9 @@ def select_ckr6_result_comment(
     nor force an ambiguity. Fails closed when no trusted result answers the
     request (``result-not-returned``) or when two distinct trusted payloads
     claim it. Identical duplicates collapse to one. The selection is then bound
-    through ``consume_ckr6_result_comment``.
+    through ``consume_ckr6_result_comment``. ``expected_target_kind`` is
+    ``"issue"`` for an ordinary issue and ``"pr"`` for a top-level PR
+    Conversation comment; the HTML location must match that kind exactly.
     """
     if comments is None or isinstance(comments, (str, bytes, Mapping)):
         raise TypeError("comments must be an iterable of comment records")
@@ -904,6 +949,8 @@ def select_ckr6_result_comment(
         expected_request_comment_id, "expected_request_comment_id"
     )
     expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
     distinct: dict[str, Mapping[str, object]] = {}
     for comment in comments:
         if not isinstance(comment, Mapping):
@@ -918,6 +965,7 @@ def select_ckr6_result_comment(
                 expected_request_created_at=expected_request_created_at,
                 expected_issue_number=expected_issue_number,
                 expected_repository=expected_repository,
+                expected_target_kind=expected_target_kind,
             )
             parsed = parse_ckr6_result_comment(body)
         except (TypeError, ValueError):
@@ -937,6 +985,7 @@ def select_ckr6_result_comment(
         expected_repository=expected_repository,
         expected_operation=expected_operation,
         expected_attempt_id=expected_attempt_id,
+        expected_target_kind=expected_target_kind,
     )
 
 

@@ -252,6 +252,29 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
     assert len(fake.posts) == 1
 
 
+# --- Positive: a PR Conversation failure posts to the same endpoint --------
+
+
+def test_infrastructure_failure_on_pr_conversation_posts_fallback(transport):
+    event = {
+        **_event(),
+        "issue": {
+            "number": ISSUE_NUMBER,
+            "pull_request": {
+                "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3502"
+            },
+        },
+    }
+    outcome = _post(transport, event=event)
+    assert outcome["issue_number"] == ISSUE_NUMBER
+    assert outcome["request_comment_id"] == REQUEST_COMMENT_ID
+    assert outcome["deduplicated"] is False
+    assert len(transport.posts) == 1
+    assert transport.posts[0].full_url == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3502/comments"
+    )
+
+
 # --- Negative: ineligible events never produce a postback -------------------
 
 
@@ -266,7 +289,8 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
             **_event(),
             "issue": {
                 "number": ISSUE_NUMBER,
-                "pull_request": {"url": "https://example.invalid/pr"},
+                # Malformed (non-mapping) pull_request value: still rejected.
+                "pull_request": "https://example.invalid/pr",
             },
         },
         {**_event(), "repository": {"full_name": "Other/repo"}},

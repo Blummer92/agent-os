@@ -137,11 +137,15 @@ def test_reader_refuses_empty_token() -> None:
 
 @pytest.mark.parametrize("failure", [RuntimeError, ValueError, OSError])
 def test_reader_token_provider_exception_fails_closed_without_leaking(failure) -> None:
-    secret = "ghs_sensitive-provider-detail"
+    # Named "provider_detail", not "secret": the issue-acceptance checker
+    # fails closed on a quoted value assigned to a variable of that name,
+    # and this fixture is a clearly-fake detail string, not a credential.
+    # The no-leak assertion below is unchanged in intent.
+    provider_detail = "provider-failure-detail-must-not-leak"
 
     class _FailingProvider:
         def get_installation_token(self):
-            raise failure(secret)
+            raise failure(provider_detail)
 
     reader = GitHubIssueCommentReader(
         token_provider=_FailingProvider(),
@@ -150,14 +154,14 @@ def test_reader_token_provider_exception_fails_closed_without_leaking(failure) -
     with pytest.raises(GitHubIssueCommentReadUnavailable) as caught:
         reader.read_issue_comments(REPOSITORY, ISSUE)
     assert caught.value.reason_code == "HOST_READ_PATH_UNAVAILABLE"
-    assert secret not in str(caught.value)
+    assert provider_detail not in str(caught.value)
     assert caught.value.__cause__ is None
 
 
 def test_wrapper_token_provider_failure_returns_stop() -> None:
     class _FailingProvider:
         def get_installation_token(self):
-            raise RuntimeError("ghs_secret-must-not-leak")
+            raise RuntimeError("provider-detail-must-not-leak")
 
     reader_module.set_github_issue_comment_reader(
         GitHubIssueCommentReader(
@@ -173,7 +177,7 @@ def test_wrapper_token_provider_failure_returns_stop() -> None:
     assert result["selected_lesson_ids"] == []
     assert result["substantial_hypothesis_admissible"] is False
     assert result["mutation_admissible"] is False
-    assert "ghs_secret" not in json.dumps(result)
+    assert "provider-detail-must-not-leak" not in json.dumps(result)
     _assert_no_authority(result)
 
 

@@ -47,6 +47,82 @@ def test_event_parser_binds_repo_issue_actor_and_strict_json_envelope():
     assert result.operation == "issue-start"
     assert result.issue_number == 2851
     assert result.specialized_knowledge_required is False
+    assert result.target_kind == "issue"
+
+
+def _pr_event(envelope=None, **changes):
+    """Top-level PR Conversation comment: issue_comment event whose issue
+    record carries a "pull_request" mapping; the event number is the PR."""
+    value = event(envelope)
+    value["issue"] = {
+        "number": 2851,
+        "pull_request": {
+            "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/2851"
+        },
+    }
+    value.update(changes)
+    return value
+
+
+def test_event_parser_accepts_top_level_pr_conversation_comment():
+    result = bridge.envelope_from_event(
+        _pr_event(), expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+    )
+    assert result.operation == "issue-start"
+    assert result.issue_number == 2851
+    assert result.target_kind == "pr"
+
+
+def test_event_parser_accepts_failed_repair_on_pr_conversation():
+    envelope = payload(
+        operation="failed-repair",
+        attempt_id="attempt-42",
+        failed_hypothesis="first repair failed",
+        result_summary="CI still red",
+        repair_context="failed-pr-repair",
+    )
+    result = bridge.envelope_from_event(
+        _pr_event(envelope),
+        expected_repository="Blummer92/agent-os",
+        allowed_actor="Blummer92",
+    )
+    assert result.operation == "failed-repair"
+    assert result.attempt_id == "attempt-42"
+    assert result.target_kind == "pr"
+
+
+@pytest.mark.parametrize("bad_pull_request", ["https://example.invalid/pr", 123, True])
+def test_event_parser_rejects_malformed_pull_request_value(bad_pull_request):
+    bad = _pr_event()
+    bad["issue"] = {"number": 2851, "pull_request": bad_pull_request}
+    with pytest.raises(ValueError, match="CKR6 ingress accepts issue comments only"):
+        bridge.envelope_from_event(
+            bad, expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+        )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _pr_event(
+            comment={"body": "/agent-os ckr6 {}", "user": {"login": "SomebodyElse"}}
+        ),
+        _pr_event(
+            {
+                "operation": "issue-start",
+                "repository": "Other/repo",
+                "issue_number": 2851,
+                "task_reference": "issue:#2851",
+            }
+        ),
+        _pr_event(payload(issue_number=9999)),
+    ],
+)
+def test_event_parser_rejects_mismatched_pr_comment(bad):
+    with pytest.raises(ValueError):
+        bridge.envelope_from_event(
+            bad, expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+        )
 
 
 @pytest.mark.parametrize(

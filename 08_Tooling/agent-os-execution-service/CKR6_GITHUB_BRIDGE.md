@@ -82,6 +82,74 @@ boundaries in #2425 itself. No host invocation of this consumer is
 proven by the repository tests; live host consumption remains owned by
 #2425/#3559.
 
+## PR Conversation comments
+
+A top-level PR Conversation comment arrives as an `issue_comment` event
+whose issue record carries a `pull_request` mapping; the event issue
+number is the PR number. `envelope_from_event` admits it with every
+existing control intact (exact repository, owner actor `Blummer92`,
+`/agent-os ckr6 ` prefix, at most 16 KiB, one canonical JSON envelope,
+envelope repository/target matching the event) and records
+`target_kind: "pr"` on the envelope (`"issue"` for ordinary issues).
+A non-mapping `pull_request` value is a malformed event and keeps the
+old rejection (`envelope-rejected:pull-request-comment`). Inline PR
+review comments never reach this ingress: they arrive as
+`pull_request_review_comment` events, not `issue_comment` events, so the
+workflow trigger excludes them before any bridge code runs.
+
+Result location is kind-exact. The REST `issue_url` stays
+`https://api.github.com/repos/{repo}/issues/{N}` for both kinds, while
+the HTML location is `https://github.com/{repo}/issues/{N}#issuecomment-{id}`
+for issues and `https://github.com/{repo}/pull/{N}#issuecomment-{id}` for
+PRs. `consume_ckr6_result_comment` and `select_ckr6_result_comment` take
+`expected_target_kind` (`"issue"` by default, `"pr"` for a PR target)
+and refuse any cross-target location. The MCP wrapper
+(`consume_agent_os_ckr6_result_tool`) stays issue-target-only; the
+connector route validates through these bridge functions instead. The
+failure-postback reporter (`scripts/ckr6_failure_postback.py`) admits PR
+events the same way; its postback target
+(`/repos/{repo}/issues/{n}/comments`) is the same endpoint for both kinds.
+
+Deployment boundary: the bridge code above accepts PR events, but the
+workflow file `.github/workflows/agent-os-ckr6.yml` still gates them out
+at `classify` (`github.event.issue.pull_request == null`), and
+`issue_comment` workflows only run from the default branch. Until that
+workflow change is separately authorized, merged, and deployed to the
+default branch, a PR Conversation command stays silent at the workflow
+gate and the live route is unverified. No live canary has been posted
+under this route.
+
+## Connector-only host recipe (GitHub connector, no MCP app required)
+
+The host needs no custom ChatGPT MCP app, secure tunnel, or second MCP
+server for this route. The existing GitHub connector writes one
+top-level PR Conversation comment and reads the result back:
+
+1. Prepare the exact CKR6 envelope (`issue-start` or `failed-repair`
+   with its `attempt_id`) for the target PR number and repository
+   `Blummer92/agent-os`, as `/agent-os ckr6 <canonical JSON>`.
+2. Post it once as a top-level PR Conversation comment. Do not repost
+   on a missing result; a duplicate command is a second request.
+3. Read back the posted comment independently (fresh GitHub GET) and
+   record its comment id and `created_at`. Never trust a pasted id.
+4. Poll the PR's issue-comment records (bounded: 12 polls at least 30 s
+   apart, 6-minute deadline) for a comment carrying the
+   `<!-- agent-os-ckr6-result:v1 -->` marker with the same
+   `request_comment_id`.
+5. Fetch the canonical result record and validate it with
+   `select_ckr6_result_comment` / `consume_ckr6_result_comment`
+   (`expected_target_kind="pr"`, exact request id/time, expected
+   operation, and for failed-repair the exact `attempt_id`).
+6. Admit only on `ckr6_result_admits_boundary(payload)`; any blocked,
+   missing, ambiguous, or timed-out result is a STOP — resume the
+   original mission only on an explicit admit, never on a pasted body.
+
+This route does not create mandatory native ChatGPT pre-model
+enforcement: CKR6 runs when the host posts the command and honors the
+result; nothing in this repository forces the host to do so. The
+opt-in MCP profile (`chatgpt-ckr6-opt-in`) remains optional and is not
+required for this route.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure
