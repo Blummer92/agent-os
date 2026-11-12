@@ -22,13 +22,19 @@ A is applied only to the existing Claude launch seam and labelled
 * **Trusted:** the process running `ModelGateway`. It alone holds the provider
   backend/credential and mints admission receipts. Receipts never leave it.
 * **Untrusted:** workers. A worker is a separate OS process started by
-  `supervisor.spawn_isolated_worker`: a **unique** unprivileged uid per worker
-  (so one worker cannot read, ptrace, or `pidfd_getfd` another's gateway
-  socket; QA reproduced exactly that when uids were shared), an empty network
-  namespace verified to hold only `lo`, `no_new_privs`, scrubbed environment,
-  only the gateway socket inherited, and proof that root cannot be regained
-  before `exec`. The worker starts only after the launcher reports readiness. It has no credential, no
-  backend handle, no route to the provider. It can send a **prompt** over
+  `supervisor.spawn_isolated_worker`: a **host-unique** unprivileged uid per
+  worker, an empty network namespace verified to hold only `lo`,
+  `no_new_privs`, its own session, a scrubbed environment, only the gateway
+  socket inherited, and proof that root cannot be regained before `exec`. The
+  worker starts only after the launcher reports readiness. Uid uniqueness is what
+  stops one worker reading, ptracing, or `pidfd_getfd`-ing another's admitted
+  gateway socket (QA reproduced that bypass with shared uids, then with
+  colliding allocators). `UidAllocator` therefore keeps a flock'd counter and an
+  exclusive per-uid lock in a 0700 state dir shared by every supervisor process
+  and fork on the host (default `/run/agent-os-ckr6-uid-alloc`, created only
+  when a worker is first spawned), refuses a uid with any live process or any
+  real account, and refuses an untrusted state dir. `InProcessUidAllocator` is
+  for tests only. It can send a **prompt** over
   `rpc.GatewayRpcServer`; frames cannot carry identity, materiality, admission,
   or receipts (strict per-method field allow-list). Repository, issue, task,
   attempt, and hints are fixed by the trusted side when the connection is made.

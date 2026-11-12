@@ -99,7 +99,11 @@ class Ckr6Admitter:
         trace.record("materiality-classified", expected_material=expected_material,
                      source="canonical-classify_envelope")
         if request.operation == "failed-repair":
-            if self.verify_failed_attempt is None or self.verify_failed_attempt(request) is not True:
+            try:
+                verified = self.verify_failed_attempt is not None and self.verify_failed_attempt(request) is True
+            except Exception:  # noqa: BLE001
+                verified = False
+            if not verified:
                 raise StopBoundary("failed-attempt-record-not-verified")
             trace.record("failed-attempt-record-verified")
         body = bridge.COMMAND_PREFIX + json.dumps(request.envelope_payload(), separators=(",", ":"),
@@ -265,7 +269,11 @@ class Ckr6Admitter:
         else:  # fallback
             if not expected_material:
                 raise StopBoundary("nonmaterial-fallback")
-            if self._verify_unavailability is None or self._verify_unavailability(request, result) is not True:
+            try:
+                verified = self._verify_unavailability is not None and self._verify_unavailability(request, result) is True
+            except Exception:  # noqa: BLE001
+                verified = False
+            if not verified:
                 raise StopBoundary("canonical-unavailability-not-verified")
             trace.record("canonical-unavailability-verified")
         return selected

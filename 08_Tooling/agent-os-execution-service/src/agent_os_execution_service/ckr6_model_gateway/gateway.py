@@ -91,12 +91,17 @@ class ModelGateway:
 
     def _still_current(self, request: InvocationRequest) -> None:
         """Re-check the live binding immediately before every dispatch (stale head/attempt)."""
-        if request.operation == "failed-repair" and (
-                self._admitter.verify_failed_attempt is None
-                or self._admitter.verify_failed_attempt(request) is not True):
-            raise StopBoundary("stale-failed-attempt")
-        if self._verify_binding_current is not None and self._verify_binding_current(request) is not True:
-            raise StopBoundary("stale-binding")
+        try:
+            if request.operation == "failed-repair" and (
+                    self._admitter.verify_failed_attempt is None
+                    or self._admitter.verify_failed_attempt(request) is not True):
+                raise StopBoundary("stale-failed-attempt")
+            if self._verify_binding_current is not None and self._verify_binding_current(request) is not True:
+                raise StopBoundary("stale-binding")
+        except StopBoundary:
+            raise
+        except Exception:  # noqa: BLE001 - a crashing hook is a STOP, never an admission or a stuck key
+            raise StopBoundary("binding-check-failed") from None
 
     # ---------------------------------------------------------------- receipts
     def _issue_receipt(self, trace: Trace, request: InvocationRequest, proof: AdmissionProof, *,

@@ -305,6 +305,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+_ALLOC = []
+
+
+def make_allocator():
+    """A file-backed allocator in a private 0700 temp dir: tests never touch the host's /run state."""
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import UidAllocator
+    if not _ALLOC:
+        _ALLOC.append(UidAllocator(tempfile.mkdtemp(prefix="aos-uids-")))
+    return _ALLOC[0]
+
+
 WORKER_SOURCE = r'''
 import json, os, socket, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -374,7 +385,8 @@ def run_worker(gateway, binding, provider, *, source=None):
             proc = spawn_isolated_worker(
                 [sys.executable, "-I", str(workdir / "worker.py"), provider.host, str(provider.port)],
                 pass_fds=(child_sock.fileno(),),
-                env={"AOS_GATEWAY_FD": str(child_sock.fileno())}, cwd=str(workdir))
+                env={"AOS_GATEWAY_FD": str(child_sock.fileno())}, cwd=str(workdir),
+                allocator=make_allocator())
         except IsolationUnavailable:
             return None  # fail-closed: no worker was started at all
         stdout, stderr = proc.communicate(timeout=60)
@@ -1013,25 +1025,123 @@ def test_isolated_spawn_fails_closed_when_isolation_is_impossible(monkeypatch):
         supervisor.spawn_isolated_worker([sys.executable, "-I", "-c", "print('must never run')"])
 
 
-def test_launcher_failure_raises_instead_of_returning_a_dead_or_unisolated_process():
+def test_launcher_failure_raises_instead_of_returning_a_dead_or_unisolated_process(monkeypatch):
     from agent_os_execution_service.ckr6_model_gateway import supervisor
-
-    class RootAllocator:  # a bad allocator must not be able to produce an un-dropped worker
-        def allocate(self):
-            return 0
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import InProcessUidAllocator
+    never = [sys.executable, "-I", "-c", "print('must never run')"]
     with pytest.raises(supervisor.IsolationUnavailable):
-        supervisor.spawn_isolated_worker([sys.executable, "-I", "-c", "print('must never run')"],
-                                         allocator=RootAllocator())
+        supervisor.spawn_isolated_worker([], allocator=make_allocator())
+    root = InProcessUidAllocator(0, 1)  # a bad allocator must not be able to produce an un-dropped worker
     with pytest.raises(supervisor.IsolationUnavailable):
-        supervisor.spawn_isolated_worker([])
+        supervisor.spawn_isolated_worker(never, allocator=root)
+    failing = Path(tempfile.mkdtemp(prefix="aos-launcher-")) / "fail.py"
+    failing.write_text("import os\nos._exit(97)\n")
+    monkeypatch.setattr(supervisor, "_LAUNCHER", str(failing))
+    with pytest.raises(supervisor.IsolationUnavailable):  # launcher died before readiness -> raise, no Popen
+        supervisor.spawn_isolated_worker(never, allocator=make_allocator())
 
 
-def test_uid_allocator_never_hands_out_a_uid_twice_and_exhaustion_fails_closed():
-    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, UidAllocator
-    alloc = UidAllocator(start=500_000, count=3)
+def test_in_process_uid_allocator_never_hands_out_a_uid_twice_and_exhaustion_fails_closed():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, InProcessUidAllocator
+    alloc = InProcessUidAllocator(500_000, 3)
     assert [alloc.allocate() for _ in range(3)] == [500_000, 500_001, 500_002]
     with pytest.raises(IsolationUnavailable):
         alloc.allocate()
+
+
+def test_A1prime_uids_are_unique_across_processes_and_forks_sharing_one_state_dir():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import UidAllocator
+    state = tempfile.mkdtemp(prefix="aos-uids-")
+    parent = UidAllocator(state)
+    got = [parent.allocate()]  # parent has used the allocator BEFORE forking (the QA collision case)
+    pipes = []
+    for _ in range(4):
+        r, w = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                alloc = UidAllocator(state)
+                os.write(w, json.dumps([alloc.allocate() for _ in range(25)]).encode())
+            finally:
+                os._exit(0)
+        os.close(w); pipes.append((pid, r))
+    got += [parent.allocate() for _ in range(25)]
+    for pid, r in pipes:
+        data = b""
+        while chunk := os.read(r, 65536):
+            data += chunk
+        os.close(r); os.waitpid(pid, 0)
+        got += json.loads(data)
+    assert len(got) == 1 + 25 + 4 * 25 and len(set(got)) == len(got)  # no uid ever handed out twice
+
+
+def test_A1prime_a_uid_cannot_be_claimed_twice_and_an_untrusted_state_dir_is_refused():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import IsolationUnavailable, UidAllocator
+    alloc = UidAllocator(tempfile.mkdtemp(prefix="aos-uids-"))
+    first = alloc.claim(3_500_000_000)
+    with pytest.raises(IsolationUnavailable, match="worker-uid-in-use"):
+        alloc.claim(3_500_000_000)
+    first.release()
+    alloc.claim(3_500_000_000).release()  # free again once the holder is gone
+    loose = tempfile.mkdtemp(prefix="aos-uids-"); os.chmod(loose, 0o777)  # a worker could tamper with it
+    with pytest.raises(IsolationUnavailable, match="uid-state-dir-untrusted"):
+        UidAllocator(loose)
+
+
+def test_A1prime_overlapping_independent_allocators_cannot_put_two_live_workers_on_one_uid():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        IsolationUnavailable, UidAllocator, isolation_available, spawn_isolated_worker)
+    import secrets
+    sleeper = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+    base = 3_600_000_000 + secrets.randbelow(100_000_000)  # random so a leaked process can never poison a rerun
+    one = UidAllocator(tempfile.mkdtemp(prefix="aos-uids-"), start=base)
+    two = UidAllocator(tempfile.mkdtemp(prefix="aos-uids-"), start=base)  # same range, separate state
+    spawned = []
+    try:
+        try:
+            spawned.append(spawn_isolated_worker(sleeper, allocator=one))
+        except IsolationUnavailable:
+            assert isolation_available() is False  # nothing started; this run proves nothing about isolation
+            return
+        try:
+            spawned.append(spawn_isolated_worker(sleeper, allocator=two))  # would be the SAME uid as the live worker
+        except IsolationUnavailable as exc:
+            assert "worker-uid-in-use" in str(exc)
+        else:
+            pytest.fail("two live workers were given the same uid")
+    finally:
+        for proc in spawned:
+            proc.kill(); proc.communicate()
+
+
+def test_A1prime_a_uid_belonging_to_a_real_host_account_is_never_used_for_a_worker():
+    from agent_os_execution_service.ckr6_model_gateway.supervisor import (
+        InProcessUidAllocator, IsolationUnavailable, isolation_available, spawn_isolated_worker)
+    marker = Path(tempfile.mkdtemp(prefix="aos-acct-")) / "ran"
+    program = [sys.executable, "-I", "-c", f"open({str(marker)!r}, 'w').write('x')"]
+    with pytest.raises(IsolationUnavailable):  # 65534 is the real 'nobody' account on this and most hosts
+        spawn_isolated_worker(program, allocator=InProcessUidAllocator(65534, 1))
+    assert not marker.exists()  # and the program never ran, as any uid
+    assert isolation_available() in (True, False)
+
+
+def test_a_crashing_binding_hook_is_a_stop_and_never_leaves_an_idempotency_key_stuck():
+    calls = {"n": 0}
+
+    def hook(req):
+        calls["n"] += 1
+        if calls["n"] <= 2:  # the hook runs twice per turn (direct check + inside consume)
+            return True
+        raise RuntimeError("hook crashed")
+    gateway, store, backend, _ = build(verify_binding_current=hook)
+    s = gateway.open_session(request())
+    first = gateway.session_turn(s.session, "normal", "p", idempotency_key="k")
+    assert (first.admitted, first.reason) == (True, "admitted")
+    boom = gateway.session_turn(s.session, "normal", "q", idempotency_key="k2")
+    assert (boom.admitted, boom.reason) == (False, "binding-check-failed")
+    again = gateway.session_turn(s.session, "normal", "q", idempotency_key="k2")
+    assert again.replayed is True and again.reason == "binding-check-failed"  # not "in-flight" forever
+    assert len(backend.calls) == 1
 
 
 # ------------------------------------------------------------ real Claude launch seam
@@ -1170,7 +1280,8 @@ def test_A1_a_denied_worker_cannot_borrow_an_admitted_workers_gateway_socket():
         a, b = socket.socketpair(); socks.extend([a, b])
         threading.Thread(target=GatewayRpcServer(gateway, binding).serve, args=(a,), daemon=True).start()
         proc = spawn_isolated_worker([sys.executable, "-I", str(workdir / "w.py"), role, str(victim_pid)],
-                                     pass_fds=(b.fileno(),), env={"AOS_GATEWAY_FD": str(b.fileno())}, cwd=str(workdir))
+                                     pass_fds=(b.fileno(),), env={"AOS_GATEWAY_FD": str(b.fileno())}, cwd=str(workdir),
+                                     allocator=make_allocator())
         procs.append(proc)
         return proc
     try:

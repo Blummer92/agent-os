@@ -20,6 +20,7 @@ import select
 import subprocess
 import sys
 import threading
+import weakref
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -31,15 +32,63 @@ class IsolationUnavailable(RuntimeError):
     """The host cannot isolate a worker; starting one anyway would be an unenforced boundary."""
 
 
-class UidAllocator:
-    """Hands out each uid at most once per allocator, so no two workers ever share one.
+def _uid_in_use_by_live_process(uid: int) -> bool:
+    """True if ANY process on the host runs with this real/effective/saved uid."""
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/status", "rb") as fh:
+                for line in fh:
+                    if line.startswith(b"Uid:"):
+                        if uid in {int(x) for x in line.split()[1:]}:
+                            return True
+                        break
+        except OSError:
+            continue  # process exited
+    return False
 
-    Supervisors running in different processes MUST be given disjoint ranges."""
 
-    def __init__(self, start: int | None = None, count: int = 1_000_000) -> None:
-        self._next = start if start is not None else 1_000_000 + secrets.randbelow(2_000_000_000)
-        self._end = self._next + count
-        self._lock = threading.Lock()
+def _uid_is_unassigned(uid: int) -> bool:
+    import pwd
+    try:
+        pwd.getpwuid(uid)
+    except KeyError:
+        return True
+    return False
+
+
+class _Claim:
+    """Exclusive, cross-process claim on one uid, held for the worker's lifetime."""
+
+    def __init__(self, fd: int | None) -> None:
+        self._fd = fd
+
+    def release(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+
+_PROCESS_CLAIMS: set[int] = set()
+_PROCESS_CLAIMS_LOCK = threading.Lock()
+
+
+class _ProcessClaim(_Claim):
+    def __init__(self, uid: int) -> None:
+        super().__init__(None)
+        self._uid = uid
+
+    def release(self) -> None:
+        with _PROCESS_CLAIMS_LOCK:
+            _PROCESS_CLAIMS.discard(self._uid)
+
+
+class InProcessUidAllocator:
+    """Unique within ONE process only (tests). NOT safe across fork or processes: use ``UidAllocator``."""
+
+    def __init__(self, start: int, count: int) -> None:
+        self._next, self._end, self._lock = start, start + count, threading.Lock()
 
     def allocate(self) -> int:
         with self._lock:
@@ -48,9 +97,73 @@ class UidAllocator:
             uid, self._next = self._next, self._next + 1
             return uid
 
+    def claim(self, uid: int) -> _Claim:
+        with _PROCESS_CLAIMS_LOCK:
+            if uid in _PROCESS_CLAIMS:
+                raise IsolationUnavailable("worker-uid-in-use")
+            _PROCESS_CLAIMS.add(uid)
+        return _ProcessClaim(uid)
 
-_DEFAULT_ALLOCATOR = UidAllocator()
+
+DEFAULT_STATE_DIR = "/run/agent-os-ckr6-uid-alloc"
+
+
+class UidAllocator:
+    """Host-wide uid allocation shared by EVERY supervisor process (and fork) that uses the same
+    ``state_dir``: a flock'd counter hands out each uid once, and each uid is additionally held under
+    an exclusive per-uid flock for the worker's lifetime. The state dir must be a real directory
+    owned by the supervisor's uid with mode 0700 (so a worker can neither read nor tamper with it)."""
+
+    def __init__(self, state_dir: str = DEFAULT_STATE_DIR, *, start: int = 3_000_000_000,
+                 count: int = 1_000_000_000) -> None:
+        self._dir, self._start, self._end = state_dir, start, start + count
+        try:
+            os.makedirs(state_dir, mode=0o700, exist_ok=True)
+            st = os.lstat(state_dir)
+        except OSError:
+            raise IsolationUnavailable("uid-state-dir-unavailable") from None
+        import stat
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077:
+            raise IsolationUnavailable("uid-state-dir-untrusted")
+
+    def _open(self, name: str) -> int:
+        return os.open(os.path.join(self._dir, name), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+
+    def allocate(self) -> int:
+        import fcntl
+        fd = self._open("counter")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = os.pread(fd, 32, 0).strip()
+            nxt = int(raw) if raw else self._start
+            if nxt < self._start or nxt >= self._end:
+                raise IsolationUnavailable("worker-uid-range-exhausted")
+            os.pwrite(fd, str(nxt + 1).encode().ljust(32), 0)
+            os.fsync(fd)
+            return nxt
+        finally:
+            os.close(fd)  # releases the flock
+
+    def claim(self, uid: int) -> _Claim:
+        import fcntl
+        fd = self._open(f"uid-{uid}.lock")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise IsolationUnavailable("worker-uid-in-use") from None
+        return _Claim(fd)
+
+
+_DEFAULT_ALLOCATOR: UidAllocator | None = None
 _PRIVILEGED: bool | None = None
+
+
+def _default_allocator() -> UidAllocator:
+    global _DEFAULT_ALLOCATOR
+    if _DEFAULT_ALLOCATOR is None:
+        _DEFAULT_ALLOCATOR = UidAllocator()
+    return _DEFAULT_ALLOCATOR
 
 
 def isolation_available() -> bool:
@@ -62,27 +175,40 @@ def isolation_available() -> bool:
 
 
 def spawn_isolated_worker(argv: Sequence[str], *, pass_fds: Sequence[int] = (), env: Mapping[str, str] | None = None,
-                          cwd: str | None = None, allocator: UidAllocator | None = None) -> subprocess.Popen:
+                          cwd: str | None = None, allocator=None) -> subprocess.Popen:
     if not argv or not isolation_available():
         raise IsolationUnavailable("host-cannot-isolate-worker")
-    uid = (allocator or _DEFAULT_ALLOCATOR).allocate()
-    read_fd, write_fd = os.pipe()
+    allocator = allocator or _default_allocator()
+    uid = allocator.allocate()
+    claim = allocator.claim(uid)  # exclusive for the worker's lifetime, across every supervisor process
     try:
-        proc = subprocess.Popen(
-            [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), "--", *argv],
-            env={"PATH": "/usr/bin:/bin", **(env or {})}, cwd=cwd, close_fds=True,
-            pass_fds=(write_fd, *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception:
-        os.close(read_fd); os.close(write_fd)
+        if (type(uid) is not int or not 0 < uid < 2**32 - 1 or _uid_in_use_by_live_process(uid)
+                or not _uid_is_unassigned(uid)):
+            raise IsolationUnavailable("worker-uid-in-use")
+        read_fd, write_fd = os.pipe()
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-I", _LAUNCHER, str(uid), str(write_fd), "--", *argv],
+                env={"PATH": "/usr/bin:/bin", **(env or {})}, cwd=cwd, close_fds=True, start_new_session=True,
+                pass_fds=(write_fd, *pass_fds), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+        except Exception:
+            os.close(read_fd); os.close(write_fd)
+            raise
+        os.close(write_fd)
+        try:
+            ready, _, _ = select.select([read_fd], [], [], _READY_TIMEOUT_SECONDS)
+            signalled = bool(ready) and os.read(read_fd, 1) == b"R"
+        finally:
+            os.close(read_fd)
+        if not signalled:
+            proc.kill()
+            proc.communicate()
+            raise IsolationUnavailable("host-cannot-isolate-worker")
+    except BaseException:
+        claim.release()
         raise
-    os.close(write_fd)
-    try:
-        ready, _, _ = select.select([read_fd], [], [], _READY_TIMEOUT_SECONDS)
-        signalled = bool(ready) and os.read(read_fd, 1) == b"R"
-    finally:
-        os.close(read_fd)
-    if not signalled:
-        proc.kill()
-        proc.communicate()
-        raise IsolationUnavailable("host-cannot-isolate-worker")
+    # The claim lives as long as the Popen object; /proc is re-checked at the next claim in any case.
+    weakref.finalize(proc, claim.release)
+    proc.aos_uid = uid  # type: ignore[attr-defined]
     return proc
