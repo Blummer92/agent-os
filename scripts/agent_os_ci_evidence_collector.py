@@ -31,9 +31,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.agent_os_ci_evidence_health import (  # noqa: E402
     AdvisoryReport,
     StreamObservation,
+    SUBTEST_RECEIPT_PREFIX,
     classify_stream,
+    load_subtest_receipts,
     validate_advisory_report,
     validate_junit,
+    verify_subtest_receipt,
 )
 
 import hashlib
@@ -135,6 +138,11 @@ def build_collector_receipt(
         )
         classified[observation.stream] = classify_stream(observation)
     junit: dict[str, dict] = {}
+    # Legacy path: no provider-verified source binding is available here,
+    # so no subtest receipt can verify and a count-mismatched report
+    # stays REJECT_SCHEMA. Receipt-explained surplus is accepted only
+    # through build_verified_receipt / classify_junit_artifact, which
+    # carry the source run, attempt and head.
     for name, data in junit_files.items():
         try:
             ids, counts = validate_junit(data)
@@ -449,10 +457,25 @@ def health_classification_from_zip(zip_bytes: bytes, *, source_run_id: int | Non
     return classification if isinstance(classification, str) else None
 
 
-def classify_junit_artifact(zip_bytes: bytes) -> dict:
+def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = None, source_attempt: int | None = None, source_head: str | None = None) -> dict:
     """Validate a downloaded JUnit artifact: ZIP safety, every XML member
     valid, no duplicate node ids across files. Manifests and other members
-    are ignored, not parsed."""
+    are ignored, not parsed.
+
+    A member whose declared total exceeds its testcase elements is
+    accepted ONLY with a source-bound subtest receipt inside the same
+    artifact (``junit-subtest-receipt-*.json``) that verifies against
+    the provider-verified source run/attempt/head (see
+    ``verify_subtest_receipt``): the surplus must be exactly the
+    verified passing subtests, with no failure, error, skipped or
+    xfailed subtest hidden in it. Without such a receipt -- or with a
+    mis-bound, stale, conflicting or malformed one -- the surplus stays
+    REJECT_SCHEMA. ``counts`` therefore keeps ``tests`` (the declared
+    total) distinct from ``testcase_elements`` (identities present) and
+    reports ``subtests_passed`` separately; the certified evidence is
+    never ``tests`` identities. When no source binding is supplied
+    (legacy callers), no receipt can verify and surplus members are
+    rejected exactly as before."""
     try:
         members = validate_archive_members(zip_bytes)
     except ValueError:
@@ -460,17 +483,42 @@ def classify_junit_artifact(zip_bytes: bytes) -> dict:
     xml_members = [m for m in members if m.lower().endswith(".xml")]
     if not xml_members:
         return {"classification": "EVIDENCE_MISSING"}
-    seen: set[str] = set()
-    totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            for member in xml_members:
-                ids, counts = validate_junit(zf.read(member))
-                if seen.intersection(ids):
-                    return {"classification": "REJECT_SCHEMA"}
-                seen.update(ids)
-                for key in totals:
-                    totals[key] += counts.get(key, 0)
+            receipt_members = {
+                m: zf.read(m)
+                for m in members
+                if m.startswith(SUBTEST_RECEIPT_PREFIX) and m.lower().endswith(".json")
+            }
+            receipts = load_subtest_receipts(receipt_members)
+            if any(name not in xml_members for name in receipts):
+                return {"classification": "REJECT_SCHEMA"}
+            xml_data = {m: zf.read(m) for m in xml_members}
+    except (ValueError, KeyError, RuntimeError, zipfile.BadZipFile, OSError):
+        return {"classification": "REJECT_SCHEMA"}
+    seen: set[str] = set()
+    totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "subtests_passed": 0, "testcase_elements": 0}
+    try:
+        for member in xml_members:
+            data = xml_data[member]
+            try:
+                ids, counts = validate_junit(data)
+                counts = {**counts, "subtests_passed": 0, "testcase_elements": counts["tests"]}
+            except ValueError as exc:
+                if str(exc) != "testcase-count-mismatch" or member not in receipts:
+                    raise
+                ids, counts = verify_subtest_receipt(
+                    data,
+                    receipts[member],
+                    source_run_id=source_run_id,
+                    source_run_attempt=source_attempt,
+                    source_head=source_head,
+                )
+            if seen.intersection(ids):
+                return {"classification": "REJECT_SCHEMA"}
+            seen.update(ids)
+            for key in totals:
+                totals[key] += counts.get(key, 0)
     except (ValueError, KeyError, RuntimeError, zipfile.BadZipFile, OSError):
         # A well-formed central directory does not prove member bytes can
         # be read. Corrupt/unsupported member data is invalid evidence,
@@ -576,7 +624,9 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
             ):
                 junit_results[name] = {"classification": "REJECT_DIGEST"}
                 continue
-            junit_results[name] = classify_junit_artifact(data)
+            junit_results[name] = classify_junit_artifact(
+                data, source_run_id=source_run_id, source_attempt=source_attempt, source_head=source_head
+            )
         for name in duplicates:
             junit_results[name] = {"classification": "REJECT_SCHEMA"}
         authoritative = junit_results.get(aggregate_name)

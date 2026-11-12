@@ -132,6 +132,56 @@ selections and are not checked. This is not CI trust certification.
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
 
+### JUnit subtest receipts (pytest 9 counter repair)
+
+pytest 9 counts passing subtests in the suite `tests` total without
+emitting one `<testcase>` per subtest, so a genuine aggregate report
+can declare more tests than it has testcase elements (observed: root
+`tests=11994` with 11,875 elements, surplus 119 passing subtests).
+`scripts/agent_os_ci_evidence_health.validate_junit` still requires
+declared tests to equal elements: an unexplained surplus stays
+rejected there, exactly as before.
+
+The surplus is certified only in the collector, by a source-bound
+receipt. After each suite run, `validate-all.sh` calls
+`scripts/agent_os_ci_junit_subtest_receipt.py`, which reads the
+suite's captured terminal summary (an independent channel from the
+JUnit file) and writes `CI_JUNIT_DIR/junit-subtest-receipt-<suite>.json`
+with the terminal counts, the JUnit file's digest and recorded totals,
+bound to the workflow run id, attempt and head SHA from the workflow
+environment. The collector (`classify_junit_artifact`, via
+`build_verified_receipt`) accepts a surplus member only when the
+receipt verifies: same source run/attempt/head as the provider data,
+matching JUnit digest, recorded totals equal to the parsed totals,
+zero failures/errors anywhere, declared tests equal to passed +
+skipped + xfailed + failed + errors + passing subtests, suite skipped
+equal to terminal skipped + xfailed, and passed/skipped element counts
+matching the terminal counts. The certified evidence is the element
+identities plus the verified subtest count; `counts` keeps `tests`,
+`testcase_elements` and `subtests_passed` distinct and never claims
+`tests` identities.
+
+Limits, all fail-closed: only the all-passing-subtest shape is
+supported -- a skipped, xfailed or failed subtest marks its parent
+element and breaks the element equation, so it stays rejected, as do
+teardown errors and multi-outcome elements. A non-strict xfail
+(`xpassed`) top-level test is also rejected: the extractor parses it
+but the verifier's total equation omits it, and xpassed elements are
+indistinguishable from passed elements in JUnit, so a suite mixing
+xpassed with passing subtests stays rejected (fail-closed). Including
+`xpassed` in the equation is a future owner decision, not part of
+this repair. A receipt is written only
+when the summary explicitly shows a `subtests passed` segment (which
+needs `-v`, supplied by the root `pytest.ini`); absence is never read
+as zero subtests, and focused runs use `-q` so they cannot emit a
+receipt. A receipt is only as trustworthy as the artifact carrying
+it: provider binding (digest, workflow run, attempt, successful
+aggregate job) is the boundary, the same trust the JUnit XML itself
+relies on. `BY_NAME_DESIGN` / `NOT_IMPLEMENTED_EXACT` job binding is
+unchanged. Tests: `tests/test_agent_os_ci_junit_subtest_receipt.py`
+(genuine pytest 9.2.0 fixtures, negative controls, full collector
+path with fixture provider metadata).
+
 ## agent_os_frontend_checks.py
 
 Profile-independent frontend lane run by the `frontend` job of the Agent OS Validation Gate. With Node 22 on `PATH` and `origin/main` fetched, from the repository root:
