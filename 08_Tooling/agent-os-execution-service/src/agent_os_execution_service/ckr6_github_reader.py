@@ -36,7 +36,8 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 _READ_TIMEOUT_SECONDS = 30
 _USER_AGENT = "agent-os-ckr6-reader"
 # One page of at most 100 comments; bound the response so a slow or
-# oversized reply cannot grow the read without limit.
+# oversized reply cannot grow the read without limit; production reads at most
+# _MAX_RESPONSE_BYTES + 1 before rejecting it.
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
@@ -76,7 +77,7 @@ def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
     request = urllib.request.Request(url, method="GET", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=_READ_TIMEOUT_SECONDS) as response:
-            return response.status, response.read()
+            return response.status, response.read(_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
         # HTTPError is raised for non-2xx responses; the status is evidence,
         # the body is not needed and may contain provider detail.
@@ -97,13 +98,9 @@ class GitHubIssueCommentReader:
         *,
         token_provider: GitHubAppInstallationTokenProvider | None = None,
         http_get: HttpGet | None = None,
-        api_base_url: str = GITHUB_API_BASE_URL,
-        allowed_repository: str = ALLOWED_REPOSITORY,
     ) -> None:
         self._token_provider = token_provider
         self._http_get = http_get or _urllib_http_get
-        self._api_base_url = api_base_url.rstrip("/")
-        self._allowed_repository = allowed_repository
 
     def read_issue_comments(
         self, repository: str, issue_number: int
@@ -117,10 +114,10 @@ class GitHubIssueCommentReader:
         The token is used only in the ``Authorization`` header of this one
         request and is never returned, logged, or embedded in any result.
         """
-        if type(repository) is not str or repository != self._allowed_repository:
+        if type(repository) is not str or repository != ALLOWED_REPOSITORY:
             raise ValueError(
                 "GitHub issue-comment reads are scoped to exactly "
-                f"{self._allowed_repository}"
+                f"{ALLOWED_REPOSITORY}"
             )
         if type(issue_number) is not int or isinstance(issue_number, bool) or issue_number < 1:
             raise ValueError("issue_number must be a positive integer")
@@ -134,7 +131,7 @@ class GitHubIssueCommentReader:
                 "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation token is available"
             )
         url = (
-            f"{self._api_base_url}/repos/{repository}/issues/{issue_number}"
+            f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
             "/comments?per_page=100"
         )
         status, body = self._http_get(
