@@ -837,10 +837,13 @@ def test_3951_dedupe_lookup_failure_is_diagnosed_and_post_still_attempted(
 def test_2851_workflow_posts_bounded_result_with_least_privilege():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
-    # Top-level stays least-privilege; the execute job alone gains issues:write.
+    # Top-level stays read-only. PR-conversation result posting has the two
+    # bounded write scopes granted only to the postback-capable jobs.
     assert "permissions:\n  contents: read" in text
     execute_block = text.split("name: Execute finite CKR6 request", 1)[1]
-    assert "issues: write" in execute_block.split("steps:", 1)[0]
+    execute_permissions = execute_block.split("steps:", 1)[0]
+    assert "issues: write" in execute_permissions
+    assert "pull-requests: write" in execute_permissions
     # The postback always runs so the host gets a terminal signal, and it
     # cannot retrigger the ingress.
     assert "Post bounded CKR6 result to issue" in text
