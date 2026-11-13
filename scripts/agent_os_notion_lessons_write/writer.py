@@ -153,6 +153,39 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
             raise WriteBlocked("descriptive-option-not-in-live-schema")
 
 
+def activation_readiness(page: Mapping) -> dict:
+    """Report, from one canonical readback, what still blocks CKR6 retrieval.
+
+    A persisted lesson is not a retrievable lesson: the CKR6 reader
+    (``lesson_activation_bridge.normalize_lesson_row``) also needs Area,
+    Learning Type and Status, and its filtered query needs Surface Before Work?
+    checked. Status and Surface are owner-only (``PROTECTED_FIELDS``); Area and
+    Learning Type are reviewed catalog metadata. This is presence only, read
+    from the page and never written: vocabulary is judged by the reader alone,
+    and a contract test pins that the two never disagree about presence. It
+    grants no authority and changes no write.
+    """
+    props = page.get("properties") if isinstance(page, Mapping) else None
+    props = props if isinstance(props, Mapping) else {}
+
+    def selected(name: str) -> bool:
+        prop = props.get(name)
+        choice = prop.get("select") if isinstance(prop, Mapping) else None
+        return isinstance(choice, Mapping) and type(choice.get("name")) is str and bool(choice["name"].strip())
+
+    surface = props.get("Surface Before Work?")
+    present = {
+        "Area": selected("Area"), "Learning Type": selected("Learning Type"), "Status": selected("Status"),
+        "Surface Before Work?": isinstance(surface, Mapping) and surface.get("checkbox") is True,
+    }
+    missing = [name for name, ok in present.items() if not ok]
+    return {
+        "retrieval_ready": not missing,
+        "missing_owner_activation": [name for name in missing if name in PROTECTED_FIELDS],
+        "missing_reviewed_metadata": [name for name in missing if name not in PROTECTED_FIELDS],
+    }
+
+
 def execute(request: AdmittedRequest, client) -> dict:
     """Consume owner admission under the existing policy, never infer authority."""
     result = {
@@ -160,6 +193,7 @@ def execute(request: AdmittedRequest, client) -> dict:
         "status": "blocked", "reason_code": "precheck-incomplete",
         "write_attempts": 0, "readback_verified": False,
         "page_id": None, "lesson_id": None, "revision": None,
+        "activation_readiness": None,
     }
     try:
         lesson = dict(lesson_for(request.request_id))
@@ -184,7 +218,8 @@ def execute(request: AdmittedRequest, client) -> dict:
             result.update(page_id=page_id, lesson_id=_lesson_id(existing),
                           revision=existing["last_edited_time"])
             if _values(existing, lesson) == lesson:
-                result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True)
+                result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True,
+                              activation_readiness=activation_readiness(existing))
                 return result
             if target is None:
                 # A create entry never overwrites; refinement needs a reviewed
@@ -239,7 +274,8 @@ def execute(request: AdmittedRequest, client) -> dict:
                 return result
         result.update(status="persisted", reason_code="exact-canonical-readback-confirmed",
                       readback_verified=True, lesson_id=_lesson_id(readback),
-                      revision=readback["last_edited_time"])
+                      revision=readback["last_edited_time"],
+                      activation_readiness=activation_readiness(readback))
     except WriteBlocked as exc:
         result["reason_code"] = str(exc)
     except Exception:

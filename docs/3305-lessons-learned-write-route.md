@@ -127,6 +127,15 @@ Reviewed entries may now supply Area, Learning Type, Applies To and Source Link
 (D1); Status and `Surface Before Work?` remain separately governed, per-action
 owner decisions outside this writer.
 
+For `persisted` and `unchanged` results the writer also returns
+`activation_readiness`, derived from the same canonical readback: `retrieval_ready`,
+`missing_owner_activation` (Status, `Surface Before Work?`) and
+`missing_reviewed_metadata` (Area, Learning Type). It reports presence only, writes
+nothing and grants no authority; the reader alone judges vocabulary, and
+`test_lessons_write_to_ckr6_readiness.py` pins that the two agree. It is `null` for any
+result without a verified readback. A `persisted` result with
+`retrieval_ready: false` is not usable by CKR6 yet.
+
 Offline tests exercise missing metadata rejection and selection with synthetic
 owner-supplied metadata; they do not prove live activation. Any live metadata repair
 belongs to the Notion field owner, routed by ChatGPT Orchestrator under separate
