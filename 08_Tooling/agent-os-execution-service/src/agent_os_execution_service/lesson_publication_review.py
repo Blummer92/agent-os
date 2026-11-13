@@ -18,7 +18,8 @@ catalog PR, using only finite caller-supplied evidence:
   revision checks remain the only publication path.
 
 Known limit (measured, not assumed): token overlap cannot certify novelty. The
-#3690 continuation candidate and live LL-82 express nearly the same lesson in
+#3690 continuation candidate and an already-live continuation lesson (see the
+bridge doc and tests, which hold the identity) express nearly the same lesson in
 different vocabulary yet score a guidance similarity of only 0.09 (whole-text
 overlap coefficient 0.28, indistinguishable from unrelated lessons at 0.27-0.28).
 So the absence of a lexical match is reported as NO_LEXICAL_MATCH with
