@@ -16,6 +16,16 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+Transport failures are diagnosable. On 2026-11-13 the first post-merge
+PR-conversation postback (run 43340181423) and the failure reporter both
+failed with a bare `HTTP Error 403: Forbidden`; the transports had discarded
+the response detail, so the refusal could not be attributed. Both postback
+paths now raise with a bounded, sanitized diagnostic - HTTP status, the
+GitHub `message` field, and the `X-Accepted-GitHub-Permissions` /
+`X-GitHub-Request-Id` headers - and the bridge's dedupe lookup logs the same
+form when it fails. The token, request headers, and unbounded response
+bodies are never logged.
+
 ## Result consumption binding (R07, hardened by P1)
 
 `parse_ckr6_result_comment` is a pure syntax check by design: it proves

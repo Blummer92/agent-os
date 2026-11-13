@@ -325,6 +325,103 @@ def test_github_transport_failure_raises(monkeypatch):
         _post(fake)
 
 
+# --- #3951 post-merge live failure: diagnosable, sanitized 403s ----------
+
+
+def _http_403(
+    *,
+    message="Resource not accessible by integration",
+    accepted="pull-requests=write",
+    request_id="E7A1:2B3C:4D5E:6F70",
+):
+    import email.message
+    import io
+
+    headers = email.message.Message()
+    headers["X-Accepted-GitHub-Permissions"] = accepted
+    headers["X-GitHub-Request-Id"] = request_id
+    body = json.dumps(
+        {
+            "message": message,
+            "documentation_url": "https://docs.github.com/rest/issues/comments#create-an-issue-comment",
+        }
+    ).encode("utf-8")
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+        403,
+        "Forbidden",
+        headers,
+        io.BytesIO(body),
+    )
+
+
+def test_3951_reporter_post_403_surfaces_sanitized_diagnostics(monkeypatch):
+    # Live defect (run 43340181423, 2026-11-13): this reporter failed with a
+    # bare "HTTP Error 403: Forbidden" and the refusal was undiagnosable.
+    # The reporter must surface the status, GitHub's message field, and the
+    # accepted-permissions and request-id headers - and never the token.
+    class _ForbiddenPost(_Transport):
+        def __call__(self, request, timeout=None):
+            if request.get_method() == "POST":
+                raise _http_403()
+            return _Response(self.existing)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _ForbiddenPost())
+    with pytest.raises(RuntimeError) as raised:
+        _post(_ForbiddenPost())
+    detail = str(raised.value)
+    assert "failure postback failed" in detail
+    assert "HTTP 403" in detail
+    assert "Resource not accessible by integration" in detail
+    assert "x-accepted-github-permissions='pull-requests=write'" in detail
+    assert "x-github-request-id='E7A1:2B3C:4D5E:6F70'" in detail
+    assert "documentation_url" not in detail
+    assert "test-token" not in detail
+
+
+def test_3951_reporter_diagnostics_redact_token_shaped_echoes(monkeypatch):
+    # Same redaction guarantee on the stdlib-only reporter path, including
+    # an echo of the exact credential.
+    class _EchoingFailure(_Transport):
+        def __call__(self, request, timeout=None):
+            if request.get_method() == "POST":
+                raise _http_403(
+                    message="refused for credential test-token and ghp_a1b2c3d4e5f60708 echo"
+                )
+            return _Response(self.existing)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _EchoingFailure())
+    with pytest.raises(RuntimeError) as raised:
+        _post(_EchoingFailure())
+    detail = str(raised.value)
+    assert detail.count("[redacted]") == 2
+    assert "test-token" not in detail
+    assert "ghp_a1b2c3d4e5f60708" not in detail
+
+
+def test_3951_reporter_get_403_is_diagnosed_in_uncertain_reason(monkeypatch):
+    # The dedupe GET may fail independently of the POST; its bounded
+    # diagnostic must survive in the uncertainty reason after the fallback
+    # still posts (never leave the requester without a result).
+    class _ForbiddenGet(_Transport):
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            if request.get_method() == "GET":
+                raise _http_403(accepted="issues=read")
+            return _Response({"id": 6328164999})
+
+    fake = _ForbiddenGet()
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError) as raised:
+        _post(fake)
+    detail = str(raised.value)
+    assert "without verified dedupe" in detail
+    assert "HTTP 403" in detail
+    assert "issues=read" in detail
+    assert len(fake.posts) == 1
+    assert "test-token" not in detail
+
+
 # --- Uncertain dedupe: post (never leave the requester without a result), then fail visibly ----
 #
 # The bridge prefers a duplicate, non-authorizing receipt over silence when the
