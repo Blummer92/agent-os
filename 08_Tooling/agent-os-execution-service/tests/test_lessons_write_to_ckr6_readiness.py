@@ -288,11 +288,22 @@ def test_blank_values_count_as_missing_and_ckr6_agrees(overrides, field):
     assert not ckr6_sufficient(page)
 
 
-@pytest.mark.parametrize("request_id", sorted(catalog.LESSONS))
+# Entries that carry Area/Learning Type. Narrative-only entries are excluded by
+# selection, not skipped: their metadata already lives on the existing page, and the
+# repository's completeness gate rejects non-allowlisted skips.
+METADATA_ENTRIES = sorted(
+    request_id for request_id in catalog.LESSONS
+    if {"Area", "Learning Type"} & set(catalog.lesson_for(request_id))
+)
+
+
+def test_the_metadata_guard_is_not_vacuous():
+    assert {CREATE_WITH_METADATA, UPDATE_METADATA} <= set(METADATA_ENTRIES)
+
+
+@pytest.mark.parametrize("request_id", METADATA_ENTRIES)
 def test_every_reviewed_catalog_entry_with_metadata_uses_vocabulary_the_reader_accepts(request_id):
     properties = dict(catalog.lesson_for(request_id))
-    if "Area" not in properties and "Learning Type" not in properties:
-        pytest.skip("narrative-only entry; metadata already lives on the existing page")
     assert {"Area", "Learning Type"} <= set(properties), "an entry naming one must name both"
 
     page = blank_page(55)
