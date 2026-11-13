@@ -1058,6 +1058,76 @@ def _load_result(path: str) -> dict[str, object] | None:
     return payload
 
 
+# --- #3951 post-merge live failure: sanitized transport diagnostics ------
+# Run 43340181423 (2026-11-13, first PR-conversation CKR6 request) failed
+# both postback paths with a bare ``HTTP Error 403: Forbidden``: the
+# transports swallowed the HTTPError body and headers, so the refusal could
+# not be attributed (missing scope vs target state vs platform policy).
+# Surface a bounded, sanitized diagnostic instead: status, the GitHub
+# ``message`` field, and the ``X-Accepted-GitHub-Permissions`` /
+# ``X-GitHub-Request-Id`` headers. Never the token, the request headers, or
+# an unbounded response body.
+MAX_DIAGNOSTIC_MESSAGE_CHARS = 200
+_MAX_DIAGNOSTIC_BODY_BYTES = 8192
+# GitHub authors the surfaced fields, but a reflected response could still
+# echo caller-supplied text, so redact token-shaped substrings and strip
+# control characters before anything reaches the log.
+_DIAGNOSTIC_SECRET_PATTERNS = (
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+)
+
+
+def _sanitize_diagnostic_text(value: str, *, token: str, ascii_only: bool = False) -> str:
+    if ascii_only:
+        text = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in value)
+    else:
+        text = "".join(ch if ch.isprintable() else " " for ch in value)
+    # Redact the exact credential first: a reflecting server could echo it
+    # verbatim inside an otherwise ordinary message field.
+    if token:
+        text = text.replace(token, "[redacted]")
+    for pattern in _DIAGNOSTIC_SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    return text
+
+
+def _http_failure_diagnostics(exc: BaseException, *, token: str = "") -> str:
+    """Bounded, sanitized description of a GitHub transport failure."""
+    import urllib.error
+
+    if type(exc) is not urllib.error.HTTPError:
+        return type(exc).__name__
+    parts = [f"HTTP {exc.code}"]
+    try:
+        # Bounded read: at most limit+1 bytes are consumed, and an oversized
+        # body is never parsed at all.
+        body = exc.read(_MAX_DIAGNOSTIC_BODY_BYTES + 1)
+    except Exception:
+        body = b""
+    message = ""
+    if isinstance(body, (bytes, bytearray)) and 0 < len(body) <= _MAX_DIAGNOSTIC_BODY_BYTES:
+        try:
+            payload = json.loads(bytes(body).decode("utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping) and type(payload.get("message")) is str:
+            message = payload["message"]
+    if message:
+        parts.append(
+            f"message={_sanitize_diagnostic_text(message, token=token)[:MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+        )
+    headers = getattr(exc, "headers", None)
+    if headers is not None:
+        for name in ("X-Accepted-GitHub-Permissions", "X-GitHub-Request-Id"):
+            value = headers.get(name)
+            if type(value) is str and value:
+                parts.append(
+                    f"{name.lower()}={_sanitize_diagnostic_text(value, token=token, ascii_only=True)[:MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+                )
+    return "; ".join(parts)
+
+
 def _existing_result_comment(
     target: str, since: object, request_comment_id: int, token: str
 ) -> int | None:
@@ -1085,7 +1155,18 @@ def _existing_result_comment(
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             comments = json.loads(response.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        # Lookup failure is still not evidence of absence of work: the
+        # caller posts, preferring a duplicate receipt over silence. But
+        # record the bounded diagnostic so a live refusal shows whether
+        # the dedupe GET and the POST fail independently.
+        import sys
+
+        print(
+            "CKR6 result dedupe lookup failed: "
+            + _http_failure_diagnostics(exc, token=token),
+            file=sys.stderr,
+        )
         return None
     if type(comments) is not list:
         return None
@@ -1166,7 +1247,9 @@ def postback_result_comment(
         with urllib.request.urlopen(request, timeout=30) as response:
             posted = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"CKR6 result postback failed: {type(exc).__name__}") from exc
+        raise RuntimeError(
+            "CKR6 result postback failed: " + _http_failure_diagnostics(exc, token=token)
+        ) from exc
     if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
         raise RuntimeError("CKR6 result postback returned an unexpected response")
     return {
