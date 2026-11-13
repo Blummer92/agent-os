@@ -83,12 +83,12 @@ class SummaryStepTests(unittest.TestCase):
         self.assertIn("Agent OS Lessons Learned: unavailable", render(None))
 
     def test_hostile_or_unbounded_values_are_not_echoed(self):
-        secret = "ntn_" + "S" * 40
+        canary = "LEAK-CANARY-" + "x" * 40
         text = render({**BASE, "activation_prerequisites": {
-            "required_fields_present": secret,
-            "missing_owner_activation": [secret, {"raw": "notion payload"}, "Status"] + ["Area"] * 1000,
+            "required_fields_present": canary,
+            "missing_owner_activation": [canary, {"raw": "notion payload"}, "Status"] + ["Area"] * 1000,
             "missing_reviewed_metadata": "Area" * 5000}})
-        self.assertNotIn(secret, text)
+        self.assertNotIn(canary, text)
         self.assertNotIn("notion payload", text)
         self.assertIn("required_fields_present: `False`", text)
         self.assertIn("missing_reviewed_metadata: `[]`", text)

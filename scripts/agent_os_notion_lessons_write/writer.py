@@ -163,7 +163,8 @@ def activation_prerequisites(page: Mapping) -> dict:
     reviewed catalog metadata.
 
     ``required_fields_present`` is a NECESSARY condition, never eligibility. It
-    reads non-blank presence of those five fields only. It still shows True for
+    reads non-blank presence of those five fields only (Status as a ``select``,
+    as the live schema requires). It still shows True for
     a present but unrecognized Area, Learning Type or Status, Status "Archived
     note", a Source Link the reader will not accept (anything but ``https://
     github.com/`` or a repo-relative governance path, or over 512 characters),
