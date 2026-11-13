@@ -251,8 +251,10 @@ No workflow change, Notion write, store or authority is added.
   `publication_review` (`lesson_publication_review`): a write-free comparison
   of the proposed guidance against caller-supplied `existing_lessons`
   (`lesson_id`, exact `source_revision`, title, guidance, optional root cause,
-  refs; at most 25) with `existing_set_complete: true` only when the bounded
-  read-only route proved the set complete. Only byte-equal (NFKC/casefold)
+  refs; at most 25) with `existing_set_complete: true` only when the caller's
+  bounded, candidate-relevant read-only read was not truncated (it is not "all
+  of Notion": one 16 KB ingress request carries about 19 real lessons, and
+  lessons outside the supplied set are not compared). Only byte-equal (NFKC/casefold)
   guidance yields `duplicate` or `update-existing` (with the target Lesson ID
   and exact revision); paraphrases, polarity conflicts, ambiguity and an
   incomplete or unverified existing set are `human-review`; sourceless, rootless

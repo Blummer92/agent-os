@@ -24,6 +24,11 @@ overlap coefficient 0.28, indistinguishable from unrelated lessons at 0.27-0.28)
 So the absence of a lexical match is reported as NO_LEXICAL_MATCH with
 ``novelty-not-semantically-verified``, never as a validated new lesson: a human
 must still compare meaning before a catalog entry is merged.
+
+Scope of ``existing_set_complete``: the caller's bounded, candidate-relevant read was
+not truncated. It does not mean "all of Notion": the database holds far more lessons
+than the 25-lesson bound, and one ingress request (16 KB) carries only about 19 real
+lessons (~820 bytes each, measured). Lessons outside the supplied set are not compared.
 """
 
 from __future__ import annotations
