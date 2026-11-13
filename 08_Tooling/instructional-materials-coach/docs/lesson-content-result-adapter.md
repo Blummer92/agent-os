@@ -91,7 +91,10 @@ another lesson's objectives.
   `compose_generation_context`.
 - Absent Key Vocabulary produces no token. A whitespace-only optional field
   is absent, not malformed. Nothing is defaulted or inferred.
-- Without a lesson-content result, YAML-only behavior is unchanged.
+- Without a lesson-content result, YAML-only behavior is unchanged. This
+  fallback does **not** prove the lesson came from Notion; the optional
+  `--lesson-content-result` binds verified Notion metadata, while slides and
+  worksheet questions still come from separately authored content.
 
 ## Offline no-write worksheet preview
 `worksheet_preview.preview_lesson_worksheet` and
@@ -113,12 +116,12 @@ Scheduler dry-run remains an inert command-plan validator and is not
 duplicated or replaced.
 
     imc-build preview-worksheet \
-      --content <authored_lesson.yaml> \
-      --lesson-content-result <result-or-evidence.json> \
-      --request-id candy-branding-lesson-content \
-      --canonical-unit-page-id 3907ac78-3131-8132-8f84-f9fd633acba5 \
-      --lesson "Day 1" \
-      --generated-at 38462963519:1 \
+      --content authored_lesson.yaml \
+      --lesson-content-result verified_notion_lesson_result.json \
+      --request-id "<verified-lesson-content-request-id>" \
+      --canonical-unit-page-id "<verified-canonical-unit-page-id>" \
+      --lesson "<exact-Day-Lesson-Number>" \
+      --generated-at "<source-run-id>:<attempt>" \
       --preview-out preview.json
 
 ## Not in scope
