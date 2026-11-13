@@ -61,13 +61,11 @@ def _requested_lesson_skips(
     rows = raw.get("results")
     if not isinstance(rows, list) or not wanted or len(skips) >= MAX_LESSON_RECORDS:
         return
-    mapped_rows = 0
-    for row in rows:
+    # Cap raw entries inspected, not just valid mapping entries. A response
+    # containing unlimited malformed values must not expand diagnostic work.
+    for row in rows[:MAX_RETRIEVAL_ROWS]:
         if not isinstance(row, Mapping):
             continue
-        mapped_rows += 1
-        if mapped_rows > MAX_RETRIEVAL_ROWS:
-            break
         normalized = normalize_lesson_row(row)
         if not isinstance(normalized, LessonActivationSkip):
             continue
