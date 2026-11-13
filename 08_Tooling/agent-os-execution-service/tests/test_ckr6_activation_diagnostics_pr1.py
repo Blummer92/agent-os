@@ -226,3 +226,96 @@ def test_ckr6_result_comment_size_limit_preserved():
             "operation": "issue-start",
             "reason_codes": ["X" * bridge.MAX_RESULT_COMMENT_BYTES],
         }, request_comment_id=123)
+
+
+def _run_insufficient(rows, known=()):
+    """Eligible candidates rejected via unmatched capability keywords."""
+    return activate_issue_start_lesson_preflight(
+        repository="Blummer92/agent-os", issue_number=3418,
+        task_reference="issue:#3418", specialized_knowledge_required=True,
+        capability_keywords=("no-such-capability-xyz",),
+        known_knowledge_refs=known, execute_read=reader(rows),
+    )
+
+
+def test_combined_rejections_and_skips_capped_at_five():
+    rows = [row(1), row(2), row(3)] + [row(n, status=None) for n in range(10, 15)]
+    result = _run_insufficient(rows, tuple(f"LL-{n}" for n in range(10, 15)))
+    evidence = result["rejected_candidate_provenance"]
+    assert len(evidence) == MAX_LESSON_RECORDS == 5
+    assert [x["lesson_id"] for x in evidence] == ["LL-1", "LL-2", "LL-3", "LL-10", "LL-11"]
+
+
+def test_eligible_rejections_precede_requested_skips_regardless_of_row_order():
+    rows = [row(n, status=None) for n in range(10, 15)] + [row(1), row(2), row(3)]
+    result = _run_insufficient(rows, tuple(f"LL-{n}" for n in range(10, 15)))
+    evidence = result["rejected_candidate_provenance"]
+    assert [x["provenance"] for x in evidence] == (
+        ["canonical-github-ref-present"] * 3
+        + ["normalization-skip:ambiguous-status-vocabulary"] * 2
+    )
+
+
+def _surface_unchecked(number=999):
+    item = row(number)
+    item["properties"]["Surface Before Work?"]["checkbox"] = False
+    return item
+
+
+def test_requested_surface_unchecked_is_diagnosed():
+    result = run([_surface_unchecked()])
+    assert result["selected_lesson_ids"] == []
+    assert result["rejected_candidate_provenance"] == [{
+        "lesson_id": "LL-999", "source_revision": REVISION,
+        "currentness": "not-activatable",
+        "provenance": "eligibility-skip:surface-before-work-unchecked",
+    }]
+
+
+def test_requested_archived_note_status_is_diagnosed():
+    result = run([row(status="Archived note")])
+    assert result["selected_lesson_ids"] == []
+    assert result["rejected_candidate_provenance"][0]["provenance"] == (
+        "eligibility-skip:archived-note-status"
+    )
+
+
+def test_disallowed_status_outside_vocabulary_stays_a_normalization_skip():
+    # "Done" is outside the Status vocabulary, so normalization fails closed
+    # before the eligibility rule; the eligibility status branch only covers
+    # vocabulary statuses outside the allowed set (today: none beyond
+    # "Archived note", which has its own reason and test above).
+    result = run([row(status="Done")])
+    assert result["selected_lesson_ids"] == []
+    assert result["rejected_candidate_provenance"][0]["provenance"] == (
+        "normalization-skip:ambiguous-status-vocabulary"
+    )
+
+
+def test_eligibility_skip_visible_when_another_requested_lesson_selected():
+    result = run([row(), _surface_unchecked(998)], ("LL-999", "LL-998"))
+    assert result["lesson_retrieval_status"] == "sufficient"
+    assert result["selected_lesson_ids"] == ["LL-999"]
+    assert result["rejected_candidate_provenance"][0] == {
+        "lesson_id": "LL-998", "source_revision": REVISION,
+        "currentness": "not-activatable",
+        "provenance": "eligibility-skip:surface-before-work-unchecked",
+    }
+    assert result["substantial_hypothesis_admissible"] is True
+
+
+def test_eligibility_and_normalization_skips_share_the_five_record_cap():
+    rows = ([row(n, status=None) for n in (10, 11, 12)]
+            + [_surface_unchecked(13), _surface_unchecked(14), row(15, status="Done")])
+    result = run(rows, tuple(f"LL-{n}" for n in range(10, 16)))
+    evidence = result["rejected_candidate_provenance"]
+    assert len(evidence) == MAX_LESSON_RECORDS == 5
+    assert [x["lesson_id"] for x in evidence] == ["LL-10", "LL-11", "LL-12", "LL-13", "LL-14"]
+    assert evidence[3]["provenance"] == "eligibility-skip:surface-before-work-unchecked"
+
+
+def test_eligible_requested_row_not_selected_gets_no_skip_record():
+    result = run([row(), row(998)], ("LL-999", "LL-998"))
+    assert result["lesson_retrieval_status"] == "sufficient"
+    assert set(result["selected_lesson_ids"]) == {"LL-999", "LL-998"}
+    assert result["rejected_candidate_provenance"] == []
