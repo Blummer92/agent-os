@@ -633,6 +633,207 @@ def test_2851_postback_fails_closed_on_transport_error(monkeypatch):
         )
 
 
+# --- #3951 post-merge live failure: diagnosable, sanitized 403s ----------
+
+
+def _http_403(
+    *,
+    message="Resource not accessible by integration",
+    accepted="pull-requests=write",
+    request_id="E7A1:2B3C:4D5E:6F70",
+):
+    import email.message
+    import io
+    import urllib.error
+
+    headers = email.message.Message()
+    headers["X-Accepted-GitHub-Permissions"] = accepted
+    headers["X-GitHub-Request-Id"] = request_id
+    body = json.dumps(
+        {
+            "message": message,
+            "documentation_url": "https://docs.github.com/rest/issues/comments#create-an-issue-comment",
+        }
+    ).encode("utf-8")
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+        403,
+        "Forbidden",
+        headers,
+        io.BytesIO(body),
+    )
+
+
+def test_3951_postback_403_surfaces_sanitized_diagnostics(monkeypatch):
+    # Live defect (run 43340181423, 2026-11-13): the first PR-conversation
+    # postback failed with a bare "HTTP Error 403: Forbidden" and the
+    # refusal was undiagnosable from the log. The transport must surface
+    # the status, GitHub's message field, and the accepted-permissions and
+    # request-id headers - and must never leak the token.
+    def fake_urlopen(request, timeout=30):
+        raise _http_403()
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert "HTTP 403" in detail
+    assert "Resource not accessible by integration" in detail
+    assert "x-accepted-github-permissions='pull-requests=write'" in detail
+    assert "x-github-request-id='E7A1:2B3C:4D5E:6F70'" in detail
+    assert "documentation_url" not in detail
+    assert "token-value" not in detail
+
+
+def test_3951_postback_diagnostics_redact_token_shaped_echoes(monkeypatch):
+    # The surfaced GitHub message/header fields are GitHub-authored, but a
+    # reflecting server could echo caller-supplied text. The exact credential
+    # and token-shaped substrings must be redacted before logging.
+    def fake_urlopen(request, timeout=30):
+        raise _http_403(
+            message="refused for credential token-value and ghp_a1b2c3d4e5f60708 echo",
+            request_id="req-ghp_zzyyxxwwvvuuttss twelve",
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert detail.count("[redacted]") == 3
+    assert "token-value" not in detail
+    assert "ghp_a1b2c3d4e5f60708" not in detail
+    assert "ghp_zzyyxxwwvvuuttss" not in detail
+
+
+def test_3951_postback_diagnostics_never_parse_oversized_body(monkeypatch):
+    # The response body is read with a hard bound: an oversized body is not
+    # consumed unboundedly and its message field is never surfaced.
+    import email.message
+    import io
+    import urllib.error
+
+    def fake_urlopen(request, timeout=30):
+        headers = email.message.Message()
+        headers["X-GitHub-Request-Id"] = "A1B2:0001"
+        body = json.dumps({"message": "x" * 20000}).encode("utf-8")
+        raise urllib.error.HTTPError(
+            "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+            403,
+            "Forbidden",
+            headers,
+            io.BytesIO(body),
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert "HTTP 403" in detail
+    assert "x-github-request-id='A1B2:0001'" in detail
+    assert "message=" not in detail
+    assert len(detail) < 1000
+
+
+def test_3951_postback_targets_issues_endpoint_for_pr_conversation(monkeypatch):
+    # A top-level PR Conversation request (issue_comment event whose issue
+    # record carries "pull_request") posts to the same /issues/N/comments
+    # endpoint as an ordinary issue. Open vs merged PR state is invisible
+    # to this transport layer; the endpoint and binding must not drift.
+    captured = {}
+
+    def fake_urlopen(request, timeout=30):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data.decode("utf-8"))["body"]
+        return _FakeResponse({"id": 890})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    pr_event = _postback_event()
+    pr_event["issue"] = {
+        "number": 3951,
+        "pull_request": {
+            "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3951"
+        },
+    }
+    posted = bridge.postback_result_comment(
+        event=pr_event,
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    assert captured["method"] == "POST"
+    assert captured["url"] == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments"
+    )
+    parsed = bridge.parse_ckr6_result_comment(captured["body"])
+    assert parsed["request_comment_id"] == 777
+    assert posted["posted_comment_id"] == 890
+    assert posted["issue_number"] == 3951
+
+
+def test_3951_dedupe_lookup_failure_is_diagnosed_and_post_still_attempted(
+    monkeypatch, capsys
+):
+    # The dedupe GET may fail independently of the POST. Its failure must be
+    # diagnosed in the job log (so a live 403 shows whether GET and POST
+    # fail together) without suppressing the post: a duplicate receipt is
+    # preferable to silence.
+    calls = []
+
+    def fake_urlopen(request, timeout=30):
+        calls.append(request.get_method())
+        if request.get_method() == "GET":
+            raise _http_403(accepted="issues=read")
+        return _FakeResponse({"id": 891})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    event = _postback_event()
+    event["comment"]["created_at"] = "2026-11-13T00:49:54Z"
+    posted = bridge.postback_result_comment(
+        event=event,
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    assert calls == ["GET", "POST"]
+    assert posted["posted_comment_id"] == 891
+    err = capsys.readouterr().err
+    assert "dedupe lookup failed" in err
+    assert "HTTP 403" in err
+    assert "issues=read" in err
+    assert "token-value" not in err
+
+
 def test_2851_workflow_posts_bounded_result_with_least_privilege():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
