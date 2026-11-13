@@ -8,11 +8,13 @@ def _content() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_report_only_acceptance_workflow_exists_and_calls_checker():
+def test_on_demand_acceptance_workflow_exists_and_calls_checker():
     content = _content()
 
     assert "Agent OS Issue Acceptance Report" in content
-    assert "pull_request:" in content
+    assert "pull_request:" not in content
+    assert "relevance:" not in content
+    assert "needs: relevance" not in content
     assert "workflow_dispatch:" in content
     assert "actions/checkout@v7" in content
     assert "./.github/actions/setup-python-dev" in content
@@ -193,7 +195,7 @@ def test_report_only_acceptance_workflow_declares_pr_number_dispatch_input():
     content = _content()
 
     assert "pr_number:" in content
-    assert "PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}" in content
+    assert "PR_NUMBER: ${{ inputs.pr_number }}" in content
 
 
 def test_report_only_acceptance_workflow_binds_transport_provenance():
