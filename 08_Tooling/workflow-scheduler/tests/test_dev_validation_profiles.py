@@ -191,3 +191,86 @@ def test_picture_perfect_runtime_metadata_matches_current_package_and_runner() -
     version = package["devDependencies"]["vitest"]
     assert version == DEV_VALIDATION_VITEST_VERSION
     assert get_profile("picture-perfect").runtime_id == "node22-vitest-" + version
+
+
+def test_validation_command_identity_matches_legacy_identifier_equality():
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        validation_command_identity_matches,
+    )
+
+    assert validation_command_identity_matches("pytest", "pytest") is True
+    assert validation_command_identity_matches("pytest", "npm-build") is False
+
+
+def test_validation_command_identity_matches_catalog_exact_argv():
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        validation_command_identity_matches,
+    )
+
+    assert (
+        validation_command_identity_matches(
+            "remote-validation", "python -m pytest tests/agent_os_remote_validation"
+        )
+        is True
+    )
+
+
+def test_validation_command_identity_matches_catalog_alias_resolves():
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        validation_command_identity_matches,
+    )
+
+    assert (
+        validation_command_identity_matches(
+            "remote-validation-suite",
+            "python -m pytest tests/agent_os_remote_validation",
+        )
+        is True
+    )
+
+
+def test_validation_command_identity_fails_closed_on_unknown_id_and_argv_drift():
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        validation_command_identity_matches,
+    )
+
+    assert (
+        validation_command_identity_matches(
+            "no-such-profile", "python -m pytest tests/agent_os_remote_validation"
+        )
+        is False
+    )
+    assert (
+        validation_command_identity_matches(
+            "remote-validation", "python -m pytest tests/other"
+        )
+        is False
+    )
+    assert validation_command_identity_matches(None, "pytest") is False
+    assert validation_command_identity_matches("pytest", 42) is False
+
+
+def test_validation_command_identities_bind_requires_full_distinct_match():
+    from workflow_scheduler.governance.dev_validation_profiles import (
+        validation_command_identities_bind,
+    )
+
+    assert validation_command_identities_bind(("pytest",), ("pytest",)) is True
+    assert (
+        validation_command_identities_bind(
+            ("remote-validation",),
+            ("python -m pytest tests/agent_os_remote_validation",),
+        )
+        is True
+    )
+    assert (
+        validation_command_identities_bind(
+            ("remote-validation", "pytest"),
+            ("python -m pytest tests/agent_os_remote_validation", "pytest"),
+        )
+        is True
+    )
+    assert validation_command_identities_bind(("pytest",), ("pytest", "extra")) is False
+    assert validation_command_identities_bind(("pytest", "pytest2"), ("pytest",)) is False
+    assert validation_command_identities_bind(("unknown",), ("pytest",)) is False
+    assert validation_command_identities_bind(["pytest"], ("pytest",)) is False

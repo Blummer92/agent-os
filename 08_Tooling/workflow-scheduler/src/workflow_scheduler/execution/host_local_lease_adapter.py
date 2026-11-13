@@ -15,6 +15,7 @@ from workflow_scheduler.execution.single_issue_pilot import (
     PilotLeaseGrant,
     PilotLeaseReleaseObservation,
     PilotLeaseRequest,
+    PilotLeaseTerminalRecord,
     pilot_holder_identity,
     pilot_lease_identity,
 )
@@ -171,6 +172,36 @@ class HostLocalLeaseAdapter:
         key = self._key(lease_identity)
         return self._root / f"{key}.active.json", self._root / f"{key}.generation"
 
+    def _terminal_path(self, lease_identity: str) -> Path:
+        key = self._key(lease_identity)
+        return self._root / f"{key}.terminal.json"
+
+    @staticmethod
+    def _decode_terminal(data: bytes) -> tuple[str, str, int, str]:
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("malformed terminal lease metadata") from exc
+        if type(payload) is not dict or set(payload) != {
+            "lease_identity", "holder_identity", "generation", "disposition"
+        }:
+            raise ValueError("malformed terminal lease metadata")
+        lease_identity = payload["lease_identity"]
+        holder_identity = payload["holder_identity"]
+        generation = payload["generation"]
+        disposition = payload["disposition"]
+        if (
+            type(lease_identity) is not str
+            or type(holder_identity) is not str
+            or type(disposition) is not str
+            or not disposition
+            or len(disposition) > 256
+        ):
+            raise ValueError("malformed terminal lease metadata")
+        if type(generation) is not int or isinstance(generation, bool) or generation < 1:
+            raise ValueError("malformed terminal lease generation")
+        return lease_identity, holder_identity, generation, disposition
+
     @staticmethod
     def _read_bounded(path: Path) -> bytes:
         if path.is_symlink():
@@ -315,6 +346,35 @@ class HostLocalLeaseAdapter:
                 generation=0,
                 reason="ambiguous lease metadata requires manual recovery",
             )
+        terminal_path = self._terminal_path(lease_identity)
+        if terminal_path.is_symlink():
+            return PilotLeaseGrant(
+                acquired=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=0,
+                reason="ambiguous lease metadata requires manual recovery",
+            )
+        if terminal_path.exists():
+            try:
+                _, _, terminal_generation, _ = self._decode_terminal(
+                    self._read_bounded(terminal_path)
+                )
+            except (OSError, ValueError):
+                return PilotLeaseGrant(
+                    acquired=False,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=0,
+                    reason="ambiguous lease metadata requires manual recovery",
+                )
+            return PilotLeaseGrant(
+                acquired=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=terminal_generation,
+                reason="invocation already terminated",
+            )
         if active_path.exists():
             observation = self.inspect(request)
             return PilotLeaseGrant(
@@ -376,6 +436,154 @@ class HostLocalLeaseAdapter:
 
         return PilotLeaseGrant(
             acquired=True,
+            lease_identity=lease_identity,
+            holder_identity=holder_identity,
+            generation=generation,
+        )
+
+    def record_terminal_disposition(
+        self, grant: PilotLeaseGrant, disposition: str
+    ) -> PilotLeaseTerminalRecord:
+        """Record one durable terminal disposition for an exact held grant.
+
+        The record is an O_EXCL-created bounded metadata file. Recording
+        requires the exact active lease for the grant to still be held:
+        recording after a release would mark an ownership the caller no
+        longer provably holds. An existing record converges only when it
+        matches exactly in identity, holder, generation, and disposition;
+        anything else is ambiguous and never overwritten.
+        """
+        if type(grant) is not PilotLeaseGrant:
+            raise TypeError("grant must be an exact PilotLeaseGrant")
+        if (
+            type(disposition) is not str
+            or not disposition
+            or len(disposition) > 256
+        ):
+            raise ValueError("disposition must be a bounded non-empty string")
+        lease_identity, holder_identity, generation = (
+            grant.lease_identity,
+            grant.holder_identity,
+            grant.generation,
+        )
+        if (
+            not grant.acquired
+            or not lease_identity
+            or not holder_identity
+            or type(generation) is not int
+            or isinstance(generation, bool)
+            or generation < 1
+        ):
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation if type(generation) is int else 0,
+                reason="malformed terminal record request",
+            )
+        terminal_path = self._terminal_path(lease_identity)
+        active_path, generation_path = self._paths(lease_identity)
+        if terminal_path.is_symlink() or active_path.is_symlink():
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="ambiguous lease metadata",
+            )
+        if terminal_path.exists():
+            try:
+                stored = self._decode_terminal(self._read_bounded(terminal_path))
+            except (OSError, ValueError) as exc:
+                return PilotLeaseTerminalRecord(
+                    recorded=False,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=generation,
+                    reason=f"ambiguous terminal record:{exc}",
+                )
+            if stored == (lease_identity, holder_identity, generation, disposition):
+                return PilotLeaseTerminalRecord(
+                    recorded=True,
+                    lease_identity=lease_identity,
+                    holder_identity=holder_identity,
+                    generation=generation,
+                    reason="terminal disposition already recorded",
+                )
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="conflicting terminal disposition",
+            )
+        try:
+            stored_lease, stored_holder, stored_generation = self._decode_active(
+                self._read_bounded(active_path)
+            )
+            durable_generation = self._decode_generation(
+                self._read_bounded(generation_path)
+            )
+        except (OSError, ValueError) as exc:
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason=f"no exact active lease for this grant:{exc}",
+            )
+        if (
+            stored_lease != lease_identity
+            or stored_holder != holder_identity
+            or stored_generation != generation
+            or durable_generation != generation
+        ):
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="no exact active lease for this grant",
+            )
+        payload = json.dumps(
+            {
+                "lease_identity": lease_identity,
+                "holder_identity": holder_identity,
+                "generation": generation,
+                "disposition": disposition,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        try:
+            fd = os.open(
+                terminal_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, self._policy.file_mode
+            )
+        except FileExistsError:
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="ambiguous terminal record",
+            )
+        try:
+            with os.fdopen(fd, "wb", closefd=True) as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            # A failed or partial write leaves ambiguous terminal metadata:
+            # never claim durable success or silently permit reacquisition.
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=lease_identity,
+                holder_identity=holder_identity,
+                generation=generation,
+                reason="terminal metadata write failed",
+            )
+        return PilotLeaseTerminalRecord(
+            recorded=True,
             lease_identity=lease_identity,
             holder_identity=holder_identity,
             generation=generation,

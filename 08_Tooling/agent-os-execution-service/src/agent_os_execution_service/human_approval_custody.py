@@ -145,6 +145,43 @@ def produce_human_approval_custody(
         evaluated_repository_sha=packet.base_sha,
         invocation_id=packet.invocation_id,
         evaluator_sha=packet.evaluator_sha,
+        # The IssuePlan current-state identity binds the approval-time
+        # freshness boundary. Re-present the packet's own durable boundary so
+        # the strict post-approval identity comparison can reproduce it; the
+        # compiler and downstream owners still evaluate that same boundary
+        # against the current evaluation time, so a stale candidate keeps
+        # failing closed.
+        freshness_boundary=packet.freshness_boundary,
+        # The approval-time stage identities (planning handoff, proposal,
+        # approval candidate) content-address their stage timestamps, so the
+        # post-approval comparison can only reproduce them from durable
+        # approval-time witnesses. The planning binding's and the proposal's
+        # own created_at survive in the provenance's proposal stage result
+        # (v2); re-present those exact fields. The approval stage's
+        # evaluated/projected times have no durable witness: the approval
+        # compile defaults every stage clock to its observation clock, which
+        # the packet durably records as evaluated_at, and the unchanged
+        # strict identity verification below is the equality proof -- a
+        # packet whose approval stage used any other clock cannot reproduce
+        # its stored approval-candidate identity and fails closed. v1
+        # provenance carries no proposal stage material at all, so its only
+        # durable clock is the packet's own. The compile's observed_at and
+        # compiler_evaluated_at remain the current clock, so freshness,
+        # currency, and authorization-expiry evaluation are unchanged.
+        planning_created_at=(
+            provenance.repository_proposal_stage_result.planning_binding.created_at
+            if provenance.repository_proposal_stage_result is not None
+            and provenance.repository_proposal_stage_result.planning_binding is not None
+            else packet.evaluated_at
+        ),
+        proposal_created_at=(
+            provenance.repository_proposal_stage_result.proposal.created_at
+            if provenance.repository_proposal_stage_result is not None
+            and provenance.repository_proposal_stage_result.proposal is not None
+            else packet.evaluated_at
+        ),
+        approval_evaluated_at=packet.evaluated_at,
+        approval_projected_at=packet.evaluated_at,
         # #3413 point 3: post-approval consumers reuse canonical dependency
         # identities from the structured IssuePlan depends_on governed field --
         # never prose, labels, CI, or guessed state. None keeps the existing

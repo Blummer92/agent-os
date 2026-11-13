@@ -174,15 +174,25 @@ def _seed_provenance(config: ProductionHostConfiguration, ready, proposal_stage)
     return provenance
 
 
-def _custody_ready(items: dict, identity_composition: str = "current"):
+def _custody_ready(
+    items: dict,
+    identity_composition: str = "current",
+    freshness_boundary: str | None = None,
+    **packet_overrides,
+):
     """One first-packet APPROVAL_READY packet plus an explicit owner approval."""
     precheck = prepare_candidate_packet(**_kwargs(items))
+    observation = packet_overrides.pop(
+        "repository_observation", None
+    ) or _observation(precheck.implementation_contract_fingerprint)
     ready = prepare_candidate_packet(
         **_kwargs(
             items,
-            repository_observation=_observation(precheck.implementation_contract_fingerprint),
+            repository_observation=observation,
             candidate_context=_candidate_context(),
             **({"identity_composition": identity_composition} if identity_composition != "current" else {}),
+            **({"freshness_boundary": freshness_boundary} if freshness_boundary is not None else {}),
+            **packet_overrides,
         )
     )
     assert ready.disposition == "approval-ready"

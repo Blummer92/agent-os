@@ -567,6 +567,42 @@ def test_installed_agent_os_mcp_entry_point_exists(
     assert "agent_os_execution_service.mcp_server" in script.read_text()
 
 
+def test_installed_host_ingress_entry_points_reach_their_argv_boundary(
+    installed_runtime: tuple[Path, Path],
+) -> None:
+    """All five #3333 host ingress console scripts install and resolve.
+
+    Each script is executed with no arguments in the isolated environment:
+    argparse rejects the missing required options (exit code 2), which
+    proves the script's module target and its full import graph resolved
+    from the installed wheels. A ModuleNotFoundError or ImportError would
+    mean the packaged entry point cannot reach its own runtime.
+    """
+    python, outside_repository = installed_runtime
+    required_option = {
+        "agent-os-host-capture-custody": "--dependency-readiness-evidence-id",
+        "agent-os-host-freeze-pre-validation-evidence": "--candidate-provenance-id",
+        "agent-os-host-originate-authorized-validation-request": (
+            "--candidate-provenance-id"
+        ),
+        "agent-os-host-record-dependency-readiness": "--candidate-provenance-id",
+        "agent-os-host-run-authorized-validation": "--expected-request-id",
+    }
+    for name, option in required_option.items():
+        script = python.parent / (f"{name}.exe" if os.name == "nt" else name)
+        assert script.is_file(), script
+        assert "agent_os_execution_service.host_ingress" in script.read_text()
+        result = _run(
+            [str(script)],
+            cwd=outside_repository,
+            check=False,
+        )
+        assert result.returncode == 2, (name, result.returncode, result.stderr)
+        assert option in result.stderr, (name, result.stderr)
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "ImportError" not in result.stderr
+
+
 def test_installed_entrypoint_reaches_its_argv_boundary_without_dispatching(
     installed_runtime: tuple[Path, Path],
 ) -> None:

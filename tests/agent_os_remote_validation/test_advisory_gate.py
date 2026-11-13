@@ -395,3 +395,166 @@ def test_module_has_no_external_io_execution_or_clock_imports() -> None:
 def test_default_result_fits_declared_size_limit() -> None:
     encoded = repr(serialize_advisory_evidence_result(_evaluate())).encode("utf-8")
     assert len(encoded) < MAX_ADVISORY_SERIALIZED_BYTES
+
+
+# --- #1985 PR-less advisory sibling ------------------------------------------
+#
+# evaluate_pr_less_advisory_evidence evaluates one frozen PR-less bundle as
+# advisory evidence: the typed bundle/plan/results derive only from the
+# canonical payload, current SHAs and invocation context come from genuine
+# fresh observation, and the result stays non-authoritative.
+
+from scripts.agent_os_remote_validation import (  # noqa: E402
+    evaluate_pr_less_advisory_evidence,
+)
+from scripts.agent_os_remote_validation.advisory_render import (  # noqa: E402
+    advisory_render_result_id,
+    render_advisory_evidence,
+)
+from scripts.agent_os_remote_validation.pre_pr_evidence_bundle import (  # noqa: E402
+    build_pre_pr_validation_evidence_bundle,
+    serialize_pre_pr_validation_evidence_bundle,
+)
+from tests.agent_os_remote_validation.test_evidence_bundle import (  # noqa: E402
+    _identity,
+    _projection,
+)
+from tests.agent_os_remote_validation.test_pre_pr_evidence_bundle import (  # noqa: E402
+    PROPOSAL_ID,
+    EVIDENCE_ID,
+    _bundle as _pr_less_bundle,
+    _plan as _pr_less_plan,
+    _result as _pr_less_result,
+)
+
+_PR_LESS_INVOCATION = "first-packet-lifecycle-3354"
+
+
+def _pr_less_payload() -> dict:
+    plan = _pr_less_plan()
+    return serialize_pre_pr_validation_evidence_bundle(_pr_less_bundle(plan))
+
+
+def _evaluate_pr_less(payload, **overrides):
+    values = dict(
+        expected_bundle_id=payload["bundle_id"],
+        current_base_sha=payload["base_sha"],
+        current_source_head_sha=payload["source_head_sha"],
+        invocation_id=_PR_LESS_INVOCATION,
+    )
+    values.update(overrides)
+    return evaluate_pr_less_advisory_evidence(payload, **values)
+
+
+def test_pr_less_advisory_passes_and_binds_payload_identities() -> None:
+    payload = _pr_less_payload()
+    result = _evaluate_pr_less(payload)
+    assert result.status == "passed"
+    assert result.reason_codes == ()
+    assert result.details == ()
+    assert result.pull_request is None
+    assert result.plan_id == payload["plan_id"]
+    assert result.bundle_id == payload["bundle_id"]
+    assert result.runner_id == payload["runner_id"]
+    assert result.base_sha == payload["base_sha"]
+    assert result.source_head_sha == payload["source_head_sha"]
+    assert result.tested_sha == payload["tested_sha"]
+    assert result.invocation_id == _PR_LESS_INVOCATION
+    assert result.command_result_ids == tuple(
+        item["result_id"] for item in payload["command_results"]
+    )
+    assert advisory_evidence_result_id(result) == result.result_id
+    serialized = serialize_advisory_evidence_result(result)
+    assert serialized["pull_request"] is None
+    assert _evaluate_pr_less(payload).result_id == result.result_id
+
+
+def test_pr_less_advisory_expected_bundle_identity_checks_fail_closed() -> None:
+    payload = _pr_less_payload()
+    other = "validation-evidence-bundle:" + "0" * 64
+    mismatch = _evaluate_pr_less(payload, expected_bundle_id=other)
+    assert mismatch.status == "invalid"
+    assert "bundle.expected-id-mismatch" in mismatch.reason_codes
+    malformed = _evaluate_pr_less(payload, expected_bundle_id="not-a-bundle-id")
+    assert malformed.status == "invalid"
+    assert "bundle.expected-id-invalid" in malformed.reason_codes
+
+
+def test_pr_less_advisory_tampered_payload_fails_closed() -> None:
+    payload = _pr_less_payload()
+    tampered = dict(payload, completed_at="2026-09-08T17:00:02Z")
+    result = _evaluate_pr_less(tampered)
+    assert result.status == "invalid"
+    assert "bundle.canonicalization-failed" in result.reason_codes
+    non_dict = evaluate_pr_less_advisory_evidence(
+        "not-a-payload",
+        expected_bundle_id=payload["bundle_id"],
+        current_base_sha=payload["base_sha"],
+        current_source_head_sha=payload["source_head_sha"],
+        invocation_id=_PR_LESS_INVOCATION,
+    )
+    assert non_dict.status == "invalid"
+    assert "bundle.canonicalization-failed" in non_dict.reason_codes
+
+
+def test_pr_less_advisory_current_revision_drift_is_stale() -> None:
+    payload = _pr_less_payload()
+    base_stale = _evaluate_pr_less(payload, current_base_sha="d" * 40)
+    assert base_stale.status == "stale"
+    assert base_stale.reason_codes == ("revision.base-sha-stale",)
+    head_stale = _evaluate_pr_less(payload, current_source_head_sha="e" * 40)
+    assert head_stale.status == "stale"
+    assert head_stale.reason_codes == ("revision.source-head-sha-stale",)
+    both_stale = _evaluate_pr_less(
+        payload, current_base_sha="d" * 40, current_source_head_sha="e" * 40
+    )
+    assert both_stale.status == "stale"
+    assert both_stale.reason_codes == (
+        "revision.base-sha-stale",
+        "revision.source-head-sha-stale",
+    )
+
+
+def test_pr_less_advisory_malformed_current_shas_are_invalid() -> None:
+    payload = _pr_less_payload()
+    result = _evaluate_pr_less(
+        payload, current_base_sha="zzz", current_source_head_sha=None
+    )
+    assert result.status == "invalid"
+    assert "advisory.current-base-sha" in result.reason_codes
+    assert "advisory.current-source-head-sha" in result.reason_codes
+
+
+def test_pr_less_advisory_failed_bundle_maps_to_failed() -> None:
+    plan = _pr_less_plan()
+    failed_receipt = replace(_pr_less_result(plan), status="failed", exit_code=1)
+    bundle = build_pre_pr_validation_evidence_bundle(
+        _projection(),
+        plan,
+        (failed_receipt,),
+        expected_repository=_identity(),
+        expected_repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
+        expected_proposal_id=PROPOSAL_ID,
+        expected_repository_state_evidence_id=EVIDENCE_ID,
+        runner_id="dev-validation:remote-validation",
+        started_at="2026-09-08T17:00:00Z",
+        completed_at="2026-09-08T17:00:01Z",
+    )
+    assert bundle.status == "failed"
+    payload = serialize_pre_pr_validation_evidence_bundle(bundle)
+    result = _evaluate_pr_less(payload)
+    assert result.status == "failed"
+    assert "bundle.failed" in result.reason_codes
+
+
+def test_pr_less_advisory_result_is_non_authoritative_and_renders() -> None:
+    payload = _pr_less_payload()
+    result = _evaluate_pr_less(payload)
+    assert result.authoritative is False
+    assert result.execution_authorized is False
+    assert result.merge_authorized is False
+    assert result.attestation_verified is False
+    assert result.side_effects_performed is False
+    render = render_advisory_evidence(result)
+    assert render.render_id.startswith("advisory-render:")
+    assert advisory_render_result_id(render) == render.render_id

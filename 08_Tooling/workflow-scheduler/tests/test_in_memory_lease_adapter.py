@@ -322,3 +322,77 @@ def test_architecture_boundaries_are_minimal() -> None:
         "worktree",
     }
     assert imported_roots.isdisjoint(forbidden)
+
+
+# --------------------------------------------------------------------------
+# Durable terminal-disposition records (#3333 once-only)
+# --------------------------------------------------------------------------
+
+
+def test_terminal_record_blocks_reacquisition() -> None:
+    adapter = InMemoryLeaseAdapter()
+    request = _request()
+    grant = adapter.acquire(request)
+    assert grant.acquired is True
+
+    record = adapter.record_terminal_disposition(grant, "completed")
+    assert record.recorded is True
+    assert record.lease_identity == grant.lease_identity
+    assert record.holder_identity == grant.holder_identity
+    assert record.generation == grant.generation
+
+    release = adapter.release(grant)
+    assert release.released is True
+
+    reacquired = adapter.acquire(request)
+    assert reacquired.acquired is False
+    assert reacquired.reason == "invocation already terminated"
+    assert reacquired.generation == grant.generation
+
+
+def test_terminal_record_requires_exact_active_grant() -> None:
+    adapter = InMemoryLeaseAdapter()
+    request = _request()
+    grant = adapter.acquire(request)
+    assert grant.acquired is True
+
+    forged = _forge(grant, generation=grant.generation + 1)
+    record = adapter.record_terminal_disposition(forged, "completed")
+    assert record.recorded is False
+    assert record.reason == "no exact active lease for this grant"
+
+    release = adapter.release(grant)
+    assert release.released is True
+    record_after_release = adapter.record_terminal_disposition(grant, "completed")
+    assert record_after_release.recorded is False
+    assert record_after_release.reason == "no exact active lease for this grant"
+
+
+def test_terminal_record_converges_only_on_exact_match() -> None:
+    adapter = InMemoryLeaseAdapter()
+    request = _request()
+    grant = adapter.acquire(request)
+    assert grant.acquired is True
+
+    first = adapter.record_terminal_disposition(grant, "completed")
+    assert first.recorded is True
+    converged = adapter.record_terminal_disposition(grant, "completed")
+    assert converged.recorded is True
+    assert converged.reason == "terminal disposition already recorded"
+    conflicting = adapter.record_terminal_disposition(grant, "failed")
+    assert conflicting.recorded is False
+    assert conflicting.reason == "conflicting terminal disposition"
+
+def test_non_acquired_matching_grant_cannot_record_terminal_disposition() -> None:
+    adapter = InMemoryLeaseAdapter()
+    request = _request()
+    held = adapter.acquire(request)
+    competing = adapter.acquire(request)
+    assert held.acquired is True
+    assert competing.acquired is False
+    assert competing.lease_identity == held.lease_identity
+    assert competing.generation == held.generation
+    rejected = adapter.record_terminal_disposition(competing, "completed")
+    assert rejected.recorded is False
+    assert adapter.release(held).released is True
+    assert adapter.acquire(request).acquired is True
