@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from scripts.agent_os_execution_interface.effective_gate_reconciliation import (
     EffectiveGateState, EvidenceDisposition, GateEvidence, GateIdentity,
     GateMarker, reconcile_effective_gate,
@@ -54,3 +58,60 @@ def test_reconciliation_never_grants_excluded_authority():
     assert result.protected_setting_authorized is False
     assert result.production_authorized is False
     assert result.external_writes_authorized is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"repository": "Other/agent-os"},
+    {"issue_number": 999},
+    {"pull_request_number": 999},
+])
+def test_each_identity_field_independently_blocks_unrelated_evidence(changes):
+    wrong = replace(IDENTITY, **changes)
+    result = reconcile_effective_gate(
+        marker=MARKER, expected_identity=IDENTITY,
+        evidence=[ev(identity=wrong)]
+    )
+    assert result.state is EffectiveGateState.BLOCKED
+    assert result.selected_evidence_refs == ()
+
+def test_invalid_non_string_timestamp_raises_value_error():
+    with pytest.raises(ValueError, match="RFC3339"):
+        reconcile_effective_gate(
+            marker=replace(MARKER, recorded_at=None),
+            expected_identity=IDENTITY,
+            evidence=[]
+        )
+
+def test_missing_owner_preserves_explicit_blocked_state():
+    result = reconcile_effective_gate(
+        marker=replace(MARKER, evidence_owner=None),
+        expected_identity=IDENTITY,
+        evidence=[ev()]
+    )
+    assert result.state is EffectiveGateState.BLOCKED
+    assert result.selected_evidence_refs == ()
+
+def test_duplicate_before_newer_evidence_does_not_stop_reconciliation():
+    old = ev(ref="old")
+    newer = ev(
+        at="2026-08-19T00:00:00Z",
+        disposition=EvidenceDisposition.BLOCKED,
+        ref="newer"
+    )
+    result = reconcile_effective_gate(
+        marker=MARKER, expected_identity=IDENTITY,
+        evidence=[old, old, newer]
+    )
+    assert result.state is EffectiveGateState.BLOCKED
+    assert result.selected_evidence_refs == ("newer",)
+
+def test_conflicting_newest_evidence_preserves_both_references():
+    result = reconcile_effective_gate(
+        marker=MARKER, expected_identity=IDENTITY,
+        evidence=[
+            ev(ref="a"),
+            ev(ref="b", disposition=EvidenceDisposition.BLOCKED)
+        ]
+    )
+    assert result.state is EffectiveGateState.MANUAL_REVIEW
+    assert result.selected_evidence_refs == ("a", "b")
