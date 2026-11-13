@@ -120,6 +120,14 @@ class LessonActivationSkip:
 # A rejection diagnostic is explanatory only. It cannot enter CKR2 candidate
 # selection, change a retrieval decision, or introduce new provider reads.
 _ELIGIBLE_STATUSES = frozenset({"New", "Applied", "Needs follow-up"})
+_DIAGNOSTIC_LESSON_ID = re.compile(r"LL-[0-9]{1,9}\\Z")
+
+
+def _diagnostic_identity(value: str | None) -> str:
+    """Publish only canonical finite Lesson IDs; no raw provider text escapes."""
+    if type(value) is str and _DIAGNOSTIC_LESSON_ID.fullmatch(value):
+        return value
+    return "unknown"
 
 
 def _lesson_exclusion(lesson: LessonRecordEvidence) -> LessonActivationSkip | None:
@@ -162,7 +170,7 @@ def _with_rejection_diagnostics(
         if added >= MAX_LESSON_RECORDS:
             break
         entries.append({
-            "lesson_id": skip.lesson_id or "unknown",
+            "lesson_id": _diagnostic_identity(skip.lesson_id),
             "source_revision": "",
             "currentness": "not-evaluated",
             "provenance": "normalization-or-eligibility-rejected",
@@ -476,10 +484,11 @@ def orchestrate_lesson_activation(
         normalized = normalize_lesson_row(row)
         if isinstance(normalized, LessonRecordEvidence):
             exclusion = _lesson_exclusion(normalized)
-            if exclusion is None:
-                lessons.append(normalized)
-            else:
+            if exclusion is not None:
                 skipped.append(exclusion)
+            # Always preserve the baseline narrowing inputs: eligibility is
+            # enforced downstream by consume_lesson_preflight, not here.
+            lessons.append(normalized)
         else:
             skipped.append(normalized)
 

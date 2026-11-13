@@ -258,3 +258,19 @@ def test_diagnostics_are_bounded_over_retrieved_rows():
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert len(result.rejected_candidate_provenance) <= 5
     assert result.selected_lesson_ids == ()
+
+
+def test_escalation_diagnostics_do_not_promote_sixth_candidate():
+    rows = [_lesson_row(f"LL-{index:02d}") for index in range(1, 7)]
+    for row in rows[:5]:
+        row["properties"]["Status"] = _select("Archived note")
+    calls = []
+    def read(query):
+        calls.append(query)
+        return {"results": rows}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.candidate_count == 0
+    assert len(calls) == 3
+    assert len(result.rejected_candidate_provenance) == 5

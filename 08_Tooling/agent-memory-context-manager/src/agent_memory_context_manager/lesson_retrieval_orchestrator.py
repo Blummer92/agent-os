@@ -229,7 +229,8 @@ def orchestrate_lesson_retrieval(
                 if exclusion is not None:
                     if exclusion not in skipped and len(skipped) < MAX_LESSON_RECORDS:
                         skipped.append(exclusion)
-                    continue
+                # Keep the original candidate window unchanged; downstream
+                # consumer enforces eligibility after relevance narrowing.
                 # R1 (#2425): accumulate keyed by full record equality.
                 # An identical record (same ID, same revision, same fields)
                 # collapses; a same-ID record that differs in any field is

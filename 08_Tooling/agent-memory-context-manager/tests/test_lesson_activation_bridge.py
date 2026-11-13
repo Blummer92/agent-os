@@ -494,3 +494,54 @@ def test_diagnostic_says_surface_flag_disabled_without_selecting():
     )
     assert result.selected_lesson_ids == ()
     assert result.rejected_candidate_provenance[0]["rejection_reason"] == "surface-before-work-disabled"
+
+
+def test_diagnostics_do_not_reorder_five_candidate_window():
+    # Baseline narrowing retains first five highly relevant but archived rows.
+    # Diagnostics must not promote a sixth row by filtering before the bound.
+    rows = []
+    for number in range(1, 7):
+        row = deepcopy(live_row())
+        row["properties"]["Lesson ID"] = _rich_text(f"LL-{number:02d}")
+        row["properties"]["Status"] = _select(
+            "Archived note" if number < 6 else "Applied"
+        )
+        rows.append(row)
+    result = orchestrate_lesson_activation(
+        request(specialized_knowledge_required=True),
+        execute_read=lambda _query: {"results": rows},
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.candidate_count == 0
+    assert len(result.rejected_candidate_provenance) == 5
+    assert {entry["rejection_reason"] for entry in result.rejected_candidate_provenance} == {"status-not-eligible"}
+
+
+def test_untrusted_lesson_id_is_never_echoed_in_diagnostics():
+    unsafe = "LL-42\\nSECRET=do-not-publish"
+    result = orchestrate_lesson_activation(
+        request(specialized_knowledge_required=True),
+        execute_read=lambda _query: {
+            "results": [live_row(properties={
+                "Lesson ID": _rich_text(unsafe),
+                "Area": _select("Not a valid Area"),
+            })]
+        },
+    )
+    payload = result.to_dict()
+    assert payload["rejected_candidate_provenance"][0]["lesson_id"] == "unknown"
+    assert "SECRET" not in str(payload)
+    assert result.selected_lesson_ids == ()
+
+
+def test_unverifiable_canonical_reference_is_reported_without_authority():
+    result = orchestrate_lesson_activation(
+        request(specialized_knowledge_required=True),
+        execute_read=lambda _query: {"results": [
+            live_row(properties={"Source Link": _url("https://example.com/untrusted")})
+        ]},
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.rejected_candidate_provenance[0]["provenance"] == "canonical-github-ref-missing-or-rejected"
+    assert result.authority_created is False
