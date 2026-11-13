@@ -188,6 +188,12 @@ def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
     if link:
         descriptive["Source Link"] = link
     over = sorted(name for name, value in narrative.items() if len(value) > CATALOG_TEXT_LIMIT)
+    # A reviewed catalog entry can be write-ready without being CKR6-eligible.
+    # Area must be supplied by a reviewer; Source Link anchors currentness.
+    activation_gaps = [
+        name for name in ("Area", "Learning Type", "Source Link")
+        if name not in descriptive
+    ]
     return {
         "status": learned.disposition.value,
         "reason_codes": reasons,
@@ -207,6 +213,9 @@ def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
                 "properties": {**narrative, **descriptive},
             },
             "catalog_ready": not over,
+            "activation_gaps": activation_gaps,
+            # These fields are *not* writable via the governed catalog writer.
+            "owner_activation_required": ["Status", "Surface Before Work?"],
             "catalog_fields_over_limit": over,
             **_NO_AUTHORITY,
         },

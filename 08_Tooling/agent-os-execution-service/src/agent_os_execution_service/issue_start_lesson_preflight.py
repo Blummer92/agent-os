@@ -10,7 +10,19 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
-from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
+from agent_memory_context_manager.lesson_activation_bridge import (
+    MAX_RETRIEVAL_ROWS,
+    LessonActivationSkip,
+    LessonRecordEvidence,
+    known_lesson_numbers,
+    normalize_lesson_row,
+)
+from agent_memory_context_manager.lesson_preflight import MAX_LESSON_RECORDS, LessonRetrievalStatus
+# Single source of truth for the canonical activatable-status rule; the
+# diagnostic projection must never define its own copy of this vocabulary.
+from agent_memory_context_manager.lesson_preflight import (
+    _ALLOWED_STATUSES as _ALLOWED_LESSON_STATUSES,
+)
 from agent_memory_context_manager.lesson_retrieval_orchestrator import orchestrate_lesson_retrieval
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -41,6 +53,71 @@ def selected_lesson_provenance(result: Any) -> list[dict[str, object]]:
         }
         for item in selection.selected
     ]
+
+
+def _eligibility_skip_reason(evidence: LessonRecordEvidence) -> str | None:
+    """Explain why an otherwise valid requested row is not activatable.
+
+    Mirrors the canonical eligibility rule in lesson_preflight (archived,
+    disallowed status, surface checkbox) in the same order. Returns None
+    for eligible rows: eligibility is admission logic, and this projection
+    only describes rows the canonical rule already excludes.
+    """
+    if evidence.archived:
+        return "eligibility-skip:archived-note-status"
+    if evidence.status not in _ALLOWED_LESSON_STATUSES:
+        return "eligibility-skip:status-not-activatable"
+    if not evidence.surface_before_work:
+        return "eligibility-skip:surface-before-work-unchecked"
+    return None
+
+
+def _requested_lesson_skips(
+    raw: Mapping[str, Any], wanted: frozenset[str],
+    skips: list[dict[str, str]], seen_ids: set[str],
+) -> None:
+    """Observe only bounded, explicitly requested skips.
+
+    Both normalization skips and eligibility exclusions of explicitly
+    requested IDs are diagnosed. No raw Notion row is retained. The
+    canonical executor still makes all retrieval and admission decisions.
+    This path is diagnostic only.
+    """
+    rows = raw.get("results")
+    if not isinstance(rows, list) or not wanted or len(skips) >= MAX_LESSON_RECORDS:
+        return
+    # Cap raw entries inspected, not just valid mapping entries. A response
+    # containing unlimited malformed values must not expand diagnostic work.
+    for row in rows[:MAX_RETRIEVAL_ROWS]:
+        if not isinstance(row, Mapping):
+            continue
+        normalized = normalize_lesson_row(row)
+        if isinstance(normalized, LessonActivationSkip):
+            reason = "normalization-skip:" + normalized.reason
+        elif isinstance(normalized, LessonRecordEvidence):
+            eligibility_reason = _eligibility_skip_reason(normalized)
+            if eligibility_reason is None:
+                continue
+            reason = eligibility_reason
+        else:
+            continue
+        lesson_id = normalized.lesson_id
+        if lesson_id not in wanted or lesson_id in seen_ids:
+            continue
+        revision = row.get("last_edited_time")
+        # A diagnostic revision is never an identity/authority token.
+        if (not isinstance(revision, str) or not 1 <= len(revision) <= 40
+                or any(char not in "0123456789-:.+TZ" for char in revision)):
+            revision = "unknown"
+        seen_ids.add(lesson_id)
+        skips.append({
+            "lesson_id": lesson_id,
+            "source_revision": revision,
+            "currentness": "not-activatable",
+            "provenance": reason,
+        })
+        if len(skips) >= MAX_LESSON_RECORDS:
+            break
 
 
 def activate_issue_start_lesson_preflight(
@@ -96,7 +173,25 @@ def activate_issue_start_lesson_preflight(
         known_knowledge_refs=known_knowledge_refs,
         specialized_knowledge_required=issue_start_materiality,
     )
-    result = orchestrate_lesson_retrieval(request, execute_read=execute_read)
+    wanted = frozenset(f"LL-{n}" for n in known_lesson_numbers(known_knowledge_refs))
+    skipped: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    bounded_read = execute_read
+    if execute_read is not None and wanted:
+        def bounded_read(query: Mapping[str, Any]) -> Mapping[str, Any]:
+            raw = execute_read(query)
+            if isinstance(raw, Mapping):
+                _requested_lesson_skips(raw, wanted, skipped, seen_ids)
+            return raw
+
+    result = orchestrate_lesson_retrieval(request, execute_read=bounded_read)
+    # Rejected eligible candidates take precedence. Never duplicate a selected
+    # ID in the rejection list or expand the existing five-record output cap.
+    rejected = [dict(item) for item in result.rejected_candidate_provenance][:MAX_LESSON_RECORDS]
+    excluded_ids = set(result.selected_lesson_ids)
+    excluded_ids.update(item["lesson_id"] for item in rejected)
+    rejected.extend(item for item in skipped if item["lesson_id"] not in excluded_ids)
+    rejected = rejected[:MAX_LESSON_RECORDS]
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
     handoff = dict(result.handoff_projection)
     handoff["known_facts"] = [
@@ -108,7 +203,7 @@ def activate_issue_start_lesson_preflight(
         "lesson_retrieval_status": result.lesson_retrieval_status.value,
         "selected_lesson_ids": list(result.selected_lesson_ids),
         "selected_lessons": selected_lesson_provenance(result),
-        "rejected_candidate_provenance": [dict(item) for item in result.rejected_candidate_provenance],
+        "rejected_candidate_provenance": rejected,
         "materiality_source": materiality_source,
         "selection_reason_codes": list(result.selection_reason_codes),
         "canonical_github_refs": list(result.canonical_github_refs),
