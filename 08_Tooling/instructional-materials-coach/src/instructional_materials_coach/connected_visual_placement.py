@@ -132,8 +132,11 @@ def plan_visual_placement_bindings(visual_plan: Any) -> tuple[VisualPlacementBin
     an upstream contract breach and fails closed here rather than being
     repaired by guessing.
     """
-    result = getattr(visual_plan, "cohesive_visual_plan_result", None)
-    payload = result.record.to_dict() if result is not None and getattr(result, "record", None) is not None else {}
+    from .visual_reuse import effective_visual_payload
+    try:
+        payload = effective_visual_payload(visual_plan)
+    except ValueError as exc:
+        raise PlacementExecutionError(f"placement-binding-incomplete: {exc}") from exc
     if not isinstance(payload, dict):
         raise PlacementExecutionError(
             "placement-binding-incomplete: governed plan carries no cohesive visual plan payload"

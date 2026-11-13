@@ -1180,3 +1180,88 @@ def _plan_id(
         )[:24],
         "cohesive_visual_plan_id",
     )
+
+
+def materialize_teacher_role_assignments(
+    cohesive_payload: dict[str, Any],
+    resolved_bindings: tuple[dict[str, str], ...],
+    *,
+    candidate_projections: object,
+    candidate_filter_result: ValidationResult,
+    visual_needs_result: ValidationResult,
+) -> tuple[dict[str, Any], ...]:
+    """Recheck each teacher-resolved binding against governed role/set policy."""
+    filter_record = candidate_filter_result.record
+    needs_record = visual_needs_result.record
+    if filter_record is None or needs_record is None:
+        raise ValueError("teacher-resolved-source-evidence-missing")
+    filtered = filter_record.to_dict()
+    needs = needs_record.to_dict()
+    eligible = _resolve_eligible_candidates(
+        list(filtered["eligible"]),
+        transport=filtered.get("projection_transport"),
+        candidate_projections=candidate_projections,
+        candidate_contract_version=filter_record.contract_version,
+    )
+    candidates: dict[str, dict[str, Any]] = {}
+    for candidate in eligible:
+        asset_id = candidate["asset_reference"]["asset_id"]
+        if asset_id in candidates and candidates[asset_id] != candidate:
+            raise ValueError("teacher-selected-asset-ambiguous")
+        candidates[asset_id] = candidate
+    roles = {role["role_id"]: role
+             for role in [*needs["required_roles"], *needs["optional_roles"]]}
+    binding_assets = {(b["role_id"], b["slot_id"]): b["asset_id"]
+                      for b in resolved_bindings}
+    if len(binding_assets) != len(resolved_bindings):
+        raise ValueError("teacher-resolved-binding-ambiguous")
+
+    effective: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    used_assets: set[tuple[str, str, str]] = set()
+    for field in ("required_role_assignments", "optional_role_assignments"):
+        for original in cohesive_payload[field]:
+            role_id = original["role_id"]
+            slot_id = original.get("slot_id", "0")
+            key = (role_id, slot_id)
+            if key in seen or key not in binding_assets or role_id not in roles:
+                raise ValueError("teacher-resolved-binding-missing-or-duplicate")
+            seen.add(key)
+            asset_id = binding_assets[key]
+            candidate = candidates.get(asset_id)
+            if candidate is None:
+                raise ValueError(
+                    "teacher-selected-candidate-not-filter-eligible:"
+                    f" asset={asset_id} eligible={','.join(sorted(candidates))}"
+                )
+            role = roles[role_id]
+            reasons = _role_rejection_reasons(
+                role, candidate, material_type=needs["material_type"],
+            )
+            if reasons:
+                raise ValueError("teacher-selected-role-incompatible")
+            if _set_rejection_reasons(
+                candidate, selected=selected, used_asset_keys=used_assets,
+                role_reasons=reasons,
+            ):
+                raise ValueError("teacher-selected-set-incompatible")
+            chosen_by_planner = original["selected_candidate"]
+            if chosen_by_planner["asset_reference"]["asset_id"] == asset_id:
+                if chosen_by_planner.get("compatibility_fingerprint") != candidate["fingerprint"]:
+                    raise ValueError("teacher-selected-candidate-identity-conflict")
+                effective.append(original)
+            else:
+                effective.append(_assignment(
+                    role, candidate,
+                    requirement_state=original["requirement_state"],
+                    slot_id=slot_id,
+                ))
+            selected.append(candidate)
+            used_assets.add(_asset_key(candidate))
+    if seen != set(binding_assets):
+        raise ValueError("teacher-resolved-binding-count-mismatch")
+    if len(used_assets) > needs["maximum_visual_count"]:
+        raise ValueError("teacher-resolved-asset-cap-exceeded")
+    return tuple(effective)
+
