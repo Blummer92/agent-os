@@ -128,13 +128,17 @@ Reviewed entries may now supply Area, Learning Type, Applies To and Source Link
 owner decisions outside this writer.
 
 For `persisted` and `unchanged` results the writer also returns
-`activation_readiness`, derived from the same canonical readback: `retrieval_ready`,
-`missing_owner_activation` (Status, `Surface Before Work?`) and
-`missing_reviewed_metadata` (Area, Learning Type). It reports presence only, writes
-nothing and grants no authority; the reader alone judges vocabulary, and
-`test_lessons_write_to_ckr6_readiness.py` pins that the two agree. It is `null` for any
-result without a verified readback. A `persisted` result with
-`retrieval_ready: false` is not usable by CKR6 yet.
+`activation_prerequisites`, derived from the same canonical readback:
+`required_fields_present`, `missing_owner_activation` (Status,
+`Surface Before Work?`) and `missing_reviewed_metadata` (Area, Learning Type, Source
+Link). It reports presence only, writes nothing and grants no authority. It is a
+necessary condition, not eligibility: a present but unrecognized Area, Learning Type or
+Status, or Status "Archived note", still reads as present while CKR6 rejects the page,
+because the reader alone judges values. `test_lessons_write_to_ckr6_readiness.py` pins
+that, with recognized values, the field matches CKR6 `sufficient` exactly. It is `null`
+for any result without a verified readback. A `persisted` result with
+`required_fields_present: false` is not usable by CKR6 yet; `true` still needs the
+reader's confirmation.
 
 Offline tests exercise missing metadata rejection and selection with synthetic
 owner-supplied metadata; they do not prove live activation. Any live metadata repair

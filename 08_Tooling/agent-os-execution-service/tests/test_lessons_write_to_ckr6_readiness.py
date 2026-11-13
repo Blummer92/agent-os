@@ -22,7 +22,7 @@ from agent_memory_context_manager.lesson_activation_bridge import (
 from agent_os_execution_service.issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from scripts.agent_os_notion_lessons_write import catalog
 from scripts.agent_os_notion_lessons_write.admission import AdmittedRequest
-from scripts.agent_os_notion_lessons_write.writer import activation_readiness, execute
+from scripts.agent_os_notion_lessons_write.writer import activation_prerequisites, execute
 
 SOURCE_ID = "00000000-0000-0000-0000-000000000001"
 PAGE_ID = "00000000-0000-0000-0000-000000000002"
@@ -140,8 +140,8 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
 
     assert result["status"] == "persisted" and result["readback_verified"] is True
     assert result["lesson_id"] == "LL-101"
-    assert result["activation_readiness"] == {
-        "retrieval_ready": False,
+    assert result["activation_prerequisites"] == {
+        "required_fields_present": False,
         "missing_owner_activation": ["Status", "Surface Before Work?"],
         "missing_reviewed_metadata": [],
     }
@@ -161,8 +161,8 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
     # A re-run is `unchanged` and now reports the page ready.
     rerun = execute(AdmittedRequest(101, issue_number=3417, request_id=CREATE_WITH_METADATA), notion)
     assert rerun["status"] == "unchanged"
-    assert rerun["activation_readiness"] == {
-        "retrieval_ready": True, "missing_owner_activation": [], "missing_reviewed_metadata": [],
+    assert rerun["activation_prerequisites"] == {
+        "required_fields_present": True, "missing_owner_activation": [], "missing_reviewed_metadata": [],
     }
 
 
@@ -171,13 +171,14 @@ def test_reviewed_create_without_area_is_reported_unretrievable_and_owner_activa
     result = execute(AdmittedRequest(100, issue_number=3417, request_id=CREATE_WITHOUT_METADATA), notion)
 
     assert result["status"] == "persisted"
-    assert result["activation_readiness"] == {
-        "retrieval_ready": False,
+    assert result["activation_prerequisites"] == {
+        "required_fields_present": False,
         "missing_owner_activation": ["Status", "Surface Before Work?"],
-        "missing_reviewed_metadata": ["Area", "Learning Type"],
+        "missing_reviewed_metadata": ["Area", "Learning Type", "Source Link"],
     }
     notion.owner_activates()
-    assert activation_readiness(notion.page)["missing_reviewed_metadata"] == ["Area", "Learning Type"]
+    assert activation_prerequisites(notion.page)["missing_reviewed_metadata"] == [
+        "Area", "Learning Type", "Source Link"]
     outcome = ckr6_lookup(notion, "LL-101")
     # The warning is true: CKR6 still cannot use the page the owner activated.
     assert outcome["selected_lessons"] == [] and outcome["lesson_retrieval_status"] != "sufficient"
@@ -190,8 +191,8 @@ def test_reviewed_metadata_update_of_existing_lesson_reaches_retrieval_after_own
     result = execute(request, notion)
 
     assert result["status"] == "persisted" and result["lesson_id"] == "LL-93"
-    assert result["activation_readiness"]["missing_reviewed_metadata"] == []
-    assert result["activation_readiness"]["missing_owner_activation"] == ["Status", "Surface Before Work?"]
+    assert result["activation_prerequisites"]["missing_reviewed_metadata"] == []
+    assert result["activation_prerequisites"]["missing_owner_activation"] == ["Status", "Surface Before Work?"]
     assert set(notion.sent[0]) == set(catalog.lesson_for(UPDATE_METADATA))
 
     notion.owner_activates()
@@ -205,34 +206,66 @@ def test_readiness_is_reported_only_for_a_verified_readback():
     stale = AdmittedRequest(100, "LL-93", "2026-01-01T00:00:00.000Z", UPDATE_METADATA, 3417)
     result = execute(stale, notion)
     assert result["status"] == "conflict" and result["reason_code"] == "stale-revision-refused"
-    assert result["activation_readiness"] is None and notion.sent == []
+    assert result["activation_prerequisites"] is None and notion.sent == []
+
+
+LINK = "https://github.com/Blummer92/agent-os/issues/3305"
+
+
+def modeled_page(*, status="New", surface=True, area="Governance", learning_type="Mistake", link=LINK):
+    page = blank_page(77)
+    props = page["properties"]
+    props["Area"] = _prop("select", area)
+    props["Learning Type"] = _prop("select", learning_type)
+    props["Applies To"] = _prop("multi_select", ("Notion",))
+    props["Source Link"] = _prop("url", link)
+    props["Status"] = {"type": "select", "select": None if status is None else {"name": status}}
+    props["Surface Before Work?"] = {"type": "checkbox", "checkbox": surface}
+    return page
+
+
+def ckr6_sufficient(page):
+    notion = FakeNotion(page)
+    return ckr6_lookup(notion, "LL-77")["lesson_retrieval_status"] == "sufficient"
 
 
 @pytest.mark.parametrize("status", [None, "New"])
 @pytest.mark.parametrize("surface", [False, True])
 @pytest.mark.parametrize("area", [None, "Governance"])
 @pytest.mark.parametrize("learning_type", [None, "Mistake"])
-def test_writer_readiness_never_disagrees_with_the_ckr6_normalizer_about_presence(
-    status, surface, area, learning_type
+@pytest.mark.parametrize("link", [None, LINK])
+def test_with_recognized_values_the_prerequisites_match_ckr6_eligibility_exactly(
+    status, surface, area, learning_type, link
 ):
-    page = blank_page(7)
-    page["properties"]["Area"] = _prop("select", area)
-    page["properties"]["Learning Type"] = _prop("select", learning_type)
-    page["properties"]["Applies To"] = _prop("multi_select", ("Notion",))
-    page["properties"]["Status"] = {"type": "select", "select": None if status is None else {"name": status}}
-    page["properties"]["Surface Before Work?"] = {"type": "checkbox", "checkbox": surface}
-
-    readiness = activation_readiness(page)
+    page = modeled_page(status=status, surface=surface, area=area, learning_type=learning_type, link=link)
+    prerequisites = activation_prerequisites(page)
     row = normalize_lesson_row(page)
-    needs_reader = {"Area", "Learning Type", "Status"} & set(
-        readiness["missing_owner_activation"] + readiness["missing_reviewed_metadata"]
-    )
-    assert isinstance(row, LessonActivationSkip) == bool(needs_reader)
-    if not isinstance(row, LessonActivationSkip):
-        assert row.surface_before_work is (
-            "Surface Before Work?" not in readiness["missing_owner_activation"]
-        )
-    assert readiness["retrieval_ready"] is (not needs_reader and surface is True)
+    missing = set(prerequisites["missing_owner_activation"] + prerequisites["missing_reviewed_metadata"])
+
+    # The reader skips exactly when Area, Learning Type or Status is missing.
+    assert isinstance(row, LessonActivationSkip) == bool({"Area", "Learning Type", "Status"} & missing)
+    # With recognized values, CKR6 reaches `sufficient` exactly when nothing is missing.
+    assert prerequisites["required_fields_present"] is (not missing)
+    assert ckr6_sufficient(page) is prerequisites["required_fields_present"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"status": "Archived note"},
+        {"status": "Bogus"},
+        {"area": "Bogus"},
+        {"learning_type": "Bogus"},
+    ],
+)
+def test_presence_is_necessary_not_sufficient_and_the_writer_does_not_claim_eligibility(overrides):
+    """Documented limit: unrecognized or archived values still read as present."""
+    page = modeled_page(**overrides)
+    prerequisites = activation_prerequisites(page)
+    assert prerequisites["required_fields_present"] is True  # presence only
+    assert not ckr6_sufficient(page)  # the reader alone rejects it
+    assert set(prerequisites) == {"required_fields_present", "missing_owner_activation", "missing_reviewed_metadata"}
+    assert "retrieval_ready" not in prerequisites and "eligible" not in prerequisites
 
 
 @pytest.mark.parametrize("request_id", sorted(catalog.LESSONS))
@@ -250,4 +283,4 @@ def test_every_reviewed_catalog_entry_with_metadata_uses_vocabulary_the_reader_a
 
     row = normalize_lesson_row(page)
     assert not isinstance(row, LessonActivationSkip), getattr(row, "reason", None)
-    assert activation_readiness(page)["retrieval_ready"] is True
+    assert activation_prerequisites(page)["required_fields_present"] is True

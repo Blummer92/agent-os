@@ -153,17 +153,20 @@ def _check_schema(schema: object, source_id: str, lesson: Mapping) -> None:
             raise WriteBlocked("descriptive-option-not-in-live-schema")
 
 
-def activation_readiness(page: Mapping) -> dict:
-    """Report, from one canonical readback, what still blocks CKR6 retrieval.
+def activation_prerequisites(page: Mapping) -> dict:
+    """Report which CKR6-required fields are still missing on one canonical readback.
 
-    A persisted lesson is not a retrievable lesson: the CKR6 reader
-    (``lesson_activation_bridge.normalize_lesson_row``) also needs Area,
-    Learning Type and Status, and its filtered query needs Surface Before Work?
-    checked. Status and Surface are owner-only (``PROTECTED_FIELDS``); Area and
-    Learning Type are reviewed catalog metadata. This is presence only, read
-    from the page and never written: vocabulary is judged by the reader alone,
-    and a contract test pins that the two never disagree about presence. It
-    grants no authority and changes no write.
+    A persisted lesson is not a retrievable lesson: the CKR6 reader needs Area,
+    Learning Type, Status and a canonical Source Link (without one the lesson is
+    only ``manual-review``), and retrieval needs Surface Before Work? checked.
+    Status and Surface are owner-only (``PROTECTED_FIELDS``); the rest are
+    reviewed catalog metadata.
+
+    ``required_fields_present`` is a NECESSARY condition, never eligibility. It
+    reads presence only: a present but unrecognized Area, Learning Type or Status,
+    or Status "Archived note", still shows True while CKR6 rejects the page. The
+    reader alone decides eligibility; a contract test pins that it never selects
+    a page this reports as incomplete. Nothing here is written or authorized.
     """
     props = page.get("properties") if isinstance(page, Mapping) else None
     props = props if isinstance(props, Mapping) else {}
@@ -174,13 +177,15 @@ def activation_readiness(page: Mapping) -> dict:
         return isinstance(choice, Mapping) and type(choice.get("name")) is str and bool(choice["name"].strip())
 
     surface = props.get("Surface Before Work?")
+    link = props.get("Source Link")
     present = {
         "Area": selected("Area"), "Learning Type": selected("Learning Type"), "Status": selected("Status"),
+        "Source Link": isinstance(link, Mapping) and type(link.get("url")) is str and bool(link["url"].strip()),
         "Surface Before Work?": isinstance(surface, Mapping) and surface.get("checkbox") is True,
     }
     missing = [name for name, ok in present.items() if not ok]
     return {
-        "retrieval_ready": not missing,
+        "required_fields_present": not missing,
         "missing_owner_activation": [name for name in missing if name in PROTECTED_FIELDS],
         "missing_reviewed_metadata": [name for name in missing if name not in PROTECTED_FIELDS],
     }
@@ -193,7 +198,7 @@ def execute(request: AdmittedRequest, client) -> dict:
         "status": "blocked", "reason_code": "precheck-incomplete",
         "write_attempts": 0, "readback_verified": False,
         "page_id": None, "lesson_id": None, "revision": None,
-        "activation_readiness": None,
+        "activation_prerequisites": None,
     }
     try:
         lesson = dict(lesson_for(request.request_id))
@@ -219,7 +224,7 @@ def execute(request: AdmittedRequest, client) -> dict:
                           revision=existing["last_edited_time"])
             if _values(existing, lesson) == lesson:
                 result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True,
-                              activation_readiness=activation_readiness(existing))
+                              activation_prerequisites=activation_prerequisites(existing))
                 return result
             if target is None:
                 # A create entry never overwrites; refinement needs a reviewed
@@ -275,7 +280,7 @@ def execute(request: AdmittedRequest, client) -> dict:
         result.update(status="persisted", reason_code="exact-canonical-readback-confirmed",
                       readback_verified=True, lesson_id=_lesson_id(readback),
                       revision=readback["last_edited_time"],
-                      activation_readiness=activation_readiness(readback))
+                      activation_prerequisites=activation_prerequisites(readback))
     except WriteBlocked as exc:
         result["reason_code"] = str(exc)
     except Exception:
