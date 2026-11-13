@@ -8,9 +8,9 @@ catalog as a brand-new ``create``. This function closes that gap *before* a
 catalog PR, using only finite caller-supplied evidence:
 
 * it never reads Notion, searches, embeds, or calls a model;
-* similarity is advisory: only byte-for-byte (NFKC/casefold) equal guidance can
-  yield DUPLICATE or UPDATE_EXISTING; every paraphrase, contradiction or
-  ambiguity is HUMAN_REVIEW;
+* similarity is advisory: only guidance that is equal after NFKC, casefold and
+  whitespace collapse (both fields together) can yield DUPLICATE or
+  UPDATE_EXISTING; every paraphrase, contradiction or ambiguity is HUMAN_REVIEW;
 * negations are never dropped from comparison and text is never truncated, so
   "never X" cannot be mistaken for "always X";
 * every result has ``publication_authorized`` false: the reviewed catalog PR,
@@ -25,10 +25,17 @@ So the absence of a lexical match is reported as NO_LEXICAL_MATCH with
 ``novelty-not-semantically-verified``, never as a validated new lesson: a human
 must still compare meaning before a catalog entry is merged.
 
+Also not matched (found by independent QA; all stay non-authorizing ``no-lexical-match``):
+visually identical homoglyph copies (NFKC does not fold confusables), the same words
+with guidance and guardrail swapped, an identical title or root cause with different
+guidance, and a candidate that is only a fragment of a long existing guidance. The
+writer's exact-title and Lesson-ID checks still apply at write time.
+
 Scope of ``existing_set_complete``: the caller's bounded, candidate-relevant read was
 not truncated. It does not mean "all of Notion": the database holds far more lessons
-than the 25-lesson bound, and one ingress request (16 KB) carries only about 19 real
-lessons (~820 bytes each, measured). Lessons outside the supplied set are not compared.
+than the 25-lesson bound, and one ingress request (16 KB) carries roughly 6 (maximum-size
+entries) to 25 (short entries) lessons, about 15 at ~1 KB each. Lessons outside the
+supplied set are not compared.
 """
 
 from __future__ import annotations
@@ -240,8 +247,12 @@ def review_lesson_candidate(
     if _is_exact(candidate, match):
         if match.root_cause and _jaccard(_tokens(candidate.root_cause), _tokens(match.root_cause)) < CAUSE_DISTINCT_BELOW:
             return _review(PublicationVerdict.HUMAN_REVIEW, ["same-guidance-different-cause"], **common)
-        known = {_base_ref(ref) for ref in match.canonical_github_refs}
-        if any(_base_ref(ref) not in known for ref in candidate.canonical_github_refs):
+        known = {_base_ref(ref) for ref in match.canonical_github_refs if type(ref) is str}
+        # Only a well-formed repository reference is evidence; junk or foreign refs are not.
+        if any(
+            type(ref) is str and GITHUB_REF.fullmatch(ref) and _base_ref(ref) not in known
+            for ref in candidate.canonical_github_refs
+        ):
             return _review(PublicationVerdict.UPDATE_EXISTING, ["same-guidance-new-evidence"], **common)
         return _review(PublicationVerdict.DUPLICATE, ["same-guidance-no-new-evidence"], **common)
     if _polarity(candidate.what_to_do_next_time, candidate.guardrail) != _polarity(

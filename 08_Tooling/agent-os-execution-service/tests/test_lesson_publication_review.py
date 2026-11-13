@@ -66,6 +66,25 @@ def test_same_guidance_with_new_evidence_updates_the_existing_lesson_at_its_exac
     assert (result.matched_lesson_id, result.expected_revision) == ("LL-87", REV)
 
 
+@pytest.mark.parametrize(
+    "extra_ref",
+    ["not a url", "https://github.com/evil/repo/issues/1", "http://github.com/Blummer92/agent-os/issues/9", 5, None],
+)
+def test_only_well_formed_repository_references_count_as_new_evidence(extra_ref):
+    result = run(candidate(canonical_github_refs=(REF_A, extra_ref)), existing())
+    assert result.verdict is V.DUPLICATE and result.reason_codes == ("same-guidance-no-new-evidence",)
+
+
+def test_a_well_formed_new_reference_still_upgrades_the_duplicate_to_an_update():
+    assert run(candidate(canonical_github_refs=(REF_A, REF_B)), existing()).verdict is V.UPDATE_EXISTING
+
+
+def test_fullwidth_compatibility_forms_are_normalized_before_the_exact_comparison():
+    wide = CLOSING_NEXT.replace("Part of", "Ｐａｒｔ ｏｆ")
+    assert wide != CLOSING_NEXT
+    assert run(candidate(what_to_do_next_time=wide), existing()).verdict is V.DUPLICATE
+
+
 def test_exact_guidance_with_an_unrelated_root_cause_is_held_for_review():
     other_cause = "Aggregate validation silently skipped the execution service package."
     assert run(candidate(root_cause=other_cause), existing()).reason_codes == ("same-guidance-different-cause",)

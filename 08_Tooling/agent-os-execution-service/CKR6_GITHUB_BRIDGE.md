@@ -253,17 +253,20 @@ No workflow change, Notion write, store or authority is added.
   (`lesson_id`, exact `source_revision`, title, guidance, optional root cause,
   refs; at most 25) with `existing_set_complete: true` only when the caller's
   bounded, candidate-relevant read-only read was not truncated (it is not "all
-  of Notion": one 16 KB ingress request carries about 19 real lessons, and
-  lessons outside the supplied set are not compared). Only byte-equal (NFKC/casefold)
-  guidance yields `duplicate` or `update-existing` (with the target Lesson ID
+  of Notion": one 16 KB ingress request carries roughly 6 (maximum-size entries)
+  to 25 (short entries) lessons, about 15 at ~1 KB each, and lessons outside the
+  supplied set are not compared). Only guidance equal after NFKC, casefold and
+  whitespace normalization (both fields together) yields `duplicate` or
+  `update-existing` (with the target Lesson ID
   and exact revision); paraphrases, polarity conflicts, ambiguity and an
   incomplete or unverified existing set are `human-review`; sourceless, rootless
   or generic candidates are `insufficient-evidence`. Everything else is
   `no-lexical-match` with `novelty-not-semantically-verified`: token overlap
   cannot certify novelty (measured: the #3690 continuation entry and LL-82 differ
   in vocabulary yet overlap in meaning), so a human compares meaning before any
-  catalog PR merges. Without `existing_lessons` the review is
-  `human-review`/`existing-set-incomplete`. It never authorizes publication.
+  catalog PR merges. Without `existing_lessons` a sufficient candidate's review is
+  `human-review`/`existing-set-incomplete` (a sourceless, rootless or generic one is
+  `insufficient-evidence` first). It never authorizes publication.
 - `lesson-refinement` (one known-ID read): `{"refinement": {lesson_id,
   source_revision, receipt_refs, evidence}}` reads exactly that lesson through
   the existing read-only route, refuses a stale revision, runs CKR7
