@@ -13,10 +13,16 @@ from agent_memory_context_manager.coding_knowledge_selection import CodingKnowle
 from agent_memory_context_manager.lesson_activation_bridge import (
     MAX_RETRIEVAL_ROWS,
     LessonActivationSkip,
+    LessonRecordEvidence,
     known_lesson_numbers,
     normalize_lesson_row,
 )
 from agent_memory_context_manager.lesson_preflight import MAX_LESSON_RECORDS, LessonRetrievalStatus
+# Single source of truth for the canonical activatable-status rule; the
+# diagnostic projection must never define its own copy of this vocabulary.
+from agent_memory_context_manager.lesson_preflight import (
+    _ALLOWED_STATUSES as _ALLOWED_LESSON_STATUSES,
+)
 from agent_memory_context_manager.lesson_retrieval_orchestrator import orchestrate_lesson_retrieval
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -49,14 +55,33 @@ def selected_lesson_provenance(result: Any) -> list[dict[str, object]]:
     ]
 
 
+def _eligibility_skip_reason(evidence: LessonRecordEvidence) -> str | None:
+    """Explain why an otherwise valid requested row is not activatable.
+
+    Mirrors the canonical eligibility rule in lesson_preflight (archived,
+    disallowed status, surface checkbox) in the same order. Returns None
+    for eligible rows: eligibility is admission logic, and this projection
+    only describes rows the canonical rule already excludes.
+    """
+    if evidence.archived:
+        return "eligibility-skip:archived-note-status"
+    if evidence.status not in _ALLOWED_LESSON_STATUSES:
+        return "eligibility-skip:status-not-activatable"
+    if not evidence.surface_before_work:
+        return "eligibility-skip:surface-before-work-unchecked"
+    return None
+
+
 def _requested_lesson_skips(
     raw: Mapping[str, Any], wanted: frozenset[str],
     skips: list[dict[str, str]], seen_ids: set[str],
 ) -> None:
-    """Observe only bounded, explicitly requested normalization skips.
+    """Observe only bounded, explicitly requested skips.
 
-    No raw Notion row is retained. The canonical executor still makes all
-    retrieval and admission decisions. This path is diagnostic only.
+    Both normalization skips and eligibility exclusions of explicitly
+    requested IDs are diagnosed. No raw Notion row is retained. The
+    canonical executor still makes all retrieval and admission decisions.
+    This path is diagnostic only.
     """
     rows = raw.get("results")
     if not isinstance(rows, list) or not wanted or len(skips) >= MAX_LESSON_RECORDS:
@@ -67,7 +92,14 @@ def _requested_lesson_skips(
         if not isinstance(row, Mapping):
             continue
         normalized = normalize_lesson_row(row)
-        if not isinstance(normalized, LessonActivationSkip):
+        if isinstance(normalized, LessonActivationSkip):
+            reason = "normalization-skip:" + normalized.reason
+        elif isinstance(normalized, LessonRecordEvidence):
+            eligibility_reason = _eligibility_skip_reason(normalized)
+            if eligibility_reason is None:
+                continue
+            reason = eligibility_reason
+        else:
             continue
         lesson_id = normalized.lesson_id
         if lesson_id not in wanted or lesson_id in seen_ids:
@@ -82,7 +114,7 @@ def _requested_lesson_skips(
             "lesson_id": lesson_id,
             "source_revision": revision,
             "currentness": "not-activatable",
-            "provenance": "normalization-skip:" + normalized.reason,
+            "provenance": reason,
         })
         if len(skips) >= MAX_LESSON_RECORDS:
             break
