@@ -43,6 +43,13 @@ from agent_memory_context_manager.notion_learning_projection import (
     project_lesson_to_notion,
 )
 
+from .lesson_publication_review import (
+    MAX_EXISTING_LESSONS,
+    CandidateLesson,
+    ExistingLessonSummary,
+    review_lesson_candidate,
+)
+
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 MAX_TEXT = 512
@@ -67,7 +74,11 @@ CANDIDATE_FIELDS = frozenset({
     "lesson_summary", "what_happened", "severity", "owner_agent", "canonical_github_refs",
     "evidence_refs", "affected_paths", "future_use_hints", "library_name",
     "what_to_do_next_time", "guardrail", "reusable_rule_proven", "permanent_regression_ref",
-    "root_cause_or_diagnosis",
+    "root_cause_or_diagnosis", "existing_lessons", "existing_set_complete",
+})
+EXISTING_LESSON_FIELDS = frozenset({
+    "lesson_id", "source_revision", "title", "what_to_do_next_time", "guardrail",
+    "root_cause", "canonical_github_refs", "archived",
 })
 EVIDENCE_FIELDS = frozenset({
     "reference", "effect", "canonical_github_refs", "evidence_refs", "revised_title",
@@ -156,9 +167,40 @@ def parse_candidate(payload: object) -> StructuredLearningOutcome:
     )
 
 
+def parse_existing_lessons(payload: Mapping[str, Any]) -> tuple[tuple[ExistingLessonSummary, ...], bool]:
+    """Bounded caller-supplied summaries of existing lessons read through the bounded route."""
+    complete = payload.get("existing_set_complete", False)
+    if type(complete) is not bool:
+        raise ValueError("candidate existing_set_complete must be bool")
+    raw = payload.get("existing_lessons")
+    if raw is None:
+        return (), False
+    if type(raw) is not list or len(raw) > MAX_EXISTING_LESSONS:
+        raise ValueError("candidate existing_lessons must be a bounded list")
+    parsed = []
+    for item in raw:
+        if not isinstance(item, Mapping) or set(item) - EXISTING_LESSON_FIELDS:
+            raise ValueError("candidate existing_lessons entries must use supported fields")
+        archived = item.get("archived", False)
+        if type(archived) is not bool:
+            raise ValueError("candidate existing_lessons archived must be bool")
+        parsed.append(ExistingLessonSummary(
+            lesson_id=_text(item.get("lesson_id"), "existing lesson_id", 16),
+            source_revision=_text(item.get("source_revision"), "existing source_revision", 40),
+            title=_text(item.get("title"), "existing title"),
+            what_to_do_next_time=_text(item.get("what_to_do_next_time"), "existing what_to_do_next_time"),
+            guardrail=_text(item.get("guardrail"), "existing guardrail"),
+            root_cause=_optional_text(item.get("root_cause"), "existing root_cause", MAX_DETAIL),
+            canonical_github_refs=_refs(item.get("canonical_github_refs"), "existing canonical_github_refs"),
+            archived=archived,
+        ))
+    return tuple(parsed), complete
+
+
 def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
     """Producer -> CKR5 -> projection -> reviewable catalog draft. Writes nothing."""
     outcome = parse_candidate(payload)
+    existing, existing_complete = parse_existing_lessons(payload)
     diagnosis = _optional_text(payload.get("root_cause_or_diagnosis"), "root_cause_or_diagnosis")
     produced = normalize_learning_outcome(outcome)
     if produced.disposition is not ProducerDisposition.CKR5_CANDIDATE or produced.observation is None:
@@ -194,6 +236,19 @@ def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
         name for name in ("Area", "Learning Type", "Source Link")
         if name not in descriptive
     ]
+    # Pre-catalog quality/duplicate review against caller-supplied verified existing
+    # lessons. Advisory and authority-false; without a complete verified set it holds.
+    review = review_lesson_candidate(
+        CandidateLesson(
+            title=record.title,
+            root_cause=diagnosis or "",
+            what_to_do_next_time=record.resolution_or_next_time,
+            guardrail=record.prevention_guardrail,
+            canonical_github_refs=tuple(record.canonical_github_refs),
+        ),
+        existing,
+        existing_set_complete=existing_complete,
+    )
     return {
         "status": learned.disposition.value,
         "reason_codes": reasons,
@@ -217,6 +272,7 @@ def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
             # These fields are *not* writable via the governed catalog writer.
             "owner_activation_required": ["Status", "Surface Before Work?"],
             "catalog_fields_over_limit": over,
+            "publication_review": review.as_dict(),
             **_NO_AUTHORITY,
         },
     }

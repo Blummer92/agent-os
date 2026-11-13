@@ -247,7 +247,21 @@ No workflow change, Notion write, store or authority is added.
   `ci_review_learning.normalize_learning_outcome` (materiality/noise gate) ->
   CKR5 `evaluate_coding_failure` (identity/recurrence) -> CKR6
   `project_lesson_to_notion` and returns an authority-false `lesson_proposal`
-  with a reviewable #3417 `catalog_entry_draft`.
+  with a reviewable #3417 `catalog_entry_draft`. The proposal also carries a
+  `publication_review` (`lesson_publication_review`): a write-free comparison
+  of the proposed guidance against caller-supplied `existing_lessons`
+  (`lesson_id`, exact `source_revision`, title, guidance, optional root cause,
+  refs; at most 25) with `existing_set_complete: true` only when the bounded
+  read-only route proved the set complete. Only byte-equal (NFKC/casefold)
+  guidance yields `duplicate` or `update-existing` (with the target Lesson ID
+  and exact revision); paraphrases, polarity conflicts, ambiguity and an
+  incomplete or unverified existing set are `human-review`; sourceless, rootless
+  or generic candidates are `insufficient-evidence`. Everything else is
+  `no-lexical-match` with `novelty-not-semantically-verified`: token overlap
+  cannot certify novelty (measured: the #3690 continuation entry and LL-82 differ
+  in vocabulary yet overlap in meaning), so a human compares meaning before any
+  catalog PR merges. Without `existing_lessons` the review is
+  `human-review`/`existing-set-incomplete`. It never authorizes publication.
 - `lesson-refinement` (one known-ID read): `{"refinement": {lesson_id,
   source_revision, receipt_refs, evidence}}` reads exactly that lesson through
   the existing read-only route, refuses a stale revision, runs CKR7
