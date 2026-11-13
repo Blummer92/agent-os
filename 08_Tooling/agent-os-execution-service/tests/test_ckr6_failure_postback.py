@@ -617,6 +617,14 @@ def test_workflow_yaml_parses_and_jobs_are_exactly_the_three_expected():
     yaml = pytest.importorskip("yaml")
     document = yaml.safe_load(_workflow_text())
     assert set(document["jobs"]) == {"classify", "execute", "report-failure"}
+    assert document["permissions"] == {"contents": "read"}
+    assert "permissions" not in document["jobs"]["classify"]
+    expected_postback_permissions = {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "write",
+    }
+    assert document["jobs"]["execute"]["permissions"] == expected_postback_permissions
     job = document["jobs"]["report-failure"]
     assert job["needs"] == ["classify", "execute"]
-    assert job["permissions"] == {"contents": "read", "issues": "write"}
+    assert job["permissions"] == expected_postback_permissions
