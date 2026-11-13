@@ -226,3 +226,35 @@ def test_pr_a01_identical_windows_collapse_across_escalation_steps():
     assert "required-library-uncovered" in result.selection_reason_codes
     assert result.candidate_count == 2
     assert result.selected_lesson_ids == ("LL-01", "LL-02")
+
+
+def test_escalation_diagnostics_keep_existing_read_budget_and_deduplicate_skips():
+    bad = _lesson_row("LL-96")
+    bad["properties"]["Area"] = _select("Unknown area")
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [bad]}
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert len(calls) == 3
+    assert len(calls) <= MAX_ESCALATION_STEPS
+    assert result.selected_lesson_ids == ()
+    assert len(result.rejected_candidate_provenance) == 1
+    assert result.rejected_candidate_provenance[0]["rejection_reason"] == "ambiguous-area-vocabulary"
+
+
+def test_diagnostics_are_bounded_over_retrieved_rows():
+    rows = []
+    for number in range(30):
+        bad = _lesson_row(f"LL-{number:02d}")
+        bad["properties"]["Area"] = _select("Unknown area")
+        rows.append(bad)
+    result = orchestrate_lesson_retrieval(
+        request(), execute_read=lambda _query: {"results": rows}
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert len(result.rejected_candidate_provenance) <= 5
+    assert result.selected_lesson_ids == ()

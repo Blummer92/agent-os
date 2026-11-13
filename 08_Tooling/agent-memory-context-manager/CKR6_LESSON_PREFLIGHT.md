@@ -103,3 +103,33 @@ Provider responses are capped by `MAX_RETRIEVAL_ROWS`, and the selector receives
 ## Validation
 
 Focused tests in `tests/test_lesson_preflight.py`, `tests/test_lesson_activation_bridge.py`, and `tests/test_lesson_retrieval_orchestrator.py` cover zero-retrieval planning, known-reference-first planning, task-filtered retrieval, exact-narrow distinction, immutable attempt-ledger advancement, bounded escalation exhaustion, unavailable-source behavior, normalization, candidate narrowing, authority/currentness handling, and fixed no-write/no-authority behavior.
+
+
+### Why a retrieved lesson was rejected (diagnostic-only)
+
+CKR6 now preserves bounded, finite rejection explanations for rows **actually
+returned** by the approved Notion reader. For a normalized, otherwise eligible
+row that failed every task-match test, `rejected_candidate_provenance` carries
+`rejection_reason: no-task-signal-match`. For observed rows discarded during
+normalization or eligibility checks, it carries the existing finite
+normalization reason (for example `ambiguous-area-vocabulary`,
+`ambiguous-status-vocabulary`, `missing-activation-guidance`) or
+`status-not-eligible` / `surface-before-work-disabled`. Unidentified rows use
+`lesson_id: unknown`; no page text, secrets, or inferred metadata are included.
+
+**Required metadata warning:** A lesson must have a stable Lesson ID, title,
+verified revision, Status in `New | Applied | Needs follow-up`, checked
+`Surface Before Work?`, recognized Area and Learning Type, valid Applies To
+vocabulary, Guardrail and What To Do Next Time guidance, and candidate-owned
+canonical GitHub provenance for sufficient selection. A row missing any of these
+cannot become selected merely by adding diagnostics. Status and Surface Before
+Work? remain separately owner-governed; this feature never activates a lesson.
+
+Notion provider-side filters can omit rows before CKR6 receives them. The system
+cannot explain individual missing/unchecked Status or Surface values for such
+**unseen** rows, and it must never fabricate that evidence. Diagnostic entries
+are capped to five distinct observed normalization/eligibility skips in addition
+to the pre-existing bounded candidate provenance. The CKR2 selector, four-slot
+maximum escalation, query page sizes, no-read `not-needed` path, admission
+polarity, and all authority/write flags are unchanged. No extra Notion read or
+metadata update is introduced.

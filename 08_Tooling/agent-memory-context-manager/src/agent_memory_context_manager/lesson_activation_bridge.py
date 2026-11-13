@@ -22,7 +22,7 @@ module adds no duplicate provenance guard or relevance vocabulary.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Sequence
 
 from .coding_knowledge_selection import (
@@ -36,6 +36,7 @@ from .lesson_preflight import (
     MAX_LESSON_RECORDS,
     LessonPreflightResult,
     LessonRecordEvidence,
+    LessonRetrievalStatus,
     consume_lesson_preflight,
     plan_lesson_preflight,
 )
@@ -113,6 +114,62 @@ class LessonActivationSkip:
 
     lesson_id: str | None
     reason: str
+
+
+
+# A rejection diagnostic is explanatory only. It cannot enter CKR2 candidate
+# selection, change a retrieval decision, or introduce new provider reads.
+_ELIGIBLE_STATUSES = frozenset({"New", "Applied", "Needs follow-up"})
+
+
+def _lesson_exclusion(lesson: LessonRecordEvidence) -> LessonActivationSkip | None:
+    if lesson.archived or lesson.status not in _ELIGIBLE_STATUSES:
+        return LessonActivationSkip(lesson.lesson_id, "status-not-eligible")
+    if not lesson.surface_before_work:
+        return LessonActivationSkip(lesson.lesson_id, "surface-before-work-disabled")
+    return None
+
+
+def _with_rejection_diagnostics(
+    result: LessonPreflightResult,
+    skipped: Sequence[LessonActivationSkip],
+) -> LessonPreflightResult:
+    """Explain only observed rejections; preserve CKR2 admission and budgets.
+
+    The existing provenance entries stay first, with only a finite reason
+    appended when the selector established that *none* matched task signals.
+    At most five distinct normalization/eligibility skips are appended.
+    No provider-hidden row is diagnosed from inference.
+    """
+    if result.lesson_retrieval_status not in (
+        LessonRetrievalStatus.INSUFFICIENT,
+        LessonRetrievalStatus.MANUAL_REVIEW,
+    ):
+        return result
+
+    entries = [dict(item) for item in result.rejected_candidate_provenance]
+    if "no-relevant-candidate" in result.selection_reason_codes:
+        for entry in entries:
+            entry["rejection_reason"] = "no-task-signal-match"
+
+    seen: set[tuple[str | None, str]] = set()
+    added = 0
+    for skip in skipped:
+        key = (skip.lesson_id, skip.reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        if added >= MAX_LESSON_RECORDS:
+            break
+        entries.append({
+            "lesson_id": skip.lesson_id or "unknown",
+            "source_revision": "",
+            "currentness": "not-evaluated",
+            "provenance": "normalization-or-eligibility-rejected",
+            "rejection_reason": skip.reason,
+        })
+        added += 1
+    return replace(result, rejected_candidate_provenance=tuple(entries))
 
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -414,13 +471,21 @@ def orchestrate_lesson_activation(
     rows = _extract_bounded_rows(raw)
 
     lessons: list[LessonRecordEvidence] = []
+    skipped: list[LessonActivationSkip] = []
     for row in rows:
         normalized = normalize_lesson_row(row)
         if isinstance(normalized, LessonRecordEvidence):
-            lessons.append(normalized)
+            exclusion = _lesson_exclusion(normalized)
+            if exclusion is None:
+                lessons.append(normalized)
+            else:
+                skipped.append(exclusion)
+        else:
+            skipped.append(normalized)
 
     bounded = _bound_relevant_lessons(request, lessons)
-    return consume_lesson_preflight(request, bounded)
+    result = consume_lesson_preflight(request, bounded)
+    return _with_rejection_diagnostics(result, skipped)
 
 
 def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:

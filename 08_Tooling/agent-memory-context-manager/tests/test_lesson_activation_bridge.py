@@ -440,3 +440,57 @@ def test_pr_a10_unranked_revision_of_ranked_id_fails_closed_at_bound_edge():
         assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
         assert "duplicate-identity-conflict" in result.selection_reason_codes
         assert result.selected_lesson_ids == ()
+
+
+# PR-1 diagnostic oracles: no selector loosening and no extra provider reads.
+
+def test_diagnostic_exposes_normalization_skip_without_admitting_lesson():
+    row = live_row(properties={"Area": _select("Unknown area")})
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [row]}
+
+    result = orchestrate_lesson_activation(
+        request(specialized_knowledge_required=True), execute_read=read
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.candidate_count == 0
+    assert result.rejected_candidate_provenance == ({
+        "lesson_id": "LL-42",
+        "source_revision": "",
+        "currentness": "not-evaluated",
+        "provenance": "normalization-or-eligibility-rejected",
+        "rejection_reason": "ambiguous-area-vocabulary",
+    },)
+    assert len(calls) == 1
+    assert result.authority_created is False
+
+
+def test_diagnostic_exposes_no_task_signal_match_without_widening_selection():
+    result = orchestrate_lesson_activation(
+        request(
+            ecosystem_hints=("javascript",),
+            capability_keywords=("unrelated",),
+            specialized_knowledge_required=True,
+        ),
+        execute_read=lambda _query: {"results": [live_row()]},
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_count == 0
+    assert result.selection_reason_codes == ("no-relevant-candidate",)
+    assert result.rejected_candidate_provenance[0]["lesson_id"] == "LL-42"
+    assert result.rejected_candidate_provenance[0]["rejection_reason"] == "no-task-signal-match"
+
+
+def test_diagnostic_says_surface_flag_disabled_without_selecting():
+    result = orchestrate_lesson_activation(
+        request(specialized_knowledge_required=True),
+        execute_read=lambda _query: {
+            "results": [live_row(properties={"Surface Before Work?": _checkbox(False)})]
+        },
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.rejected_candidate_provenance[0]["rejection_reason"] == "surface-before-work-disabled"

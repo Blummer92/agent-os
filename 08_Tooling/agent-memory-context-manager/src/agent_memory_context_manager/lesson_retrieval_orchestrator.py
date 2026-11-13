@@ -23,6 +23,9 @@ from .lesson_activation_bridge import (
     MAX_RETRIEVAL_ROWS,
     _bound_relevant_lessons,
     _extract_bounded_rows,
+    _lesson_exclusion,
+    _with_rejection_diagnostics,
+    LessonActivationSkip,
     build_filtered_query,
     build_known_reference_query,
     known_lesson_numbers,
@@ -190,6 +193,7 @@ def orchestrate_lesson_retrieval(
 
     current_request = request
     accumulated: list[LessonRecordEvidence] = []
+    skipped: list[LessonActivationSkip] = []
     result: LessonPreflightResult | None = None
 
     for _ in range(MAX_ESCALATION_STEPS):
@@ -221,6 +225,11 @@ def orchestrate_lesson_retrieval(
         for row in rows:
             normalized = normalize_lesson_row(row)
             if isinstance(normalized, LessonRecordEvidence):
+                exclusion = _lesson_exclusion(normalized)
+                if exclusion is not None:
+                    if exclusion not in skipped and len(skipped) < MAX_LESSON_RECORDS:
+                        skipped.append(exclusion)
+                    continue
                 # R1 (#2425): accumulate keyed by full record equality.
                 # An identical record (same ID, same revision, same fields)
                 # collapses; a same-ID record that differs in any field is
@@ -228,9 +237,13 @@ def orchestrate_lesson_retrieval(
                 # the selector instead of being silently overwritten.
                 if normalized not in accumulated:
                     accumulated.append(normalized)
+            elif normalized not in skipped and len(skipped) < MAX_LESSON_RECORDS:
+                skipped.append(normalized)
 
         bounded = _bound_relevant_lessons(current_request, accumulated)
-        result = consume_lesson_preflight(current_request, bounded)
+        result = _with_rejection_diagnostics(
+            consume_lesson_preflight(current_request, bounded), skipped
+        )
         if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
             return result
         if result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW:
