@@ -7,6 +7,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from agent_os_execution_service import lesson_learning_loop as loop
+from agent_os_execution_service import ckr6_github_bridge as bridge
 from agent_os_execution_service.issue_start_lesson_preflight import (
     activate_issue_start_lesson_preflight,
 )
@@ -192,3 +193,36 @@ def test_modeled_capture_write_read_selection_seam():
     selected = run([page], ("LL-1000",))
     assert selected["selected_lesson_ids"] == ["LL-1000"]
     assert selected["rejected_candidate_provenance"] == []
+
+
+def test_raw_provider_entries_bound_including_non_mapping_values():
+    # The diagnostic observer must not inspect a valid 26th row after 25
+    # malformed raw entries (even when the canonical parser filters them).
+    oversized = [None] * 25 + [row(status=None)]
+    result = run(oversized)
+    assert result["selected_lesson_ids"] == []
+    assert result["rejected_candidate_provenance"] == []
+
+
+def test_sanitized_skip_survives_canonical_ckr6_result_comment():
+    result = run([row(area=None)])
+    envelope = {
+        "operation": "issue-start",
+        "rejected_candidate_provenance": result["rejected_candidate_provenance"],
+        "selected_lesson_ids": result["selected_lesson_ids"],
+        "substantial_hypothesis_admissible": result["substantial_hypothesis_admissible"],
+    }
+    body = bridge.serialize_ckr6_result_comment(envelope, request_comment_id=123)
+    assert len(body.encode("utf-8")) <= bridge.MAX_RESULT_COMMENT_BYTES
+    parsed = bridge.parse_ckr6_result_comment(body)
+    assert parsed["rejected_candidate_provenance"] == result["rejected_candidate_provenance"]
+    assert parsed["request_comment_id"] == 123
+    assert "normalization-skip:ambiguous-area-vocabulary" in body
+
+
+def test_ckr6_result_comment_size_limit_preserved():
+    with __import__("pytest").raises(ValueError, match="bounded comment size"):
+        bridge.serialize_ckr6_result_comment({
+            "operation": "issue-start",
+            "reason_codes": ["X" * bridge.MAX_RESULT_COMMENT_BYTES],
+        }, request_comment_id=123)
