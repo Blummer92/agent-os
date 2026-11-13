@@ -82,7 +82,14 @@ def parse_result_comment(body: object) -> dict[str, object]:
 def validate_event(
     event: Mapping[str, object], *, expected_repository: str, allowed_actor: str
 ) -> tuple[int, int, str]:
-    """Validate owner-only issue-comment ingress; return correlation metadata."""
+    """Validate owner-only issue-comment ingress; return correlation metadata.
+
+    A top-level PR Conversation comment arrives as an issue_comment event
+    whose issue record carries a "pull_request" mapping; the event issue
+    number is the PR number. The failure postback target
+    (``/repos/{repo}/issues/{n}/comments``) is the same endpoint for both
+    kinds, so no target kind is returned.
+    """
     if not isinstance(event, Mapping):
         raise TypeError("event must be a mapping")
     repository = event.get("repository")
@@ -93,7 +100,10 @@ def validate_event(
         or repository.get("full_name") != expected_repository
     ):
         raise ValueError("event repository identity mismatch")
-    if not isinstance(issue, Mapping) or "pull_request" in issue:
+    if not isinstance(issue, Mapping):
+        raise ValueError("CKR6 ingress accepts issue comments only")
+    pull_request = issue.get("pull_request")
+    if pull_request is not None and not isinstance(pull_request, Mapping):
         raise ValueError("CKR6 ingress accepts issue comments only")
     if type(issue.get("number")) is not int or issue["number"] < 1:
         raise ValueError("event issue number missing")

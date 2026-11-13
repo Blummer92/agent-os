@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify finite CKR6 request
-    if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
+    if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
     runs-on: ubuntu-latest
     outputs:
       retrieval_required: ${{ steps.classify.outputs.retrieval_required }}

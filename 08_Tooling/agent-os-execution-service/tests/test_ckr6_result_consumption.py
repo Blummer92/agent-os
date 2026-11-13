@@ -154,6 +154,97 @@ def test_consume_accepts_matching_failed_repair_result_for_exact_attempt():
     assert payload["retry_reentry_outcome"] == "consumed"
 
 
+# --- PR Conversation target location (N6) -------------------------------------
+
+def _pr_comment(result, request_comment_id=REQUEST_ID, **meta):
+    """Trusted result record for a top-level PR Conversation comment.
+
+    GitHub's REST ``issue_url`` stays ``/issues/N`` for a PR conversation,
+    while its HTML location is ``/pull/N#issuecomment-ID``. The ``html_url``
+    override below is the only difference from an ordinary-issue record.
+    """
+    meta.setdefault(
+        "html_url",
+        f"https://github.com/{REPOSITORY}/pull/{ISSUE}#issuecomment-{meta.get('comment_id', RESULT_ID)}",
+    )
+    return _comment(result, request_comment_id=request_comment_id, **meta)
+
+
+def test_consume_accepts_pr_result_with_pull_location():
+    payload = _consume(_pr_comment(_result()), expected_target_kind="pr")
+    assert payload["request_comment_id"] == REQUEST_ID
+    assert payload["issue_number"] == ISSUE
+    assert payload["substantial_hypothesis_admissible"] is True
+
+
+def test_consume_accepts_pr_failed_repair_result_for_exact_attempt():
+    payload = _consume(
+        _pr_comment(_failed_repair_result()),
+        expected_operation="failed-repair",
+        expected_attempt_id="attempt-42",
+        expected_target_kind="pr",
+    )
+    assert payload["attempt_id"] == "attempt-42"
+    assert payload["retry_reentry_outcome"] == "consumed"
+
+
+def test_consume_rejects_pr_location_for_issue_target():
+    with pytest.raises(ValueError, match="location does not match"):
+        _consume(_pr_comment(_result()))
+
+
+def test_consume_rejects_issue_location_for_pr_target():
+    with pytest.raises(ValueError, match="location does not match"):
+        _consume(_comment(_result()), expected_target_kind="pr")
+
+
+def test_consume_rejects_pr_location_for_wrong_pr_number():
+    record = _pr_comment(_result())
+    record["html_url"] = record["html_url"].replace("/pull/2425", "/pull/9999")
+    with pytest.raises(ValueError, match="location does not match"):
+        _consume(record, expected_target_kind="pr")
+
+
+def test_consume_rejects_pr_record_with_wrong_issue_url():
+    record = _pr_comment(_result())
+    record["issue_url"] = record["issue_url"].replace("/issues/2425", "/issues/9999")
+    with pytest.raises(ValueError, match="location does not match"):
+        _consume(record, expected_target_kind="pr")
+
+
+@pytest.mark.parametrize("kind", ["review", "pull_request", "", None, 7])
+def test_consume_rejects_invalid_expected_target_kind(kind):
+    with pytest.raises(ValueError, match="expected_target_kind must be issue or pr"):
+        _consume(_comment(_result()), expected_target_kind=kind)
+
+
+def test_select_returns_pr_result_among_noise():
+    comments = [
+        _record("ordinary discussion comment", comment_id=1002, login="Blummer92", account_id=1, account_type="User"),
+        _comment(_result(), request_comment_id=777, comment_id=1004),
+        _pr_comment(_result()),
+    ]
+    payload = _select(comments, expected_target_kind="pr")
+    assert payload["request_comment_id"] == REQUEST_ID
+
+
+def test_select_ignores_issue_location_result_when_pr_target_expected():
+    with pytest.raises(ValueError, match="not returned for the pending request"):
+        _select([_comment(_result())], expected_target_kind="pr")
+
+
+def test_select_rejects_ambiguous_distinct_pr_results():
+    comments = [
+        _pr_comment(_result(status="sufficient")),
+        _pr_comment(
+            _result(status="insufficient", substantial_hypothesis_admissible=False),
+            comment_id=1002,
+        ),
+    ]
+    with pytest.raises(ValueError, match="ambiguous CKR6 result"):
+        _select(comments, expected_target_kind="pr")
+
+
 # --- R07: request identity -------------------------------------------------
 
 

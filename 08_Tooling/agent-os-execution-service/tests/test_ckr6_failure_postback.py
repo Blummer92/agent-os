@@ -252,6 +252,29 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
     assert len(fake.posts) == 1
 
 
+# --- Positive: a PR Conversation failure posts to the same endpoint --------
+
+
+def test_infrastructure_failure_on_pr_conversation_posts_fallback(transport):
+    event = {
+        **_event(),
+        "issue": {
+            "number": ISSUE_NUMBER,
+            "pull_request": {
+                "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3502"
+            },
+        },
+    }
+    outcome = _post(transport, event=event)
+    assert outcome["issue_number"] == ISSUE_NUMBER
+    assert outcome["request_comment_id"] == REQUEST_COMMENT_ID
+    assert outcome["deduplicated"] is False
+    assert len(transport.posts) == 1
+    assert transport.posts[0].full_url == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3502/comments"
+    )
+
+
 # --- Negative: ineligible events never produce a postback -------------------
 
 
@@ -266,7 +289,8 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
             **_event(),
             "issue": {
                 "number": ISSUE_NUMBER,
-                "pull_request": {"url": "https://example.invalid/pr"},
+                # Malformed (non-mapping) pull_request value: still rejected.
+                "pull_request": "https://example.invalid/pr",
             },
         },
         {**_event(), "repository": {"full_name": "Other/repo"}},
@@ -423,7 +447,7 @@ def _failure_predicate(classify_result: str, execute_result: str) -> bool:
         ("success", "failure", True),  # execute infra failure
         ("failure", "failure", True),
         ("success", "success", False),  # happy path: no failure receipt
-        ("skipped", "skipped", False),  # noncommand / PR comment / other actor
+        ("skipped", "skipped", False),  # noncommand / other actor
         ("success", "skipped", False),
         ("cancelled", "cancelled", False),
     ],
@@ -449,9 +473,9 @@ def test_workflow_report_failure_job_shape():
     assert "pip install" not in block
     assert "agent_os_execution_service" not in block
     assert "scripts/ckr6_failure_postback.py" in block
-    # The existing ingress gate and happy path are untouched.
+    # Preserve exact owner-and-command gating for issue and PR Conversation comments.
     assert (
-        "if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
+        "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
         in text
     )
     assert text.count("- name: Install existing Agent OS runtime") == 2
@@ -461,6 +485,36 @@ def test_workflow_report_failure_job_shape():
         in text
     )
 
+
+
+def test_classify_gate_accepts_owner_issue_and_pr_comment_kinds():
+    """Catch reintroduction of the issue-only gate."""
+    content = _workflow_text()
+    classify = content.split("\n  classify:\n", 1)[1].split("\n  execute:\n", 1)[0]
+    assert "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}" in classify
+    assert "github.event.issue.pull_request" not in classify
+    for kind in ("issue", "pr"):
+        request = _event()
+        if kind == "pr":
+            request["issue"] = {
+                "number": ISSUE_NUMBER,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3502"
+                },
+            }
+        envelope = bridge.envelope_from_event(
+            request, expected_repository=REPOSITORY, allowed_actor="Blummer92"
+        )
+        assert envelope.target_kind == kind
+        assert envelope.issue_number == ISSUE_NUMBER
+
+
+def test_classify_gate_preserves_owner_command_and_webhook_family():
+    content = _workflow_text()
+    classify = content.split("\n  classify:\n", 1)[1].split("\n  execute:\n", 1)[0]
+    gate = next(row.strip() for row in classify.splitlines() if row.startswith("    if: "))
+    assert gate == "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
+    assert "pull_request_review_comment" not in content.split("\npermissions:", 1)[0]
 
 def test_workflow_yaml_parses_and_jobs_are_exactly_the_three_expected():
     yaml = pytest.importorskip("yaml")
