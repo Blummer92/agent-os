@@ -132,10 +132,14 @@ For `persisted` and `unchanged` results the writer also returns
 `required_fields_present`, `missing_owner_activation` (Status,
 `Surface Before Work?`) and `missing_reviewed_metadata` (Area, Learning Type, Source
 Link). It reports presence only, writes nothing and grants no authority. It is a
-necessary condition, not eligibility: a present but unrecognized Area, Learning Type or
-Status, or Status "Archived note", still reads as present while CKR6 rejects the page,
-because the reader alone judges values. `test_lessons_write_to_ckr6_readiness.py` pins
-that, with recognized values, the field matches CKR6 `sufficient` exactly. It is `null`
+necessary condition, not eligibility, and it checks non-blank presence of those five
+fields only. A present but unrecognized Area, Learning Type or Status, Status "Archived
+note", a Source Link the reader will not accept (anything but `https://github.com/` or a
+repo-relative governance path, or over 512 characters), or a missing narrative field
+the reader also needs still reads as present while CKR6 rejects the page, because the
+reader alone judges values. `test_lessons_write_to_ckr6_readiness.py` pins that, with
+recognized values and a canonical Source Link, the field matches CKR6 `sufficient`
+exactly, and that blank values read as missing on both sides. It is `null`
 for any result without a verified readback. A `persisted` result with
 `required_fields_present: false` is not usable by CKR6 yet; `true` still needs the
 reader's confirmation.

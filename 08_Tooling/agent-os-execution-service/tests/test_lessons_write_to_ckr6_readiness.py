@@ -256,16 +256,36 @@ def test_with_recognized_values_the_prerequisites_match_ckr6_eligibility_exactly
         {"status": "Bogus"},
         {"area": "Bogus"},
         {"learning_type": "Bogus"},
+        {"link": "https://example.com/x"},
+        {"link": "http://github.com/Blummer92/agent-os/issues/1"},
+        {"link": "https://github.com/" + "x" * 600},
     ],
 )
 def test_presence_is_necessary_not_sufficient_and_the_writer_does_not_claim_eligibility(overrides):
-    """Documented limit: unrecognized or archived values still read as present."""
+    """Documented limit: unrecognized, archived or non-canonical values still read as present."""
     page = modeled_page(**overrides)
     prerequisites = activation_prerequisites(page)
     assert prerequisites["required_fields_present"] is True  # presence only
     assert not ckr6_sufficient(page)  # the reader alone rejects it
     assert set(prerequisites) == {"required_fields_present", "missing_owner_activation", "missing_reviewed_metadata"}
     assert "retrieval_ready" not in prerequisites and "eligible" not in prerequisites
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"area": "  "}, "Area"),
+        ({"learning_type": " "}, "Learning Type"),
+        ({"status": "\t"}, "Status"),
+        ({"link": "   "}, "Source Link"),
+    ],
+)
+def test_blank_values_count_as_missing_and_ckr6_agrees(overrides, field):
+    page = modeled_page(**overrides)
+    prerequisites = activation_prerequisites(page)
+    assert field in prerequisites["missing_owner_activation"] + prerequisites["missing_reviewed_metadata"]
+    assert prerequisites["required_fields_present"] is False
+    assert not ckr6_sufficient(page)
 
 
 @pytest.mark.parametrize("request_id", sorted(catalog.LESSONS))

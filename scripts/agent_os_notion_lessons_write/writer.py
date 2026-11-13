@@ -157,16 +157,19 @@ def activation_prerequisites(page: Mapping) -> dict:
     """Report which CKR6-required fields are still missing on one canonical readback.
 
     A persisted lesson is not a retrievable lesson: the CKR6 reader needs Area,
-    Learning Type, Status and a canonical Source Link (without one the lesson is
+    Learning Type, Status and a Source Link (without a usable one the lesson is
     only ``manual-review``), and retrieval needs Surface Before Work? checked.
     Status and Surface are owner-only (``PROTECTED_FIELDS``); the rest are
     reviewed catalog metadata.
 
     ``required_fields_present`` is a NECESSARY condition, never eligibility. It
-    reads presence only: a present but unrecognized Area, Learning Type or Status,
-    or Status "Archived note", still shows True while CKR6 rejects the page. The
-    reader alone decides eligibility; a contract test pins that it never selects
-    a page this reports as incomplete. Nothing here is written or authorized.
+    reads non-blank presence of those five fields only. It still shows True for
+    a present but unrecognized Area, Learning Type or Status, Status "Archived
+    note", a Source Link the reader will not accept (anything but ``https://
+    github.com/`` or a repo-relative governance path, or over 512 characters),
+    and missing narrative fields the reader also needs. The reader alone decides
+    eligibility; contract tests pin that it never selects a page this reports as
+    incomplete. Nothing here is written or authorized.
     """
     props = page.get("properties") if isinstance(page, Mapping) else None
     props = props if isinstance(props, Mapping) else {}
