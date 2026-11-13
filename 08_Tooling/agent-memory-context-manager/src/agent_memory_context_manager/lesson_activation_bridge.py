@@ -120,7 +120,7 @@ class LessonActivationSkip:
 # A rejection diagnostic is explanatory only. It cannot enter CKR2 candidate
 # selection, change a retrieval decision, or introduce new provider reads.
 _ELIGIBLE_STATUSES = frozenset({"New", "Applied", "Needs follow-up"})
-_DIAGNOSTIC_LESSON_ID = re.compile(r"LL-[0-9]{1,9}\\Z")
+_DIAGNOSTIC_LESSON_ID = re.compile(r"LL-[0-9]{1,9}\Z")
 
 
 def _diagnostic_identity(value: str | None) -> str:
