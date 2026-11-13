@@ -195,13 +195,78 @@ merge, and a production merge executor consuming an exact-head receipt is
 not established by this repository refactor. No new owner approval
 requirement is introduced.
 
+## Step 1: owner-operated producer console (read-only preparation)
+
+`scripts/agent_os_issue_acceptance/merge_authorization_owner_console.py`
+is a read-only preparation and verification CLI for the schema 1.2
+two-revision flow. It never posts a comment, merges, changes settings,
+or creates a standing grant, and its payloads always carry
+`merge_authorized=false` and `side_effects_performed=false`:
+
+- `prepare` reacquires live PR evidence (exact head/base, changed-file
+  scope against an explicit owner policy, forbidden paths, the
+  authoritative aggregate with verified publisher identity, blocking
+  reviews, and every GraphQL review-thread page), then re-reads the PR
+  and refuses unless that second read passes the same open, unmerged,
+  Ready, mergeable, target-`main` gate and binds the same head, target
+  ref, base SHA, title, and body. It then builds a PENDING
+  candidate with the canonical constructor and serializer, and refuses
+  when any trusted authorization chain already exists in the PR
+  conversation (current, pending, rejected, expired, superseded, or
+  consumed chains must be reconciled first). The policy requires
+  nonempty allowed_files, required_tests, and required_check_contexts
+  (the aggregate context must be required); forbidden_paths may be
+  empty, since an empty exclusion list adds no restriction beyond
+  allowed_files.
+- `decide` refuses unless the owner has personally posted the exact
+  PENDING comment and the trusted source reader has read it back as the
+  sole revision of its chain, and unless fresh live evidence still
+  matches the binding exactly; it then prepares the AUTHORIZED revision
+  for a second owner-posted comment. Typing a confirmation string is
+  not authentication of human origin.
+- `verify` requires both revisions read back from the trusted source
+  in the exact chain, a second confirming source read, and a fresh
+  canonical `applicable` result, and still reports
+  `human_origin_attested=false`: a verified record is auditable
+  representation only, not the runtime approval-card attestation
+  required at any merge call (S2, unchanged).
+- Two things the owner should know before posting. First, aggregate
+  alignment: the producer requires the authoritative aggregate to be
+  a real commit status with verified publisher identity — deliberately
+  stricter than the canonical evaluator (which also accepts a
+  publisher-verified check-run-only aggregate) and exactly aligned
+  with the dispatch consumer, which refuses a check-run-only
+  aggregate as `checks.authoritative-aggregate-unverifiable`. A
+  check-run-only aggregate therefore fails `prepare` rather than
+  minting a binding that can never dispatch. Second, `prepare` refuses
+  whenever any authorization chain already exists in the PR
+  conversation, including a pending-only or terminally rejected one,
+  and the console currently offers no supersede path: reconciling a
+  stale chain means the owner deletes their own un-adopted PENDING
+  comment(s) (returning the source to clean absence) or waits for a
+  future supersede-capable preparation; never edit record bytes to
+  force a fit.
+
+This console does not close the "no authenticated producer posting
+path" gap below: the posting step itself remains a first-party owner
+browser action. The console's value is that the bytes the owner posts
+are canonically constructed, scope-bound, and independently read back,
+instead of hand-crafted. Integration tests are in
+`tests/agent_os_issue_acceptance/test_merge_authorization_owner_console.py`
+(real canonical objects against PyGithub-shaped clients, including the
+full prepare/decide/verify flow and its negative matrix); the module is
+classified in the `approval` architecture domain.
+
 ## What this does not do (explicitly out of scope)
 
-- **No authenticated producer posting path.** How an owner decision becomes
+- **No automated authenticated producer posting path.** How an owner decision becomes
   a trusted approval/authorization comment on a PR conversation — which
   agent/route, with what authentication — is Phase 4 decision (e) and is
   NOT implemented here. No code in this change posts to GitHub, and no
   hand-crafted serialized record may be treated as produced evidence.
+  Step 1 (see the producer console section above) adds canonical
+  preparation and readback verification only; the two comments themselves
+  are still posted by the owner in a first-party browser session.
 - **No merge dispatch.** No repository code calls the GitHub merge API,
   and no MCP tool, credential, or protected-setting change is made here.
   The workflow remains read-only: the existing `merge_admission`
@@ -235,6 +300,17 @@ requirement is introduced.
   GraphQL review-thread completeness and the owner-authored merge record.
 - `merge_admission_actions.py`: remains the non-authorizing candidate
   front door and dispatch contract.
+- `merge_authorization_owner_console.py`: Step 1 owner-operated,
+  read-only preparation/verification CLI (prepare/decide/verify); no
+  GitHub writes, no executor, no attestation.
+- `test_merge_authorization_owner_console.py`: integration tests for the
+  console against real canonical objects (full owner flow plus the
+  negative matrix: stale head/base/body/scope, target-ref and lifecycle
+  drift on either PR read, wrong publisher,
+  unresolved threads, blocking review, app-performed and footer
+  records, replay, supersession, expiry, and existing-chain refusal),
+  plus a check that a verified producer chain is accepted by the real
+  dispatch consumer on the same evidence and refused when it is not.
 - The redundant `merge_proposal.py` representation, its exclusive tests
   and the `_merge_proposal_binding` approval-triple branch were retired.
 - Shared planning approval records, evaluators, projections and Scheduler
