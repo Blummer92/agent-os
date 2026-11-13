@@ -275,6 +275,8 @@ def validate_ckr6_host_procedure(root: Path, overlays: Path, errors: list[str]) 
         return
     required = (
         ("first-substantial-hypothesis ordering", "first substantial diagnostic or coding hypothesis"),
+        ("finite GitHub-ingress route", "When the host cannot run the in-process bridge"),
+        ("admitting result returns to parent", "GitHub-ingress admitted-result continuation."),
         ("GitHub-ingress result wait and STOP", "GitHub-ingress result wait and STOP"),
         ("skipped classifier is not a pass", "a skipped job is not a pass"),
         ("missing result is not an admission", "result-not-returned"),
@@ -299,6 +301,18 @@ def validate_ckr6_host_procedure(root: Path, overlays: Path, errors: list[str]) 
         ).splitlines()
     ]
     guarded = (
+        ("GitHub-ingress identity, bounded postback and blocked polarity",
+         "- When the host cannot run the in-process bridge",
+         ("/agent-os ckr6", "agent-os-ckr6-result:v1",
+          "honor `false` as a hard stop", "returned handoff projection",
+          "Never synthesize `not-needed`", "result-not-returned")),
+        ("admitted CKR6 result resumes parent mission without authority widening",
+         "- GitHub-ingress admitted-result continuation.",
+         ("trusted result comment", "`substantial_hypothesis_admissible=true`",
+          "subordinate intermediate evidence", "original parent mission cursor",
+          "next still-authorized operation", "same active turn",
+          "literal `false` authority flags", "grant no new execution",
+          "do not revoke", "HARD STOP")),
         ("finite wait limit and expiry", "- GitHub-ingress result wait and STOP.",
          ("at most 12 polls", "every 30 seconds", "six-minute deadline",
           "host-bounded-wait-unavailable", "host-local expiry receipt",
