@@ -67,6 +67,33 @@ def test_missing_or_bad_association_is_never_accepted():
         r.select_run(pr(), data)
 
 
+def test_incomplete_run_page_never_selects_an_unproven_latest_run():
+    page = runs()
+    page["workflow_runs"] = page["workflow_runs"] * 100
+    with pytest.raises(ValueError, match="incomplete"):
+        r.select_run(pr(), page)
+
+
+def test_no_matching_run_is_a_blocker_not_a_silent_success(monkeypatch):
+    writes = []
+
+    def fake(method, path, token):
+        if method == "POST":
+            writes.append(path)
+        if path.startswith("/pulls?"):
+            return [pr()]
+        if path == "/pulls/3966":
+            return pr()
+        if path.startswith("/actions/workflows/"):
+            return {"workflow_runs": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(ValueError, match="no verifiable"):
+        r.revalidate(EVENT, "token")
+    assert writes == []
+
+
 def test_wrong_workflow_never_rerun():
     data = runs()
     data["workflow_runs"][0]["path"] = ".github/workflows/other.yml"
@@ -148,3 +175,7 @@ def test_live_workflow_has_no_status_creation_or_merge_rights():
     assert "checks: write" not in text
     assert "contents: write" not in text
     assert "pull-requests: write" not in text
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in text
+    assert "actions/checkout@v7" not in text
+    assert "actions/setup-python@v7" not in text
+    assert 'python3 -m venv "$RUNNER_TEMP/ckr6-venv"' in text
