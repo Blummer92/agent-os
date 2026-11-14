@@ -678,6 +678,8 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
         classification="COMPLETE"
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$CI_JUNIT_DIR/$junit_file"; then
+        classification="TEST_OUTCOME_FAILED"
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
         classification="TEST_SELECTION_INCOMPLETE"
       else
@@ -690,6 +692,26 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
     elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
+      # For full suites, require the independent completeness/outcome receipt.
+      # Do not certify an EXECUTED_PASS when a helper failed or its receipt is absent.
+      if [ "$classification" = "EXECUTED_PASS" ]; then
+        case "$name" in
+          "focused: "*) ;; # Explicit focused selections have no completeness receipt.
+          *)
+            outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
+            if [ ! -f "$outcome_receipt" ]; then
+              status="FAIL"
+              classification="TEST_COLLECTION_ERROR"
+            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
+              status="FAIL"
+              classification="TEST_OUTCOME_FAILED"
+            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
+              status="FAIL"
+              classification="TEST_COLLECTION_ERROR"
+            fi
+            ;;
+        esac
+      fi
     else
       junit_exists="no"
       if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else classification="MISSING_UNEXPECTED"; fi

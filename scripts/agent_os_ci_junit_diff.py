@@ -72,6 +72,79 @@ def skipped_node_ids(xml: bytes) -> set[str]:
     return {ident for ident, skipped in _testcases(xml) if skipped}
 
 
+def junit_outcomes(xml: bytes) -> dict:
+    """Independently veto failed JUnit outcomes without changing NC07 identities.
+
+    Read the SAME report as ``node_ids`` and ``skipped_node_ids``. Preserve
+    NC07's strict node/count checks, while rejecting unsupported outcome
+    placement and contradictory suite counters (NC09).
+    """
+    identities = _testcases(xml)  # identity, duplicate, and pytest-9 bounds
+    root = ET.fromstring(xml)
+    suites = [root] if root.tag == "testsuite" else list(root)
+    failures = errors = skipped = 0
+    declared_tests_total = 0
+    failed_nodes: set[str] = set()
+    for suite in suites:
+        observed = {"failures": 0, "errors": 0, "skipped": 0}
+        parents = {child: parent for parent in suite.iter() for child in parent}
+        for element in suite.iter():
+            local_tag = element.tag.rsplit("}", 1)[-1]
+            if local_tag in {"testcase", "testsuite", "failure", "error", "skipped"}:
+                if local_tag != element.tag:
+                    raise ValueError("junit-unsupported-element-namespace")
+            if element.tag == "testsuite" and element is not suite:
+                raise ValueError("junit-unsupported-nested-suite")
+            if element.tag == "testcase" and parents.get(element) is not suite:
+                raise ValueError("junit-unsupported-testcase-placement")
+            kind = {"failure": "failures", "error": "errors", "skipped": "skipped"}.get(element.tag)
+            if kind is not None:
+                case = parents.get(element)
+                if case is None or case.tag != "testcase" or parents.get(case) is not suite:
+                    raise ValueError("junit-unsupported-outcome-placement")
+                observed[kind] += 1
+                if element.tag in {"failure", "error"}:
+                    classname = case.attrib.get("classname") or case.attrib.get("file") or ""
+                    failed_nodes.add(f"{classname}::{case.attrib['name']}")
+        for attr, actual in observed.items():
+            if attr in suite.attrib:
+                try:
+                    claimed = int(suite.attrib[attr])
+                except ValueError as exc:
+                    raise ValueError(f"junit-invalid-{attr}-attribute") from exc
+                if claimed != actual:
+                    raise ValueError("junit-outcome-count-mismatch")
+        failures += observed["failures"]
+        errors += observed["errors"]
+        skipped += observed["skipped"]
+        # _testcases already rejected a suite whose ``tests`` attribute is
+        # absent, non-integer, or smaller than its testcase count.
+        declared_tests_total += int(suite.attrib["tests"])
+    if root.tag == "testsuites":
+        # A multi-suite document's root counters are evidence too: a present
+        # but contradictory root counter fails closed, as each suite's does.
+        for attr, actual in (
+            ("tests", declared_tests_total),
+            ("failures", failures),
+            ("errors", errors),
+            ("skipped", skipped),
+        ):
+            if attr in root.attrib:
+                try:
+                    claimed = int(root.attrib[attr])
+                except ValueError as exc:
+                    raise ValueError(f"junit-invalid-{attr}-attribute") from exc
+                if claimed != actual:
+                    raise ValueError("junit-outcome-count-mismatch")
+    return {
+        "tests": len(identities),
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "failed_nodes": sorted(failed_nodes),
+    }
+
+
 def diff_junit(
     baseline_xml: bytes,
     patched_xml: bytes,
