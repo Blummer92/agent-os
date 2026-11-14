@@ -421,6 +421,84 @@ def test_scoped_extraction_confines_and_flags_foreign_markers() -> None:
     assert extract_subtest_markers(unrelated)["root"]["subtests_passed"] == 119
 
 
+# Real production member names, captured 2026-11-13 from the provider's
+# own attempt-scoped run-log archives (run 43241120512 attempt 1 at PR
+# head 5e3d9f2e, and run 43526657700 attempt 1 at main ee95b696): the
+# run-level archive is job-granular - one "{job_ordinal}_{job name}.txt"
+# member per executed job at the archive root plus one
+# "{job name}/system.txt" per job; skipped jobs have no members, and NO
+# per-step member paths exist. Marker content below is synthetic; only
+# the layout mirrors production.
+_REAL_LAYOUT_QUIET = {
+    "0_Agent OS aggregate gate.txt": b"2026-11-12T14:56:16.0000000Z gate output\n",
+    "Agent OS aggregate gate/system.txt": b"2026-11-12T14:56:13.0000000Z Evaluating validate.if\n",
+    "1_Run frontend checks.txt": b"2026-11-12T14:56:16.0000000Z frontend output\n",
+    "Run frontend checks/system.txt": b"2026-11-12T14:56:13.0000000Z Evaluating validate.if\n",
+    "Run aggregate validation/system.txt": b"2026-11-12T14:56:13.0000000Z Evaluating validate.if\n",
+}
+
+
+def test_real_production_layout_run_archive_binds_aggregate_member() -> None:
+    # The genuine marker sits in the bound aggregate job's own member
+    # ("2_Run aggregate validation.txt"); every other real member stays
+    # out of scope and silent.
+    marker = format_subtest_marker(_sample_marker_entry(), "root")
+    job = "Run aggregate validation"
+    archive = _zip({
+        **_REAL_LAYOUT_QUIET,
+        "2_Run aggregate validation.txt": ("2026-11-12T14:56:16.3568897Z " + marker + "\n").encode(),
+    })
+    found = extract_subtest_markers(archive, job_name=job, step_name=job)
+    assert found["root"]["subtests_passed"] == 119
+    assert found["root"]["passed"] == 11843
+
+
+def test_real_production_layout_foreign_member_marker_raises() -> None:
+    # With the real member names, a marker line anywhere except the
+    # bound aggregate job member is conflicting evidence and raises;
+    # it never corroborates and is never silently ignored.
+    marker = format_subtest_marker(_sample_marker_entry(), "root")
+    job = "Run aggregate validation"
+    line = ("2026-11-12T14:56:16.3568897Z " + marker + "\n").encode()
+    for foreign in (
+        "0_Agent OS aggregate gate.txt",
+        "1_Run frontend checks.txt",
+        "Agent OS aggregate gate/system.txt",
+        "Run aggregate validation/system.txt",
+    ):
+        archive = _zip({
+            "2_Run aggregate validation.txt": b"2026-11-12T14:56:16.0000000Z ordinary output\n",
+            foreign: line,
+        })
+        with pytest.raises(ValueError, match="subtest-marker-out-of-scope"):
+            extract_subtest_markers(archive, job_name=job, step_name=job)
+
+
+def test_full_collector_path_accepts_real_production_layout_archive(tmp_path: Path) -> None:
+    # Real-layout run archive through the full collector path: genuine
+    # receipt plus the genuine bound marker corroborates to
+    # EVIDENCE_VALID exactly like the synthetic-layout archives.
+    xml, output = _genuine_pass_fixture(tmp_path)
+    entry = extract_entry(
+        junit_bytes=xml, pytest_output=output, junit_file="root.xml",
+        source_run_id=RUN_ID, source_run_attempt=1, source_head=SOURCE_HEAD,
+    )
+    assert entry is not None
+    artifact = _zip({
+        "root.xml": xml,
+        "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
+    })
+    marker = format_subtest_marker(entry, "root")
+    archive = _zip({
+        **_REAL_LAYOUT_QUIET,
+        "2_Run aggregate validation.txt": ("2026-11-12T14:56:16.3568897Z " + marker + "\n").encode(),
+    })
+    receipt = _verified_receipt(artifact, aggregate_log_bytes=archive)
+    assert receipt["streams"]["aggregate"]["classification"] == "EVIDENCE_VALID"
+    assert receipt["streams"]["junit"]["junit-aggregate-1"]["classification"] == "EVIDENCE_VALID"
+    assert receipt["subtest_log_corroboration"] == "ok"
+
+
 def test_extractor_prints_marker_matching_receipt(tmp_path: Path) -> None:
     xml, output = _genuine_pass_fixture(tmp_path)
     junit_path = tmp_path / "root.xml"

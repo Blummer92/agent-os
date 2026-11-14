@@ -45,7 +45,10 @@ class FailureReceiptTests(unittest.TestCase):
         self.run = {'id': 100, 'head_sha': HEAD, 'status': 'completed',
                     'path': '.github/workflows/agent-os-validation.yml'}
         self.jobs = [dict(id=i, name=name, run_id=100, run_attempt=2,
-                          status='completed', conclusion='success', steps=[])
+                          status='completed', conclusion='success',
+                          steps=[{'number': 15, 'name': 'Run aggregate validation',
+                                  'status': 'completed', 'conclusion': 'success'}]
+                          if name == 'Run aggregate validation' else [])
                      for i, name in enumerate(['pyan3 call-graph advisory',
                          'jscpd duplicate-code advisory', 'Run aggregate validation'], 1)]
         self.artifacts = [artifact(11, 'pyan3-advisory-1-attempt-2')]
@@ -54,8 +57,8 @@ class FailureReceiptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'nested/collector-receipt.json'
             stdout, stderr = io.StringIO(), io.StringIO()
-            # The collector also fetches the aggregate job's log from
-            # the provider for subtest-marker corroboration. These
+            # The collector also fetches the bound aggregate step's log
+            # from the provider for subtest-marker corroboration. These
             # fixtures provide no log, so that fetch is unavailable:
             # route it to a failed log fetch and let the artifact
             # downloads follow the fixture's own behaviour.
@@ -143,8 +146,10 @@ class FailureReceiptTests(unittest.TestCase):
         # The receipt shape evolved with the subtest trust-contract
         # repair: it records whether the provider log corroborated any
         # surplus (unavailable here -- these fixtures provide no log).
+        # The fetch is the bound step's log, so the failure stage is the
+        # step-log download.
         self.assertEqual(receipt['subtest_log_corroboration'], 'unavailable')
-        self.assertEqual(receipt['subtest_log_error']['stage'], 'aggregate_job_log_download')
+        self.assertEqual(receipt['subtest_log_error']['stage'], 'aggregate_step_log_download')
 
     def test_integrity_rejections_survive_other_download_failure(self):
         data = report('jscpd')

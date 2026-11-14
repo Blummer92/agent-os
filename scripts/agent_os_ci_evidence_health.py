@@ -203,11 +203,14 @@ def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000
                             job_name: str | None = None, step_name: str | None = None) -> dict[str, dict]:
     """Extract subtest markers from provider-fetched job-log bytes.
 
-    The run-level logs endpoint returns a ZIP with one text file per
-    step; the job-level endpoint serves the job's log as plain text
-    (HIGH-1 repair). Bytes that are not a ZIP archive (no PK magic) are
-    therefore decoded as UTF-8 with replacement and parsed as log text
-    directly; that path is job-scoped by construction. ZIP member names
+    The run-level logs endpoint returns a job-granular ZIP
+    ("{ordinal}_{job}.txt" members plus per-job "system.txt" files, as
+    measured on this repository's production archives 2026-11-13), NOT
+    one file per step; the job-level and step-level endpoints serve
+    plain text (HIGH-1 repair). Bytes that are not a ZIP archive (no PK
+    magic) are therefore decoded as UTF-8 with replacement and parsed
+    as log text directly; that path is scoped by the endpoint route
+    (job or step) by construction. ZIP member names
     are validated (no absolute paths, no traversal, no duplicates),
     total uncompressed size and entry count are capped, and members are
     decoded as UTF-8 with replacement (a marker line damaged by
@@ -226,8 +229,9 @@ def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000
     if len(data) > max_bytes:
         raise ValueError("invalid-subtest-log-archive")
     if not data.startswith(_ZIP_MAGIC):
-        # Plain-text job log (the jobs/{job_id}/logs shape): one job's
-        # output, already scoped to that job by the endpoint.
+        # Plain-text producer log (the jobs/{id}/logs or
+        # jobs/{id}/steps/{n}/logs shape): output already scoped by the
+        # endpoint route (production: the bound aggregate step).
         return parse_subtest_markers_text(data.decode("utf-8", errors="replace"))
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))

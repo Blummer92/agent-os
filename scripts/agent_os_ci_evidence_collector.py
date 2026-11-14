@@ -186,6 +186,42 @@ def job_by_name(jobs: list[dict], name: str, *, expected_attempt: int | None = N
     return matches[0] if matches else None
 
 
+def resolve_aggregate_step_number(aggregate_job: dict) -> int:
+    """Provider-resolved step number of the bound aggregate step.
+
+    The aggregate job and its marker-emitting step share the name
+    AGGREGATE_STEP_NAME. The binding uses the provider's own step
+    identity (job_id + step_number from the jobs payload), never a
+    name-derived position: a step that did not execute (conclusion
+    "skipped", or not completed) cannot corroborate, and zero or
+    multiple executed same-named steps are a provider anomaly, not a
+    choice. Raises ValueError ("aggregate-step-unresolved" /
+    "aggregate-step-ambiguous"); main() records that and treats it as
+    no available corroboration (fail closed - there is no fallback to
+    the job-scoped log route).
+    """
+    steps = aggregate_job.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError("aggregate-step-unresolved")
+    matches: list[int] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if step.get("name") != AGGREGATE_STEP_NAME:
+            continue
+        if step.get("status") != "completed" or step.get("conclusion") == "skipped":
+            continue
+        try:
+            matches.append(int(step.get("number")))
+        except (TypeError, ValueError):
+            continue
+    if not matches:
+        raise ValueError("aggregate-step-unresolved")
+    if len(matches) != 1:
+        raise ValueError("aggregate-step-ambiguous")
+    return matches[0]
+
+
 def aggregate_obligation(validate_job: dict | None) -> str:
     """Map the validate job to the aggregate stream obligation. A skipped
     job is a Draft deferral. A successful job whose aggregate step was
@@ -551,20 +587,24 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
     source_head = str(source_run["head_sha"])
     source_run_id = int(source_run["id"])
     # Provider-log corroboration for subtest receipts (trust-contract
-    # repair, 2026-11-12). ``aggregate_log_bytes`` is the aggregate
-    # job's log archive fetched from the provider by main(); without
-    # it, or when marker extraction finds the log ambiguous, no surplus
-    # can be corroborated and any surplus stays rejected. The status is
+    # repair, 2026-11-12). ``aggregate_log_bytes`` is the bound
+    # aggregate step's log fetched from the provider's step-log
+    # endpoint by main() (plain text, scoped to the provider-resolved
+    # job_id + step_number by the route itself); without it, or when
+    # marker extraction finds the log ambiguous, no surplus can be
+    # corroborated and any surplus stays rejected. The status is
     # recorded, never silently treated as corroboration.
     log_markers: dict[str, dict] = {}
     subtest_log_status = "unavailable"
     if aggregate_log_bytes is not None:
         try:
             # Scope binding (MED-1 repair): only the bound aggregate
-            # job's own step-log member(s) may corroborate its receipts.
+            # job's own step-log evidence may corroborate its receipts.
             # The job and its marker-emitting step share the name
-            # AGGREGATE_STEP_NAME; plain-text job logs are scoped to the
-            # job by the endpoint itself.
+            # AGGREGATE_STEP_NAME; the production fetch uses the
+            # provider's step-log endpoint, whose plain-text bytes are
+            # scoped to the step by the route itself (plain-text job
+            # logs are scoped to the job likewise).
             log_markers = extract_subtest_markers(
                 aggregate_log_bytes,
                 job_name=AGGREGATE_STEP_NAME,
@@ -813,12 +853,18 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             downloads[str(art["id"])] = data
     # Provider-log corroboration for subtest receipts: independently
-    # fetch the aggregate job's log from the provider (same
-    # ``actions: read`` token and redirect handling as artifact
-    # downloads; the logs endpoint 302s to a temporary archive URL).
-    # A missing, expired, or unfetchable log means no surplus can be
-    # corroborated -- the receipt records that instead of failing the
-    # whole collection, and any surplus stays rejected downstream.
+    # fetch the bound aggregate step's log from the provider's step-log
+    # endpoint (GET /repos/{repo}/actions/jobs/{job_id}/steps/{step}/logs,
+    # verified 2026-11-13 on agent-os: 302 to step-scoped plain text).
+    # The route itself binds the bytes to the provider-resolved job_id
+    # and step_number, so a marker from any other job or step cannot
+    # enter this stream. There is NO fallback to the job-scoped log
+    # route: an unresolved step identity or a missing, expired, or
+    # unfetchable step log means no surplus can be corroborated -- the
+    # receipt records that instead of failing the whole collection, and
+    # any surplus stays rejected downstream. Same ``actions: read``
+    # token and redirect handling as artifact downloads (the endpoint
+    # 302s to a temporary signed URL).
     aggregate_job = job_by_name(jobs, AGGREGATE_STEP_NAME, expected_attempt=args.source_attempt)
     aggregate_log_bytes: bytes | None = None
     log_error: dict | None = None
@@ -827,20 +873,27 @@ def main(argv: list[str] | None = None) -> int:
             aggregate_job_id = int(aggregate_job.get("id"))
         except (TypeError, ValueError):
             aggregate_job_id = None
+        step_number: int | None = None
         if aggregate_job_id is not None:
             try:
+                step_number = resolve_aggregate_step_number(aggregate_job)
+            except ValueError as exc:
+                log_error = {"stage": "aggregate_step_resolution", "reason": str(exc)}
+                print("aggregate step identity unresolved; subtest surplus stays uncorroborated", file=sys.stderr)
+        if step_number is not None:
+            try:
                 aggregate_log_bytes = _api_get_bytes(
-                    f"https://api.github.com/repos/{repository}/actions/jobs/{aggregate_job_id}/logs", token
+                    f"https://api.github.com/repos/{repository}/actions/jobs/{aggregate_job_id}/steps/{step_number}/logs", token
                 )
             except (RuntimeError, OSError, ValueError, http.client.HTTPException) as exc:
                 cause = exc.__cause__ if isinstance(exc, RuntimeError) else exc
                 log_error = {
-                    "stage": "aggregate_job_log_download",
+                    "stage": "aggregate_step_log_download",
                     "http_status": cause.code if isinstance(cause, urllib.error.HTTPError) else None,
                 }
                 if isinstance(cause, urllib.error.HTTPError):
                     cause.close()
-                print("aggregate job log download failed; subtest surplus stays uncorroborated", file=sys.stderr)
+                print("aggregate step log download failed; subtest surplus stays uncorroborated", file=sys.stderr)
     receipt = build_verified_receipt(
         source_run=run_payload, jobs=jobs, artifacts=artifacts, downloads=downloads,
         source_attempt=args.source_attempt, collector_head=os.environ.get("GITHUB_SHA", ""),
