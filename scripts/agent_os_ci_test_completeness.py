@@ -42,7 +42,10 @@ narrow or mutate collection identically for the reference and the real run
 ``pytest_ignore_collect``); the check is not CI trust certification. Focused
 runs are explicit selections and are not checked.
 
-Exit codes: 0 COMPLETE, 1 INCOMPLETE, 2 ERROR (comparison not established).
+NC09: failed or errored executed JUnit outcomes veto a pass, even when pytest's
+exit status was swallowed. This check uses the same XML bytes as NC07.
+
+Exit codes: 0 COMPLETE, 1 INCOMPLETE or OUTCOME_FAILED, 2 ERROR.
 """
 from __future__ import annotations
 
@@ -54,7 +57,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from agent_os_ci_junit_diff import node_ids, skipped_node_ids
+from agent_os_ci_junit_diff import junit_outcomes, node_ids, skipped_node_ids
 
 SCHEMA = "agent-os-ci-test-completeness/1"
 SKIP_ALLOWLIST_SCHEMA = "agent-os-ci-skipped-allowlist/1"
@@ -154,6 +157,7 @@ def check_suite(
         "skipped_mandatory": [],
         "skip_allowlist_stale": [],
         "skip_allowlist_missing": False,
+        "outcome": None,
     }
     env = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
     if skip_allowlist is None:
@@ -191,9 +195,11 @@ def check_suite(
     try:
         executed = node_ids(junit_bytes)
         skipped = skipped_node_ids(junit_bytes)
+        outcome = junit_outcomes(junit_bytes)
     except ValueError as exc:
         result["error"] = f"executed JUnit report rejected: {exc}"
         return result
+    result["outcome"] = outcome
     expected = {_identity(line) for line in proc.stdout.splitlines() if _NODE_LINE.match(line)}
     missing, extra = sorted(expected - executed), sorted(executed - expected)
     # A reference test missing from the report is only explained by an executed test
@@ -223,14 +229,20 @@ def check_suite(
     result["skipped_allowlisted"] = sorted(skipped_base & allowlisted)[:_MISSING_CAP]
     result["skipped_mandatory"] = mandatory[:_MISSING_CAP]
     result["skip_allowlist_stale"] = stale[:_MISSING_CAP]
-    # Verdict precedence: ERROR (invalid evidence or stale allowlist) >
-    # INCOMPLETE (tests omitted or mandatory bodies skipped) > COMPLETE.
+    # Verdict precedence: ERROR > OUTCOME_FAILED > INCOMPLETE > COMPLETE.
     errors: list[str] = []
     if stale:
         result["verdict"] = "ERROR"
         result["error"] = (
             f"{len(stale)} skip-allowlist entr(ies) are in neither the reference "
             f"collection nor the executed report: {', '.join(stale[:5])}"
+        )
+        return result
+    if outcome["failures"] or outcome["errors"]:
+        result["verdict"] = "OUTCOME_FAILED"
+        result["error"] = (
+            f"executed JUnit contains {outcome['failures']} failure(s) and "
+            f"{outcome['errors']} error(s); outcome vetoes runner exit 0"
         )
         return result
     if unpaired:
@@ -274,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         args.receipt.parent.mkdir(parents=True, exist_ok=True)
         args.receipt.write_text(text, encoding="utf-8")
     print(text, end="")
-    return {"COMPLETE": 0, "INCOMPLETE": 1, "ERROR": 2}[result["verdict"]]
+    return {"COMPLETE": 0, "INCOMPLETE": 1, "OUTCOME_FAILED": 1, "ERROR": 2}[result["verdict"]]
 
 
 if __name__ == "__main__":
