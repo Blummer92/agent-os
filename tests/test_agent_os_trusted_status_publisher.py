@@ -414,3 +414,75 @@ def test_publisher_emits_pending_not_success_for_authority_change(tmp_path):
     assert 'state=success' not in command
     assert f'context={pub.CONTEXT}' in command
     assert f'repos/{REPO}/statuses/{SHA}' in command
+
+
+def test_ckr6_gate_transitive_inputs_are_not_self_certifying():
+    # The pull_request gate job installs and executes these packages from the
+    # PR head. A PR modifying any of them (the gate's trusted-read layer, the
+    # request-envelope parser, or any module they import transitively) changes
+    # the gate's decision inputs and must stay non-certifying.
+    representative = (
+        "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_github_reader.py",
+        "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_github_bridge.py",
+        "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/mcp_facade.py",
+        "08_Tooling/agent-memory-context-manager/src/agent_memory_context_manager/coding_knowledge_selection.py",
+        "08_Tooling/workflow-scheduler/src/workflow_scheduler/execution/single_issue_runtime.py",
+        "scripts/agent_os_candidate_packet/compiler.py",
+        "scripts/agent_os_execution_capabilities/models.py",
+        "scripts/agent_os_execution_checkpoint/store.py",
+        "scripts/agent_os_execution_interface/continuation_driver.py",
+        "scripts/agent_os_github_git_objects/models.py",
+        "scripts/agent_os_github_issue_provider/provider.py",
+        "scripts/agent_os_issue_acceptance/policy.py",
+    )
+    for path in representative:
+        assert pub.touches_authority({path}), path
+        outcome = pub.evaluate(source(), jobs(), {path})
+        assert outcome["state"] == "pending", (path, outcome)
+        assert "not certified" in outcome["description"]
+
+
+def test_ckr6_gate_import_closure_is_authority_covered(tmp_path):
+    # Recompute the live import closure of both gate entry modules in a clean
+    # interpreter and require every repo file it executes to be authority
+    # covered. This fails (never skips) if a future dependency addition
+    # reopens a self-certification path.
+    import subprocess
+
+    src_roots = (
+        "08_Tooling/agent-os-execution-service/src",
+        "08_Tooling/agent-memory-context-manager/src",
+        "08_Tooling/workflow-scheduler/src",
+        "08_Tooling/reusable-capability-registry/src",
+        "src",
+        ".",
+    )
+    env_pythonpath = ":".join(str(ROOT / r) for r in src_roots)
+    program = (
+        "import sys, os, json\n"
+        "repo = os.path.abspath(sys.argv[1])\n"
+        "import agent_os_execution_service.ckr6_mutation_gate\n"
+        "import agent_os_execution_service.ckr6_gate_revalidate\n"
+        "files = sorted({os.path.relpath(os.path.abspath(m.__file__), repo)\n"
+        "    for m in sys.modules.values()\n"
+        "    if getattr(m, '__file__', None)\n"
+        "    and os.path.abspath(m.__file__).startswith(repo + os.sep)})\n"
+        "print(json.dumps(files))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", program, str(ROOT)],
+        env={"PYTHONPATH": env_pythonpath, "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    closure = json.loads(proc.stdout.strip().splitlines()[-1])
+    # The closure must really contain the gate chain; a trivially empty or
+    # broken closure can never satisfy this guard.
+    for required in (
+        "ckr6_mutation_gate.py", "ckr6_gate_revalidate.py",
+        "ckr6_github_bridge.py", "ckr6_github_reader.py",
+    ):
+        assert any(p.endswith("/" + required) for p in closure), required
+    assert len(closure) >= 100, len(closure)
+    uncovered = [p for p in closure if not pub.touches_authority({p})]
+    assert uncovered == [], uncovered
