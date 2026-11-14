@@ -95,6 +95,10 @@ def select_run(pr, listing):
         raise ValueError("head branch invalid")
     if not isinstance(listing, dict) or not isinstance(listing.get("workflow_runs"), list):
         raise ValueError("run list invalid")
+    # A full page does not prove that an older/latest matching run wasn't
+    # omitted. No rerun is safe without complete source-run evidence.
+    if len(listing["workflow_runs"]) >= 100:
+        raise ValueError("workflow run population incomplete")
     matches = []
     for run in listing["workflow_runs"]:
         if not isinstance(run, dict):
@@ -131,8 +135,9 @@ def revalidate(event, token):
         })
         runs = api("GET", f"/actions/workflows/{WORKFLOW}/runs?{query}", token)
         run_id = select_run(pr, runs)
-        if run_id is not None:
-            run_ids.append(run_id)
+        if run_id is None:
+            raise ValueError("no verifiable current-head CKR6 gate run")
+        run_ids.append(run_id)
     if len(set(run_ids)) != len(run_ids):
         raise ValueError("duplicate rerun target")
     for rid in run_ids:
