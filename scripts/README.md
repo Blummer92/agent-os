@@ -65,9 +65,9 @@ handling, overall status, or exit authority. If the runner cannot obtain a safe
 timestamp, it reports `unavailable` for that timing rather than changing the
 validation result.
 
-The timing instrumentation does not add a second pytest collection or execution
-pass. Collection-versus-execution separation is therefore not reported by this
-runner unless it can be added later without changing validation behavior.
+Timing instrumentation itself does not add collection or execution passes.
+The completeness checker below separately performs two reference collections
+per passing suite; timing does not break out those collection durations.
 
 Aggregate pytest suites run with bounded cross-suite concurrency (default: 3,
 configurable from 1 through 8 with `VALIDATE_ALL_MAX_PARALLEL`). Each suite keeps
@@ -115,19 +115,19 @@ with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
 and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
 `TEST_COLLECTION_ERROR` when the comparison could not be established) in the
 manifest row `test selection completeness: <suite>`, whose receipt is
-`test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
-pass per suite; the single intentional discovery exclusion is
+`test-completeness-<suite>.json`. The completeness checker performs two `--collect-only` reference passes per suite:
+one normal and one `--noconftest`, comparing per-base-ID test multiplicity.
+A collection failure or mismatch fails closed as `TEST_COLLECTION_ERROR`; the single intentional discovery exclusion is
 `08_Tooling/reusable-capability-registry/tests/fixtures`.
 
-Proven boundary: pytest **configuration** (any config file or addopts, including
-`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`), plus
-**skipped test bodies** (a mandatory body marked skipped is caught by the veto,
-NC07).
-**`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
-outside the boundary**: they change the reference and the real run identically,
-so they are not detected (pinned by a strict xfail in
-`tests/test_agent_os_ci_test_completeness.py`). Focused runs are explicit
-selections and are not checked. This is not CI trust certification.
+Proven boundary: pytest **configuration**, NC07 **skipped test bodies**,
+NC09 **failed/errored JUnit outcomes**, and NC08 **conftest collection narrowing**
+(`collect_ignore`, `pytest_collection_modifyitems`, including one missing
+parameterized case). The independent `--noconftest` reference compares per-test
+multiplicity; legitimate conftest markers and fixtures remain supported.
+Plugins loaded in both paths, edits to the checker/runner itself, and
+intentionally focused test selections remain outside this boundary. This is
+not independent CI trust certification.
 
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
