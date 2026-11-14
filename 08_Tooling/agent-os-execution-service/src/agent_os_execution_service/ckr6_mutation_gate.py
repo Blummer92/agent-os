@@ -137,8 +137,9 @@ _MAX_EVENT_BYTES = 1024 * 1024
 # a bounded number of pages, a bounded response size.
 _COMMENT_PAGE_SIZE = 100
 _MAX_COMMENT_PAGES = 50  # 5000 comments; deeper threads fail closed.
-_EVENT_PAGE_SIZE = 100
-_MAX_EVENT_PAGES = 3  # the Events API retains at most 300 events / 90 days.
+_WORKFLOW_RUN_PAGE_SIZE = 100
+_MAX_WORKFLOW_RUN_PAGES = 10
+_CKR6_GATE_WORKFLOW_PATH = ".github/workflows/agent-os-ckr6-mutation-gate.yml"
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _READ_TIMEOUT_SECONDS = 30
 _USER_AGENT = "agent-os-ckr6-mutation-gate"
@@ -468,7 +469,7 @@ def evaluate_mutation_boundary(
             operation=envelope.operation,
             request_comment_id=newest.comment_id,
             detail=(
-                "the newest trusted request predates the current head's "
+                "the newest trusted request predates the observed current head's "
                 "proposal; admission must be re-requested for this exact "
                 "work attempt"
             ),
@@ -557,10 +558,9 @@ class PaginatedIssueCommentReader:
     comments a newer owner request would be invisible and the gate would
     decide on a stale subset. This reader paginates to exhaustion with a
     bounded page count and fails closed when completeness cannot be
-    established. It also reads the server-recorded push time of an exact
-    branch head from the repository Events API (commit timestamps are
-    author-controlled and never used). Same trust bound as the shared
-    reader: GET only, bounded responses, the token leaves the process never.
+    established. It also reads server-created Actions workflow runs for
+    the exact branch/head rather than lossy repository Events. Provider
+    reads remain GET-only, bounded, and the token is never logged.
     """
 
     def __init__(
@@ -651,51 +651,100 @@ class PaginatedIssueCommentReader:
             "comment pagination exceeds the bounded page count",
         )
 
-    def read_branch_push_time(
-        self, repository: str, branch: str, head_sha: str
+    def read_head_observed_at(
+        self, repository: str, branch: str, head_sha: str, pr_number: int
     ) -> str | None:
-        """Return when ``head_sha`` was last pushed to ``branch``, or None.
+        """Return earliest server-created workflow observation of this PR head.
 
-        Scans the repository Events API (server-assigned ``created_at``;
-        bounded to the API's retained window). ``None`` means the push that
-        proposed this exact head is not visible - retention exceeded or the
-        head never landed on this ref - and callers must fail closed.
+        Repository Events is a short, eventually consistent activity feed.
+        A GitHub Actions pull_request run provides stronger proof that GitHub
+        had already observed the exact branch and SHA. The timestamp is NOT
+        asserted to be the actual push time. No evidence means STOP.
         """
-        if type(repository) is not str or not _REPOSITORY_RE.match(repository):
-            raise ValueError("repository must be exact owner/name text")
+        if repository != ALLOWED_REPOSITORY:
+            raise ValueError("repository must be canonical")
         if type(branch) is not str or not branch.strip():
             raise ValueError("branch must be non-empty exact text")
-        if type(head_sha) is not str or not head_sha.strip():
-            raise ValueError("head_sha must be non-empty exact text")
-        wanted_ref = f"refs/heads/{branch}"
-        latest: datetime | None = None
-        latest_text: str | None = None
-        for page in range(1, _MAX_EVENT_PAGES + 1):
-            events = self._get_json_list(
-                f"{GITHUB_API_BASE_URL}/repos/{repository}/events"
-                f"?per_page={_EVENT_PAGE_SIZE}&page={page}"
+        if type(head_sha) is not str or not _HEAD_SHA_RE.fullmatch(head_sha):
+            raise ValueError("head_sha must be exact 40-hex text")
+        if type(pr_number) is not int or pr_number < 1:
+            raise ValueError("pr_number must be positive")
+        earliest: datetime | None = None
+        earliest_text: str | None = None
+        for page in range(1, _MAX_WORKFLOW_RUN_PAGES + 1):
+            url = (
+                f"{GITHUB_API_BASE_URL}/repos/{repository}/actions/runs"
+                f"?head_sha={head_sha}&event=pull_request"
+                f"&per_page={_WORKFLOW_RUN_PAGE_SIZE}&page={page}"
             )
-            for event in events:
-                if event.get("type") != "PushEvent":
+            status, raw = self._http_get(
+                url, _READ_HEADERS | {"Authorization": "Bearer " + self._token()}
+            )
+            if status != 200 or len(raw) > _MAX_RESPONSE_BYTES:
+                raise GitHubIssueCommentReadUnavailable(
+                    "github-api-failure", "workflow run read unavailable"
+                )
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise GitHubIssueCommentReadUnavailable(
+                    "github-api-unexpected-response", "invalid workflow run JSON"
+                ) from exc
+            if (
+                not isinstance(data, Mapping)
+                or type(data.get("total_count")) is not int
+                or not isinstance(data.get("workflow_runs"), list)
+                or any(not isinstance(run, Mapping) for run in data["workflow_runs"])
+            ):
+                raise GitHubIssueCommentReadUnavailable(
+                    "github-api-unexpected-response", "malformed workflow runs"
+                )
+            batch = data["workflow_runs"]
+            for run in batch:
+                if (
+                    run.get("event") != "pull_request"
+                    or run.get("path") != _CKR6_GATE_WORKFLOW_PATH
+                    or run.get("head_sha") != head_sha
+                    or run.get("head_branch") != branch
+                ):
                     continue
-                payload = event.get("payload")
-                if not isinstance(payload, Mapping):
+                source = run.get("repository")
+                if not isinstance(source, Mapping) or source.get("full_name") != repository:
+                    raise GitHubIssueCommentReadUnavailable(
+                        "github-api-unexpected-response", "workflow repo unproven"
+                    )
+                linked = run.get("pull_requests")
+                if not isinstance(linked, list):
+                    raise GitHubIssueCommentReadUnavailable(
+                        "github-api-unexpected-response", "workflow PR association unavailable"
+                    )
+                # The provider can omit PR associations; exact repo/branch/SHA
+                # plus pull_request source still prove the observed content.
+                # A nonempty contradictory association is not admissible.
+                if linked and not any(
+                    isinstance(pr, Mapping) and pr.get("number") == pr_number
+                    for pr in linked
+                ):
                     continue
-                if payload.get("ref") != wanted_ref or payload.get("head") != head_sha:
-                    continue
-                created_at = event.get("created_at")
-                if type(created_at) is not str:
-                    continue
+                created_at = run.get("created_at")
+                run_id = run.get("id")
+                if type(created_at) is not str or type(run_id) is not int or run_id < 1:
+                    raise GitHubIssueCommentReadUnavailable(
+                        "github-api-unexpected-response", "workflow timestamp/ID malformed"
+                    )
                 try:
-                    parsed = _parse_github_ts(created_at)
-                except ValueError:
-                    continue
-                if latest is None or parsed > latest:
-                    latest = parsed
-                    latest_text = created_at
-            if len(events) < _EVENT_PAGE_SIZE:
-                break
-        return latest_text
+                    observed = _parse_github_ts(created_at)
+                except ValueError as exc:
+                    raise GitHubIssueCommentReadUnavailable(
+                        "github-api-unexpected-response", "workflow timestamp invalid"
+                    ) from exc
+                if earliest is None or observed < earliest:
+                    earliest, earliest_text = observed, created_at
+            if len(batch) < _WORKFLOW_RUN_PAGE_SIZE:
+                return earliest_text
+        raise GitHubIssueCommentReadUnavailable(
+            "github-api-unexpected-response", "workflow run pagination incomplete"
+        )
 
 
 def run_gate(
@@ -712,9 +761,9 @@ def run_gate(
 ) -> GateDecision:
     """Read both threads through the trusted read path, then decide.
 
-    When a PR is gated, the head's server-recorded push time is read first
-    and the admission must postdate it; a head whose proposal cannot be
-    proven fails closed.
+    When a PR is gated, a server-created Actions run on the exact branch/head
+    is required. The owner request must postdate that observation; missing
+    provider evidence fails closed.
     """
     head_proposed_at: str | None = None
     if pr_number is not None:
@@ -726,8 +775,8 @@ def run_gate(
         if type(head_sha) is not str or not _HEAD_SHA_RE.match(head_sha):
             raise ValueError("head_sha must be exact 40-hex text")
         try:
-            head_proposed_at = reader.read_branch_push_time(
-                head_repository, head_branch, head_sha
+            head_proposed_at = reader.read_head_observed_at(
+                head_repository, head_branch, head_sha, pr_number
             )
         except GitHubIssueCommentReadUnavailable as exc:
             return GateDecision(False, READ_UNAVAILABLE, detail=exc.reason_code)
@@ -736,8 +785,8 @@ def run_gate(
                 False,
                 HEAD_PROPOSAL_UNPROVEN,
                 detail=(
-                    "no server-recorded push of this exact head to the PR "
-                    "branch is visible in the retained events"
+                    "no server-created workflow run observes the exact current "
+                    "PR branch and head"
                 ),
             )
     try:
