@@ -86,7 +86,7 @@ def test_ready_without_prior_aggregate_still_executes_authoritative_command() ->
     summary = content.index("      - name: Publish validation summary", aggregate)
     aggregate_block = content[aggregate:summary]
     assert "steps.aggregate_evidence.outputs.run_required != 'false'" in aggregate_block
-    assert "run: ./scripts/validate-all.sh" in aggregate_block
+    assert "run: bash ./scripts/validate-all.sh" in aggregate_block
 
 
 def test_ready_completed_evidence_reuse_skips_all_aggregate_execution_cost() -> None:

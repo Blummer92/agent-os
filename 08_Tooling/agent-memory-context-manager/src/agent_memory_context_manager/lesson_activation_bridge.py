@@ -334,7 +334,13 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
 def _bound_relevant_lessons(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
 ) -> tuple[LessonRecordEvidence, ...]:
-    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher."""
+    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher.
+
+    R1 (#2425): the budget counts DISTINCT lesson IDs. A conflicting
+    identity counts once, and ALL its records enter the bound set, so a
+    conflict at the bound edge is reported by the selector instead of being
+    silently dropped with the second revision.
+    """
     ranked: list[tuple[int, str, LessonRecordEvidence]] = []
     unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
@@ -346,9 +352,34 @@ def _bound_relevant_lessons(
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return tuple(item[2] for item in ranked[:MAX_LESSON_RECORDS])
+        # Rank identities, not individual revisions. A second revision of
+        # a selected ID may be unranked, but must still reach CKR2's
+        # fail-closed duplicate-identity conflict check.
+        selected_ids = {
+            lesson.lesson_id
+            for lesson in _take_distinct_ids([item[2] for item in ranked])
+        }
+        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
     unranked.sort(key=lambda item: item.lesson_id.casefold())
-    return tuple(unranked[:MAX_LESSON_RECORDS])
+    return _take_distinct_ids(unranked)
+
+
+def _take_distinct_ids(
+    ordered: Sequence[LessonRecordEvidence],
+) -> tuple[LessonRecordEvidence, ...]:
+    """First MAX_LESSON_RECORDS distinct lesson IDs, with every record of
+    each bounded identity included."""
+    seen: set[str] = set()
+    kept: list[LessonRecordEvidence] = []
+    for lesson in ordered:
+        if lesson.lesson_id in seen:
+            kept.append(lesson)
+            continue
+        if len(seen) >= MAX_LESSON_RECORDS:
+            continue
+        seen.add(lesson.lesson_id)
+        kept.append(lesson)
+    return tuple(kept)
 
 
 def orchestrate_lesson_activation(

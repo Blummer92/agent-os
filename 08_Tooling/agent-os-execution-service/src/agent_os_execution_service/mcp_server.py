@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import asdict
+from datetime import datetime
 
 from mcp.server import MCPServer
 
@@ -68,6 +69,19 @@ from .mcp_facade import (
     classify_agent_os_continuation,
     classify_agent_os_mission_completion,
     plan_agent_os_continuation,
+)
+from .ckr6_github_bridge import (
+    COMMAND_PREFIX,
+    MAX_COMMENT_BYTES,
+    _command_payload,
+    parse_envelope,
+    ckr6_result_admits_boundary,
+    select_ckr6_result_comment,
+)
+from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY,
+    GitHubIssueCommentReadUnavailable,
+    get_github_issue_comment_reader,
 )
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import ZeroJobAdmissionEvidence
 from agent_os_execution_service.failed_repair_admission import DiagnosticSurfaceEvidence
@@ -442,6 +456,325 @@ def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, att
 @mcp.tool()
 def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, *, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None, diagnostics: DiagnosticSurfaceEvidence | None = None, validation_head: ValidationSupersessionEvidence | None = None, validation_failure: ValidationFailureEvidence | None = None) -> dict[str, object]:
     return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job, diagnostics=diagnostics, validation_head=validation_head, validation_failure=validation_failure)
+
+
+def _parse_ckr6_timestamp(value: object, name: str) -> None:
+    """Require an ISO-8601 timestamp carrying a UTC offset, else raise ValueError."""
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{name} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{name} must be an ISO-8601 timestamp") from None
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} must carry a UTC offset")
+
+
+def _ckr6_result_decision(
+    *,
+    repository: str,
+    issue_number: int,
+    operation: str,
+    request_comment_id: int,
+    attempt_id: str | None,
+    admits: bool,
+    status: str,
+    reason_codes: list[str],
+    selected_lesson_ids: list[str],
+    substantial_hypothesis_admissible: bool,
+    mutation_admissible: bool,
+    host_read_path_available: bool,
+) -> dict[str, object]:
+    """Project one CKR6 boundary decision. All authority flags are literal False.
+
+    ``True`` here means only "this consumed result admits its own CKR6
+    boundary"; it grants no execution, GitHub write, merge, closure, or
+    side-effect authority.
+    """
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "operation": operation,
+        "request_comment_id": request_comment_id,
+        "attempt_id": attempt_id,
+        "ckr6_admits_boundary": admits,
+        "status": status,
+        "reason_codes": list(reason_codes),
+        "selected_lesson_ids": list(selected_lesson_ids),
+        "substantial_hypothesis_admissible": substantial_hypothesis_admissible,
+        "mutation_admissible": mutation_admissible,
+        "host_read_path_available": host_read_path_available,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _ckr6_stop(
+    *,
+    repository: str,
+    issue_number: int,
+    operation: str,
+    request_comment_id: int,
+    attempt_id: str | None,
+    reason_code: str,
+    host_read_path_available: bool,
+) -> dict[str, object]:
+    """STOP decision for a read/selection failure: one named reason code, no admit."""
+    return _ckr6_result_decision(
+        repository=repository,
+        issue_number=issue_number,
+        operation=operation,
+        request_comment_id=request_comment_id,
+        attempt_id=attempt_id,
+        admits=False,
+        status="manual-review",
+        reason_codes=[reason_code],
+        selected_lesson_ids=[],
+        substantial_hypothesis_admissible=False,
+        mutation_admissible=False,
+        host_read_path_available=host_read_path_available,
+    )
+
+
+@mcp.tool()
+def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expected_operation: str, expected_request_comment_id: int, expected_request_created_at: str, expected_attempt_id: str | None = None) -> dict[str, object]:
+    """Consume the trusted CKR6 result comment answering a pending request (#2425).
+
+    Thin R07 adapter over ``select_ckr6_result_comment`` +
+    ``ckr6_result_admits_boundary``. The comment records come only from the
+    server-installed read-only GitHub issue-comment reader
+    (``ckr6_github_reader``): this tool accepts NO comment body, record, or
+    caller-asserted producer identity as an argument, so caller-pasted JSON
+    can never establish provenance. The pending request comment itself is
+    independently re-read from the same authenticated fetch — its GitHub
+    ``created_at`` is the timing bound, and the caller-supplied timestamp
+    is only cross-checked against it. Without an installed reader it returns
+    ``HOST_READ_PATH_UNAVAILABLE`` STOP; forged, stale, mismatched, or
+    ambiguous evidence also returns STOP, never an admit. The returned
+    decision is execution-order only and grants no GitHub write, merge,
+    closure, or side-effect authority.
+    """
+    # A syntactically valid but out-of-scope repository is a bounded STOP,
+    # not a transport exception. Never reach the token-bearing reader.
+    if repository != ALLOWED_REPOSITORY:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    if expected_operation not in ("issue-start", "failed-repair"):
+        raise ValueError("expected_operation must be 'issue-start' or 'failed-repair'")
+    if type(expected_request_comment_id) is not int or isinstance(expected_request_comment_id, bool) or expected_request_comment_id < 1:
+        raise ValueError("expected_request_comment_id must be a positive integer")
+    _parse_ckr6_timestamp(expected_request_created_at, "expected_request_created_at")
+    if expected_operation == "failed-repair":
+        if type(expected_attempt_id) is not str or not expected_attempt_id.strip():
+            raise ValueError("failed-repair result requires expected_attempt_id")
+    elif expected_attempt_id is not None:
+        raise ValueError("expected_attempt_id must be None for issue-start")
+    reader = get_github_issue_comment_reader()
+    if reader is None:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="HOST_READ_PATH_UNAVAILABLE",
+            host_read_path_available=False,
+        )
+    try:
+        records = reader.read_issue_comments(repository, issue_number)
+    except ValueError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
+    except GitHubIssueCommentReadUnavailable as exc:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code=exc.reason_code,
+            host_read_path_available=False,
+        )
+    # Independently re-read the pending request comment from the same
+    # authenticated fetch. The caller's expected_request_created_at is only
+    # a cross-check: the timing bound used by select_ckr6_result_comment
+    # comes from GitHub's own record, never from the caller alone. A
+    # caller-supplied timestamp that disagrees with GitHub's record, or a
+    # request comment absent from the issue, is STOP — never an admit.
+    request_record = next(
+        (
+            record
+            for record in records
+            if isinstance(record, dict) and record.get("id") == expected_request_comment_id
+        ),
+        None,
+    )
+    if request_record is None:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-not-returned",
+            host_read_path_available=True,
+        )
+    # The GitHub timestamp is meaningful only for a real pending CKR6
+    # request, not for an arbitrary comment with a matching id. Reuse the
+    # canonical bridge parser rather than accepting caller-asserted identity.
+    try:
+        request_body = request_record.get("body")
+        if type(request_body) is not str or len(request_body.encode("utf-8")) > MAX_COMMENT_BYTES:
+            raise ValueError("invalid request body")
+        if not request_body.startswith(COMMAND_PREFIX):
+            raise ValueError("not a CKR6 command")
+        payload = _command_payload(request_body[len(COMMAND_PREFIX):])
+        if type(payload) is not dict:
+            raise ValueError("request payload is not an object")
+        envelope = parse_envelope(payload)
+        if (envelope.repository != repository or envelope.issue_number != issue_number
+                or envelope.operation != expected_operation
+                or envelope.attempt_id != expected_attempt_id):
+            raise ValueError("request envelope does not match pending request")
+        if (request_record.get("issue_url") !=
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}"
+                or request_record.get("html_url") !=
+                f"https://github.com/{repository}/issues/{issue_number}#issuecomment-{expected_request_comment_id}"
+                or request_record.get("updated_at") != request_record.get("created_at")):
+            raise ValueError("request location or edit identity mismatch")
+    except (ValueError, TypeError, UnicodeError):
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    request_created_at = request_record.get("created_at")
+    try:
+        _parse_ckr6_timestamp(request_created_at, "request created_at")
+        caller_created = datetime.fromisoformat(
+            expected_request_created_at.replace("Z", "+00:00")
+        )
+        github_created = datetime.fromisoformat(
+            str(request_created_at).replace("Z", "+00:00")
+        )
+    except ValueError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    if caller_created != github_created:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    try:
+        consumed = select_ckr6_result_comment(
+            records,
+            expected_request_comment_id=expected_request_comment_id,
+            expected_request_created_at=str(request_created_at),
+            expected_issue_number=issue_number,
+            expected_repository=repository,
+            expected_operation=expected_operation,
+            expected_attempt_id=expected_attempt_id,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "CKR6 result not returned for the pending request":
+            reason_code = "ckr6-result-not-returned"
+        elif message == "ambiguous CKR6 result for the pending request":
+            reason_code = "ckr6-result-ambiguous"
+        else:
+            reason_code = message
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code=reason_code,
+            host_read_path_available=True,
+        )
+    except TypeError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="github-api-failure",
+            host_read_path_available=True,
+        )
+    admits = ckr6_result_admits_boundary(consumed)
+    reason_codes = consumed.get("reason_codes")
+    selected = consumed.get("selected_lesson_ids")
+    # A consumed-but-not-admitted result is STOP, full stop: project it as
+    # one. Echoing the payload's own status (e.g. "sufficient" for a
+    # sufficient-with-empty-selection result the bridge refused) alongside
+    # admits=False would let a host keying on status alone misread a refusal
+    # as an admission. Only an admitted result keeps the payload's fields.
+    if not admits:
+        return _ckr6_result_decision(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            admits=False,
+            status="manual-review",
+            reason_codes=list(reason_codes) if isinstance(reason_codes, list) else [],
+            selected_lesson_ids=[],
+            substantial_hypothesis_admissible=False,
+            mutation_admissible=False,
+            host_read_path_available=True,
+        )
+    return _ckr6_result_decision(
+        repository=repository,
+        issue_number=issue_number,
+        operation=expected_operation,
+        request_comment_id=expected_request_comment_id,
+        attempt_id=expected_attempt_id,
+        admits=True,
+        status=str(consumed.get("status")),
+        reason_codes=list(reason_codes) if isinstance(reason_codes, list) else [],
+        selected_lesson_ids=list(selected) if isinstance(selected, list) else [],
+        substantial_hypothesis_admissible=consumed.get("substantial_hypothesis_admissible") is True,
+        mutation_admissible=consumed.get("mutation_admissible") is True,
+        host_read_path_available=True,
+    )
 
 
 def _ready_review_closure_admissions(
@@ -1060,6 +1393,45 @@ _CHATGPT_PUBLICATION_TOOLS = frozenset(
     }
 )
 
+# #2425: one additional opt-in profile exposing exactly the CKR6 tools plus
+# the thin R07 consumption wrapper. The five-tool chatgpt-governance
+# surface above is unchanged; the two profiles are disjoint and neither
+# widens the other.
+_CHATGPT_CKR6_OPT_IN_PROFILE = "chatgpt-ckr6-opt-in"
+_CHATGPT_CKR6_OPT_IN_TOOLS = frozenset(
+    {
+        "activate_agent_os_issue_start_lessons_tool",
+        "activate_agent_os_failed_repair_tool",
+        "admit_agent_os_failed_repair_tool",
+        "consume_agent_os_ckr6_result_tool",
+    }
+)
+
+_MCP_PUBLICATION_PROFILES: dict[str, frozenset[str]] = {
+    _CHATGPT_PUBLICATION_PROFILE: _CHATGPT_PUBLICATION_TOOLS,
+    _CHATGPT_CKR6_OPT_IN_PROFILE: _CHATGPT_CKR6_OPT_IN_TOOLS,
+}
+
+
+def _apply_publication_profile(server: MCPServer, profile: str) -> None:
+    """Fail closed unless this server can expose exactly the profile's tools.
+
+    Same list_tools/remove_tool pattern as the governance profile; the
+    allowlist comes from ``_MCP_PUBLICATION_PROFILES``, never from caller
+    input. Unknown profile names raise KeyError; ``main()`` guards first
+    and refuses startup for them instead.
+    """
+    tools = _MCP_PUBLICATION_PROFILES[profile]
+    registered = {tool.name for tool in asyncio.run(server.list_tools())}
+    missing = tools - registered
+    if missing:
+        raise RuntimeError("Agent OS publication missing approved tools: " + ", ".join(sorted(missing)))
+    for name in sorted(registered - tools):
+        server.remove_tool(name)
+    exposed = {tool.name for tool in asyncio.run(server.list_tools())}
+    if exposed != tools:
+        raise RuntimeError("Agent OS publication tool containment failed")
+
 
 def _apply_chatgpt_publication_profile(server: MCPServer) -> None:
     """Fail closed unless this server can expose exactly the approved five tools.
@@ -1067,22 +1439,16 @@ def _apply_chatgpt_publication_profile(server: MCPServer) -> None:
     Use the supported MCP SDK list_tools/remove_tool API, before listening.
     Existing in-process contracts and the normal local registration are unchanged.
     """
-    registered = {tool.name for tool in asyncio.run(server.list_tools())}
-    missing = _CHATGPT_PUBLICATION_TOOLS - registered
-    if missing:
-        raise RuntimeError("Agent OS publication missing approved tools: " + ", ".join(sorted(missing)))
-    for name in sorted(registered - _CHATGPT_PUBLICATION_TOOLS):
-        server.remove_tool(name)
-    exposed = {tool.name for tool in asyncio.run(server.list_tools())}
-    if exposed != _CHATGPT_PUBLICATION_TOOLS:
-        raise RuntimeError("Agent OS publication tool containment failed")
+    _apply_publication_profile(server, _CHATGPT_PUBLICATION_PROFILE)
 
 
 def main() -> None:
     profile = os.environ.get("AGENT_OS_MCP_TOOL_PROFILE")
-    if profile == _CHATGPT_PUBLICATION_PROFILE:
-        _apply_chatgpt_publication_profile(mcp)
-    elif profile is not None:
+    if profile is None:
+        pass
+    elif profile in _MCP_PUBLICATION_PROFILES:
+        _apply_publication_profile(mcp, profile)
+    else:
         raise RuntimeError("Unrecognized AGENT_OS_MCP_TOOL_PROFILE; refusing MCP startup")
     mcp.run(transport="stdio")
 

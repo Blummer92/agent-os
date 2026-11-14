@@ -85,8 +85,9 @@ job log.
 5. Consume the Ready-triggered authoritative aggregate. For a provisional Ready,
    non-success, pending, or head drift requires converting back to Draft
    (`evaluate_provisional_ready_reconciliation`).
-6. In a batch, record each item's disposition (`run_ready_batch`) and continue past
-   item-local blockers such as #3411 or PR #3449.
+6. In a batch, evaluate and verify each item independently and continue past
+   item-local blockers such as #3411 or PR #3449 under the existing finite-mission
+   cursor in `AGENTS.md`.
 
 Repeating the same request yields the same trigger id and receipt id; the host must
 not re-post identical handoffs while a matching unconsumed receipt exists.

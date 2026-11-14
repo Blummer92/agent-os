@@ -11,6 +11,8 @@ from agent_os_execution_service import lesson_learning_loop as loop
 from agent_os_execution_service.issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from agent_os_execution_service.lesson_learning_metrics import derive_lesson_metrics
 
+import receipt_fixtures as rf
+
 REVISION = "2026-10-08T12:00:00.000Z"
 TASK = "https://github.com/Blummer92/agent-os/issues/3418"
 
@@ -226,7 +228,8 @@ def test_candidate_envelope_is_strict():
 
 # ------------------------------------------------------------- refinement
 
-RECEIPT_REF = "https://github.com/Blummer92/agent-os/issues/3418#issuecomment-6100000001"
+# Names the fixture chain's receipt comment (receipt_fixtures.RECEIPT_ID).
+RECEIPT_REF = rf.receipt_html_ref()
 
 
 def refinement(**changes):
@@ -251,8 +254,21 @@ def _route(monkeypatch, rows):
     return read
 
 
+def _verified_receipt_route(monkeypatch, rows):
+    """Notion route plus the trusted GitHub comment read the barrier needs.
+
+    The fixture receipt/result chain is produced by the production
+    serializers for the default RECEIPT_REF chain (LL-999 @ REVISION), so
+    the happy path exercises the real barrier instead of bypassing it.
+    """
+    read = _route(monkeypatch, rows)
+    fetch = rf.fetch_from(rf.verified_chain())
+    monkeypatch.setattr(bridge, "_receipt_comment_fetch", lambda: fetch)
+    return read, fetch
+
+
 def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
-    read = _route(monkeypatch, [row()])
+    read, fetch = _verified_receipt_route(monkeypatch, [row()])
     calls = []
     original = loop.evaluate_lesson_enrichment
     monkeypatch.setattr(loop, "evaluate_lesson_enrichment",
@@ -261,6 +277,8 @@ def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
     assert bridge.classify_envelope(envelope)["retrieval_required"] is True
     result = bridge.execute_envelope(envelope, retrieval_required=True)
     assert calls == ["ckr7"]
+    # The barrier retrieved the exact cited comment through the trusted read.
+    assert rf.RECEIPT_ID in fetch.calls
     assert read.calls == [{"page_size": 5, "filter": {"or": [{"property": "Lesson ID", "unique_id": {"equals": 999}}]}}]
     assert result["status"] == "enrich-existing"
     proposal = result["revision_proposal"]
@@ -274,13 +292,13 @@ def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
 
 
 def test_refinement_refuses_stale_revision_and_unusable_lessons(monkeypatch):
-    _route(monkeypatch, [row(revision="2026-10-09T00:00:00.000Z")])
+    _verified_receipt_route(monkeypatch, [row(revision="2026-10-09T00:00:00.000Z")])
     stale = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert (stale["status"], stale["reason_codes"]) == ("rejected", ["stale-lesson-revision"])
-    _route(monkeypatch, [row(status=None)])
+    _verified_receipt_route(monkeypatch, [row(status=None)])
     skip = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert skip["reason_codes"] == ["lesson-not-normalizable:ambiguous-status-vocabulary"]
-    _route(monkeypatch, [])
+    _verified_receipt_route(monkeypatch, [])
     missing = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert missing["reason_codes"] == ["lesson-not-found"]
 

@@ -1,0 +1,75 @@
+name: Agent OS CKR6 Mutation Gate
+
+# Landing-only enforcement (#2425 follow-up): refuses to let governed work
+# land without a trusted CKR6 admission bound to the newest owner request on
+# the linked issue or PR thread. This workflow publishes an ordinary check;
+# making it REQUIRED is a separate owner branch-protection decision and is
+# not part of this change. It performs read-only issue-comment reads through
+# the job's repo-scoped github.token (the binding pattern shipped by #3963)
+# and grants no write, merge, closure, Notion, or execution authority.
+#
+# Known residual (independent QA, Finding 5): until this gate module is on
+# the default branch AND inside the trusted status publisher's authority
+# surface, a PR that edits the gate module would self-certify its own
+# enforcement. Owner-side follow-up: add
+# 08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_mutation_gate.py
+# to the publisher's authority paths before making this check required.
+#
+# Head binding: the gate reads the earliest server-created Actions
+# observation of this exact PR head and branch, not the incomplete Events
+# activity feed. This observation is not a claim about the exact push time.
+# The newest trusted CKR6 request must postdate that observation and name
+# the FULL 40-hex head SHA in task_reference. Missing provenance fails closed.
+# Remediation when this check fails:
+# post a fresh /agent-os ckr6 request naming the new head's full SHA.
+# After the separate comment-revalidation workflow is deployed on main,
+# trusted owner request / bot result comments attempt an exact-current-head
+# rerun of this same gate. Until live revalidation is qualified, operators
+# must verify the rerun occurred and manually rerun the failed check if not.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+
+concurrency:
+  group: agent-os-ckr6-gate-${{ github.repository_id }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-gate:
+    name: CKR6 mutation boundary gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install existing Agent OS runtime
+        run: |
+          python -m pip install \
+            -e 08_Tooling/reusable-capability-registry \
+            -e 08_Tooling/agent-memory-context-manager \
+            -e 08_Tooling/workflow-scheduler \
+            -e src \
+            -e . \
+            -e 08_Tooling/agent-os-execution-service
+
+      - name: Evaluate CKR6 mutation boundary
+        env:
+          # The job's already-present repo-scoped token, used only for
+          # read-only issue-comment GETs. Never logged; the gate prints a
+          # bounded JSON verdict only (no bodies, no token).
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m agent_os_execution_service.ckr6_mutation_gate \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "${{ github.repository }}"

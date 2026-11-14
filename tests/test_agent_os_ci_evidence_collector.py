@@ -401,3 +401,217 @@ def test_review_3762_duplicate_or_expired_aggregate_cannot_be_green():
         _receipt_jobs("success", "success"),
         [_artifact("junit-aggregate-1", 82, expired=True)], {"82": zipped})
     assert expired["streams"]["aggregate"]["classification"] == "REJECT_EXPIRED"
+
+
+# ---------------------------------------------------------------------------
+# Step-log fetch route (Candidate A, verified on agent-os 2026-11-13):
+# main() must fetch the bound aggregate step's log from the provider's
+# step-log endpoint (jobs/{job_id}/steps/{step_number}/logs), resolving
+# the step number from the provider's own jobs payload, and must fail
+# closed with NO fallback to the job-scoped log route when the step
+# identity is unresolved or the fetch fails.
+# ---------------------------------------------------------------------------
+
+import urllib.error as _urllib_error
+
+from scripts import agent_os_ci_evidence_collector as _collector
+
+_STEP_RUN_ID = 43241120512
+_STEP_HEAD = "5e3d9f2ec70d672b67f191523e11bd32dfb464d7"
+_STEP_JOB_ID = 131261469158
+# Genuine marker line captured from the provider's step-log endpoint for
+# run 43241120512 job 131261469158 step 15 (public repo evidence).
+_REAL_MARKER_LINE = (
+    "2026-11-12T14:56:16.3568886Z AGENT_OS_JUNIT_SUBTEST_RECEIPT suite=root"
+    " passed=11877 skipped=31 xfailed=1 failed=0 errors=0 subtests_passed=119"
+    " junit_tests=12028"
+    " junit_sha256=fc16b2d2ef9d7b7273f3f53af5f9fedf5c639e7db90f293fbeefa812e42d6dd4\n"
+).encode()
+
+
+def _step(n: int, name: str, conclusion: str = "success", status: str = "completed") -> dict:
+    return {"number": n, "name": name, "status": status, "conclusion": conclusion}
+
+
+# Modeled on the provider's real step list for job 131261469158 (run
+# 43241120512): 21 steps in the live payload, several skipped; the
+# aggregate step is 15. This fixture keeps a representative subset.
+_REAL_SHAPE_STEPS = [
+    _step(1, "Set up job"),
+    _step(2, "Check out workflow source for ingress verification", "skipped"),
+    _step(3, "Admit exact-head Draft final candidate"),
+    _step(7, "Check out repository"),
+    _step(10, "Recover missing exact-current main aggregate evidence", "skipped"),
+    _step(11, "Stop candidate while exact-current main recovery runs", "skipped"),
+    _step(13, "Set up Python"),
+    _step(14, "Install validation dependencies"),
+    _step(15, "Run aggregate validation"),
+    _step(16, "Record not-executed infrastructure receipt", "skipped"),
+    _step(17, "Upload aggregate JUnit evidence"),
+    _step(18, "Publish validation summary"),
+    _step(37, "Complete job"),
+]
+
+
+def _step_job(steps, conclusion: str = "success") -> dict:
+    return {
+        "id": _STEP_JOB_ID,
+        "name": "Run aggregate validation",
+        "conclusion": conclusion,
+        "run_id": _STEP_RUN_ID,
+        "run_attempt": 1,
+        "steps": steps,
+    }
+
+
+def test_resolve_aggregate_step_number_real_shape() -> None:
+    assert _collector.resolve_aggregate_step_number(_step_job(_REAL_SHAPE_STEPS)) == 15
+
+
+def test_resolve_aggregate_step_number_unresolved_and_ambiguous() -> None:
+    # Only a skipped aggregate step: it did not execute, cannot corroborate.
+    with pytest.raises(ValueError, match="aggregate-step-unresolved"):
+        _collector.resolve_aggregate_step_number(_step_job([_step(15, "Run aggregate validation", "skipped")]))
+    # No same-named step at all.
+    with pytest.raises(ValueError, match="aggregate-step-unresolved"):
+        _collector.resolve_aggregate_step_number(_step_job([_step(1, "Set up job")]))
+    # Missing steps payload.
+    with pytest.raises(ValueError, match="aggregate-step-unresolved"):
+        _collector.resolve_aggregate_step_number({"id": _STEP_JOB_ID, "steps": None})
+    # Two executed same-named steps: provider anomaly, never a choice.
+    dup = [_step(15, "Run aggregate validation"), _step(16, "Run aggregate validation")]
+    with pytest.raises(ValueError, match="aggregate-step-ambiguous"):
+        _collector.resolve_aggregate_step_number(_step_job(dup))
+    # A still-running same-named step cannot corroborate yet.
+    with pytest.raises(ValueError, match="aggregate-step-unresolved"):
+        _collector.resolve_aggregate_step_number(
+            _step_job([_step(15, "Run aggregate validation", None, "in_progress")]))
+
+
+def _patch_provider(monkeypatch, jobs, bytes_handler):
+    run_payload = {
+        "id": _STEP_RUN_ID,
+        "head_sha": _STEP_HEAD,
+        "path": ".github/workflows/agent-os-validation.yml",
+        "status": "completed",
+    }
+
+    def fake_api_get(url, token):
+        if "/attempts/" in url:
+            return {"jobs": jobs}, {}
+        if url.endswith("/artifacts?per_page=100"):
+            return {"artifacts": []}, {}
+        return dict(run_payload), {}
+
+    monkeypatch.setattr(_collector, "_api_get", fake_api_get)
+    monkeypatch.setattr(_collector, "_api_get_bytes", bytes_handler)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Blummer92/agent-os")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+
+
+def _run_main(tmp_path) -> tuple[int, dict]:
+    out = tmp_path / "receipt.json"
+    rc = _collector.main([
+        "--source-run-id", str(_STEP_RUN_ID),
+        "--source-head", _STEP_HEAD,
+        "--source-attempt", "1",
+        "--output", str(out),
+    ])
+    return rc, json.loads(out.read_text())
+
+
+def test_main_fetches_bound_step_log_route(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_bytes(url, token):
+        calls.append(url)
+        return _REAL_MARKER_LINE
+
+    _patch_provider(monkeypatch, [_step_job(_REAL_SHAPE_STEPS)], fake_bytes)
+    rc, receipt = _run_main(tmp_path)
+    assert rc == 0
+    assert calls == [
+        f"https://api.github.com/repos/Blummer92/agent-os/actions/jobs/{_STEP_JOB_ID}/steps/15/logs"
+    ]
+    assert receipt["subtest_log_corroboration"] == "ok"
+
+
+def test_main_uses_provider_step_number_not_observed_position(monkeypatch, tmp_path) -> None:
+    # The step number comes from the provider payload, never a hardcoded
+    # position: same job shape but the aggregate step sits at number 7
+    # (the real job has it at 15).
+    calls: list[str] = []
+
+    def fake_bytes(url, token):
+        calls.append(url)
+        return _REAL_MARKER_LINE
+
+    steps = [
+        _step(1, "Set up job"),
+        _step(7, "Run aggregate validation"),
+        _step(9, "Complete job"),
+    ]
+    assert _collector.resolve_aggregate_step_number(_step_job(steps)) == 7
+    _patch_provider(monkeypatch, [_step_job(steps)], fake_bytes)
+    rc, receipt = _run_main(tmp_path)
+    assert rc == 0
+    assert calls == [
+        f"https://api.github.com/repos/Blummer92/agent-os/actions/jobs/{_STEP_JOB_ID}/steps/7/logs"
+    ]
+    assert receipt["subtest_log_corroboration"] == "ok"
+
+
+def test_main_step_unresolved_fetches_no_log(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_bytes(url, token):
+        calls.append(url)
+        return _REAL_MARKER_LINE
+
+    job = _step_job([_step(15, "Run aggregate validation", "skipped")])
+    _patch_provider(monkeypatch, [job], fake_bytes)
+    rc, receipt = _run_main(tmp_path)
+    assert rc == 0
+    # Fail closed: no log URL is fetched at all when the step identity
+    # is unresolved - in particular no silent job-scoped fallback.
+    assert [u for u in calls if u.endswith("/logs")] == []
+    assert receipt["subtest_log_corroboration"] == "unavailable"
+    assert receipt["subtest_log_error"]["stage"] == "aggregate_step_resolution"
+
+
+def test_main_step_log_fetch_failure_has_no_fallback(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_bytes(url, token):
+        calls.append(url)
+        raise RuntimeError("provider download failed: HTTP 404") from _urllib_error.HTTPError(
+            url, 404, "not found", {}, None)
+
+    _patch_provider(monkeypatch, [_step_job(_REAL_SHAPE_STEPS)], fake_bytes)
+    rc, receipt = _run_main(tmp_path)
+    assert rc == 0
+    # Exactly one attempt, at the step route; the job-scoped route is
+    # never tried.
+    assert calls == [
+        f"https://api.github.com/repos/Blummer92/agent-os/actions/jobs/{_STEP_JOB_ID}/steps/15/logs"
+    ]
+    assert receipt["subtest_log_corroboration"] == "unavailable"
+    assert receipt["subtest_log_error"]["stage"] == "aggregate_step_log_download"
+    assert receipt["subtest_log_error"]["http_status"] == 404
+
+
+def test_main_duplicate_aggregate_steps_fail_closed(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_bytes(url, token):
+        calls.append(url)
+        return _REAL_MARKER_LINE
+
+    dup = [_step(15, "Run aggregate validation"), _step(16, "Run aggregate validation")]
+    _patch_provider(monkeypatch, [_step_job(dup)], fake_bytes)
+    rc, receipt = _run_main(tmp_path)
+    assert rc == 0
+    assert [u for u in calls if u.endswith("/logs")] == []
+    assert receipt["subtest_log_corroboration"] == "unavailable"
+    assert receipt["subtest_log_error"]["stage"] == "aggregate_step_resolution"

@@ -256,7 +256,11 @@ def consume_lesson_preflight(
             RetrievalEscalation.NONE,
         )
 
-    if len(lessons) > MAX_LESSON_RECORDS:
+    # R1 (#2425): the budget counts DISTINCT lesson identities, matching the
+    # bound and the selector. Identical or conflicting records of one identity
+    # must reach the selector — which collapses identicals and fails closed
+    # on conflicts — instead of being swallowed here as a budget failure.
+    if len({lesson.lesson_id for lesson in lessons}) > MAX_LESSON_RECORDS:
         return _fallback(
             LessonRetrievalStatus.MANUAL_REVIEW,
             "lesson-candidate-budget-exceeded",

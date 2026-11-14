@@ -151,3 +151,78 @@ def test_provider_failure_detail_survives_canonical_reader_chain():
     assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
     assert "lesson-retrieval-unavailable-specialized-knowledge-required" in result.selection_reason_codes
     assert "notion-http-403" in result.selection_reason_codes
+
+
+# --- CKR6 PR-A (R1 selector dedup / candidate-budget repair, #2425) ---
+# A01 (orchestrator half) from PR_A_TEST_MATRIX.csv. Written fail-first:
+# it fails on the pre-repair accumulation (identical windows accumulate as
+# new candidates) and passes once accumulation collapses by full equality.
+
+
+def _title(text):
+    return {"type": "title", "title": [{"plain_text": text}]}
+
+
+def _rich_text(text):
+    return {"type": "rich_text", "rich_text": [{"plain_text": text}]}
+
+
+def _select(name):
+    return {"type": "select", "select": {"name": name}}
+
+
+def _multi_select(*names):
+    return {"type": "multi_select", "multi_select": [{"name": name} for name in names]}
+
+
+def _checkbox(value):
+    return {"type": "checkbox", "checkbox": value}
+
+
+def _url(value):
+    return {"type": "url", "url": value}
+
+
+def _lesson_row(lesson_id, *, last_edited="2026-11-04T12:00:00.000Z"):
+    return {
+        "object": "page",
+        "id": f"row-{lesson_id}",
+        "url": f"https://www.notion.so/lesson-{lesson_id}",
+        "last_edited_time": last_edited,
+        "properties": {
+            "Lesson ID": _rich_text(lesson_id),
+            "Lesson Learned": _title("Recheck currentness before routing"),
+            "Status": _select("Applied"),
+            "Surface Before Work?": _checkbox(True),
+            "Area": _select("Testing"),
+            "Applies To": _multi_select("Notion"),
+            "Learning Type": _select("Testing lesson"),
+            "Source Link": _url(
+                "https://github.com/Blummer92/agent-os/blob/main/01_Shared_Standards/python/testing-standard.md"
+            ),
+            "Guardrail": _rich_text("Never reuse stale evidence."),
+            "What To Do Next Time": _rich_text("Reacquire evidence after head advances."),
+        },
+    }
+
+
+def test_pr_a01_identical_windows_collapse_across_escalation_steps():
+    # Two distinct lessons, returned identically on every escalation step.
+    # The retrieval escalates because a required library hint is uncovered,
+    # so the same window is read three times. Identical records must collapse
+    # by full equality in the accumulation: two candidates, not six (and not
+    # five, the old record-counted bound's silent truncation).
+    rows = [_lesson_row("LL-01"), _lesson_row("LL-02")]
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": rows}
+
+    req = request(library_hints=("hypothesis",))
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    assert len(calls) == 3
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "required-library-uncovered" in result.selection_reason_codes
+    assert result.candidate_count == 2
+    assert result.selected_lesson_ids == ("LL-01", "LL-02")

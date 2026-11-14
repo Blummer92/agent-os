@@ -256,6 +256,89 @@ def validate_write_boundaries(root: Path, overlays: Path, matrix_rows: list[list
         errors.append("Write Authorization Policy must require target, ownership, and authorization confirmation")
 
 
+def validate_ckr6_host_procedure(root: Path, overlays: Path, errors: list[str]) -> None:
+    """CKR6 host procedure (#2425 / PR-E).
+
+    The ChatGPT Orchestrator overlay's Coding Lessons Learned Preflight
+    section is the host's GitHub-ingress procedure: the ingress request is
+    the first substantive action, a missing/untrusted result is a hard STOP
+    (never a fallback substitution), materiality is truthful, failed repairs
+    re-enter with a fresh attempt_id, results are recorded as receipts and
+    verified retrospectively, and the whole section is procedure — not a
+    mechanical guarantee. Deleting the section or any load-bearing element
+    is a registry-consistency failure.
+    """
+    orchestrator_text = read_required(overlays / "chatgpt-orchestrator.md", "ChatGPT Orchestrator overlay", errors)
+    section = normalized(section_text(orchestrator_text, "Coding Lessons Learned Preflight"))
+    if not section:
+        errors.append("ChatGPT Orchestrator must retain the Coding Lessons Learned Preflight section")
+        return
+    required = (
+        ("first-substantial-hypothesis ordering", "first substantial diagnostic or coding hypothesis"),
+        ("finite GitHub-ingress route", "When the host cannot run the in-process bridge"),
+        ("admitting result returns to parent", "GitHub-ingress admitted-result continuation."),
+        ("GitHub-ingress result wait and STOP", "GitHub-ingress result wait and STOP"),
+        ("skipped classifier is not a pass", "a skipped job is not a pass"),
+        ("missing result is not an admission", "result-not-returned"),
+        ("no fallback substitution", "NEVER substitute the in-process `unavailable-safe-fallback` for a missing, failed, or unverifiable GitHub-ingress result"),
+        ("truthful materiality", "Truthful materiality"),
+        ("no manufactured not-needed", "manufacture a `not-needed` result"),
+        ("failed-repair re-entry", "Failed-repair re-entry"),
+        ("no external attempt registry", "no external attempt registry"),
+        ("result receipts and retrospective verification", "Result receipts and retrospective verification"),
+        ("retrospective verification only", "AFTER THE FACT"),
+        ("procedure, not mechanical enforcement", "Procedure, not mechanical enforcement"),
+        ("literal #2425 criterion stays open", "stays open; nothing in this section changes it"),
+    )
+    for element, phrase in required:
+        if phrase not in section:
+            errors.append(f"CKR6 host procedure is missing {element}: {phrase}")
+
+    # Clause-local deletion tripwires, not semantic policy enforcement.
+    clause_lines = [
+        normalized(line) for line in section_text(
+            orchestrator_text, "Coding Lessons Learned Preflight"
+        ).splitlines()
+    ]
+    guarded = (
+        ("GitHub-ingress identity, bounded postback and blocked polarity",
+         "- When the host cannot run the in-process bridge",
+         ("/agent-os ckr6", "agent-os-ckr6-result:v1",
+          "honor `false` as a hard stop", "returned handoff projection",
+          "Never synthesize `not-needed`", "result-not-returned")),
+        ("admitted CKR6 result resumes parent mission without authority widening",
+         "- GitHub-ingress admitted-result continuation.",
+         ("trusted result comment", "`substantial_hypothesis_admissible=true`",
+          "subordinate intermediate evidence", "original parent mission cursor",
+          "next still-authorized operation", "same active turn",
+          "literal `false` authority flags", "grant no new execution",
+          "do not revoke", "HARD STOP")),
+        ("finite wait limit and expiry", "- GitHub-ingress result wait and STOP.",
+         ("at most 12 polls", "every 30 seconds", "six-minute deadline",
+          "host-bounded-wait-unavailable", "host-local expiry receipt",
+          "result-not-returned", "HARD STOP")),
+        ("no automatic retry and H1 approval", "- No automatic retry.",
+         ("Never repost", "cancel-in-progress: false", "conclusive idempotency evidence",
+          "fresh owner authorization", "No retry is authorized", "H1 smoke test")),
+        ("exact failed-repair attempt binding", "- Failed-repair re-entry.",
+         ("fresh `attempt_id`", "exact same `attempt_id`", "expected_attempt_id",
+          "earlier attempt", "consumption without `expected_attempt_id`")),
+        ("producer timestamp and source-revision receipt",
+         "- Result receipts and retrospective verification.",
+         ("request comment ID and `created_at`", "result comment ID and `created_at`",
+          "`github-actions[bot]`, id 41898282", "source revisions",
+          "exact pending request identity", "AFTER THE FACT")),
+    )
+    for element, marker, fragments in guarded:
+        matches = [line for line in clause_lines if line.startswith(marker)]
+        if len(matches) != 1:
+            errors.append(f"CKR6 host procedure is missing {element}: expected one {marker}")
+        else:
+            for fragment in fragments:
+                if fragment not in matches[0]:
+                    errors.append(f"CKR6 host procedure is missing {element}: {fragment}")
+
+
 def validate(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     registry = root / "04_Registry/agent-inheritance-registry.md"
@@ -331,6 +414,7 @@ def validate(root: Path = ROOT) -> list[str]:
     validate_legacy_aliases(root, agents, errors)
     validate_routing_documents(root, agents, overlay_slugs, errors)
     validate_write_boundaries(root, overlays, valid_rows, errors)
+    validate_ckr6_host_procedure(root, overlays, errors)
     return sorted(set(errors))
 
 

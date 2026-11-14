@@ -99,6 +99,8 @@ _CODESPACE_IMPLEMENTATION_RE = re.compile(
     r"(?P<sha>[0-9a-f]{40})", re.ASCII
 )
 CODESPACE_IMPLEMENTATION_ISSUE = 3333
+CODESPACE_START_ISSUE = 3345
+CODESPACE_START_TRIGGER = "/agent-os codespace-start"
 
 IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
@@ -110,6 +112,7 @@ IngressReason = Literal[
     "accepted-first-run-validation-envelope", "accepted-notion-read-envelope",
     "accepted-codespaces-diagnostic-envelope", "accepted-ruleset-admin-envelope",
     "accepted-codespace-implementation-envelope", "codespace-implementation-issue-mismatch",
+    "accepted-codespace-start-envelope", "codespace-start-issue-mismatch",
     "accepted-ppux-projection-envelope", "accepted-ready-admission-envelope",
     "accepted-merge-admission-envelope", "accepted-draft-validation-envelope",
     "accepted-ready-recovery-envelope",
@@ -160,6 +163,12 @@ class IssueCommentIngressResult:
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+def _codespace_start_trigger_id(repository: str, issue_number: int, comment_id: int) -> str:
+    """Bind the start request to one owner-authored comment, not the issue alone."""
+    material = f"{repository}\0{issue_number}\0codespace-start\0{comment_id}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 
 def _operation_trigger_id(repository: str, issue_number: int, operation: str) -> str:
     material = f"{repository}\0{issue_number}\0{operation}".encode("ascii")
@@ -225,6 +234,7 @@ def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attem
     elif ruleset_prestate_sha256 is not None and issue_number is not None: logical_id=_ruleset_admin_trigger_id(repository,issue_number,ruleset_prestate_sha256)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif ppux_projection_branch is not None and ppux_projection_sha is not None and ppux_projection_input_ref is not None and issue_number is not None: logical_id=_ppux_projection_trigger_id(repository,issue_number,ppux_projection_branch,ppux_projection_sha,ppux_projection_input_ref)
+    elif operation == "codespace-start" and issue_number is not None and comment_id is not None: logical_id=_codespace_start_trigger_id(repository, issue_number, comment_id)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
     return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,ppux_projection_branch_or_none=ppux_projection_branch,ppux_projection_sha_or_none=ppux_projection_sha,ppux_projection_input_ref_or_none=ppux_projection_input_ref,source_capsule_id_or_none=source_capsule_id,notion_read_request_id_or_none=notion_read_request_id,diagnostic_id_or_none=diagnostic_id,diagnostic_request_id_or_none=diagnostic_request_id,ruleset_prestate_sha256_or_none=ruleset_prestate_sha256,codespace_implementation_handoff_id_or_none=codespace_implementation_handoff,codespace_implementation_sha_or_none=codespace_implementation_sha,ready_admission_pr_number_or_none=ready_admission_pr_number,ready_admission_head_sha_or_none=ready_admission_head_sha,ready_admission_body_sha256_or_none=ready_admission_body_sha256,merge_admission_pr_number_or_none=merge_admission_pr_number,merge_admission_head_sha_or_none=merge_admission_head_sha,merge_admission_body_sha256_or_none=merge_admission_body_sha256,merge_admission_method_or_none=merge_admission_method,draft_validation_pr_number_or_none=draft_validation_pr_number,draft_validation_head_sha_or_none=draft_validation_head_sha,ready_recovery_pr_number_or_none=ready_recovery_pr_number,ready_recovery_head_sha_or_none=ready_recovery_head_sha,ready_recovery_main_sha_or_none=ready_recovery_main_sha,ready_recovery_workflow_sha_or_none=ready_recovery_workflow_sha,ready_recovery_source_run_id_or_none=ready_recovery_source_run_id)
 
@@ -269,6 +279,10 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if actor_is_recovery_service:_service_prefixes.append(_RECOVER_READY_PREFIX)
     if _service_prefixes and not (type(body) is str and any(body.startswith(prefix) for prefix in _service_prefixes)):return _result(status="blocked",reason="actor-not-allowed",**common)
     if type(body) is not str or len(body.encode("utf-8"))>MAX_COMMENT_BYTES:return _result(status="ignored",reason="malformed-trigger",**common)
+    if body == CODESPACE_START_TRIGGER:
+        if issue_number != CODESPACE_START_ISSUE:
+            return _result(status="blocked", reason="codespace-start-issue-mismatch", **common)
+        return _result(status="accepted", reason="accepted-codespace-start-envelope", operation="codespace-start", **common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
     ruleset_admin=_RULESET_ADMIN_RE.fullmatch(body)

@@ -18,7 +18,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -262,26 +262,6 @@ def verify_ready_admission_receipt(
     if receipt.get("transition_admissible") is not True:
         reasons.append("receipt-not-admitting")
     return (not reasons), tuple(dict.fromkeys(reasons))
-
-
-def run_ready_batch(requests: Iterable[Mapping[str, object]],
-                    decide: Callable[[Mapping[str, object]], tuple[bool, tuple[str, ...]]]) -> list[dict[str, object]]:
-    """Finite batch cursor: record each item's disposition and continue past item-local blockers."""
-    dispositions: list[dict[str, object]] = []
-    for index, request in enumerate(requests):
-        if index >= _MAX_ITEMS:
-            dispositions.append({"pr_number": None, "disposition": "batch-bound-exceeded", "reason_codes": []})
-            break
-        try:
-            admitted, reasons = decide(request)
-        except Exception:
-            admitted, reasons = False, ("item-evaluation-failed",)
-        dispositions.append({
-            "pr_number": request.get("pr_number"),
-            "disposition": "ready-eligible" if admitted else "blocked-item-local",
-            "reason_codes": list(reasons),
-        })
-    return dispositions
 
 
 # ------------------------------------------------------------------- PyGithub provider
