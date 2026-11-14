@@ -596,7 +596,7 @@ def test_parent_request_for_other_pr_never_supersedes_exact_target():
         _comment(_result()),
         _bound_issue_request(other_pr, "b" * 40, comment_id=1002,
                              created_at=SECOND_REQUEST_AT),
-        _comment(_result(request_comment_id=1002), comment_id=1003,
+        _comment(_result(), request_comment_id=1002, comment_id=1003,
                  created_at="2026-11-11T10:01:30Z",
                  updated_at="2026-11-11T10:01:30Z"),
     ]
@@ -649,10 +649,10 @@ def test_newer_blocked_same_pr_blocks_older_admission():
     newer = _bound_issue_request(pr, comment_id=1002,
                                   created_at=SECOND_REQUEST_AT)
     blocked = _comment(_result(
-        request_comment_id=1002, status="insufficient",
+        status="insufficient",
         substantial_hypothesis_admissible=False, selected_lesson_ids=[],
         selected_lessons=[], reason_codes=["no-relevant-candidate"]),
-        comment_id=1003, created_at="2026-11-11T10:01:30Z",
+        request_comment_id=1002, comment_id=1003, created_at="2026-11-11T10:01:30Z",
         updated_at="2026-11-11T10:01:30Z")
     decision = evaluate_mutation_boundary(
         repository=REPOSITORY, issue_number=ISSUE,
