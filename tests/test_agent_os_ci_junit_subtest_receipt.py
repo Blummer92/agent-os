@@ -373,13 +373,52 @@ def test_log_zip_extraction_rejects_ambiguous_and_unsafe_archives() -> None:
     bad = _zip({"1_Step one.txt": (marker.replace("passed=11843", "passed=xx") + "\n").encode()})
     with pytest.raises(ValueError, match="subtest-marker-conflict"):
         extract_subtest_markers(bad)
-    with pytest.raises(ValueError):
-        extract_subtest_markers(b"not a zip")
+    # Non-ZIP bytes are the job-level plain-text log shape (HIGH-1
+    # repair): parsed as text, and text with no marker is empty, never
+    # an error. Empty input remains invalid.
+    assert extract_subtest_markers(b"not a zip") == {}
     with pytest.raises(ValueError):
         extract_subtest_markers(b"")
     traversal = _zip({"../evil.txt": (marker + "\n").encode()})
     with pytest.raises(ValueError):
         extract_subtest_markers(traversal)
+
+
+def test_plaintext_job_log_bytes_parse_directly() -> None:
+    # HIGH-1 repair: the jobs/{job_id}/logs endpoint serves plain text;
+    # those bytes must corroborate exactly like the ZIP shape.
+    marker = format_subtest_marker(_sample_marker_entry(), "root")
+    raw = ("2026-11-11T19:35:44.2098772Z " + marker + "\n").encode()
+    found = extract_subtest_markers(raw)
+    assert found["root"]["subtests_passed"] == 119
+    assert found["root"]["passed"] == 11843
+    assert extract_subtest_markers(b"2026-11-11T19:30:44.8285754Z ordinary output\n") == {}
+
+
+def test_scoped_extraction_confines_and_flags_foreign_markers() -> None:
+    # MED-1 repair: with job/step scope bound, only the bound job/step
+    # member corroborates. A marker line in a foreign job's member, a
+    # different step's member, or an unrelated member is conflicting
+    # evidence and raises ValueError (never corroboration, never
+    # silently ignored); out-of-scope non-marker content is ignored.
+    # Unscoped callers keep the legacy whole-archive behavior.
+    marker = format_subtest_marker(_sample_marker_entry(), "root")
+    job = "Run aggregate validation"
+    bound = _zip({f"{job}/15_Run aggregate validation.txt": (marker + "\n").encode()})
+    scoped = extract_subtest_markers(bound, job_name=job, step_name="Run aggregate validation")
+    assert scoped["root"]["subtests_passed"] == 119
+    # Job-level layout (step files at the archive root) stays in scope.
+    job_level = _zip({"1_Run aggregate validation.txt": (marker + "\n").encode()})
+    assert extract_subtest_markers(job_level, job_name=job, step_name="Run aggregate validation")["root"]["passed"] == 11843
+    for members in (
+        {"Run frontend checks/1_Run frontend checks.txt": (marker + "\n").encode()},
+        {f"{job}/3_Set up job.txt": (marker + "\n").encode()},
+        {"totally/unrelated.txt": (marker + "\n").encode()},
+    ):
+        with pytest.raises(ValueError, match="subtest-marker-out-of-scope"):
+            extract_subtest_markers(_zip(members), job_name=job, step_name="Run aggregate validation")
+    unrelated = _zip({"totally/unrelated.txt": (marker + "\n").encode()})
+    assert extract_subtest_markers(unrelated)["root"]["subtests_passed"] == 119
 
 
 def test_extractor_prints_marker_matching_receipt(tmp_path: Path) -> None:
@@ -794,13 +833,64 @@ def test_full_collector_path_rejects_receipt_without_log_corroboration(tmp_path:
     receipt = _verified_receipt(artifact, aggregate_log_bytes=_log_zip({"root": wrong}))
     assert receipt["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
     assert receipt["subtest_log_corroboration"] == "ok"
-    # Log present but ambiguous (duplicate markers): rejected.
+    # Log present but ambiguous (duplicate markers in in-scope step
+    # members): rejected. (A marker in an out-of-scope member now raises
+    # subtest-marker-out-of-scope instead; see
+    # test_full_collector_path_rejects_marker_in_foreign_member.)
     marker = format_subtest_marker(entry, "root")
-    ambiguous = _zip({"1_Step one.txt": (marker + "\n").encode(),
-                      "2_Step two.txt": (marker + "\n").encode()})
+    ambiguous = _zip({"15_Run aggregate validation.txt": (marker + "\n").encode(),
+                      "16_Run aggregate validation.txt": (marker + "\n").encode()})
     receipt = _verified_receipt(artifact, aggregate_log_bytes=ambiguous)
     assert receipt["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
     assert receipt["subtest_log_corroboration"] == "ambiguous"
+
+
+def test_full_collector_path_accepts_plaintext_job_log(tmp_path: Path) -> None:
+    # HIGH-1 regression: the jobs/{job_id}/logs endpoint serves plain
+    # text; genuine plain-text job-log bytes must corroborate exactly
+    # like the ZIP shape (the pre-repair collector rejected them).
+    xml, output = _genuine_pass_fixture(tmp_path)
+    entry = extract_entry(
+        junit_bytes=xml, pytest_output=output, junit_file="root.xml",
+        source_run_id=RUN_ID, source_run_attempt=1, source_head=SOURCE_HEAD,
+    )
+    assert entry is not None
+    artifact = _zip({
+        "root.xml": xml,
+        "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
+    })
+    marker = format_subtest_marker(entry, "root")
+    plain = ("2026-11-11T19:35:44.2098772Z " + marker + "\n").encode()
+    receipt = _verified_receipt(artifact, aggregate_log_bytes=plain)
+    assert receipt["streams"]["aggregate"]["classification"] == "EVIDENCE_VALID"
+    assert receipt["streams"]["junit"]["junit-aggregate-1"]["classification"] == "EVIDENCE_VALID"
+    assert receipt["subtest_log_corroboration"] == "ok"
+
+
+def test_full_collector_path_rejects_marker_in_foreign_member(tmp_path: Path) -> None:
+    # MED-1 regression: a sole marker in a foreign job's member, a
+    # different step's member, or an unrelated member is out of scope,
+    # raises subtest-marker-out-of-scope, and never corroborates; the
+    # surplus stays REJECT_SCHEMA with corroboration "ambiguous".
+    xml, output = _genuine_pass_fixture(tmp_path)
+    entry = extract_entry(
+        junit_bytes=xml, pytest_output=output, junit_file="root.xml",
+        source_run_id=RUN_ID, source_run_attempt=1, source_head=SOURCE_HEAD,
+    )
+    assert entry is not None
+    artifact = _zip({
+        "root.xml": xml,
+        "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
+    })
+    marker = format_subtest_marker(entry, "root")
+    for members in (
+        {"Run frontend checks/1_Run frontend checks.txt": (marker + "\n").encode()},
+        {"Run aggregate validation/3_Set up job.txt": (marker + "\n").encode()},
+        {"totally/unrelated.txt": (marker + "\n").encode()},
+    ):
+        receipt = _verified_receipt(artifact, aggregate_log_bytes=_zip(members))
+        assert receipt["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
+        assert receipt["subtest_log_corroboration"] == "ambiguous"
 
 
 def test_full_collector_path_rejects_same_artifact_without_receipt(tmp_path: Path) -> None:

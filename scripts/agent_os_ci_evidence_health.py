@@ -167,21 +167,68 @@ def parse_subtest_markers_text(text: str) -> dict[str, dict]:
     return found
 
 
-def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000, max_entries: int = 1_000) -> dict[str, dict]:
-    """Extract subtest markers from a provider-fetched job-log archive.
+_ZIP_MAGIC = b"PK\x03\x04"
 
-    The logs endpoint returns a ZIP with one text file per step. Member
-    names are validated (no absolute paths, no traversal, no
-    duplicates), total uncompressed size and entry count are capped,
-    and members are decoded as UTF-8 with replacement (a marker line
-    damaged by undecodable bytes simply fails to parse, fail-closed).
-    Any malformed marker line or duplicate marker for a suite raises
-    ValueError: ambiguous log evidence must never silently resolve."""
+
+def _log_member_in_scope(name: str, job_name: str | None, step_name: str | None) -> bool:
+    """Scope binding for log-archive members (MED-1 repair).
+
+    With no ``job_name`` and no ``step_name`` every member is in scope
+    (legacy whole-archive callers). Otherwise a member under a top-level
+    directory is in scope only when that directory IS the bound job
+    (run-level archive layout ``<job>/<NN>_<step>.txt``); a member at
+    the archive root comes from a job-level archive, which the endpoint
+    already scopes to one job. When ``step_name`` is given, the member's
+    step file must additionally be the bound step's own log
+    (``<NN>_<step_name>.txt``). An out-of-scope member never
+    corroborates the bound job's receipts; extract_subtest_markers
+    treats a marker line found in one as conflicting evidence and
+    raises, while out-of-scope non-marker content is simply not
+    corroboration."""
+    if job_name is None and step_name is None:
+        return True
+    base = name
+    if "/" in name:
+        top, base = name.split("/", 1)
+        if job_name is not None and top != job_name:
+            return False
+        if "/" in base:
+            return False
+    if step_name is not None:
+        return re.fullmatch(r"\d+_" + re.escape(step_name) + r"\.txt", base) is not None
+    return True
+
+
+def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000, max_entries: int = 1_000,
+                            job_name: str | None = None, step_name: str | None = None) -> dict[str, dict]:
+    """Extract subtest markers from provider-fetched job-log bytes.
+
+    The run-level logs endpoint returns a ZIP with one text file per
+    step; the job-level endpoint serves the job's log as plain text
+    (HIGH-1 repair). Bytes that are not a ZIP archive (no PK magic) are
+    therefore decoded as UTF-8 with replacement and parsed as log text
+    directly; that path is job-scoped by construction. ZIP member names
+    are validated (no absolute paths, no traversal, no duplicates),
+    total uncompressed size and entry count are capped, and members are
+    decoded as UTF-8 with replacement (a marker line damaged by
+    undecodable bytes simply fails to parse, fail-closed). Only members
+    in scope for ``job_name``/``step_name`` (see _log_member_in_scope)
+    count as corroboration; every member is still validated, and every
+    member is still scanned for marker lines: a marker line outside the
+    bound scope is conflicting evidence and raises ValueError, it is
+    never silently ignored (a forged marker must not corroborate, and
+    its presence must not go unnoticed). Any malformed marker line or
+    duplicate marker for a suite raises ValueError: ambiguous log
+    evidence must never silently resolve."""
     if not isinstance(log_zip_bytes, (bytes, bytearray)) or not log_zip_bytes:
         raise ValueError("invalid-subtest-log-archive")
     data = bytes(log_zip_bytes)
     if len(data) > max_bytes:
         raise ValueError("invalid-subtest-log-archive")
+    if not data.startswith(_ZIP_MAGIC):
+        # Plain-text job log (the jobs/{job_id}/logs shape): one job's
+        # output, already scoped to that job by the endpoint.
+        return parse_subtest_markers_text(data.decode("utf-8", errors="replace"))
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
     except Exception as exc:
@@ -205,7 +252,14 @@ def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000
         found: dict[str, dict] = {}
         for info in infos:
             text = zf.read(info.filename).decode("utf-8", errors="replace")
-            for key, marker in parse_subtest_markers_text(text).items():
+            markers = parse_subtest_markers_text(text)
+            if not _log_member_in_scope(info.filename, job_name, step_name):
+                if markers:
+                    # A marker outside the bound job/step scope is
+                    # conflicting evidence, never corroboration.
+                    raise ValueError("subtest-marker-out-of-scope")
+                continue
+            for key, marker in markers.items():
                 if key in found:
                     raise ValueError("subtest-marker-duplicate")
                 found[key] = marker

@@ -560,7 +560,16 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
     subtest_log_status = "unavailable"
     if aggregate_log_bytes is not None:
         try:
-            log_markers = extract_subtest_markers(aggregate_log_bytes)
+            # Scope binding (MED-1 repair): only the bound aggregate
+            # job's own step-log member(s) may corroborate its receipts.
+            # The job and its marker-emitting step share the name
+            # AGGREGATE_STEP_NAME; plain-text job logs are scoped to the
+            # job by the endpoint itself.
+            log_markers = extract_subtest_markers(
+                aggregate_log_bytes,
+                job_name=AGGREGATE_STEP_NAME,
+                step_name=AGGREGATE_STEP_NAME,
+            )
             subtest_log_status = "ok"
         except ValueError:
             # "ambiguous" covers both conflicting markers and an
