@@ -6,6 +6,7 @@ Never execute source-run code, checked-out PR code, or downloaded artifacts here
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -62,6 +63,7 @@ def touches_authority(paths: set[str]) -> bool:
             or path.startswith(AUTHORITY_PREFIXES)
             or path.endswith(AUTHORITY_SUFFIXES)
             or name in AUTHORITY_FILENAMES
+            or name == "conftest.py"
             or (name.startswith("requirements") and name.endswith(".txt"))
         )
 
@@ -83,6 +85,52 @@ REQUIRED_STEPS = {
     "Run frontend checks": ("Run applicable frontend checks",),
     "Agent OS aggregate gate": ("Enforce authoritative aggregate disposition",),
 }
+# Ready-for-Review may legitimately reuse a prior exact-head aggregate. Provider
+# job records can prove the *shape* of that reuse, but not the original JUnit,
+# status producer, or previous run's source/attempt association. Never certify
+# reuse from step names alone: it is a non-certifying pending disposition.
+REUSE_STEP_CONCLUSIONS = {
+    "Set up job": "success",
+    "Check out workflow source for ingress verification": "skipped",
+    "Admit exact-head Draft final candidate": "skipped",
+    "Resolve authoritative candidate identity": "success",
+    "Reuse valid exact-head aggregate evidence": "success",
+    "Publish authoritative aggregate pending status": "skipped",
+    "Check out repository": "skipped",
+    "Check out admitted candidate commit": "skipped",
+    "Verify aggregate checkout identity": "skipped",
+    "Recover missing exact-current main aggregate evidence": "skipped",
+    "Stop candidate while exact-current main recovery runs": "skipped",
+    "Project exact-current main health": "skipped",
+    "Set up Python": "skipped",
+    "Install validation dependencies": "skipped",
+    "Run aggregate validation": "skipped",
+    "Record not-executed infrastructure receipt": "skipped",
+    "Upload aggregate JUnit evidence": "skipped",
+    "Publish validation summary": "success",
+    "Complete job": "success",
+}
+
+
+def _provider_observed_reuse(steps: list[dict[str, Any]]) -> bool:
+    # Match the entire provider-observed job (including GitHub's setup and
+    # completion steps). Any extra, omitted, duplicated, or mixed step rejects
+    # reuse; the shape alone still cannot certify its original producer.
+    if len(steps) != len(REUSE_STEP_CONCLUSIONS):
+        return False
+    seen: set[str] = set()
+    for step in steps:
+        name = step["name"]  # evaluate() already checked step types.
+        if name not in REUSE_STEP_CONCLUSIONS or name in seen:
+            return False
+        if step["conclusion"] != REUSE_STEP_CONCLUSIONS[name]:
+            return False
+        if step.get("status", "completed") != "completed":
+            return False
+        seen.add(name)
+    return len(seen) == len(REUSE_STEP_CONCLUSIONS)
+
+
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -134,17 +182,25 @@ def changed_paths(repository: str, pr_number: int) -> set[str]:
 
 
 def lookup_pr(repository: str, head_sha: str, branch: str) -> dict[str, Any] | None:
-    data = api(f"repos/{repository}/commits/{head_sha}/pulls?per_page=100")
-    if not isinstance(data, list):
-        raise ValueError("provider associated PRs payload is malformed")
-    matches = [p for p in data if isinstance(p, dict)
-               and p.get("state") == "open"
-               and p.get("draft") is False
-               and p.get("base", {}).get("ref") == "main"
-               and p.get("base", {}).get("repo", {}).get("full_name") == repository
-               and p.get("head", {}).get("sha") == head_sha
-               and p.get("head", {}).get("ref") == branch
-               and p.get("head", {}).get("repo", {}).get("full_name") == repository]
+    matches: list[dict[str, Any]] = []
+    for page in range(1, 21):
+        data = api(f"repos/{repository}/commits/{head_sha}/pulls?per_page=100&page={page}")
+        if not isinstance(data, list):
+            raise ValueError("provider associated PRs payload is malformed")
+        # Reject malformed provider entries even when another PR matches.
+        if any(not isinstance(p, dict) for p in data):
+            raise ValueError("provider associated PR entry is malformed")
+        matches.extend([p for p in data if p.get("state") == "open"
+                        and p.get("draft") is False
+                        and p.get("base", {}).get("ref") == "main"
+                        and p.get("base", {}).get("repo", {}).get("full_name") == repository
+                        and p.get("head", {}).get("sha") == head_sha
+                        and p.get("head", {}).get("ref") == branch
+                        and p.get("head", {}).get("repo", {}).get("full_name") == repository])
+        if len(data) < 100:
+            break
+    else:
+        raise ValueError("provider associated PR pagination incomplete")
     if len(matches) > 1:
         raise ValueError("ambiguous source PR association")
     if not matches:
@@ -172,25 +228,54 @@ def lookup_pr(repository: str, head_sha: str, branch: str) -> dict[str, Any] | N
 
 
 def latest_attempt(repository: str, workflow_id: int, sha: str) -> tuple[int, int] | None:
-    data = api(f"repos/{repository}/actions/workflows/{workflow_id}/runs?head_sha={sha}&event=pull_request&per_page=100")
-    if not isinstance(data, dict) or not isinstance(data.get("workflow_runs"), list):
-        raise ValueError("source run list is malformed")
-    runs = [r for r in data["workflow_runs"] if isinstance(r, dict) and r.get("head_sha") == sha
+    all_runs: list[dict[str, Any]] = []
+    for page in range(1, 21):
+        data = api(f"repos/{repository}/actions/workflows/{workflow_id}/runs?head_sha={sha}&event=pull_request&per_page=100&page={page}")
+        if not isinstance(data, dict) or not isinstance(data.get("workflow_runs"), list):
+            raise ValueError("source run list is malformed")
+        batch = data["workflow_runs"]
+        if any(not isinstance(r, dict) for r in batch):
+            raise ValueError("source run entry is malformed")
+        all_runs.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        raise ValueError("provider source run pagination incomplete")
+    runs = [r for r in all_runs if r.get("head_sha") == sha
             and r.get("event") == "pull_request" and r.get("path") == SOURCE_PATH]
     if not runs:
         return None
-    newest = max(runs, key=lambda r: (r.get("created_at", ""), r.get("id", -1)))
-    if type(newest.get("id")) is not int or type(newest.get("run_attempt")) is not int:
-        raise ValueError("latest run identity is malformed")
-    return newest["id"], newest["run_attempt"]
+    # Validate every matching run before choosing one. With a single row,
+    # max() never compares keys, so a malformed created_at could previously
+    # authorize publication from unverified provider metadata.
+    verified: list[tuple[datetime, int, int]] = []
+    for run in runs:
+        created_at = run.get("created_at")
+        if not isinstance(created_at, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created_at
+        ):
+            raise ValueError("latest run created_at is malformed")
+        try:
+            timestamp = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as exc:
+            raise ValueError("latest run created_at is malformed") from exc
+        run_id, attempt = run.get("id"), run.get("run_attempt")
+        if type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0:
+            raise ValueError("latest run identity is malformed")
+        verified.append((timestamp, run_id, attempt))
+    # Reruns retain a run ID and created_at; use attempt as the tie-breaker.
+    newest = max(verified, key=lambda row: (row[0], row[1], row[2]))
+    return newest[1], newest[2]
 
 
 def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]) -> dict[str, Any]:
-    if touches_authority(paths):
-        return result("error", "CI authority files changed; require independent trusted validation")
     if source.get("conclusion") != "success":
         return result("failure", "Source validation run did not finish successfully")
     selected = {}
+    # Malformed job entries must yield a fail-closed result, never an
+    # AttributeError: a provider record is untrusted until proven otherwise.
+    if any(not isinstance(job, dict) for job in jobs):
+        return result("error", "Malformed job evidence")
     for name in JOBS:
         matches = [j for j in jobs if j.get("name") == name]
         if len(matches) != 1:
@@ -198,14 +283,44 @@ def evaluate(source: dict[str, Any], jobs: list[dict[str, Any]], paths: set[str]
         selected[name] = matches[0]
         if matches[0].get("conclusion") != "success":
             return result("failure", f"Required job did not succeed: {name}")
+        # Omission is accepted for legacy provider records; an explicitly
+        # present null (or any other non-completed value) is malformed.
+        if "status" in matches[0] and matches[0]["status"] != "completed":
+            return result("error", f"Required job not completed: {name}")
+    reuse_observed = False
     for job_name, step_names in REQUIRED_STEPS.items():
         steps = selected[job_name].get("steps")
         if not isinstance(steps, list):
             return result("error", f"Step evidence unavailable: {job_name}")
+        # Check every provider step before reuse or ordinary matching; malformed
+        # elements must yield a fail-closed result, never an AttributeError.
+        if any(
+            not isinstance(step, dict)
+            or not isinstance(step.get("name"), str)
+            or not step["name"]
+            or not isinstance(step.get("conclusion"), str)
+            or not step["conclusion"]
+            or ("status" in step and step["status"] != "completed")
+            for step in steps
+        ):
+            return result("error", f"Malformed step evidence: {job_name}")
+        if job_name == "Run aggregate validation" and _provider_observed_reuse(steps):
+            reuse_observed = True
+            continue
         for step_name in step_names:
             matches = [s for s in steps if s.get("name") == step_name]
             if len(matches) != 1 or matches[0].get("conclusion") != "success":
                 return result("error", f"Required step not proven: {step_name}")
+            # Preserve omission compatibility, but reject explicit null.
+            if "status" in matches[0] and matches[0]["status"] != "completed":
+                return result("error", f"Required step not completed: {step_name}")
+    if touches_authority(paths):
+        # An authority-changing PR cannot be independently certified by this
+        # pilot, even when every source job and step has provider evidence.
+        # Pending is non-certifying (never success); the pilot is not required.
+        return result("pending", "Trust review pending: CI authority files changed; not certified")
+    if reuse_observed:
+        return result("pending", "Aggregate reuse observed; source producer not independently certified")
     return result("success", "Trusted pilot: source jobs and steps passed on exact PR head")
 
 
@@ -249,8 +364,11 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("Invalid workflow event")
     try:
         outcome = decide(event, args.repository)
-    except (ValueError, RuntimeError, subprocess.TimeoutExpired):
+    except (ValueError, RuntimeError, subprocess.TimeoutExpired, AttributeError, TypeError, KeyError, OSError):
         # No state should be minted from incomplete/ambiguous provider data.
+        # Wrong-typed provider objects (AttributeError/TypeError/KeyError)
+        # and missing transport (OSError, e.g. no `gh`) belong to the same
+        # no-publication class as malformed payloads and provider failures.
         outcome = result(None, "Provider evidence unavailable: no status published")
     safe = {"state": outcome["state"], "context": outcome["context"], "description": outcome["description"]}
     print(json.dumps(safe, sort_keys=True))
@@ -264,7 +382,9 @@ def main(argv: list[str] | None = None) -> int:
         completed = subprocess.run(cmd, text=True, capture_output=True, check=False, timeout=45)
         if completed.returncode:
             raise SystemExit("Provider rejected trusted status publication")
-    return 0 if outcome["state"] in (None, "success") else 1
+    # A published non-certifying pending disposition is a successful reporting
+    # operation, NOT a successful trusted attestation. Failures remain red.
+    return 0 if outcome["state"] in (None, "success", "pending") else 1
 
 
 if __name__ == "__main__":

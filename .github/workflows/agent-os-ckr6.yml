@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify finite CKR6 request
-    if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
+    if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
     runs-on: ubuntu-latest
     outputs:
       retrieval_required: ${{ steps.classify.outputs.retrieval_required }}
@@ -70,13 +70,15 @@ jobs:
     name: Execute finite CKR6 request
     needs: classify
     runs-on: ubuntu-latest
-    # issues:write is scoped to this job only: it posts the bounded CKR6
-    # result comment back to the originating issue (#2851) so the ChatGPT
-    # host can consume it through its GitHub MCP surface. Top-level
-    # permissions stay contents:read. No other GitHub write is performed.
+    # Postback needs both issues:write and pull-requests:write on these
+    # two jobs for PR-conversation result delivery (live 403 in run
+    # 43353276568). The only intended write is a bounded CKR6 result
+    # comment to the originating issue or PR conversation. The top-level
+    # permissions stay contents:read; classify remains read-only.
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Check out canonical source
         uses: actions/checkout@v7
@@ -209,6 +211,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Check out canonical source
         uses: actions/checkout@v7

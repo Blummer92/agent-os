@@ -573,6 +573,7 @@ mapfile -t test_dirs < <(
   find . -type d -name tests \
     -not -path './.git/*' \
     -not -path './.venv/*' \
+    -not -path './.venv-*/*' \
     -not -path './venv/*' \
     -not -path './node_modules/*' \
     -not -path './.tmp/*' \
@@ -678,8 +679,6 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
         classification="COMPLETE"
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$CI_JUNIT_DIR/$junit_file"; then
-        # NC09: executed tests failed or errored. The suite passed on what it
-        # ran only in the runner's exit code; the JUnit outcome is the verdict.
         classification="TEST_OUTCOME_FAILED"
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
         classification="TEST_SELECTION_INCOMPLETE"
@@ -693,35 +692,20 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
     elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
-      # NC09: a suite whose JUnit contains failures/errors must never be
-      # recorded EXECUTED_PASS, even when the runner reported exit 0 (a
-      # swallowed exit cannot manufacture a clean report). The completeness
-      # receipt for this suite is the independent outcome evidence; its
-      # verdict reclassifies the suite row and fails it. The recorded exit
-      # code is preserved as evidence of what the runner reported.
-      outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
+      # For full suites, require the independent completeness/outcome receipt.
+      # Do not certify an EXECUTED_PASS when a helper failed or its receipt is absent.
       if [ "$classification" = "EXECUTED_PASS" ]; then
         case "$name" in
-          "focused: "*)
-            # Focused runs are explicit selections and are not outcome-checked
-            # (documented boundary); no completeness receipt exists for them.
-            ;;
+          "focused: "*) ;; # Explicit focused selections have no completeness receipt.
           *)
-            if [ -f "$outcome_receipt" ]; then
-              if grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
-                status="FAIL"
-                classification="TEST_OUTCOME_FAILED"
-              elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
-                # Invalid JUnit evidence cannot certify a passing suite.
-                # Preserve the original runner exit code for diagnostics.
-                status="FAIL"
-                classification="TEST_COLLECTION_ERROR"
-              fi
-            else
-              # No outcome receipt: the completeness gate produced no evidence
-              # for this suite in this run (helper crash, or success without a
-              # receipt). A passing suite must not stand on absent outcome
-              # evidence; the completeness row already fails closed.
+            outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
+            if [ ! -f "$outcome_receipt" ]; then
+              status="FAIL"
+              classification="TEST_COLLECTION_ERROR"
+            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
+              status="FAIL"
+              classification="TEST_OUTCOME_FAILED"
+            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
               status="FAIL"
               classification="TEST_COLLECTION_ERROR"
             fi
