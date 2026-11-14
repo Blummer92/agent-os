@@ -166,6 +166,15 @@ _CLOSING_DIRECTIVE_RE = re.compile(
     rf"(?:\s*:\s*|\s+)(?:{_URL_TARGET}|#(?P<number>\d+))\b",
     re.IGNORECASE | re.MULTILINE,
 )
+# Canonical Agent OS PRs commonly use "Part of #N" so a partial PR
+# cannot implicitly close its issue. Treat only a line-anchored, non-closing
+# "Part of" claim as linkage; generic mentions and "Non-closing" lists
+# remain non-authoritative for issue selection.
+_PART_OF_DIRECTIVE_RE = re.compile(
+    rf"^[ \t]*(?:[-*][ \t]+)?Part[ \t]+of(?:[ \t]*:[ \t]*|[ \t]+)"
+    rf"(?:{_URL_TARGET}|#(?P<number>\d+))\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 _ISSUE_REFERENCE_RE = re.compile(
     rf"(?<![A-Za-z0-9_.-])(?:{_URL_TARGET}|#(?P<number>\d+))\b"
 )
@@ -753,14 +762,12 @@ def run_gate(
 
 
 def _linked_issue_from_pr_body(body: object) -> int:
-    """Return the single closing-keyword issue target of a PR body.
+    """Return one unambiguous linked issue from closing OR non-closing claims.
 
-    Mirrors parse_pr.py's GitHub-effective detection: non-prose markdown is
-    masked, directives must be line-anchored, and a URL target binds only
-    when it names this repository (a cross-repo closing URL is not a link
-    into this tracker). Zero or several distinct this-repo targets are not
-    decidable here and fail closed; the full linked-issue convention stays
-    owned by parse_pr.py.
+    Agent OS uses line-anchored ``Part of #N`` to avoid automatic closure.
+    Generic references, ``Non-closing`` lists, code, quotes, and cross-repo
+    URLs are not issue-selection authority. Conflicting claims fail closed.
+    The full closing-reference convention remains owned by parse_pr.py.
     """
     if type(body) is not str:
         raise ValueError(ISSUE_LINK_MISSING)
@@ -781,6 +788,11 @@ def _linked_issue_from_pr_body(body: object) -> int:
         if number is not None:
             explicit.add(number)
         occupied.append(match.span())
+    part_of: set[int] = set()
+    for match in _PART_OF_DIRECTIVE_RE.finditer(masked):
+        number = _this_repo_number(match)
+        if number is not None:
+            part_of.add(number)
     closing_looking: set[int] = set()
     for match in _ISSUE_REFERENCE_RE.finditer(masked):
         if any(start < match.end() and match.start() < end for start, end in occupied):
@@ -792,9 +804,10 @@ def _linked_issue_from_pr_body(body: object) -> int:
         number = _this_repo_number(match)
         if number is not None:
             closing_looking.add(number)
-    if len(explicit) == 1 and closing_looking <= explicit:
-        return next(iter(explicit))
-    if explicit or closing_looking:
+    linked = explicit | part_of
+    if len(linked) == 1 and closing_looking <= linked:
+        return next(iter(linked))
+    if linked or closing_looking:
         # Several directives, or closing-looking references with no
         # standalone directive: not decidable here, fail closed.
         raise ValueError(ISSUE_LINK_AMBIGUOUS)
