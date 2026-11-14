@@ -61,9 +61,11 @@ Documented residuals (explicit, not silently accepted):
   field, which needs a small ingress parser change (``parse_envelope``
   rejects unknown fields today) and is tracked as a separate owner
   proposal. The gate's requirement is identical under either form.
-- Revocation timing: issue comments do not re-trigger the PR check. A newer
-  blocking owner request posted after a green run takes effect on the next
-  gate evaluation (any PR event or a maintainer re-run).
+- Revocation timing: the separate default-branch comment-revalidation
+  workflow can request a rerun of this same gate when a trusted owner request
+  or producer result arrives. This asynchronous rerun is not instantaneous
+  revocation; until live acceptance proves the exact-head rerun on main,
+  prior green results can persist and a maintainer may need to rerun manually.
 - The gate module path is not yet in the trusted status publisher's
   authority surface; until it is, a PR that edits this module self-certifies
   its own enforcement. Adding the module path to the publisher's authority
