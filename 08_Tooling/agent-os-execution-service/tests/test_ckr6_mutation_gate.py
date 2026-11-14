@@ -339,8 +339,8 @@ def test_unavailable_read_fails_closed():
     "Closes #2425",
     "Part of #2425",
     "Part of https://github.com/Blummer92/agent-os/issues/2425",
-    "Part of #2425\\n\\nNon-closing: #2425, #3418",
-    "Part of #2425\\n\\nCloses #2425",
+    "Part of #2425\n\nNon-closing: #2425, #3418",
+    "Part of #2425\n\nCloses #2425",
     "fixed https://github.com/Blummer92/agent-os/issues/2425",
     "closes https://github.com/BLUMMER92/Agent-OS/issues/2425",
     "Closes #2425 twice: closes #2425",
@@ -356,9 +356,9 @@ def test_linked_issue_missing_fails_closed():
 
 
 @pytest.mark.parametrize("body", [
-    "Part of #2425\\nPart of #3418",
-    "Part of #2425\\nCloses #3418",
-    "Closes #2425\\nPart of #3418",
+    "Part of #2425\nPart of #3418",
+    "Part of #2425\nCloses #3418",
+    "Closes #2425\nPart of #3418",
 ])
 def test_non_closing_linkage_conflict_fails_closed(body):
     with pytest.raises(ValueError, match=ISSUE_LINK_AMBIGUOUS):
@@ -368,7 +368,7 @@ def test_non_closing_linkage_conflict_fails_closed(body):
 @pytest.mark.parametrize("body", [
     "Intro says Part of #2425 in prose.",
     "Non-closing: #2425",
-    "```md\\nPart of #2425\\n```",
+    "```md\nPart of #2425\n```",
     "> Part of #2425",
     "Part of https://github.com/another/repo/issues/2425",
 ])
