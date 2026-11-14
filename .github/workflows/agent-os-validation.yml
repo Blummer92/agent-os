@@ -219,7 +219,7 @@ jobs:
             if [ "$PROFILE" = "static" ]; then
               echo "- Static profile selected; no Python test command executed."
             elif [ "$PROFILE" = "focused" ]; then
-              echo "- Only the canonical focused command set executed."
+              echo "- Focused commands selected; inspect the focused JUnit artifact for execution evidence."
             elif [ "$PROFILE" = "aggregate" ]; then
               echo "- Aggregate profile selected; Draft PR events defer authoritative aggregate validation to explicit exact-head final-candidate admission."
             elif [ "$PROFILE" = "manual-review" ]; then
@@ -1086,9 +1086,7 @@ jobs:
               echo "- Pull request head SHA: \`$PR_HEAD_SHA\`"
             fi
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-              if [ "$DISPATCH_MODE" = "final-candidate" ]; then
-                echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
-              elif [ "$DISPATCH_MODE" = "ready-recovery" ]; then
+              if [ "$DISPATCH_MODE" = "final-candidate" ] || [ "$DISPATCH_MODE" = "ready-recovery" ]; then
                 echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
               fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
@@ -1098,14 +1096,14 @@ jobs:
             elif [ "${MAIN_RECOVERY_STOP_OUTCOME:-}" = "failure" ]; then
               echo "- Failure class: \`main-health-admission\` (reason: \`main-health.validation-missing\`; exact-current main recovery dispatched). Candidate aggregate tests were not executed and did not establish this failure."
             elif [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
-              echo "- Failure class: \`candidate-aggregate\`. Candidate aggregate tests executed and failed."
+              echo "- Failure class: \`candidate-aggregate\`. Aggregate step failed; inspect JUnit and logs before classifying the failure."
             fi
             if [ "${RUN_REQUIRED:-true}" = "false" ]; then
               echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
             elif [ "${AGGREGATE_OUTCOME:-}" = "success" ] || [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
-              echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
+              echo "- Aggregate step completed; verify test execution using JUnit and the manifest."
             else
-              echo "- Candidate aggregate validation was not executed in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`)."
+              echo "- Aggregate execution not established in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`)."
             fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"

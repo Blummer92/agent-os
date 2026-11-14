@@ -16,6 +16,150 @@ correlation. When `result.json` is absent, an explicit `manual-review` fallback
 is posted instead of silence. The `execute` job holds `issues: write` for this
 single postback; no other GitHub write is performed and no authority is created.
 
+Transport failures are diagnosable. On 2026-11-13 the first post-merge
+PR-conversation postback (run 43340181423) and the failure reporter both
+failed with a bare `HTTP Error 403: Forbidden`; the transports had discarded
+the response detail, so the refusal could not be attributed. Both postback
+paths now raise with a bounded, sanitized diagnostic - HTTP status, the
+GitHub `message` field, and the `X-Accepted-GitHub-Permissions` /
+`X-GitHub-Request-Id` headers - and the bridge's dedupe lookup logs the same
+form when it fails. The token, request headers, and unbounded response
+bodies are never logged.
+
+## Result consumption binding (R07, hardened by P1)
+
+`parse_ckr6_result_comment` is a pure syntax check by design: it proves
+neither who wrote a comment nor which request it answers. Hosts must consume
+through `ckr6_github_bridge.consume_ckr6_result_comment` (one comment) or
+`select_ckr6_result_comment` (a bounded list), passing the GitHub
+issue-comment **record** (`id`, `user`, `created_at`, `issue_url`/`html_url`,
+optional `updated_at`/`performed_via_github_app`) -- never a bare body -- plus
+the exact pending request identity (`expected_request_comment_id`,
+`expected_request_created_at`, issue, repository) and the **required**
+`expected_operation`. Both fail closed with `ValueError`.
+
+Producer provenance. A result is trusted only if the GitHub record shows the
+`github-actions[bot]` account (numeric id 41898282, type `Bot` when present,
+app slug `github-actions` when present), a location equal to the pending
+request's repository/issue (and the comment's own id), a creation time and id
+after the request, and no edit after creation. `select_` discards untrusted or
+unparsable candidates *before* the exactly-one/ambiguity check, so a forged
+comment can neither satisfy a request nor force an ambiguity. Producer claims
+inside the body are never used. **Limitation:** this proves the comment was
+posted by the GitHub Actions bot account, not which workflow or job posted it;
+any other workflow with `issues: write` in this repository posts under the same
+identity, and the result carries no run identifier. `author_association` is
+`NONE` for the bot and is not used.
+
+Schema and admission. The payload may use only `RESULT_FIELDS` plus the
+separately added `request_comment_id`; the operation must be a supported
+`OPERATIONS` value equal to the expected one; all five authority flags must be
+explicitly `false`. issue-start admission must equal the contract in
+`ISSUE_START_LESSON_PREFLIGHT.md` (`not-needed`, `sufficient`,
+`unavailable-safe-fallback` admit; `insufficient`/`manual-review` do not) and
+must not claim mutation admission. For failed repairs, the canonical status
+and retry outcome must match exactly: `sufficient -> consumed`,
+`not-needed -> not-material`, and `insufficient`/`manual-review`/
+`unavailable-safe-fallback -> unavailable-or-failed`. Only the first two
+pairs can admit retry mutation; a blocked early `manual-review` with no
+retry outcome remains valid STOP evidence when bound to the exact attempt.
+Failed-repair results must not claim first-hypothesis admission. A valid
+blocked result is returned as STOP evidence. The bounded
+`unknown`/`ckr6-result-unavailable` infrastructure fallback is STOP evidence
+for issue-start, but is **rejected** for failed-repair consumption because
+it has no `attempt_id` and cannot bind to the current failed attempt.
+`ckr6_result_admits_boundary(payload)` turns a consumed payload into the
+execution-order decision. It grants no repository write, merge, or closure
+authority.
+
+Failed-repair results additionally carry `attempt_id` -- the exact failed
+attempt they were produced for -- through the bounded result projection
+(`RESULT_FIELDS` + `execute_envelope`). A failed-repair result is
+consumable only against that same attempt: a result recorded for an
+earlier attempt, a result with no `attempt_id`, or a consumption call
+with no `expected_attempt_id` is rejected. Results produced before this
+projection carry no `attempt_id` and are therefore unusable for
+failed-repair consumption (fail-closed, by design). Serializer/parser
+compatibility is preserved: old comments without `attempt_id` still
+parse, and results without it still serialize. The MCP-side attempt
+binding in `admit_agent_os_failed_repair` (#3772) is separate and
+unchanged: it binds the activation result at admission time, while this
+binding covers the GitHub-ingress result comment the host reads.
+
+A consumed result is evidence for the host's governed decision, never a
+grant: the host must still call the consumer and enforce the issue-start and failed-repair
+boundaries in #2425 itself. No host invocation of this consumer is
+proven by the repository tests; live host consumption remains owned by
+#2425/#3559.
+
+## PR Conversation comments
+
+A top-level PR Conversation comment arrives as an `issue_comment` event
+whose issue record carries a `pull_request` mapping; the event issue
+number is the PR number. `envelope_from_event` admits it with every
+existing control intact (exact repository, owner actor `Blummer92`,
+`/agent-os ckr6 ` prefix, at most 16 KiB, one canonical JSON envelope,
+envelope repository/target matching the event) and records
+`target_kind: "pr"` on the envelope (`"issue"` for ordinary issues).
+A non-mapping `pull_request` value is a malformed event and keeps the
+old rejection (`envelope-rejected:pull-request-comment`). Inline PR
+review comments never reach this ingress: they arrive as
+`pull_request_review_comment` events, not `issue_comment` events, so the
+workflow trigger excludes them before any bridge code runs.
+
+Result location is kind-exact. The REST `issue_url` stays
+`https://api.github.com/repos/{repo}/issues/{N}` for both kinds, while
+the HTML location is `https://github.com/{repo}/issues/{N}#issuecomment-{id}`
+for issues and `https://github.com/{repo}/pull/{N}#issuecomment-{id}` for
+PRs. `consume_ckr6_result_comment` and `select_ckr6_result_comment` take
+`expected_target_kind` (`"issue"` by default, `"pr"` for a PR target)
+and refuse any cross-target location. The MCP wrapper
+(`consume_agent_os_ckr6_result_tool`) stays issue-target-only; the
+connector route validates through these bridge functions instead. The
+failure-postback reporter (`scripts/ckr6_failure_postback.py`) admits PR
+events the same way; its postback target
+(`/repos/{repo}/issues/{n}/comments`) is the same endpoint for both kinds.
+
+Deployment boundary: PR #3951 updates the workflow source to admit owner-authored
+`issue_comment` commands on ordinary issues and top-level PR Conversation
+comments, preserving the exact actor and command-prefix checks. The bridge
+independently verifies the repository, target, and canonical request envelope.
+GitHub Actions `issue_comment` workflows use the default branch, so this
+source change does **not** establish live PR-comment triggering until both
+the workflow and bridge are merged onto `main`. Local and Draft CI tests
+are not live canary evidence. No live canary has been posted here.
+
+## Connector-only host recipe (GitHub connector, no MCP app required)
+
+The host needs no custom ChatGPT MCP app, secure tunnel, or second MCP
+server for this route. The existing GitHub connector writes one
+top-level PR Conversation comment and reads the result back:
+
+1. Prepare the exact CKR6 envelope (`issue-start` or `failed-repair`
+   with its `attempt_id`) for the target PR number and repository
+   `Blummer92/agent-os`, as `/agent-os ckr6 <canonical JSON>`.
+2. Post it once as a top-level PR Conversation comment. Do not repost
+   on a missing result; a duplicate command is a second request.
+3. Read back the posted comment independently (fresh GitHub GET) and
+   record its comment id and `created_at`. Never trust a pasted id.
+4. Poll the PR's issue-comment records (bounded: 12 polls at least 30 s
+   apart, 6-minute deadline) for a comment carrying the
+   `<!-- agent-os-ckr6-result:v1 -->` marker with the same
+   `request_comment_id`.
+5. Fetch the canonical result record and validate it with
+   `select_ckr6_result_comment` / `consume_ckr6_result_comment`
+   (`expected_target_kind="pr"`, exact request id/time, expected
+   operation, and for failed-repair the exact `attempt_id`).
+6. Admit only on `ckr6_result_admits_boundary(payload)`; any blocked,
+   missing, ambiguous, or timed-out result is a STOP — resume the
+   original mission only on an explicit admit, never on a pasted body.
+
+This route does not create mandatory native ChatGPT pre-model
+enforcement: CKR6 runs when the host posts the command and honors the
+result; nothing in this repository forces the host to do so. The
+opt-in MCP profile (`chatgpt-ckr6-opt-in`) remains optional and is not
+required for this route.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure
@@ -26,7 +170,7 @@ classification), `execute` is skipped by `needs: classify`, and the
 postback's own module is part of the install that failed. The workflow's
 `report-failure` job covers exactly that boundary. It runs only when the
 `classify` or `execute` job result is `failure` (a skipped classify —
-noncommand, PR comment, unauthorized actor — stays silent), holds job-scoped
+noncommand or unauthorized actor — stays silent), holds job-scoped
 `issues: write`, and runs `scripts/ckr6_failure_postback.py`: a
 standard-library-only reporter that installs nothing, revalidates the event
 repository/issue/actor/command prefix, and posts the same bounded fallback
@@ -103,7 +247,26 @@ No workflow change, Notion write, store or authority is added.
   `ci_review_learning.normalize_learning_outcome` (materiality/noise gate) ->
   CKR5 `evaluate_coding_failure` (identity/recurrence) -> CKR6
   `project_lesson_to_notion` and returns an authority-false `lesson_proposal`
-  with a reviewable #3417 `catalog_entry_draft`.
+  with a reviewable #3417 `catalog_entry_draft`. The proposal also carries a
+  `publication_review` (`lesson_publication_review`): a write-free comparison
+  of the proposed guidance against caller-supplied `existing_lessons`
+  (`lesson_id`, exact `source_revision`, title, guidance, optional root cause,
+  refs; at most 25) with `existing_set_complete: true` only when the caller's
+  bounded, candidate-relevant read-only read was not truncated (it is not "all
+  of Notion": one 16 KB ingress request carries roughly 6 (maximum-size entries)
+  to 25 (short entries) lessons, about 15 at ~1 KB each, and lessons outside the
+  supplied set are not compared). Only guidance equal after NFKC, casefold and
+  whitespace normalization (both fields together) yields `duplicate` or
+  `update-existing` (with the target Lesson ID
+  and exact revision); paraphrases, polarity conflicts, ambiguity and an
+  incomplete or unverified existing set are `human-review`; sourceless, rootless
+  or generic candidates are `insufficient-evidence`. Everything else is
+  `no-lexical-match` with `novelty-not-semantically-verified`: token overlap
+  cannot certify novelty (measured: the #3690 continuation entry and LL-82 differ
+  in vocabulary yet overlap in meaning), so a human compares meaning before any
+  catalog PR merges. Without `existing_lessons` a sufficient candidate's review is
+  `human-review`/`existing-set-incomplete` (a sourceless, rootless or generic one is
+  `insufficient-evidence` first). It never authorizes publication.
 - `lesson-refinement` (one known-ID read): `{"refinement": {lesson_id,
   source_revision, receipt_refs, evidence}}` reads exactly that lesson through
   the existing read-only route, refuses a stale revision, runs CKR7

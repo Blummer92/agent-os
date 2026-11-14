@@ -388,3 +388,70 @@ def test_request_requires_bounded_exact_tuple_inputs():
 def test_candidate_currentness_requires_finite_enum():
     with pytest.raises(TypeError):
         candidate(currentness="current")
+
+
+# --- CKR6 PR-A (R1 selector dedup / candidate-budget repair, #2425) ---
+# A03/A04/A05/A11 from PR_A_TEST_MATRIX.csv. These tests are written
+# fail-first: A03 fails on the pre-repair budget check (raw count), A04/A05/A11
+# pin behavior that must not change across the repair.
+
+
+def test_pr_a03_six_raw_three_distinct_does_not_trigger_budget_failure():
+    # Duplicates must not consume the candidate budget. Six raw candidates
+    # collapse to three distinct identities, which fits the five-candidate
+    # budget, so selection proceeds instead of failing closed on the budget.
+    values = (
+        candidate("a", library_name="hypothesis"),
+        candidate("a", library_name="hypothesis"),
+        candidate("b", library_name="hypothesis"),
+        candidate("b", library_name="hypothesis"),
+        candidate("c", library_name="hypothesis"),
+        candidate("c", library_name="hypothesis"),
+    )
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert "candidate-budget-exceeded" not in result.reason_codes
+    assert result.candidate_count == 6
+    assert result.selected_count == 3
+    assert result.knowledge_refs == ("a", "b", "c")
+
+
+def test_pr_a04_six_genuinely_distinct_still_exceed_budget():
+    # The budget still binds genuinely distinct candidates: six distinct
+    # identities exceed the five-candidate budget and fail closed.
+    values = tuple(
+        candidate(str(index), library_name="hypothesis")
+        for index in range(MAX_CANDIDATES + 1)
+    )
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("candidate-budget-exceeded",)
+    assert result.selected_count == 0
+    assert result.candidate_count == MAX_CANDIDATES + 1
+
+
+def test_pr_a05_same_id_conflicting_revisions_require_manual_review():
+    # The same identity at two different source revisions is a conflict,
+    # not a duplicate to collapse: it must fail closed.
+    from dataclasses import replace
+
+    one = candidate()
+    two = replace(one, source_revision="rev-2")
+    assert one != two
+    result = select_coding_knowledge(request(), (one, two))
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("duplicate-identity-conflict",)
+
+
+def test_pr_a11_candidate_count_retains_raw_count_after_dedup():
+    # candidate_count keeps its documented raw contract: it counts the
+    # supplied candidates, not the deduplicated set.
+    values = (
+        candidate("a", library_name="hypothesis"),
+        candidate("a", library_name="hypothesis"),
+        candidate("b", library_name="hypothesis"),
+    )
+    result = select_coding_knowledge(request(), values)
+    assert result.candidate_count == 3
+    assert result.selected_count == 2
+    assert result.knowledge_refs == ("a", "b")

@@ -16,6 +16,8 @@ A privileged commit-status publisher must not execute pull-request-controlled co
 - The subscriber checks out only the repository's default branch with `persist-credentials: false` and **never checks out or runs PR content**. No artifact content is executed or imported. Credentials are available only to the trusted provider-query step.
 - Fork PRs, Draft PRs, dispatches, main-push runs, and unassociated runs do not mint this pilot context.
 - Provider failures yield no authority. A missing result is **not** a pass.
+- When all required source jobs and steps have provider-backed success **but the PR changes CI authority**, this non-required pilot publishes `pending`, not `success`. The pending state explicitly means *independent trust review still required*; it is neither certification nor a merge-required approval. Known source failures, missing or conflicting jobs, and failed/missing step evidence remain `failure`/`error`, even on authority-changing PRs.
+- A green publisher **workflow job** after a `pending` publication proves only that the pending status was delivered successfully. It does **not** make the pilot trusted or green. Pending may persist until a separately governed qualification route exists; do not automatically convert it to success.
 
 ## Deliberately incomplete
 
@@ -33,6 +35,6 @@ The pilot also does not certify that candidate-controlled test code is semantica
 
 ## Verification
 
-`python -m pytest -q tests/test_agent_os_trusted_status_publisher.py`
+`python -m pytest -q tests/test_agent_os_trusted_status_publisher.py tests/test_agent_os_trusted_status_publisher_negative_controls.py`
 
-These tests are offline synthetic negative controls. They cannot certify hosted events, credentials, or GitHub ruleset behavior.
+These tests are offline synthetic negative controls. They cannot certify hosted events, credentials, GitHub ruleset behavior, or downstream consumers of the pilot context. Independent security/policy QA must verify that no merge-admission consumer treats `pending` as success and explicitly accept or reject indefinite pending; a green publisher job is never a trusted CI attestation.

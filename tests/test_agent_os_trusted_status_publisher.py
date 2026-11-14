@@ -1,6 +1,7 @@
 """No-network adversarial controls for the isolated trusted status decision."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -47,6 +48,115 @@ def test_positive_result_requires_successful_jobs_and_steps():
     assert pub.evaluate(source(), jobs(), set())['state']=='success'
 
 
+def _reuse_jobs():
+    copy = jobs()
+    aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+    aggregate["steps"] = [
+        {"name": name, "conclusion": conclusion, "status": "completed"}
+        for name, conclusion in pub.REUSE_STEP_CONCLUSIONS.items()
+    ]
+    return copy
+
+
+def test_ready_reuse_is_pending_not_trusted_success():
+    assert pub.evaluate(source(), _reuse_jobs(), set())["state"] == "pending"
+    assert pub.evaluate(source(), _reuse_jobs(), {pub.SOURCE_PATH})["state"] == "pending"
+
+
+def test_ready_reuse_requires_complete_unambiguous_provider_step_shape():
+    for name in pub.REUSE_STEP_CONCLUSIONS:
+        for mode in ("missing", "duplicate", "wrong_conclusion", "wrong_status"):
+            copy = _reuse_jobs()
+            aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+            steps = aggregate["steps"]
+            target = next(s for s in steps if s["name"] == name)
+            if mode == "missing":
+                steps.remove(target)
+            elif mode == "duplicate":
+                steps.append(target.copy())
+            elif mode == "wrong_conclusion":
+                target["conclusion"] = "failure" if target["conclusion"] == "success" else "success"
+            else:
+                target["status"] = "in_progress"
+            assert pub.evaluate(source(), copy, set())["state"] == "error", (name, mode)
+
+
+def test_ready_reuse_rejects_extra_and_malformed_provider_entries():
+    for step in (
+        {"name": "Unexpected successful step", "conclusion": "success", "status": "completed"},
+        {"name": "Unexpected failed step", "conclusion": "failure", "status": "completed"},
+        {"name": "Unexpected skipped step", "conclusion": "skipped", "status": "completed"},
+        {"name": "Post Check out repository", "conclusion": "success", "status": "completed"},
+        {"name": "Unexpected step"},
+        {"conclusion": "success"},
+        {"name": None, "conclusion": "success"},
+        {"name": ["not a name"], "conclusion": "success"},
+        {"name": "Unexpected step", "conclusion": None},
+        {"name": "Unexpected step", "conclusion": ["success"]},
+        None,
+        "not a step",
+    ):
+        copy = _reuse_jobs()
+        aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+        aggregate["steps"].append(step)
+        assert pub.evaluate(source(), copy, set())["state"] == "error", step
+
+
+def test_ready_reuse_rejects_corrupted_required_step_fields():
+    for field, value in (("name", None), ("name", []), ("conclusion", None), ("conclusion", [])):
+        copy = _reuse_jobs()
+        aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+        aggregate["steps"][0][field] = value
+        assert pub.evaluate(source(), copy, set())["state"] == "error", (field, value)
+
+
+def test_direct_execution_rejects_malformed_provider_step_instead_of_raising():
+    for job_name in pub.REQUIRED_STEPS:
+        for bad_step in (None, "not a step", {"name": [], "conclusion": "success"}):
+            copy = jobs()
+            job = next(j for j in copy if j["name"] == job_name)
+            job["steps"].append(bad_step)
+            assert pub.evaluate(source(), copy, set())["state"] == "error", (job_name, bad_step)
+
+
+def test_malformed_job_entries_fail_closed_instead_of_raising():
+    for bad_job in (None, "not a job", 42, ["Run validation plan"]):
+        appended = jobs()
+        appended.append(bad_job)
+        assert pub.evaluate(source(), appended, set())["state"] == "error", bad_job
+        replaced = jobs()
+        replaced[0] = bad_job
+        assert pub.evaluate(source(), replaced, set())["state"] == "error", bad_job
+
+
+def test_reuse_steps_cover_every_named_aggregate_workflow_step():
+    workflow = (ROOT / ".github/workflows/agent-os-validation.yml").read_text()
+    aggregate = workflow.split("\n  validate:\n", 1)[1]
+    aggregate = re.split(r"(?m)^  [A-Za-z0-9_-]+:\s*$", aggregate, maxsplit=1)[0]
+    named_steps = {
+        line.removeprefix("      - name: ").strip()
+        for line in aggregate.splitlines()
+        if line.startswith("      - name: ")
+    }
+    synthetic_steps = {"Set up job", "Complete job"}
+    assert set(pub.REUSE_STEP_CONCLUSIONS) == named_steps | synthetic_steps
+
+
+def test_ready_reuse_cannot_hide_failed_source_or_required_jobs():
+    assert pub.evaluate(source(conclusion="failure"), _reuse_jobs(), set())["state"] == "failure"
+    for name in pub.JOBS:
+        copy = _reuse_jobs()
+        next(j for j in copy if j["name"] == name)["conclusion"] = "failure"
+        assert pub.evaluate(source(), copy, set())["state"] == "failure", name
+
+
+def test_ready_reuse_does_not_accept_unproven_mixed_execution():
+    copy = _reuse_jobs()
+    aggregate = next(j for j in copy if j["name"] == "Run aggregate validation")
+    next(s for s in aggregate["steps"] if s["name"] == "Run aggregate validation")["conclusion"] = "success"
+    assert pub.evaluate(source(), copy, set())["state"] == "error"
+
+
 def test_non_success_source():
     assert pub.evaluate(source(conclusion='failure'), jobs(), set())['state']=='failure'
 
@@ -76,7 +186,7 @@ def test_missing_skipped_or_duplicate_required_step():
 
 def test_critical_validation_source_edit_never_passes():
     for path in pub.AUTHORITY_PATHS | {"scripts/agent_os_ci_new.py", "scripts/agent_os_remote_validation/new.py", "tests/conftest.py", "08_Tooling/foo/tests/conftest.py", "pytest.ini", "pyproject.toml", "07_Agent_Tests/validate-repo-structure.sh"}:
-        assert pub.evaluate(source(),jobs(),{path})['state']=='error'
+        assert pub.evaluate(source(),jobs(),{path})['state']=='pending'
 
 
 def fake_api(endpoint):
@@ -116,7 +226,7 @@ def test_workflow_installed_dependency_manifests_are_authority():
     }
     for path in paths:
         assert pub.touches_authority({path}), path
-        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'pending', path
 
 
 def test_unlisted_build_and_workflow_authority_configs_fail_closed():
@@ -132,7 +242,7 @@ def test_unlisted_build_and_workflow_authority_configs_fail_closed():
         '08_Tooling/future-tool/uv.lock',
         '.github/workflows/another-validation.yml',
     ):
-        assert pub.evaluate(source(), jobs(), {path})['state'] == 'error', path
+        assert pub.evaluate(source(), jobs(), {path})['state'] == 'pending', path
     assert pub.evaluate(source(), jobs(), {'src/domain_logic.py'})['state'] == 'success'
     assert pub.evaluate(source(), jobs(), {'docs/requirements-notes.md'})['state'] == 'success'
 
@@ -217,3 +327,77 @@ def test_no_network_or_publish_on_non_pr_event(tmp_path):
          patch.object(pub.subprocess,'run',side_effect=AssertionError('publish not allowed')) as run:
         assert pub.main(['--event',str(path),'--repository',REPO,'--publish'])==0
         api.assert_not_called();run.assert_not_called()
+
+
+def test_authority_disposition_is_explicitly_non_certifying():
+    changed = {'.github/workflows/agent-os-governed-invocation.yml'}
+    outcome = pub.evaluate(source(), jobs(), changed)
+    assert outcome['state'] == 'pending'
+    assert outcome['state'] != 'success'
+    assert outcome['context'] == pub.CONTEXT
+    assert 'not certified' in outcome['description']
+
+
+def test_authority_change_does_not_mask_actual_failed_or_missing_evidence():
+    changed = {pub.SOURCE_PATH}
+    for source_conclusion in ('failure', 'cancelled', 'skipped', None):
+        assert pub.evaluate(source(conclusion=source_conclusion), jobs(), changed)['state'] == 'failure'
+    for name in pub.JOBS:
+        missing = [job for job in jobs() if job['name'] != name]
+        assert pub.evaluate(source(), missing, changed)['state'] == 'error'
+        skipped = jobs()
+        next(job for job in skipped if job['name'] == name)['conclusion'] = 'skipped'
+        assert pub.evaluate(source(), skipped, changed)['state'] == 'failure'
+    duplicate = jobs()
+    duplicate.append(duplicate[0].copy())
+    assert pub.evaluate(source(), duplicate, changed)['state'] == 'error'
+    for name, required_steps in pub.REQUIRED_STEPS.items():
+        for step in required_steps:
+            missing_step = jobs()
+            job = next(job for job in missing_step if job['name'] == name)
+            job['steps'] = [s for s in job['steps'] if s['name'] != step]
+            assert pub.evaluate(source(), missing_step, changed)['state'] == 'error'
+            skipped_step = jobs()
+            job = next(job for job in skipped_step if job['name'] == name)
+            next(s for s in job['steps'] if s['name'] == step)['conclusion'] = 'skipped'
+            assert pub.evaluate(source(), skipped_step, changed)['state'] == 'error'
+
+
+def test_pending_requires_current_exact_pr_and_attempt():
+    def changed_files_api(endpoint):
+        if '/pulls/42/files?' in endpoint:
+            return [{'filename': '.github/workflows/agent-os-governed-invocation.yml'}]
+        return fake_api(endpoint)
+
+    assert decide(api_fn=changed_files_api)['state'] == 'pending'
+
+    def stale_attempt_api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': [dict(
+                id=RUN_ID + 1, run_attempt=1,
+                created_at='2026-11-08T20:10:00Z',
+                head_sha=SHA, event='pull_request', path=pub.SOURCE_PATH)]}
+        return changed_files_api(endpoint)
+
+    assert decide(api_fn=stale_attempt_api)['state'] is None
+
+
+def test_publisher_emits_pending_not_success_for_authority_change(tmp_path):
+    event_file = tmp_path / 'event.json'
+    event_file.write_text(json.dumps({'workflow_run': source()}))
+
+    def changed_files_api(endpoint):
+        if '/pulls/42/files?' in endpoint:
+            return [{'filename': '.github/workflows/agent-os-governed-invocation.yml'}]
+        return fake_api(endpoint)
+
+    completed = type('Completed', (), {'returncode': 0})()
+    with patch.object(pub, 'api', side_effect=changed_files_api), \
+         patch.object(pub.subprocess, 'run', return_value=completed) as posted:
+        assert pub.main(['--event', str(event_file), '--repository', REPO, '--publish']) == 0
+    posted.assert_called_once()
+    command = posted.call_args.args[0]
+    assert 'state=pending' in command
+    assert 'state=success' not in command
+    assert f'context={pub.CONTEXT}' in command
+    assert f'repos/{REPO}/statuses/{SHA}' in command

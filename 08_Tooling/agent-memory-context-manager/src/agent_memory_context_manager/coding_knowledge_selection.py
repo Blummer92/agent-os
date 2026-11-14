@@ -230,17 +230,10 @@ def select_coding_knowledge(
     if any(type(candidate) is not CodingKnowledgeCandidate for candidate in candidates):
         raise TypeError("candidates must contain CodingKnowledgeCandidate values")
 
+    # R1 (#2425): deduplicate BEFORE the budget check. The budget counts
+    # DISTINCT candidate identities; identical duplicates must not consume
+    # it. candidate_count keeps its raw contract (len of supplied candidates).
     candidate_count = len(candidates)
-    if candidate_count > MAX_CANDIDATES:
-        return _result(
-            SufficiencyStatus.MANUAL_REVIEW,
-            RetrievalEscalation.MANUAL_REVIEW,
-            (),
-            request.canonical_rule_refs,
-            ("candidate-budget-exceeded",),
-            candidate_count,
-        )
-
     deduped, duplicate_conflict = _deduplicate(candidates)
     if duplicate_conflict:
         return _result(
@@ -249,6 +242,15 @@ def select_coding_knowledge(
             (),
             request.canonical_rule_refs,
             ("duplicate-identity-conflict",),
+            candidate_count,
+        )
+    if len(deduped) > MAX_CANDIDATES:
+        return _result(
+            SufficiencyStatus.MANUAL_REVIEW,
+            RetrievalEscalation.MANUAL_REVIEW,
+            (),
+            request.canonical_rule_refs,
+            ("candidate-budget-exceeded",),
             candidate_count,
         )
 
