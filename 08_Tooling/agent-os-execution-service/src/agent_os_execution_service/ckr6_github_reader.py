@@ -90,6 +90,38 @@ def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
         ) from exc
 
 
+_READ_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": _USER_AGENT,
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+
+def _parse_comment_record(status: int, body: bytes) -> dict[str, object]:
+    """Validate one exact-ID comment response; fail closed, never leak detail."""
+    if status != 200:
+        raise GitHubIssueCommentReadUnavailable(
+            "github-api-failure", f"GitHub API returned HTTP {status}"
+        )
+    if len(body) > _MAX_RESPONSE_BYTES:
+        raise GitHubIssueCommentReadUnavailable(
+            "github-api-unexpected-response",
+            "GitHub API response exceeds the bounded size",
+        )
+    try:
+        record = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GitHubIssueCommentReadUnavailable(
+            "github-api-unexpected-response", "GitHub API response is not valid JSON"
+        ) from exc
+    if not isinstance(record, Mapping):
+        raise GitHubIssueCommentReadUnavailable(
+            "github-api-unexpected-response",
+            "GitHub API response is not one comment record",
+        )
+    return dict(record)
+
+
 class GitHubIssueCommentReader:
     """Bounded read-only reader for one repository's issue comments."""
 
@@ -121,35 +153,14 @@ class GitHubIssueCommentReader:
             )
         if type(issue_number) is not int or isinstance(issue_number, bool) or issue_number < 1:
             raise ValueError("issue_number must be a positive integer")
-        if self._token_provider is None:
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation-token provider is installed"
-            )
-        try:
-            token = self._token_provider.get_installation_token()
-        except Exception:
-            # Provider failures are unavailable reads, never MCP exceptions.
-            # Do not propagate provider exception text or credential details.
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "GitHub App installation token is unavailable",
-            ) from None
-        if type(token) is not str or not token.strip():
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation token is available"
-            )
+        token = self._read_token()
         url = (
             f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
             "/comments?per_page=100"
         )
         status, body = self._http_get(
             url,
-            {
-                "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer " + token,
-                "User-Agent": _USER_AGENT,
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            _READ_HEADERS | {"Authorization": "Bearer " + token},
         )
         if status != 200:
             raise GitHubIssueCommentReadUnavailable(
@@ -174,6 +185,55 @@ class GitHubIssueCommentReader:
                 "GitHub API response is not a list of comment records",
             )
         return [dict(item) for item in comments]
+
+    def read_issue_comment(self, repository: str, comment_id: int) -> dict[str, object]:
+        """Return ONE issue-comment record fetched by its exact GitHub id.
+
+        Same trust bound as ``read_issue_comments``: the record arrives from
+        the authenticated GitHub read, never from caller-supplied text, so
+        its server-assigned id, author, location and timestamps are evidence
+        a caller cannot fabricate. Used by the CKR7 receipt barrier (#3418):
+        a receipt reference is only an identifier until the exact comment it
+        names is retrieved through this path.
+
+        Raises ``ValueError`` on malformed caller identity and
+        ``GitHubIssueCommentReadUnavailable`` when no token is available, the
+        transport fails (including HTTP 404 for a missing/deleted comment),
+        or the response is not one comment record.
+        """
+        if type(repository) is not str or repository != ALLOWED_REPOSITORY:
+            raise ValueError(
+                "GitHub issue-comment reads are scoped to exactly "
+                f"{ALLOWED_REPOSITORY}"
+            )
+        if type(comment_id) is not int or isinstance(comment_id, bool) or comment_id < 1:
+            raise ValueError("comment_id must be a positive integer")
+        token = self._read_token()
+        status, body = self._http_get(
+            f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/comments/{comment_id}",
+            _READ_HEADERS | {"Authorization": "Bearer " + token},
+        )
+        return _parse_comment_record(status, body)
+
+    def _read_token(self) -> str:
+        if self._token_provider is None:
+            raise GitHubIssueCommentReadUnavailable(
+                "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation-token provider is installed"
+            )
+        try:
+            token = self._token_provider.get_installation_token()
+        except Exception:
+            # Provider failures are unavailable reads, never MCP exceptions.
+            # Do not propagate provider exception text or credential details.
+            raise GitHubIssueCommentReadUnavailable(
+                "HOST_READ_PATH_UNAVAILABLE",
+                "GitHub App installation token is unavailable",
+            ) from None
+        if type(token) is not str or not token.strip():
+            raise GitHubIssueCommentReadUnavailable(
+                "HOST_READ_PATH_UNAVAILABLE", "no GitHub App installation token is available"
+            )
+        return token
 
 
 _READER: GitHubIssueCommentReader | None = None

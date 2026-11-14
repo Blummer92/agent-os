@@ -267,12 +267,32 @@ No workflow change, Notion write, store or authority is added.
   catalog PR merges. Without `existing_lessons` a sufficient candidate's review is
   `human-review`/`existing-set-incomplete` (a sourceless, rootless or generic one is
   `insufficient-evidence` first). It never authorizes publication.
-- `lesson-refinement` (one known-ID read): `{"refinement": {lesson_id,
-  source_revision, receipt_refs, evidence}}` reads exactly that lesson through
-  the existing read-only route, refuses a stale revision, runs CKR7
-  `evaluate_lesson_enrichment`, and returns a `revision_proposal` whose
+- `lesson-refinement` (receipt barrier, then one known-ID read):
+  `{"refinement": {lesson_id, source_revision, receipt_refs, evidence}}`.
+  A receipt URL is an identifier, never evidence (H1): before the lesson
+  read, EVERY cited receipt comment is fetched by exact comment id through
+  the trusted read-only GitHub path (`ckr6_github_reader`), proven
+  owner-authored, unedited and exactly located, strictly parsed
+  (`parse_receipt_comment`; a malformed body is never repaired), and bound
+  through `consume_ckr6_result_comment` to a trusted CKR6 result that
+  selected the same `(lesson_id, source_revision)`. One invalid receipt
+  voids the whole request; distinct comments with the same receipt key are
+  conflicting proof. Only then does the existing read-only route read
+  exactly that lesson, refuse a stale revision, run CKR7
+  `evaluate_lesson_enrichment`, and return a `revision_proposal` whose
   `catalog_entry_draft` targets the Lesson ID with the bound revision.
-  At least one receipt comment URL is required.
+  Barrier stops carry finite reason codes (`receipt-read-unavailable`,
+  `receipt-read-failed`, `receipt-comment-not-found`,
+  `receipt-parse-invalid`, `receipt-author-untrusted`,
+  `receipt-location-mismatch`, `receipt-comment-edited`,
+  `receipt-result-untrusted`, the `verify_receipt_against_result` codes,
+  `receipt-lesson-mismatch`,
+  `receipt-disposition-not-refinement-evidence`, `receipt-key-conflict`)
+  and report `notion_read_performed` truthfully. The Actions worker binds
+  the job's already-present repo-scoped `github.token` to the read-only
+  refinement step for these GETs; unbound surfaces stop at
+  `manual-review`/`receipt-read-unavailable`. No new credential,
+  permission, or write.
 - Receipts (`lesson_learning_loop`): `<!-- agent-os-lesson-receipt:v1 -->` +
   canonical JSON. Valid only when the referenced CKR6 result returned that
   exact lesson revision; applied/skipped use finite reasons; duplicates collapse

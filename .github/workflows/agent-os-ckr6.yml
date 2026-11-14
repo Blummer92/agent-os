@@ -121,6 +121,13 @@ jobs:
           AGENT_OS_REPOSITORY: ${{ github.repository }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+          # CKR7 receipt barrier (#3418): refinement must fetch the cited
+          # receipt/result comments through the trusted read-only GitHub
+          # path. Bind the job's already-present, repo-scoped github.token
+          # (already used by the postback step below) to this read-only
+          # step. No new credential, permission, or write: the job's
+          # permissions block is unchanged and the token is never logged.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"

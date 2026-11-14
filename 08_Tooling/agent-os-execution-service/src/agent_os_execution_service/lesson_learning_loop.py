@@ -43,6 +43,11 @@ from agent_memory_context_manager.notion_learning_projection import (
     project_lesson_to_notion,
 )
 
+from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY as GITHUB_REPOSITORY,
+    GitHubIssueCommentReadUnavailable,
+    get_github_issue_comment_reader,
+)
 from .lesson_publication_review import (
     MAX_EXISTING_LESSONS,
     CandidateLesson,
@@ -51,6 +56,10 @@ from .lesson_publication_review import (
 )
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+# Trusted exact-comment read: comment id -> GitHub issue-comment *record*.
+# The record must arrive from the authenticated read path; caller-supplied
+# bodies or dicts are never receipt evidence.
+CommentFetch = Callable[[int], Mapping[str, Any]]
 
 MAX_TEXT = 512
 MAX_DETAIL = 1024
@@ -330,31 +339,54 @@ def _what_happened(row: Mapping[str, Any]) -> str | None:
     return text[:MAX_TEXT] or None
 
 
-def propose_lesson_refinement(payload: Mapping[str, Any], execute_read: ReadExecutor) -> dict[str, object]:
-    """Exact current lesson + receipt-linked evidence -> CKR7 proposal. Writes nothing."""
+def propose_lesson_refinement(
+    payload: Mapping[str, Any],
+    execute_read: ReadExecutor,
+    fetch_comment: CommentFetch | None = None,
+) -> dict[str, object]:
+    """Exact current lesson + receipt-verified evidence -> CKR7 proposal. Writes nothing.
+
+    H1 barrier (#3418): a syntactically valid receipt URL is an identifier,
+    never evidence. Before the lesson read or any CKR7 evaluation, EVERY
+    supplied receipt reference is retrieved by exact comment id through the
+    trusted GitHub read, validated for location/author/edit provenance,
+    strictly parsed, and bound to a trusted CKR6 result that selected the
+    same (lesson_id, source_revision) the refinement asks to change. A stop
+    before the lesson read reports ``notion_read_performed`` false.
+    """
     request = parse_refinement(payload)
+    fetch = fetch_comment if fetch_comment is not None else _installed_comment_fetch()
+    if fetch is None:
+        return _receipt_barrier_stop("receipt-read-unavailable", manual_review=True)
+    try:
+        verify_receipt_evidence(request, fetch)
+    except ReceiptEvidenceInvalid as exc:
+        return _receipt_barrier_stop(exc.reason_code, manual_review=exc.manual_review)
     raw = execute_read(build_known_reference_query([request["lesson_id"]]))
     rows = raw.get("results") if isinstance(raw, Mapping) else None
     if type(rows) is not list:
-        return {"status": "manual-review", "reason_codes": ["lesson-read-malformed"], "revision_proposal": None}
+        return {"status": "manual-review", "reason_codes": ["lesson-read-malformed"], "revision_proposal": None,
+                "notion_read_performed": True}
     matches = []
     for row in rows[:5]:
         normalized = normalize_lesson_row(row) if isinstance(row, Mapping) else None
         if isinstance(normalized, LessonActivationSkip) and normalized.lesson_id == request["lesson_id"]:
             return {"status": "manual-review", "reason_codes": ["lesson-not-normalizable:" + normalized.reason],
-                    "revision_proposal": None}
+                    "revision_proposal": None, "notion_read_performed": True}
         if normalized is not None and not isinstance(normalized, LessonActivationSkip) and normalized.lesson_id == request["lesson_id"]:
             matches.append((row, normalized))
     if len(matches) != 1:
         return {"status": "manual-review", "reason_codes": ["lesson-identity-not-unique" if matches else "lesson-not-found"],
-                "revision_proposal": None}
+                "revision_proposal": None, "notion_read_performed": True}
     row, lesson = matches[0]
     if lesson.source_revision != request["source_revision"]:
         # Never refine from stale text; the proposal must bind the live revision.
-        return {"status": "rejected", "reason_codes": ["stale-lesson-revision"], "revision_proposal": None}
+        return {"status": "rejected", "reason_codes": ["stale-lesson-revision"], "revision_proposal": None,
+                "notion_read_performed": True}
     what_happened = _what_happened(row)
     if what_happened is None:
-        return {"status": "manual-review", "reason_codes": ["lesson-what-happened-missing"], "revision_proposal": None}
+        return {"status": "manual-review", "reason_codes": ["lesson-what-happened-missing"], "revision_proposal": None,
+                "notion_read_performed": True}
     current = CurrentLessonEvidence(
         lesson_id=lesson.lesson_id,
         source_revision=lesson.source_revision,
@@ -376,7 +408,7 @@ def propose_lesson_refinement(payload: Mapping[str, Any], execute_read: ReadExec
     proposal = result.proposal
     if proposal is None:
         return {"status": result.disposition.value, "reason_codes": list(result.reason_codes),
-                "revision_proposal": None}
+                "revision_proposal": None, "notion_read_performed": True}
     before = {"Lesson Learned": current.title, "What Happened": current.what_happened,
               "What To Do Next Time": current.what_to_do_next_time, "Guardrail": current.guardrail}
     after = {"Lesson Learned": proposal.title, "What Happened": proposal.what_happened,
@@ -399,6 +431,7 @@ def propose_lesson_refinement(payload: Mapping[str, Any], execute_read: ReadExec
             ),
             **_NO_AUTHORITY,
         },
+        "notion_read_performed": True,
     }
 
 
@@ -490,3 +523,233 @@ def verify_receipt_against_result(
     if (receipt["lesson_id"], receipt["source_revision"]) not in pairs:
         return "receipt-lesson-not-returned-by-ckr6"
     return None
+
+
+# ------------------------------------------- receipt verification barrier (H1)
+#
+# A receipt reference is only an identifier. Before CKR7 may evaluate a
+# refinement, every cited receipt must be fetched by exact comment id through
+# the trusted read-only GitHub path (ckr6_github_reader), proven unedited and
+# owner-authored at the claimed issue/PR location, strictly parsed, and bound
+# to a trusted CKR6 result (consume_ckr6_result_comment) that selected the
+# same (lesson_id, source_revision). A malformed second receipt is never
+# excused by one valid receipt; a caller-supplied body or parsed record is
+# never a fallback. No write, no new credential or permission scope: the read
+# consumes the token the host already provides to its read path.
+
+# Receipts are owner-authored claims of observed use, posted by the same
+# allowed actor the CKR6 ingress admits. The CKR6 *result* author stays the
+# GitHub Actions bot (ckr6_github_bridge.CKR6_PRODUCER_*); an owner receipt is
+# not required to be bot-authored, and a bot receipt is not owner evidence.
+TRUSTED_RECEIPT_AUTHOR = "Blummer92"
+
+_RECEIPT_HTML_REF = re.compile(
+    r"https://github\.com/Blummer92/agent-os/(issues|pull)/([1-9][0-9]{0,6})#issuecomment-([1-9][0-9]{0,14})"
+)
+_RECEIPT_API_REF = re.compile(
+    r"https://api\.github\.com/repos/Blummer92/agent-os/issues/comments/([1-9][0-9]{0,14})"
+)
+_ISSUE_API_URL = re.compile(
+    r"https://api\.github\.com/repos/Blummer92/agent-os/issues/([1-9][0-9]{0,6})"
+)
+# Only operations that SELECT lessons can support a use receipt.
+_RECEIPT_RESULT_OPERATIONS = frozenset({"issue-start", "failed-repair"})
+
+
+class ReceiptEvidenceInvalid(ValueError):
+    """One finite receipt-barrier stop; never carries provider or token detail."""
+
+    def __init__(self, reason_code: str, *, manual_review: bool = False) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.manual_review = manual_review
+
+
+def _receipt_barrier_stop(reason_code: str, *, manual_review: bool) -> dict[str, object]:
+    return {
+        "status": "manual-review" if manual_review else "rejected",
+        "reason_codes": [reason_code],
+        "revision_proposal": None,
+        # The barrier stops before the known-ID lesson read; report that
+        # truthfully instead of the historical unconditional true.
+        "notion_read_performed": False,
+    }
+
+
+def _installed_comment_fetch() -> CommentFetch | None:
+    """The host-installed trusted reader, or None when this surface is unbound."""
+    reader = get_github_issue_comment_reader()
+    if reader is None:
+        return None
+
+    def fetch(comment_id: int) -> Mapping[str, Any]:
+        return reader.read_issue_comment(GITHUB_REPOSITORY, comment_id)
+
+    return fetch
+
+
+def receipt_comment_id(ref: str) -> int:
+    """Exact comment id named by either canonical receipt URL form."""
+    match = _RECEIPT_HTML_REF.fullmatch(ref)
+    if match is not None:
+        return int(match.group(3))
+    return int(_RECEIPT_API_REF.fullmatch(ref).group(1))
+
+
+def _fetch_comment_record(fetch: CommentFetch, comment_id: int) -> Mapping[str, Any]:
+    try:
+        record = fetch(comment_id)
+    except GitHubIssueCommentReadUnavailable as exc:
+        if exc.reason_code == "HOST_READ_PATH_UNAVAILABLE":
+            raise ReceiptEvidenceInvalid("receipt-read-unavailable", manual_review=True) from None
+        if "HTTP 404" in getattr(exc, "detail", ""):
+            raise ReceiptEvidenceInvalid("receipt-comment-not-found") from None
+        raise ReceiptEvidenceInvalid("receipt-read-failed", manual_review=True) from None
+    except ReceiptEvidenceInvalid:
+        raise
+    except Exception:
+        # A transport shim failure is an unavailable read, never evidence.
+        raise ReceiptEvidenceInvalid("receipt-read-failed", manual_review=True) from None
+    if not isinstance(record, Mapping):
+        raise ReceiptEvidenceInvalid("receipt-read-failed", manual_review=True)
+    return record
+
+
+def _record_issue_number(record: Mapping[str, Any], *, reason_code: str) -> int:
+    issue_url = record.get("issue_url")
+    match = _ISSUE_API_URL.fullmatch(issue_url) if type(issue_url) is str else None
+    if match is None:
+        raise ReceiptEvidenceInvalid(reason_code)
+    return int(match.group(1))
+
+
+def _record_unedited(record: Mapping[str, Any], *, reason_code: str) -> None:
+    created = record.get("created_at")
+    if type(created) is not str or not created.strip():
+        raise ReceiptEvidenceInvalid(reason_code)
+    updated = record.get("updated_at")
+    if updated is not None and updated != created:
+        raise ReceiptEvidenceInvalid(reason_code)
+
+
+def _receipt_record(ref: str, record: Mapping[str, Any]) -> dict[str, object]:
+    """Validate the server-supplied receipt record and strictly parse its body."""
+    comment_id = receipt_comment_id(ref)
+    if record.get("id") != comment_id:
+        raise ReceiptEvidenceInvalid("receipt-location-mismatch")
+    user = record.get("user")
+    if not isinstance(user, Mapping) or user.get("login") != TRUSTED_RECEIPT_AUTHOR:
+        raise ReceiptEvidenceInvalid("receipt-author-untrusted")
+    issue_number = _record_issue_number(record, reason_code="receipt-location-mismatch")
+    html_url = record.get("html_url")
+    html = _RECEIPT_HTML_REF.fullmatch(ref)
+    if html is not None:
+        # The HTML form names kind, number and id; the server record must
+        # reproduce it exactly. A cross-issue or cross-kind anchor is refused.
+        if html_url != ref or int(html.group(2)) != issue_number:
+            raise ReceiptEvidenceInvalid("receipt-location-mismatch")
+    else:
+        if type(html_url) is not str or _RECEIPT_HTML_REF.fullmatch(html_url) is None:
+            raise ReceiptEvidenceInvalid("receipt-location-mismatch")
+        located = _RECEIPT_HTML_REF.fullmatch(html_url)
+        if int(located.group(2)) != issue_number or int(located.group(3)) != comment_id:
+            raise ReceiptEvidenceInvalid("receipt-location-mismatch")
+    _record_unedited(record, reason_code="receipt-comment-edited")
+    try:
+        return parse_receipt_comment(record.get("body"))
+    except (TypeError, ValueError):
+        # Never strip a trailing backtick or normalize the comment body.
+        raise ReceiptEvidenceInvalid("receipt-parse-invalid") from None
+
+
+def _trusted_result_for_receipt(receipt: Mapping[str, object], fetch: CommentFetch) -> Mapping[str, object]:
+    """Fetch and authenticate the CKR6 result the receipt claims answered it."""
+    result_id = receipt["ckr6_result_comment_id"]
+    record = _fetch_comment_record(fetch, result_id)
+    if record.get("id") != result_id:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    issue_number = _record_issue_number(record, reason_code="receipt-result-untrusted")
+    html_url = record.get("html_url")
+    if type(html_url) is not str:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    located = _RECEIPT_HTML_REF.fullmatch(html_url)
+    if located is None or int(located.group(2)) != issue_number or int(located.group(3)) != result_id:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    target_kind = "pr" if located.group(1) == "pull" else "issue"
+    _record_unedited(record, reason_code="receipt-result-untrusted")
+    from .ckr6_github_bridge import (
+        consume_ckr6_result_comment,
+        parse_ckr6_result_comment,
+    )
+
+    try:
+        payload = parse_ckr6_result_comment(record.get("body"))
+    except (TypeError, ValueError):
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted") from None
+    operation = payload.get("operation")
+    if operation not in _RECEIPT_RESULT_OPERATIONS:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    request_id = payload.get("request_comment_id")
+    if type(request_id) is not int or isinstance(request_id, bool) or request_id < 1:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    request_record = _fetch_comment_record(fetch, request_id)
+    # The fetched request record must be the exact comment the result names:
+    # same defense-in-depth id check the receipt and result records get.
+    if request_record.get("id") != request_id:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    if _record_issue_number(request_record, reason_code="receipt-result-untrusted") != issue_number:
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    request_created = request_record.get("created_at")
+    if type(request_created) is not str or not request_created.strip():
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted")
+    attempt_id = payload.get("attempt_id") if operation == "failed-repair" else None
+    try:
+        return consume_ckr6_result_comment(
+            record,
+            expected_request_comment_id=request_id,
+            expected_request_created_at=request_created,
+            expected_issue_number=issue_number,
+            expected_repository=GITHUB_REPOSITORY,
+            expected_operation=operation,
+            expected_attempt_id=attempt_id if type(attempt_id) is str else None,
+            expected_target_kind=target_kind,
+        )
+    except (TypeError, ValueError):
+        raise ReceiptEvidenceInvalid("receipt-result-untrusted") from None
+
+
+def verify_receipt_evidence(request: Mapping[str, Any], fetch: CommentFetch) -> tuple[dict[str, object], ...]:
+    """Prove every receipt the refinement cites; return the verified receipts.
+
+    Raises ``ReceiptEvidenceInvalid`` with one finite reason code on the first
+    failure. Duplicate references to the same comment collapse; two distinct
+    comments carrying the same ``receipt_key`` are conflicting proof and fail
+    closed. Every receipt must bind the refinement's exact lesson and source
+    revision and carry a disposition that is refinement evidence at all
+    (``applied`` use, or ``skipped`` with a refinement-signal reason).
+    """
+    seen: set[int] = set()
+    verified = []
+    for ref in request["receipt_refs"]:
+        comment_id = receipt_comment_id(ref)
+        if comment_id in seen:
+            continue
+        seen.add(comment_id)
+        record = _fetch_comment_record(fetch, comment_id)
+        receipt = _receipt_record(ref, record)
+        result = _trusted_result_for_receipt(receipt, fetch)
+        invalid = verify_receipt_against_result(receipt, result, result_comment_id=receipt["ckr6_result_comment_id"])
+        if invalid is not None:
+            raise ReceiptEvidenceInvalid(invalid)
+        if (
+            receipt["lesson_id"] != request["lesson_id"]
+            or receipt["source_revision"] != request["source_revision"]
+        ):
+            raise ReceiptEvidenceInvalid("receipt-lesson-mismatch")
+        if receipt["disposition"] != "applied" and receipt["reason_code"] not in REFINEMENT_SIGNAL_REASONS:
+            raise ReceiptEvidenceInvalid("receipt-disposition-not-refinement-evidence")
+        verified.append(receipt)
+    keys = [receipt_key(receipt) for receipt in verified]
+    if len(set(keys)) != len(keys):
+        raise ReceiptEvidenceInvalid("receipt-key-conflict")
+    return tuple(verified)

@@ -18,6 +18,10 @@ from typing import Any, Mapping, TypedDict, cast
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_preflight import RepairContext, plan_lesson_preflight
 
+from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY as GITHUB_REPOSITORY,
+    GitHubIssueCommentReader,
+)
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_learning_loop import capture_lesson_candidate, propose_lesson_refinement
 from .lesson_reader_composition import resolve_lesson_read_route
@@ -542,6 +546,39 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     }
 
 
+class _GitHubActionsTokenProvider:
+    """The workflow's own repo-scoped ``github.token``, read at call time.
+
+    The Actions runtime injects it through the step environment (never a tool
+    argument, comment body, or caller field). It already exists for the
+    postback step; binding it to the refinement step adds no credential,
+    permission, or scope. It is never logged, stored, or returned.
+    """
+
+    def get_installation_token(self) -> str | None:
+        token = os.environ.get("GITHUB_TOKEN", "")
+        return token if token.strip() else None
+
+
+def _receipt_comment_fetch():
+    """Trusted exact-comment read for the CKR7 receipt barrier, or None.
+
+    None means this execution surface carries no bound GitHub token; the
+    refinement then stops at manual-review / receipt-read-unavailable and
+    performs no Notion read. Tests substitute this seam; production binds the
+    workflow's existing github.token through the bounded reader.
+    """
+    provider = _GitHubActionsTokenProvider()
+    if provider.get_installation_token() is None:
+        return None
+    reader = GitHubIssueCommentReader(token_provider=provider)
+
+    def fetch(comment_id: int) -> Mapping[str, object]:
+        return reader.read_issue_comment(GITHUB_REPOSITORY, comment_id)
+
+    return fetch
+
+
 def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
     key = "lesson_proposal" if envelope.operation == "lesson-candidate" else "revision_proposal"
     try:
@@ -552,7 +589,7 @@ def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
         if envelope.operation == "lesson-candidate":
             outcome = capture_lesson_candidate(detail)
         else:
-            outcome = propose_lesson_refinement(detail, reader)
+            outcome = propose_lesson_refinement(detail, reader, fetch_comment=_receipt_comment_fetch())
     except (TypeError, ValueError) as exc:
         # Detail validation precedes any read. A malformed candidate or
         # refinement returns a bounded finite-code rejection, never a crash
@@ -560,7 +597,9 @@ def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
         outcome = {"status": "rejected", "reason_codes": [rejection_reason(exc)], key: None}
         read = False
     else:
-        read = envelope.operation == "lesson-refinement"
+        # Truthful reporting: the receipt barrier can stop a refinement
+        # before the known-ID lesson read happens.
+        read = bool(outcome.get("notion_read_performed", False))
     extra = {key: outcome[key]}
     return {
         "operation": envelope.operation,
