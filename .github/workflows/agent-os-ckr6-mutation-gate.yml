@@ -33,6 +33,7 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 permissions:
+  actions: read
   contents: read
   issues: read
 
