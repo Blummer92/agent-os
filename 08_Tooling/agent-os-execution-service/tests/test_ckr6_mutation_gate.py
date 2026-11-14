@@ -20,7 +20,7 @@ import json
 import pytest
 
 from agent_os_execution_service import ckr6_github_bridge as bridge
-from agent_os_execution_service.ckr6_github_reader import GitHubIssueCommentReader
+from agent_os_execution_service.ckr6_github_reader import (GitHubIssueCommentReader, GitHubIssueCommentReadUnavailable)
 from agent_os_execution_service.ckr6_mutation_gate import (
     ADMITTED,
     BOUNDARY_BLOCKED,
