@@ -27,6 +27,7 @@ AUTHORITY_PATHS = frozenset({
     "scripts/agent_os_ci_test_completeness.py",
     "scripts/agent_os_ci_junit_diff.py",
     "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_mutation_gate.py",
+    "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_gate_revalidate.py",
     "scripts/agent_os_frontend_checks.py",
     # Four direct pip / editable-project inputs installed in both the plan
     # and aggregate jobs of agent-os-validation.yml.
