@@ -1,8 +1,8 @@
 """Adversarial tests for the CKR6 mutation-boundary gate (landing-only).
 
 The gate enforces one property: governed work cannot land without a trusted
-CKR6 admission bound to the newest owner request on the linked issue or PR
-thread. Every test here is a bypass attempt or a fail-closed case: forged,
+CKR6 admission bound to the newest owner request applicable to the exact PR
+and head (or the newest boundary request in legacy issue-only mode). Every test here is a bypass attempt or a fail-closed case: forged,
 edited, mis-located, pre-dating, ambiguous, cross-target, stale, or
 unanswered results must never admit, and a valid blocked result is STOP
 evidence, not an admission.
@@ -30,6 +30,7 @@ from agent_os_execution_service.ckr6_mutation_gate import (
     READ_UNAVAILABLE,
     REQUEST_MISSING,
     REQUEST_HEAD_UNBOUND,
+    REQUEST_TARGET_AMBIGUOUS,
     REQUEST_STALE,
     REQUEST_UNANSWERED,
     RESULT_AMBIGUOUS,
@@ -574,6 +575,167 @@ def test_head_naming_is_case_insensitive_hex():
     )
     assert decision.admitted is True
 
+
+
+# --- same-parent cross-PR routing: test-only qualification ---------------------
+
+def _bound_issue_request(pr_number, head=HEAD_SHA, *, comment_id=REQUEST_ID,
+                         created_at=REQUEST_AT):
+    return _request_record(
+        _envelope(task_reference=f"PR #{pr_number} exact head {head}"),
+        comment_id=comment_id,
+        created_at=created_at,
+    )
+
+
+def test_parent_request_for_other_pr_never_supersedes_exact_target():
+    target_pr = ISSUE + 10
+    other_pr = ISSUE + 11
+    issue_records = [
+        _bound_issue_request(target_pr),
+        _comment(_result()),
+        _bound_issue_request(other_pr, "b" * 40, comment_id=1002,
+                             created_at=SECOND_REQUEST_AT),
+        _comment(_result(request_comment_id=1002), comment_id=1003,
+                 created_at="2026-11-11T10:01:30Z",
+                 updated_at="2026-11-11T10:01:30Z"),
+    ]
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=issue_records, pr_number=target_pr,
+        head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert decision.admitted is True
+    assert decision.request_comment_id == REQUEST_ID
+
+
+def test_parent_different_pr_without_own_request_is_not_admitted():
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[_bound_issue_request(ISSUE + 11), _comment(_result())],
+        pr_number=ISSUE + 10, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert decision.admitted is False
+    assert decision.reason_code == REQUEST_MISSING
+
+
+def test_parent_bare_sha_without_pr_identity_is_not_admitted():
+    issue_request = _request_record(_envelope(task_reference=f"Head {HEAD_SHA}"))
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[issue_request, _comment(_result())],
+        pr_number=ISSUE + 10, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert decision.admitted is False
+    assert decision.reason_code == REQUEST_MISSING
+
+
+def test_newer_unanswered_same_pr_blocks_older_admission():
+    pr = ISSUE + 10
+    newer = _bound_issue_request(pr, comment_id=1002,
+                                  created_at=SECOND_REQUEST_AT)
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[_bound_issue_request(pr), _comment(_result()), newer],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == REQUEST_UNANSWERED
+    assert decision.request_comment_id == 1002
+
+
+def test_newer_blocked_same_pr_blocks_older_admission():
+    pr = ISSUE + 10
+    newer = _bound_issue_request(pr, comment_id=1002,
+                                  created_at=SECOND_REQUEST_AT)
+    blocked = _comment(_result(
+        request_comment_id=1002, status="insufficient",
+        substantial_hypothesis_admissible=False, selected_lesson_ids=[],
+        selected_lessons=[], reason_codes=["no-relevant-candidate"]),
+        comment_id=1003, created_at="2026-11-11T10:01:30Z",
+        updated_at="2026-11-11T10:01:30Z")
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[_bound_issue_request(pr), _comment(_result()),
+                        newer, blocked],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == BOUNDARY_BLOCKED
+    assert decision.request_comment_id == 1002
+
+
+def test_newer_different_head_on_same_pr_cannot_rescue_prior_admission():
+    pr = ISSUE + 10
+    newer = _bound_issue_request(pr, "b" * 40, comment_id=1002,
+                                  created_at=SECOND_REQUEST_AT)
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[_bound_issue_request(pr), _comment(_result()), newer],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == REQUEST_HEAD_UNBOUND
+    assert decision.request_comment_id == 1002
+
+
+def test_parent_ambiguous_multi_pr_reference_blocks_old_admission():
+    pr = ISSUE + 10
+    ambiguous = _request_record(
+        _envelope(task_reference=f"PR #{pr} and PR #{pr + 1} head {HEAD_SHA}"),
+        comment_id=1002, created_at=SECOND_REQUEST_AT,
+    )
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[_bound_issue_request(pr), _comment(_result()), ambiguous],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == REQUEST_TARGET_AMBIGUOUS
+    assert decision.request_comment_id == 1002
+
+
+def test_pr_thread_contradictory_explicit_pr_blocks():
+    pr = ISSUE + 10
+    pair = _pr_thread_pair(pr)
+    bad = _request_record(
+        _envelope(issue_number=pr,
+                  task_reference=f"PR #{pr+1} head {HEAD_SHA}"),
+        comment_id=1002, created_at=SECOND_REQUEST_AT, target="pr",
+    )
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[], pr_number=pr,
+        pr_comments=[*pair, bad],
+        head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == REQUEST_TARGET_AMBIGUOUS
+
+
+def test_parent_issue_url_is_not_pr_target():
+    pr = ISSUE + 10
+    issue_request = _request_record(_envelope(
+        task_reference=f"https://github.com/Blummer92/agent-os/issues/{pr} head {HEAD_SHA}"
+    ))
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[issue_request, _comment(_result())],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert decision.reason_code == REQUEST_MISSING
+
+
+def test_two_distinct_heads_in_one_request_fail_closed():
+    pr = ISSUE + 10
+    issue_request = _bound_issue_request(pr, HEAD_SHA + " and " + "b" * 40)
+    decision = evaluate_mutation_boundary(
+        repository=REPOSITORY, issue_number=ISSUE,
+        issue_comments=[issue_request, _comment(_result())],
+        pr_number=pr, head_sha=HEAD_SHA, head_proposed_at=PUSH_AT,
+    )
+    assert not decision.admitted
+    assert decision.reason_code == REQUEST_HEAD_UNBOUND
 
 # --- owner identity pins the numeric account id --------------------------------
 
