@@ -111,6 +111,26 @@ curriculum/asset requests can execute.
 Historical/exported page ids remain planning evidence only and are never copied
 into the executable catalog as verified-current identity.
 
+## Reviewed Lessons Learned current-revision inspection (#3418)
+
+The existing binding-verification ingress derives finite
+`verify-ll-<number>-current-revision` slugs from reviewed writer-catalog entries
+with a non-null `target_lesson_id`. For example, LL-87 and LL-93 use the
+same read-only implementation. A new reviewed target requires no Python dispatch
+branch. Owner-authored, first-attempt requests may originate on any ordinary
+non-PR repository issue. Unreviewed IDs are rejected before credential access.
+
+The canonical Lessons Learned anchor verifies the current destination; a
+unique bounded Lesson ID query finds the target, then an exact page read and
+schema read verify identity, parent, archive state, protected values and a
+writer-compatible current revision. Surface Before Work? is observed, never an
+inspection eligibility gate. The result contains bounded identity, revision,
+state and verification fields only; no narrative, raw properties, or write
+operation. Source Link presence and writer-approved GitHub URL format are
+reported separately; format is not proof of live provenance or CKR6 eligibility.
+The canonical source schema is fetched once per inspection. No Notion write
+or activation authority is created.
+
 ## Fixed destination verification
 
 Issue #2871 adds one finite governance read for #249:
