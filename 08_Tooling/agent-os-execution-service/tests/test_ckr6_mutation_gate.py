@@ -436,8 +436,8 @@ class _FakeGateReader:
     def read_issue_comments(self, repository, issue_number):
         return self._comments[issue_number]
 
-    def read_branch_push_time(self, repository, branch, head_sha):
-        assert (branch, head_sha) == (HEAD_BRANCH, HEAD_SHA)
+    def read_head_observed_at(self, repository, branch, head_sha, pr_number):
+        assert (branch, head_sha, pr_number) == (HEAD_BRANCH, HEAD_SHA, ISSUE + 10)
         return self._push_time
 
 
@@ -713,49 +713,80 @@ def test_paginated_read_requires_token():
     assert decision.detail == "HOST_READ_PATH_UNAVAILABLE"
 
 
-# --- server-recorded push-time reads --------------------------------------------
+# --- provider-created exact-head workflow observation ----------------------------
 
-def _push_event(created_at, ref=f"refs/heads/{HEAD_BRANCH}", head=HEAD_SHA):
+def _run_record(created_at, *, head=HEAD_SHA, branch=HEAD_BRANCH,
+                repo=REPOSITORY, number=ISSUE + 10):
     return {
-        "type": "PushEvent",
+        "id": 12345, "event": "pull_request",
+        "path": ".github/workflows/agent-os-ckr6-mutation-gate.yml",
+        "head_sha": head, "head_branch": branch,
         "created_at": created_at,
-        "payload": {"ref": ref, "head": head},
+        "repository": {"full_name": repo},
+        "pull_requests": [{"number": number}],
     }
 
 
-def test_push_time_read_finds_exact_ref_and_head():
-    events = [
-        {"type": "IssueCommentEvent", "created_at": "2026-11-11T09:30:00Z", "payload": {}},
-        _push_event("2026-11-11T09:00:00Z"),
-        _push_event("2026-11-11T08:00:00Z", ref="refs/heads/other-branch"),
-        _push_event("2026-11-11T08:30:00Z", head="0" * 40),
+def _run_listing(rows):
+    return {"total_count": len(rows), "workflow_runs": rows}
+
+
+def _run_http(pages):
+    calls = []
+    def get(url, headers):
+        calls.append(url)
+        idx = len(calls) - 1
+        return (200, json.dumps(pages[idx]).encode("utf-8"))
+    return get, calls
+
+
+def test_head_observation_uses_exact_provider_run_not_unrelated_runs():
+    relevant = _run_record(PUSH_AT)
+    wrong = [
+        _run_record("2026-11-11T08:00:00Z", head="0" * 40),
+        _run_record("2026-11-11T08:30:00Z", branch="other-branch"),
+        _run_record("2026-11-11T08:45:00Z", number=999),
+        relevant,
     ]
-    http_get, _ = _fake_http([(200, events)])
+    http_get, calls = _run_http([_run_listing(wrong)])
     reader = PaginatedIssueCommentReader(token_provider=_token_provider(), http_get=http_get)
-    assert reader.read_branch_push_time(REPOSITORY, HEAD_BRANCH, HEAD_SHA) == "2026-11-11T09:00:00Z"
+    assert reader.read_head_observed_at(REPOSITORY, HEAD_BRANCH, HEAD_SHA, ISSUE + 10) == PUSH_AT
+    assert "event=pull_request" in calls[0]
+    assert f"head_sha={HEAD_SHA}" in calls[0]
 
 
-def test_push_time_read_returns_latest_matching_push():
-    events = [
-        _push_event("2026-11-11T09:00:00Z"),
-        _push_event("2026-11-11T10:15:00Z"),
-    ]
-    http_get, _ = _fake_http([(200, events)])
+def test_head_observation_chooses_earliest_matching_run():
+    rows = [_run_record("2026-11-11T10:00:00Z"), _run_record(PUSH_AT)]
+    http_get, _ = _run_http([_run_listing(rows)])
     reader = PaginatedIssueCommentReader(token_provider=_token_provider(), http_get=http_get)
-    assert reader.read_branch_push_time(REPOSITORY, HEAD_BRANCH, HEAD_SHA) == "2026-11-11T10:15:00Z"
+    assert reader.read_head_observed_at(REPOSITORY, HEAD_BRANCH, HEAD_SHA, ISSUE + 10) == PUSH_AT
 
 
-def test_push_time_read_paginates_events():
-    noise = [{"type": "WatchEvent", "created_at": "2026-11-11T07:00:00Z", "payload": {}}] * 100
-    http_get, _ = _fake_http([(200, noise), (200, [_push_event(PUSH_AT)])])
+def test_head_observation_paginates_and_rejects_incomplete_listing():
+    rows = [_run_record("2026-11-11T10:00:00Z")] * 100
+    http_get, _ = _run_http([_run_listing(rows), _run_listing([_run_record(PUSH_AT)])])
     reader = PaginatedIssueCommentReader(token_provider=_token_provider(), http_get=http_get)
-    assert reader.read_branch_push_time(REPOSITORY, HEAD_BRANCH, HEAD_SHA) == PUSH_AT
+    assert reader.read_head_observed_at(REPOSITORY, HEAD_BRANCH, HEAD_SHA, ISSUE + 10) == PUSH_AT
 
 
-def test_push_time_read_absent_returns_none():
-    http_get, _ = _fake_http([(200, [])])
+def test_head_observation_without_run_fails_closed():
+    http_get, _ = _run_http([_run_listing([])])
     reader = PaginatedIssueCommentReader(token_provider=_token_provider(), http_get=http_get)
-    assert reader.read_branch_push_time(REPOSITORY, HEAD_BRANCH, HEAD_SHA) is None
+    assert reader.read_head_observed_at(REPOSITORY, HEAD_BRANCH, HEAD_SHA, ISSUE + 10) is None
+
+
+@pytest.mark.parametrize("record", [
+    {"total_count": "0", "workflow_runs": []},
+    {"total_count": 1, "workflow_runs": [None]},
+    {"total_count": 1, "workflow_runs": [_run_record(PUSH_AT) | {"created_at": "bad"}]},
+    {"total_count": 1, "workflow_runs": [_run_record(PUSH_AT) | {"repository": None}]},
+    {"total_count": 1, "workflow_runs": [_run_record(PUSH_AT) | {"pull_requests": None}]},
+])
+def test_head_observation_malformed_provider_evidence_fails_closed(record):
+    http_get, _ = _run_http([record])
+    reader = PaginatedIssueCommentReader(token_provider=_token_provider(), http_get=http_get)
+    with pytest.raises(GitHubIssueCommentReadUnavailable):
+        reader.read_head_observed_at(REPOSITORY, HEAD_BRANCH, HEAD_SHA, ISSUE + 10)
 
 
 # --- linked-issue extraction: hostile bodies -------------------------------------
