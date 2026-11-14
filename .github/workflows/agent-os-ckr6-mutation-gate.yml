@@ -15,13 +15,12 @@ name: Agent OS CKR6 Mutation Gate
 # 08_Tooling/agent-os-execution-service/src/agent_os_execution_service/ckr6_mutation_gate.py
 # to the publisher's authority paths before making this check required.
 #
-# Head binding: the gate reads the PR head's server-recorded push time from
-# the repository Events API and requires the newest trusted CKR6 request to
-# postdate it, so a push after admission invalidates the admission. Git
-# commit timestamps are author-controlled and are never consulted. The
-# request must also name the gated head's FULL 40-hex SHA in its
-# task_reference (short SHAs do not count), so an admission can only cover
-# content the owner explicitly named. Remediation when this check fails:
+# Head binding: the gate reads the earliest server-created Actions
+# observation of this exact PR head and branch, not the incomplete Events
+# activity feed. This observation is not a claim about the exact push time.
+# The newest trusted CKR6 request must postdate that observation and name
+# the FULL 40-hex head SHA in task_reference. Missing provenance fails closed.
+# Remediation when this check fails:
 # post a fresh /agent-os ckr6 request naming the new head's full SHA.
 # After the separate comment-revalidation workflow is deployed on main,
 # trusted owner request / bot result comments attempt an exact-current-head
