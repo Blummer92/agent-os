@@ -52,6 +52,25 @@ _AREA_PROPERTY = "Area"
 _APPLIES_TO_PROPERTY = "Applies To"
 _LEARNING_TYPE_PROPERTY = "Learning Type"
 _SOURCE_LINK_PROPERTY = "Source Link"
+# #3973 (optional, proposed): bounded curated corroborating refs. One
+# canonical GitHub ref per rich-text item; no free-form parsing. The
+# property is absent on legacy rows, which behave exactly as today.
+_SUPPORTING_PROPERTY = "Supporting Source Links"
+MAX_SUPPORTING_REFS = 5
+# A supporting ref must be a canonical Blummer92/agent-os issue/PR URL or
+# one of the five repo-relative governance prefixes -- the same allowlist
+# shape as the primary Source Link, tightened to this repository for
+# supporting evidence. Anything else is dropped and reported, never admitted.
+_SUPPORTING_REF = re.compile(
+    r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}"
+)
+_GOVERNANCE_PREFIXES = (
+    "00_Governance/",
+    "01_Shared_Standards/",
+    "02_Agent_Overlays/",
+    "04_Registry/",
+    "08_Tooling/",
+)
 _GUARDRAIL_PROPERTY = "Guardrail"
 _NEXT_TIME_PROPERTY = "What To Do Next Time"
 
@@ -284,7 +303,20 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
 
     canonical_ref = _github_source_link(properties.get(_SOURCE_LINK_PROPERTY))
     currentness = KnowledgeCurrentness.CURRENT if canonical_ref else KnowledgeCurrentness.UNVERIFIABLE
-    canonical_github_refs = (canonical_ref,) if canonical_ref else ()
+    supporting_valid, supporting_dropped = _supporting_source_links(
+        properties.get(_SUPPORTING_PROPERTY), canonical_ref
+    )
+    if canonical_ref:
+        # Primary first, then supporting refs in row order, stably deduped.
+        # One lesson stays one CKR2 candidate; the budget does not change.
+        canonical_github_refs = (canonical_ref,) + supporting_valid
+        dropped_supporting_refs = supporting_dropped
+    else:
+        # The primary Source Link is still required (#3973 / #1520): valid
+        # supporting refs never substitute for a missing primary. They are
+        # reported as dropped rather than silently admitted or lost.
+        canonical_github_refs = ()
+        dropped_supporting_refs = (supporting_dropped + supporting_valid)[:MAX_ROW_LIST_ITEMS]
 
     evidence_refs: tuple[str, ...] = ()
     page_url = row.get("url")
@@ -306,6 +338,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             canonical_github_refs=canonical_github_refs,
             evidence_refs=evidence_refs,
             keywords=applies_to,
+            dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
     except (TypeError, ValueError):
@@ -518,6 +551,57 @@ def _checkbox(prop: Any) -> bool | None:
     if type(value) is not bool:
         return None
     return value
+
+
+def _is_supporting_ref(value: str) -> bool:
+    """One canonical supporting ref: this repo's issue/PR, or a governance path."""
+    if len(value) > MAX_ROW_TEXT_CHARS:
+        return False
+    if _SUPPORTING_REF.fullmatch(value) is not None:
+        return True
+    return value.startswith(_GOVERNANCE_PREFIXES)
+
+
+def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Parse approved bounded supporting refs: (admitted, dropped).
+
+    One URL per rich-text item, no free-form parsing. A missing property
+    behaves exactly as today (legacy one-link rows). Malformed, foreign,
+    duplicate, oversized, or over-cap refs are dropped and reported -- never
+    admitted, and never voiding the lesson or its primary ref. Dropped
+    entries are truncated to the row text bound so the evidence record
+    itself stays within its finite validation.
+    """
+    if prop is None:
+        return (), ()
+    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
+        return (), ("<malformed-supporting-property>",)
+    items = prop.get("rich_text")
+    if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
+        return (), ("<oversized-supporting-list>",)
+    seen: set[str] = {primary} if primary else set()
+    valid: list[str] = []
+    dropped: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            dropped.append("<malformed-supporting-item>")
+            continue
+        text = item.get("plain_text")
+        if not isinstance(text, str):
+            dropped.append("<malformed-supporting-item>")
+            continue
+        ref = text.strip()
+        if not ref:
+            continue
+        if len(valid) >= MAX_SUPPORTING_REFS:
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
+        if ref in seen or not _is_supporting_ref(ref):
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
+        seen.add(ref)
+        valid.append(ref)
+    return tuple(valid), tuple(dropped[:MAX_ROW_LIST_ITEMS])
 
 
 def _github_source_link(prop: Any) -> str | None:

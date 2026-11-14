@@ -98,6 +98,11 @@ class LessonRecordEvidence:
     canonical_github_refs: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     keywords: tuple[str, ...] = ()
+    # #3973: supporting refs that were parsed from `Supporting Source Links`
+    # but NOT admitted into canonical_github_refs (malformed, foreign,
+    # duplicate, oversized, over the five-ref cap, or unusable without a
+    # primary Source Link). Bounded, reported, never voids the lesson.
+    dropped_supporting_refs: tuple[str, ...] = ()
     library_name: str | None = None
     archived: bool = False
     authority_conflict: bool = False
@@ -110,7 +115,7 @@ class LessonRecordEvidence:
             _text(getattr(self, name), name)
         if self.library_name is not None:
             _text(self.library_name, "library_name")
-        for name in ("canonical_github_refs", "evidence_refs", "keywords"):
+        for name in ("canonical_github_refs", "evidence_refs", "keywords", "dropped_supporting_refs"):
             _items(getattr(self, name), name)
         if type(self.surface_before_work) is not bool:
             raise TypeError("surface_before_work must be bool")
