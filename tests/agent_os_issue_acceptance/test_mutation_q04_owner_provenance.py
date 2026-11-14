@@ -12,4 +12,4 @@ def test_q04_valid_owner_trigger_does_not_launder_foreign_authorizer(monkeypatch
     receipt = fixture._run(record=foreign_record, transport=owner_trigger)
     assert receipt["dispatch_checks_passed"] is False
     assert receipt["merge_authorized"] is False
-    assert "authorization.owner-provenance-mismatch" in receipt["reason_codes"]
+    assert receipt["reason_codes"] == ["authorization.owner-provenance-mismatch"]
