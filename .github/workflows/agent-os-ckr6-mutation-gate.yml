@@ -22,8 +22,11 @@ name: Agent OS CKR6 Mutation Gate
 # request must also name the gated head's FULL 40-hex SHA in its
 # task_reference (short SHAs do not count), so an admission can only cover
 # content the owner explicitly named. Remediation when this check fails:
-# post a fresh /agent-os ckr6 request naming the new head's full SHA, then
-# re-run the failed check - issue comments do not re-trigger it.
+# post a fresh /agent-os ckr6 request naming the new head's full SHA.
+# After the separate comment-revalidation workflow is deployed on main,
+# trusted owner request / bot result comments attempt an exact-current-head
+# rerun of this same gate. Until live revalidation is qualified, operators
+# must verify the rerun occurred and manually rerun the failed check if not.
 
 on:
   pull_request:
