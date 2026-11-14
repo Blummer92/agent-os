@@ -139,7 +139,7 @@ def test_unverified_run_causes_no_post(monkeypatch):
 
 def test_live_workflow_has_no_status_creation_or_merge_rights():
     from pathlib import Path
-    root = Path(__file__).resolve().parents[4]
+    root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
     assert "issue_comment:" in text
     assert "actions: write" in text
