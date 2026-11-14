@@ -1,0 +1,56 @@
+name: Agent OS CKR6 Comment Revalidation
+
+# Trusted default-branch-only workflow. Reruns EXISTING PR gate checks; never
+# grants CKR6 admission or publishes a new check/status. Review actions:write
+# scope before merge. Issue comment events are not PR-code execution events.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  revalidate:
+    if: >-
+      github.repository == 'Blummer92/agent-os' &&
+      (
+        (github.event.comment.user.id == 32861845 &&
+         startsWith(github.event.comment.body, '/agent-os ckr6 ')) ||
+        (github.event.comment.user.id == 41898282 &&
+         startsWith(github.event.comment.body, '<!-- agent-os-ckr6-result:v1 -->'))
+      )
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ckr6-comment-revalidate-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out default-branch trusted code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install existing Agent OS runtime
+        run: |
+          python -m pip install \
+            -e 08_Tooling/reusable-capability-registry \
+            -e 08_Tooling/agent-memory-context-manager \
+            -e 08_Tooling/workflow-scheduler \
+            -e src \
+            -e . \
+            -e 08_Tooling/agent-os-execution-service
+
+      - name: Rerun existing exact-head CKR6 gate checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -m agent_os_execution_service.ckr6_gate_revalidate
