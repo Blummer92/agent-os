@@ -158,8 +158,8 @@ _HEAD_SHA_RE = re.compile(r"(?i)^[0-9a-f]{40}$")
 # unambiguous, explicit PR marker for parent-issue routing. A bare issue
 # reference or bare SHA is not sufficient to bind a parent-issue request.
 _PR_TARGET_RE = re.compile(
-    r"(?<![A-Za-z0-9_])PR[ \\t]*#[ \\t]*([1-9][0-9]{0,6})(?![0-9])"
-    r"|https://github\\.com/Blummer92/agent-os/pull/([1-9][0-9]{0,6})(?![0-9])",
+    r"(?<![A-Za-z0-9_])PR[ \t]*#[ \t]*([1-9][0-9]{0,6})(?![0-9])"
+    r"|https://github\.com/Blummer92/agent-os/pull/([1-9][0-9]{0,6})(?![0-9])",
     re.IGNORECASE,
 )
 _HEAD_REFERENCE_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
