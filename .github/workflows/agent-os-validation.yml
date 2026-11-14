@@ -999,7 +999,16 @@ jobs:
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         env:
           CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
-        run: ./scripts/validate-all.sh
+          # Subtest receipt binding (JUnit counter repair): the producer
+          # records the workflow run id, attempt and authoritative head
+          # in each per-suite receipt, so the collector can verify the
+          # explanation against provider data. authority.outputs.head_sha
+          # is the PR/dispatch head; for push runs it is empty and
+          # github.sha (the pushed commit = the run head) applies.
+          CI_JUNIT_RUN_ID: ${{ github.run_id }}
+          CI_JUNIT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_JUNIT_HEAD_SHA: ${{ steps.authority.outputs.head_sha || github.sha }}
+        run: bash ./scripts/validate-all.sh
 
       - name: Record not-executed infrastructure receipt
         # Only when a pre-aggregate step failed and the aggregate step

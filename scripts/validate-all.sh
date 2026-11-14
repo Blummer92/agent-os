@@ -541,6 +541,38 @@ consume_captured_suite() {
     check_results+=("FAIL|$suite_name|$command_text|$code")
     record_failure "$suite_name" "$command_text" "$code"
   fi
+  write_subtest_receipt "$suite_name" "$output_file"
+}
+
+# pytest 9 subtest receipt (JUnit counter repair). After a suite's pytest
+# run, extract the terminal summary's explicit subtests-passed segment
+# and the JUnit file's own digest/totals into
+# CI_JUNIT_DIR/junit-subtest-receipt-<suite>.json. The collector accepts
+# a declared-tests surplus only with such a source-bound receipt; without
+# one the surplus stays rejected. A receipt is written only when the
+# summary explicitly reports passing subtests -- absence is never read
+# as zero. Run/attempt/head binding comes from the workflow environment
+# (CI_JUNIT_RUN_ID / CI_JUNIT_RUN_ATTEMPT / CI_JUNIT_HEAD_SHA); absent
+# locally, the receipt is unbound and the collector will not accept it.
+# Extraction never fails a suite: a missing receipt only means a surplus
+# stays rejected downstream, which is the safe direction.
+write_subtest_receipt() {
+  local suite_name="$1"
+  local output_file="$2"
+  [ -n "${CI_JUNIT_DIR:-}" ] || return 0
+  local junit_path receipt_path
+  junit_path="$(suite_junit_path_for "$suite_name")"
+  [ -n "$junit_path" ] && [ -f "$junit_path" ] || return 0
+  receipt_path="$CI_JUNIT_DIR/junit-subtest-receipt-$(junit_key "$suite_name").json"
+  local receipt_args=()
+  [ -n "${CI_JUNIT_RUN_ID:-}" ] && receipt_args+=(--run-id "$CI_JUNIT_RUN_ID")
+  [ -n "${CI_JUNIT_RUN_ATTEMPT:-}" ] && receipt_args+=(--run-attempt "$CI_JUNIT_RUN_ATTEMPT")
+  [ -n "${CI_JUNIT_HEAD_SHA:-}" ] && receipt_args+=(--head-sha "$CI_JUNIT_HEAD_SHA")
+  "$PYTHON_BIN" scripts/agent_os_ci_junit_subtest_receipt.py \
+    --junit "$junit_path" --pytest-output "$output_file" --suite-name "$suite_name" \
+    --output "$receipt_path" "${receipt_args[@]}" || \
+    echo "subtest receipt unavailable for $suite_name; any JUnit surplus stays rejected" >&2
+  return 0
 }
 
 aggregate_started_us="$(timer_now_us || true)"
@@ -625,9 +657,18 @@ for test_dir in "${test_dirs[@]}"; do
 
   if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then
     flush_parallel_batch
-    if run_pytest_suite "$suite_dir" "$suite_name"; then
+    # Sequential suite: capture its output (as the parallel path does)
+    # so the subtest receipt can be extracted from the same text the
+    # operator sees. The output is replayed in full before any other
+    # step, preserving the foreground behaviour.
+    coach_output_file="$parallel_tmp/output-coach"
+    if run_pytest_suite "$suite_dir" "$suite_name" >"$coach_output_file" 2>&1; then
+      cat "$coach_output_file"
       check_test_completeness "$suite_name"
+    else
+      cat "$coach_output_file"
     fi
+    write_subtest_receipt "$suite_name" "$coach_output_file"
     continue
   fi
 
