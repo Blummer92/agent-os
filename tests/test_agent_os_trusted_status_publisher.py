@@ -185,15 +185,16 @@ def test_missing_skipped_or_duplicate_required_step():
 
 
 def test_ckr6_gate_module_is_not_self_certifying():
-    path = (
-        "08_Tooling/agent-os-execution-service/src/"
-        "agent_os_execution_service/ckr6_mutation_gate.py"
-    )
-    assert path in pub.AUTHORITY_PATHS
-    assert pub.touches_authority({path})
-    outcome = pub.evaluate(source(), jobs(), {path})
-    assert outcome["state"] == "pending"
-    assert "not certified" in outcome["description"]
+    for module in ("ckr6_mutation_gate.py", "ckr6_gate_revalidate.py"):
+        path = (
+            "08_Tooling/agent-os-execution-service/src/"
+            "agent_os_execution_service/" + module
+        )
+        assert path in pub.AUTHORITY_PATHS
+        assert pub.touches_authority({path})
+        outcome = pub.evaluate(source(), jobs(), {path})
+        assert outcome["state"] == "pending"
+        assert "not certified" in outcome["description"]
 
 
 def test_critical_validation_source_edit_never_passes():
