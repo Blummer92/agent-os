@@ -1,8 +1,10 @@
 name: Agent OS CKR6 Comment Revalidation
 
 # Trusted default-branch-only workflow. Reruns EXISTING PR gate checks; never
-# grants CKR6 admission or publishes a new check/status. Review actions:write
-# scope before merge. Issue comment events are not PR-code execution events.
+# grants CKR6 admission or publishes a new check/status. Unrelated learning
+# operations and unbound issue-level requests return non-admitting not-applicable.
+# An actual head-bound PR with no verified run still fails closed. Review
+# actions:write scope before merge. Issue comments never execute PR code.
 on:
   issue_comment:
     types: [created]
@@ -46,7 +48,7 @@ jobs:
             -e . \
             -e 08_Tooling/agent-os-execution-service
 
-      - name: Rerun existing exact-head CKR6 gate checks
+      - name: Evaluate relevant exact-head CKR6 gate revalidation
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
