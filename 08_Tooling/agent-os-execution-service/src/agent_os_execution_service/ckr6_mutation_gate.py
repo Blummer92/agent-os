@@ -27,9 +27,12 @@ Semantics (fail closed):
 - Producer result records are held to the SAME unedited proof: a producer
   record whose ``updated_at`` is missing or differs from ``created_at`` is
   not evidence and is excluded before result selection.
-- The NEWEST trusted boundary request across the linked-issue thread and the
-  PR thread decides. An older admitted request never rescues a newer
-  unanswered, ambiguous, invalid, or blocked request.
+- For a gated PR, consider only owner requests addressed to that exact PR:
+  the parent issue's task_reference must name one matching PR number, while a
+  request on the PR's own thread inherits its target from the trusted thread.
+  Unrelated parent-issue requests cannot supersede another PR. Among requests
+  for the SAME PR, the newest trusted request still decides: an older admission
+  cannot rescue a newer unanswered, ambiguous, invalid, or blocked request.
 - Work-attempt binding: when a PR is gated, the newest trusted request must
   (a) name the gated head's exact 40-hex SHA in its ``task_reference``
   (``ckr6-request-head-unbound`` otherwise) and (b) postdate the
@@ -53,8 +56,9 @@ Semantics (fail closed):
   rather than deciding on a truncated, oldest-first page.
 
 Documented residuals (explicit, not silently accepted):
-- Two PRs sharing one head branch share one head SHA, so one head-named
-  admission covers both (identical content; low impact).
+- A request on the linked issue must name one PR and one exact head;
+  sharing a head SHA cannot transfer admission to a different PR. Requests
+  on a PR thread are also checked against contradictory explicit PR identities.
 - Naming the head in ``task_reference`` free text is the gate-local
   convention; the durable form is an optional typed ``head_sha`` envelope
   field, which needs a small ingress parser change (``parse_envelope``
@@ -121,6 +125,7 @@ REQUEST_MISSING = "ckr6-request-missing"
 REQUEST_UNANSWERED = "ckr6-request-unanswered"
 REQUEST_STALE = "ckr6-request-stale"
 REQUEST_HEAD_UNBOUND = "ckr6-request-head-unbound"
+REQUEST_TARGET_AMBIGUOUS = "ckr6-request-target-ambiguous"
 RESULT_AMBIGUOUS = "ckr6-result-ambiguous"
 RESULT_INVALID = "ckr6-result-invalid"
 BOUNDARY_BLOCKED = "ckr6-boundary-blocked"
@@ -149,6 +154,15 @@ _READ_HEADERS = {
 }
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _HEAD_SHA_RE = re.compile(r"(?i)^[0-9a-f]{40}$")
+# The canonical request's task_reference is free text, so accept only an
+# unambiguous, explicit PR marker for parent-issue routing. A bare issue
+# reference or bare SHA is not sufficient to bind a parent-issue request.
+_PR_TARGET_RE = re.compile(
+    r"(?<![A-Za-z0-9_])PR[ \t]*#[ \t]*([1-9][0-9]{0,6})(?![0-9])"
+    r"|https://github\.com/Blummer92/agent-os/pull/([1-9][0-9]{0,6})(?![0-9])",
+    re.IGNORECASE,
+)
+_HEAD_REFERENCE_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
 
 # Closing-keyword convention mirroring the GitHub-effective detection in
 # scripts/agent_os_issue_acceptance/parse_pr.py: markdown that GitHub does
@@ -266,6 +280,32 @@ class _TrustedRequest:
     created_at: str
     target_kind: str
     thread_comments: Sequence[Mapping[str, object]]
+
+
+def _target_pr_numbers(task_reference: str) -> frozenset[int]:
+    """Extract explicit same-repo PR identities, without interpreting issues.
+
+    If two PRs are mentioned, the reference is ambiguous and never admits
+    either PR. A parent-issue request with no explicit PR is not applicable.
+    """
+    return frozenset(
+        int(match.group(1) or match.group(2))
+        for match in _PR_TARGET_RE.finditer(task_reference)
+    )
+
+
+def _request_applies_to_pr(request: _TrustedRequest, pr_number: int) -> bool:
+    """PR-thread ownership is the API association; parent issues need a PR id."""
+    if request.target_kind == "pr":
+        return True
+    return pr_number in _target_pr_numbers(request.envelope.task_reference)
+
+
+def _request_target_unambiguous(request: _TrustedRequest, pr_number: int) -> bool:
+    references = _target_pr_numbers(request.envelope.task_reference)
+    if request.target_kind == "pr":
+        return not references or references == {pr_number}
+    return references == {pr_number}
 
 
 def _drop_unproven_producer_records(
@@ -395,8 +435,9 @@ def evaluate_mutation_boundary(
 ) -> GateDecision:
     """Decide whether the CKR6 mutation boundary admits landing.
 
-    Pure function over already-read comment records; the newest trusted
-    boundary request across the issue thread and the PR thread decides. When
+    Pure function over already-read comment records. For a gated PR, the
+    newest trusted request APPLICABLE TO THAT PR decides; unrelated requests
+    on a shared parent issue do not supersede one another. When
     ``head_proposed_at`` is given (the server-recorded time Actions
     first observed this exact branch/head), the newest trusted request
     must strictly postdate it. This does not assert a push timestamp.
@@ -445,12 +486,28 @@ def evaluate_mutation_boundary(
             allowed_actor=allowed_actor,
             allowed_actor_id=allowed_actor_id,
         )
+    if pr_number is not None:
+        # Do not allow a newer request for another PR on the same issue to
+        # supersede this PR. Filter by target PR BEFORE the newest-request
+        # selection, but never filter out conflicting/newer requests for this
+        # SAME PR: those must still block an earlier admission.
+        requests = [r for r in requests if _request_applies_to_pr(r, pr_number)]
     if not requests:
         return GateDecision(False, REQUEST_MISSING)
 
     newest = max(requests, key=lambda r: (r.created_at, r.comment_id))
     envelope = newest.envelope
-    if head_sha is not None and head_sha.lower() not in envelope.task_reference.lower():
+    if pr_number is not None and not _request_target_unambiguous(newest, pr_number):
+        return GateDecision(
+            False,
+            REQUEST_TARGET_AMBIGUOUS,
+            operation=envelope.operation,
+            request_comment_id=newest.comment_id,
+            detail="newest request does not unambiguously target this PR",
+        )
+    named_heads = {match.group(0).lower() for match in
+                   _HEAD_REFERENCE_RE.finditer(envelope.task_reference)}
+    if head_sha is not None and named_heads != {head_sha.lower()}:
         return GateDecision(
             False,
             REQUEST_HEAD_UNBOUND,
