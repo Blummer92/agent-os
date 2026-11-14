@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -82,7 +83,14 @@ def parse_result_comment(body: object) -> dict[str, object]:
 def validate_event(
     event: Mapping[str, object], *, expected_repository: str, allowed_actor: str
 ) -> tuple[int, int, str]:
-    """Validate owner-only issue-comment ingress; return correlation metadata."""
+    """Validate owner-only issue-comment ingress; return correlation metadata.
+
+    A top-level PR Conversation comment arrives as an issue_comment event
+    whose issue record carries a "pull_request" mapping; the event issue
+    number is the PR number. The failure postback target
+    (``/repos/{repo}/issues/{n}/comments``) is the same endpoint for both
+    kinds, so no target kind is returned.
+    """
     if not isinstance(event, Mapping):
         raise TypeError("event must be a mapping")
     repository = event.get("repository")
@@ -93,7 +101,10 @@ def validate_event(
         or repository.get("full_name") != expected_repository
     ):
         raise ValueError("event repository identity mismatch")
-    if not isinstance(issue, Mapping) or "pull_request" in issue:
+    if not isinstance(issue, Mapping):
+        raise ValueError("CKR6 ingress accepts issue comments only")
+    pull_request = issue.get("pull_request")
+    if pull_request is not None and not isinstance(pull_request, Mapping):
         raise ValueError("CKR6 ingress accepts issue comments only")
     if type(issue.get("number")) is not int or issue["number"] < 1:
         raise ValueError("event issue number missing")
@@ -116,6 +127,71 @@ def validate_event(
 def _request_json(request: urllib.request.Request) -> object:
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+# #3951 post-merge live failure (run 43340181423): this reporter failed with
+# a bare ``HTTP Error 403: Forbidden`` and the refusal was undiagnosable
+# because the HTTPError body and headers were discarded. Surface a bounded,
+# sanitized diagnostic instead: status, the GitHub ``message`` field, and
+# the ``X-Accepted-GitHub-Permissions`` / ``X-GitHub-Request-Id`` headers.
+# Never the token, the request headers, or an unbounded response body.
+_MAX_DIAGNOSTIC_MESSAGE_CHARS = 200
+_MAX_DIAGNOSTIC_BODY_BYTES = 8192
+# GitHub authors the surfaced fields, but a reflected response could still
+# echo caller-supplied text, so redact token-shaped substrings and strip
+# control characters before anything reaches the log.
+_DIAGNOSTIC_SECRET_PATTERNS = (
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+)
+
+
+def _sanitize_diagnostic_text(value: str, *, token: str, ascii_only: bool = False) -> str:
+    if ascii_only:
+        text = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in value)
+    else:
+        text = "".join(ch if ch.isprintable() else " " for ch in value)
+    # Redact the exact credential first: a reflecting server could echo it
+    # verbatim inside an otherwise ordinary message field.
+    if token:
+        text = text.replace(token, "[redacted]")
+    for pattern in _DIAGNOSTIC_SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    return text
+
+
+def _http_failure_diagnostics(exc: BaseException, *, token: str = "") -> str:
+    """Bounded, sanitized description of a GitHub transport failure."""
+    if type(exc) is not urllib.error.HTTPError:
+        return type(exc).__name__
+    parts = [f"HTTP {exc.code}"]
+    try:
+        # Bounded read: at most limit+1 bytes are consumed, and an oversized
+        # body is never parsed at all.
+        body = exc.read(_MAX_DIAGNOSTIC_BODY_BYTES + 1)
+    except Exception:
+        body = b""
+    message = ""
+    if isinstance(body, (bytes, bytearray)) and 0 < len(body) <= _MAX_DIAGNOSTIC_BODY_BYTES:
+        try:
+            payload = json.loads(bytes(body).decode("utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict) and type(payload.get("message")) is str:
+            message = payload["message"]
+    if message:
+        parts.append(
+            f"message={_sanitize_diagnostic_text(message, token=token)[:_MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+        )
+    headers = getattr(exc, "headers", None)
+    if headers is not None:
+        for name in ("X-Accepted-GitHub-Permissions", "X-GitHub-Request-Id"):
+            value = headers.get(name)
+            if type(value) is str and value:
+                parts.append(
+                    f"{name.lower()}={_sanitize_diagnostic_text(value, token=token, ascii_only=True)[:_MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+                )
+    return "; ".join(parts)
 
 
 def _github_request(url: str, token: str, *, body: str | None = None) -> urllib.request.Request:
@@ -151,7 +227,7 @@ def _existing_result_comment(
     try:
         comments = _request_json(request)
     except Exception as exc:
-        return None, f"lookup failed: {type(exc).__name__}"
+        return None, "lookup failed: " + _http_failure_diagnostics(exc, token=token)
     if type(comments) is not list:
         return None, "lookup returned an unexpected response"
     for item in comments:
@@ -194,7 +270,8 @@ def post_failure_result(
             posted = _request_json(request)
         except Exception as exc:
             raise RuntimeError(
-                f"CKR6 failure postback failed: {type(exc).__name__}"
+                "CKR6 failure postback failed: "
+                + _http_failure_diagnostics(exc, token=token)
             ) from exc
         if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
             raise RuntimeError("CKR6 failure postback returned an unexpected response")

@@ -221,7 +221,13 @@ def orchestrate_lesson_retrieval(
         for row in rows:
             normalized = normalize_lesson_row(row)
             if isinstance(normalized, LessonRecordEvidence):
-                accumulated.append(normalized)
+                # R1 (#2425): accumulate keyed by full record equality.
+                # An identical record (same ID, same revision, same fields)
+                # collapses; a same-ID record that differs in any field is
+                # kept, so a conflicting identity survives to the bound and
+                # the selector instead of being silently overwritten.
+                if normalized not in accumulated:
+                    accumulated.append(normalized)
 
         bounded = _bound_relevant_lessons(current_request, accumulated)
         result = consume_lesson_preflight(current_request, bounded)

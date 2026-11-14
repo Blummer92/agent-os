@@ -252,6 +252,29 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
     assert len(fake.posts) == 1
 
 
+# --- Positive: a PR Conversation failure posts to the same endpoint --------
+
+
+def test_infrastructure_failure_on_pr_conversation_posts_fallback(transport):
+    event = {
+        **_event(),
+        "issue": {
+            "number": ISSUE_NUMBER,
+            "pull_request": {
+                "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3502"
+            },
+        },
+    }
+    outcome = _post(transport, event=event)
+    assert outcome["issue_number"] == ISSUE_NUMBER
+    assert outcome["request_comment_id"] == REQUEST_COMMENT_ID
+    assert outcome["deduplicated"] is False
+    assert len(transport.posts) == 1
+    assert transport.posts[0].full_url == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3502/comments"
+    )
+
+
 # --- Negative: ineligible events never produce a postback -------------------
 
 
@@ -266,7 +289,8 @@ def test_result_for_a_different_request_does_not_deduplicate(monkeypatch):
             **_event(),
             "issue": {
                 "number": ISSUE_NUMBER,
-                "pull_request": {"url": "https://example.invalid/pr"},
+                # Malformed (non-mapping) pull_request value: still rejected.
+                "pull_request": "https://example.invalid/pr",
             },
         },
         {**_event(), "repository": {"full_name": "Other/repo"}},
@@ -299,6 +323,103 @@ def test_github_transport_failure_raises(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake)
     with pytest.raises(RuntimeError, match="failure postback failed"):
         _post(fake)
+
+
+# --- #3951 post-merge live failure: diagnosable, sanitized 403s ----------
+
+
+def _http_403(
+    *,
+    message="Resource not accessible by integration",
+    accepted="pull-requests=write",
+    request_id="E7A1:2B3C:4D5E:6F70",
+):
+    import email.message
+    import io
+
+    headers = email.message.Message()
+    headers["X-Accepted-GitHub-Permissions"] = accepted
+    headers["X-GitHub-Request-Id"] = request_id
+    body = json.dumps(
+        {
+            "message": message,
+            "documentation_url": "https://docs.github.com/rest/issues/comments#create-an-issue-comment",
+        }
+    ).encode("utf-8")
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+        403,
+        "Forbidden",
+        headers,
+        io.BytesIO(body),
+    )
+
+
+def test_3951_reporter_post_403_surfaces_sanitized_diagnostics(monkeypatch):
+    # Live defect (run 43340181423, 2026-11-13): this reporter failed with a
+    # bare "HTTP Error 403: Forbidden" and the refusal was undiagnosable.
+    # The reporter must surface the status, GitHub's message field, and the
+    # accepted-permissions and request-id headers - and never the token.
+    class _ForbiddenPost(_Transport):
+        def __call__(self, request, timeout=None):
+            if request.get_method() == "POST":
+                raise _http_403()
+            return _Response(self.existing)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _ForbiddenPost())
+    with pytest.raises(RuntimeError) as raised:
+        _post(_ForbiddenPost())
+    detail = str(raised.value)
+    assert "failure postback failed" in detail
+    assert "HTTP 403" in detail
+    assert "Resource not accessible by integration" in detail
+    assert "x-accepted-github-permissions='pull-requests=write'" in detail
+    assert "x-github-request-id='E7A1:2B3C:4D5E:6F70'" in detail
+    assert "documentation_url" not in detail
+    assert "test-token" not in detail
+
+
+def test_3951_reporter_diagnostics_redact_token_shaped_echoes(monkeypatch):
+    # Same redaction guarantee on the stdlib-only reporter path, including
+    # an echo of the exact credential.
+    class _EchoingFailure(_Transport):
+        def __call__(self, request, timeout=None):
+            if request.get_method() == "POST":
+                raise _http_403(
+                    message="refused for credential test-token and ghp_a1b2c3d4e5f60708 echo"
+                )
+            return _Response(self.existing)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _EchoingFailure())
+    with pytest.raises(RuntimeError) as raised:
+        _post(_EchoingFailure())
+    detail = str(raised.value)
+    assert detail.count("[redacted]") == 2
+    assert "test-token" not in detail
+    assert "ghp_a1b2c3d4e5f60708" not in detail
+
+
+def test_3951_reporter_get_403_is_diagnosed_in_uncertain_reason(monkeypatch):
+    # The dedupe GET may fail independently of the POST; its bounded
+    # diagnostic must survive in the uncertainty reason after the fallback
+    # still posts (never leave the requester without a result).
+    class _ForbiddenGet(_Transport):
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            if request.get_method() == "GET":
+                raise _http_403(accepted="issues=read")
+            return _Response({"id": 6328164999})
+
+    fake = _ForbiddenGet()
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError) as raised:
+        _post(fake)
+    detail = str(raised.value)
+    assert "without verified dedupe" in detail
+    assert "HTTP 403" in detail
+    assert "issues=read" in detail
+    assert len(fake.posts) == 1
+    assert "test-token" not in detail
 
 
 # --- Uncertain dedupe: post (never leave the requester without a result), then fail visibly ----
@@ -423,7 +544,7 @@ def _failure_predicate(classify_result: str, execute_result: str) -> bool:
         ("success", "failure", True),  # execute infra failure
         ("failure", "failure", True),
         ("success", "success", False),  # happy path: no failure receipt
-        ("skipped", "skipped", False),  # noncommand / PR comment / other actor
+        ("skipped", "skipped", False),  # noncommand / other actor
         ("success", "skipped", False),
         ("cancelled", "cancelled", False),
     ],
@@ -449,9 +570,9 @@ def test_workflow_report_failure_job_shape():
     assert "pip install" not in block
     assert "agent_os_execution_service" not in block
     assert "scripts/ckr6_failure_postback.py" in block
-    # The existing ingress gate and happy path are untouched.
+    # Preserve exact owner-and-command gating for issue and PR Conversation comments.
     assert (
-        "if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
+        "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
         in text
     )
     assert text.count("- name: Install existing Agent OS runtime") == 2
@@ -462,10 +583,48 @@ def test_workflow_report_failure_job_shape():
     )
 
 
+
+def test_classify_gate_accepts_owner_issue_and_pr_comment_kinds():
+    """Catch reintroduction of the issue-only gate."""
+    content = _workflow_text()
+    classify = content.split("\n  classify:\n", 1)[1].split("\n  execute:\n", 1)[0]
+    assert "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}" in classify
+    assert "github.event.issue.pull_request" not in classify
+    for kind in ("issue", "pr"):
+        request = _event()
+        if kind == "pr":
+            request["issue"] = {
+                "number": ISSUE_NUMBER,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3502"
+                },
+            }
+        envelope = bridge.envelope_from_event(
+            request, expected_repository=REPOSITORY, allowed_actor="Blummer92"
+        )
+        assert envelope.target_kind == kind
+        assert envelope.issue_number == ISSUE_NUMBER
+
+
+def test_classify_gate_preserves_owner_command_and_webhook_family():
+    content = _workflow_text()
+    classify = content.split("\n  classify:\n", 1)[1].split("\n  execute:\n", 1)[0]
+    gate = next(row.strip() for row in classify.splitlines() if row.startswith("    if: "))
+    assert gate == "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
+    assert "pull_request_review_comment" not in content.split("\npermissions:", 1)[0]
+
 def test_workflow_yaml_parses_and_jobs_are_exactly_the_three_expected():
     yaml = pytest.importorskip("yaml")
     document = yaml.safe_load(_workflow_text())
     assert set(document["jobs"]) == {"classify", "execute", "report-failure"}
+    assert document["permissions"] == {"contents": "read"}
+    assert "permissions" not in document["jobs"]["classify"]
+    expected_postback_permissions = {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "write",
+    }
+    assert document["jobs"]["execute"]["permissions"] == expected_postback_permissions
     job = document["jobs"]["report-failure"]
     assert job["needs"] == ["classify", "execute"]
-    assert job["permissions"] == {"contents": "read", "issues": "write"}
+    assert job["permissions"] == expected_postback_permissions

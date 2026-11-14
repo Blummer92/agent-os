@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -150,21 +152,178 @@ def test_fixed_node_runner_invokes_only_the_projection_entrypoint() -> None:
     assert "process.argv[2]" in text
 
 
+
+def _canonical_result():
+    return {
+        "formatVersion": entrypoint.PROJECTION_RESULT_VERSION,
+        "status": "valid",
+        "routeId": "route-1",
+        "sourceHandoffRef": "handoff-1",
+        "sourceFingerprint": "sha256:route-1",
+        "recordingId": "recording-1",
+        "recordingSha256": "sha256:recording-1",
+        "applications": [],
+        "tutorialPackage": {
+            "packageVersion": "picture-perfect-tutorial-package-v1",
+            "routeId": "route-1",
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "objectiveRef": "objective-1",
+            "successCriteriaRef": "criteria-1",
+            "evidenceTargetRef": "evidence-1",
+            "canonicalArtifactIdentity": None,
+            "pathwayPlanRef": None,
+            "steps": [],
+            "cards": [],
+            "reusedAssetRefs": [],
+            "resurfacedAssetRefs": [],
+            "executionAuthorized": False,
+            "externalWriteAuthorized": False,
+            "productionAuthorized": False,
+        },
+        "blockers": [],
+        "executionAuthorized": False,
+        "externalWriteAuthorized": False,
+        "productionAuthorized": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "reason"),
+    [
+        ("valid", "success", "projection-result-ready"),
+        ("blocked", "success", "projection-result-blocked"),
+        ("missing", "needs-decision", "projection-result-invalid"),
+        ("legacy_alias", "needs-decision", "projection-result-invalid"),
+        ("bad_cards", "needs-decision", "projection-result-invalid"),
+        ("oversize", "needs-decision", "projection-output-oversize"),
+        ("unauthorized_nested", "needs-decision", "projection-authority-violation"),
+        ("unauthorized_top", "needs-decision", "projection-authority-violation"),
+        ("blocked_missing_package", "needs-decision", "projection-result-invalid"),
+        ("blocked_bad_blocker", "needs-decision", "projection-result-invalid"),
+        ("missing_top_identity", "needs-decision", "projection-result-invalid"),
+        ("missing_package_version", "needs-decision", "projection-result-invalid"),
+        ("missing_package_metadata", "needs-decision", "projection-result-invalid"),
+        ("malformed_card", "needs-decision", "projection-result-invalid"),
+        ("identity_disagreement", "needs-decision", "projection-result-invalid"),
+        ("bad_applications", "needs-decision", "projection-result-invalid"),
+        ("unhashable_status", "needs-decision", "projection-result-invalid"),
+    ],
+)
+def test_actual_node_runner_import_and_result_guards(monkeypatch, case, status, reason):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node 22 required for this local integration check")
+    raw = json.dumps({"formatVersion": entrypoint.PROJECTION_INPUT_VERSION}).encode()
+    identity = make_identity(input_ref=hashlib.sha256(raw).hexdigest())
+    result = _canonical_result()
+    if case == "blocked":
+        result["status"] = "blocked"
+        result["tutorialPackage"] = None
+        result["blockers"] = ["route-missing"]
+    elif case == "missing":
+        del result["tutorialPackage"]
+    elif case == "legacy_alias":
+        result["package"] = result.pop("tutorialPackage")
+    elif case == "bad_cards":
+        result["tutorialPackage"]["cards"] = "bad"
+    elif case == "oversize":
+        result["tutorialPackage"]["cards"] = [
+            {"cardId": str(i)} for i in range(entrypoint.MAX_PROJECTION_CARDS + 1)
+        ]
+    elif case == "unauthorized_nested":
+        result["tutorialPackage"]["executionAuthorized"] = True
+    elif case == "unauthorized_top":
+        result["externalWriteAuthorized"] = True
+    elif case == "blocked_bad_blocker":
+        result["status"] = "blocked"
+        result["tutorialPackage"] = None
+        result["blockers"] = ["not-a-canonical-blocker"]
+    elif case == "blocked_missing_package":
+        result["status"] = "blocked"
+        result["blockers"] = ["route-missing"]
+        del result["tutorialPackage"]
+    elif case == "missing_top_identity":
+        del result["recordingId"]
+    elif case == "missing_package_version":
+        del result["tutorialPackage"]["packageVersion"]
+    elif case == "missing_package_metadata":
+        del result["tutorialPackage"]["objectiveRef"]
+    elif case == "malformed_card":
+        result["tutorialPackage"]["cards"] = [{"cardId": "not-canonical"}]
+    elif case == "identity_disagreement":
+        result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
+    elif case == "unhashable_status":
+        result["status"] = []
+    elif case == "bad_applications":
+        result["applications"] = [42]
+
+    def fake_checkout(_identity, workdir):
+        package_dir = workdir / entrypoint.PPUX_PACKAGE_DIR
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+        return None
+
+    def fake_run(argv, *, cwd, timeout):
+        if len(argv) >= 3 and argv[1] == entrypoint.VITE_CLI:
+            output = cwd / entrypoint.PROJECTION_BUILD_OUTPUT
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                "export function projectTutorialPromptCards() { return " + json.dumps(result)
+                + "; }\nexport function serializePromptProjectionResult(x) { return JSON.stringify(x); }\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.run(argv, cwd=cwd, timeout=timeout, capture_output=True, text=True)
+
+    monkeypatch.setattr(entrypoint, "NODE", node)
+    monkeypatch.setattr(entrypoint, "_node_runtime_ready", lambda: None)
+    monkeypatch.setattr(entrypoint, "_checkout_exact_branch_sha", fake_checkout)
+    monkeypatch.setattr(entrypoint, "_run", fake_run)
+    outcome = entrypoint.execute_ppux_projection(identity, resolve_input=lambda ref: raw)
+    assert outcome.status == status
+    assert outcome.reason_codes == [reason]
+    assert (outcome.projection_result is not None) == (status == "success")
+
+
 # --- envelope ------------------------------------------------------------------
 
 def _success_outcome():
     result = {
         "formatVersion": "picture-perfect-prompt-projection-result-v1",
         "status": "valid",
-        "package": {
+        "routeId": "route-1",
+        "sourceHandoffRef": "handoff-1",
+        "sourceFingerprint": "sha256:route-1",
+        "recordingId": "recording-1",
+        "recordingSha256": "sha256:recording-1",
+        "applications": [],
+        "tutorialPackage": {
             "packageVersion": "picture-perfect-tutorial-package-v1",
             "routeId": "route-1",
-            "cards": [{"cardId": "card-1"}],
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "objectiveRef": "objective-1",
+            "successCriteriaRef": "criteria-1",
+            "evidenceTargetRef": "evidence-1",
+            "canonicalArtifactIdentity": None,
+            "pathwayPlanRef": None,
+            "steps": [],
+            "cards": [],
+            "reusedAssetRefs": [],
+            "resurfacedAssetRefs": [],
             "executionAuthorized": False,
             "externalWriteAuthorized": False,
             "productionAuthorized": False,
         },
         "blockers": [],
+        "executionAuthorized": False,
+        "externalWriteAuthorized": False,
+        "productionAuthorized": False,
     }
     return entrypoint.PpuxProjectionOutcome(
         status="success",
@@ -232,3 +391,21 @@ def test_main_rejects_invalid_request_with_failure_envelope(capsys) -> None:
     assert envelope["status"] == "needs-decision"
     assert envelope["reason_codes"] == ["projection-request-invalid"]
     assert envelope["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("evidence", [
+    {},
+    {"sourceIndexes": [True], "actionIdentity": [], "stateLocalClaims": [], "recordingClaimTexts": []},
+    {"sourceIndexes": [], "actionIdentity": [{}], "stateLocalClaims": [], "recordingClaimTexts": []},
+    {"sourceIndexes": [], "actionIdentity": [], "stateLocalClaims": [{}], "recordingClaimTexts": []},
+])
+def test_host_rejects_malformed_required_card_evidence(evidence):
+    result = _canonical_result()
+    result["tutorialPackage"]["cards"] = [{
+        "stepNumber": 1, "imagePurpose": "result", "imageState": "result",
+        "application": "Canva", "applicationContext": "example", "targetState": "done",
+        "mustShow": [], "mustNotShow": [], "annotationSpace": "none", "provenance": [],
+        "requestedUiDetails": [], "requiresScreenFidelity": False, "evidence": evidence,
+        "portablePrompt": "show result", "status": "ready", "blockerReasons": [],
+    }]
+    assert entrypoint._canonical_projection_shape_valid(result) is False

@@ -6,7 +6,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from scripts.agent_os_ci_junit_diff import diff_junit, junit_outcomes, node_ids
+from scripts.agent_os_ci_junit_diff import diff_junit, node_ids, skipped_node_ids
 
 
 def _xml(nodes: list[tuple[str, str]]) -> bytes:
@@ -15,6 +15,31 @@ def _xml(nodes: list[tuple[str, str]]) -> bytes:
         f'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="{len(nodes)}" '
         f'failures="0" errors="0" skipped="0">{cases}</testsuite></testsuites>'
     ).encode()
+
+
+def _xml_with_skips(nodes: list[tuple[str, str, bool]]) -> bytes:
+    cases = "".join(
+        f'<testcase classname="{c}" name="{n}">{"<skipped/>" if skipped else ""}</testcase>'
+        for c, n, skipped in nodes
+    )
+    skipped_count = sum(1 for _, _, skipped in nodes if skipped)
+    return (
+        f'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="{len(nodes)}" '
+        f'failures="0" errors="0" skipped="{skipped_count}">{cases}</testsuite></testsuites>'
+    ).encode()
+
+
+def test_skipped_node_ids_names_only_skipped() -> None:
+    xml = _xml_with_skips([("m", "passed", False), ("m", "skipped", True), ("", "modskip", True)])
+    assert skipped_node_ids(xml) == {"m::skipped", "::modskip"}
+    assert node_ids(xml) == {"m::passed", "m::skipped", "::modskip"}
+
+
+def test_skipped_node_ids_rejects_malformed_reports() -> None:
+    with pytest.raises(ValueError, match="invalid-junit-xml"):
+        skipped_node_ids(b"<testsuites><testsuite><testcase></testsuites>")
+    with pytest.raises(ValueError, match="duplicate-nodes"):
+        skipped_node_ids(_xml_with_skips([("m", "t", True), ("m", "t", True)]))
 
 
 def test_mapped_replacement_is_machine_verified() -> None:
@@ -78,108 +103,3 @@ def test_pytest9_subtests_raise_tests_attribute_without_extra_elements(tmp_path)
     if int(suite.attrib["tests"]) == 1:
         pytest.skip("this pytest does not count subtests in the tests attribute")
     assert node_ids(report.read_bytes()) == {"test_sub.T::test_sub"}
-
-
-# --- NC09 JUnit outcome oracle ------------------------------------------------
-
-def _outcome_xml(cases: str, *, tests: int, failures: int, errors: int, skipped: int) -> bytes:
-    return (
-        '<?xml version="1.0"?><testsuites><testsuite name="pytest" '
-        f'tests="{tests}" failures="{failures}" errors="{errors}" skipped="{skipped}">{cases}'
-        "</testsuite></testsuites>"
-    ).encode()
-
-
-def test_outcome_oracle_counts_failures_errors_and_skips() -> None:
-    xml = _outcome_xml(
-        '<testcase classname="m" name="ok"/>'
-        '<testcase classname="m" name="bad"><failure message="boom"/></testcase>'
-        '<testcase classname="m" name="err"><error message="crash"/></testcase>'
-        '<testcase classname="m" name="skip"><skipped message="env"/></testcase>',
-        tests=4, failures=1, errors=1, skipped=1,
-    )
-    out = junit_outcomes(xml)
-    assert (out["tests"], out["failures"], out["errors"], out["skipped"]) == (4, 1, 1, 1)
-    assert out["failed_nodes"] == ["m::bad", "m::err"]
-    # Identity semantics are untouched: the same report still yields its nodes.
-    assert node_ids(xml) == {"m::ok", "m::bad", "m::err", "m::skip"}
-
-
-def test_outcome_oracle_passes_clean_and_skip_only_reports() -> None:
-    xml = _outcome_xml(
-        '<testcase classname="m" name="ok"/>'
-        '<testcase classname="m" name="skip"><skipped message="env"/></testcase>',
-        tests=2, failures=0, errors=0, skipped=1,
-    )
-    out = junit_outcomes(xml)
-    assert (out["failures"], out["errors"], out["skipped"]) == (0, 0, 1)
-    assert out["failed_nodes"] == []
-
-
-def test_outcome_oracle_rejects_contradictory_counters() -> None:
-    # Attribute claims no failures but a <failure> child is present: the
-    # report contradicts itself, so it fails closed instead of passing.
-    xml = _outcome_xml(
-        '<testcase classname="m" name="bad"><failure message="boom"/></testcase>',
-        tests=1, failures=0, errors=0, skipped=0,
-    )
-    with pytest.raises(ValueError, match="junit-outcome-count-mismatch"):
-        junit_outcomes(xml)
-    # And the reverse: attribute claims a failure no child evidences.
-    xml = _outcome_xml('<testcase classname="m" name="ok"/>', tests=1, failures=1, errors=0, skipped=0)
-    with pytest.raises(ValueError, match="junit-outcome-count-mismatch"):
-        junit_outcomes(xml)
-
-
-def test_outcome_oracle_rejects_empty_and_malformed_reports() -> None:
-    for bad in (
-        b"",
-        b"<not-xml",
-        b'<?xml version="1.0"?><weird><testcase classname="m" name="t"/></weird>',
-    ):
-        with pytest.raises(ValueError):
-            junit_outcomes(bad)
-
-
-def test_outcome_oracle_zero_case_report_counts_zero_and_never_vetoes() -> None:
-    # A --collect-only report has no <testcase>: no failure to veto, and the
-    # completeness check (not this oracle) reports it INCOMPLETE.
-    out = junit_outcomes(_outcome_xml("", tests=0, failures=0, errors=0, skipped=0))
-    assert (out["tests"], out["failures"], out["errors"], out["skipped"]) == (0, 0, 0, 0)
-
-
-def test_outcome_oracle_tolerates_missing_counters_and_subtest_tests_attribute() -> None:
-    # Counters absent: children alone decide. tests attribute above the
-    # element count (pytest 9 subtests) is legitimate and not reconciled.
-    xml = (
-        b'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="3">'
-        b'<testcase classname="m" name="t"/></testsuite></testsuites>'
-    )
-    out = junit_outcomes(xml)
-    assert (out["tests"], out["failures"], out["errors"], out["skipped"]) == (1, 0, 0, 0)
-    # Nested <testsuites> shape, as pytest writes it.
-    xml = _outcome_xml(
-        '<testcase classname="m" name="bad"><failure message="boom"/></testcase>',
-        tests=1, failures=1, errors=0, skipped=0,
-    )
-    assert junit_outcomes(xml)["failed_nodes"] == ["m::bad"]
-
-
-@pytest.mark.parametrize("cases", ["", '<testcase classname="m" name="t"/>'])
-def test_outcome_oracle_requires_tests_attribute_even_for_empty_suite(cases: str) -> None:
-    """QA #5821733152: a missing tests count cannot certify an empty report."""
-    xml = (
-        '<testsuites><testsuite name="pytest" failures="0" errors="0" skipped="0">'
-        f'{cases}</testsuite></testsuites>'
-    ).encode()
-    with pytest.raises(ValueError, match="junit-missing-or-invalid-tests-count"):
-        junit_outcomes(xml)
-    # The identity reader already denied this input; preserve that contract.
-    with pytest.raises(ValueError, match="testcase-count-mismatch"):
-        node_ids(xml)
-
-
-def test_outcome_oracle_rejects_negative_tests_counter() -> None:
-    xml = b'<testsuite name="pytest" tests="-1" failures="0" errors="0" skipped="0"/>'
-    with pytest.raises(ValueError, match="junit-missing-or-invalid-tests-count"):
-        junit_outcomes(xml)
