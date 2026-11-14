@@ -184,6 +184,18 @@ def test_missing_skipped_or_duplicate_required_step():
                 assert pub.evaluate(source(),copy,set())['state']=='error', (name, step, mode)
 
 
+def test_ckr6_gate_module_is_not_self_certifying():
+    path = (
+        "08_Tooling/agent-os-execution-service/src/"
+        "agent_os_execution_service/ckr6_mutation_gate.py"
+    )
+    assert path in pub.AUTHORITY_PATHS
+    assert pub.touches_authority({path})
+    outcome = pub.evaluate(source(), jobs(), {path})
+    assert outcome["state"] == "pending"
+    assert "not certified" in outcome["description"]
+
+
 def test_critical_validation_source_edit_never_passes():
     for path in pub.AUTHORITY_PATHS | {"scripts/agent_os_ci_new.py", "scripts/agent_os_remote_validation/new.py", "tests/conftest.py", "08_Tooling/foo/tests/conftest.py", "pytest.ini", "pyproject.toml", "07_Agent_Tests/validate-repo-structure.sh"}:
         assert pub.evaluate(source(),jobs(),{path})['state']=='pending'
