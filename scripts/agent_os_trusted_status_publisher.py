@@ -44,6 +44,25 @@ AUTHORITY_PREFIXES = (
     "scripts/agent_os_remote_validation/",
     ".github/actions/",
     ".github/workflows/",
+    # The CKR6 mutation gate and comment revalidation entry modules are listed
+    # in AUTHORITY_PATHS, but protecting only the entry points leaves their
+    # transitive import closure open: the pull_request gate job installs and
+    # executes these packages from the PR head, so a PR that modified any
+    # module the gate imports (the trusted-read layer, the envelope parser,
+    # or anything they reach) would change the gate's decision inputs while
+    # the publisher certified the change. Every repo package that executes on
+    # import of the two entry modules is therefore authority-covered. The
+    # regression test recomputes the live import closure and fails on drift.
+    "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/",
+    "08_Tooling/agent-memory-context-manager/src/agent_memory_context_manager/",
+    "08_Tooling/workflow-scheduler/src/workflow_scheduler/",
+    "scripts/agent_os_candidate_packet/",
+    "scripts/agent_os_execution_capabilities/",
+    "scripts/agent_os_execution_checkpoint/",
+    "scripts/agent_os_execution_interface/",
+    "scripts/agent_os_github_git_objects/",
+    "scripts/agent_os_github_issue_provider/",
+    "scripts/agent_os_issue_acceptance/",
 )
 AUTHORITY_SUFFIXES = ("/conftest.py",)
 # Dependencies are selected dynamically by some validation branches. Reject
