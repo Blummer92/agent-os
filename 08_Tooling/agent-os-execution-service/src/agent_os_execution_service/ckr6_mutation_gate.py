@@ -33,15 +33,14 @@ Semantics (fail closed):
 - Work-attempt binding: when a PR is gated, the newest trusted request must
   (a) name the gated head's exact 40-hex SHA in its ``task_reference``
   (``ckr6-request-head-unbound`` otherwise) and (b) postdate the
-  server-recorded push that proposed that head (found via the repository
-  Events API; commit author/committer dates are author-controlled and are
-  never used). A push after admission invalidates it - "admit once, then
-  change the work" is blocked, and a fresh admission for unrelated work on
-  the linked issue admits nothing here. Remediation: the owner posts a
-  fresh ``/agent-os ckr6`` request naming the current head and the failed
-  check is re-run. When no push event for the exact head SHA is visible
-  (event retention is bounded), the gate fails closed with
-  ``ckr6-head-proposal-unproven``.
+  first server-created GitHub Actions observation of the exact current PR
+  branch/head (not the lossy repository Events activity feed). This
+  timestamp is proof of when GitHub observed the content, NOT an assertion
+  of the actual push time. A changed SHA invalidates admission; an older
+  or unrelated request cannot cover this head. Missing or malformed run
+  evidence still fails closed as ``ckr6-head-proposal-unproven``.
+  Remediation: post a fresh trusted request naming the full current head SHA,
+  obtain an admitted CKR6 result and verify a new gate evaluation.
 - The newest request's result is selected from the SAME thread's records
   with exact request binding (``request_comment_id``, request
   ``created_at``, operation, and for failed-repair the envelope's exact
@@ -398,8 +397,9 @@ def evaluate_mutation_boundary(
 
     Pure function over already-read comment records; the newest trusted
     boundary request across the issue thread and the PR thread decides. When
-    ``head_proposed_at`` is given (the server-recorded time the gated head
-    was pushed), the newest trusted request must strictly postdate it.
+    ``head_proposed_at`` is given (the server-recorded time Actions
+    first observed this exact branch/head), the newest trusted request
+    must strictly postdate it. This does not assert a push timestamp.
     """
     if type(repository) is not str or not repository.strip():
         raise ValueError("repository must be non-empty exact text")
