@@ -21,7 +21,13 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
-def node_ids(xml: bytes) -> set[str]:
+def _testcases(xml: bytes) -> list[tuple[str, bool]]:
+    """Strictly parsed ``(identity, was_skipped)`` pairs from a JUnit report.
+
+    Shared by identity and outcome reads so the two can never disagree about
+    what counts as a report: empty, malformed, wrong-root, count-mismatched,
+    identity-less, or duplicated reports are all rejected here.
+    """
     if not xml:
         raise ValueError("empty-junit")
     try:
@@ -31,7 +37,7 @@ def node_ids(xml: bytes) -> set[str]:
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
         raise ValueError("invalid-junit-root")
-    ids: list[str] = []
+    out: list[tuple[str, bool]] = []
     for suite in suites:
         cases = [x for x in suite if x.tag == "testcase"]
         # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
@@ -44,10 +50,99 @@ def node_ids(xml: bytes) -> set[str]:
             name = case.attrib.get("name")
             if not name:
                 raise ValueError("node-identity-missing")
-            ids.append(f"{classname}::{name}")
-    if len(set(ids)) != len(ids):
+            out.append((f"{classname}::{name}", any(x.tag == "skipped" for x in case)))
+    if len({ident for ident, _ in out}) != len(out):
         raise ValueError("duplicate-nodes")
-    return set(ids)
+    return out
+
+
+def node_ids(xml: bytes) -> set[str]:
+    return {ident for ident, _ in _testcases(xml)}
+
+
+def skipped_node_ids(xml: bytes) -> set[str]:
+    """Identities whose ``<testcase>`` carries a ``<skipped>`` child.
+
+    A skipped testcase is present in the report but its body never ran, so
+    identity reconciliation alone cannot see it (NC07, hosted 2026-11-08:
+    a mandatory test marked ``@pytest.mark.skip`` kept the aggregate green).
+    The same strict parse as :func:`node_ids` applies, so a malformed report
+    fails closed instead of reporting no skips.
+    """
+    return {ident for ident, skipped in _testcases(xml) if skipped}
+
+
+def junit_outcomes(xml: bytes) -> dict:
+    """Independently veto failed JUnit outcomes without changing NC07 identities.
+
+    Read the SAME report as ``node_ids`` and ``skipped_node_ids``. Preserve
+    NC07's strict node/count checks, while rejecting unsupported outcome
+    placement and contradictory suite counters (NC09).
+    """
+    identities = _testcases(xml)  # identity, duplicate, and pytest-9 bounds
+    root = ET.fromstring(xml)
+    suites = [root] if root.tag == "testsuite" else list(root)
+    failures = errors = skipped = 0
+    declared_tests_total = 0
+    failed_nodes: set[str] = set()
+    for suite in suites:
+        observed = {"failures": 0, "errors": 0, "skipped": 0}
+        parents = {child: parent for parent in suite.iter() for child in parent}
+        for element in suite.iter():
+            local_tag = element.tag.rsplit("}", 1)[-1]
+            if local_tag in {"testcase", "testsuite", "failure", "error", "skipped"}:
+                if local_tag != element.tag:
+                    raise ValueError("junit-unsupported-element-namespace")
+            if element.tag == "testsuite" and element is not suite:
+                raise ValueError("junit-unsupported-nested-suite")
+            if element.tag == "testcase" and parents.get(element) is not suite:
+                raise ValueError("junit-unsupported-testcase-placement")
+            kind = {"failure": "failures", "error": "errors", "skipped": "skipped"}.get(element.tag)
+            if kind is not None:
+                case = parents.get(element)
+                if case is None or case.tag != "testcase" or parents.get(case) is not suite:
+                    raise ValueError("junit-unsupported-outcome-placement")
+                observed[kind] += 1
+                if element.tag in {"failure", "error"}:
+                    classname = case.attrib.get("classname") or case.attrib.get("file") or ""
+                    failed_nodes.add(f"{classname}::{case.attrib['name']}")
+        for attr, actual in observed.items():
+            if attr in suite.attrib:
+                try:
+                    claimed = int(suite.attrib[attr])
+                except ValueError as exc:
+                    raise ValueError(f"junit-invalid-{attr}-attribute") from exc
+                if claimed != actual:
+                    raise ValueError("junit-outcome-count-mismatch")
+        failures += observed["failures"]
+        errors += observed["errors"]
+        skipped += observed["skipped"]
+        # _testcases already rejected a suite whose ``tests`` attribute is
+        # absent, non-integer, or smaller than its testcase count.
+        declared_tests_total += int(suite.attrib["tests"])
+    if root.tag == "testsuites":
+        # A multi-suite document's root counters are evidence too: a present
+        # but contradictory root counter fails closed, as each suite's does.
+        for attr, actual in (
+            ("tests", declared_tests_total),
+            ("failures", failures),
+            ("errors", errors),
+            ("skipped", skipped),
+        ):
+            if attr in root.attrib:
+                try:
+                    claimed = int(root.attrib[attr])
+                except ValueError as exc:
+                    raise ValueError(f"junit-invalid-{attr}-attribute") from exc
+                if claimed != actual:
+                    raise ValueError("junit-outcome-count-mismatch")
+    return {
+        "tests": len(identities),
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "failed_nodes": sorted(failed_nodes),
+    }
 
 
 def diff_junit(

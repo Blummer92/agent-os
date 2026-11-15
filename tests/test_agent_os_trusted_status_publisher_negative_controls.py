@@ -5,6 +5,8 @@ invariant, the input mutation, the expected publisher behaviour, and the
 classification of the observed outcome:
 
 - REJECTED_RED: an error/failure status was published for the exact head.
+- REJECTED_PENDING: verified source evidence with changed CI authority was
+  explicitly *not certified*; pending is not success or trust authorization.
 - REJECTED_NO_PUBLICATION: no status was created (state None, exit 0).
 - PUBLICATION_FAILED: a status POST was attempted and the provider refused it.
 - FALSE_GREEN: untrustworthy evidence produced a success status.
@@ -498,10 +500,12 @@ def test_C13_duplicate_job_across_pages_is_error():
     assert decide_with(FakeApi(jobs_pages=[page1, page2]))["state"] == "error"
 
 
-def test_C14_authority_file_on_second_changed_files_page_is_error():
+def test_C14_authority_file_on_second_changed_files_page_is_noncertifying():
     page1 = [{"filename": f"src/f{i}.py"} for i in range(100)]
     page2 = [{"filename": "scripts/agent_os_trusted_status_publisher.py"}]
-    assert decide_with(FakeApi(files_pages=[page1, page2]))["state"] == "error"
+    assert pub.touches_authority({page2[0]["filename"]})
+    outcome = decide_with(FakeApi(files_pages=[page1, page2]))
+    assert outcome["state"] == "pending"  # never trusted success
 
 
 def test_C15_files_payload_malformed_is_rejected():
@@ -521,10 +525,11 @@ def test_D01_fork_pr_head_repo_is_no_publish():
     assert decide_with(FakeApi(assoc_pages=[[bad]]))["state"] is None
 
 
-def test_D02_renamed_authority_file_is_error():
+def test_D02_renamed_authority_file_is_noncertifying():
     files = [[{"filename": "src/safe.py",
                "previous_filename": "scripts/agent_os_trusted_status_publisher.py"}]]
-    assert decide_with(FakeApi(files_pages=files))["state"] == "error"
+    assert pub.touches_authority({files[0][0]["previous_filename"]})
+    assert decide_with(FakeApi(files_pages=files))["state"] == "pending"
 
 
 def test_D03_root_conftest_is_authority():
@@ -533,7 +538,7 @@ def test_D03_root_conftest_is_authority():
     with '/conftest.py'. Pytest loads ancestor conftest.py files, so a root
     collection hook is the same authority class as any other conftest.py."""
     assert pub.touches_authority({"conftest.py"})
-    assert pub.evaluate(source(), jobs(), {"conftest.py"})["state"] == "error"
+    assert pub.evaluate(source(), jobs(), {"conftest.py"})["state"] == "pending"
 
 
 def test_D04_publisher_never_reads_artifacts_or_executes_pr_code():
@@ -548,11 +553,12 @@ def test_D04_publisher_never_reads_artifacts_or_executes_pr_code():
     assert "ref: ${{ github.event.repository.default_branch }}" in workflow
 
 
-def test_D05_composite_action_and_validator_prefix_changes_are_error():
+def test_D05_composite_action_and_validator_prefix_changes_are_noncertifying():
     for path in ("scripts/agent_os_ci_validation.py",
                  ".github/actions/setup-python-dev/action.yml",
                  "scripts/agent_os_remote_validation/main_health.py"):
-        assert pub.evaluate(source(), jobs(), {path})["state"] == "error", path
+        assert pub.touches_authority({path}), path
+        assert pub.evaluate(source(), jobs(), {path})["state"] == "pending", path
 
 
 def test_D06_fork_head_repo_in_current_read_is_no_publish():
@@ -635,19 +641,47 @@ def test_E08_exit_zero_without_publication_is_not_success(tmp_path):
     assert posts == []
 
 
-def test_E09_pending_is_never_a_published_state():
-    src_text = (ROOT / "scripts/agent_os_trusted_status_publisher.py").read_text()
-    assert '"pending"' not in src_text
-    states = set()
-    for outcome in (
-        pub.evaluate(source(), jobs(), set()),
-        pub.evaluate(source(conclusion="failure"), jobs(), set()),
-        pub.evaluate(source(), jobs()[:-1], set()),
-        decide_with(FakeApi()),
-    ):
-        states.add(outcome["state"])
-    assert states <= {"success", "failure", "error", None}
-    assert "pending" not in states
+def test_E09_pending_is_published_only_for_verified_authority_changes(tmp_path):
+    """Policy change: authority edits abstain without granting trusted success.
+
+    Real source failure, missing evidence and non-authority PRs retain their
+    original dispositions. Pending must never bypass exact-head checks.
+    """
+    authority = "scripts/agent_os_trusted_status_publisher.py"
+    verified = FakeApi(files_pages=[[{"filename": authority}]])
+    assert pub.evaluate(source(), jobs(), set())["state"] == "success"
+    assert pub.evaluate(source(), jobs(), {authority})["state"] == "pending"
+    assert pub.evaluate(source(conclusion="failure"), jobs(), {authority})["state"] == "failure"
+    assert pub.evaluate(source(), jobs()[:-1], {authority})["state"] == "error"
+    assert decide_with(FakeApi())["state"] == "success"
+    assert decide_with(verified)["state"] == "pending"
+
+    code, out, posts, _ = run_main(tmp_path, FakeApi(files_pages=[[{"filename": authority}]]))
+    assert code == 0  # successful reporting, NOT successful certification
+    assert out["context"] == pub.CONTEXT
+    assert out["state"] == "pending" and "not certified" in out["description"]
+    assert len(posts) == 1
+    assert "state=pending" in post_cmd(posts)
+    assert "state=success" not in post_cmd(posts)
+
+
+def test_E10_authority_change_with_incomplete_source_evidence_stays_red(tmp_path):
+    authority_files = [[{"filename": ".github/workflows/agent-os-validation.yml"}]]
+    missing = jobs()[:-1]
+    failed = jobs()
+    failed[0]["conclusion"] = "failure"
+    for altered_jobs, expected in ((missing, "error"), (failed, "failure")):
+        code, out, posts, _ = run_main(
+            tmp_path, FakeApi(files_pages=authority_files, jobs_pages=[altered_jobs]))
+        assert code == 1 and out["state"] == expected
+        assert len(posts) == 1 and f"state={expected}" in post_cmd(posts)
+        assert "state=success" not in post_cmd(posts)
+        assert "state=pending" not in post_cmd(posts)
+
+    stale = FakeApi(files_pages=authority_files,
+                    runs_pages=[[run_record(run_id=RUN_ID + 1)]])
+    code, out, posts, _ = run_main(tmp_path, stale)
+    assert code == 0 and out["state"] is None and posts == []
 
 
 def test_C16_single_run_malformed_timestamp_fails_closed(tmp_path):

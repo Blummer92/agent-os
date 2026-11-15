@@ -1438,6 +1438,64 @@ def test_bound_bootstrap_fails_on_corrupted_readiness(tmp_path, monkeypatch) -> 
     assert excinfo.value.reason == "bound-evidence-unavailable"
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        pytest.param("truncated", id="truncated-request-file"),
+        pytest.param("tampered", id="tampered-request-file"),
+    ],
+)
+def test_bound_bootstrap_fails_closed_on_present_but_corrupt_runtime_request(
+    tmp_path, monkeypatch, corruption
+) -> None:
+    """A durable runtime request that EXISTS but is corrupt must fail closed.
+
+    The missing-request case is covered by the ``missing-handoff`` case of
+    ``test_bound_controller_fails_closed_before_dispatch``; this pins the
+    present-but-corrupt case at the controller boundary: no bootstrap is
+    returned, so no dispatch or receipt can follow.
+    """
+    bound = _bound_store(tmp_path, monkeypatch)
+    request_files = list((bound["store"] / "runtime-execution-requests").glob("*.json"))
+    assert len(request_files) == 1
+    request_file = request_files[0]
+    original = request_file.read_text()
+    if corruption == "truncated":
+        request_file.write_text(original[: len(original) // 2])
+    else:
+        # Alter one admitted identity inside an otherwise well-formed record.
+        assert _BOUND_SHA in original
+        request_file.write_text(original.replace(_BOUND_SHA, "d" * 40))
+        assert request_file.read_text() != original
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _build_bound_bootstrap(bound["envelope"], bound["configuration"])
+    assert excinfo.value.reason == "bound-evidence-unavailable"
+    receipts_dir = bound["store"] / "invocations" / "receipts"
+    assert not receipts_dir.exists() or list(receipts_dir.iterdir()) == []
+
+
+def test_descriptor_and_capsule_subject_binding_rejects_mismatch(tmp_path, monkeypatch) -> None:
+    """The factory's descriptor/capsule subject binding is asserted directly.
+
+    The factory tests monkeypatch ``_bind_descriptor_and_capsule`` away, so
+    its mismatch branch was never exercised. A different handoff identity
+    must be refused; the matching identity (control) must be accepted.
+    """
+    from agent_os_execution_service.production_governed_resume_factory import (
+        ProductionGovernedResumeFactoryError,
+        _bind_descriptor_and_capsule,
+    )
+
+    bound = _bound_store(tmp_path, monkeypatch)
+    descriptor = bound["request"].invocation_descriptor
+    capsule = bound["request"].restart_capsule
+    _bind_descriptor_and_capsule(descriptor, capsule, bound["handoff"].handoff_id)
+    with pytest.raises(
+        ProductionGovernedResumeFactoryError, match="do not bind the same subject"
+    ):
+        _bind_descriptor_and_capsule(descriptor, capsule, "executor-handoff:" + "9" * 64)
+
+
 def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeypatch) -> None:
     """Stale dependency readiness must not become RESOLVED_CLEAR evidence."""
     bound = _bound_store(tmp_path, monkeypatch, readiness_expires="2026-01-02T00:00:00Z")

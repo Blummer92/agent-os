@@ -230,17 +230,10 @@ def select_coding_knowledge(
     if any(type(candidate) is not CodingKnowledgeCandidate for candidate in candidates):
         raise TypeError("candidates must contain CodingKnowledgeCandidate values")
 
+    # R1 (#2425): deduplicate BEFORE the budget check. The budget counts
+    # DISTINCT candidate identities; identical duplicates must not consume
+    # it. candidate_count keeps its raw contract (len of supplied candidates).
     candidate_count = len(candidates)
-    if candidate_count > MAX_CANDIDATES:
-        return _result(
-            SufficiencyStatus.MANUAL_REVIEW,
-            RetrievalEscalation.MANUAL_REVIEW,
-            (),
-            request.canonical_rule_refs,
-            ("candidate-budget-exceeded",),
-            candidate_count,
-        )
-
     deduped, duplicate_conflict = _deduplicate(candidates)
     if duplicate_conflict:
         return _result(
@@ -249,6 +242,15 @@ def select_coding_knowledge(
             (),
             request.canonical_rule_refs,
             ("duplicate-identity-conflict",),
+            candidate_count,
+        )
+    if len(deduped) > MAX_CANDIDATES:
+        return _result(
+            SufficiencyStatus.MANUAL_REVIEW,
+            RetrievalEscalation.MANUAL_REVIEW,
+            (),
+            request.canonical_rule_refs,
+            ("candidate-budget-exceeded",),
             candidate_count,
         )
 
@@ -402,6 +404,18 @@ def _match_candidate(
         if path_match:
             reasons.append("target-path-match")
         return 3, tuple(reasons)
+    # Explicit CKR6 mutation-boundary requests may match a lesson's verified
+    # title/guidance even when Notion's controlled vocabulary is generic.
+    # Require BOTH distinctive tokens, as whole words, in the lesson-owned
+    # text. This is relevance only, never eligibility or authorization.
+    import re
+    ci_request = "ckr6 mutation boundary" in capability_hints
+    if ci_request:
+        lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
+        if all(re.search(r"(?<![a-z0-9])" + term + r"(?![a-z0-9])", lesson_text)
+               for term in ("ckr6", "mutation")):
+            return 2, ("verified-ckr6-mutation-context-match",)
+
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
     if path_match:

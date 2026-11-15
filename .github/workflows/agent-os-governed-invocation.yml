@@ -24,7 +24,7 @@ env:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') && !startsWith(github.event.comment.body, '/agent-os validate-draft') && !startsWith(github.event.comment.body, '/agent-os recover-ready') }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') && !startsWith(github.event.comment.body, '/agent-os validate-draft') && !startsWith(github.event.comment.body, '/agent-os recover-ready') && github.event.comment.body != '/agent-os codespace-start' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
@@ -1395,5 +1395,54 @@ jobs:
         with:
           name: agent-os-ready-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-ready-recovery/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  codespace_start:
+    name: Start the existing authorized Codespace (#3345)
+    # This is a distinct lifecycle-only lane, not the ordinary ingress.
+    # Only an exact owner-authored command on #3345 may reach this job.
+    # No GCE fallback, checkout reset, stop, or general shell capability.
+    if: ${{ github.event.issue.pull_request == null && github.ref == 'refs/heads/main' && github.event.issue.number == 3345 && github.event.comment.user.id == 32861845 && github.event.sender.id == 32861845 && github.event.comment.body == '/agent-os codespace-start' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: agent-os-codespace-lifecycle-${{ github.repository_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Parse owner-only lifecycle envelope
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/agent-os-codespace-start"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-codespace-start/transport.json"
+
+      - name: Verify target and start with separate lifecycle identity
+        env:
+          AGENT_OS_CODESPACES_READ_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_TOKEN }}
+          AGENT_OS_CODESPACES_LIFECYCLE_TOKEN: ${{ secrets.AGENT_OS_CODESPACES_LIFECYCLE_TOKEN }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.codespaces_remote_start \
+              --transport "$RUNNER_TEMP/agent-os-codespace-start/transport.json" \
+              --output "$RUNNER_TEMP/agent-os-codespace-start/result.json"
+
+      - name: Publish bounded lifecycle evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-codespace-start-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-codespace-start/*.json
           if-no-files-found: warn
           retention-days: 7

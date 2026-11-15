@@ -342,3 +342,23 @@ def test_1510_no_repair_context_has_no_retry_boundary():
     plan = plan_repair_retry_boundary(RepairContext.NONE, (failed_attempt(),))
     assert plan.mutation_admissible is True
     assert plan.reason_codes == ("no-retry-boundary-applicable",)
+
+
+# --- CKR6 PR-A (R1 selector dedup / candidate-budget repair, #2425) ---
+# A06 (consumer half) from PR_A_TEST_MATRIX.csv. The consumer budget gate
+# must count distinct lesson identities, not records, or a conflicting
+# identity preserved by the bound would be swallowed here as a budget
+# failure before the selector can report the conflict.
+
+
+def test_pr_a06_consumer_budget_counts_distinct_ids_not_records():
+    # Six records covering five distinct identities: one identical duplicate.
+    # The gate must not trip; the duplicate collapses downstream.
+    lessons = tuple(lesson(lesson_id=f"lesson:{index}") for index in range(5)) + (
+        lesson(lesson_id="lesson:0"),
+    )
+    result = consume_lesson_preflight(request(), lessons)
+    assert "lesson-candidate-budget-exceeded" not in result.selection_reason_codes
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.candidate_count == 6
+    assert result.selected_count == 3

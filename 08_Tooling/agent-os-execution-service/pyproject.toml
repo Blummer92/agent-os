@@ -57,6 +57,7 @@ agent-os-mcp = "agent_os_execution_service.mcp_server:main"
 [tool.setuptools]
 packages = [
   "agent_os_execution_service",
+  "agent_os_execution_service.ckr6_model_gateway",
   "scripts.agent_os_candidate_packet",
   "scripts.agent_os_candidate_packet_live_input",
 ]

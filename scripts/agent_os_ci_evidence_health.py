@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import sys
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -28,6 +30,269 @@ _ADVISORY_SCHEMAS = {
     "pyan3": "agent-os-pyan3-advisory/1",
     "jscpd": "agent-os-jscpd-advisory/1",
 }
+
+# pytest 9 counts unittest/pytest subtests in the suite ``tests`` total
+# without emitting one <testcase> per subtest, so a genuine aggregate
+# report can declare more tests than it has testcase elements. A surplus
+# is certified ONLY by a source-bound subtest receipt (see below) that
+# is ALSO corroborated by the provider-fetched producer job log (see
+# SUBTEST_MARKER_TAG): the receipt is producer evidence from the same
+# run, bound by run id, attempt, head SHA and the JUnit file's own
+# digest, and it must satisfy the passing-subtests-only equations in
+# verify_subtest_receipt against the actual XML bytes. A version
+# string, a claimed count, a self-consistent receipt, or the surplus
+# itself proves nothing on its own.
+SUBTEST_RECEIPT_SCHEMA = "agent-os-ci-junit-subtest-receipt/1"
+SUBTEST_RECEIPT_PREFIX = "junit-subtest-receipt-"
+
+# Provider-log corroboration (trust-contract repair, 2026-11-12). A receipt
+# alone is producer evidence: its run/attempt/SHA/digest binding prevents
+# reuse across executions, but those fields alone do not prove the claimed
+# subtest count was observed during execution. The producer therefore also
+# prints one structured marker line to stdout when it writes a receipt;
+# that line is replayed into the aggregate job's log, which the provider
+# captures. The collector independently fetches that job's log from the
+# provider (Actions API, ``actions: read`` -- already granted to the
+# collector workflow) and requires exactly one well-formed marker for the
+# suite whose counts and JUnit digest equal the receipt's claims.
+# A marker is NOT cryptographic proof of test behavior: provider logs
+# still contain producer output, so a party controlling the producer job
+# can print a marker with any counts. What corroboration adds is that
+# the explanation must appear in the provider's own capture of the bound
+# execution, not merely in a file the producer placed in the artifact:
+# post-hoc receipt forgery or reuse cannot pass, because the
+# provider-held log cannot be rewritten after the run. The XML equations
+# in verify_subtest_receipt still pin passed (via passed_elements) and
+# the surplus (via tests - elements), so a forged marker cannot certify
+# any surplus other than the one the XML itself already implies. The
+# job->artifact join remains BY_NAME (NOT_IMPLEMENTED_EXACT): the log is
+# the same-named aggregate job's log, not a provider-proven join.
+SUBTEST_MARKER_TAG = "AGENT_OS_JUNIT_SUBTEST_RECEIPT"
+_SUBTEST_MARKER_FIELDS = (
+    "passed",
+    "skipped",
+    "xfailed",
+    "failed",
+    "errors",
+    "subtests_passed",
+    "junit_tests",
+)
+_SUBTEST_MARKER_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ")
+
+
+def format_subtest_marker(entry: dict, suite_key: str) -> str:
+    """Format the single stdout marker line for a receipt entry.
+
+    Fixed field order, no free text: the collector's parser requires
+    this exact shape, so a misleading pytest summary line, a nested
+    run's output, or a JSON-embedded summary can never match it."""
+    if not isinstance(suite_key, str) or not _SUBTEST_MARKER_KEY_RE.fullmatch(suite_key):
+        raise ValueError("invalid-subtest-marker-suite")
+    if not isinstance(entry, dict):
+        raise ValueError("invalid-subtest-marker-entry")
+    for field in _SUBTEST_MARKER_FIELDS:
+        if not _is_non_negative_int(entry.get(field)):
+            raise ValueError("invalid-subtest-marker-entry")
+    digest = entry.get("junit_sha256")
+    if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+        raise ValueError("invalid-subtest-marker-entry")
+    fields = " ".join(f"{field}={entry[field]}" for field in _SUBTEST_MARKER_FIELDS)
+    return f"{SUBTEST_MARKER_TAG} suite={suite_key} {fields} junit_sha256={digest}"
+
+
+def parse_subtest_marker_line(line: str) -> dict | None:
+    """Parse one log line as a subtest marker, or None when it is not one.
+
+    A line is a marker only when, after stripping a leading GitHub
+    timestamp prefix, it STARTS with the tag. A tag appearing mid-line
+    (for example inside a JSON-embedded nested run) is not a marker and
+    is ignored. A line that starts with the tag but fails the strict
+    grammar is conflicting evidence and raises ValueError: it must
+    never be silently skipped, or a misleading marker could hide
+    behind a parse failure."""
+    if not isinstance(line, str):
+        raise ValueError("invalid-subtest-marker-line")
+    content = _TIMESTAMP_PREFIX_RE.sub("", line.strip(), count=1)
+    if not content.startswith(SUBTEST_MARKER_TAG):
+        return None
+    rest = content[len(SUBTEST_MARKER_TAG):]
+    if not rest.startswith(" "):
+        raise ValueError("subtest-marker-conflict")
+    tokens = rest.strip().split(" ")
+    if len(tokens) != len(_SUBTEST_MARKER_FIELDS) + 2:  # suite= + fields + digest=
+        raise ValueError("subtest-marker-conflict")
+    if not tokens[0].startswith("suite="):
+        raise ValueError("subtest-marker-conflict")
+    suite_key = tokens[0][len("suite="):]
+    if not _SUBTEST_MARKER_KEY_RE.fullmatch(suite_key):
+        raise ValueError("subtest-marker-conflict")
+    values: dict[str, int | str] = {"suite_key": suite_key}
+    for token, field in zip(tokens[1:1 + len(_SUBTEST_MARKER_FIELDS)], _SUBTEST_MARKER_FIELDS):
+        if not token.startswith(f"{field}="):
+            raise ValueError("subtest-marker-conflict")
+        raw = token[len(field) + 1:]
+        if not raw.isdigit():
+            raise ValueError("subtest-marker-conflict")
+        values[field] = int(raw)
+    digest_token = tokens[-1]
+    if not digest_token.startswith("junit_sha256="):
+        raise ValueError("subtest-marker-conflict")
+    digest = digest_token[len("junit_sha256="):]
+    if not _DIGEST.fullmatch(digest):
+        raise ValueError("subtest-marker-conflict")
+    values["junit_sha256"] = digest
+    return values
+
+
+def parse_subtest_markers_text(text: str) -> dict[str, dict]:
+    """Extract subtest markers from decoded log text.
+
+    Returns suite key -> marker counts. Raises ValueError on a
+    malformed marker line or on two valid markers for the same suite:
+    duplicate summaries are ambiguous evidence, never resolved by
+    picking one. A log with no markers returns an empty dict (the
+    caller treats that as uncorroborated, never as zero subtests)."""
+    if not isinstance(text, str):
+        raise ValueError("invalid-subtest-log-text")
+    found: dict[str, dict] = {}
+    for line in text.splitlines():
+        marker = parse_subtest_marker_line(line)
+        if marker is None:
+            continue
+        key = str(marker["suite_key"])
+        if key in found:
+            raise ValueError("subtest-marker-duplicate")
+        found[key] = {k: v for k, v in marker.items() if k != "suite_key"}
+    return found
+
+
+_ZIP_MAGIC = b"PK\x03\x04"
+
+
+def _log_member_in_scope(name: str, job_name: str | None, step_name: str | None) -> bool:
+    """Scope binding for log-archive members (MED-1 repair).
+
+    With no ``job_name`` and no ``step_name`` every member is in scope
+    (legacy whole-archive callers). Otherwise a member under a top-level
+    directory is in scope only when that directory IS the bound job
+    (run-level archive layout ``<job>/<NN>_<step>.txt``); a member at
+    the archive root comes from a job-level archive, which the endpoint
+    already scopes to one job. When ``step_name`` is given, the member's
+    step file must additionally be the bound step's own log
+    (``<NN>_<step_name>.txt``). An out-of-scope member never
+    corroborates the bound job's receipts; extract_subtest_markers
+    treats a marker line found in one as conflicting evidence and
+    raises, while out-of-scope non-marker content is simply not
+    corroboration."""
+    if job_name is None and step_name is None:
+        return True
+    base = name
+    if "/" in name:
+        top, base = name.split("/", 1)
+        if job_name is not None and top != job_name:
+            return False
+        if "/" in base:
+            return False
+    if step_name is not None:
+        return re.fullmatch(r"\d+_" + re.escape(step_name) + r"\.txt", base) is not None
+    return True
+
+
+def extract_subtest_markers(log_zip_bytes: bytes, *, max_bytes: int = 64_000_000, max_entries: int = 1_000,
+                            job_name: str | None = None, step_name: str | None = None) -> dict[str, dict]:
+    """Extract subtest markers from provider-fetched job-log bytes.
+
+    The run-level logs endpoint returns a job-granular ZIP
+    ("{ordinal}_{job}.txt" members plus per-job "system.txt" files, as
+    measured on this repository's production archives 2026-11-13), NOT
+    one file per step; the job-level and step-level endpoints serve
+    plain text (HIGH-1 repair). Bytes that are not a ZIP archive (no PK
+    magic) are therefore decoded as UTF-8 with replacement and parsed
+    as log text directly; that path is scoped by the endpoint route
+    (job or step) by construction. ZIP member names
+    are validated (no absolute paths, no traversal, no duplicates),
+    total uncompressed size and entry count are capped, and members are
+    decoded as UTF-8 with replacement (a marker line damaged by
+    undecodable bytes simply fails to parse, fail-closed). Only members
+    in scope for ``job_name``/``step_name`` (see _log_member_in_scope)
+    count as corroboration; every member is still validated, and every
+    member is still scanned for marker lines: a marker line outside the
+    bound scope is conflicting evidence and raises ValueError, it is
+    never silently ignored (a forged marker must not corroborate, and
+    its presence must not go unnoticed). Any malformed marker line or
+    duplicate marker for a suite raises ValueError: ambiguous log
+    evidence must never silently resolve."""
+    if not isinstance(log_zip_bytes, (bytes, bytearray)) or not log_zip_bytes:
+        raise ValueError("invalid-subtest-log-archive")
+    data = bytes(log_zip_bytes)
+    if len(data) > max_bytes:
+        raise ValueError("invalid-subtest-log-archive")
+    if not data.startswith(_ZIP_MAGIC):
+        # Plain-text producer log (the jobs/{id}/logs or
+        # jobs/{id}/steps/{n}/logs shape): output already scoped by the
+        # endpoint route (production: the bound aggregate step).
+        return parse_subtest_markers_text(data.decode("utf-8", errors="replace"))
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception as exc:
+        raise ValueError("invalid-subtest-log-archive") from exc
+    try:
+        infos = zf.infolist()
+        if not infos or len(infos) > max_entries:
+            raise ValueError("invalid-subtest-log-archive")
+        names: set[str] = set()
+        total = 0
+        for info in infos:
+            name = info.filename
+            if not name or name.startswith("/") or "\\" in name or ".." in name.split("/"):
+                raise ValueError("invalid-subtest-log-archive")
+            if name in names:
+                raise ValueError("invalid-subtest-log-archive")
+            names.add(name)
+            total += info.file_size
+            if total > max_bytes:
+                raise ValueError("invalid-subtest-log-archive")
+        found: dict[str, dict] = {}
+        for info in infos:
+            text = zf.read(info.filename).decode("utf-8", errors="replace")
+            markers = parse_subtest_markers_text(text)
+            if not _log_member_in_scope(info.filename, job_name, step_name):
+                if markers:
+                    # A marker outside the bound job/step scope is
+                    # conflicting evidence, never corroboration.
+                    raise ValueError("subtest-marker-out-of-scope")
+                continue
+            for key, marker in markers.items():
+                if key in found:
+                    raise ValueError("subtest-marker-duplicate")
+                found[key] = marker
+        return found
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("invalid-subtest-log-archive") from exc
+_SUBTEST_RECEIPT_KEYS = frozenset(
+    {
+        "schema",
+        "junit_file",
+        "junit_sha256",
+        "source_run_id",
+        "source_run_attempt",
+        "source_head_sha",
+        "passed",
+        "skipped",
+        "xfailed",
+        "failed",
+        "errors",
+        "subtests_passed",
+        "junit_tests",
+        "junit_testcase_elements",
+        "junit_failures",
+        "junit_errors",
+        "junit_skipped",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -166,9 +431,23 @@ def validate_advisory_report_file(path: Path, *, tool: str, expected_head: str) 
     return validate_advisory_report(report, expected_head=expected_head)
 
 
-def validate_junit(xml: bytes, *, max_bytes: int = 8_000_000) -> tuple[tuple[str, ...], dict[str, int]]:
-    """Strict JUnit validation. Returned ids are reporter-derived (suite +
-    classname + name), NOT asserted to be full pytest nodeids."""
+def parse_junit_report(xml: bytes, *, max_bytes: int = 8_000_000) -> tuple[tuple[str, ...], dict[str, int], tuple[tuple[int, int], ...]]:
+    """Strict JUnit parse shared by the validator and the subtest receipt.
+
+    Returns reporter-derived ids, counts, and per-suite (declared tests,
+    testcase elements) shapes. ``counts`` carries the suite attribute
+    totals plus per-element outcome counts: ``testcase_elements`` is the
+    number of <testcase> elements actually present, and
+    ``passed_elements`` / ``failed_elements`` / ``error_elements`` /
+    ``skipped_elements`` count elements by the outcome child they carry
+    (an element with no outcome child is a passed element). This function
+    deliberately does NOT require declared tests to equal the element
+    count: that equality is the validator's rule (see validate_junit),
+    and the receipt verifier applies its own explained-surplus equations
+    instead. Every other strictness is identical: unsafe/empty input,
+    malformed XML, wrong root, missing suite name, non-numeric counts,
+    missing node identity, duplicate identities, and subcounts larger
+    than the declared total are all rejected here."""
     if not isinstance(xml, (bytes, bytearray)):
         raise ValueError("junit input must be bytes, not a path string")
     xml = bytes(xml)
@@ -182,19 +461,30 @@ def validate_junit(xml: bytes, *, max_bytes: int = 8_000_000) -> tuple[tuple[str
     if not suites or any(x.tag != "testsuite" for x in suites):
         raise ValueError("invalid-junit-root")
     ids: list[str] = []
-    counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    counts = {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "testcase_elements": 0,
+        "passed_elements": 0,
+        "failed_elements": 0,
+        "error_elements": 0,
+        "skipped_elements": 0,
+    }
+    suite_shapes: list[tuple[int, int]] = []
     for suite in suites:
         suite_name = suite.attrib.get("name", "")
         if not suite_name:
             raise ValueError("suite-name-missing")
-        for field in counts:
+        for field in ("tests", "failures", "errors", "skipped"):
             raw = suite.attrib.get(field, "")
             if not raw.isdigit():
                 raise ValueError("invalid-junit-count")
             counts[field] += int(raw)
         cases = [x for x in suite if x.tag == "testcase"]
-        if len(cases) != int(suite.attrib["tests"]):
-            raise ValueError("testcase-count-mismatch")
+        counts["testcase_elements"] += len(cases)
+        suite_shapes.append((int(suite.attrib["tests"]), len(cases)))
         for case in cases:
             # Real pytest output can emit a testcase with an empty classname
             # (e.g. a module-level node, observed in tests/agent_os_issue_acceptance:
@@ -208,11 +498,204 @@ def validate_junit(xml: bytes, *, max_bytes: int = 8_000_000) -> tuple[tuple[str
             if not name:
                 raise ValueError("node-identity-missing")
             ids.append("::".join((suite_name, classname, name)))
+            children = {x.tag for x in case}
+            if "failure" in children:
+                counts["failed_elements"] += 1
+            if "error" in children:
+                counts["error_elements"] += 1
+            if "skipped" in children:
+                counts["skipped_elements"] += 1
+            if not children & {"failure", "error", "skipped"}:
+                counts["passed_elements"] += 1
     if not ids or len(set(ids)) != len(ids):
         raise ValueError("zero-or-duplicate-nodes")
-    if any(v > counts["tests"] for k, v in counts.items() if k != "tests"):
+    if any(v > counts["tests"] for k, v in counts.items() if k in ("failures", "errors", "skipped")):
         raise ValueError("invalid-subcount")
-    return tuple(ids), counts
+    return tuple(ids), counts, tuple(suite_shapes)
+
+
+def validate_junit(xml: bytes, *, max_bytes: int = 8_000_000) -> tuple[tuple[str, ...], dict[str, int]]:
+    """Strict JUnit validation. Returned ids are reporter-derived (suite +
+    classname + name), NOT asserted to be full pytest nodeids.
+
+    The declared suite total must equal the testcase elements present,
+    per suite, exactly as before. A pytest 9 subtest surplus is NOT
+    accepted here: it is accepted only in the collector, where a
+    source-bound subtest receipt explains it (verify_subtest_receipt).
+    An unexplained surplus stays rejected."""
+    ids, counts, suite_shapes = parse_junit_report(xml, max_bytes=max_bytes)
+    if any(elements != tests for tests, elements in suite_shapes):
+        raise ValueError("testcase-count-mismatch")
+    return ids, {k: counts[k] for k in ("tests", "failures", "errors", "skipped")}
+
+
+def _is_non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def load_subtest_receipts(receipt_files: dict[str, bytes]) -> dict[str, dict]:
+    """Parse subtest receipt files from a JUnit artifact.
+
+    ``receipt_files`` maps member name to bytes for members named
+    ``junit-subtest-receipt-*.json``. Each file is one receipt entry (a
+    JSON object, not a list). Returns junit_file -> entry. Any malformed
+    file, wrong schema, unexpected field, or duplicate junit_file is a
+    hard ValueError: a corrupt explanation poisons the artifact instead
+    of being silently ignored."""
+    out: dict[str, dict] = {}
+    for name, data in receipt_files.items():
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError(f"invalid-subtest-receipt: {name}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid-subtest-receipt: {name}")
+        if set(payload) != _SUBTEST_RECEIPT_KEYS:
+            raise ValueError(f"invalid-subtest-receipt: {name}")
+        if payload["schema"] != SUBTEST_RECEIPT_SCHEMA:
+            raise ValueError(f"invalid-subtest-receipt: {name}")
+        junit_file = payload["junit_file"]
+        if not isinstance(junit_file, str) or not junit_file.endswith(".xml") or "/" in junit_file or "\\" in junit_file:
+            raise ValueError(f"invalid-subtest-receipt: {name}")
+        if junit_file in out:
+            raise ValueError(f"duplicate-subtest-receipt: {junit_file}")
+        out[junit_file] = payload
+    return out
+
+
+def verify_subtest_receipt(
+    xml: bytes,
+    entry: dict,
+    *,
+    source_run_id: int | None,
+    source_run_attempt: int | None,
+    source_head: str | None,
+    log_counts: dict | None = None,
+) -> tuple[tuple[str, ...], dict[str, int]]:
+    """Accept a JUnit report whose declared total exceeds its testcase
+    elements ONLY when a source-bound receipt explains the surplus as
+    passing subtests AND the provider-fetched producer log corroborates
+    that explanation. Returns (ids, counts) with the four validator
+    counts plus ``subtests_passed`` and ``testcase_elements`` kept
+    distinct: the certified evidence is the element identities plus the
+    verified subtest count, never ``tests`` identities.
+
+    The explanation must satisfy, against the actual XML bytes:
+      * the entry's source run id, attempt and head SHA equal the
+        provider-verified source (never None, never merely self-reported);
+      * the entry's junit_sha256 equals the digest of these exact bytes;
+      * the provider log carries exactly one well-formed marker for
+        this suite (``AGENT_OS_JUNIT_SUBTEST_RECEIPT``) whose terminal
+        counts and JUnit digest equal the receipt's claims
+        (``log_counts``). A missing marker, a duplicate marker, a
+        malformed marker line, or any mismatch is uncorroborated and
+        the surplus stays rejected. A receipt alone -- however
+        self-consistent -- never certifies a surplus.
+      * the entry's recorded JUnit totals equal the parsed totals;
+      * no failure or error anywhere (terminal counts, suite attributes,
+        or outcome elements): an adverse subtest can never be reconciled
+        away, and a failed suite is rejected on its own merits;
+      * declared tests == passed + skipped + xfailed + failed + errors
+        + subtests_passed (every report accounted for, nothing else);
+      * suite skipped == terminal skipped + xfailed (xfail is a JUnit
+        skip; no hidden skipped outcome);
+      * passed elements == terminal passed, skipped elements == suite
+        skipped, and every element is either passed or skipped. A
+        skipped or xfailed subtest marks its (passed) parent element
+        with a <skipped> child, so it breaks the element equation and
+        stays rejected: only the all-passing-subtest shape is supported.
+        Skipped/xfail/failed subtests, teardown errors, parallel and
+        nested shapes are explicitly unsupported, not silently accepted.
+      * the surplus (declared tests - elements) is positive and equals
+        subtests_passed exactly; nothing is inferred from a missing
+        receipt, and a missing receipt never implies zero subtests.
+
+    What corroboration does and does not prove: the marker must appear
+    in the provider's own capture of the bound aggregate job's log, so
+    a receipt forged or reused after the run cannot pass. It does not
+    prove the subtest count was observed by pytest -- provider logs
+    contain producer output, and a party controlling the producer job
+    can print a marker with any counts. The XML equations still pin
+    passed (via passed_elements) and the surplus (via tests -
+    elements), so a forged marker cannot certify any surplus other
+    than the one the XML itself already implies; and the job->artifact
+    join remains BY_NAME, not a provider-proven join.
+
+    Any violation raises ValueError. Callers must treat a raised error
+    as REJECT_SCHEMA for that report."""
+    if not isinstance(entry, dict) or set(entry) != _SUBTEST_RECEIPT_KEYS:
+        raise ValueError("invalid-subtest-receipt-entry")
+    if entry["schema"] != SUBTEST_RECEIPT_SCHEMA:
+        raise ValueError("invalid-subtest-receipt-entry")
+    for field in ("passed", "skipped", "xfailed", "failed", "errors", "subtests_passed",
+                  "junit_tests", "junit_testcase_elements", "junit_failures", "junit_errors", "junit_skipped"):
+        if not _is_non_negative_int(entry[field]):
+            raise ValueError("invalid-subtest-receipt-entry")
+    if source_run_id is None or source_run_attempt is None or source_head is None:
+        raise ValueError("subtest-receipt-unbound")
+    if entry["source_run_id"] != source_run_id or entry["source_run_attempt"] != source_run_attempt or entry["source_head_sha"] != source_head:
+        raise ValueError("subtest-receipt-wrong-source")
+    if not isinstance(entry["source_head_sha"], str) or not _SHA.fullmatch(entry["source_head_sha"]):
+        raise ValueError("subtest-receipt-wrong-source")
+    if not isinstance(entry["junit_sha256"], str) or not _DIGEST.fullmatch(entry["junit_sha256"]):
+        raise ValueError("invalid-subtest-receipt-entry")
+    if hashlib.sha256(bytes(xml)).hexdigest() != entry["junit_sha256"]:
+        raise ValueError("subtest-receipt-digest-mismatch")
+    # Provider-log corroboration is required, not optional: a receipt
+    # alone -- however internally consistent -- never certifies a
+    # surplus. The marker must be the provider log's own record for
+    # this suite, with counts and digest equal to the receipt's claims.
+    if log_counts is None:
+        raise ValueError("subtest-receipt-uncorroborated")
+    if not isinstance(log_counts, dict) or set(log_counts) != set(_SUBTEST_MARKER_FIELDS) | {"junit_sha256"}:
+        raise ValueError("subtest-receipt-uncorroborated")
+    for field in _SUBTEST_MARKER_FIELDS:
+        if not _is_non_negative_int(log_counts[field]) or log_counts[field] != entry[field]:
+            raise ValueError("subtest-marker-mismatch")
+    if log_counts["junit_sha256"] != entry["junit_sha256"]:
+        raise ValueError("subtest-marker-mismatch")
+    ids, counts, suite_shapes = parse_junit_report(xml)
+    if any(elements > tests for tests, elements in suite_shapes):
+        # A suite with more elements than declared tests is the
+        # --setup-only shape (passing-looking elements, tests="0"): never
+        # an executed-tests explanation, even with a receipt.
+        raise ValueError("testcase-count-mismatch")
+    if (
+        entry["junit_tests"] != counts["tests"]
+        or entry["junit_testcase_elements"] != counts["testcase_elements"]
+        or entry["junit_failures"] != counts["failures"]
+        or entry["junit_errors"] != counts["errors"]
+        or entry["junit_skipped"] != counts["skipped"]
+    ):
+        raise ValueError("subtest-receipt-count-mismatch")
+    if (
+        entry["failed"] != 0
+        or entry["errors"] != 0
+        or counts["failures"] != 0
+        or counts["errors"] != 0
+        or counts["failed_elements"] != 0
+        or counts["error_elements"] != 0
+    ):
+        raise ValueError("subtest-receipt-adverse-outcome")
+    if counts["tests"] != entry["passed"] + entry["skipped"] + entry["xfailed"] + entry["failed"] + entry["errors"] + entry["subtests_passed"]:
+        raise ValueError("subtest-receipt-total-mismatch")
+    if counts["skipped"] != entry["skipped"] + entry["xfailed"]:
+        raise ValueError("subtest-receipt-skip-mismatch")
+    if counts["passed_elements"] != entry["passed"] or counts["skipped_elements"] != counts["skipped"]:
+        raise ValueError("subtest-receipt-element-mismatch")
+    if counts["testcase_elements"] != counts["passed_elements"] + counts["skipped_elements"]:
+        raise ValueError("subtest-receipt-element-mismatch")
+    surplus = counts["tests"] - counts["testcase_elements"]
+    if surplus <= 0 or surplus != entry["subtests_passed"]:
+        raise ValueError("subtest-receipt-surplus-mismatch")
+    return ids, {
+        "tests": counts["tests"],
+        "failures": counts["failures"],
+        "errors": counts["errors"],
+        "skipped": counts["skipped"],
+        "subtests_passed": entry["subtests_passed"],
+        "testcase_elements": counts["testcase_elements"],
+    }
 
 
 def dedup_action(existing: dict[str, str], key: str, content_digest: str) -> str:
