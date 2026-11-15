@@ -195,3 +195,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+@pytest.fixture
+def nc08_positive_fixture() -> str:
+    """Benign shared fixture for the hosted NC08 positive control."""
+    return "collection-preserved"
