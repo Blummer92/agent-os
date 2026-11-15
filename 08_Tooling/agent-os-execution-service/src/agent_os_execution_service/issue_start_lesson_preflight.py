@@ -206,6 +206,7 @@ def activate_issue_start_lesson_preflight(
         "rejected_candidate_provenance": rejected,
         "materiality_source": materiality_source,
         "selection_reason_codes": list(result.selection_reason_codes),
+        "retrieval_diagnostics": dict(result.retrieval_diagnostics),
         "canonical_github_refs": list(result.canonical_github_refs),
         "knowledge_refs": list(result.knowledge_refs),
         "handoff_projection": handoff,
