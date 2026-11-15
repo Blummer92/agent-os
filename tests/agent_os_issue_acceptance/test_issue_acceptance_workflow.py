@@ -467,3 +467,36 @@ def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
     assert check(metadata, final_net_diff).status == Status.PASS
     # A real addition that survives in the delivered diff stays blocked.
     assert check(metadata, surviving_net_diff).status == Status.FAIL
+
+
+def test_manual_dispatch_uses_only_trusted_default_branch_evaluator():
+    """PR content is evidence, not executable acceptance policy."""
+    import yaml
+
+    workflow = yaml.safe_load(_content())
+    report = workflow["jobs"]["report"]
+    steps = report["steps"]
+    checkout = next(step for step in steps if step["uses"].startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert checkout["with"]["persist-credentials"] is False
+    verify = next(step for step in steps if step["name"] == "Verify trusted evaluator revision")
+    assert verify["env"]["EXPECTED_EVALUATOR_SHA"] == "${{ github.sha }}"
+    assert verify["env"]["EXPECTED_DISPATCH_REF"] == "${{ github.ref }}"
+    assert 'test "$EXPECTED_DISPATCH_REF" = "refs/heads/main"' in verify["run"]
+    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_EVALUATOR_SHA"' in verify["run"]
+    assert steps.index(checkout) < steps.index(verify)
+    assert steps.index(verify) < next(
+        i for i, step in enumerate(steps)
+        if step["name"] == "Run report-only issue acceptance checker"
+    )
+    assert "headRefOid" in _content()
+    assert '--transport-evaluator-sha "$evaluator_sha"' in _content()
+
+
+def test_manual_dispatch_never_executes_target_pr_head():
+    content = _content()
+    assert "ref: ${{ github.sha }}" in content
+    assert "ref: ${{ inputs.pr_number }}" not in content
+    assert "ref: ${{ github.event.pull_request.head.sha }}" not in content
+    assert "persist-credentials: false" in content
+    assert 'exit "$checker_exit_code"' in content
