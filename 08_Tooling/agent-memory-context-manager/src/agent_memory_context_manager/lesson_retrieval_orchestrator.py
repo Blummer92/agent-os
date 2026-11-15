@@ -170,6 +170,28 @@ def build_escalation_query(
                         # repeating the broader OR query.
                         narrowed = list(clauses)
                         narrowed[-1] = alternatives[0]
+                        # The CKR6-specific first query already searched Testing.
+                        # The second finite lookup must cover remaining controlled
+                        # relevance clauses, not repeat the same Testing area.
+                        # Preserve the existing 5-row and complete-cursor bounds.
+                        hints = {
+                            item.strip().casefold()
+                            for item in request.capability_keywords
+                        }
+                        testing = {"property": "Area", "select": {"equals": "Testing"}}
+                        remaining = [
+                            clause for clause in alternatives if clause != testing
+                        ]
+                        if (
+                            "ckr6 mutation boundary" in hints
+                            and testing in alternatives
+                            and remaining
+                        ):
+                            narrowed[-1] = (
+                                remaining[0]
+                                if len(remaining) == 1
+                                else {"or": remaining}
+                            )
                         query["filter"] = {"and": narrowed}
                         query["page_size"] = MAX_LESSON_RECORDS
                         return query
