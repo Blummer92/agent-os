@@ -362,3 +362,102 @@ def test_workflow_artifact_manifest_preserves_trusted_result_and_diagnostics():
     assert "${{ runner.temp }}/agent-os-ckr6/result.json" in upload
     assert "${{ runner.temp }}/agent-os-ckr6/retrieval-diagnostics.json" in upload
     assert "if-no-files-found: warn" in upload
+
+
+def _issue_start_envelope():
+    return bridge.parse_envelope({
+        "operation": "issue-start", "repository": "Blummer92/agent-os",
+        "issue_number": 3986, "task_reference": "issue-start diagnostics propagation",
+        "ecosystem_hints": ["python"], "language_hints": ["Python"],
+        "library_hints": [], "capability_keywords": ["failure-avoidance"],
+        "target_path_hints": [], "canonical_rule_refs": [], "known_knowledge_refs": [],
+        "specialized_knowledge_required": True,
+    })
+
+
+def _run_issue_start(monkeypatch, reader):
+    route = type("Route", (), {})()
+    route.execute_read = reader
+    monkeypatch.setattr(bridge, "resolve_lesson_read_route", lambda: route)
+    sink: list = []
+    result = bridge.execute_envelope(
+        _issue_start_envelope(), retrieval_required=True, diagnostics_sink=sink
+    )
+    return result, sink
+
+
+def _assert_issue_start_governance(result):
+    assert result["mutation_admissible"] is False
+    assert set(result) <= bridge.RESULT_FIELDS
+    assert "retrieval_diagnostics" not in result
+    for flag in ("execution_authorized", "github_writes_authorized", "merge_authorized",
+                 "closure_authorized", "side_effects_performed"):
+        assert result[flag] is False
+
+
+def test_issue_start_normal_read_reaches_artifact_with_actual_counters(monkeypatch, tmp_path):
+    reader = _counting({"results": [_row(1), _row(2), _row(3)], "has_more": False})
+    result, sink = _run_issue_start(monkeypatch, reader)
+    assert result["status"] == "sufficient"
+    assert result["selected_lesson_ids"] == ["LL-1", "LL-2", "LL-3"]
+    _assert_issue_start_governance(result)
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
+    data = json.loads(target.read_text())
+    assert data["read_count"] == 1
+    assert data["observed_rows"] == 3
+    assert data["normalized_rows"] == 3
+    assert data["candidate_count"] == 3
+    assert data["incomplete_reason_code"] == "none"
+
+
+def test_issue_start_incomplete_page_reaches_artifact_with_row_bound_and_read_count(monkeypatch, tmp_path):
+    reader = _counting({
+        "results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR,
+    })
+    result, sink = _run_issue_start(monkeypatch, reader)
+    assert result["status"] == "insufficient"
+    assert result["selected_lesson_ids"] == []
+    assert len(reader.calls) == 1
+    _assert_issue_start_governance(result)
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
+    data = json.loads(target.read_text())
+    assert data["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert data["incomplete_reason_code"] == "row-bound-exceeded"
+    assert data["read_count"] == 1
+    text = target.read_text()
+    assert CURSOR not in text and CURSOR not in json.dumps(result)
+
+
+def test_issue_start_adversarial_reader_text_never_reaches_result_or_artifact(monkeypatch, tmp_path):
+    result, sink = _run_issue_start(
+        monkeypatch, _counting(RuntimeError(f"upstream {SENSITIVE_SAMPLE} {CURSOR}"))
+    )
+    assert result["status"] == "insufficient"
+    _assert_issue_start_governance(result)
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
+    blob = target.read_text() + json.dumps(result) + json.dumps(sink)
+    assert SENSITIVE_SAMPLE not in blob and CURSOR not in blob
+
+
+def test_issue_start_malformed_page_and_unsupported_values_stay_finite(monkeypatch, tmp_path):
+    hostile_row = _row(7)
+    hostile_row["properties"]["Lesson Learned"] = {"type": "unsupported", "payload": SENSITIVE_SAMPLE}
+    for response in ({"results": "not-a-list", "has_more": False},
+                     {"results": [hostile_row, "junk", 5, None], "has_more": False}):
+        result, sink = _run_issue_start(monkeypatch, _counting(response))
+        _assert_issue_start_governance(result)
+        target = tmp_path / "d.json"
+        assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
+        data = json.loads(target.read_text())
+        assert all(type(v) is int and 0 <= v <= 10000 for k, v in data.items() if k.endswith(("_count", "_rows")))
+        assert SENSITIVE_SAMPLE not in target.read_text()
+
+
+def test_failed_repair_artifact_values_unchanged_alongside_issue_start(monkeypatch):
+    reader = _counting({"results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR})
+    _, sink = _run(monkeypatch, reader)
+    assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
+    assert sink[0]["read_count"] == 1
