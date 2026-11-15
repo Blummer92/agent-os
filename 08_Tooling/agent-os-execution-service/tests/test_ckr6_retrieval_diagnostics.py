@@ -12,8 +12,8 @@ from copy import deepcopy
 from agent_os_execution_service import ckr6_github_bridge as bridge
 
 REVISION = "2026-10-08T12:00:00.000Z"
-SECRET = "Bearer secret-token-DO-NOT-LEAK"
-CURSOR = "SECRET-CURSOR-DO-NOT-LEAK"
+SENSITIVE_SAMPLE = "synthetic sensitive-content sentinel; never a real credential"
+CURSOR = "SENSITIVE_SAMPLE-CURSOR-DO-NOT-LEAK"
 
 
 def _rt(text):
@@ -125,7 +125,7 @@ def test_case_c_provider_429_is_distinct_and_fail_closed(monkeypatch):
 
 
 def test_case_d_unknown_exception_and_sensitive_text_never_surface(monkeypatch, tmp_path):
-    reader = _counting(RuntimeError(f"upstream said {SECRET} " + "x" * 5000))
+    reader = _counting(RuntimeError(f"upstream said {SENSITIVE_SAMPLE} " + "x" * 5000))
     result, sink = _run(monkeypatch, reader)
     _assert_fail_closed(result)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-runtime-error"
@@ -134,7 +134,7 @@ def test_case_d_unknown_exception_and_sensitive_text_never_surface(monkeypatch, 
         sink[0], {"GITHUB_STEP_SUMMARY": str(summary)}
     ) is True
     text = summary.read_text(encoding="utf-8")
-    assert SECRET not in text and SECRET not in json.dumps(result) + json.dumps(sink)
+    assert SENSITIVE_SAMPLE not in text and SENSITIVE_SAMPLE not in json.dumps(result) + json.dumps(sink)
     assert "xxxx" not in text
     assert len(text) < 1024
 
@@ -144,10 +144,10 @@ def test_case_d_projection_rejects_hostile_values():
         "retrieval_diagnostics": {
             "read_count": True, "observed_rows": 10**9, "normalized_rows": -1,
             "skipped_rows": "7", "candidate_count": 4,
-            "raw_page": {"secret": SECRET}, "next_cursor": CURSOR,
+            "raw_page": {"secret": SENSITIVE_SAMPLE}, "next_cursor": CURSOR,
         },
         "selection_reason_codes": [
-            SECRET, "notion-" + "a" * 200, "Notion-http-429", {"x": 1}, "notion-http-503",
+            SENSITIVE_SAMPLE, "notion-" + "a" * 200, "Notion-http-429", {"x": 1}, "notion-http-503",
         ],
     }
     assert bridge.retrieval_diagnostics_projection(hostile) == {
