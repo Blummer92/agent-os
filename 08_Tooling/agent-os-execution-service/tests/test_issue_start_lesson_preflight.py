@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent_os_execution_service import issue_start_lesson_preflight as preflight
 from agent_os_execution_service.issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 
 
@@ -183,11 +184,25 @@ def test_issue_start_preserves_retrieval_diagnostics_for_normal_read():
     assert "incomplete_reason_code" not in diagnostics
 
 
-def test_issue_start_diagnostics_are_a_copy_not_the_orchestrator_mapping():
+def test_issue_start_diagnostics_are_a_copy_not_the_orchestrator_mapping(monkeypatch):
+    # Compare mappings from ONE orchestration call; two separate calls each
+    # construct a new mapping and cannot detect a shared-reference alias.
+    produced = []
+    original_orchestrate = preflight.orchestrate_lesson_retrieval
+
+    def capture_orchestrator_result(*args, **kwargs):
+        result = original_orchestrate(*args, **kwargs)
+        produced.append(result.retrieval_diagnostics)
+        return result
+
+    monkeypatch.setattr(preflight, "orchestrate_lesson_retrieval", capture_orchestrator_result)
     result = _material_call(lambda query: {"results": [_lesson()], "has_more": False})
-    result["retrieval_diagnostics"]["read_count"] = 99
-    again = _material_call(lambda query: {"results": [_lesson()], "has_more": False})
-    assert again["retrieval_diagnostics"]["read_count"] == 1
+    assert len(produced) == 1
+    returned = result["retrieval_diagnostics"]
+    assert returned == produced[0]
+    assert returned is not produced[0]
+    returned["read_count"] = 99
+    assert produced[0]["read_count"] == 1
 
 
 def test_issue_start_bounded_page_with_more_preserves_row_bound_and_read_count():
@@ -228,10 +243,14 @@ def test_not_needed_and_unbound_reader_diagnostics_stay_finite_and_zero_reads():
         specialized_knowledge_required=False, execute_read=lambda q: 1 / 0,
     )
     assert skipped["lesson_retrieval_status"] == "not-needed"
-    assert skipped["retrieval_diagnostics"].get("read_count", 0) == 0
+    assert "read_count" in skipped["retrieval_diagnostics"]
+    assert skipped["retrieval_diagnostics"]["read_count"] == 0
+    assert skipped["retrieval_diagnostics"]["observed_rows"] == 0
     unbound = activate_issue_start_lesson_preflight(
         repository="Blummer92/agent-os", issue_number=1, task_reference="issue:#1",
         specialized_knowledge_required=True, execute_read=None,
     )
     assert unbound["lesson_retrieval_status"] == "insufficient"
-    assert unbound["retrieval_diagnostics"].get("read_count", 0) == 0
+    assert "read_count" in unbound["retrieval_diagnostics"]
+    assert unbound["retrieval_diagnostics"]["read_count"] == 0
+    assert unbound["retrieval_diagnostics"]["observed_rows"] == 0
