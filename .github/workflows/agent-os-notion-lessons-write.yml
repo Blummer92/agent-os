@@ -70,21 +70,21 @@ jobs:
           if not target.exists():
               target = root / 'admission.json'
           result = json.loads(target.read_text()) if target.exists() else {}
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
-              for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision'):
-                  summary.write(f'{key}: `{result.get(key)}`\n\n')
-              verification_path = root / 'verification.json'
+          verification_path = root / 'verification.json'
           verification = json.loads(verification_path.read_text()) if verification_path.exists() else {}
-          summary.write('independent_write_verification: `' + verification.get('status', 'not-run') + '`\\n\\n')
-          summary.write('write_verified: `' + str(verification.get('write_verified') is True) + '`\\n\\n')
-          summary.write('independent_reason_code: `' + verification.get('reason_code', 'not-run') + '`\\n\\n')
-          prerequisites = result.get('activation_prerequisites')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\\n\\n')
+              for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision'):
+                  summary.write(f'{key}: `{result.get(key)}`\\n\\n')
+              summary.write('independent_write_verification: `' + verification.get('status', 'not-run') + '`\\n\\n')
+              summary.write('write_verified: `' + str(verification.get('write_verified') is True) + '`\\n\\n')
+              summary.write('independent_reason_code: `' + verification.get('reason_code', 'not-run') + '`\\n\\n')
+              prerequisites = result.get('activation_prerequisites')
               if isinstance(prerequisites, dict):
                   known = ('Area', 'Learning Type', 'Source Link', 'Status', 'Surface Before Work?')
-                  summary.write(f"required_fields_present: `{prerequisites.get('required_fields_present') is True}`\n\n")
+                  summary.write(f"required_fields_present: `{prerequisites.get('required_fields_present') is True}`\\n\\n")
                   for key in ('missing_owner_activation', 'missing_reviewed_metadata'):
                       value = prerequisites.get(key)
                       names = [name for name in value if name in known][:5] if isinstance(value, list) else []
-                      summary.write(f'{key}: `{names}`\n\n')
+                      summary.write(f'{key}: `{names}`\\n\\n')
           PY
