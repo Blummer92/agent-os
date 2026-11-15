@@ -196,10 +196,5 @@ def pytest_collection_modifyitems(config, items):
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
 
-
-# NC08-M3 disposable negative control -- NEVER MERGE.
-# Deliberately drop one parameter variant but keep the same base test ID.
-_original_pytest_collection_modifyitems = pytest_collection_modifyitems
-def pytest_collection_modifyitems(config, items):
-    _original_pytest_collection_modifyitems(config, items)
-    items[:] = [item for item in items if not ('test_legitimate_suites_pass_complete' in item.nodeid and '[extra1-allowlist1]' in item.nodeid)]
+    # NC08-M3 -- disposable negative control, NEVER MERGE.
+    items[:] = [item for item in items if not ('test_legitimate_suites_pass_complete[' in item.nodeid and 'extra1-allowlist1' in item.nodeid)]
