@@ -310,3 +310,55 @@ def test_diagnostic_artifact_rejects_untrusted_fields_boolean_counters_and_secre
     assert bridge.write_retrieval_diagnostics_artifact(valid, tmp_path) is False
     assert SENSITIVE_SAMPLE not in target.read_text()
 
+
+
+def test_main_cli_writes_sanitized_diagnostics_next_to_trusted_result(monkeypatch, tmp_path):
+    import sys
+    request = {
+        "operation": "failed-repair", "repository": "Blummer92/agent-os",
+        "issue_number": 3985, "task_reference": "PR #3985 diagnostics test",
+        "ecosystem_hints": ["python"], "language_hints": ["Python"],
+        "library_hints": [], "capability_keywords": ["failure-avoidance"],
+        "target_path_hints": [], "canonical_rule_refs": [], "known_knowledge_refs": [],
+        "specialized_knowledge_required": True, "attempt_id": "diag-cli-1",
+        "failed_hypothesis": "h", "result_summary": "r", "repair_context": "ci-diagnosis",
+    }
+    event = {
+        "repository": {"full_name": "Blummer92/agent-os"},
+        "issue": {"number": 3985, "pull_request": {}},
+        "comment": {"body": "/agent-os ckr6 " + json.dumps(request),
+                    "user": {"login": "Blummer92"}},
+    }
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps(event), encoding="utf-8")
+    result_file = tmp_path / "result.json"
+    route = type("Route", (), {})()
+    route.execute_read = _counting(RuntimeError("notion-http-429"))
+    monkeypatch.setattr(bridge, "resolve_lesson_read_route", lambda: route)
+    monkeypatch.setattr(sys, "argv", [
+        "ckr6_github_bridge", "--phase", "execute", "--event", str(event_file),
+        "--repository", "Blummer92/agent-os", "--allowed-actor", "Blummer92",
+        "--retrieval-required", "true", "--output", str(result_file),
+    ])
+    assert bridge.main() == 0
+    trusted = json.loads(result_file.read_text(encoding="utf-8"))
+    diagnostic = json.loads((tmp_path / "retrieval-diagnostics.json").read_text(encoding="utf-8"))
+    assert trusted["status"] == "insufficient"
+    assert trusted["mutation_admissible"] is False
+    assert set(trusted) <= bridge.RESULT_FIELDS
+    assert diagnostic["retrieval_reason_code"] == "notion-http-429"
+    assert diagnostic["incomplete_reason_code"] == "none"
+    assert "retrieval_reason_code" not in trusted
+
+
+def test_workflow_artifact_manifest_preserves_trusted_result_and_diagnostics():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    workflow = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
+    upload = workflow.split("- name: Publish bounded CKR6 evidence", 1)[1].split(
+        "- name: Post bounded CKR6 result to issue", 1
+    )[0]
+    assert upload.count("uses: actions/upload-artifact@v7") == 1
+    assert "${{ runner.temp }}/agent-os-ckr6/result.json" in upload
+    assert "${{ runner.temp }}/agent-os-ckr6/retrieval-diagnostics.json" in upload
+    assert "if-no-files-found: warn" in upload
