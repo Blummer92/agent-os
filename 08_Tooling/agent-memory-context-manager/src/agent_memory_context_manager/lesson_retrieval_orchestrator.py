@@ -130,7 +130,30 @@ def build_escalation_query(
         return build_known_reference_query(request.known_knowledge_refs)
 
     if step is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY:
-        return build_filtered_query(request)
+        query = build_filtered_query(request)
+        # CKR2 explicitly recognizes the "ckr6 mutation boundary" capability
+        # and requires BOTH "ckr6" and "mutation" in lesson-owned guidance.
+        # Its existing provider vocabulary maps that exact hint to Area=Testing.
+        # Do not widen this first lookup with generic Python -> Automation /
+        # Dashboard OR branches: that 25-row union was incomplete in the
+        # 2026-11-15 live request (#3989). Query the controlled Testing area
+        # first; if no qualifying lesson is found CKR2's existing escalation
+        # ledger still handles subsequent lookups. All pagination and row caps
+        # remain unchanged, including STOP when Testing itself overflows.
+        hints = {item.strip().casefold() for item in request.capability_keywords}
+        if "ckr6 mutation boundary" in hints:
+            filters = query.get("filter")
+            clauses = filters.get("and") if isinstance(filters, dict) else None
+            if isinstance(clauses, list) and clauses:
+                relevance = clauses[-1]
+                testing = {"property": "Area", "select": {"equals": "Testing"}}
+                if (
+                    isinstance(relevance, dict)
+                    and isinstance(relevance.get("or"), list)
+                    and testing in relevance["or"]
+                ):
+                    query["filter"] = {"and": [*clauses[:-1], testing]}
+        return query
 
     if step is RetrievalEscalation.EXACT_NARROW_LOOKUP:
         query = build_filtered_query(request)
