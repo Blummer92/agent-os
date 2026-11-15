@@ -11,6 +11,8 @@ from agent_os_execution_service import lesson_learning_loop as loop
 from agent_os_execution_service.issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from agent_os_execution_service.lesson_learning_metrics import derive_lesson_metrics
 
+import receipt_fixtures as rf
+
 REVISION = "2026-10-08T12:00:00.000Z"
 TASK = "https://github.com/Blummer92/agent-os/issues/3418"
 
@@ -19,7 +21,7 @@ def _rt(text):
     return {"type": "rich_text", "rich_text": [{"plain_text": text, "text": {"content": text}}]}
 
 
-def row(number=999, revision=REVISION, *, status="New"):
+def row(number=999, revision=REVISION, *, status="New", area="Governance", learning_type="Mistake"):
     return {
         "object": "page", "last_edited_time": revision,
         "url": f"https://www.notion.so/{number}",
@@ -28,8 +30,8 @@ def row(number=999, revision=REVISION, *, status="New"):
             "Lesson Learned": {"type": "title", "title": [{"plain_text": "Verify labels after issue creation"}]},
             "Status": {"type": "select", "select": None if status is None else {"name": status}},
             "Surface Before Work?": {"type": "checkbox", "checkbox": True},
-            "Area": {"type": "select", "select": {"name": "Governance"}},
-            "Learning Type": {"type": "select", "select": {"name": "Mistake"}},
+            "Area": {"type": "select", "select": {"name": area}},
+            "Learning Type": {"type": "select", "select": {"name": learning_type}},
             "Applies To": {"type": "multi_select", "multi_select": [{"name": "Notion"}]},
             "Source Link": {"type": "url", "url": "https://github.com/Blummer92/agent-os/issues/3305"},
             "Guardrail": _rt("Prove label convergence through readback."),
@@ -67,6 +69,28 @@ def test_issue_start_returns_exact_lesson_revision_and_selection_provenance():
     }]
     assert result["selected_lessons"][0]["selection_reason_codes"]
     assert result["materiality_source"] == "caller-asserted-material"
+
+
+def test_issue_start_selection_follows_notion_data_and_task_context():
+    testing = {"area": "Testing", "learning_type": "Testing lesson"}
+    governance = {"area": "Governance", "learning_type": "Scope/permission lesson"}
+    python_testing = {"ecosystem_hints": ("python",), "capability_keywords": ("testing",)}
+    agent_os_routing = {"ecosystem_hints": ("agent-os",), "capability_keywords": ("authorization-routing",)}
+
+    def selected(rows, **task):
+        return activate_issue_start_lesson_preflight(
+            repository="Blummer92/agent-os", issue_number=3418, task_reference="issue:#3418",
+            specialized_knowledge_required=True, execute_read=reader(rows), **task,
+        )["selected_lesson_ids"]
+
+    # Same task, different Notion data: a different lesson, and an empty result selects nothing.
+    assert selected([row(201, **testing)], **python_testing) == ["LL-201"]
+    assert selected([row(202, **testing)], **python_testing) == ["LL-202"]
+    assert selected([], **python_testing) == []
+    # Same Notion data, different task: a different lesson.
+    both = [row(201, **testing), row(202, **governance)]
+    assert selected(both, **python_testing) == ["LL-201"]
+    assert selected(both, **agent_os_routing) == ["LL-202"]
 
 
 def test_issue_start_projects_real_rejected_candidate_provenance():
@@ -204,7 +228,8 @@ def test_candidate_envelope_is_strict():
 
 # ------------------------------------------------------------- refinement
 
-RECEIPT_REF = "https://github.com/Blummer92/agent-os/issues/3418#issuecomment-6100000001"
+# Names the fixture chain's receipt comment (receipt_fixtures.RECEIPT_ID).
+RECEIPT_REF = rf.receipt_html_ref()
 
 
 def refinement(**changes):
@@ -229,8 +254,21 @@ def _route(monkeypatch, rows):
     return read
 
 
+def _verified_receipt_route(monkeypatch, rows):
+    """Notion route plus the trusted GitHub comment read the barrier needs.
+
+    The fixture receipt/result chain is produced by the production
+    serializers for the default RECEIPT_REF chain (LL-999 @ REVISION), so
+    the happy path exercises the real barrier instead of bypassing it.
+    """
+    read = _route(monkeypatch, rows)
+    fetch = rf.fetch_from(rf.verified_chain())
+    monkeypatch.setattr(bridge, "_receipt_comment_fetch", lambda: fetch)
+    return read, fetch
+
+
 def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
-    read = _route(monkeypatch, [row()])
+    read, fetch = _verified_receipt_route(monkeypatch, [row()])
     calls = []
     original = loop.evaluate_lesson_enrichment
     monkeypatch.setattr(loop, "evaluate_lesson_enrichment",
@@ -239,6 +277,8 @@ def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
     assert bridge.classify_envelope(envelope)["retrieval_required"] is True
     result = bridge.execute_envelope(envelope, retrieval_required=True)
     assert calls == ["ckr7"]
+    # The barrier retrieved the exact cited comment through the trusted read.
+    assert rf.RECEIPT_ID in fetch.calls
     assert read.calls == [{"page_size": 5, "filter": {"or": [{"property": "Lesson ID", "unique_id": {"equals": 999}}]}}]
     assert result["status"] == "enrich-existing"
     proposal = result["revision_proposal"]
@@ -252,13 +292,13 @@ def test_refinement_reads_exact_lesson_and_runs_ckr7(monkeypatch):
 
 
 def test_refinement_refuses_stale_revision_and_unusable_lessons(monkeypatch):
-    _route(monkeypatch, [row(revision="2026-10-09T00:00:00.000Z")])
+    _verified_receipt_route(monkeypatch, [row(revision="2026-10-09T00:00:00.000Z")])
     stale = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert (stale["status"], stale["reason_codes"]) == ("rejected", ["stale-lesson-revision"])
-    _route(monkeypatch, [row(status=None)])
+    _verified_receipt_route(monkeypatch, [row(status=None)])
     skip = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert skip["reason_codes"] == ["lesson-not-normalizable:ambiguous-status-vocabulary"]
-    _route(monkeypatch, [])
+    _verified_receipt_route(monkeypatch, [])
     missing = bridge.execute_envelope(_learning_envelope("lesson-refinement", "refinement", refinement()), retrieval_required=True)
     assert missing["reason_codes"] == ["lesson-not-found"]
 
@@ -334,6 +374,14 @@ def test_receipt_requires_actual_retrieval_of_that_revision():
 # ---------------------------------------------------------------- metrics
 
 
+def test_metrics_empty_input_reports_version_without_snapshot():
+    metrics = derive_lesson_metrics({})
+    assert metrics["schema_version"] == "2.0"
+    assert "accountability" not in metrics
+
+
+
+
 def _comment(comment_id, body):
     return {"id": comment_id, "body": body}
 
@@ -366,15 +414,15 @@ def test_metrics_count_only_valid_deduplicated_receipts_and_expose_signals():
     assert metrics["lesson_candidates"] == {"reusable-new": 2}
     assert metrics["candidate_recurrences"] == 1
     assert metrics["malformed_markers"] == {"receipt": 1}
-    assert metrics["accountability"] == {"LL-999": "not-in-accountability-catalog"}
     assert metrics["causality_inferred"] is False
+    assert metrics["schema_version"] == "2.0"
+    assert "accountability" not in metrics
     json.dumps(metrics)
 
 
-def test_metrics_reuse_ckr12_accountability_by_lesson_number():
+def test_metrics_report_selected_lessons_without_receipt_from_durable_results():
     result_body = bridge.serialize_ckr6_result_comment(sufficient_result((("LL-36", REVISION),)), request_comment_id=500)
     metrics = derive_lesson_metrics({1: [_comment(501, result_body)]})
-    assert metrics["accountability"]["LL-36"] != "not-in-accountability-catalog"
     assert metrics["selected_without_receipt"] == [f"LL-36@{REVISION}"]
 
 

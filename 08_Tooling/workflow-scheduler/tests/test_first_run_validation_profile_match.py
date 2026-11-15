@@ -1,8 +1,9 @@
 """#1972 regressions for exact fixed validation-profile matching.
 
 The canonical #1985 PR-less plan may execute only when it maps to exactly one
-existing fixed validation profile the current GCE dev-validation runner already
-owns. Anything else fails closed instead of becoming a new command surface.
+existing fixed validation profile in the historical registry. This matcher
+is evidence-only after Wave 1; it does not dispatch first-run validation.
+Anything else fails closed instead of becoming a new command surface.
 """
 from __future__ import annotations
 
@@ -96,8 +97,8 @@ def test_non_plan_input_fails_closed() -> None:
 
 def test_profile_catalog_entries_outside_the_fixed_runner_are_rejected() -> None:
     # 'issue-acceptance' and 'pr-remediation' exist in the profile catalog but the
-    # existing fixed GCE dev-validation runner does not execute them. First-run
-    # must not widen that runner's surface.
+    # historical fixed registry does not include them. The evidence matcher
+    # must not invent a broader executable profile.
     for profile_id in ("issue-acceptance", "pr-remediation", "visual-asset-sheets-smoke"):
         plan = _plan(" ".join(profile_argv(profile_id)))
         with pytest.raises(

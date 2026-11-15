@@ -4,10 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 127.0.0.1",
+    "dev:app": "node server/dev.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "playwright test",
-    "test:unit": "node --test tests/fixture.test.mjs"
+    "test:unit": "node --experimental-strip-types --test --test-reporter=tap tests/unit/apiContract.test.ts tests/unit/fixtureContract.test.ts | node tests/unit/require-tests.mjs --min 55",
+    "test:integration": "playwright test --config playwright.integration.config.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

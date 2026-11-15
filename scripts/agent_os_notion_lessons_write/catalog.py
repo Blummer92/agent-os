@@ -22,11 +22,20 @@ NARRATIVE_TYPES = MappingProxyType({
 })
 # Owner decision D1 (#3417): reviewed entries MAY carry descriptive metadata.
 # Descriptive metadata never activates a lesson.
+# #3973: "Supporting Source Links" is a bounded curated corroborating-ref
+# field (rich_text, one canonical ref per item, max five). It is writable
+# ONLY through a reviewed catalog entry + the existing guarded writer with
+# exact-revision binding; it never activates a lesson, never substitutes
+# for the primary Source Link, and never changes Status / Surface Before
+# Work? (both stay in PROTECTED_FIELDS).
+SUPPORTING_SOURCE_LINKS = "Supporting Source Links"
+MAX_SUPPORTING_REFS = 5
 DESCRIPTIVE_TYPES = MappingProxyType({
     "Area": "select",
     "Learning Type": "select",
     "Applies To": "multi_select",
     "Source Link": "url",
+    SUPPORTING_SOURCE_LINKS: "rich_text",
 })
 WRITABLE_TYPES = MappingProxyType({**NARRATIVE_TYPES, **DESCRIPTIVE_TYPES})
 # Activation/readiness fields stay separately governed, per-action approved.
@@ -36,7 +45,21 @@ PROTECTED_FIELDS = frozenset({"Status", "Surface Before Work?"})
 MAX_TEXT = 512
 MAX_APPLIES_TO = 8
 SOURCE_LINK = re.compile(r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}")
+GOVERNANCE_PREFIXES = (
+    "00_Governance/",
+    "01_Shared_Standards/",
+    "02_Agent_Overlays/",
+    "04_Registry/",
+    "08_Tooling/",
+)
 LESSON_ID = re.compile(r"LL-([1-9][0-9]{0,8})")
+
+
+def _valid_supporting_ref(value: str) -> bool:
+    """One canonical supporting ref: this repo's issue/PR, or a governance path."""
+    return len(value) <= MAX_TEXT and (
+        SOURCE_LINK.fullmatch(value) is not None or value.startswith(GOVERNANCE_PREFIXES)
+    )
 
 # No readiness, approval, audit, owner, provenance-authority, relation or schema
 # field is admitted, even if the existing integration could technically write it.
@@ -119,6 +142,472 @@ LESSONS = MappingProxyType({
             "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
         }),
     }),
+    # Full-database repair 2026-11-14: 61 reviewed update entries.
+    # Each entry carries the verified Source Link + Supporting Source
+    # Links (0-5 distinct canonical refs) from WRITE_BATCH_61.csv.
+    # Execution requires, per row, the owner command
+    # `/agent-os notion-write <request-id> <LL-n> <exact-last-edited-time>`
+    # on an ordinary GitHub issue (#3417 route). No entry names Status,
+    # Surface Before Work?, Usage Count, or Recurrence Count.
+    "ll-4-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-4",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/361",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/372",),
+        }),
+    }),
+    "ll-5-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-5",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1325",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1328",),
+        }),
+    }),
+    "ll-6-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-6",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/370",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/662",),
+        }),
+    }),
+    "ll-9-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-9",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/358",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/414",),
+        }),
+    }),
+    "ll-10-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-10",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/1366",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1364",),
+        }),
+    }),
+    "ll-12-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-12",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1365",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1395", "https://github.com/Blummer92/agent-os/pull/1400"),
+        }),
+    }),
+    "ll-13-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-13",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/903",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1220", "https://github.com/Blummer92/agent-os/pull/1225"),
+        }),
+    }),
+    "ll-14-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-14",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1331",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/2005",),
+        }),
+    }),
+    "ll-15-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-15",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/1366",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1364",),
+        }),
+    }),
+    "ll-16-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-16",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/1366",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1364",),
+        }),
+    }),
+    "ll-17-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-17",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/254",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/492", "https://github.com/Blummer92/agent-os/pull/495"),
+        }),
+    }),
+    "ll-18-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-18",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/376",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/688", "https://github.com/Blummer92/agent-os/pull/558"),
+        }),
+    }),
+    "ll-19-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-19",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1274",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1277",),
+        }),
+    }),
+    "ll-23-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-23",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1365",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1395", "https://github.com/Blummer92/agent-os/pull/1400"),
+        }),
+    }),
+    "ll-24-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-24",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1201",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1339",),
+        }),
+    }),
+    "ll-25-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-25",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/723",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/728",),
+        }),
+    }),
+    "ll-27-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-27",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/332",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/225",),
+        }),
+    }),
+    "ll-30-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-30",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/307",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/316",),
+        }),
+    }),
+    "ll-31-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-31",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1718",
+        }),
+    }),
+    "ll-32-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-32",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1269",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1290",),
+        }),
+    }),
+    "ll-33-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-33",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/358",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/414",),
+        }),
+    }),
+    "ll-34-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-34",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1269",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1290", "https://github.com/Blummer92/agent-os/pull/2961"),
+        }),
+    }),
+    "ll-35-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-35",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1269",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1290",),
+        }),
+    }),
+    "ll-36-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-36",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1364",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1366",),
+        }),
+    }),
+    "ll-37-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-37",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1364",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1366",),
+        }),
+    }),
+    "ll-38-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-38",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1364",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1366",),
+        }),
+    }),
+    "ll-40-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-40",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1364",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1366",),
+        }),
+    }),
+    "ll-42-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-42",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1232",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1250",),
+        }),
+    }),
+    "ll-45-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-45",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1232",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1250",),
+        }),
+    }),
+    "ll-46-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-46",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/804",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/812",),
+        }),
+    }),
+    "ll-47-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-47",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/357",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/405", "https://github.com/Blummer92/agent-os/pull/408"),
+        }),
+    }),
+    "ll-48-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-48",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/357",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/405", "https://github.com/Blummer92/agent-os/pull/408"),
+        }),
+    }),
+    "ll-49-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-49",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/538",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/539", "https://github.com/Blummer92/agent-os/pull/540"),
+        }),
+    }),
+    "ll-50-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-50",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1138",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1350",),
+        }),
+    }),
+    "ll-51-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-51",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1362",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1526", "https://github.com/Blummer92/agent-os/pull/1989"),
+        }),
+    }),
+    "ll-52-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-52",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1614",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1615", "https://github.com/Blummer92/agent-os/pull/2409"),
+        }),
+    }),
+    "ll-54-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-54",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1614",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1615", "https://github.com/Blummer92/agent-os/pull/2409"),
+        }),
+    }),
+    "ll-55-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-55",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1602",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1635", "https://github.com/Blummer92/agent-os/pull/1725"),
+        }),
+    }),
+    "ll-56-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-56",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1621",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1623",),
+        }),
+    }),
+    "ll-57-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-57",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1608",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1609", "https://github.com/Blummer92/agent-os/pull/1633", "https://github.com/Blummer92/agent-os/pull/1662"),
+        }),
+    }),
+    "ll-58-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-58",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1872",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1873",),
+        }),
+    }),
+    "ll-61-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-61",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1865",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1866",),
+        }),
+    }),
+    "ll-63-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-63",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1362",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1526", "https://github.com/Blummer92/agent-os/pull/1989"),
+        }),
+    }),
+    "ll-64-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-64",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/2067",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/2080",),
+        }),
+    }),
+    "ll-65-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-65",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1904",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1905",),
+        }),
+    }),
+    "ll-66-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-66",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/229",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/230", "https://github.com/Blummer92/agent-os/pull/2961"),
+        }),
+    }),
+    "ll-68-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-68",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1602",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1635", "https://github.com/Blummer92/agent-os/pull/1725"),
+        }),
+    }),
+    "ll-69-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-69",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1985",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/2121", "https://github.com/Blummer92/agent-os/pull/2125", "https://github.com/Blummer92/agent-os/pull/2311"),
+        }),
+    }),
+    "ll-72-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-72",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/2005",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1331",),
+        }),
+    }),
+    "ll-73-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-73",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/2064",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/2077",),
+        }),
+    }),
+    "ll-74-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-74",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/2220",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/2137", "https://github.com/Blummer92/agent-os/issues/2006"),
+        }),
+    }),
+    "ll-75-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-75",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1362",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1526", "https://github.com/Blummer92/agent-os/pull/1989"),
+        }),
+    }),
+    "ll-76-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-76",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1904",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1905",),
+        }),
+    }),
+    "ll-79-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-79",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/229",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/230",),
+        }),
+    }),
+    "ll-80-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-80",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1865",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/1866",),
+        }),
+    }),
+    "ll-86-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-86",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3085",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/3312",),
+        }),
+    }),
+    "ll-87-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-87",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3157",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/3164", "https://github.com/Blummer92/agent-os/pull/3161"),
+        }),
+    }),
+    "ll-88-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-88",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3270",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/3271", "https://github.com/Blummer92/agent-os/pull/3267"),
+        }),
+    }),
+    "ll-90-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-90",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/3303",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/3298",),
+        }),
+    }),
+    "ll-91-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-91",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/3312",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/3085",),
+        }),
+    }),
+    "ll-93-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-93",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3305",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/3358",),
+        }),
+    }),
+    # Audit new repairs 2026-11-14 (D-A1--D-A4, NOT in the 61-row batch):
+    # LL-21 primary #223; LL-62 primary #1251 + supporting #1873;
+    # LL-82 primary #2220 + supporting #2230, #2093; LL-71 primary PR #1858
+    # (D-A4 owner judgement call: candidate-grade primary) + supporting #1200.
+    # LL-71's entry carries provenance only; the #3418 receipt recording
+    # (D-A5/D-R1) is NOT included here and remains held out.
+    "ll-21-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-21",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/223",
+        }),
+    }),
+    "ll-62-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-62",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/1251",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1873",),
+        }),
+    }),
+    "ll-82-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-82",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/2220",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/2230", "https://github.com/Blummer92/agent-os/issues/2093"),
+        }),
+    }),
+    "ll-71-source-and-supporting-2026-11-14": MappingProxyType({
+        "target_lesson_id": "LL-71",
+        "properties": MappingProxyType({
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/1858",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1200",),
+        }),
+    }),
 })
 
 
@@ -129,6 +618,10 @@ def _valid_value(name: str, value: object) -> bool:
                 and len(set(value)) == len(value)
                 and all(type(item) is str and item.strip() == item and 0 < len(item) <= 100
                         for item in value))
+    if name == SUPPORTING_SOURCE_LINKS:
+        return (type(value) is tuple and 0 < len(value) <= MAX_SUPPORTING_REFS
+                and len(set(value)) == len(value)
+                and all(type(item) is str and _valid_supporting_ref(item) for item in value))
     if type(value) is not str or not value.strip() or len(value) > MAX_TEXT:
         return False
     if kind == "url":

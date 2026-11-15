@@ -1,58 +1,165 @@
-import { useRef, useState } from "react";
-import { courses, schoolYears, selectCourse, selectUnit, type Material } from "./fixtures";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { fetchLessons, fetchUnits, isStale, readAge, type Lesson, type LoadState, type Loaded, type Unit } from "./notionClient";
 
 type Screen = "chat" | "preview" | "edit";
-type Scenario = "fixture" | "loading" | "empty" | "unavailable" | "stale" | "error";
 type MessageMap = Record<string, readonly string[]>;
+type Failure = Extract<LoadState<unknown>, { reason: string }>;
+
+const NOTICE: Record<string, string> = {
+  "admission-required": "live Notion reads are not admitted for Teacher OS yet.",
+  "not-configured": "the Notion connection is not configured for this server.",
+  "source-unverified": "the curriculum source is not verified.",
+  "unit-not-approved": "this unit is not in the approved curriculum source.",
+  "malformed-response": "the reader sent a response that does not match the Teacher OS contract.",
+  unauthenticated: "this browser session is not authorized to read curriculum.",
+  "host-not-allowed": "the request did not come from this computer's Teacher OS app.",
+  "origin-not-allowed": "the request came from another site.",
+};
+const READER_DEFAULT = "the curriculum reader could not be reached.";
+
+/** What a teacher should do next for each failure; never implies content exists. */
+const DEV_APP = <code>npm run dev:app</code>;
+function guidance(state: Failure | { kind: "empty" }): { title: string; body: ReactNode } {
+  if (state.kind === "empty") return { title: "No approved units yet", body: "The verified unit registry has no Active units cleared for classroom use. Approved units appear here automatically — no code change is needed." };
+  if (state.kind === "unauthorized") return { title: "This session isn't authorized", body: <>Restart Teacher OS with {DEV_APP} so the local session is set up again. Nothing is shown until the session is authorized.</> };
+  switch (state.reason) {
+    case "admission-required": return { title: "Live curriculum is not connected yet", body: <>Teacher OS shows only units and lessons that an owner-approved Notion read admission allows. No Teacher OS admission has been approved yet, so no curriculum is shown here and no sample lessons are substituted. To see how Teacher OS presents a classroom, open the separate <a href="/fixture.html">sample classroom (synthetic fixture, not Notion data)</a>.</> };
+    case "reader-unreachable": case "reader-unavailable": return { title: "The curriculum reader isn't running", body: <>Start Teacher OS with {DEV_APP} in <code>08_Tooling/teacher-os-web</code>. It runs only on this computer (127.0.0.1).</> };
+    case "rate-limited": return { title: "Too many reads in a short time", body: "Wait a minute, then try again." };
+    case "malformed-response": return { title: "The reader sent an unexpected response", body: "The response did not match the Teacher OS contract, so nothing from it is shown. Try again; if it persists, check the local reader." };
+    default: return { title: "Curriculum couldn't be read", body: "Try again in a moment. Nothing is shown in place of the missing curriculum." };
+  }
+}
+
+/** Loads one keyed remote read. Superseded requests are aborted and a result is only returned for the key that requested it. */
+function useRemote<T>(key: string | undefined, load: (key: string, signal: AbortSignal) => Promise<LoadState<T>>, reloadKey: number): LoadState<T> {
+  const [done, setDone] = useState<{ key: string; reloadKey: number; state: LoadState<T> } | null>(null);
+  useEffect(() => {
+    if (key === undefined) return;
+    const controller = new AbortController();
+    load(key, controller.signal).then(state => { if (!controller.signal.aborted) setDone({ key, reloadKey, state }); }, () => {});
+    return () => controller.abort();
+  }, [key, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (key === undefined) return { kind: "idle" };
+  return done && done.key === key && done.reloadKey === reloadKey ? done.state : { kind: "loading" };
+}
+
+function connection(units: LoadState<unknown>): { tone: "ok" | "wait" | "warn" | "bad"; text: string } {
+  switch (units.kind) {
+    case "ready": case "empty": return { tone: "ok", text: "Connected · read-only" };
+    case "idle": case "loading": return { tone: "wait", text: "Checking curriculum…" };
+    case "unauthorized": return { tone: "bad", text: "Session not authorized" };
+    case "unavailable": return units.reason === "admission-required" ? { tone: "warn", text: "Live reads not admitted" } : { tone: "warn", text: "Reader unavailable" };
+    default: return { tone: "bad", text: "Reader error" };
+  }
+}
+
+function Field({ label, value }: { label: string; value: string | null }) {
+  return <div className="field"><h3>{label}</h3><p className={value ? undefined : "not-recorded"}>{value ?? "Not recorded in Notion"}</p></div>;
+}
+
+function Provenance({ evidence, now }: { evidence: Loaded<unknown>; now: number }) {
+  return (
+    <dl className="provenance" aria-label="Where this came from">
+      <div><dt>Source</dt><dd>{evidence.source.display_name}</dd></div>
+      <div><dt>Verification</dt><dd>{evidence.source.verification_state}</dd></div>
+      <div><dt>Access</dt><dd>{evidence.source.access}</dd></div>
+      <div><dt>Read</dt><dd><time dateTime={evidence.generatedAt} title={evidence.generatedAt}>{readAge(evidence.generatedAt, now)}</time></dd></div>
+    </dl>
+  );
+}
+
+function Materials({ lesson, linkLabel }: { lesson: Lesson; linkLabel: string }) {
+  return (
+    <div className="materials">
+      <h3>Approved materials</h3>
+      <p>No approved Google Drive materials are linked in this lesson record. Slides, Docs and worksheets stay in approved Drive folders and are not generated here.</p>
+      {lesson.record_url && <p><a href={lesson.record_url} rel="noreferrer noopener" target="_blank">{linkLabel}</a></p>}
+    </div>
+  );
+}
 
 export function TeacherApp() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [assignmentOpen, setAssignmentOpen] = useState(false);
-  const [schoolYear, setSchoolYear] = useState<string>(schoolYears[0]);
-  const [courseId, setCourseId] = useState("media1");
-  const [unitId, setUnitId] = useState("photography");
-  const [materialIndex, setMaterialIndex] = useState(0);
+  const [unitId, setUnitId] = useState("");
+  const [lessonIndex, setLessonIndex] = useState(0);
   const [screen, setScreen] = useState<Screen>("chat");
-  const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
-  const [scenario, setScenario] = useState<Scenario>("fixture");
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // The read generation the selection came from. A selection belongs to one
+  // read only: after a refresh, a regrown list must not resurrect a preview
+  // or edit the user left when the list shrank. No effect is needed — the
+  // derivation below compares this stored generation with the current one.
+  const [selectedReloadKey, setSelectedReloadKey] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
+  const [reloadKey, setReloadKey] = useState(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const course = selectCourse(courseId) ?? courses[0];
-  const unit = selectUnit(course, unitId) ?? course.units[0];
-  const materials = unit.materials;
-  const current = materials[materialIndex] ?? materials[0];
-  const conversationKey = screen === "edit" && selectedMaterial ? selectedMaterial.id : "lesson";
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+
+  const units = useRemote<readonly Unit[]>("units", (_key, signal) => fetchUnits(signal), reloadKey);
+  const unitList: readonly Unit[] = units.kind === "ready" ? units.value.data : [];
+  const unit = unitList.find(u => u.unit_id === unitId) ?? unitList[0];
+  const lessons = useRemote<readonly Lesson[]>(unit?.unit_id, fetchLessons, reloadKey);
+  const lessonList: readonly Lesson[] = lessons.kind === "ready" ? lessons.value.data : [];
+  // Lesson records carry no stable lesson ID (see apiContract: only
+  // day_lesson_number plus text fields), so a lesson-keyed draft/message
+  // cannot be re-attached by identity after a reorder. It is bound to one
+  // exact list signature for its unit instead: when a fresh ready read for
+  // the same unit arrives with a different signature, every draft/message
+  // keyed to that unit is dropped rather than risk attributing a note to a
+  // different lesson. An identical refresh preserves drafts; a reorder,
+  // insertion or removal invalidates them. Limitation: two lessons with
+  // byte-identical signature fields are indistinguishable, so a swap
+  // between them cannot be detected — no stable ID exists to do better,
+  // and none is fabricated here.
+  const lessonSignaturesRef = useRef<Record<string, string>>({});
+  const lessonSignature = (list: readonly Lesson[]) =>
+    list.map(l => [l.day_lesson_number, l.daily_focus, l.daily_learning_target, l.key_vocabulary, l.source_evidence, l.record_url].map(f => f ?? "\u0002").join("\u0000")).join("\u0001");
+  useEffect(() => {
+    if (lessons.kind !== "ready" || !unit) return;
+    const signature = lessonSignature(lessonList);
+    const previous = lessonSignaturesRef.current[unit.unit_id];
+    lessonSignaturesRef.current[unit.unit_id] = signature;
+    if (previous !== undefined && previous !== signature) {
+      const prefix = `${unit.unit_id}:`;
+      const dropUnitKeys = (prev: Record<string, string> | MessageMap) => Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(prefix)));
+      setDrafts(prev => dropUnitKeys(prev) as Record<string, string>);
+      setMessages(prev => dropUnitKeys(prev) as MessageMap);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessons, unit]);
+  // Derived, never stored back: clamp the index to the list on screen, so a
+  // refresh that shrinks the list can never render "3 of 1". No effect or
+  // extra state sync is needed; the stored index is only a preference.
+  const lessonIndexClamped = lessonList.length === 0 ? 0 : Math.min(lessonIndex, lessonList.length - 1);
+  const current = lessonList[lessonIndexClamped];
+  const evidence = lessons.kind === "ready" ? lessons.value : units.kind === "ready" ? units.value : null;
+  const stale = evidence ? isStale(evidence.generatedAt, clock) : false;
+  // Derived from the current read, so a refresh can never leave a superseded lesson on screen.
+  // An out-of-range selection, or one from an older read generation, is no
+  // selection, never a stale lesson and never a resurrected preview.
+  const picked = selectedIndex === null || selectedReloadKey !== reloadKey || selectedIndex >= lessonList.length ? undefined : lessonList[selectedIndex];
+  const selected = picked ? { key: `${unit?.unit_id}:${selectedIndex}`, lesson: picked, label: lessonLabel(picked, selectedIndex!) } : null;
+  const view: Screen = selected ? screen : "chat";
+  useEffect(() => { const t = setInterval(() => setClock(Date.now()), 30_000); return () => clearInterval(t); }, []);
+  const conversationKey = view === "edit" && selected ? selected.key : "lesson";
   const draft = drafts[conversationKey] ?? "";
   const history = messages[conversationKey] ?? [];
-  const hasMaterials = scenario === "fixture" || scenario === "stale";
+  const status = connection(units);
 
-  function changeCourse(next: string) {
-    const selected = selectCourse(next);
-    if (!selected) return;
-    setCourseId(next);
-    setUnitId(selected.units[0].id);
-    setMaterialIndex(0);
+  function lessonLabel(lesson: Lesson, index: number) { return lesson.day_lesson_number ?? `Lesson ${index + 1}`; }
+  function changeUnit(next: string) { setUnitId(next); setLessonIndex(0); setScreen("chat"); setSelectedIndex(null); setSelectedReloadKey(null); }
+  function closeAssignments() { setAssignmentOpen(false); triggerRef.current?.focus(); }
+  function closeMenu() { setMenuOpen(false); menuButtonRef.current?.focus(); }
+  function refresh() { setReloadKey(k => k + 1); }
+  function enter(next: "preview" | "edit", index: number) {
+    setSelectedIndex(index);
+    setSelectedReloadKey(reloadKey);
+    setScreen(next); setAssignmentOpen(false); setMenuOpen(false);
   }
-  function changeUnit(next: string) {
-    if (!selectUnit(course, next)) return;
-    setUnitId(next);
-    setMaterialIndex(0);
-  }
-  function closeAssignments() {
-    setAssignmentOpen(false);
-    triggerRef.current?.focus();
-  }
-  function enter(next: "preview" | "edit", material: Material) {
-    setSelectedMaterial(material);
-    setScreen(next);
-    setAssignmentOpen(false);
-    setMenuOpen(false);
-  }
-  function backToLesson() {
-    setScreen("chat");
-    setSelectedMaterial(null);
-  }
+  function backToLesson() { setScreen("chat"); setSelectedIndex(null); setSelectedReloadKey(null); }
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = draft.trim();
@@ -60,63 +167,112 @@ export function TeacherApp() {
     setMessages(prev => ({ ...prev, [conversationKey]: [...(prev[conversationKey] ?? []), trimmed] }));
     setDrafts(prev => ({ ...prev, [conversationKey]: "" }));
   }
+  const sourceNotice = (state: LoadState<unknown>, what: string) => {
+    if (state.kind === "loading") return <p role="status" className="notice notice--wait">Loading {what} from Notion…</p>;
+    if (state.kind === "empty") return <p role="status" className="notice">Notion returned no {what}. Nothing is shown in its place.</p>;
+    if (state.kind === "unavailable") return <p role="alert" className="notice notice--warn">Notion is unavailable: {NOTICE[state.reason] ?? READER_DEFAULT} No substitute {what} are shown.</p>;
+    if (state.kind === "unauthorized") return <p role="alert" className="notice notice--bad">Not authorized: {NOTICE[state.reason] ?? NOTICE.unauthenticated} No {what} are shown.</p>;
+    if (state.kind === "error") return <p role="alert" className="notice notice--bad">Could not read {what} from Notion ({state.reason}). No substitute {what} are shown.</p>;
+    return null;
+  };
+  const provenanceLine = (e: Loaded<unknown>) => `${e.source.display_name} · ${e.source.verification_state} · ${e.source.access} · read ${e.generatedAt}`;
+  const stateCard = (state: LoadState<unknown>, what: string): ReactNode => {
+    if (state.kind === "ready" || state.kind === "idle") return null;
+    const help = state.kind === "loading" ? null : guidance(state);
+    return (
+      <div className="state-card">
+        {help && <h2>{help.title}</h2>}
+        {sourceNotice(state, what)}
+        {help && <p className="muted guidance">{help.body}</p>}
+        {state.kind !== "loading" && <button type="button" className="secondary" onClick={refresh}>Try again</button>}
+      </div>
+    );
+  };
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" onKeyDown={event => { if (event.key === "Escape" && menuOpen) closeMenu(); }}>
       <header className="app-header">
-        <button className="icon-button" type="button" aria-label="Toggle recent conversations" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}>☰</button>
-        <div className="app-title"><strong>Agent OS Teacher</strong><span>{screen === "chat" ? "Lesson chat" : screen === "preview" ? "Material preview" : "Focused material chat"}</span></div>
+        <button ref={menuButtonRef} className="icon-button" type="button" aria-label="Toggle recent conversations" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}>☰</button>
+        <div className="app-title"><strong>Teacher OS</strong><span>{view === "chat" ? "Lesson overview" : view === "preview" ? "Complete lesson" : "Local lesson notes"}</span></div>
+        <p className={`connection connection--${status.tone}`} role="status" aria-label={`Curriculum connection: ${status.text}`}><span className="dot" aria-hidden="true" />{status.text}</p>
         <button ref={triggerRef} className="assignment-button" type="button" aria-controls="assignment-panel" aria-expanded={assignmentOpen} onClick={() => { setAssignmentOpen(v => !v); setMenuOpen(false); }}>View Assignment <span aria-hidden="true">{assignmentOpen ? "⌃" : "⌄"}</span></button>
       </header>
-      <div className="demo-banner" role="status">Interactive sample · Fixture data · No Notion, Drive or AI connection</div>
+      <div className="demo-banner" role="note">{units.kind === "unavailable" && units.reason === "admission-required"
+        ? "Read-only · live Notion reads are not admitted yet, so no lessons are shown · Slides, Docs and worksheets stay in approved Google Drive folders"
+        : "Read-only · only owner-approved Notion evidence is shown, when live reads are admitted · Slides, Docs and worksheets stay in approved Google Drive folders"}</div>
+      {stale && evidence && <p role="alert" className="notice notice--warn banner-notice">Stale evidence: last read {evidence.generatedAt}. <button type="button" className="text-button" onClick={refresh}>Refresh from Notion</button></p>}
       {menuOpen && <nav aria-label="Recent conversations" className="recent-menu">
         <h2>Recent conversations</h2>
-        <button type="button" onClick={() => { backToLesson(); setMenuOpen(false); }}>Photography Foundations — lesson chat</button>
-        {Object.keys(messages).filter(key => key !== "lesson").map(key => (
-          <button type="button" key={key} onClick={() => {
-            const material = courses.flatMap(c => c.units).flatMap(u => u.materials).find(m => m.id === key);
-            if (material) enter("edit", material);
-          }}>{key.replaceAll("-", " ")} — local draft chat</button>
-        ))}
-        <p>Recent chats exist only during this session. No external history was loaded.</p>
+        <button type="button" className="secondary" onClick={() => { backToLesson(); setMenuOpen(false); }}>{unit ? `${unit.title} — lesson overview` : "Lesson overview"}</button>
+        {Object.keys(messages).filter(key => key !== "lesson").map(key => <p key={key}>{key.startsWith(`${unit?.unit_id}:`) ? "Lesson notes" : "Notes for another unit"} — local only</p>)}
+        <p>Recent notes exist only during this session. No external history was loaded.</p>
       </nav>}
       {assignmentOpen && <section id="assignment-panel" aria-label="View Assignment" className="assignment-panel" onKeyDown={event => { if (event.key === "Escape") closeAssignments(); }}>
         <div className="panel-heading"><h2>View Assignment</h2><button className="text-button" type="button" onClick={closeAssignments}>Close</button></div>
-        <label htmlFor="year">School year</label>
-        <select id="year" value={schoolYear} onChange={event => setSchoolYear(event.target.value)}>{schoolYears.map(y => <option key={y}>{y}</option>)}</select>
         <div className="filters">
-          <div><label htmlFor="course">Course</label><select id="course" value={courseId} onChange={event => changeCourse(event.target.value)}>{courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}</select></div>
-          <div><label htmlFor="unit">Unit</label><select id="unit" value={unitId} onChange={event => changeUnit(event.target.value)}>{course.units.map(u => <option key={u.id} value={u.id}>{u.title}</option>)}</select></div>
+          <div><label htmlFor="unit">Unit</label><select id="unit" value={unit?.unit_id ?? ""} disabled={unitList.length === 0} onChange={event => changeUnit(event.target.value)}>
+            {unitList.length === 0 && <option value="">No units available</option>}
+            {unitList.map(u => <option key={u.unit_id} value={u.unit_id}>{u.title}</option>)}
+          </select></div>
+          <button className="text-button" type="button" onClick={refresh}>Refresh from Notion</button>
         </div>
-        <div className="source-controls"><label htmlFor="source-scenario">Demo source scenario</label><select id="source-scenario" value={scenario} onChange={event => setScenario(event.target.value as Scenario)}>
-          <option value="fixture">Available fixture</option><option value="loading">Loading (simulated)</option><option value="empty">Empty (simulated)</option><option value="unavailable">Unavailable (simulated)</option><option value="stale">Stale (simulated)</option><option value="error">Error (simulated)</option>
-        </select></div>
-        <div className="panel-meta"><span>{unit.title}</span><span>Grade {course.grade} · {schoolYear}</span></div>
-        {scenario === "stale" && <p role="alert" className="notice">Stale sample evidence. Preview is illustrative only; no live action is authorized.</p>}
-        {scenario === "loading" && <p role="status" className="notice">Simulated loading. No network request is running.</p>}
-        {scenario === "empty" && <p role="status" className="notice">No materials in this simulated scenario.</p>}
-        {scenario === "unavailable" && <p role="alert" className="notice">Current curriculum source is not connected. Sample selectors do not represent live Notion data.</p>}
-        {scenario === "error" && <p role="alert" className="notice">Simulated source error. No source data was modified.</p>}
-        {hasMaterials && <div className="carousel" aria-label="Material carousel">
+        {sourceNotice(units, "units")}
+        {unit && sourceNotice(lessons, "lessons")}
+        {current && <div className="carousel" aria-label="Lesson carousel">
           <article className="material-card">
-            <div className="card-meta"><span>{current.kind === "unit" ? "Unit overview" : current.kind === "slides" ? "Slide deck" : "Worksheet"}</span><span>Grade {course.grade}</span></div>
-            <h3>{current.title}</h3><p>{current.summary}</p>
-            <div className="sample-paper" aria-label="Sample material excerpt">{current.preview.slice(0,2).map(line => <p key={line}>{line}</p>)}</div>
-            <div className="card-actions"><button type="button" onClick={() => enter("preview", current)}>View full preview</button><button type="button" onClick={() => enter("edit", current)}>Edit in focused chat</button></div>
+            <div className="card-meta"><span>{lessonLabel(current, lessonIndexClamped)}</span><span>{unit?.title}</span></div>
+            <h3>{current.daily_focus ?? "No daily focus recorded in Notion"}</h3>
+            <p>{current.daily_learning_target ?? "No learning target recorded in Notion"}</p>
+            <div className="card-actions"><button type="button" onClick={() => enter("preview", lessonIndexClamped)}>View full lesson</button><button type="button" className="secondary" onClick={() => enter("edit", lessonIndexClamped)}>Edit in focused chat</button></div>
           </article>
-          <div className="carousel-controls"><button type="button" disabled={materialIndex === 0} onClick={() => setMaterialIndex(v => v - 1)}>← Previous</button><span aria-live="polite">{materialIndex + 1} of {materials.length}</span><button type="button" disabled={materialIndex === materials.length - 1} onClick={() => setMaterialIndex(v => v + 1)}>Next →</button></div>
+          <div className="carousel-controls"><button type="button" className="secondary" disabled={lessonIndexClamped === 0} onClick={() => setLessonIndex(lessonIndexClamped - 1)}>← Previous</button><span aria-live="polite">{lessonList.length === 0 ? 0 : lessonIndexClamped + 1} of {lessonList.length}</span><button type="button" className="secondary" disabled={lessonIndexClamped >= lessonList.length - 1} onClick={() => setLessonIndex(lessonIndexClamped + 1)}>Next →</button></div>
         </div>}
+        {lessons.kind === "ready" && <p className="fine-print">{provenanceLine(lessons.value)}</p>}
       </section>}
       <main className="main-content">
-        {screen === "chat" && <section aria-labelledby="chat-title"><h1 id="chat-title">Photography Foundations</h1><p className="muted">Discuss your lesson here, or open View Assignment in the top-right corner to inspect sample materials.</p><div className="assistant-note"><strong>Sample assistant</strong><p>We can explore the Rule of Thirds. The material previews are fixtures; no lesson has been generated or saved.</p></div></section>}
-        {screen === "preview" && selectedMaterial && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Full sample preview · Grade {course.grade}</p><h1 id="preview-title">{selectedMaterial.title}</h1><p>{selectedMaterial.summary}</p><div className="sample-page">{selectedMaterial.preview.map((line, i) => <div key={i} className="preview-question"><strong>{i + 1}.</strong><p>{line}</p><div className="response-lines" aria-hidden="true" /></div>)}</div><button type="button" onClick={() => enter("edit", selectedMaterial)}>Edit in focused chat</button></section>}
-        {screen === "edit" && selectedMaterial && <section aria-labelledby="edit-title"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Local demonstration · No material mutation</p><h1 id="edit-title">Editing: {selectedMaterial.title}</h1><div className="assistant-note"><strong>Focused chat context</strong><p>{selectedMaterial.summary}. Describe a proposed revision below; the text remains local and no worksheet or slide deck is changed.</p></div></section>}
-        {screen !== "preview" && <section aria-label="Local conversation" className="conversation">
-          <ol aria-label="Your sample messages">{history.map((message, i) => <li key={i}>{message}</li>)}</ol>
-          <form onSubmit={submit} className="chat-form"><label htmlFor="chat-input">{screen === "edit" ? "Describe a proposed edit" : "Write a sample chat message"}</label><textarea id="chat-input" rows={3} value={draft} onChange={event => setDrafts(prev => ({ ...prev, [conversationKey]: event.target.value }))} placeholder="Type a message (local demo only)" /><button type="submit" disabled={!draft.trim()}>Add local message</button></form>
-          <p className="fine-print">Messages are session-only and do not contact an AI service. Leaving this page or refreshing may lose them.</p>
+        {view === "chat" && <section aria-labelledby="chat-title" className="workspace">
+          <p className="eyebrow">Verified curriculum · read-only</p>
+          <h1 id="chat-title">{unit?.title ?? "Teacher OS"}</h1>
+          {units.kind !== "ready" ? stateCard(units, "units") : unit && lessons.kind !== "ready" ? stateCard(lessons, "lessons") : null}
+          {current && <section className="lesson-card" aria-labelledby="overview-title">
+            <div className="lesson-card__top">
+              <div><h2 id="overview-title">Lesson overview</h2><p className="day-badge">{lessonLabel(current, lessonIndexClamped)}</p></div>
+              <div className="stepper" role="group" aria-label="Choose lesson">
+                <button type="button" className="secondary" aria-label="Previous lesson" disabled={lessonIndexClamped === 0} onClick={() => setLessonIndex(lessonIndexClamped - 1)}>‹</button>
+                <span className="stepper__count">Lesson {lessonIndexClamped + 1} of {lessonList.length}</span>
+                <button type="button" className="secondary" aria-label="Next lesson" disabled={lessonIndexClamped >= lessonList.length - 1} onClick={() => setLessonIndex(lessonIndexClamped + 1)}>›</button>
+              </div>
+            </div>
+            <div className="lesson-fields">
+              <Field label="Learning target" value={current.daily_learning_target} />
+              <Field label="Today's focus" value={current.daily_focus} />
+              <Field label="Key vocabulary" value={current.key_vocabulary} />
+            </div>
+            <div className="card-actions"><button type="button" onClick={() => enter("preview", lessonIndexClamped)}>Open complete lesson</button><button type="button" className="secondary" onClick={() => enter("edit", lessonIndexClamped)}>Local notes for this lesson</button></div>
+            {lessons.kind === "ready" && <Provenance evidence={lessons.value} now={clock} />}
+            <Materials lesson={current} linkLabel="Open lesson record in Notion" />
+          </section>}
+        </section>}
+        {view === "preview" && selected && <section aria-labelledby="preview-title" className="full-preview"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button>
+          <p className="eyebrow">{unit?.title} · read-only Notion lesson</p><h1 id="preview-title">{selected.label}</h1>
+          <dl className="sample-page">
+            <dt>Daily Learning Target</dt><dd>{selected.lesson.daily_learning_target ?? "Not recorded in Notion"}</dd>
+            <dt>Daily Focus</dt><dd>{selected.lesson.daily_focus ?? "Not recorded in Notion"}</dd>
+            <dt>Key Vocabulary</dt><dd>{selected.lesson.key_vocabulary ?? "Not recorded in Notion"}</dd>
+            <dt>Source Evidence</dt><dd>{selected.lesson.source_evidence ?? "Not recorded in Notion"}</dd>
+          </dl>
+          <Materials lesson={selected.lesson} linkLabel="Open the Notion record" />
+          {lessons.kind === "ready" && <p className="fine-print">{provenanceLine(lessons.value)}</p>}
+          <button type="button" onClick={() => enter("edit", selectedIndex!)}>Edit in focused chat</button></section>}
+        {view === "edit" && selected && <section aria-labelledby="edit-title"><button type="button" className="back-button" onClick={backToLesson}>← Back to lesson</button><p className="eyebrow">Local draft · No Notion or Drive mutation</p><h1 id="edit-title">Editing: {selected.label}</h1><div className="assistant-note"><strong>Focused lesson context</strong><p>{selected.lesson.daily_focus ?? "No daily focus recorded"}. Describe a proposed revision below; the text stays in this browser session and nothing in Notion or Drive is changed.</p></div></section>}
+        {view !== "preview" && <section aria-labelledby="notes-title" className="conversation">
+          <div className="notes-heading"><h2 id="notes-title">{view === "edit" ? "Proposed edits" : "Local notes"}</h2><span className="unsaved-badge">Unsaved · this session only</span></div>
+          <ol aria-label="Your draft messages">{history.map((message, i) => <li key={i}>{message}</li>)}</ol>
+          <form onSubmit={submit} className="chat-form"><label htmlFor="chat-input">{view === "edit" ? "Describe a proposed edit" : "Write a draft message"}</label><textarea id="chat-input" rows={3} value={draft} onChange={event => setDrafts(prev => ({ ...prev, [conversationKey]: event.target.value }))} placeholder="Type a note (local draft only)" /><button type="submit" disabled={!draft.trim()}>Add local message</button></form>
+          <p className="fine-print">Notes are kept only in this browser tab and do not contact an AI service. Leaving or refreshing the page loses them.</p>
         </section>}
       </main>
-      <footer>Teacher OS first slice · #2801 · No production actions</footer>
+      <footer>Teacher OS · #2801 · Read-only · No production actions</footer>
     </div>
   );
 }

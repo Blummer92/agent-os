@@ -43,6 +43,14 @@ from .lesson_preflight import (
 MAX_ROW_TEXT_CHARS = 512
 MAX_ROW_LIST_ITEMS = 20
 MAX_RETRIEVAL_ROWS = MAX_LESSON_RECORDS * 5
+# #3973 full-database repair: a Notion query page is not the database.
+# The live Lessons Learned database holds more rows than one page_size=25
+# response can carry, and the provider may return smaller pages. Follow
+# `next_cursor` until `has_more` is false, bounded by the row cap above
+# and by this page cap so a lying executor can never loop forever. Hitting
+# the page cap with pages still outstanding fails closed (a
+# LessonActivationError) instead of silently truncating the database tail.
+MAX_RETRIEVAL_PAGES = 5
 
 _LESSON_ID_PROPERTY = "Lesson ID"
 _TITLE_PROPERTY = "Lesson Learned"
@@ -52,6 +60,25 @@ _AREA_PROPERTY = "Area"
 _APPLIES_TO_PROPERTY = "Applies To"
 _LEARNING_TYPE_PROPERTY = "Learning Type"
 _SOURCE_LINK_PROPERTY = "Source Link"
+# #3973 (optional, proposed): bounded curated corroborating refs. One
+# canonical GitHub ref per rich-text item; no free-form parsing. The
+# property is absent on legacy rows, which behave exactly as today.
+_SUPPORTING_PROPERTY = "Supporting Source Links"
+MAX_SUPPORTING_REFS = 5
+# A supporting ref must be a canonical Blummer92/agent-os issue/PR URL or
+# one of the five repo-relative governance prefixes -- the same allowlist
+# shape as the primary Source Link, tightened to this repository for
+# supporting evidence. Anything else is dropped and reported, never admitted.
+_SUPPORTING_REF = re.compile(
+    r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}"
+)
+_GOVERNANCE_PREFIXES = (
+    "00_Governance/",
+    "01_Shared_Standards/",
+    "02_Agent_Overlays/",
+    "04_Registry/",
+    "08_Tooling/",
+)
 _GUARDRAIL_PROPERTY = "Guardrail"
 _NEXT_TIME_PROPERTY = "What To Do Next Time"
 
@@ -172,6 +199,10 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
     capability_hints = _normalized(request.capability_keywords)
 
     clauses: list[dict[str, Any]] = []
+    # Only a finite exact CI/CKR6 hint maps to the existing Testing area.
+    # No arbitrary request prose is sent as a provider option identity.
+    if {"ckr6 mutation boundary", "fail-closed lesson preflight"} & capability_hints:
+        clauses.append({"property": _AREA_PROPERTY, "select": {"equals": "Testing"}})
     for area, ecosystem in sorted(_AREA_ECOSYSTEM.items()):
         if ecosystem.casefold() in ecosystem_hints:
             clauses.append({"property": _AREA_PROPERTY, "select": {"equals": area}})
@@ -194,7 +225,8 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
             clauses.append(
                 {"property": _APPLIES_TO_PROPERTY, "multi_select": {"contains": term}}
             )
-    return clauses
+    # Repeated canonical clauses must not consume the bounded query budget.
+    return list({str(clause): clause for clause in clauses}.values())
 
 
 def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:
@@ -284,7 +316,20 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
 
     canonical_ref = _github_source_link(properties.get(_SOURCE_LINK_PROPERTY))
     currentness = KnowledgeCurrentness.CURRENT if canonical_ref else KnowledgeCurrentness.UNVERIFIABLE
-    canonical_github_refs = (canonical_ref,) if canonical_ref else ()
+    supporting_valid, supporting_dropped = _supporting_source_links(
+        properties.get(_SUPPORTING_PROPERTY), canonical_ref
+    )
+    if canonical_ref:
+        # Primary first, then supporting refs in row order, stably deduped.
+        # One lesson stays one CKR2 candidate; the budget does not change.
+        canonical_github_refs = (canonical_ref,) + supporting_valid
+        dropped_supporting_refs = supporting_dropped
+    else:
+        # The primary Source Link is still required (#3973 / #1520): valid
+        # supporting refs never substitute for a missing primary. They are
+        # reported as dropped rather than silently admitted or lost.
+        canonical_github_refs = ()
+        dropped_supporting_refs = (supporting_dropped + supporting_valid)[:MAX_ROW_LIST_ITEMS]
 
     evidence_refs: tuple[str, ...] = ()
     page_url = row.get("url")
@@ -306,6 +351,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             canonical_github_refs=canonical_github_refs,
             evidence_refs=evidence_refs,
             keywords=applies_to,
+            dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
     except (TypeError, ValueError):
@@ -334,7 +380,13 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
 def _bound_relevant_lessons(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
 ) -> tuple[LessonRecordEvidence, ...]:
-    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher."""
+    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher.
+
+    R1 (#2425): the budget counts DISTINCT lesson IDs. A conflicting
+    identity counts once, and ALL its records enter the bound set, so a
+    conflict at the bound edge is reported by the selector instead of being
+    silently dropped with the second revision.
+    """
     ranked: list[tuple[int, str, LessonRecordEvidence]] = []
     unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
@@ -346,9 +398,34 @@ def _bound_relevant_lessons(
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return tuple(item[2] for item in ranked[:MAX_LESSON_RECORDS])
+        # Rank identities, not individual revisions. A second revision of
+        # a selected ID may be unranked, but must still reach CKR2's
+        # fail-closed duplicate-identity conflict check.
+        selected_ids = {
+            lesson.lesson_id
+            for lesson in _take_distinct_ids([item[2] for item in ranked])
+        }
+        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
     unranked.sort(key=lambda item: item.lesson_id.casefold())
-    return tuple(unranked[:MAX_LESSON_RECORDS])
+    return _take_distinct_ids(unranked)
+
+
+def _take_distinct_ids(
+    ordered: Sequence[LessonRecordEvidence],
+) -> tuple[LessonRecordEvidence, ...]:
+    """First MAX_LESSON_RECORDS distinct lesson IDs, with every record of
+    each bounded identity included."""
+    seen: set[str] = set()
+    kept: list[LessonRecordEvidence] = []
+    for lesson in ordered:
+        if lesson.lesson_id in seen:
+            kept.append(lesson)
+            continue
+        if len(seen) >= MAX_LESSON_RECORDS:
+            continue
+        seen.add(lesson.lesson_id)
+        kept.append(lesson)
+    return tuple(kept)
 
 
 def orchestrate_lesson_activation(
@@ -379,8 +456,33 @@ def orchestrate_lesson_activation(
     else:
         query = build_filtered_query(request)
 
-    raw = execute_read(query)
-    rows = _extract_bounded_rows(raw)
+    # Exhaust every provider page up to the bounded row/page caps. A single
+    # first page is NOT the database: rows past the first page are real
+    # lessons, and silently dropping them would make CKR6 retrieval
+    # incomplete exactly when the database grows past one page. Follow-up
+    # pages carry only `start_cursor`; the real read adapter forwards the
+    # query body to the Notion data-source query endpoint, which accepts it.
+    rows: list[Mapping[str, Any]] = []
+    seen_cursors: set[str | None] = set()
+    cursor: str | None = None
+    for _page_index in range(MAX_RETRIEVAL_PAGES):
+        if cursor in seen_cursors:
+            raise LessonActivationError("repeated pagination cursor")
+        seen_cursors.add(cursor)
+        page_query = query if cursor is None else {**query, "start_cursor": cursor}
+        raw = execute_read(page_query)
+        rows.extend(_extract_bounded_rows(raw))
+        if len(rows) >= MAX_RETRIEVAL_ROWS:
+            rows = rows[:MAX_RETRIEVAL_ROWS]
+            break
+        has_more, next_cursor = _page_cursor(raw)
+        if not has_more:
+            break
+        if next_cursor is None:
+            raise LessonActivationError("paginated retrieval missing next cursor")
+        cursor = next_cursor
+    else:
+        raise LessonActivationError("paginated retrieval exceeded page bound")
 
     lessons: list[LessonRecordEvidence] = []
     for row in rows:
@@ -399,6 +501,25 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     if not isinstance(results, list):
         raise LessonActivationError("read executor result is missing 'results'")
     return [item for item in results if isinstance(item, Mapping)][:MAX_RETRIEVAL_ROWS]
+
+
+def _page_cursor(raw: Any) -> tuple[bool, str | None]:
+    """Validate one page's pagination state, or fail closed.
+
+    A missing ``has_more`` is a single-page (legacy executor) response.
+    ``has_more: true`` without a non-empty string ``next_cursor`` is
+    malformed: following it would loop, and ignoring it would silently
+    truncate the database.
+    """
+    if not isinstance(raw, Mapping):
+        raise LessonActivationError("read executor must return a mapping")
+    has_more = raw.get("has_more", False)
+    if type(has_more) is not bool:
+        raise LessonActivationError("read executor returned a non-boolean has_more")
+    next_cursor = raw.get("next_cursor")
+    if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
+        raise LessonActivationError("read executor returned a malformed next_cursor")
+    return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
 
 
 def _plain_text(rich_text: Any) -> str | None:
@@ -489,6 +610,93 @@ def _checkbox(prop: Any) -> bool | None:
     return value
 
 
+def _is_supporting_ref(value: str) -> bool:
+    """One canonical supporting ref: this repo's issue/PR, or a governance path."""
+    if len(value) > MAX_ROW_TEXT_CHARS:
+        return False
+    if _SUPPORTING_REF.fullmatch(value) is not None:
+        return True
+    return value.startswith(_GOVERNANCE_PREFIXES)
+
+
+def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Parse approved bounded supporting refs: (admitted, dropped).
+
+    One URL per rich-text item, no free-form parsing. A missing property
+    behaves exactly as today (legacy one-link rows). Malformed, foreign,
+    duplicate, oversized, or over-cap refs are dropped and reported -- never
+    admitted, and never voiding the lesson or its primary ref. Dropped
+    entries are truncated to the row text bound so the evidence record
+    itself stays within its finite validation.
+    """
+    if prop is None:
+        return (), ()
+    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
+        return (), ("<malformed-supporting-property>",)
+    items = prop.get("rich_text")
+    if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
+        return (), ("<oversized-supporting-list>",)
+    seen: set[str] = {primary} if primary else set()
+    valid: list[str] = []
+    dropped: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            dropped.append("<malformed-supporting-item>")
+            continue
+        text = item.get("plain_text")
+        if not isinstance(text, str):
+            dropped.append("<malformed-supporting-item>")
+            continue
+        ref = text.strip()
+        if not ref:
+            continue
+        # A link annotation (what Notion makes clickable) must agree with
+        # the displayed text: a live row whose display text names one
+        # canonical ref while its link target points elsewhere is a spoof
+        # shape, so drop the item rather than admitting the display while
+        # the UI links somewhere else. Real API responses carry the link
+        # target as top-level `href` (and requests as nested `text.link`);
+        # the pre-repair writer emitted a top-level `link` key, so all
+        # three shapes are checked. Any present container that is malformed
+        # or disagrees with the displayed ref drops the item.
+        link_targets: list[str] = []
+        malformed_link = False
+        # Real API response field: `href` is always a string or null.
+        href = item.get("href")
+        if href is not None:
+            if isinstance(href, str) and href.strip():
+                link_targets.append(href.strip())
+            else:
+                malformed_link = True
+        # Legacy mock/pre-repair-writer shape: top-level `link` object.
+        legacy = item.get("link")
+        if legacy is not None:
+            if isinstance(legacy, Mapping) and isinstance(legacy.get("url"), str) and legacy["url"].strip():
+                link_targets.append(legacy["url"].strip())
+            else:
+                malformed_link = True
+        text_obj = item.get("text")
+        if isinstance(text_obj, Mapping):
+            nested = text_obj.get("link")
+            if nested is not None:
+                if isinstance(nested, Mapping) and isinstance(nested.get("url"), str) and nested["url"].strip():
+                    link_targets.append(nested["url"].strip())
+                else:
+                    malformed_link = True
+        if malformed_link or any(target != ref for target in link_targets):
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
+        if len(valid) >= MAX_SUPPORTING_REFS:
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
+        if ref in seen or not _is_supporting_ref(ref):
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
+        seen.add(ref)
+        valid.append(ref)
+    return tuple(valid), tuple(dropped[:MAX_ROW_LIST_ITEMS])
+
+
 def _github_source_link(prop: Any) -> str | None:
     if not isinstance(prop, Mapping) or prop.get("type") != "url":
         return None
@@ -497,6 +705,17 @@ def _github_source_link(prop: Any) -> str | None:
         return None
     value = value.strip()
     if len(value) > MAX_ROW_TEXT_CHARS:
+        return None
+    # CKR6 full-database readback (2026-11-14): a `#` fragment names a
+    # sub-resource of a page, not a canonical resource -- one live lesson's
+    # primary was a pull-request review anchor (`.../pull/1858` plus a
+    # `#pullrequestreview-...` fragment) and was admitted as CURRENT.
+    # A review/comment anchor is not a canonical issue/PR resource, so it
+    # is rejected here (UNVERIFIABLE) rather than admitted as the lesson's
+    # provenance. Plain resource URLs are unaffected: blob-URL primaries
+    # (relied on by an existing test) and governance-path primaries still
+    # normalize as CURRENT.
+    if "#" in value:
         return None
     if not (
         value.startswith("https://github.com/")

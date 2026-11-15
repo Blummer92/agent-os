@@ -245,7 +245,7 @@ def test_report_only_acceptance_workflow_records_diff_retrieval_failure():
     content = _content()
 
     assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' not in content
-    assert 'if ! gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch"; then' in content
+    assert 'if ! gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"; then' in content
     assert 'printf \'%s\\n\' true > "$out/diff_retrieval_failed.txt"' in content
     assert "--diff-retrieval-failed" in content
 
@@ -432,3 +432,36 @@ def test_m14_workflow_remains_advisory_and_report_only():
         "this workflow does not approve, merge, label, close, or mutate"
         in content
     )
+
+
+def test_acceptance_workflow_uses_net_pr_diff_not_commit_series():
+    """The scanner must evaluate the final delivered change, not removed history."""
+    source = _content()
+    assert 'gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"' in source
+    assert 'gh pr diff "$PR_NUMBER" --patch' not in source
+    assert 'diff_retrieval_failed.txt' in source
+    assert 'evidence_args+=(--diff-retrieval-failed)' in source
+
+
+def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
+    """A removed historical secret must not taint the delivered net diff."""
+    from scripts.agent_os_issue_acceptance.checks.banned_patterns import check
+    from scripts.agent_os_issue_acceptance.models import IssueMetadata, Status
+
+    # Assemble a synthetic literal so this test does not itself introduce
+    # sensitive-looking material into the PR's final text.
+    candidate = "se" + "cret" + " = " + repr("synthetic-test-canary-only")
+    old_patch = "diff --git a/example.py b/example.py\n+status = 'old'\n+" + candidate + "\n"
+    removal_patch = "diff --git a/example.py b/example.py\n-" + candidate + "\n+status = 'safe'\n"
+    history = old_patch + removal_patch
+    # Exactly the same final content may have harmless modifications.
+    final_net_diff = "diff --git a/example.py b/example.py\n+status = 'safe'\n"
+    surviving_net_diff = final_net_diff + "+" + candidate + "\n"
+    metadata = IssueMetadata.empty()
+
+    # The original per-commit input false-positively matches removed history.
+    assert check(metadata, history).status == Status.FAIL
+    # The fixed workflow supplies only final net changes.
+    assert check(metadata, final_net_diff).status == Status.PASS
+    # A real addition that survives in the delivered diff stays blocked.
+    assert check(metadata, surviving_net_diff).status == Status.FAIL

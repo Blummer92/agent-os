@@ -62,6 +62,14 @@ The `Agent OS Validation Gate` is the repository-visible compatibility and valid
 
 The workflow does not commit, push, open pull requests, write to Google Drive, modify source-of-truth records, mutate labels, or change PR readiness. Issue-to-PR automation is not part of this validation workflow.
 
+The one server-required status is `agent-os/authoritative-aggregate`. The `aggregate-gate` job mints a success only when, for the exact head it is minted for, the `validate` job (`./scripts/validate-all.sh`: Ruff, structure, every Python suite) succeeded, the `plan` job did not fail, and the `frontend` job (`scripts/agent_os_frontend_checks.py`) succeeded on that same SHA. A skipped, cancelled, failed, missing, or other-SHA result never produces a success status.
+
+The `frontend` job runs on every pull request (Draft included) and every manual dispatch, independent of the selector profile. It runs each registered Node project that has changed files: `picture-perfect-coach` (`npm run check`), `software-tutorial-capture`, `ui-cross-platform-reference`, `teacher-os-web` (build and unit tests) and `workspace-automation-builder` (fixture validation). A pull request that changes none still passes, with the non-applicability stated on the check run. A changed `package.json` project or JS/TS source file that is not registered in `scripts/agent_os_frontend_checks.py` fails the job instead of going unvalidated. Playwright browser suites run in the advisory `teacher-os-react-ci` workflow.
+
+The gate fails closed: the frontend verdict is required unless the workflow states `FRONTEND_REQUIRED=false` (push events only), and a required success must name the SHA it tested and match the SHA the status is minted for. Like a failed `plan` job, a failed frontend job supersedes a reused exact-head success because the newest status wins; the gate mints nothing for a reused success, so recover with a new push or by re-running all jobs, not only the failed ones.
+
+Draft pull requests defer `validate` and `aggregate-gate`, so the required status is absent until an authorized final-candidate run or the Ready event; a green Draft check list is not validation of Python changes.
+
 ## Safe Change Workflow
 
 Agent OS changes use:

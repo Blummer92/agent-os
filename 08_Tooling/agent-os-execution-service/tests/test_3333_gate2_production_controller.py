@@ -36,6 +36,7 @@ from agent_os_execution_service.gate2_production_controller import (
     Gate2ControllerError,
     _build_bound_bootstrap,
     _persist_receipt_atomically,
+    check_host_bindings,
     main,
     run_gate2_fixed_pilot_controller,
 )
@@ -1437,6 +1438,64 @@ def test_bound_bootstrap_fails_on_corrupted_readiness(tmp_path, monkeypatch) -> 
     assert excinfo.value.reason == "bound-evidence-unavailable"
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        pytest.param("truncated", id="truncated-request-file"),
+        pytest.param("tampered", id="tampered-request-file"),
+    ],
+)
+def test_bound_bootstrap_fails_closed_on_present_but_corrupt_runtime_request(
+    tmp_path, monkeypatch, corruption
+) -> None:
+    """A durable runtime request that EXISTS but is corrupt must fail closed.
+
+    The missing-request case is covered by the ``missing-handoff`` case of
+    ``test_bound_controller_fails_closed_before_dispatch``; this pins the
+    present-but-corrupt case at the controller boundary: no bootstrap is
+    returned, so no dispatch or receipt can follow.
+    """
+    bound = _bound_store(tmp_path, monkeypatch)
+    request_files = list((bound["store"] / "runtime-execution-requests").glob("*.json"))
+    assert len(request_files) == 1
+    request_file = request_files[0]
+    original = request_file.read_text()
+    if corruption == "truncated":
+        request_file.write_text(original[: len(original) // 2])
+    else:
+        # Alter one admitted identity inside an otherwise well-formed record.
+        assert _BOUND_SHA in original
+        request_file.write_text(original.replace(_BOUND_SHA, "d" * 40))
+        assert request_file.read_text() != original
+    with pytest.raises(Gate2ControllerError) as excinfo:
+        _build_bound_bootstrap(bound["envelope"], bound["configuration"])
+    assert excinfo.value.reason == "bound-evidence-unavailable"
+    receipts_dir = bound["store"] / "invocations" / "receipts"
+    assert not receipts_dir.exists() or list(receipts_dir.iterdir()) == []
+
+
+def test_descriptor_and_capsule_subject_binding_rejects_mismatch(tmp_path, monkeypatch) -> None:
+    """The factory's descriptor/capsule subject binding is asserted directly.
+
+    The factory tests monkeypatch ``_bind_descriptor_and_capsule`` away, so
+    its mismatch branch was never exercised. A different handoff identity
+    must be refused; the matching identity (control) must be accepted.
+    """
+    from agent_os_execution_service.production_governed_resume_factory import (
+        ProductionGovernedResumeFactoryError,
+        _bind_descriptor_and_capsule,
+    )
+
+    bound = _bound_store(tmp_path, monkeypatch)
+    descriptor = bound["request"].invocation_descriptor
+    capsule = bound["request"].restart_capsule
+    _bind_descriptor_and_capsule(descriptor, capsule, bound["handoff"].handoff_id)
+    with pytest.raises(
+        ProductionGovernedResumeFactoryError, match="do not bind the same subject"
+    ):
+        _bind_descriptor_and_capsule(descriptor, capsule, "executor-handoff:" + "9" * 64)
+
+
 def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeypatch) -> None:
     """Stale dependency readiness must not become RESOLVED_CLEAR evidence."""
     bound = _bound_store(tmp_path, monkeypatch, readiness_expires="2026-01-02T00:00:00Z")
@@ -1444,3 +1503,104 @@ def test_bound_reader_reports_expired_readiness_as_unavailable(tmp_path, monkeyp
     dependency = bootstrap.sources.repository_reader.read_dependency_evidence(_BOUND_REPO, 3333)
     assert str(dependency.status) == "EvidenceStatus.UNAVAILABLE"
     assert any("not-current" in code for code in dependency.reason_codes)
+
+
+# --- Read-only --check-bindings probe (D1) ----------------------------------
+# N3: the strict host-identity rule is unchanged (absent and different
+# both fail), and the probe creates no state, reads no event, acquires
+# no claim, and dispatches nothing.
+
+def _check_env(host: dict) -> dict[str, str]:
+    return {key: value for key, value in host.items() if type(value) is str}
+
+
+def test_check_bindings_valid_and_creates_no_state(host, tmp_path) -> None:
+    """The probe passes on a qualified host and leaves the tree untouched."""
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {
+        "check_bindings": "VALID",
+        "reason": None,
+        "codespace_name": "test-box",
+    }
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert before == after
+    assert not (host["store"] / "invocations" / "receipts").exists()
+
+
+@pytest.mark.parametrize(
+    "mutate,reason",
+    [
+        (
+            lambda env: env.pop("AGENT_OS_LEASE_DIRECTORY"),
+            "host-configuration-invalid",
+        ),
+        (
+            lambda env: env.update(CODESPACE_NAME=""),
+            "host-surface-identity-unavailable",
+        ),
+        (
+            lambda env: env.update(CODESPACE_NAME="other-box"),
+            "host-surface-identity-mismatch",
+        ),
+    ],
+)
+def test_check_bindings_invalid_cases(host, mutate, reason) -> None:
+    env = _check_env(host)
+    mutate(env)
+    probe = check_host_bindings(
+        environ=env, resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": reason}
+
+
+def test_check_bindings_uninitialized_store_is_invalid(host) -> None:
+    import shutil
+
+    shutil.rmtree(host["store"] / "invocations")
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "checkpoint-store-not-initialized"}
+
+
+def test_check_bindings_unqualified_selection_is_invalid(host) -> None:
+    probe = check_host_bindings(
+        environ=_check_env(host),
+        resolve_selection=lambda: CodespaceSelection(
+            selected=False, reason="none", codespace_name=None, state=None
+        ),
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "execution-surface-unqualified"}
+
+
+def test_check_bindings_active_lease_is_invalid(host) -> None:
+    (host["lease_dir"] / ("f" * 64 + ".active.json")).write_text("{}\n")
+    probe = check_host_bindings(
+        environ=_check_env(host), resolve_selection=lambda: _selection("test-box")
+    )
+    assert probe == {"check_bindings": "INVALID", "reason": "conflicting-active-lease"}
+
+
+def test_check_bindings_cli_wiring(host, monkeypatch, capsys) -> None:
+    """main() accepts --check-bindings alone and rejects ambiguous argv."""
+    for key, value in _check_env(host).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        "agent_os_execution_service.gate2_production_controller"
+        ".read_canonical_codespace_selection",
+        lambda resolve_selection: _selection("test-box"),
+    )
+    assert main(["--check-bindings"]) == 0
+    assert json.loads(capsys.readouterr().out)["check_bindings"] == "VALID"
+    monkeypatch.setenv("CODESPACE_NAME", "other-box")
+    assert main(["--check-bindings"]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "host-surface-identity-mismatch"
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--check-bindings", "--event", "event.json"])
+    assert excinfo.value.code == 2
+    with pytest.raises(SystemExit) as excinfo:
+        main([])
+    assert excinfo.value.code == 2

@@ -11,10 +11,10 @@ are outstanding (see "What this does not do").
 - **Caller.** The `merge_admission` job in
   `.github/workflows/agent-os-governed-invocation.yml` is the production
   caller of `merge_applicability.evaluate_merge_dispatch_applicability`.
-  It runs `merge_admission_actions` first, then `merge_applicability`
-  with the same fixed transport file, and publishes both
-  `receipt.json` (candidate) and `dispatch_receipt.json` (dispatch) as
-  job artifacts (7-day retention) plus a step summary naming both.
+  It runs `merge_applicability` once, which performs canonical
+  admission internally. It publishes `dispatch_receipt.json` containing
+  nested `admission_receipt` evidence (7-day retention), plus a step
+  summary reporting both decisions.
 - **Trigger.** An owner issue comment (user id 32861845, not a PR
   comment) starting with `/agent-os merge-admit `, parsed by the fixed
   `github_issue_comment_ingress` grammar into immutable selectors
@@ -39,8 +39,9 @@ are outstanding (see "What this does not do").
 
 1. **Fixed ingress (unchanged, #3661).** An owner `/agent-os merge-admit`
    comment on an issue triggers the read-only `merge_admission` job, which
-   runs `merge_admission_actions.evaluate_merge_admission_transport`. That
-   consumer reacquires the live PR and the trusted
+   runs `merge_applicability.evaluate_merge_dispatch_applicability`,
+   which internally calls `merge_admission_actions.evaluate_merge_admission_transport`.
+   That consumer reacquires the live PR and the trusted
    `agent-os-merge-authorization/v1` source, gates open/non-draft/unmerged,
    exact head, body SHA-256, mergeability, and base == main, and reconciles
    the 8 live-comparable binding fields. A fully matching record is a
@@ -203,9 +204,9 @@ requirement is introduced.
   hand-crafted serialized record may be treated as produced evidence.
 - **No merge dispatch.** No repository code calls the GitHub merge API,
   and no MCP tool, credential, or protected-setting change is made here.
-  The one workflow change is read-only: the existing `merge_admission`
-  job additionally runs the dispatch evaluator and publishes its
-  receipt; it grants no merge authority. The dispatch owner
+  The workflow remains read-only: the existing `merge_admission`
+  job runs the dispatch evaluator once and publishes its nested
+  admission evidence; it grants no merge authority. The dispatch owner
   (repo-owned Actions dispatch vs. product-side connector gating,
   decisions (a)/(b)) is still undecided for the merge-executing step.
 - **No host enforcement proof.** Repository tests prove the canonical

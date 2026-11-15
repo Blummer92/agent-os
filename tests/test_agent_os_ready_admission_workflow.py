@@ -43,6 +43,7 @@ ORIGINAL_JOBS = ["ingress", "refresh_pr", "ready_admission", "merge_admission"]
 # job; it is recognized here by exact name, never by a broad allowance.
 DRAFT_VALIDATION_JOBS = ["draft_validation_dispatch", "draft_validation_receipt"]
 READY_RECOVERY_JOBS = ["ready_recovery_dispatch"]
+CODESPACES_START_JOBS = ["codespace_start"]
 
 
 def test_existing_jobs_unchanged_in_shape():
@@ -50,7 +51,7 @@ def test_existing_jobs_unchanged_in_shape():
     # The original four jobs are preserved, in order and first.
     assert jobs[: len(ORIGINAL_JOBS)] == ORIGINAL_JOBS
     # Exactly the authorized #2410 jobs follow, in order; any other job fails closed.
-    assert jobs[len(ORIGINAL_JOBS):] == DRAFT_VALIDATION_JOBS + READY_RECOVERY_JOBS
+    assert jobs[len(ORIGINAL_JOBS):] == (DRAFT_VALIDATION_JOBS + READY_RECOVERY_JOBS + CODESPACES_START_JOBS)
 
 
 def test_draft_validation_dispatch_job_has_only_the_bounded_permissions():

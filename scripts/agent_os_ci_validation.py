@@ -155,6 +155,76 @@ def _command_env(cwd: Path) -> dict[str, str]:
     return env
 
 
+def _junit_path_for_command(command: str, junit_dir: Path, index: int) -> Path:
+    """Unique JUnit path for one bounded command. Index guarantees uniqueness
+    even when the same command string appears twice; the sanitized command
+    keeps the file name human-readable. Never applied to npm commands."""
+    sanitized = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in command.replace("/", "__"))
+    return junit_dir / f"{index:02d}_{sanitized}.xml"
+
+
+def _is_pytest_argv(argv: tuple[str, ...]) -> bool:
+    return len(argv) >= 3 and argv[0] in ("python", "python3") and argv[1] == "-m" and argv[2] == "pytest"
+
+
+def _junit_counts(path: Path) -> dict | None:
+    """Best-effort node counts from a JUnit file, or None when absent/malformed.
+
+    This is a receipt field only; strict schema validation stays with the
+    evidence-health verifier, which must still reject malformed reports.
+    """
+    try:
+        import hashlib as _hashlib
+        from xml.etree import ElementTree as _ET
+
+        root = _ET.fromstring(path.read_bytes())
+    except (OSError, ValueError, _ET.ParseError):
+        return None
+    suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
+    if not suites or any(x.tag != "testsuite" for x in suites):
+        return None
+    counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    for suite in suites:
+        for field in counts:
+            raw = suite.attrib.get(field, "")
+            if not raw.isdigit():
+                return None
+            counts[field] += int(raw)
+    return counts
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        import hashlib as _hashlib
+
+        return _hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _pytest_classification(code: int, junit_path: Path | None) -> str:
+    """Truth classification for a pytest exit code. Exit 5 (no tests
+    collected) is ZERO_COLLECTED, never a pass and never a generic failure.
+
+    QA-A D1 considered: a nonzero exit with a missing JUnit report is
+    labelled EXECUTED_FAIL here, NOT NOT_EXECUTED_SETUP_FAILURE, because
+    the command did execute and its exit code is recorded. The missing
+    report is carried separately in the receipt (junit_sha256=None,
+    junit_counts=None); downstream ingestion must check those fields
+    before treating EXECUTED_FAIL as node-level evidence. Labelling it
+    NOT_EXECUTED would misstate an executed-and-failed command as never
+    run, and would break the prior patch's established contract. Exit 0
+    with a missing report keeps NOT_EXECUTED_SETUP_FAILURE: a claimed
+    pass with no report is not executed-pass evidence."""
+    if code == 0:
+        if junit_path is not None and not junit_path.is_file():
+            return "NOT_EXECUTED_SETUP_FAILURE"
+        return "EXECUTED_PASS"
+    if code == 5:
+        return "ZERO_COLLECTED"
+    return "EXECUTED_FAIL"
+
+
 def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
     if plan.profile != "focused":
         raise ValueError("bounded CI executor accepts focused plans only")
@@ -165,9 +235,118 @@ def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
         raise ValueError(
             f"checked-out SHA {checked_out} does not match expected PR head {expected_head_sha}"
         )
-    for command in plan.commands:
-        argv, cwd = _resolve_command(command)
-        subprocess.run(argv, cwd=cwd, check=True, env=_command_env(cwd))
+    junit_dir_raw = os.environ.get("CI_JUNIT_DIR", "")
+    junit_dir = Path(junit_dir_raw) if junit_dir_raw else None
+    if junit_dir is not None:
+        junit_dir.mkdir(parents=True, exist_ok=True)
+    manifest: list[dict[str, str]] = []
+    receipt_commands: list[dict] = []
+    first_failure: BaseException | None = None
+    try:
+        for index, command in enumerate(plan.commands):
+            try:
+                argv, cwd = _resolve_command(command)
+            except ValueError as exc:
+                # Unresolvable selected command: record it as not executed
+                # instead of dropping every later selected command silently.
+                manifest.append({"command": command, "classification": "NOT_EXECUTED", "junit_file": ""})
+                receipt_commands.append(
+                    {
+                        "command_id": f"cmd-{index:02d}",
+                        "command": command,
+                        "argv": [],
+                        "cwd": "",
+                        "language": "unknown",
+                        "exit_code": None,
+                        "classification": "NOT_EXECUTED",
+                        "junit_file": "",
+                        "junit_sha256": None,
+                        "junit_counts": None,
+                        "error": str(exc),
+                    }
+                )
+                if first_failure is None:
+                    first_failure = exc
+                continue
+            language = "python" if argv and argv[0] in ("python", "python3") else "npm" if argv and argv[0] == "npm" else "other"
+            junit_path: Path | None = None
+            run_argv = argv
+            if junit_dir is not None and _is_pytest_argv(argv):
+                junit_path = _junit_path_for_command(command, junit_dir, index)
+                run_argv = (*argv, f"--junitxml={junit_path}")
+            code: int | None = None
+            error: str | None = None
+            try:
+                subprocess.run(run_argv, cwd=cwd, check=True, env=_command_env(cwd))
+                code = 0
+            except subprocess.CalledProcessError as exc:
+                code = int(exc.returncode)
+                error = str(exc)
+            except OSError as exc:
+                error = str(exc)
+            if junit_dir is not None:
+                if junit_path is not None:
+                    if code is None:
+                        classification = "NOT_EXECUTED_SETUP_FAILURE"
+                    else:
+                        classification = _pytest_classification(code, junit_path)
+                    entry = {"command": command, "classification": classification, "junit_file": str(junit_path)}
+                elif language == "npm":
+                    classification = "EXECUTED_FAIL" if (code is not None and code != 0) or code is None else "NODE_REPORTER_NOT_AVAILABLE"
+                    entry = {"command": command, "classification": classification, "junit_file": ""}
+                else:
+                    classification = "EXECUTED_FAIL" if (code is not None and code != 0) or code is None else "NO_JUNIT_INSTRUMENTATION"
+                    entry = {"command": command, "classification": classification, "junit_file": ""}
+                manifest.append(entry)
+                receipt_commands.append(
+                    {
+                        "command_id": f"cmd-{index:02d}",
+                        "command": command,
+                        "argv": list(run_argv),
+                        "cwd": str(cwd),
+                        "language": language,
+                        "exit_code": code,
+                        "classification": classification,
+                        "junit_file": str(junit_path) if junit_path is not None else "",
+                        "junit_sha256": _sha256_file(junit_path) if junit_path is not None and junit_path.is_file() else None,
+                        "junit_counts": _junit_counts(junit_path) if junit_path is not None and junit_path.is_file() else None,
+                        "error": error,
+                    }
+                )
+            if code is None or (code != 0):
+                # Record the first failure, keep executing the remaining
+                # selected commands so the receipt covers the whole plan,
+                # then fail the step at the end with the first code.
+                failure: BaseException
+                if code is None:
+                    failure = OSError(error or "command could not be executed")
+                else:
+                    failure = subprocess.CalledProcessError(code, run_argv)
+                if first_failure is None:
+                    first_failure = failure
+    finally:
+        if junit_dir is not None:
+            lines = ["command\tjunit_file\tclassification"]
+            for entry in manifest:
+                lines.append(f"{entry['command']}\t{entry['junit_file']}\t{entry['classification']}")
+            (junit_dir / "manifest.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            receipt = {
+                "schema": "agent-os-ci-command-receipt/1",
+                "repository": plan.repository,
+                "pull_request": plan.pull_request,
+                "head_sha": plan.head_sha,
+                "base_sha": plan.base_sha,
+                "profile": plan.profile,
+                "selector_version": plan.selector_version,
+                "command_set_digest": plan.command_set_digest,
+                "commands": receipt_commands,
+                "selected_count": len(plan.commands),
+                "executed_count": sum(1 for c in receipt_commands if c["exit_code"] is not None),
+                "note": "Selected-vs-executed receipt only; it is not a merge, Ready, or aggregate decision.",
+            }
+            (junit_dir / "manifest.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if first_failure is not None:
+        raise first_failure
 
 
 def _parse_args() -> argparse.Namespace:
