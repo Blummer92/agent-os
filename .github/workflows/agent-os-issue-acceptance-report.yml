@@ -22,8 +22,23 @@ jobs:
     name: Run issue acceptance report
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      # The advisory evaluator is deliberately the trusted dispatch revision,
+      # not unreviewed code from the target PR. PR metadata/diff are inputs only.
+      # This report does not certify the PR head's acceptance implementation.
+      - name: Check out trusted report evaluator
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify trusted evaluator revision
+        env:
+          EXPECTED_EVALUATOR_SHA: ${{ github.sha }}
+          EXPECTED_DISPATCH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_DISPATCH_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_EVALUATOR_SHA"
 
       - name: Set up Python test environment
         uses: ./.github/actions/setup-python-dev
@@ -112,6 +127,8 @@ jobs:
           if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
             captured_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"
           fi
+          # Explicit base-evaluator semantics: the target PR head is only
+          # captured as evidence, never executed as the checker implementation.
           evaluator_sha="$(git rev-parse HEAD)"
           observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
