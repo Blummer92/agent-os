@@ -356,3 +356,79 @@ def test_ckr11_malformed_pagination_state_fails_closed():
         assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
         assert "lesson-read-incomplete" in result.selection_reason_codes
         assert result.selected_lesson_ids == ()
+
+
+# #3986: CKR6's exact, already-controlled Testing hint must be used before
+# generic Python area expansion. No new provider vocabulary or authority.
+def test_ckr6_exact_context_first_query_targets_testing_only():
+    req = request(
+        ecosystem_hints=("GitHub Actions",),
+        language_hints=("Python", "YAML"),
+        capability_keywords=("CKR6 mutation boundary", "trusted owner request"),
+    )
+    focused = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
+    broad = build_escalation_query(req, RetrievalEscalation.WORKSPACE_SEARCH)
+    assert focused["filter"]["and"][-1] == {
+        "property": "Area", "select": {"equals": "Testing"}
+    }
+    assert broad != focused
+    assert any(
+        clause.get("property") == "Area" and clause["select"]["equals"] == "Automation"
+        for clause in broad["filter"]["and"][-1].get("or", [])
+    )
+
+
+def test_ckr6_focused_query_retrieves_verified_lesson_without_broad_overflow():
+    req = request(
+        task_reference="PR #3989 exact head",
+        ecosystem_hints=("GitHub Actions",),
+        language_hints=("Python", "YAML"),
+        capability_keywords=("CKR6 mutation boundary", "trusted owner request"),
+    )
+    row = _lesson_row("LL-63")
+    row["properties"]["Lesson Learned"] = _title("CKR6 mutation boundary verification")
+    row["properties"]["What To Do Next Time"] = _rich_text(
+        "Verify CKR6 mutation admission against the exact head."
+    )
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        # A broad Python union would return 25 rows with has_more=True;
+        # the focused controlled Testing query returns a complete result.
+        if "or" in query["filter"]["and"][-1]:
+            return {"results": [row] * MAX_RETRIEVAL_ROWS,
+                    "has_more": True, "next_cursor": "overflow"}
+        return {"results": [row], "has_more": False, "next_cursor": None}
+
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    assert len(calls) == 1
+    assert calls[0]["filter"]["and"][-1]["select"]["equals"] == "Testing"
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-63",)
+    assert result.selection.selected[0].candidate.source_revision == "2026-11-04T12:00:00.000Z"
+    assert result.selection.selected[0].candidate.canonical_github_refs
+    assert result.retrieval_diagnostics["read_count"] == 1
+
+
+def test_ckr6_testing_query_still_stops_when_it_overflows():
+    req = request(capability_keywords=("CKR6 mutation boundary",))
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row("LL-63")] * MAX_RETRIEVAL_ROWS,
+                "has_more": True, "next_cursor": "more"}
+
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    assert len(calls) == 1
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    assert result.selected_lesson_ids == ()
+
+
+def test_generic_python_testing_request_retains_broad_query():
+    req = request(capability_keywords=("testing",))
+    query = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
+    assert "or" in query["filter"]["and"][-1]
+    assert {"property": "Learning Type", "select": {"equals": "Testing lesson"}} in query["filter"]["and"][-1]["or"]
