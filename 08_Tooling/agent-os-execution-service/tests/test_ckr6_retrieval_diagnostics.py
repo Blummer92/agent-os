@@ -262,3 +262,51 @@ def test_transport_failures_are_distinct_and_fail_closed(monkeypatch, failure, e
     assert sink[0]["retrieval_reason_code"] == expected
     assert sink[0]["incomplete_reason_code"] == "none"
     assert "private" not in json.dumps(result) + json.dumps(sink)
+
+def test_sanitized_retrieval_diagnostics_artifact_tracks_exact_failure(tmp_path, monkeypatch):
+    reader = _counting({
+        "results": [_row(n) for n in range(25)],
+        "has_more": True,
+        "next_cursor": CURSOR,
+    })
+    result, sink = _run(monkeypatch, reader)
+    _assert_fail_closed(result)
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
+    data = json.loads(target.read_text())
+    assert data["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert data["incomplete_reason_code"] == "row-bound-exceeded"
+    assert data["read_count"] == 1
+    assert CURSOR not in target.read_text()
+    assert SENSITIVE_SAMPLE not in target.read_text()
+    assert "retrieval_diagnostics" not in json.dumps(result)
+    assert set(result) <= bridge.RESULT_FIELDS
+
+
+def test_diagnostic_artifact_rejects_untrusted_fields_boolean_counters_and_secret_text(tmp_path):
+    valid = {
+        "retrieval_reason_code": "notion-http-429",
+        "incomplete_reason_code": "none",
+        "read_count": 1,
+        "observed_rows": 0,
+        "normalized_rows": 0,
+        "skipped_rows": 0,
+        "candidate_count": 0,
+    }
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(valid, target)
+    before = target.read_text()
+    variants = [
+        {**valid, "raw_provider_text": SENSITIVE_SAMPLE},
+        {**valid, "retrieval_reason_code": SENSITIVE_SAMPLE},
+        {**valid, "incomplete_reason_code": CURSOR},
+        {**valid, "read_count": True},
+        {**valid, "candidate_count": 10001},
+    ]
+    for hostile in variants:
+        assert bridge.write_retrieval_diagnostics_artifact(hostile, target) is False
+        assert target.read_text() == before
+    assert bridge.write_retrieval_diagnostics_artifact(None, target) is False
+    assert bridge.write_retrieval_diagnostics_artifact(valid, tmp_path) is False
+    assert SENSITIVE_SAMPLE not in target.read_text()
+

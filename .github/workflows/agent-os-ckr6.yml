@@ -172,7 +172,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: agent-os-ckr6-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agent-os-ckr6/result.json
+          path: |
+            ${{ runner.temp }}/agent-os-ckr6/result.json
+            ${{ runner.temp }}/agent-os-ckr6/retrieval-diagnostics.json
           if-no-files-found: warn
           retention-days: 3
 

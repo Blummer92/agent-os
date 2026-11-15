@@ -515,6 +515,53 @@ def write_retrieval_diagnostics_summary(
     return True
 
 
+def write_retrieval_diagnostics_artifact(
+    diagnostics: Mapping[str, object] | None,
+    path: Path,
+) -> bool:
+    """Write only finite, sanitized diagnostic codes and bounded counters.
+
+    This is separate from result.json and the trusted result comment. It never
+    influences CKR6 admission, mutation, or execution status. Invalid values
+    cannot be serialized or echoed, and artifact failures are non-blocking.
+    """
+    if not isinstance(diagnostics, Mapping):
+        return False
+    expected_keys = {
+        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
+    }
+    if set(diagnostics) != expected_keys:
+        return False
+    reason = diagnostics.get("retrieval_reason_code")
+    if type(reason) is not str or not (
+        reason == "none" or reason in _RETRIEVAL_FINITE_REASONS
+        or _NOTION_REASON_RE.fullmatch(reason)
+    ):
+        return False
+    incomplete = diagnostics.get("incomplete_reason_code")
+    if type(incomplete) is not str or incomplete not in (_INCOMPLETE_REASON_CODES | {"none"}):
+        return False
+    if any(
+        type(diagnostics[name]) is not int
+        or not 0 <= diagnostics[name] <= _MAX_DIAGNOSTIC_COUNTER
+        for name in _RETRIEVAL_COUNTERS
+    ):
+        return False
+    safe = {
+        "retrieval_reason_code": reason,
+        "incomplete_reason_code": incomplete,
+        **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
+    }
+    try:
+        path.write_text(
+            json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return False
+    return True
+
+
 def _record_diagnostics(
     sink: list[dict[str, object]] | None,
     raw: Mapping[str, object],
@@ -1474,6 +1521,11 @@ def main() -> int:
     # Written after the result so diagnostics can never block or alter it.
     for item in diagnostics:
         write_retrieval_diagnostics_summary(item)
+        # The trusted result was already written. This separate, sanitized
+        # artifact cannot change admission or make the bridge fail.
+        write_retrieval_diagnostics_artifact(
+            item, Path(args.output).with_name("retrieval-diagnostics.json")
+        )
     return 0
 
 
