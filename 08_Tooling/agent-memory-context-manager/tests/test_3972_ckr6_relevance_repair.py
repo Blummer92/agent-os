@@ -22,7 +22,7 @@ def _candidate(**kw):
                 source_revision="2026-11-14T00:00:00Z",
                 currentness=KnowledgeCurrentness.CURRENT,
                 name="CKR6 mutation gate must use verified lesson preflight",
-                ecosystem="python", capability_kind="testing",
+                ecosystem="python", library_name=None, capability_kind="testing",
                 use_when=("Check CKR6 mutation boundary admission on the exact head.",),
                 canonical_github_refs=("https://github.com/Blummer92/agent-os/issues/2425",))
     data.update(kw)
