@@ -2,9 +2,17 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeRequest,
     RetrievalEscalation,
 )
-from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
+from agent_memory_context_manager.lesson_preflight import (
+    FailedRepairAttempt,
+    LessonRetrievalStatus,
+    RepairContext,
+    RetryReentryOutcome,
+)
+from agent_memory_context_manager.repair_lesson_activation import activate_repair_retry_lessons
 from agent_memory_context_manager.lesson_retrieval_orchestrator import (
     MAX_ESCALATION_STEPS,
+    MAX_RETRIEVAL_PAGES,
+    MAX_RETRIEVAL_ROWS,
     build_escalation_query,
     orchestrate_lesson_retrieval,
     record_retrieval_attempt,
@@ -226,3 +234,124 @@ def test_pr_a01_identical_windows_collapse_across_escalation_steps():
     assert "required-library-uncovered" in result.selection_reason_codes
     assert result.candidate_count == 2
     assert result.selected_lesson_ids == ("LL-01", "LL-02")
+
+
+# --- CKR11 cursor-completeness regression (reuses #3973's finite contract) ---
+
+
+def test_ckr11_finds_current_relevant_lesson_on_second_page():
+    calls = []
+    irrelevant = _lesson_row("LL-41")
+    irrelevant["properties"]["Area"] = _select("Governance")
+    irrelevant["properties"]["Learning Type"] = _select("Mistake")
+
+    def read(query):
+        calls.append(dict(query))
+        if "start_cursor" not in query:
+            return {"results": [irrelevant], "has_more": True, "next_cursor": "c1"}
+        assert query["start_cursor"] == "c1"
+        return {"results": [_lesson_row("LL-42")], "has_more": False, "next_cursor": None}
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-42",)
+    assert len(calls) == 2
+    assert calls[1]["filter"] == calls[0]["filter"]
+    assert calls[1]["page_size"] == calls[0]["page_size"]
+    assert result.retrieval_diagnostics["read_count"] == 2
+    assert result.retrieval_diagnostics["observed_rows"] == 2
+
+
+def test_ckr11_legacy_single_page_response_is_unchanged():
+    calls = []
+    def read(query):
+        calls.append(dict(query))
+        return {"results": [_lesson_row("LL-42")]}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-42",)
+    assert len(calls) == 1
+
+
+def test_ckr11_relevant_first_page_cannot_admit_when_next_page_is_broken():
+    calls = []
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {"results": [_lesson_row("LL-42")], "has_more": True, "next_cursor": "c1"}
+        return {"results": [], "has_more": True, "next_cursor": None}
+
+    activation = activate_repair_retry_lessons(
+        request(),
+        FailedRepairAttempt("attempt-42", "partial evidence enough", "previous failure"),
+        execute_read=read,
+        repair_context=RepairContext.CI_DIAGNOSIS,
+    )
+    assert len(calls) == 2
+    assert activation.lesson_result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" in activation.lesson_result.selection_reason_codes
+    assert activation.lesson_result.selected_lesson_ids == ()
+    assert activation.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
+    assert activation.boundary.mutation_admissible is False
+    assert activation.boundary.blocking_attempt_id == "attempt-42"
+
+
+def test_ckr11_repeated_cursor_fails_closed_without_third_read():
+    calls = []
+    def read(query):
+        calls.append(dict(query))
+        return {"results": [_lesson_row("LL-42")], "has_more": True, "next_cursor": "c1"}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 2
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+    assert result.retrieval_diagnostics["read_count"] == 2
+
+
+def test_ckr11_page_cap_fails_closed_without_unbounded_reads():
+    calls = []
+    def read(query):
+        calls.append(dict(query))
+        return {"results": [], "has_more": True, "next_cursor": f"cursor-{len(calls)}"}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == MAX_RETRIEVAL_PAGES
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_row_cap_with_more_results_refuses_partial_selection():
+    calls = []
+    def read(query):
+        calls.append(dict(query))
+        return {
+            "results": [_lesson_row(f"LL-{n}") for n in range(1, MAX_RETRIEVAL_ROWS + 1)],
+            "has_more": True,
+            "next_cursor": "later",
+        }
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 1
+    assert result.selected_lesson_ids == ()
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_oversized_provider_page_fails_closed_without_silent_truncation():
+    def read(_query):
+        return {
+            "results": [_lesson_row(f"LL-{n}") for n in range(1, MAX_RETRIEVAL_ROWS + 2)],
+            "has_more": False,
+        }
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+    assert result.selected_lesson_ids == ()
+
+
+def test_ckr11_malformed_pagination_state_fails_closed():
+    for bad_page in (
+        {"results": [_lesson_row("LL-42")], "has_more": "true"},
+        {"results": [_lesson_row("LL-42")], "has_more": True, "next_cursor": 123},
+    ):
+        result = orchestrate_lesson_retrieval(request(), execute_read=lambda _q: bad_page)
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+        assert "lesson-read-incomplete" in result.selection_reason_codes
+        assert result.selected_lesson_ids == ()
