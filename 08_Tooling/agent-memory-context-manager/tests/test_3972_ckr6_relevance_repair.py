@@ -41,7 +41,7 @@ def test_exact_ckr6_context_selects_verified_relevant_lesson():
 
 
 def test_unrelated_or_one_anchor_is_not_sufficient():
-    for name in ("Generic CI tests", "CKR6 lesson lifecycle", "Mutation testing unrelated to CKR6"):
+    for name in ("Generic CI tests", "CKR6 lesson lifecycle", "Mutation testing unrelated to lesson admission"):
         result = select_coding_knowledge(_request(), (_candidate(name=name, use_when=("Review ordinary tests.",)),))
         assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
 
