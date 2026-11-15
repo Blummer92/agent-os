@@ -21,7 +21,10 @@ from .coding_knowledge_selection import (
     select_coding_knowledge,
 )
 from .lesson_activation_bridge import (
+    MAX_RETRIEVAL_PAGES,
     MAX_RETRIEVAL_ROWS,
+    LessonActivationError,
+    _page_cursor,
     _bound_relevant_lessons,
     _extract_bounded_rows,
     build_filtered_query,
@@ -53,6 +56,9 @@ _SANITIZED_PROVIDER_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 def _sanitized_read_failure_reason(exc: BaseException) -> str:
     """Keep only finite provider reason codes; never expose raw exception text."""
 
+    if isinstance(exc, LessonActivationError):
+        # Incomplete provider pagination is STOP evidence, not a candidate set.
+        return "lesson-read-incomplete"
     if isinstance(exc, TimeoutError):
         return "lesson-read-timeout"
     if isinstance(exc, ConnectionError):
@@ -230,14 +236,40 @@ def orchestrate_lesson_retrieval(
             continue
 
         query = build_escalation_query(current_request, step)
+        rows: list[Mapping[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str | None] = set()
         try:
-            raw = execute_read(query)
-            read_count += 1
-        except (ConnectionError, TimeoutError, RuntimeError) as exc:
+            # #3973's existing, bounded cursor contract also applies to CKR11:
+            # selecting from a truncated page is never sufficient evidence.
+            for _page_index in range(MAX_RETRIEVAL_PAGES):
+                if cursor in seen_cursors:
+                    raise LessonActivationError("repeated pagination cursor")
+                seen_cursors.add(cursor)
+                page_query = query if cursor is None else {**query, "start_cursor": cursor}
+                raw = execute_read(page_query)
+                read_count += 1
+                page_rows = _extract_bounded_rows(raw)
+                # _extract_bounded_rows is intentionally bounded; reject an
+                # oversized supplied page instead of silently truncating it.
+                if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
+                    raise LessonActivationError("paginated retrieval exceeded row bound")
+                rows.extend(page_rows)
+                has_more, next_cursor = _page_cursor(raw)
+                if not has_more:
+                    break
+                if len(rows) >= MAX_RETRIEVAL_ROWS:
+                    raise LessonActivationError("paginated retrieval exceeded row bound")
+                if next_cursor is None:
+                    raise LessonActivationError("paginated retrieval missing next cursor")
+                cursor = next_cursor
+            else:
+                raise LessonActivationError("paginated retrieval exceeded page bound")
+        except (ConnectionError, TimeoutError, RuntimeError, LessonActivationError) as exc:
+            # No partial page population may reach CKR2 or admit a repair.
             return with_diagnostics(_unavailable_result(current_request, exc))
 
         current_request = record_retrieval_attempt(current_request, step)
-        rows = _extract_bounded_rows(raw)
         observed_rows += len(rows)
         for row in rows:
             normalized = normalize_lesson_row(row)
