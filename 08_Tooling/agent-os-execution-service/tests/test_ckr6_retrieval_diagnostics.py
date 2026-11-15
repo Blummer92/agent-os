@@ -241,3 +241,24 @@ def test_incomplete_reason_projection_ignores_untrusted_detail():
     assert projected["retrieval_reason_code"] == "lesson-read-incomplete"
     assert projected["incomplete_reason_code"] == "none"
     assert "SENSITIVE_SAMPLE-DO-NOT-LEAK" not in json.dumps(projected)
+
+
+def test_unmapped_incomplete_error_uses_static_fallback(monkeypatch):
+    from agent_memory_context_manager.lesson_activation_bridge import LessonActivationError
+    result, sink = _run(monkeypatch, _counting(LessonActivationError("unrecognized private payload")))
+    _assert_fail_closed(result)
+    assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert sink[0]["incomplete_reason_code"] == "unknown-incomplete"
+    assert "private payload" not in json.dumps(result) + json.dumps(sink)
+
+
+@pytest.mark.parametrize(("failure", "expected"), [
+    (TimeoutError("private timeout details"), "lesson-read-timeout"),
+    (ConnectionError("private connection details"), "lesson-read-connection-error"),
+])
+def test_transport_failures_are_distinct_and_fail_closed(monkeypatch, failure, expected):
+    result, sink = _run(monkeypatch, _counting(failure))
+    _assert_fail_closed(result)
+    assert sink[0]["retrieval_reason_code"] == expected
+    assert sink[0]["incomplete_reason_code"] == "none"
+    assert "private" not in json.dumps(result) + json.dumps(sink)
