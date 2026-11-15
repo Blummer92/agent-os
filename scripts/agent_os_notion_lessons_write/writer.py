@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from .admission import AdmittedRequest, WriteBlocked, notion_id
-from .catalog import LESSON_ID, PROTECTED_FIELDS, REQUEST_ID, WRITABLE_TYPES, entry_for, lesson_for
+from .catalog import LESSON_ID, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
 
 
 def properties(request_id: str = REQUEST_ID) -> dict:
@@ -19,7 +19,11 @@ def properties(request_id: str = REQUEST_ID) -> dict:
     payload = {}
     for name, value in lesson_for(request_id).items():
         kind = WRITABLE_TYPES[name]
-        if kind in ("title", "rich_text"):
+        if name == SUPPORTING_SOURCE_LINKS:
+            # One canonical ref per rich_text item; the catalog already
+            # bounded and validated the tuple (max five, distinct, canonical).
+            payload[name] = {"rich_text": [{"type": "text", "text": {"content": ref}} for ref in value]}
+        elif kind in ("title", "rich_text"):
             payload[name] = {kind: [{"type": "text", "text": {"content": value}}]}
         elif kind == "select":
             payload[name] = {"select": {"name": value}}
@@ -57,6 +61,15 @@ def _values(page: Mapping, names) -> dict:
         prop = raw.get(name)
         if not isinstance(prop, Mapping) or prop.get("type") != kind:
             raise WriteBlocked("page-property-type-mismatch")
+        if name == SUPPORTING_SOURCE_LINKS:
+            # Read back one ref per rich_text item, in order; joining them
+            # into one string would destroy the per-ref boundary the
+            # catalog validated.
+            items = prop.get("rich_text")
+            if type(items) is not list:
+                raise WriteBlocked("malformed-page-properties")
+            values[name] = tuple(_text([item]) for item in items)
+            continue
         item = prop.get(kind)
         if kind in ("title", "rich_text"):
             values[name] = _text(item)
