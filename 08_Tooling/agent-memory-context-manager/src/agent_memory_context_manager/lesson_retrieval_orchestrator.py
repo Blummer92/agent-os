@@ -53,6 +53,20 @@ MAX_ESCALATION_STEPS = len(_EXECUTABLE_STEPS)
 _SANITIZED_PROVIDER_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 
 
+# This is intentionally a closed vocabulary. Raw exception text (including
+# provider-controlled payloads) is never a diagnostic value.
+_INCOMPLETE_REASON_CODES = {
+    "paginated retrieval exceeded row bound": "row-bound-exceeded",
+    "paginated retrieval exceeded page bound": "page-bound-exceeded",
+    "paginated retrieval missing next cursor": "missing-cursor",
+    "repeated pagination cursor": "repeated-cursor",
+    "read executor must return a mapping": "malformed-page",
+    "read executor result is missing 'results'": "malformed-page",
+    "read executor returned a non-boolean has_more": "malformed-pagination",
+    "read executor returned a malformed next_cursor": "malformed-pagination",
+}
+
+
 def _sanitized_read_failure_reason(exc: BaseException) -> str:
     """Keep only finite provider reason codes; never expose raw exception text."""
 
@@ -202,10 +216,11 @@ def orchestrate_lesson_retrieval(
     normalized_rows = 0
     skipped = Counter()
     read_count = 0
+    incomplete_reason_code: str | None = None
 
     def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
         # Only finite counts and static normalization reason names; no raw rows.
-        return replace(value, retrieval_diagnostics={
+        diagnostics = {
             "read_count": read_count,
             "observed_rows": observed_rows,
             "normalized_rows": normalized_rows,
@@ -215,7 +230,10 @@ def orchestrate_lesson_retrieval(
             "missing_source_guidance_rows": skipped["missing-activation-guidance"],
             "ambiguous_metadata_rows": sum(count for reason, count in skipped.items() if reason.startswith("ambiguous-")),
             "candidate_count": value.candidate_count,
-        })
+        }
+        if incomplete_reason_code is not None:
+            diagnostics["incomplete_reason_code"] = incomplete_reason_code
+        return replace(value, retrieval_diagnostics=diagnostics)
 
     for _ in range(MAX_ESCALATION_STEPS):
         step = select_coding_knowledge(
@@ -267,6 +285,12 @@ def orchestrate_lesson_retrieval(
                 raise LessonActivationError("paginated retrieval exceeded page bound")
         except (ConnectionError, TimeoutError, RuntimeError, LessonActivationError) as exc:
             # No partial page population may reach CKR2 or admit a repair.
+            # Preserve the generic reason and admission outcome; only append a
+            # finite, internal diagnostic identifying the incomplete condition.
+            if isinstance(exc, LessonActivationError):
+                incomplete_reason_code = _INCOMPLETE_REASON_CODES.get(
+                    str(exc), "unknown-incomplete"
+                )
             return with_diagnostics(_unavailable_result(current_request, exc))
 
         current_request = record_retrieval_attempt(current_request, step)
