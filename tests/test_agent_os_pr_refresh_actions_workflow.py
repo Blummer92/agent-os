@@ -22,7 +22,11 @@ _ADMISSION_LITERAL = re.compile(
 def _refresh_job(text: str) -> str:
     marker = "  refresh_pr:\n"
     assert marker in text
-    return text.split(marker, 1)[1]
+    rest = text.split(marker, 1)[1]
+    # Bound the slice to the refresh job: stop at the next job header (two-space
+    # indent), so jobs defined after it never leak into this job's assertions.
+    next_job = re.search(r"^  [A-Za-z_][\w-]*:\n", rest, re.MULTILINE)
+    return rest[: next_job.start()] if next_job else rest
 
 
 def _admission_prefix() -> str:

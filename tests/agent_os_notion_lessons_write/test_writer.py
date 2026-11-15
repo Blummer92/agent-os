@@ -151,7 +151,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_lesson_id_update_is_admitted_only_for_reviewed_target(self):
         actual = admit(event(UPDATE_COMMAND), **CONTEXT)
-        self.assertEqual((actual.expected_lesson_id, actual.expected_revision), ("LL-93", REVISION))
+        self.assertEqual((actual.request_id, actual.expected_lesson_id, actual.expected_revision), (UPDATE, "LL-93", REVISION))
         for body in (f"{COMMAND_PREFIX}{UPDATE} LL-94 {REVISION}", f"{COMMAND_PREFIX}{UPDATE}",
                      f"{COMMAND_PREFIX}{UPDATE} {PAGE_ID} {REVISION}", f"{COMMAND} LL-93 {REVISION}"):
             with self.subTest(body=body), self.assertRaises(WriteBlocked):

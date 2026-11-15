@@ -23,6 +23,43 @@ dispatch only when:
 - Provider-backed recovery history is available.
 - The existing two-attempt recovery limit is not exceeded.
 
+## Ingress-origin recovery (#2410)
+
+A governed issue-comment dispatch is admitted as an alternative to direct
+owner dispatch, under verification that is strictly stronger than actor
+alone:
+
+- The comment grammar is fixed: `/agent-os recover-ready <pr> <head>
+  <main> <workflow> <source-run-id>`, admitted for the repository owner
+  and the ChatGPT service actor for this operation only.
+- The governed ingress job re-verifies the PR, live main, workflow
+  revision, source-run identity, zero-job evidence, and the two-attempt
+  budget, then dispatches the validation workflow on `main` with the
+  ingress run id and trigger id as correlation inputs.
+- The validation workflow admits an ingress dispatch only when its actor
+  is the ingress job's token identity (`github-actions[bot]`) AND it
+  independently fetches the ingress run record and receipt artifact from
+  GitHub and verifies every binding, the recomputed trigger id, and the
+  content-derived receipt id (`scripts/agent_os_ready_recovery_ingress.py`).
+  Forged, stale, mismatched, duplicated, or unavailable evidence fails
+  closed. Direct owner dispatch is unchanged; supplying ingress inputs
+  never upgrades it, and no blanket service-actor admission exists.
+- Fork pull requests are rejected on both sides: the ingress dispatch
+  and the validation-side ingress check both require the PR head to
+  live in the same repository.
+- Receipt-publication race (#3732): the ingress job dispatches validation
+  before it publishes its receipt artifact, so validation may check
+  before the evidence exists. The validation side therefore waits, via
+  the script's `wait-and-verify` mode, only for the already-identified
+  ingress run and its single receipt artifact, with fixed bounds (300s
+  run wait at 10s polls, 60s artifact grace at 5s polls). Pending
+  evidence (run queued/in_progress, artifact not yet listed) is awaited;
+  terminal failure (completed run with a non-success conclusion,
+  duplicate artifacts) fails immediately; timeout, provider failure,
+  forged evidence, or mismatch fails closed. No workflow is dispatched
+  while waiting, and every trust check runs in full after the evidence
+  arrives. The direct owner-dispatch path is unchanged and never waits.
+
 The workflow-wide concurrency group keeps manual runs distinct
 before admission, using their unique GitHub run IDs.
 

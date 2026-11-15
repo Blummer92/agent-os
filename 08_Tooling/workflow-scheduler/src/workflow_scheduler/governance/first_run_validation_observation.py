@@ -1,9 +1,10 @@
 """Bind existing fixed dev-validation evidence to #1985 observations.
 
 This module does not execute validation and accepts no command, argv, runner, or
-timestamp input from the first-run caller. It only validates the evidence emitted
-by the existing fixed dev-validation runners (GCE and Codespaces) and projects it
-into the canonical #1985 ``ObservedDevValidationCommand`` type.
+timestamp input from the caller. It validates fixed Codespaces dev-validation
+evidence and projects it into the canonical #1985
+``ObservedDevValidationCommand`` type. The historical plan matcher below
+is evidence-only and does not reactivate first-run validation.
 """
 from __future__ import annotations
 
@@ -15,14 +16,11 @@ from .dev_validation import VALIDATION_REGISTRY
 from .dev_validation_profiles import canonical_profile_id, profile_argv
 from .pre_pr_dev_validation_evidence import ObservedDevValidationCommand
 
-FIXED_GCE_RUNNER_ID = "agent-os-gce-dev-validation-v1"
 CODESPACES_RUNNER_ID = "agent-os-codespaces-dev-validation-v1"
 
-# The first-run lane may only execute a validation plan the *existing* fixed GCE
-# dev-validation runner already knows how to run. ``VALIDATION_REGISTRY`` is that
-# runner's own legacy execution registry, so this widens nothing: a plan that is
-# not exactly one of those fixed profiles fails closed instead of becoming a new
-# command surface.
+# Historical #1972 plan matching remains a pure fail-closed evidence contract.
+# It compares only fixed profiles in the legacy VALIDATION_REGISTRY; it grants
+# no first-run execution route, command surface, or GCE activation.
 FIRST_RUN_SUPPORTED_VALIDATION_IDS = tuple(sorted(VALIDATION_REGISTRY))
 
 
@@ -72,7 +70,7 @@ def _project_runner_evidence(
     expected_profile_id: str,
     expected_request_id: str,
 ) -> ObservedDevValidationCommand:
-    """Shared fail-closed projector used by the fixed-runner entry points."""
+    """Fail-closed projector for fixed Codespaces runner evidence."""
     if type(evidence) is not dict:
         raise FirstRunValidationObservationError("runner-evidence-malformed")
     expected_profile = canonical_profile_id(expected_profile_id)
@@ -123,27 +121,6 @@ def _project_runner_evidence(
     )
 
 
-def observed_command_from_fixed_gce_evidence(
-    evidence: object,
-    *,
-    expected_repository: str,
-    expected_issue_number: int,
-    expected_sha: str,
-    expected_profile_id: str,
-    expected_request_id: str,
-) -> ObservedDevValidationCommand:
-    """Project one exact fixed-runner result into the existing #1985 adapter input."""
-    return _project_runner_evidence(
-        evidence,
-        expected_runner_id=FIXED_GCE_RUNNER_ID,
-        expected_repository=expected_repository,
-        expected_issue_number=expected_issue_number,
-        expected_sha=expected_sha,
-        expected_profile_id=expected_profile_id,
-        expected_request_id=expected_request_id,
-    )
-
-
 def observed_command_from_codespaces_evidence(
     evidence: object,
     *,
@@ -155,11 +132,9 @@ def observed_command_from_codespaces_evidence(
 ) -> ObservedDevValidationCommand:
     """Project one exact Codespaces-runner result into the #1985 adapter input.
 
-    Mirrors ``observed_command_from_fixed_gce_evidence`` exactly: strict identity
-    binding on repository / issue / SHA / request_id / profile, and the runner id
-    must be the fixed Codespaces runner — evidence from any other runner fails
-    closed. Projects evidence only; grants no execution, merge, or publication
-    authority.
+    Requires strict repository / issue / SHA / request_id / profile binding,
+    and the fixed Codespaces runner identity. Evidence from retired GCE or any
+    other runner fails closed. This grants no execution or publication authority.
     """
     return _project_runner_evidence(
         evidence,
@@ -175,9 +150,7 @@ def observed_command_from_codespaces_evidence(
 __all__ = [
     "CODESPACES_RUNNER_ID",
     "FIRST_RUN_SUPPORTED_VALIDATION_IDS",
-    "FIXED_GCE_RUNNER_ID",
     "FirstRunValidationObservationError",
     "observed_command_from_codespaces_evidence",
-    "observed_command_from_fixed_gce_evidence",
     "resolve_fixed_first_run_validation_id",
 ]

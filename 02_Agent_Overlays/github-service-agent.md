@@ -129,6 +129,21 @@ title/body without canonical close-issue authorization refuse the transition.
 The pre-step projects admissibility only; it grants no merge, closure,
 workflow, protected-setting, production, or external-write authority.
 
+Satisfying routes (#3446): the pre-step is satisfied either by the registered
+MCP admission tool where it is attached, or, where that tool is unattached,
+by an existing Actions-ingress admission receipt for the same PR, head, and
+body, verified immediately before mutation through
+`verify_ready_admission_receipt` against a fresh canonical PR readback. The
+ingress route creates no second evaluator: the Actions consumer calls the
+same single canonical evaluator `evaluate_ready_for_review_admission`, and
+the exact head SHA and PR body revision binding, the closing-reference
+refusal, and fail-closed behavior apply unchanged — an absent, refused,
+stale, duplicate, or forged receipt stops the transition. A host must not
+stop solely because the MCP tool is absent when the ingress route is
+available. The MCP admission tool is retained, not deleted, and no route
+grants merge, closure, workflow, protected-setting, production, or
+external-write authority.
+
 ## Required Handoff Targets
 Return implementation evidence and unresolved decisions to the requesting owner.
 Route independent validation uncertainty to QA / Test Agent support. Route
@@ -150,9 +165,16 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.17.0
+0.18.0
 
 ## Changelog
+- 0.18.0 recognizes the existing Actions-ingress admission receipt, verified
+  through `verify_ready_admission_receipt`, as satisfying the Draft ->
+  Ready-for-Review pre-step where the MCP admission tool is unattached
+  (#3446). The single canonical evaluator, exact head/body binding, receipt
+  verification, closing-reference safeguards, and fail-closed behavior are
+  preserved; the MCP admission tool is retained and no second evaluator is
+  created.
 - 0.17.0 adds the validation-gate currentness classifier (#3269): merge admission must converge connector wrapper workflow-run snapshots against canonical check-run evidence for the reacquired head SHA; a `pending` + zero-job wrapper result is never presented as current (cross-check-required without canonical evidence, stale-retry against it), conflicting snapshots produce an explicit retry state rather than a terminal conclusion, and no branch protection, required check, or mandatory approval is bypassed.
 - 0.16.0 names the governed GitHub mutation guard/readback contracts (#2741/#2785/#2791) as the executable owners of AGENTS.md step 9 and the Draft-PR post-create obligations, exposed to the ChatGPT execution surface as MCP admission tools: the issue-comment write boundary (pre-write verify-open guard + post-write canonical readback) and the Safe Implementation Lane post-PR issue reconciliation (#3281).
 - 0.15.0 requires the Draft -> Ready-for-Review transition to run the registered MCP admission pre-step `admit_agent_os_ready_for_review_tool` (#3279): the exact head SHA and PR body revision must bind, GitHub-effective closing references without canonical close-issue authorization fail closed, and the pre-step grants no merge, closure, workflow, protected-setting, production, or external-write authority.

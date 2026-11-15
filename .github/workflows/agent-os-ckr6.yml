@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify finite CKR6 request
-    if: ${{ github.event.issue.pull_request == null && github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
+    if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}
     runs-on: ubuntu-latest
     outputs:
       retrieval_required: ${{ steps.classify.outputs.retrieval_required }}
@@ -34,6 +34,7 @@ jobs:
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
             -e src \
+            -e . \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Parse and classify bounded CKR6 envelope
@@ -69,13 +70,15 @@ jobs:
     name: Execute finite CKR6 request
     needs: classify
     runs-on: ubuntu-latest
-    # issues:write is scoped to this job only: it posts the bounded CKR6
-    # result comment back to the originating issue (#2851) so the ChatGPT
-    # host can consume it through its GitHub MCP surface. Top-level
-    # permissions stay contents:read. No other GitHub write is performed.
+    # Postback needs both issues:write and pull-requests:write on these
+    # two jobs for PR-conversation result delivery (live 403 in run
+    # 43353276568). The only intended write is a bounded CKR6 result
+    # comment to the originating issue or PR conversation. The top-level
+    # permissions stay contents:read; classify remains read-only.
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Check out canonical source
         uses: actions/checkout@v7
@@ -92,6 +95,7 @@ jobs:
             -e 08_Tooling/agent-memory-context-manager \
             -e 08_Tooling/workflow-scheduler \
             -e src \
+            -e . \
             -e 08_Tooling/agent-os-execution-service
 
       - name: Execute zero-read CKR6 request
@@ -117,6 +121,13 @@ jobs:
           AGENT_OS_REPOSITORY: ${{ github.repository }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+          # CKR7 receipt barrier (#3418): refinement must fetch the cited
+          # receipt/result comments through the trusted read-only GitHub
+          # path. Bind the job's already-present, repo-scoped github.token
+          # (already used by the postback step below) to this read-only
+          # step. No new credential, permission, or write: the job's
+          # permissions block is unchanged and the token is never logged.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"
@@ -185,4 +196,45 @@ jobs:
             --event "$AGENT_OS_EVENT" \
             --repository "$AGENT_OS_REPOSITORY" \
             --result "$RUNNER_TEMP/agent-os-ckr6/result.json" \
+            --api-url "$GITHUB_API_URL"
+
+  report-failure:
+    name: Report CKR6 infrastructure failure
+    # #3691: when classify or execute fails before the bridge can post its
+    # bounded result (checkout, Python setup, or the runtime install
+    # itself), the execute job's step-level always() postback never runs:
+    # execute is skipped when classify fails, and the postback step imports
+    # the package whose install may have failed. This job reports that
+    # failure instead. It runs only on an actual job failure -- a skipped
+    # classify (noncommand, PR comment, unauthorized actor) never satisfies
+    # the predicate, so ineligible events stay silent. The reporter is
+    # stdlib-only and deliberately does NOT install the Agent OS runtime:
+    # it must work precisely when that installation is what failed. It
+    # posts the bridge's existing bounded fallback result (manual-review /
+    # ckr6-result-unavailable), deduplicated per request comment.
+    needs: [classify, execute]
+    if: ${{ always() && (needs.classify.result == 'failure' || needs.execute.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check out canonical source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Post bounded CKR6 failure result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ckr6_failure_postback.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
             --api-url "$GITHUB_API_URL"

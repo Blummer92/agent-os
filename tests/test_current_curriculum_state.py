@@ -531,3 +531,66 @@ def test_unmapped_approvals_stay_ambiguous_without_unavailable_blocker() -> None
     assert state["assets"]["matching_asset_exists"] is True
     assert "asset-approval-ambiguous" in state["reason_codes"]
     assert "asset-reusable-unavailable" not in state["blockers"]
+
+
+# MUTATION-GAP-REGRESSION-CONTROLS
+
+def test_mutation_gap_stale_evidence_projection():
+    result = current_state.resolve_current_curriculum_state(
+        evidence(
+            required_keys=[],
+            owner_evidence=[
+                owner("stale-1", decision_key="stale-gate", currentness="stale"),
+                owner("current-1", decision_key="current-gate", currentness="current"),
+            ],
+        )
+    )
+    state = payload(result)
+    assert [item["evidence_id"] for item in state["stale_evidence"]] == ["stale-1"]
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [
+        ("ambiguous", "identity-canonical-unit-ambiguous"),
+        ("archived", "identity-canonical-unit-archived"),
+        ("split", "identity-canonical-unit-split"),
+        ("merged", "identity-canonical-unit-merged"),
+        ("human-review-required", "manual-review-canonical-unit-human-review"),
+    ],
+)
+def test_mutation_gap_unit_identity_reason_and_guidance(status, reason):
+    result = current_state.resolve_current_curriculum_state(
+        evidence(unit_status=status)
+    )
+    state = payload(result)
+    assert reason in state["reason_codes"]
+    assert state["unresolved_teacher_decision"] == (
+        "Resolve canonical unit identity before downstream planning."
+    )
+
+
+@pytest.mark.parametrize(
+    "omitted_field",
+    ["required_decision_keys", "owner_evidence"],
+)
+def test_mutation_gap_optional_lists_default_to_empty(omitted_field):
+    value = evidence(required_keys=[], owner_evidence=[])
+    del value[omitted_field]
+    result = current_state.resolve_current_curriculum_state(value)
+    explicit = current_state.resolve_current_curriculum_state(
+        evidence(required_keys=[], owner_evidence=[])
+    )
+
+    assert result.status is ValidationStatus.VALID
+    assert explicit.status is ValidationStatus.VALID
+    state = payload(result)
+    # Omission is semantically identical to an explicitly empty list, not
+    # merely a status-preserving substitution of invented owner evidence.
+    assert state == payload(explicit)
+    assert state["owner_states"] == []
+    assert state["context_evidence"] == []
+    assert state["stale_evidence"] == []
+    assert state["contradictions"] == []
+    assert state["reason_codes"] == []
+    assert state["blockers"] == []

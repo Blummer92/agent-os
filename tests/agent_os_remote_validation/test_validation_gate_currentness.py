@@ -246,3 +246,81 @@ def test_non_tuple_check_runs_fail_closed():
             wrapper_run=wrapper(),
             canonical_check_runs=[check_run("Run validation plan", "in_progress")],
         )
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 finish campaign (Workstream B3): terminal-conclusion matrix.
+#
+# _FAILURE_CONCLUSIONS already contains failure, timed_out, action_required
+# and cancelled, but the pre-existing tests exercised only "failure".
+# Converged terminal failures are CURRENT evidence of failure (never
+# success, never merge authority); any wrapper/check divergence is
+# STALE_RETRY, including a pending zero-job wrapper facing a terminal
+# failure check run. A different head never inherits earlier validation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled", "action_required"])
+def test_converged_terminal_conclusion_is_current_failure_not_success(conclusion):
+    result = classify(
+        wrapper(WrapperRunState.COMPLETED, job_count=8, run_conclusion=conclusion),
+        (check_run("Run aggregate validation", "completed", conclusion),),
+    )
+    assert result.status is GateCurrentness.CURRENT
+    assert result.reason_codes == (GateCurrentnessReason.CONVERGED,)
+    assert result.merge_authorized is False
+    assert result.authoritative is False
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "action_required"])
+def test_wrapper_success_vs_terminal_failure_check_is_diverged(conclusion):
+    result = classify(
+        wrapper(WrapperRunState.COMPLETED, job_count=8, run_conclusion="success"),
+        (check_run("Run aggregate validation", "completed", conclusion),),
+    )
+    assert result.status is GateCurrentness.STALE_RETRY
+    assert result.reason_codes == (GateCurrentnessReason.CONCLUSION_DIVERGED,)
+    assert result.merge_authorized is False
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "action_required"])
+def test_wrapper_failure_vs_terminal_success_check_is_diverged(conclusion):
+    result = classify(
+        wrapper(WrapperRunState.COMPLETED, job_count=8, run_conclusion=conclusion),
+        (check_run("Run aggregate validation", "completed", "success"),),
+    )
+    assert result.status is GateCurrentness.STALE_RETRY
+    assert result.reason_codes == (GateCurrentnessReason.CONCLUSION_DIVERGED,)
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "action_required"])
+def test_pending_zero_job_wrapper_never_hides_terminal_failure_check(conclusion):
+    result = classify(
+        wrapper(),
+        (check_run("Run aggregate validation", "completed", conclusion),),
+    )
+    assert result.status is GateCurrentness.STALE_RETRY
+    assert result.reason_codes == (
+        GateCurrentnessReason.CANONICAL_TERMINAL_BEATS_WRAPPER,
+    )
+    assert result.merge_authorized is False
+
+
+def test_terminal_failure_evidence_for_another_head_is_not_inherited():
+    # The classifier raises on a check run for a different head rather
+    # than classifying it against the reacquired head (see pre-existing
+    # test_check_run_for_other_head_fails_closed); this case pins the
+    # complementary direction: a wrapper for a stale head is STALE_RETRY
+    # even when its own conclusion agrees with the canonical failure.
+    result = classify(
+        wrapper(
+            WrapperRunState.COMPLETED,
+            job_count=8,
+            run_conclusion="failure",
+            run_head_sha=OTHER_HEAD,
+        ),
+        (check_run("Run aggregate validation", "completed", "failure"),),
+    )
+    assert result.status is GateCurrentness.STALE_RETRY
+    assert result.reason_codes == (GateCurrentnessReason.RUN_HEAD_SHA_STALE,)
+    assert result.merge_authorized is False

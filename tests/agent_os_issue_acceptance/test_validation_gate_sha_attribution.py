@@ -66,7 +66,9 @@ def test_summary_uses_event_specific_identity_labels_without_inventing_merge_sem
     assert "Pull request head SHA" in step
 
     assert 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then' in step
-    assert 'if [ "$DISPATCH_MODE" = "final-candidate" ]; then' in step
+    # Both admitted modes use the same exact-head label; diagnostics cannot masquerade as admitted candidates.
+    assert 'if [ "$DISPATCH_MODE" = "final-candidate" ] || [ "$DISPATCH_MODE" = "ready-recovery" ]; then' in step
+    assert step.count('echo "- Admitted candidate SHA:') == 1
     assert "Admitted candidate SHA" in step
     assert "DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}" in step
     assert "Dispatch mode" in step

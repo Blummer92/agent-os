@@ -623,7 +623,9 @@ def test_package_version_matches_the_documented_cutover_version():
     match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
 
     assert match is not None
-    assert match.group(1) == "0.2.0"
+    # #1729 retires public CKR12 exports in the 0.3.0 breaking release.
+    # The summary-cache v2 contract remains independently versioned.
+    assert match.group(1) == "0.3.0"
 
 
 def test_no_dependency_was_added():

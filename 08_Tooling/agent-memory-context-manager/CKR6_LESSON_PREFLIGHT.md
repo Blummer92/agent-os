@@ -94,7 +94,7 @@ The memory/context package itself performs zero Notion writes, Notion schema/vie
 
 ### Deterministic normalization
 
-`normalize_lesson_row()` maps only the controlled live Notion properties into `LessonRecordEvidence`, or returns an explicit `LessonActivationSkip` when evidence is missing or ambiguous. It never invents ecosystem, capability, keyword, provenance, or currentness evidence. Rows that cannot be mapped safely are excluded from the candidate set as explicitly non-ready; they are accounted for by #1517 / CKR12, not guessed here.
+`normalize_lesson_row()` maps only the controlled live Notion properties into `LessonRecordEvidence`, or returns an explicit `LessonActivationSkip` when evidence is missing or ambiguous. It never invents ecosystem, capability, keyword, provenance, or currentness evidence. Rows that cannot be mapped safely are excluded from the candidate set as explicitly non-ready and are not guessed here.
 
 ### Bounded retrieval
 

@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
 from .issueplan_scanner import AdoptionClass, ScanFinding, ScanResult, SourceEnvelope
+
+# CR-6 (#3690): the canonical parameterized transport validators and the
+# canonical-bytes/digest helpers live in scheduler_handoff; the former
+# issueplan-local copies are deleted, not wrapped.
+from .scheduler_handoff import (
+    _canonical_bytes as _bytes,
+    _decode_transport_payload,
+    _digest,
+    _require_exact_keys,
+    _require_string_array,
+)
 
 ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION = "1.0"
 
@@ -368,6 +378,94 @@ def compute_issueplan_current_state_fingerprint(
     )
 
 
+_LOWER_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _hex_digest(value: object, name: str, length: int) -> None:
+    if (
+        type(value) is not str
+        or len(value) != length
+        or not _LOWER_HEX_DIGITS.issuperset(value)
+    ):
+        raise ValueError(f"{name} must be a {length}-char lowercase hex digest")
+
+
+def project_planning_context(
+    evidence: IssuePlanCurrentStateEvidence,
+    *,
+    base_branch: str,
+    evaluated_repository_sha: str,
+    implementation_contract_fingerprint: str,
+    allowed_files: Iterable[str],
+    forbidden_paths: Iterable[str],
+    required_tests: Iterable[str],
+) -> IssuePlanCurrentStateEvidence:
+    """Return ``evidence`` with only the planning-context fields projected.
+
+    This is the #3690 single-readiness-pass consolidation: the candidate
+    packet entrypoint used to run the whole readiness stage twice -- once
+    without a planning context to derive the implementation-contract
+    fingerprint, then again with that context -- even though the context
+    reaches exactly these six fields of the IssuePlan evidence and nothing
+    else in the stage (snapshot resolve, IssuePlan scan, dependency and
+    validation evidence, and the readiness evaluation itself are all
+    context-independent). Projecting the context here, and recomputing the
+    evidence identity from the projected payload, produces exactly the
+    evidence the second full stage run produced, from the one snapshot the
+    fingerprint was derived from, instead of silently mixing two lineages
+    when a live reader changes between passes.
+
+    The input identity is verified first: an evidence object whose
+    ``evidence_id`` does not match its own recomputed fingerprint is
+    rejected rather than re-identified. The projected context is then
+    validated here -- non-empty branch, 40-char lowercase-hex repository
+    SHA, 64-char lowercase-hex contract fingerprint, and scope collections
+    that are not bare strings, bytes, or mappings (a bare string would
+    otherwise be silently split into characters by the tuple conversion)
+    -- because the evidence dataclass itself checks only that scope
+    members are non-empty strings, not these formats. The dataclass
+    constructor then re-validates scope membership and the reason-code
+    superset rule exactly as construction from the builder would. No
+    other field is changed, and no authorization, merge, closure,
+    workflow, or protected-setting value is carried or created here.
+    Note the fingerprint payload excludes ``observed_at``, so this check
+    cannot detect tampering with that field alone; that is the builder's
+    own design, and the candidate-packet caller supplies both passes from
+    the same request.
+    """
+    if not isinstance(evidence, IssuePlanCurrentStateEvidence):
+        raise TypeError("evidence must be IssuePlanCurrentStateEvidence")
+    if evidence.evidence_id != (
+        f"issueplan-current-state:{compute_issueplan_current_state_fingerprint(evidence)}"
+    ):
+        raise ValueError("evidence_id does not match evidence fingerprint")
+    _text(base_branch, "base_branch")
+    _hex_digest(evaluated_repository_sha, "evaluated_repository_sha", 40)
+    _hex_digest(
+        implementation_contract_fingerprint,
+        "implementation_contract_fingerprint",
+        64,
+    )
+    for name, values in (
+        ("allowed_files", allowed_files),
+        ("forbidden_paths", forbidden_paths),
+        ("required_tests", required_tests),
+    ):
+        if isinstance(values, (str, bytes, Mapping)):
+            raise TypeError(f"{name} must be an iterable of strings, not a scalar")
+    projected = replace(
+        evidence,
+        base_branch=base_branch,
+        evaluated_repository_sha=evaluated_repository_sha,
+        implementation_contract_fingerprint=implementation_contract_fingerprint,
+        allowed_files=tuple(allowed_files),
+        forbidden_paths=tuple(forbidden_paths),
+        required_tests=tuple(required_tests),
+    )
+    fingerprint = compute_issueplan_current_state_fingerprint(projected)
+    return replace(projected, evidence_id=f"issueplan-current-state:{fingerprint}")
+
+
 def compare_issueplan_current_state(
     expected: IssuePlanCurrentStateEvidence,
     current: IssuePlanCurrentStateEvidence,
@@ -472,8 +570,8 @@ def reconstruct_issueplan_current_state_comparison(
     payload: bytes | str | Mapping[str, Any],
 ) -> IssuePlanCurrentStateComparison:
     """Strictly reconstruct one comparison with closed-schema transport validation."""
-    raw = _decode_transport_payload(payload)
-    _require_exact_keys(raw)
+    raw = _decode_transport_payload(payload, _COMPARISON_TRANSPORT_NAME)
+    _require_exact_keys(raw, _COMPARISON_TRANSPORT_KEYS, _COMPARISON_TRANSPORT_NAME)
     for name in _COMPARISON_IDENTITY_FIELDS:
         _text(raw[name], name)
     if type(raw["outcome"]) is not str:
@@ -829,72 +927,6 @@ def _jsonable(value: Any) -> Any:
         unique = {_bytes(_jsonable(item)): _jsonable(item) for item in value}
         return [unique[key] for key in sorted(unique)]
     raise TypeError(f"unsupported canonical value type: {type(value).__name__}")
-
-
-def _bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_bytes(value)).hexdigest()
-
-
-def _decode_transport_payload(
-    payload: bytes | str | Mapping[str, Any],
-) -> Mapping[str, Any]:
-    name = _COMPARISON_TRANSPORT_NAME
-    source_bytes: bytes | None = None
-    source_text: str | None = None
-    if isinstance(payload, bytes):
-        source_bytes = payload
-        try:
-            raw: object = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"{name} must be canonical UTF-8 JSON") from exc
-    elif isinstance(payload, str):
-        source_text = payload
-        try:
-            raw = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{name} must be canonical JSON text") from exc
-    elif isinstance(payload, Mapping):
-        raw = dict(payload)
-    else:
-        raise TypeError("payload must be bytes, text, or a mapping")
-    if not isinstance(raw, Mapping):
-        raise ValueError(f"{name} payload must be an object")
-    if source_bytes is not None and source_bytes != _bytes(raw):
-        raise ValueError(f"{name} must be canonical UTF-8 JSON")
-    if source_text is not None and source_text != _bytes(raw).decode("utf-8"):
-        raise ValueError(f"{name} must be canonical JSON text")
-    return raw
-
-
-def _require_exact_keys(raw: Mapping[str, Any]) -> None:
-    unknown = sorted(set(raw) - _COMPARISON_TRANSPORT_KEYS)
-    missing = sorted(_COMPARISON_TRANSPORT_KEYS - set(raw))
-    if unknown:
-        raise ValueError(
-            f"{_COMPARISON_TRANSPORT_NAME} has unknown fields: {', '.join(unknown)}"
-        )
-    if missing:
-        raise ValueError(
-            f"{_COMPARISON_TRANSPORT_NAME} is missing required fields: "
-            f"{', '.join(missing)}"
-        )
-
-
-def _require_string_array(value: object, name: str) -> tuple[str, ...]:
-    if type(value) is not list:
-        raise ValueError(f"{name} must be an array")
-    if not all(type(item) is str and item for item in value):
-        raise ValueError(f"{name} must contain non-empty strings")
-    return tuple(value)
 
 
 def _reasons(values: Iterable[str]) -> tuple[str, ...]:

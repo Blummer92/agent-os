@@ -100,6 +100,8 @@ def test_3463_seam2_tool_forwards_exact_call_to_implementation(monkeypatch) -> N
         "closure_authorized": False,
         "evidence_current": True,
         "plan": None,
+        "repository": None,
+        "state_reason": None,
     }
     assert result["_fake_receipt"] is True
 

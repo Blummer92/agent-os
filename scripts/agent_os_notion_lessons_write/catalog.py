@@ -11,6 +11,7 @@ import re
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
+CONTINUATION_CONSUMER_REQUEST_ID = "continuation-live-consumer-2026-10-30"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -21,11 +22,20 @@ NARRATIVE_TYPES = MappingProxyType({
 })
 # Owner decision D1 (#3417): reviewed entries MAY carry descriptive metadata.
 # Descriptive metadata never activates a lesson.
+# #3973: "Supporting Source Links" is a bounded curated corroborating-ref
+# field (rich_text, one canonical ref per item, max five). It is writable
+# ONLY through a reviewed catalog entry + the existing guarded writer with
+# exact-revision binding; it never activates a lesson, never substitutes
+# for the primary Source Link, and never changes Status / Surface Before
+# Work? (both stay in PROTECTED_FIELDS).
+SUPPORTING_SOURCE_LINKS = "Supporting Source Links"
+MAX_SUPPORTING_REFS = 5
 DESCRIPTIVE_TYPES = MappingProxyType({
     "Area": "select",
     "Learning Type": "select",
     "Applies To": "multi_select",
     "Source Link": "url",
+    SUPPORTING_SOURCE_LINKS: "rich_text",
 })
 WRITABLE_TYPES = MappingProxyType({**NARRATIVE_TYPES, **DESCRIPTIVE_TYPES})
 # Activation/readiness fields stay separately governed, per-action approved.
@@ -35,7 +45,21 @@ PROTECTED_FIELDS = frozenset({"Status", "Surface Before Work?"})
 MAX_TEXT = 512
 MAX_APPLIES_TO = 8
 SOURCE_LINK = re.compile(r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}")
+GOVERNANCE_PREFIXES = (
+    "00_Governance/",
+    "01_Shared_Standards/",
+    "02_Agent_Overlays/",
+    "04_Registry/",
+    "08_Tooling/",
+)
 LESSON_ID = re.compile(r"LL-([1-9][0-9]{0,8})")
+
+
+def _valid_supporting_ref(value: str) -> bool:
+    """One canonical supporting ref: this repo's issue/PR, or a governance path."""
+    return len(value) <= MAX_TEXT and (
+        SOURCE_LINK.fullmatch(value) is not None or value.startswith(GOVERNANCE_PREFIXES)
+    )
 
 # No readiness, approval, audit, owner, provenance-authority, relation or schema
 # field is admitted, even if the existing integration could technically write it.
@@ -84,6 +108,40 @@ LESSONS = MappingProxyType({
             "Source Link": "https://github.com/Blummer92/agent-os/issues/3305",
         }),
     }),
+    # #3690: reviewed continuation integration lesson, proposal only until
+    # an owner-issued one-time #3417 command and exact Notion readback.
+    CONTINUATION_CONSUMER_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
+            "What Happened": (
+                "Agent OS repaired continuation boundaries in merged PRs #2175 (Claude Stop hook), "
+                "#2213 (MCP reachability), #2263 (false stall), #2494 (batch cursor), and "
+                "#3670 (missing MCP payloads). Owner-reported Cloud Shell runs on "
+                "2026-10-30 at main bb43fc08: 109 focused, 12 reconstructed, and "
+                "30 MCP tests passed; QA did not independently reproduce those runs. "
+                "Native host next-dispatch remains unverified. The approved five-tool "
+                "chatgpt-governance profile excludes all continuation-named tools."
+            ),
+            "What To Do Next Time": (
+                "Trace producer -> canonical payload -> registered MCP tool -> approved "
+                "publication allowlist -> live host consumer -> next admitted dispatch -> "
+                "exact receipt. Reuse existing driver, hooks and governed ingress; repair "
+                "only the first proven disconnected boundary. Evaluate same-turn continuation "
+                "and asynchronous post-stop re-entry as separate acceptance cases."
+            ),
+            "Guardrail": (
+                "Registration, a green test, emitted agent_os_continuation or a successful "
+                "same-turn read does not prove automatic host dispatch. Do not widen the "
+                "five-tool allowlist without a separate owner decision or treat a Notion "
+                "lesson as execution authority. Keep source/head, issue/PR lineage, "
+                "currentness, bounded stops and no-duplicate-mutation checks explicit."
+            ),
+            "Area": "Governance",
+            "Learning Type": "Mistake",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
+        }),
+    }),
 })
 
 
@@ -94,6 +152,10 @@ def _valid_value(name: str, value: object) -> bool:
                 and len(set(value)) == len(value)
                 and all(type(item) is str and item.strip() == item and 0 < len(item) <= 100
                         for item in value))
+    if name == SUPPORTING_SOURCE_LINKS:
+        return (type(value) is tuple and 0 < len(value) <= MAX_SUPPORTING_REFS
+                and len(set(value)) == len(value)
+                and all(type(item) is str and _valid_supporting_ref(item) for item in value))
     if type(value) is not str or not value.strip() or len(value) > MAX_TEXT:
         return False
     if kind == "url":

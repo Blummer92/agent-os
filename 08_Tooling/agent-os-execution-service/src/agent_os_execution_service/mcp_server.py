@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import asdict
+from datetime import datetime
 
 from mcp.server import MCPServer
 
@@ -27,6 +28,17 @@ from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     LifecycleMutationAuthorization,
     LifecycleStateSnapshot,
     evaluate_lifecycle_mutation,
+)
+from scripts.agent_os_issue_acceptance.closure_admission_actions import (
+    HOST_DISPATCH_CONTRACT as CLOSURE_HOST_DISPATCH_CONTRACT,
+    POST_CLOSE_RECONCILIATION_CONTRACT,
+    ClosureAcceptanceEvidence,
+    IssueClosureRequest,
+    evaluate_issue_closure,
+    verify_closure_admission_receipt,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
 )
 from scripts.agent_os_issue_labels.ready_for_review_admission import (
     evaluate_ready_for_review_admission,
@@ -57,6 +69,19 @@ from .mcp_facade import (
     classify_agent_os_continuation,
     classify_agent_os_mission_completion,
     plan_agent_os_continuation,
+)
+from .ckr6_github_bridge import (
+    COMMAND_PREFIX,
+    MAX_COMMENT_BYTES,
+    _command_payload,
+    parse_envelope,
+    ckr6_result_admits_boundary,
+    select_ckr6_result_comment,
+)
+from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY,
+    GitHubIssueCommentReadUnavailable,
+    get_github_issue_comment_reader,
 )
 from scripts.agent_os_issue_acceptance.zero_job_validation_recovery import ZeroJobAdmissionEvidence
 from agent_os_execution_service.failed_repair_admission import DiagnosticSurfaceEvidence
@@ -433,6 +458,325 @@ def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], chec
     return admit_agent_os_failed_repair(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job, diagnostics=diagnostics, validation_head=validation_head, validation_failure=validation_failure)
 
 
+def _parse_ckr6_timestamp(value: object, name: str) -> None:
+    """Require an ISO-8601 timestamp carrying a UTC offset, else raise ValueError."""
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{name} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{name} must be an ISO-8601 timestamp") from None
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} must carry a UTC offset")
+
+
+def _ckr6_result_decision(
+    *,
+    repository: str,
+    issue_number: int,
+    operation: str,
+    request_comment_id: int,
+    attempt_id: str | None,
+    admits: bool,
+    status: str,
+    reason_codes: list[str],
+    selected_lesson_ids: list[str],
+    substantial_hypothesis_admissible: bool,
+    mutation_admissible: bool,
+    host_read_path_available: bool,
+) -> dict[str, object]:
+    """Project one CKR6 boundary decision. All authority flags are literal False.
+
+    ``True`` here means only "this consumed result admits its own CKR6
+    boundary"; it grants no execution, GitHub write, merge, closure, or
+    side-effect authority.
+    """
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "operation": operation,
+        "request_comment_id": request_comment_id,
+        "attempt_id": attempt_id,
+        "ckr6_admits_boundary": admits,
+        "status": status,
+        "reason_codes": list(reason_codes),
+        "selected_lesson_ids": list(selected_lesson_ids),
+        "substantial_hypothesis_admissible": substantial_hypothesis_admissible,
+        "mutation_admissible": mutation_admissible,
+        "host_read_path_available": host_read_path_available,
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _ckr6_stop(
+    *,
+    repository: str,
+    issue_number: int,
+    operation: str,
+    request_comment_id: int,
+    attempt_id: str | None,
+    reason_code: str,
+    host_read_path_available: bool,
+) -> dict[str, object]:
+    """STOP decision for a read/selection failure: one named reason code, no admit."""
+    return _ckr6_result_decision(
+        repository=repository,
+        issue_number=issue_number,
+        operation=operation,
+        request_comment_id=request_comment_id,
+        attempt_id=attempt_id,
+        admits=False,
+        status="manual-review",
+        reason_codes=[reason_code],
+        selected_lesson_ids=[],
+        substantial_hypothesis_admissible=False,
+        mutation_admissible=False,
+        host_read_path_available=host_read_path_available,
+    )
+
+
+@mcp.tool()
+def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expected_operation: str, expected_request_comment_id: int, expected_request_created_at: str, expected_attempt_id: str | None = None) -> dict[str, object]:
+    """Consume the trusted CKR6 result comment answering a pending request (#2425).
+
+    Thin R07 adapter over ``select_ckr6_result_comment`` +
+    ``ckr6_result_admits_boundary``. The comment records come only from the
+    server-installed read-only GitHub issue-comment reader
+    (``ckr6_github_reader``): this tool accepts NO comment body, record, or
+    caller-asserted producer identity as an argument, so caller-pasted JSON
+    can never establish provenance. The pending request comment itself is
+    independently re-read from the same authenticated fetch — its GitHub
+    ``created_at`` is the timing bound, and the caller-supplied timestamp
+    is only cross-checked against it. Without an installed reader it returns
+    ``HOST_READ_PATH_UNAVAILABLE`` STOP; forged, stale, mismatched, or
+    ambiguous evidence also returns STOP, never an admit. The returned
+    decision is execution-order only and grants no GitHub write, merge,
+    closure, or side-effect authority.
+    """
+    # A syntactically valid but out-of-scope repository is a bounded STOP,
+    # not a transport exception. Never reach the token-bearing reader.
+    if repository != ALLOWED_REPOSITORY:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="read-issue"
+    )
+    if expected_operation not in ("issue-start", "failed-repair"):
+        raise ValueError("expected_operation must be 'issue-start' or 'failed-repair'")
+    if type(expected_request_comment_id) is not int or isinstance(expected_request_comment_id, bool) or expected_request_comment_id < 1:
+        raise ValueError("expected_request_comment_id must be a positive integer")
+    _parse_ckr6_timestamp(expected_request_created_at, "expected_request_created_at")
+    if expected_operation == "failed-repair":
+        if type(expected_attempt_id) is not str or not expected_attempt_id.strip():
+            raise ValueError("failed-repair result requires expected_attempt_id")
+    elif expected_attempt_id is not None:
+        raise ValueError("expected_attempt_id must be None for issue-start")
+    reader = get_github_issue_comment_reader()
+    if reader is None:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="HOST_READ_PATH_UNAVAILABLE",
+            host_read_path_available=False,
+        )
+    try:
+        records = reader.read_issue_comments(repository, issue_number)
+    except ValueError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-repository-out-of-scope",
+            host_read_path_available=False,
+        )
+    except GitHubIssueCommentReadUnavailable as exc:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code=exc.reason_code,
+            host_read_path_available=False,
+        )
+    # Independently re-read the pending request comment from the same
+    # authenticated fetch. The caller's expected_request_created_at is only
+    # a cross-check: the timing bound used by select_ckr6_result_comment
+    # comes from GitHub's own record, never from the caller alone. A
+    # caller-supplied timestamp that disagrees with GitHub's record, or a
+    # request comment absent from the issue, is STOP — never an admit.
+    request_record = next(
+        (
+            record
+            for record in records
+            if isinstance(record, dict) and record.get("id") == expected_request_comment_id
+        ),
+        None,
+    )
+    if request_record is None:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-not-returned",
+            host_read_path_available=True,
+        )
+    # The GitHub timestamp is meaningful only for a real pending CKR6
+    # request, not for an arbitrary comment with a matching id. Reuse the
+    # canonical bridge parser rather than accepting caller-asserted identity.
+    try:
+        request_body = request_record.get("body")
+        if type(request_body) is not str or len(request_body.encode("utf-8")) > MAX_COMMENT_BYTES:
+            raise ValueError("invalid request body")
+        if not request_body.startswith(COMMAND_PREFIX):
+            raise ValueError("not a CKR6 command")
+        payload = _command_payload(request_body[len(COMMAND_PREFIX):])
+        if type(payload) is not dict:
+            raise ValueError("request payload is not an object")
+        envelope = parse_envelope(payload)
+        if (envelope.repository != repository or envelope.issue_number != issue_number
+                or envelope.operation != expected_operation
+                or envelope.attempt_id != expected_attempt_id):
+            raise ValueError("request envelope does not match pending request")
+        if (request_record.get("issue_url") !=
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}"
+                or request_record.get("html_url") !=
+                f"https://github.com/{repository}/issues/{issue_number}#issuecomment-{expected_request_comment_id}"
+                or request_record.get("updated_at") != request_record.get("created_at")):
+            raise ValueError("request location or edit identity mismatch")
+    except (ValueError, TypeError, UnicodeError):
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    request_created_at = request_record.get("created_at")
+    try:
+        _parse_ckr6_timestamp(request_created_at, "request created_at")
+        caller_created = datetime.fromisoformat(
+            expected_request_created_at.replace("Z", "+00:00")
+        )
+        github_created = datetime.fromisoformat(
+            str(request_created_at).replace("Z", "+00:00")
+        )
+    except ValueError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    if caller_created != github_created:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-request-identity-mismatch",
+            host_read_path_available=True,
+        )
+    try:
+        consumed = select_ckr6_result_comment(
+            records,
+            expected_request_comment_id=expected_request_comment_id,
+            expected_request_created_at=str(request_created_at),
+            expected_issue_number=issue_number,
+            expected_repository=repository,
+            expected_operation=expected_operation,
+            expected_attempt_id=expected_attempt_id,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "CKR6 result not returned for the pending request":
+            reason_code = "ckr6-result-not-returned"
+        elif message == "ambiguous CKR6 result for the pending request":
+            reason_code = "ckr6-result-ambiguous"
+        else:
+            reason_code = message
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code=reason_code,
+            host_read_path_available=True,
+        )
+    except TypeError:
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="github-api-failure",
+            host_read_path_available=True,
+        )
+    admits = ckr6_result_admits_boundary(consumed)
+    reason_codes = consumed.get("reason_codes")
+    selected = consumed.get("selected_lesson_ids")
+    # A consumed-but-not-admitted result is STOP, full stop: project it as
+    # one. Echoing the payload's own status (e.g. "sufficient" for a
+    # sufficient-with-empty-selection result the bridge refused) alongside
+    # admits=False would let a host keying on status alone misread a refusal
+    # as an admission. Only an admitted result keeps the payload's fields.
+    if not admits:
+        return _ckr6_result_decision(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            admits=False,
+            status="manual-review",
+            reason_codes=list(reason_codes) if isinstance(reason_codes, list) else [],
+            selected_lesson_ids=[],
+            substantial_hypothesis_admissible=False,
+            mutation_admissible=False,
+            host_read_path_available=True,
+        )
+    return _ckr6_result_decision(
+        repository=repository,
+        issue_number=issue_number,
+        operation=expected_operation,
+        request_comment_id=expected_request_comment_id,
+        attempt_id=expected_attempt_id,
+        admits=True,
+        status=str(consumed.get("status")),
+        reason_codes=list(reason_codes) if isinstance(reason_codes, list) else [],
+        selected_lesson_ids=list(selected) if isinstance(selected, list) else [],
+        substantial_hypothesis_admissible=consumed.get("substantial_hypothesis_admissible") is True,
+        mutation_admissible=consumed.get("mutation_admissible") is True,
+        host_read_path_available=True,
+    )
+
+
 def _ready_review_closure_admissions(
     items: list[dict[str, object]] | None,
 ) -> tuple[IssueClosureAdmission, ...]:
@@ -742,10 +1086,15 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
     closure_authorized: bool = False,
     evidence_current: bool = False,
     plan: dict[str, object] | None = None,
+    repository: str | None = None,
+    state_reason: str | None = None,
 ) -> dict[str, object]:
-    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority."""
+    """Project the Safe Implementation Lane post-PR issue disposition (#2791) or prove it from the canonical post-mutation readback. Never grants merge/Ready authority.
+
+    `repository` and `state_reason` (#3690 ADV-5) carry the canonical issue identity and closure reason: a closed issue is reconciled only when closed as `completed` with no stale Ready label, and a readback naming a repository other than the plan's never proves reconciliation.
+    """
     _github_target_entry_guard(
-        repository=None, issue_number=issue_number, operation="read-issue"
+        repository=repository, issue_number=issue_number, operation="read-issue"
     )
     if linked_pull_request_number:
         _github_target_entry_guard(
@@ -765,44 +1114,341 @@ def project_agent_os_lane_post_pr_issue_reconciliation_tool(
         closure_authorized=closure_authorized,
         evidence_current=evidence_current,
         plan=plan,
+        repository=repository,
+        state_reason=state_reason,
     )
+
+
+def _closure_snapshot(item: dict[str, object]) -> LifecycleStateSnapshot:
+    """Reconstruct the canonical lifecycle snapshot from host-supplied evidence.
+
+    The dataclass validates its own content digest; malformed or inconsistent
+    items raise and the closure tools fail closed.
+    """
+    return LifecycleStateSnapshot(
+        repository=item["repository"],
+        issue_number=item["issue_number"],
+        pull_request_number=item.get("pull_request_number"),
+        source_head=item.get("source_head"),
+        base_head=item.get("base_head"),
+        pr_state=item["pr_state"],
+        merged=item["merged"],
+        issue_state=item["issue_state"],
+        review_state=item["review_state"],
+        unresolved_threads=item["unresolved_threads"],
+        lifecycle_labels=tuple(item["lifecycle_labels"]),
+        observed_revision=item["observed_revision"],
+    )
+
+
+def _closure_acceptance(item: dict[str, object]) -> ClosureAcceptanceEvidence:
+    return ClosureAcceptanceEvidence(
+        verdict=item["verdict"],
+        evidence_id=item["evidence_id"],
+        evaluator_id=item["evaluator_id"],
+        issue_number=item.get("issue_number"),
+        validated_head_sha=item.get("validated_head_sha"),
+    )
+
+
+def _closure_authorization(item: dict[str, object]) -> LifecycleMutationAuthorization:
+    """Reconstruct the canonical lifecycle authorization (to_dict shape).
+
+    The dataclass recomputes its content-bound authorization id and revision;
+    a tampered or synthetic authorization raises and the verify tool fails
+    closed.
+    """
+    return LifecycleMutationAuthorization(
+        schema_version=item["schema_version"],
+        repository=item["repository"],
+        issue_number=item["issue_number"],
+        pull_request_number=item.get("pull_request_number"),
+        authorized_mutations=tuple(item["authorized_mutations"]),
+        expected_source_head=item.get("expected_source_head"),
+        expected_base_head=item.get("expected_base_head"),
+        expected_pr_state=item["expected_pr_state"],
+        expected_merged=item["expected_merged"],
+        expected_issue_state=item["expected_issue_state"],
+        expected_review_state=item["expected_review_state"],
+        expected_unresolved_threads=item["expected_unresolved_threads"],
+        expected_lifecycle_labels=tuple(item["expected_lifecycle_labels"]),
+        observed_at_revision=item["observed_at_revision"],
+        state=item["state"],
+        authorizer_id=item["authorizer_id"],
+        decision_id=item["decision_id"],
+        authorization_id=item.get("authorization_id", ""),
+        authorization_revision=item.get("authorization_revision", ""),
+    )
+
+
+def _refused_closure_projection(
+    *,
+    repository: str,
+    issue_number: int,
+    reason_codes: tuple[str, ...],
+    next_action: str,
+) -> dict[str, object]:
+    """Fail-closed closure projection: no admission, no verification, no write."""
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "admitted": False,
+        "verified": False,
+        "reason_codes": list(reason_codes),
+        "next_action": next_action,
+        "host_dispatch_contract": None,
+        "post_close_reconciliation_contract": None,
+        "closure_performed": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+@mcp.tool()
+def admit_agent_os_issue_closure_tool(
+    repository: str,
+    issue_number: int,
+    owner_decision: dict[str, object],
+    acceptance: dict[str, object],
+    snapshot: dict[str, object],
+    satisfaction: dict[str, object] | None = None,
+    current_issue_body_digest: str | None = None,
+) -> dict[str, object]:
+    """Evaluate governed issue-closure admission for one issue (#3489).
+
+    Builds the single content-bound, non-performing closure receipt through
+    the canonical `evaluate_issue_closure`: the recorded owner decision must
+    authorize exactly the close-issue mutation for this issue, the acceptance
+    evidence must be an independent pass (evaluator != authorizer), and
+    admission is bound to the exact issue and the snapshot's observed
+    revision. The receipt is returned verbatim — its exact shape is what
+    `verify_agent_os_issue_closure_admission_tool` later consumes. This tool
+    performs no GitHub write and grants no closure authority by itself.
+    """
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="update-issue"
+    )
+    try:
+        decision = LifecycleOwnerDecision(
+            repository=owner_decision["repository"],
+            issue_number=owner_decision["issue_number"],
+            requested_mutations=tuple(owner_decision["requested_mutations"]),
+            authorizer_id=owner_decision["authorizer_id"],
+            decision_id=owner_decision["decision_id"],
+            decision_recorded=owner_decision["decision_recorded"],
+            pull_request_number=owner_decision.get("pull_request_number"),
+        )
+        evidence = _closure_acceptance(acceptance)
+        snap = _closure_snapshot(snapshot)
+        request = IssueClosureRequest(
+            decision=decision, acceptance=evidence, satisfaction=satisfaction
+        )
+    except (KeyError, TypeError, ValueError):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-evidence-invalid",),
+            next_action="supply-canonical-closure-evidence",
+        )
+    if (
+        decision.repository != repository
+        or decision.issue_number != issue_number
+        or snap.repository != repository
+        or snap.issue_number != issue_number
+    ):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-target-binding-mismatch",),
+            next_action="reacquire-issue-and-reevaluate",
+        )
+    return evaluate_issue_closure(
+        request, snap, current_issue_body_digest=current_issue_body_digest
+    )
+
+
+@mcp.tool()
+def verify_agent_os_issue_closure_admission_tool(
+    repository: str,
+    issue_number: int,
+    receipt: dict[str, object],
+    authorization: dict[str, object],
+    fresh_snapshot: dict[str, object],
+    acceptance: dict[str, object],
+    current_issue_body_digest: str | None = None,
+    satisfaction: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Verify a closure-admission receipt against a fresh snapshot (#3489).
+
+    The caller-bound host gate, the closure analogue of the Ready admission
+    receipt check: it recomputes the admission outside the receipt via
+    `verify_closure_admission_receipt`. Returns verified=True only when the
+    receipt is the exact, still-current admitted closure for this issue and
+    revision — any drift, forgery, stale revision, changed labels/state,
+    non-independent or non-pass acceptance, or a protected target fails
+    closed. This tool performs no GitHub write. Only after verified=True
+    may the host perform the fixed dispatch contract: its native GitHub
+    issue-update operation (ChatGPT connector `update_issue`; GitHub MCP
+    `issue_write`) with method=update, state=closed, state_reason=completed,
+    followed by canonical readback of the exact repository, issue number,
+    closed state, and completed reason, and then by the fixed post-close
+    reconciliation contract (#3489 requirement 3): remove exactly
+    ``status:ready`` only when the batch flagged it stale, post the
+    deterministic evidence comment, and re-read to verify label absence
+    and comment presence by receipt id. A reconciliation failure never
+    reverses a verified closure and never stops the next batch item.
+
+    `satisfaction` (#3690 ADV-6/ADV-7) is the satisfaction record the host
+    reacquired independently of the receipt. The receipt id is an unkeyed
+    hash a caller can recompute, so a receipt's own satisfaction block is
+    never trusted: a receipt citing satisfaction verifies only with the
+    matching trusted record, and a supplied record verifies only a receipt
+    carrying exactly its block. `current_issue_body_digest` must then match
+    that trusted record's digest; a digest without a trusted record fails
+    closed. Both checks are owned by `verify_closure_admission_receipt`.
+    """
+    _github_target_entry_guard(
+        repository=repository, issue_number=issue_number, operation="update-issue"
+    )
+    try:
+        auth = _closure_authorization(authorization)
+        snap = _closure_snapshot(fresh_snapshot)
+        evidence = _closure_acceptance(acceptance)
+    except (KeyError, TypeError, ValueError):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-verification-evidence-invalid",),
+            next_action="supply-canonical-closure-evidence",
+        )
+    if (
+        auth.repository != repository
+        or auth.issue_number != issue_number
+        or snap.repository != repository
+        or snap.issue_number != issue_number
+    ):
+        return _refused_closure_projection(
+            repository=repository,
+            issue_number=issue_number,
+            reason_codes=("closure-target-binding-mismatch",),
+            next_action="reacquire-issue-and-reevaluate",
+        )
+    # The canonical gate owns the trusted-satisfaction binding and the
+    # body-digest currentness check; never turn missing or mismatched
+    # evidence into a verified write.
+    verified = verify_closure_admission_receipt(
+        receipt,
+        authorization=auth,
+        fresh_snapshot=snap,
+        acceptance=evidence,
+        satisfaction=satisfaction,
+        current_issue_body_digest=current_issue_body_digest,
+    )
+    return {
+        "repository": repository,
+        "issue_number": issue_number,
+        "admitted": verified,
+        "verified": verified,
+        "receipt_id": receipt.get("receipt_id") if isinstance(receipt, dict) else None,
+        "reason_codes": [] if verified else ["closure-admission-not-verified"],
+        "next_action": (
+            "host-close-issue-then-canonical-readback"
+            if verified
+            else "do-not-dispatch-closure-reevaluate"
+        ),
+        "host_dispatch_contract": (
+            {
+                **CLOSURE_HOST_DISPATCH_CONTRACT,
+                "chatgpt_connector_tool": "update_issue",
+            }
+            if verified
+            else None
+        ),
+        "post_close_reconciliation_contract": (
+            dict(POST_CLOSE_RECONCILIATION_CONTRACT) if verified else None
+        ),
+        "closure_performed": False,
+        "github_writes_authorized": False,
+        "merge_authorized": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
 # #3372: the ChatGPT publication profile is intentionally narrower than the
 # complete repository-local MCP registration. SDK tool removal affects both
 # tools/list and tools/call; UI-side tool toggles cannot enforce this boundary.
+# #3489: the two closure admission tools join the owner-approved published
+# surface; host attachment of the widened surface remains #3559 host work.
 _CHATGPT_PUBLICATION_PROFILE = "chatgpt-governance"
 _CHATGPT_PUBLICATION_TOOLS = frozenset(
     {
         "admit_agent_os_issue_comment_mutation_tool",
         "project_agent_os_lane_post_pr_issue_reconciliation_tool",
         "admit_agent_os_ready_for_review_tool",
+        "admit_agent_os_issue_closure_tool",
+        "verify_agent_os_issue_closure_admission_tool",
     }
 )
 
+# #2425: one additional opt-in profile exposing exactly the CKR6 tools plus
+# the thin R07 consumption wrapper. The five-tool chatgpt-governance
+# surface above is unchanged; the two profiles are disjoint and neither
+# widens the other.
+_CHATGPT_CKR6_OPT_IN_PROFILE = "chatgpt-ckr6-opt-in"
+_CHATGPT_CKR6_OPT_IN_TOOLS = frozenset(
+    {
+        "activate_agent_os_issue_start_lessons_tool",
+        "activate_agent_os_failed_repair_tool",
+        "admit_agent_os_failed_repair_tool",
+        "consume_agent_os_ckr6_result_tool",
+    }
+)
+
+_MCP_PUBLICATION_PROFILES: dict[str, frozenset[str]] = {
+    _CHATGPT_PUBLICATION_PROFILE: _CHATGPT_PUBLICATION_TOOLS,
+    _CHATGPT_CKR6_OPT_IN_PROFILE: _CHATGPT_CKR6_OPT_IN_TOOLS,
+}
+
+
+def _apply_publication_profile(server: MCPServer, profile: str) -> None:
+    """Fail closed unless this server can expose exactly the profile's tools.
+
+    Same list_tools/remove_tool pattern as the governance profile; the
+    allowlist comes from ``_MCP_PUBLICATION_PROFILES``, never from caller
+    input. Unknown profile names raise KeyError; ``main()`` guards first
+    and refuses startup for them instead.
+    """
+    tools = _MCP_PUBLICATION_PROFILES[profile]
+    registered = {tool.name for tool in asyncio.run(server.list_tools())}
+    missing = tools - registered
+    if missing:
+        raise RuntimeError("Agent OS publication missing approved tools: " + ", ".join(sorted(missing)))
+    for name in sorted(registered - tools):
+        server.remove_tool(name)
+    exposed = {tool.name for tool in asyncio.run(server.list_tools())}
+    if exposed != tools:
+        raise RuntimeError("Agent OS publication tool containment failed")
+
 
 def _apply_chatgpt_publication_profile(server: MCPServer) -> None:
-    """Fail closed unless this server can expose exactly the approved three tools.
+    """Fail closed unless this server can expose exactly the approved five tools.
 
     Use the supported MCP SDK list_tools/remove_tool API, before listening.
     Existing in-process contracts and the normal local registration are unchanged.
     """
-    registered = {tool.name for tool in asyncio.run(server.list_tools())}
-    missing = _CHATGPT_PUBLICATION_TOOLS - registered
-    if missing:
-        raise RuntimeError("Agent OS publication missing approved tools: " + ", ".join(sorted(missing)))
-    for name in sorted(registered - _CHATGPT_PUBLICATION_TOOLS):
-        server.remove_tool(name)
-    exposed = {tool.name for tool in asyncio.run(server.list_tools())}
-    if exposed != _CHATGPT_PUBLICATION_TOOLS:
-        raise RuntimeError("Agent OS publication tool containment failed")
+    _apply_publication_profile(server, _CHATGPT_PUBLICATION_PROFILE)
 
 
 def main() -> None:
     profile = os.environ.get("AGENT_OS_MCP_TOOL_PROFILE")
-    if profile == _CHATGPT_PUBLICATION_PROFILE:
-        _apply_chatgpt_publication_profile(mcp)
-    elif profile is not None:
+    if profile is None:
+        pass
+    elif profile in _MCP_PUBLICATION_PROFILES:
+        _apply_publication_profile(mcp, profile)
+    else:
         raise RuntimeError("Unrecognized AGENT_OS_MCP_TOOL_PROFILE; refusing MCP startup")
     mcp.run(transport="stdio")
 

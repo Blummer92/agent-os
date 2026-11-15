@@ -48,7 +48,7 @@ Tool registration is not evidence of live consumption. The fact that these tools
 
 `admit_agent_os_issue_comment_mutation_tool(phase, issue_number, ...)` exposes the issue-comment write boundary. Phase `pre-write-guard` runs the #2741 verify-open guard (`evaluate_defect_evidence_mutation`) on host-supplied target state: stale state evidence is refused fail-closed for re-acquire; a closed target is refused with the directive `route-to-open-owner` (when an open owner is named) or `create-new-bug`; only a current, verified-open target is admitted. Phase `post-write-readback` runs the #2785 canonical readback (`evaluate_comment_persistence`) over the host's canonical comment list: a subordinate write is `persisted` only when the exact intended body appears in the canonical readback; a provider success claim without readback proof is `not-persisted` and retry-safe; an incomplete or ambiguous readback is `uncertain` and never authorizes an automatic retry, so an uncertain response followed by reconciliation never creates a duplicate comment.
 
-`project_agent_os_lane_post_pr_issue_reconciliation_tool(phase, ...)` exposes the Safe Implementation Lane post-PR step. Phase `plan` runs the #2791 projection (`project_lane_post_pr_issue_reconciliation`) on host-supplied issue/PR readback evidence and projects the issue's expected post-PR disposition using only the existing lifecycle-mutation vocabulary (`remove-lifecycle-label`, `close-issue`); phase `readback-proof` replays the returned plan dict against the canonical post-mutation readback (`evaluate_lane_post_pr_issue_readback`). Draft PR creation is never reported `fully_reconciled` while the linked issue keeps a stale Ready label or an open disposition. The projection can never grant merge or Ready authority (`merge_authorized`/`ready_authorized` are `Literal[False]`).
+`project_agent_os_lane_post_pr_issue_reconciliation_tool(phase, ...)` exposes the Safe Implementation Lane post-PR step. Phase `plan` runs the #2791 projection (`project_lane_post_pr_issue_reconciliation`) on host-supplied issue/PR readback evidence and projects the issue's expected post-PR disposition using only the existing lifecycle-mutation vocabulary (`remove-lifecycle-label`, `close-issue`); phase `readback-proof` replays the returned plan dict against the canonical post-mutation readback (`evaluate_lane_post_pr_issue_readback`). Draft PR creation is never reported `fully_reconciled` while the linked issue keeps a stale Ready label or an open disposition. Optional `repository` and `state_reason` inputs (#3690) carry the canonical issue identity and closure reason: a closed issue is reconciled only when closed as `completed` with no stale Ready label, and a readback whose repository differs from the plan's never proves reconciliation. The projection can never grant merge or Ready authority (`merge_authorized`/`ready_authorized` are `Literal[False]`).
 
 Both tools are pure admission/readback composition in `governed_mutation_seams_facade.py`. They perform no GitHub writes, authorize none, and introduce no second issue registry, queue, scheduler, or lifecycle authority. Live host consumption is separately authorized; registration and tests alone are not closure evidence.
 
@@ -56,7 +56,7 @@ Both tools are pure admission/readback composition in `governed_mutation_seams_f
 
 #1284 remains unchanged: MCP never reads `<checkpoint_store>/invocations/*.json` directly. The app requests the existing server-side discovery operation through the governed GitHub/GCE path. Zero matches remain `not-found`; multiple/corrupt/unavailable evidence remains `needs-decision`; no newest/latest heuristic is added.
 
-The MCP server has no GitHub repository-write credential in this phase. GitHub mutations remain GitHub Service Agent-owned and use the existing connected GitHub surface. The MCP facade does not invoke GitHub, Scheduler, shell, provider, cloud, VM, publication, authorized validation, activation, resume, or replay itself.
+The MCP server has no GitHub repository-write credential in this phase. GitHub mutations remain GitHub Service Agent-owned and use the existing connected GitHub surface. The MCP facade does not invoke GitHub, Scheduler, shell, provider, cloud, VM, publication, authorized validation, activation, resume, or replay itself — with one read-only exception, the CKR6 opt-in profile below: `consume_agent_os_ckr6_result_tool` reads issue comments through the server-installed read-only GitHub App installation-token reader (`ckr6_github_reader.py`, scoped to `Blummer92/agent-os`, `GET` only). That reader performs no GitHub write and grants none.
 
 ## Protocol binding
 
@@ -91,8 +91,8 @@ Remove `mcp_facade.py`, `mcp_server.py`, their focused tests/docs, and the `mcp`
 ## #3372 bounded ChatGPT publication profile
 
 The installed `agent-os-mcp` launcher remains the existing stdio MCP server.
-Its full 17-tool registration is preserved for the default local profile.
-To publish only the three owner-approved tools, start the **same launcher**
+Its full 20-tool registration is preserved for the default local profile (19 tools before #2425 PR-1 added `consume_agent_os_ckr6_result_tool`).
+To publish only the five owner-approved tools, start the **same launcher**
 with `AGENT_OS_MCP_TOOL_PROFILE=chatgpt-governance` in the approved private
 host's Secure MCP Tunnel stdio command environment. Do not use an unfiltered
 launcher for the ChatGPT custom connection.
@@ -104,6 +104,8 @@ is supplied. The exact approved list is:
 - `admit_agent_os_issue_comment_mutation_tool`
 - `project_agent_os_lane_post_pr_issue_reconciliation_tool`
 - `admit_agent_os_ready_for_review_tool`
+- `admit_agent_os_issue_closure_tool`
+- `verify_agent_os_issue_closure_admission_tool`
 
 On the approved host, verify `tools/list` exposes exactly these names and
 `tools/call` refuses each excluded name. An app UI toggle is not sufficient
@@ -120,6 +122,79 @@ After actual ChatGPT attachment, prove host invocation and readback for #3281
 and #3446; repository tests alone cannot satisfy #3372.
 
 **Disconnect / rollback:** disable or remove the custom ChatGPT connection,
-stop the bounded tunnel process, and verify the three tools are absent from a
+stop the bounded tunnel process, and verify the five tools are absent from a
 new ChatGPT session. Remove the environment variable to restore the existing
-local 17-tool behavior. Do not remove the canonical MCP server or its guards.
+local 20-tool behavior. Do not remove the canonical MCP server or its guards.
+
+## #2425 opt-in CKR6 publication profile (`chatgpt-ckr6-opt-in`)
+
+A second, opt-in publication profile on the same launcher and stdio
+transport, created under the owner's disposition-B authorization for #2425.
+It exposes exactly four tools — no more, no fewer:
+- `activate_agent_os_issue_start_lessons_tool` (CKR6 issue-start activation)
+- `activate_agent_os_failed_repair_tool` (CKR6 failed-repair re-entry)
+- `admit_agent_os_failed_repair_tool` (retry admission gate)
+- `consume_agent_os_ckr6_result_tool` (thin R07 trusted-result consumption adapter)
+
+Start the same launcher with `AGENT_OS_MCP_TOOL_PROFILE=chatgpt-ckr6-opt-in`.
+The five-tool `chatgpt-governance` profile above is unchanged by this profile;
+the two profiles are disjoint, and neither widens the other. The opt-in
+profile uses the same MCP SDK `list_tools` / `remove_tool` containment as the
+governance profile and fails closed on a missing tool, a differing catalog,
+or an unknown profile value.
+
+`consume_agent_os_ckr6_result_tool` binds a pending CKR6 request to the
+GitHub Actions result comment answering it (`select_ckr6_result_comment` +
+`ckr6_result_admits_boundary` in `ckr6_github_bridge.py`) and returns a
+single admit/STOP decision. It accepts no comment body, record, or
+caller-asserted producer identity: comment records come only from the
+server-installed read-only GitHub issue-comment reader
+(`ckr6_github_reader.py`), fed by an injectable GitHub App
+installation-token provider scoped to `Blummer92/agent-os` with read-only
+issue permissions. The reader's production repository and API endpoint are
+fixed, not configurable; test injection is limited to the HTTP transport.
+The pending request comment itself is independently
+re-read from the same authenticated fetch: its GitHub `created_at` is the
+timing bound, and the caller-supplied timestamp is only cross-checked
+against it. The request must also be an unedited, correctly located CKR6
+command whose canonical envelope matches the repository, issue, operation,
+and failed-repair attempt. An unrelated comment ID never establishes request
+identity. The host operator installs that reader at server startup
+(`set_github_issue_comment_reader`); minting, scoping, and rotating the
+installation token remain host-operator work, and no credential is created,
+stored, or deployed by this repository change. Until a reader is installed —
+or when the GitHub API read fails — the wrapper returns STOP with
+`host_read_path_available: False` and reason code
+`HOST_READ_PATH_UNAVAILABLE` (or `github-api-failure`); it never admits on
+caller-pasted JSON, and it never performs a GitHub write. The reader fetches
+one page of at most 100 comments with a 30-second timeout and an 8 MiB
+response bound enforced during the HTTP read; a result past page 1 is missed and fails closed as
+`ckr6-result-not-returned`.
+
+The wrapper's decision is execution-order only: `ckr6_admits_boundary: True`
+means the consumed result admits its own CKR6 boundary. All five authority
+flags in every return are literal `False`; admission grants no execution,
+GitHub write, merge, closure, or side-effect authority.
+
+Publication is layer 1 only. Actual host invocation, trusted result
+consumption on a live host, and mandatory CKR6 enforcement before
+substantial work remain separately unproven and require separate host
+attachment (Secure MCP Tunnel + custom ChatGPT app, host-operator owned
+under #3559) and live acceptance. Do not claim that publishing these tools
+makes ChatGPT invoke CKR6 automatically.
+
+**Disconnect / rollback:** remove the `AGENT_OS_MCP_TOOL_PROFILE` value (or
+set it to `chatgpt-governance`) and verify the four tools are absent from a
+new ChatGPT session; clear the installed reader to restore
+`HOST_READ_PATH_UNAVAILABLE` behavior. The canonical MCP server, the
+governance profile, and the R07 bridge remain unchanged.
+
+## Governed issue-closure admission (#3489)
+
+`admit_agent_os_issue_closure_tool(repository, issue_number, owner_decision, acceptance, snapshot)` exposes the canonical closure-admission evaluation (`evaluate_issue_closure` in `scripts/agent_os_issue_acceptance/closure_admission_actions.py`). The recorded owner decision must authorize exactly the `close-issue` mutation for the exact issue, the acceptance evidence must be an independent pass (evaluator != authorizer), and admission is bound to the snapshot's observed revision. It returns the single content-bound, non-performing receipt verbatim (`closure_performed: False`); the receipt alone authorizes nothing.
+
+`verify_agent_os_issue_closure_admission_tool(repository, issue_number, receipt, authorization, fresh_snapshot, acceptance, current_issue_body_digest=None, satisfaction=None)` is the caller-bound host gate — the closure analogue of the Ready admission receipt check. It recomputes the admission outside the receipt via `verify_closure_admission_receipt` against a freshly reacquired snapshot; any drift, forgery, stale revision, changed labels/state, non-independent or non-pass acceptance, cross-issue substitution, or protected target (#3292) fails closed with `verified: False` and `host_dispatch_contract: None`. Its optional `satisfaction` input (#3690) is the satisfaction record the host reacquired independently of the receipt: because the receipt id is an unkeyed hash a caller can recompute, a receipt that cites satisfaction verifies only with the matching trusted record, and `current_issue_body_digest` must match that record. Head-bound acceptance against a snapshot with no head fails closed.
+
+Only after `verified: True` may the host perform the fixed dispatch contract the tool returns: the host's own native GitHub issue-update operation (ChatGPT GitHub connector `update_issue`; GitHub MCP `issue_write`) with `method=update`, `state=closed`, `state_reason=completed`, followed by canonical readback binding the exact repository, issue number, closed state, and completed reason. The MCP service itself has no GitHub write credential and never performs the closure; publication of these tools grants no closure authority by itself, and an unverified or refused admission must never be followed by a host closure dispatch.
+
+The two closure tools joined the `chatgpt-governance` publication surface under #3489. #3559's fixed-surface record (three tools, from #3372) must be amended by the host operator to list all five before attachment, and the attachment itself — Secure MCP Tunnel plus custom-app configuration on the ChatGPT host — remains host-owned work under #3559; no repository change creates it.

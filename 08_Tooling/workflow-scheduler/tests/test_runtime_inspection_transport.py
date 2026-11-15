@@ -119,8 +119,9 @@ def test_inspection_never_starts_vm_or_reaches_scheduler_discovery_resume() -> N
 def test_stopped_vm_is_not_started_by_diagnostic_mode() -> None:
     adapter = InspectionAdapter(VmState.STOPPED)
     result = live.execute_transport(_ingress(), claims=_claims(), adapter=adapter)
-    assert adapter.calls == ["observe"]
+    assert adapter.calls == ["observe", "retirement"]
     assert result["runtime_inspection"]["reason_codes"] == ["host-not-running"]
+    assert result["retirement_inventory"]["side_effects_performed"] is False
 
 
 def test_fixed_command_uses_iap_and_has_no_comment_or_handoff_input(
@@ -685,3 +686,12 @@ def test_execute_transport_returns_bounded_result_without_raising_on_crash() -> 
     assert evidence["discovery_invoked"] is False
     assert evidence["resume_invoked"] is False
     assert evidence["side_effects_performed"] is False
+
+@pytest.mark.parametrize("state", [VmState.STOPPED, VmState.UNKNOWN, VmState.STAGING])
+def test_non_running_inspection_preserves_provider_inventory_without_guest_access(state) -> None:
+    adapter = InspectionAdapter(state)
+    result = live.execute_transport(_ingress(), claims=_claims(), adapter=adapter)
+    assert adapter.calls == ["observe", "retirement"]
+    assert result["runtime_inspection"]["reason_codes"] == ["host-not-running"]
+    assert result["retirement_inventory"]["status"] == "observed"
+    assert result["retirement_inventory"]["side_effects_performed"] is False

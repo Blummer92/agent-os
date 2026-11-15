@@ -133,6 +133,38 @@ proof, reason codes/blockers, rollback posture, and side-effect evidence. It gra
 Ready-for-Review, merge, issue-closure, workflow, repository-setting, credential,
 production, or external-system authority.
 
+## Governed refresh observability and authorization rendering (#3463)
+
+The Actions runner `pr_branch_refresh_actions_runner.py` writes the existing
+`result.json` artifact and, in addition, prints exactly one bounded terminal
+line to standard output for every runner outcome:
+
+```
+agent-os-pr-refresh-result/v1 {"status": "...", "reason_codes": [...], "invocation_id": "...", "trigger_comment_id": ...}
+```
+
+The line is a strict projection of the runner result (status, coded reasons,
+authorization id, correlation ids, mutation count, receipt-publication
+evidence). It never carries the refresh receipt, environment, or exception
+text, so no token, secret, or unbounded provider message can reach the job
+log through it. A blocked refresh that previously left only an exit code in
+the log now leaves its exact reason code readable without an artifact
+download. Exit codes are unchanged: converged 0, blocked trigger 0, any
+other runner outcome 1.
+
+`pr_branch_refresh_authorization_renderer.py` is the single production
+entry point for rendering the existing canonical refresh-authorization
+record: it builds a `RefreshAuthorization` (validation and content-derived
+identifier computation unchanged) and renders it with the existing
+`serialize_refresh_authorization_comment`. It performs no GitHub I/O, posts
+nothing, calls no merge API, accepts no caller-supplied authorization id,
+and grants nothing by itself. Rendering is only the record-construction
+step; a record becomes trusted only when posted verbatim through an
+owner-authored channel and then accepted by the governed runner against
+freshly reacquired head/main/scope evidence. The native ChatGPT host
+integration that would produce, post, trigger, correlate, and continue from
+that record remains outstanding and must not be claimed from this renderer.
+
 ## Bounded failed-command diagnostic evidence (#3153)
 
 When required validation fails after a successful branch mutation, the receipt

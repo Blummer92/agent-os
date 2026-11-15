@@ -35,6 +35,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     LifecycleStage,
 )
 from scripts.agent_os_issue_acceptance.lifecycle_stage_acquisition import (
+    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     LifecycleAcquisitionOutcome,
 )
 from scripts.agent_os_issue_acceptance.live_candidate_evidence_reader import (
@@ -178,6 +179,7 @@ def make_pair(prs, *, issues=None, main=None, bundle_overrides=None):
         detail_reader=Details(prs),
         source_revision_reader=main or Main(SHA),
         observed_at=OBSERVED,
+        association_policy=ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     )
     kwargs = dict(
         repository=REPO,

@@ -20,6 +20,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "edit_relevance",
                 "legacy_preflight",
                 "linked_issue",
+                "merged_docs",
                 "metadata_validation",
                 "models",
                 "parse_pr",
@@ -50,7 +51,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
     ),
     (
         "handoff",
-        frozenset({"scheduler_handoff"}),
+        frozenset({"criterion_preservation", "scheduler_handoff"}),
         (),
     ),
     (
@@ -82,13 +83,14 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "approval_source",
                 "planning_binding",
                 "primary_pr_creation_admission",
+                "satisfaction_snapshot",
             }
         ),
         (),
     ),
     (
         "mode",
-        frozenset({"executor_route", "operating_mode"}),
+        frozenset({"executor_route", "operating_mode", "session_closure_adapter"}),
         (),
     ),
     (
@@ -96,11 +98,14 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         frozenset(
             {
                 "acceptance_report_transport",
+                "build_merged_doc_evidence",
                 "cli",
                 "coding_command_center_handoff",
                 "compute_control_projection",
+                "criterion_satisfaction",
                 "documentation_advisory",
                 "documentation_gap_report",
+                "github_closure_dispatch",
                 "issue_operational_state_acquisition",
                 "issue_operational_state_producer",
                 "lifecycle_stage_acquisition",
@@ -220,13 +225,11 @@ EXPECTED_PUBLIC_FACADE = (
     "SprintMode",
     "SuppliedSprintEvidence",
     "ValidationEvidence",
-    "approval_applicability_identity",
     "build_approval_candidate",
     "build_approved_execution_projection",
     "build_issue_batch_graph",
     "build_issue_operational_state",
     "build_issueplan_current_state_evidence",
-    "build_merge_authorization_candidate",
     "canonical_sprint_payload",
     "compare_issueplan_current_state",
     "compute_current_approval_binding",

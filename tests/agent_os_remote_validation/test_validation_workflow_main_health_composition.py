@@ -397,7 +397,7 @@ def test_2783_main_health_block_is_summarized_as_admission_not_candidate_failure
     assert f"exact-current main validation: `{conclusion}`" in rendered
     assert "Candidate aggregate tests were not executed" in rendered
     assert "candidate-aggregate" not in rendered
-    assert "executed in GitHub Actions" not in rendered
+    assert "Aggregate step completed; verify test execution" not in rendered
 
 
 def test_2783_missing_main_recovery_is_summarized_as_admission(tmp_path):
@@ -408,7 +408,7 @@ def test_2783_missing_main_recovery_is_summarized_as_admission(tmp_path):
     )
 
     assert "- Failure class: `main-health-admission` (reason: `main-health.validation-missing`;" in rendered
-    assert "executed in GitHub Actions" not in rendered
+    assert "Aggregate step completed; verify test execution" not in rendered
 
 
 def test_2783_real_candidate_failure_stays_classified_as_candidate(tmp_path):
@@ -420,9 +420,9 @@ def test_2783_real_candidate_failure_stays_classified_as_candidate(tmp_path):
         AGGREGATE_OUTCOME="failure",
     )
 
-    assert "- Failure class: `candidate-aggregate`. Candidate aggregate tests executed and failed." in rendered
+    assert "- Failure class: `candidate-aggregate`. Aggregate step failed; inspect JUnit and logs before classifying the failure." in rendered
     assert "main-health-admission" not in rendered
-    assert "executed in GitHub Actions" in rendered
+    assert "Aggregate step completed; verify test execution using JUnit and the manifest." in rendered
 
 
 def test_2783_healthy_passing_run_reports_no_failure_class(tmp_path):
@@ -434,7 +434,7 @@ def test_2783_healthy_passing_run_reports_no_failure_class(tmp_path):
     )
 
     assert "Failure class" not in rendered
-    assert "executed in GitHub Actions" in rendered
+    assert "Aggregate step completed; verify test execution using JUnit and the manifest." in rendered
 
 
 def test_2783_main_health_reason_is_published_before_the_step_can_fail():

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,82 @@ def test_event_parser_binds_repo_issue_actor_and_strict_json_envelope():
     assert result.operation == "issue-start"
     assert result.issue_number == 2851
     assert result.specialized_knowledge_required is False
+    assert result.target_kind == "issue"
+
+
+def _pr_event(envelope=None, **changes):
+    """Top-level PR Conversation comment: issue_comment event whose issue
+    record carries a "pull_request" mapping; the event number is the PR."""
+    value = event(envelope)
+    value["issue"] = {
+        "number": 2851,
+        "pull_request": {
+            "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/2851"
+        },
+    }
+    value.update(changes)
+    return value
+
+
+def test_event_parser_accepts_top_level_pr_conversation_comment():
+    result = bridge.envelope_from_event(
+        _pr_event(), expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+    )
+    assert result.operation == "issue-start"
+    assert result.issue_number == 2851
+    assert result.target_kind == "pr"
+
+
+def test_event_parser_accepts_failed_repair_on_pr_conversation():
+    envelope = payload(
+        operation="failed-repair",
+        attempt_id="attempt-42",
+        failed_hypothesis="first repair failed",
+        result_summary="CI still red",
+        repair_context="failed-pr-repair",
+    )
+    result = bridge.envelope_from_event(
+        _pr_event(envelope),
+        expected_repository="Blummer92/agent-os",
+        allowed_actor="Blummer92",
+    )
+    assert result.operation == "failed-repair"
+    assert result.attempt_id == "attempt-42"
+    assert result.target_kind == "pr"
+
+
+@pytest.mark.parametrize("bad_pull_request", ["https://example.invalid/pr", 123, True])
+def test_event_parser_rejects_malformed_pull_request_value(bad_pull_request):
+    bad = _pr_event()
+    bad["issue"] = {"number": 2851, "pull_request": bad_pull_request}
+    with pytest.raises(ValueError, match="CKR6 ingress accepts issue comments only"):
+        bridge.envelope_from_event(
+            bad, expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+        )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _pr_event(
+            comment={"body": "/agent-os ckr6 {}", "user": {"login": "SomebodyElse"}}
+        ),
+        _pr_event(
+            {
+                "operation": "issue-start",
+                "repository": "Other/repo",
+                "issue_number": 2851,
+                "task_reference": "issue:#2851",
+            }
+        ),
+        _pr_event(payload(issue_number=9999)),
+    ],
+)
+def test_event_parser_rejects_mismatched_pr_comment(bad):
+    with pytest.raises(ValueError):
+        bridge.envelope_from_event(
+            bad, expected_repository="Blummer92/agent-os", allowed_actor="Blummer92"
+        )
 
 
 @pytest.mark.parametrize(
@@ -300,21 +378,48 @@ def test_retrieval_required_fails_closed_when_canonical_route_is_unbound(monkeyp
     assert result["github_writes_authorized"] is False
 
 
+def _local_runtime_closure(root: Path) -> set[str]:
+    """Repository-relative project paths of every first-party distribution the
+    execution service needs, derived from the declared ``pyproject.toml``
+    dependencies so a newly declared local distribution (#3197, #3502) cannot
+    be missed by a hand-maintained list."""
+    def canonical(name: str) -> str:
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    excluded = {"06_Archive", "03_Templates", "node_modules", "build", "dist", ".venv", "venv", ".git"}
+    projects: dict[str, tuple[str, list[str]]] = {}
+    for path in root.rglob("pyproject.toml"):
+        relative = path.parent.relative_to(root)
+        if excluded & set(relative.parts):
+            continue
+        project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
+        if project.get("name"):
+            projects[canonical(project["name"])] = (relative.as_posix(), list(project.get("dependencies", [])))
+    closure: set[str] = set()
+    pending = [canonical("agent-os-execution-service")]
+    while pending:
+        location, requirements = projects[pending.pop()]
+        if location in closure:
+            continue
+        closure.add(location)
+        for requirement in requirements:
+            name = canonical(re.match(r"[A-Za-z0-9._-]+", requirement).group(0))
+            if name in projects:
+                pending.append(name)
+    return closure
+
+
 def test_workflow_installs_repository_local_agent_os_runtime_graph_before_ckr6():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
-    local_projects = (
-        "08_Tooling/reusable-capability-registry",
-        "08_Tooling/agent-memory-context-manager",
-        "08_Tooling/workflow-scheduler",
-        "08_Tooling/agent-os-execution-service",
-    )
+    local_projects = _local_runtime_closure(root)
+    assert {"08_Tooling/workflow-scheduler", "08_Tooling/agent-os-execution-service"} <= local_projects
     install_blocks = text.split("- name: Install existing Agent OS runtime")[1:]
     assert len(install_blocks) == 2
     for block in install_blocks:
         bounded = block.split("\n\n", 1)[0]
-        for project in local_projects:
-            assert f"-e {project}" in bounded
+        installed = set(re.findall(r"^\s*-e\s+(\S+?)\s*\\?$", bounded, re.MULTILINE))
+        assert local_projects <= installed, sorted(local_projects - installed)
         assert bounded.index("reusable-capability-registry") < bounded.index("workflow-scheduler")
         assert bounded.index("agent-memory-context-manager") < bounded.index("agent-os-execution-service")
         assert bounded.index("workflow-scheduler") < bounded.index("agent-os-execution-service")
@@ -528,13 +633,217 @@ def test_2851_postback_fails_closed_on_transport_error(monkeypatch):
         )
 
 
+# --- #3951 post-merge live failure: diagnosable, sanitized 403s ----------
+
+
+def _http_403(
+    *,
+    message="Resource not accessible by integration",
+    accepted="pull-requests=write",
+    request_id="E7A1:2B3C:4D5E:6F70",
+):
+    import email.message
+    import io
+    import urllib.error
+
+    headers = email.message.Message()
+    headers["X-Accepted-GitHub-Permissions"] = accepted
+    headers["X-GitHub-Request-Id"] = request_id
+    body = json.dumps(
+        {
+            "message": message,
+            "documentation_url": "https://docs.github.com/rest/issues/comments#create-an-issue-comment",
+        }
+    ).encode("utf-8")
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+        403,
+        "Forbidden",
+        headers,
+        io.BytesIO(body),
+    )
+
+
+def test_3951_postback_403_surfaces_sanitized_diagnostics(monkeypatch):
+    # Live defect (run 43340181423, 2026-11-13): the first PR-conversation
+    # postback failed with a bare "HTTP Error 403: Forbidden" and the
+    # refusal was undiagnosable from the log. The transport must surface
+    # the status, GitHub's message field, and the accepted-permissions and
+    # request-id headers - and must never leak the token.
+    def fake_urlopen(request, timeout=30):
+        raise _http_403()
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert "HTTP 403" in detail
+    assert "Resource not accessible by integration" in detail
+    assert "x-accepted-github-permissions='pull-requests=write'" in detail
+    assert "x-github-request-id='E7A1:2B3C:4D5E:6F70'" in detail
+    assert "documentation_url" not in detail
+    assert "token-value" not in detail
+
+
+def test_3951_postback_diagnostics_redact_token_shaped_echoes(monkeypatch):
+    # The surfaced GitHub message/header fields are GitHub-authored, but a
+    # reflecting server could echo caller-supplied text. The exact credential
+    # and token-shaped substrings must be redacted before logging.
+    def fake_urlopen(request, timeout=30):
+        raise _http_403(
+            message="refused for credential token-value and ghp_a1b2c3d4e5f60708 echo",
+            request_id="req-ghp_zzyyxxwwvvuuttss twelve",
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert detail.count("[redacted]") == 3
+    assert "token-value" not in detail
+    assert "ghp_a1b2c3d4e5f60708" not in detail
+    assert "ghp_zzyyxxwwvvuuttss" not in detail
+
+
+def test_3951_postback_diagnostics_never_parse_oversized_body(monkeypatch):
+    # The response body is read with a hard bound: an oversized body is not
+    # consumed unboundedly and its message field is never surfaced.
+    import email.message
+    import io
+    import urllib.error
+
+    def fake_urlopen(request, timeout=30):
+        headers = email.message.Message()
+        headers["X-GitHub-Request-Id"] = "A1B2:0001"
+        body = json.dumps({"message": "x" * 20000}).encode("utf-8")
+        raise urllib.error.HTTPError(
+            "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments",
+            403,
+            "Forbidden",
+            headers,
+            io.BytesIO(body),
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError) as excinfo:
+        bridge.postback_result_comment(
+            event=_postback_event(),
+            repository="Blummer92/agent-os",
+            result=_result(),
+            api_url="https://api.github.com",
+            token="token-value",
+        )
+    detail = str(excinfo.value)
+    assert "HTTP 403" in detail
+    assert "x-github-request-id='A1B2:0001'" in detail
+    assert "message=" not in detail
+    assert len(detail) < 1000
+
+
+def test_3951_postback_targets_issues_endpoint_for_pr_conversation(monkeypatch):
+    # A top-level PR Conversation request (issue_comment event whose issue
+    # record carries "pull_request") posts to the same /issues/N/comments
+    # endpoint as an ordinary issue. Open vs merged PR state is invisible
+    # to this transport layer; the endpoint and binding must not drift.
+    captured = {}
+
+    def fake_urlopen(request, timeout=30):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data.decode("utf-8"))["body"]
+        return _FakeResponse({"id": 890})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    pr_event = _postback_event()
+    pr_event["issue"] = {
+        "number": 3951,
+        "pull_request": {
+            "url": "https://api.github.com/repos/Blummer92/agent-os/pulls/3951"
+        },
+    }
+    posted = bridge.postback_result_comment(
+        event=pr_event,
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    assert captured["method"] == "POST"
+    assert captured["url"] == (
+        "https://api.github.com/repos/Blummer92/agent-os/issues/3951/comments"
+    )
+    parsed = bridge.parse_ckr6_result_comment(captured["body"])
+    assert parsed["request_comment_id"] == 777
+    assert posted["posted_comment_id"] == 890
+    assert posted["issue_number"] == 3951
+
+
+def test_3951_dedupe_lookup_failure_is_diagnosed_and_post_still_attempted(
+    monkeypatch, capsys
+):
+    # The dedupe GET may fail independently of the POST. Its failure must be
+    # diagnosed in the job log (so a live 403 shows whether GET and POST
+    # fail together) without suppressing the post: a duplicate receipt is
+    # preferable to silence.
+    calls = []
+
+    def fake_urlopen(request, timeout=30):
+        calls.append(request.get_method())
+        if request.get_method() == "GET":
+            raise _http_403(accepted="issues=read")
+        return _FakeResponse({"id": 891})
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    event = _postback_event()
+    event["comment"]["created_at"] = "2026-11-13T00:49:54Z"
+    posted = bridge.postback_result_comment(
+        event=event,
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="token-value",
+    )
+    assert calls == ["GET", "POST"]
+    assert posted["posted_comment_id"] == 891
+    err = capsys.readouterr().err
+    assert "dedupe lookup failed" in err
+    assert "HTTP 403" in err
+    assert "issues=read" in err
+    assert "token-value" not in err
+
+
 def test_2851_workflow_posts_bounded_result_with_least_privilege():
     root = Path(__file__).resolve().parents[3]
     text = (root / ".github/workflows/agent-os-ckr6.yml").read_text(encoding="utf-8")
-    # Top-level stays least-privilege; the execute job alone gains issues:write.
+    # Top-level stays read-only. PR-conversation result posting has the two
+    # bounded write scopes granted only to the postback-capable jobs.
     assert "permissions:\n  contents: read" in text
     execute_block = text.split("name: Execute finite CKR6 request", 1)[1]
-    assert "issues: write" in execute_block.split("steps:", 1)[0]
+    execute_permissions = execute_block.split("steps:", 1)[0]
+    assert "issues: write" in execute_permissions
+    assert "pull-requests: write" in execute_permissions
     # The postback always runs so the host gets a terminal signal, and it
     # cannot retrigger the ingress.
     assert "Post bounded CKR6 result to issue" in text

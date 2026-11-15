@@ -40,6 +40,16 @@ Missing required content is `fail`. Missing recommended content is `warn`.
 Ambiguous or vague content is `manual-review`; checkers must not guess it into
 `pass` or `fail`.
 
+Criterion-level satisfaction (see `criterion_satisfaction.py`) uses a separate
+per-criterion evidence vocabulary, not a checker outcome: `satisfied`
+(current, uncontradicted per-criterion verdict evidence), `unsatisfied`
+(current evidence reports the criterion unmet), `stale` (evidence bound to a
+superseded PR head or a prior issue-body version), `missing` (no
+criterion-level evidence), `contradicted` (current evidence sources
+disagree), and `manual-review` (the criterion cannot be parsed canonically,
+or the lineage is not trustworthy). Complete satisfaction requires every
+criterion to be `satisfied`; no other disposition may be read as satisfied.
+
 ## Missing, Empty, And Placeholder Content
 
 A section is missing when its heading is absent. A section is empty when it has

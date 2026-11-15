@@ -59,13 +59,30 @@ class ProductionGovernedResumeFactoryError(RuntimeError):
     """Production entrypoint evidence could not be composed safely."""
 
 
-def build_production_governed_resume_bindings_for_handoff(
+def build_production_host_bootstrap_for_handoff(
     handoff_id: str,
-) -> GovernedResumeBindings:
-    """Build the canonical #1319 bindings for one immutable handoff identity."""
+    *,
+    configuration=None,
+    evaluated_at: str | None = None,
+):
+    """Build the canonical #1319 bootstrap for one immutable handoff identity.
+
+    This is the single production binding shared by the governed-resume
+    factory and the Gate 2 controller: the runtime request, descriptor,
+    restart capsule, dependency readiness, and advisory validation are all
+    loaded from the same durable checkpoint store and bound to the same
+    handoff, and the resulting ``LiveRepositoryEvidenceReader`` carries
+    that real evidence instead of the always-UNAVAILABLE empty reader.
+    ``configuration`` and ``evaluated_at`` are injectable only so callers
+    that already bound a host configuration (or a test that binds one)
+    share one clock and one store; production callers leave both unset
+    and get the canonical host configuration and evaluation moment.
+    """
     try:
-        configuration = load_production_host_configuration()
-        evaluated_at = canonical_evaluated_at()
+        if configuration is None:
+            configuration = load_production_host_configuration()
+        if evaluated_at is None:
+            evaluated_at = canonical_evaluated_at()
         loaded = load_runtime_execution_request_or_legacy(
             configuration.checkpoint_store_root, handoff_id
         )
@@ -89,7 +106,7 @@ def build_production_governed_resume_bindings_for_handoff(
         )
 
         transport = build_host_github_read_transport_from_environment()
-        bootstrap = build_production_host_bootstrap(
+        return build_production_host_bootstrap(
             issue_transport=transport,
             authorization_transport=transport,
             repository_evidence_reader=repository_reader,
@@ -98,13 +115,20 @@ def build_production_governed_resume_bindings_for_handoff(
             evaluated_at=evaluated_at,
             runtime_request=loaded.request,
         )
-        return bootstrap.governed_resume_bindings(cancelled=_no_cancellation_requested)
     except ProductionGovernedResumeFactoryError:
         raise
     except (TypeError, ValueError, LookupError, OSError, RuntimeError) as exc:
         raise ProductionGovernedResumeFactoryError(
             "production governed-resume composition failed closed"
         ) from exc
+
+
+def build_production_governed_resume_bindings_for_handoff(
+    handoff_id: str,
+) -> GovernedResumeBindings:
+    """Build the canonical #1319 bindings for one immutable handoff identity."""
+    bootstrap = build_production_host_bootstrap_for_handoff(handoff_id)
+    return bootstrap.governed_resume_bindings(cancelled=_no_cancellation_requested)
 
 
 def _bind_descriptor_and_capsule(
@@ -371,6 +395,12 @@ def _required_text(payload: Mapping[str, object], name: str) -> str:
     return value
 
 
-def _no_cancellation_requested() -> bool:
-    """The fixed host argv carries no cancellation datum; report none requested."""
+def _no_cancellation_requested(checkpoint: object = None) -> bool:
+    """The fixed host argv carries no cancellation datum; report none requested.
+
+    The argument is required by the ``CancellationProbe`` protocol
+    (``run_single_issue_pilot`` calls ``cancelled(checkpoint)``); a
+    zero-argument probe would raise ``TypeError`` at the first
+    cancellation checkpoint instead of reporting no cancellation.
+    """
     return False

@@ -3,6 +3,8 @@
 Sources are only the existing bounded marker comments on issues: CKR6 result
 comments (`<!-- agent-os-ckr6-result:v1 -->`, posted by the ingress workflow)
 and lesson application receipts (`<!-- agent-os-lesson-receipt:v1 -->`).
+Output schema v2.0 explicitly retires the v1 snapshot-backed
+``accountability`` field; CKR6 evidence remains the lesson eligibility source.
 No database, telemetry store, Notion read or write, score, or promotion
 authority is created. Unknown stays unknown; causality is never inferred.
 
@@ -17,12 +19,7 @@ import argparse
 from collections import Counter
 import json
 import os
-import re
 from typing import Iterable, Mapping
-
-from agent_memory_context_manager.lesson_activation_accountability import (
-    load_lesson_accountability_catalog,
-)
 
 from .ckr6_github_bridge import parse_ckr6_result_comment
 from .lesson_learning_loop import (
@@ -32,29 +29,12 @@ from .lesson_learning_loop import (
     verify_receipt_against_result,
 )
 
+# v1 was the unversioned snapshot-backed JSON output. v2 explicitly removes
+# the static CKR12 accountability field.
+METRICS_OUTPUT_SCHEMA_VERSION = "2.0"
+
 MAX_ISSUES = 50
 MAX_PAGES_PER_ISSUE = 10
-_NUMBER = re.compile(r"(?:[A-Za-z][A-Za-z0-9_]*-)?([0-9]{1,9})")
-
-
-def _lesson_number(lesson_id: str) -> int | None:
-    match = _NUMBER.fullmatch(lesson_id)
-    return int(match.group(1)) if match else None
-
-
-def _accountability_by_number() -> dict[int, str]:
-    """Reuse CKR12 bookkeeping keyed by lesson number.
-
-    The checked-in CKR12 snapshot names lessons ``lesson-N`` while live
-    normalization renders ``LL-N``; matching by number avoids reporting every
-    lesson as drift. The prefix mismatch itself is reported, not repaired here.
-    """
-    result = {}
-    for entry in load_lesson_accountability_catalog():
-        number = _lesson_number(entry.lesson_id)
-        if number is not None:
-            result[number] = f"{entry.activation_class}/{entry.activation_readiness}"
-    return result
 
 
 def derive_lesson_metrics(comments_by_issue: Mapping[int, Iterable[Mapping[str, object]]]) -> dict[str, object]:
@@ -141,9 +121,8 @@ def derive_lesson_metrics(comments_by_issue: Mapping[int, Iterable[Mapping[str, 
         r["lesson_id"] for r in valid.values()
         if r["disposition"] == "skipped" and r["reason_code"] in REFINEMENT_SIGNAL_REASONS
     })
-    accountability = _accountability_by_number()
-    lesson_ids = sorted({lesson_id for lesson_id, _ in selected} | {r["lesson_id"] for r in valid.values()})
     return {
+        "schema_version": METRICS_OUTPUT_SCHEMA_VERSION,
         "ckr6_results": dict(sorted(by_status.items())),
         "materiality_source": dict(sorted(materiality.items())),
         "notion_retrievals": reads,
@@ -166,10 +145,6 @@ def derive_lesson_metrics(comments_by_issue: Mapping[int, Iterable[Mapping[str, 
         "candidate_recurrences": sum(1 for count in candidate_core.values() if count > 1),
         "refinement_proposals": dict(sorted(refinements.items())),
         "refinement_signals": refinement_signals,
-        "accountability": {
-            lesson_id: accountability.get(_lesson_number(lesson_id) or -1, "not-in-accountability-catalog")
-            for lesson_id in lesson_ids
-        },
         "malformed_markers": dict(sorted(malformed.items())),
         "causality_inferred": False,
         "authority_created": False,

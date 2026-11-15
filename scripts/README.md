@@ -95,8 +95,140 @@ test-gap evidence**, not evidence that code is unreachable or safe to remove.
 Any wire-or-retire decisions belong to #1729, and static security analysis to
 #3427.
 
+### Test-selection completeness (PR #3817)
+
+A suite that passes must also have *executed* every test the repository defines
+(PR #3816: `--deselect` in `pytest.ini` produced a green aggregate while the
+regression tests never ran). Every suite writes JUnit (published under
+`CI_JUNIT_DIR` when set, otherwise a private temp file), and after each passing
+suite `scripts/agent_os_ci_test_completeness.py` requires every test of one
+runner-owned reference collection (`addopts` emptied, discovery options reset to
+pytest defaults, must exit 0) to appear as an executed `<testcase>` **with no
+`<skipped>` child** — a skipped test body never ran, so it does not count as
+executed. A skipped identity vetoes `COMPLETE` unless it is named in the
+committed per-suite skip allowlist (`scripts/agent_os_ci_skipped_allowlist.json`,
+seeded from the trusted baseline: 39 skipped testcases = 24 base ids, by base
+id with `[params]` stripped). A missing allowlist file means no skip is allowed;
+a malformed file or a stale entry (in neither the reference nor the executed
+report) fails closed with `ERROR`. Suites run
+with `-p no:setuponly -p no:setupplan`, so pytest itself rejects `--setup-only`
+and `--setup-plan`. A failure records `TEST_SELECTION_INCOMPLETE` (or
+`TEST_COLLECTION_ERROR` when the comparison could not be established) in the
+manifest row `test selection completeness: <suite>`, whose receipt is
+`test-completeness-<suite>.json`. The reference collection adds one `--collect-only`
+pass per suite; the single intentional discovery exclusion is
+`08_Tooling/reusable-capability-registry/tests/fixtures`.
+
+Proven boundary: pytest **configuration** (any config file or addopts, including
+`.pytest.ini`, `pytest.toml`, `[tool.pytest]` and nested `tests/pytest.ini`), plus
+**skipped test bodies** (a mandatory body marked skipped is caught by the veto,
+NC07).
+**`conftest.py` manipulation (`collect_ignore`, collection hooks) and plugins are
+outside the boundary**: they change the reference and the real run identically,
+so they are not detected (pinned by a strict xfail in
+`tests/test_agent_os_ci_test_completeness.py`). Focused runs are explicit
+selections and are not checked. This is not CI trust certification.
+
 `08_Tooling/instructional-materials-coach` remains sequential because its
 shared-working-tree sentinel is not proven safe for concurrent execution.
+
+### JUnit subtest receipts (pytest 9 counter repair)
+
+pytest 9 counts passing subtests in the suite `tests` total without
+emitting one `<testcase>` per subtest, so a genuine aggregate report
+can declare more tests than it has testcase elements (observed: root
+`tests=11994` with 11,875 elements, surplus 119 passing subtests).
+`scripts/agent_os_ci_evidence_health.validate_junit` still requires
+declared tests to equal elements: an unexplained surplus stays
+rejected there, exactly as before.
+
+The surplus is certified only in the collector, by a source-bound
+receipt corroborated against the provider-fetched producer log.
+After each suite run, `validate-all.sh` calls
+`scripts/agent_os_ci_junit_subtest_receipt.py`, which reads the
+suite's captured terminal summary (an independent channel from the
+JUnit file) and writes `CI_JUNIT_DIR/junit-subtest-receipt-<suite>.json`
+with the terminal counts, the JUnit file's digest and recorded totals,
+bound to the workflow run id, attempt and head SHA from the workflow
+environment. The extractor also prints exactly one structured marker
+line to stdout with the same counts and digest
+(`AGENT_OS_JUNIT_SUBTEST_RECEIPT suite=<key> passed=... ...`), which
+is replayed into the aggregate job's log, where the provider captures
+it. The collector independently fetches that job's log from the
+provider (Actions API, `actions: read`, already granted to the
+collector workflow) and requires exactly one well-formed marker for
+the suite whose counts and digest equal the receipt's claims. The
+collector accepts a surplus only when the receipt verifies: same
+source run/attempt/head as the provider data, matching JUnit digest,
+recorded totals equal to the parsed totals, zero failures/errors
+anywhere, declared tests equal to passed + skipped + xfailed + failed
++ errors + passing subtests, suite skipped equal to terminal skipped +
+xfailed, and passed/skipped element counts matching the terminal
+counts — **and** the provider log corroborates it. A receipt without
+its marker in the provider log, a duplicate or malformed marker, or
+any marker/receipt mismatch leaves the surplus rejected. A
+self-consistent receipt alone never certifies a surplus: the earlier
+design point that it could is superseded. The certified evidence is
+the element identities plus the verified subtest count; `counts` keeps
+`tests`, `testcase_elements` and `subtests_passed` distinct and never
+claims `tests` identities.
+
+What corroboration does and does not prove: the marker must appear in
+the provider's own capture of the bound aggregate job's log, so a
+receipt forged or reused after the run cannot pass. It does not prove
+the subtest count was observed by pytest — provider logs contain
+producer output, and a party controlling the producer job can print a
+marker with any counts. The XML equations still pin passed (via
+passed_elements) and the surplus (via tests − elements), so a forged
+marker cannot certify any surplus other than the one the XML itself
+already implies. The job→artifact join remains BY_NAME
+(`NOT_IMPLEMENTED_EXACT`): the log is the same-named aggregate job's
+log, not a provider-proven join. No cryptographic proof is claimed.
+
+Limits, all fail-closed: only the all-passing-subtest shape is
+supported -- a skipped, xfailed or failed subtest marks its parent
+element and breaks the element equation, so it stays rejected, as do
+teardown errors and multi-outcome elements. A non-strict xfail
+(`xpassed`) top-level test is also rejected: the extractor parses it
+but the verifier's total equation omits it, and xpassed elements are
+indistinguishable from passed elements in JUnit, so a suite mixing
+xpassed with passing subtests stays rejected (fail-closed). Including
+`xpassed` in the equation is a future owner decision, not part of
+this repair. A receipt is written only
+when the summary explicitly shows a `subtests passed` segment (which
+needs `-v`, supplied by the root `pytest.ini`); absence is never read
+as zero subtests, and focused runs use `-q` so they cannot emit a
+receipt. A missing, expired, or unfetchable aggregate job log, or a
+log archive that exceeds the size cap, leaves every surplus
+uncorroborated and rejected. An unparseable log archive is reported
+as `ambiguous` in the receipt's `subtest_log_corroboration`: the
+label covers both conflicting markers and archives that cannot be
+parsed at all, and means "the log cannot settle the question", not
+"markers conflicted" (QA note N2). Either way the surplus stays
+rejected. The receipt member's filename carries no trust: the
+collector verifies the entry's content, binding, digest, and marker,
+not the name it was filed under (QA note N3). Marker lines are matched only at the
+start of a log line (after a GitHub timestamp prefix); a tag
+appearing mid-line, as in a JSON-embedded nested run, is ignored,
+and a malformed or duplicate marker is conflicting evidence that
+rejects the suite. `BY_NAME_DESIGN` /
+`NOT_IMPLEMENTED_EXACT` job binding is unchanged. Tests:
+`tests/test_agent_os_ci_junit_subtest_receipt.py`
+(genuine pytest 9.2.0 fixtures, marker/log-corroboration tests,
+negative controls, full collector path with fixture provider metadata
+and fixture logs).
+
+## agent_os_frontend_checks.py
+
+Profile-independent frontend lane run by the `frontend` job of the Agent OS Validation Gate. With Node 22 on `PATH` and `origin/main` fetched, from the repository root:
+
+```bash
+EXPECTED_HEAD_SHA="$(git rev-parse HEAD)" python scripts/agent_os_frontend_checks.py
+```
+
+It diffs `HEAD` against the merge-base with `origin/main`, runs every registered Node project (`PROJECTS`) that has changed files, and exits `0` when each applicable project passed or none applies, `1` on a failed command, an unregistered `package.json` project or JS/TS source file, or a head mismatch. It writes `tested_sha` to `GITHUB_OUTPUT`, plus check-run annotations and a step summary. Deleted paths select a project (its tests must still pass) but never count as an unknown project, so a project can be removed together with its `PROJECTS` entry. `agent_os_aggregate_gate.py` requires its success for the same SHA the authoritative status is minted for. To bring a new Node project under CI, add it to `PROJECTS`; list in its `also_triggered_by` any repo path outside the project that its tests read (a drift test scans for `../` reads and fails when one is undeclared).
+
+Tests: `python -m pytest tests/test_agent_os_frontend_checks.py tests/test_agent_os_aggregate_gate.py`.
 
 ## agent_os_github_git_objects
 
@@ -134,3 +266,16 @@ routed to a surface that only edits code or reads/writes GitHub. It adds no
 route, runner, Scheduler, registry, dependency framework, or authority. See
 `scripts/agent-os-prepr-runtime-compatibility.md`; tests:
 `tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.
+
+### Pytest compatibility skip baseline (NC07)
+
+The root skip policy includes the JUnit subtest-counter compatibility probe,
+which skips when pytest reports one testcase rather than pytest 9 subtest totals,
+and the version-gated configuration controls in
+`test_configuration_narrowing_cannot_pass`. Those controls require pytest 8.1
+for `.pytest.ini`, or pytest 9 for `pytest.toml` and `[tool.pytest]`.
+The supported pytest 7+ floor is unchanged. These are compatibility exemptions,
+not evidence that a skipped body executed. As with the existing policy, parameter
+labels are reduced to base identities; the latter exemption therefore covers all
+parameters of that one test function. Review future skips of its other variants.
+Unlisted mandatory bodies, malformed policy files and stale entries remain vetoed.

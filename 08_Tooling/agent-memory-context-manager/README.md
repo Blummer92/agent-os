@@ -1,5 +1,19 @@
 # Agent Memory & Context Budget Manager
 
+## Package compatibility — 0.3.0 (#1729)
+
+This distribution's 0.3.0 release removes the unconsumed public exports
+`MAX_PROJECTED_LESSONS`, `RiskLessonProjection`,
+`load_risk_lesson_activation_map` and `project_risks_to_lessons`.
+There is no compatibility shim: the hardcoded risk-to-lesson catalog and CKR12
+snapshot no longer exist. Code importing them must remove that import rather
+than recreate or silently substitute hardcoded data. For live per-lesson
+eligibility, use the CKR6 selection result backed by CKR11 normalization and
+CKR2; the removed advisory projection was never an authorization source.
+The execution-service package dependency now requires
+`agent-memory-context-manager>=0.3.0,<0.4.0` in the same change.
+
+
 ## Purpose
 Reduce agent compute by selecting only the context needed. Agents waste compute re-reading unchanged files and scanning full repos. Memory Manager helps agents operate within file budgets, reuse cached summaries, and prevent unnecessary scans.
 

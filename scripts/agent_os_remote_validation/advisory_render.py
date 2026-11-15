@@ -10,6 +10,7 @@ from .advisory_gate import (
     MAX_ADVISORY_REASON_CODES,
     MAX_ADVISORY_STRING_LENGTH,
     AdvisoryEvidenceResult,
+    _canonical_bytes,
     advisory_evidence_result_id,
     serialize_advisory_evidence_result,
 )
@@ -298,13 +299,3 @@ def _semantic_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(
         b"agent-os-advisory-evidence-render:v1\0" + _canonical_bytes(payload)
     ).hexdigest()
-
-
-def _canonical_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")

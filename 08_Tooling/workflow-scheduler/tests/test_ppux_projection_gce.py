@@ -7,6 +7,7 @@ closed with finite reasons; the canonical result is never truncated.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import subprocess
@@ -51,6 +52,36 @@ def make_request(**overrides):
     return build_ppux_projection_request(**kwargs)
 
 
+def _canonical_card(card_id):
+    return {
+        "cardId": card_id,
+        "stepNumber": 1,
+        "imagePurpose": "Show the modeled result",
+        "imageState": "result",
+        "application": "Canva",
+        "applicationContext": "Example",
+        "targetState": "Completed",
+        "mustShow": [],
+        "mustNotShow": [],
+        "annotationSpace": "none",
+        "provenance": ["Teacher Modeling: handoff-1"],
+        "requestedUiDetails": [],
+        "requiresScreenFidelity": False,
+        "evidence": {"sourceIndexes": [], "actionIdentity": [], "stateLocalClaims": [], "recordingClaimTexts": []},
+        "portablePrompt": "Render the approved result.",
+        "status": "ready",
+        "blockerReasons": [],
+    }
+
+
+def _refresh_projection_digest(payload):
+    """Sign the test fixture exactly as the recorder signs canonical JSON."""
+    canonical = json.dumps(
+        payload["projection_result"], sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    payload["projection_result_sha256"] = hashlib.sha256(canonical).hexdigest()
+
+
 def make_host_payload(**overrides):
     request = make_request()
     payload = {
@@ -67,15 +98,36 @@ def make_host_payload(**overrides):
         "projection_result": {
             "formatVersion": "picture-perfect-prompt-projection-result-v1",
             "status": "valid",
-            "package": {
+            "routeId": "route-1",
+            "sourceHandoffRef": "handoff-1",
+            "sourceFingerprint": "sha256:route-1",
+            "recordingId": "recording-1",
+            "recordingSha256": "sha256:recording-1",
+            "applications": [],
+            "tutorialPackage": {
                 "packageVersion": "picture-perfect-tutorial-package-v1",
                 "routeId": "route-1",
-                "cards": [{"cardId": "card-1"}, {"cardId": "card-2"}],
+                "sourceHandoffRef": "handoff-1",
+                "sourceFingerprint": "sha256:route-1",
+                "recordingId": "recording-1",
+                "recordingSha256": "sha256:recording-1",
+                "objectiveRef": "objective-1",
+                "successCriteriaRef": "criteria-1",
+                "evidenceTargetRef": "evidence-1",
+                "canonicalArtifactIdentity": None,
+                "pathwayPlanRef": None,
+                "steps": [],
+                "cards": [_canonical_card("card-1"), _canonical_card("card-2")],
+                "reusedAssetRefs": [],
+                "resurfacedAssetRefs": [],
                 "executionAuthorized": False,
                 "externalWriteAuthorized": False,
                 "productionAuthorized": False,
             },
             "blockers": [],
+            "executionAuthorized": False,
+            "externalWriteAuthorized": False,
+            "productionAuthorized": False,
         },
         "projection_result_sha256": "c" * 64,
         "diagnostics": {"invoke_stdout_tail": "ok"},
@@ -88,6 +140,7 @@ def make_host_payload(**overrides):
         "publication_invoked": False,
         "merge_authorized": False,
     }
+    _refresh_projection_digest(payload)
     payload.update(overrides)
     return request, payload
 
@@ -194,6 +247,34 @@ def test_recorder_preserves_canonical_result_verbatim() -> None:
         assert recorded[authority] is False
 
 
+@pytest.mark.parametrize("digest", ["0" * 64, "not-a-digest", None])
+def test_recorder_rejects_missing_malformed_or_forged_digest(digest):
+    request, payload = make_host_payload()
+    assert payload["projection_result_sha256"] != "c" * 64
+    payload["projection_result_sha256"] = digest
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+def test_recorder_rejects_changed_result_with_original_valid_digest():
+    request, payload = make_host_payload()
+    payload["projection_result"]["tutorialPackage"]["objectiveRef"] = "tampered"
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+@pytest.mark.parametrize("blockers", [["invented-blocker"], ["route-missing", "invalid-enum"]])
+def test_recorder_rejects_out_of_contract_blockers_even_with_matching_digest(blockers):
+    request, payload = make_host_payload()
+    payload["projection_result"]["status"] = "blocked"
+    payload["projection_result"]["tutorialPackage"] = None
+    payload["projection_result"]["blockers"] = blockers
+    payload["reason_codes"] = ["projection-result-blocked"]
+    _refresh_projection_digest(payload)
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
 def test_recorder_preserves_blocked_host_payload() -> None:
     request, payload = make_host_payload(
         status="blocked",
@@ -221,6 +302,7 @@ def test_recorder_rejects_wrong_result_version() -> None:
     request, payload = make_host_payload()
     payload["projection_result"]["formatVersion"] = "picture-perfect-prompt-projection-result-v0"
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-result-invalid"
@@ -228,11 +310,12 @@ def test_recorder_rejects_wrong_result_version() -> None:
 
 def test_recorder_rejects_oversize_canonical_payload() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["cards"] = [
+    payload["projection_result"]["tutorialPackage"]["cards"] = [
         {"cardId": f"card-{index}", "filler": "x" * 4096}
         for index in range(MAX_PROJECTION_CARDS - 1)
     ]
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-output-oversize"
@@ -240,10 +323,11 @@ def test_recorder_rejects_oversize_canonical_payload() -> None:
 
 def test_recorder_rejects_too_many_cards() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["cards"] = [
+    payload["projection_result"]["tutorialPackage"]["cards"] = [
         {"cardId": f"card-{index}"} for index in range(MAX_PROJECTION_CARDS + 1)
     ]
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-output-oversize"
@@ -251,8 +335,9 @@ def test_recorder_rejects_too_many_cards() -> None:
 
 def test_recorder_rejects_authority_violation() -> None:
     request, payload = make_host_payload()
-    payload["projection_result"]["package"]["executionAuthorized"] = True
+    payload["projection_result"]["tutorialPackage"]["executionAuthorized"] = True
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-authority-violation"
@@ -262,6 +347,7 @@ def test_recorder_keeps_diagnostics_separate_from_canonical_result() -> None:
     request, payload = make_host_payload()
     payload["projection_result"]["diagnostics"] = {"invoke_stdout_tail": "ok"}
 
+    _refresh_projection_digest(payload)
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-diagnostic-invalid"
@@ -282,6 +368,101 @@ def test_recorder_rejects_authorized_envelope() -> None:
     with pytest.raises(PpuxProjectionRecorderError) as exc:
         record_ppux_projection_result(payload, request)
     assert exc.value.reason == "projection-authority-violation"
+
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("missing", "projection-result-invalid"),
+        ("legacy_alias", "projection-result-invalid"),
+        ("invalid_cards", "projection-result-invalid"),
+        ("too_many", "projection-output-oversize"),
+        ("nested_authority", "projection-authority-violation"),
+        ("top_authority", "projection-authority-violation"),
+        ("blocked_missing_package", "projection-result-invalid"),
+        ("missing_result_identity", "projection-result-invalid"),
+        ("missing_package_version", "projection-result-invalid"),
+        ("missing_package_metadata", "projection-result-invalid"),
+        ("malformed_card", "projection-result-invalid"),
+        ("identity_disagreement", "projection-result-invalid"),
+        ("bad_applications", "projection-result-invalid"),
+    ],
+)
+def test_recorder_rejects_canonical_result_violations(mutation, reason):
+    request, payload = make_host_payload()
+    result = payload["projection_result"]
+    if mutation == "missing":
+        del result["tutorialPackage"]
+    elif mutation == "legacy_alias":
+        result["package"] = result.pop("tutorialPackage")
+    elif mutation == "invalid_cards":
+        result["tutorialPackage"]["cards"] = "not-an-array"
+    elif mutation == "too_many":
+        result["tutorialPackage"]["cards"] = [
+            {"cardId": str(i)} for i in range(MAX_PROJECTION_CARDS + 1)
+        ]
+    elif mutation == "nested_authority":
+        result["tutorialPackage"]["executionAuthorized"] = True
+    elif mutation == "top_authority":
+        result["executionAuthorized"] = True
+    elif mutation == "blocked_missing_package":
+        result["status"] = "blocked"
+        result["blockers"] = ["route-missing"]
+        payload["reason_codes"] = ["projection-result-blocked"]
+        del result["tutorialPackage"]
+    elif mutation == "missing_result_identity":
+        del result["recordingId"]
+    elif mutation == "missing_package_version":
+        del result["tutorialPackage"]["packageVersion"]
+    elif mutation == "missing_package_metadata":
+        del result["tutorialPackage"]["objectiveRef"]
+    elif mutation == "malformed_card":
+        result["tutorialPackage"]["cards"] = [{"cardId": "not-canonical"}]
+    elif mutation == "identity_disagreement":
+        result["tutorialPackage"]["sourceFingerprint"] = "mismatch"
+    elif mutation == "bad_applications":
+        result["applications"] = [42]
+    _refresh_projection_digest(payload)
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == reason
+
+
+def test_recorder_accepts_blocked_domain_result_without_package():
+    request, payload = make_host_payload()
+    payload["projection_result"]["status"] = "blocked"
+    payload["projection_result"]["tutorialPackage"] = None
+    payload["projection_result"]["blockers"] = ["route-missing"]
+    payload["reason_codes"] = ["projection-result-blocked"]
+    _refresh_projection_digest(payload)
+    recorded = record_ppux_projection_result(payload, request)
+    assert recorded["projection_result"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize("outer_status", ["blocked", "needs-decision"])
+def test_recorder_rejects_non_success_envelope_with_projection_result(outer_status):
+    request, payload = make_host_payload(status=outer_status)
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-result-invalid"
+
+
+@pytest.mark.parametrize("outer_status", ["blocked", "needs-decision"])
+def test_recorder_rejects_non_success_envelope_with_result_digest(outer_status):
+    request, payload = make_host_payload(
+        status=outer_status, projection_result=None,
+    )
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-result-invalid"
+
+
+def test_recorder_rejects_mismatched_success_reason():
+    request, payload = make_host_payload(reason_codes=["projection-result-blocked"])
+    with pytest.raises(PpuxProjectionRecorderError) as exc:
+        record_ppux_projection_result(payload, request)
+    assert exc.value.reason == "projection-reason-invalid"
 
 
 # --- transport entry point ---------------------------------------------------
@@ -378,7 +559,7 @@ def test_transport_records_framed_host_payload() -> None:
 
     recorded = evidence["ppux_projection"]
     assert recorded["status"] == "success"
-    assert recorded["projection_result"]["package"]["cards"][0]["cardId"] == "card-1"
+    assert recorded["projection_result"]["tutorialPackage"]["cards"][0]["cardId"] == "card-1"
     assert recorded["vm_initial_state"] == VmState.RUNNING.value
     assert recorded["start_issued"] is False
     # The fixed host command is what ran on the VM.
@@ -469,3 +650,53 @@ def test_ingress_from_file_preserves_projection_selector_identity(tmp_path) -> N
     assert reconstructed.ppux_projection_branch_or_none == BRANCH
     assert reconstructed.ppux_projection_sha_or_none == SHA
     assert reconstructed.ppux_projection_input_ref_or_none == INPUT_REF
+
+
+@pytest.mark.parametrize("mutation", [
+    "empty_evidence", "bad_source_index", "bad_action", "bad_claim", "bad_claim_kind",
+    "bad_recording_text", "unhashable_image_state", "unhashable_card_status", "unhashable_disposition",
+])
+def test_recorder_rejects_malformed_card_evidence_with_finite_reason(mutation):
+    request, payload = make_host_payload()
+    card = payload["projection_result"]["tutorialPackage"]["cards"][0]
+    if mutation == "empty_evidence":
+        card["evidence"] = {}
+    elif mutation == "bad_source_index":
+        card["evidence"]["sourceIndexes"] = [True]
+    elif mutation == "bad_action":
+        card["evidence"]["actionIdentity"] = [{}]
+    elif mutation == "bad_claim":
+        card["evidence"]["stateLocalClaims"] = [{}]
+    elif mutation == "bad_claim_kind":
+        card["evidence"]["stateLocalClaims"] = [{
+            "text": "x", "kind": "invented", "sourceIndex": 0,
+            "sourceFingerprint": "x", "recordingSha256": "x",
+        }]
+    elif mutation == "bad_recording_text":
+        card["evidence"]["recordingClaimTexts"] = [42]
+    elif mutation == "unhashable_image_state":
+        card["imageState"] = []
+    elif mutation == "unhashable_card_status":
+        card["status"] = {}
+    else:
+        payload["projection_result"]["tutorialPackage"]["steps"] = [{
+            "reviewStepId": "1", "visualRoleRef": "v", "disposition": [],
+        }]
+    _refresh_projection_digest(payload)
+    with pytest.raises(PpuxProjectionRecorderError, match="projection-result-invalid"):
+        record_ppux_projection_result(payload, request)
+
+
+@pytest.mark.parametrize("field", ["outer", "result"])
+@pytest.mark.parametrize("value", [[], {}])
+def test_recorder_rejects_unhashable_status_with_finite_reason(field, value):
+    request, payload = make_host_payload()
+    if field == "outer":
+        payload["status"] = value
+        reason = "projection-status-invalid"
+    else:
+        payload["projection_result"]["status"] = value
+        reason = "projection-result-invalid"
+    _refresh_projection_digest(payload)
+    with pytest.raises(PpuxProjectionRecorderError, match=reason):
+        record_ppux_projection_result(payload, request)
