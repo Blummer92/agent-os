@@ -195,3 +195,11 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+
+# NC08-M2 disposable negative control -- NEVER MERGE.
+# Deliberately drop one mandatory test during normal collection.
+_original_pytest_collection_modifyitems = pytest_collection_modifyitems
+def pytest_collection_modifyitems(config, items):
+    _original_pytest_collection_modifyitems(config, items)
+    items[:] = [item for item in items if not item.nodeid.endswith('test_conftest_collect_ignore_is_caught')]
