@@ -306,6 +306,7 @@ def test_ckr11_repeated_cursor_fails_closed_without_third_read():
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert "lesson-read-incomplete" in result.selection_reason_codes
     assert result.retrieval_diagnostics["read_count"] == 2
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "repeated-cursor"
 
 
 def test_ckr11_page_cap_fails_closed_without_unbounded_reads():

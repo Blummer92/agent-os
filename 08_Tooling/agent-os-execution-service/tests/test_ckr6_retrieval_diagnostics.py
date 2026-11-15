@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+import pytest
+
 from agent_os_execution_service import ckr6_github_bridge as bridge
 
 REVISION = "2026-10-08T12:00:00.000Z"
@@ -94,7 +96,8 @@ def test_case_a_complete_retrieval_selects_normally_and_reports_none(monkeypatch
     assert result["retry_reentry_outcome"] == "consumed"
     assert result["selected_lesson_ids"] == ["LL-1", "LL-2", "LL-3"]
     assert sink == [{
-        "retrieval_reason_code": "none", "read_count": 1, "observed_rows": 3,
+        "retrieval_reason_code": "none", "incomplete_reason_code": "none",
+        "read_count": 1, "observed_rows": 3,
         "normalized_rows": 3, "skipped_rows": 0, "candidate_count": 3,
     }]
 
@@ -106,6 +109,7 @@ def test_case_b_incomplete_pagination_is_distinct_and_fail_closed(monkeypatch):
     result, sink = _run(monkeypatch, reader)
     _assert_fail_closed(result)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
     assert len(reader.calls) == 1  # no unauthorized continuation after the STOP
     assert CURSOR not in json.dumps(result) + json.dumps(sink)
 
@@ -152,6 +156,7 @@ def test_case_d_projection_rejects_hostile_values():
     }
     assert bridge.retrieval_diagnostics_projection(hostile) == {
         "retrieval_reason_code": "notion-http-503",
+        "incomplete_reason_code": "none",
         "read_count": 0, "observed_rows": 0, "normalized_rows": 0,
         "skipped_rows": 0, "candidate_count": 4,
     }
@@ -180,3 +185,59 @@ def test_trusted_result_schema_and_default_behavior_unchanged(monkeypatch):
     body = bridge.serialize_ckr6_result_comment(result, request_comment_id=1)
     assert "notion-http-429" not in body
     assert bridge.parse_ckr6_result_comment(body)["mutation_admissible"] is False
+
+
+@pytest.mark.parametrize(("scenario", "expected_code", "expected_reads"), [
+    ("row-bound", "row-bound-exceeded", 1),
+    ("page-bound", "page-bound-exceeded", 5),
+    ("missing-cursor", "missing-cursor", 1),
+    ("repeated-cursor", "repeated-cursor", 2),
+    ("malformed-page", "malformed-page", 1),
+    ("malformed-pagination", "malformed-pagination", 1),
+])
+def test_incomplete_subreasons_are_finite_and_fail_closed(
+    monkeypatch, scenario, expected_code, expected_reads
+):
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if scenario == "row-bound":
+            return {"results": [_row(n) for n in range(25)],
+                    "has_more": True, "next_cursor": "cursor-next"}
+        if scenario == "page-bound":
+            return {"results": [], "has_more": True,
+                    "next_cursor": f"cursor-{len(calls)}"}
+        if scenario == "missing-cursor":
+            return {"results": [], "has_more": True, "next_cursor": None}
+        if scenario == "repeated-cursor":
+            return {"results": [], "has_more": True, "next_cursor": "same-cursor"}
+        if scenario == "malformed-page":
+            return {"results": "not-a-list", "has_more": False}
+        if scenario == "malformed-pagination":
+            return {"results": [], "has_more": "not-a-bool"}
+        raise AssertionError("unknown test scenario")
+
+    result, sink = _run(monkeypatch, read)
+    _assert_fail_closed(result)
+    assert len(calls) == expected_reads
+    assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert sink[0]["incomplete_reason_code"] == expected_code
+    assert "incomplete_reason_code" not in json.dumps(result)
+    assert "cursor-next" not in json.dumps(sink)
+    assert "same-cursor" not in json.dumps(sink)
+
+
+def test_incomplete_reason_projection_ignores_untrusted_detail():
+    raw = {
+        "retrieval_diagnostics": {
+            "incomplete_reason_code": "SENSITIVE_SAMPLE-DO-NOT-LEAK",
+            "read_count": 1,
+        },
+        "selection_reason_codes": ["lesson-read-incomplete"],
+    }
+    projected = bridge.retrieval_diagnostics_projection(raw)
+    assert projected is not None
+    assert projected["retrieval_reason_code"] == "lesson-read-incomplete"
+    assert projected["incomplete_reason_code"] == "none"
+    assert "SENSITIVE_SAMPLE-DO-NOT-LEAK" not in json.dumps(projected)

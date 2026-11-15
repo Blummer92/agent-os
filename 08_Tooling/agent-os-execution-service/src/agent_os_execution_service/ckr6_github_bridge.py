@@ -442,6 +442,15 @@ _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
 )
 _MAX_DIAGNOSTIC_COUNTER = 10_000
+_INCOMPLETE_REASON_CODES = frozenset({
+    "row-bound-exceeded",
+    "page-bound-exceeded",
+    "missing-cursor",
+    "repeated-cursor",
+    "malformed-page",
+    "malformed-pagination",
+    "unknown-incomplete",
+})
 
 
 def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, object] | None:
@@ -465,6 +474,13 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             reason = item
             break
     projected: dict[str, object] = {"retrieval_reason_code": reason}
+    # Never trust arbitrary source values. This remains a finite code, not
+    # the exception message, page data, cursor, or a provider response.
+    incomplete = source.get("incomplete_reason_code") if isinstance(source, Mapping) else None
+    projected["incomplete_reason_code"] = (
+        incomplete if type(incomplete) is str and incomplete in _INCOMPLETE_REASON_CODES
+        else "none"
+    )
     for name in _RETRIEVAL_COUNTERS:
         value = source.get(name) if isinstance(source, Mapping) else None
         if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_COUNTER:
@@ -489,7 +505,7 @@ def write_retrieval_diagnostics_summary(
     if not target:
         return False
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
-    for name in ("retrieval_reason_code", *_RETRIEVAL_COUNTERS):
+    for name in ("retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS):
         lines.append(f"- {name}: `{diagnostics.get(name)}`")
     try:
         with open(target, "a", encoding="utf-8") as handle:
