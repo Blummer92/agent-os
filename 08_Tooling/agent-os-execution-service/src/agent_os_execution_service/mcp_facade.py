@@ -111,7 +111,7 @@ def _required_attempt_id(value: object) -> str:
     return value
 
 
-def admit_agent_os_failed_repair(
+def admit_agent_os_failed_repair(*, activation_result: Mapping[str, object], failed_repair_attempt_id: str, check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str, current: RecoverySemanticEvidence | None = None, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None, zero_job: ZeroJobAdmissionEvidence | None = None, diagnostics: DiagnosticSurfaceEvidence | None = None, validation_head: ValidationSupersessionEvidence | None = None, validation_failure: ValidationFailureEvidence | None = None) -> dict[str, object]:
     decision = evaluate_failed_repair_admission(activation_result=activation_result, failed_repair_attempt_id=_required_attempt_id(failed_repair_attempt_id), check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability, current=current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint, zero_job=zero_job, diagnostics=diagnostics, validation_head=validation_head, validation_failure=validation_failure)
     proceeds = decision.mutation_admissible or decision.bounded_continuation_admitted
     payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(DriverDecision(action=decision.next_action if proceeds else "", blocked=not proceeds, stalled=decision.recovery_stalled, reason_codes=decision.reason_codes)); return payload
