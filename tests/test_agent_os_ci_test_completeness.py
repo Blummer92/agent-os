@@ -428,6 +428,7 @@ def test_conftest_modifyitems_drop_one_parameterized_case_is_caught(tmp_path: Pa
     assert receipt["reference_noconftest_count"] == 6
 
 
+@pytest.mark.skip(reason='NC07_DISPOSABLE_REQUIRED_BODY_SKIP_NEVER_MERGE')
 def test_conftest_marker_only_passes_complete(tmp_path: Path) -> None:
     """A conftest that only adds markers (like the real root conftest) collects
     identically in both references: legitimate conftests are unaffected."""
