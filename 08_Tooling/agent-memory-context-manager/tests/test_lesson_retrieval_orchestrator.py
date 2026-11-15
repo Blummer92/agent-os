@@ -372,10 +372,9 @@ def test_ckr6_exact_context_first_query_targets_testing_only():
         "property": "Area", "select": {"equals": "Testing"}
     }
     assert broad != focused
-    assert any(
-        clause.get("property") == "Area" and clause["select"]["equals"] == "Automation"
-        for clause in broad["filter"]["and"][-1].get("or", [])
-    )
+    # The final bounded workspace-search slot is deliberately broader:
+    # it retains only the existing surface and non-archived filters.
+    assert len(broad["filter"]["and"]) == 2
 
 
 def test_ckr6_focused_query_retrieves_verified_lesson_without_broad_overflow():
