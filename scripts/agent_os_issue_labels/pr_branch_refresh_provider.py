@@ -252,11 +252,15 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
             if rebase.timed_out or not rebase.termination_confirmed:
                 return _ambiguous(expected_head_sha, "rebase-outcome-uncertain")
             if rebase.return_code != 0:
-                return _blocked(expected_head_sha, "rebase-rejected")
-            head = self.runner.run((self.git_binary, "rev-parse", "--verify", "HEAD^{commit}"), cwd=self.repository_root, env=dict(self.environment))
-            proposed_head_sha = _exact_head(head)
-            if proposed_head_sha is None:
-                return _blocked(expected_head_sha, "rebased-head-unavailable")
+                fallback = self._rebase_rejected_fallback(expected_head_sha=expected_head_sha, current_main_sha=current_main_sha, admitted_paths=snapshot.changed_paths)
+                if isinstance(fallback, BranchRefreshMutationResult):
+                    return fallback
+                proposed_head_sha = fallback
+            else:
+                head = self.runner.run((self.git_binary, "rev-parse", "--verify", "HEAD^{commit}"), cwd=self.repository_root, env=dict(self.environment))
+                proposed_head_sha = _exact_head(head)
+                if proposed_head_sha is None:
+                    return _blocked(expected_head_sha, "rebased-head-unavailable")
 
         if proposed_head_sha == expected_head_sha:
             return _blocked(expected_head_sha, "rebased-head-unchanged")
@@ -282,6 +286,28 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if update.status is ExpectedHeadBranchUpdateStatus.UNCERTAIN:
             return _ambiguous(expected_head_sha, f"transport.{update.reason}")
         return _blocked(expected_head_sha, f"transport.{update.reason}")
+
+    def _rebase_rejected_fallback(self, *, expected_head_sha: str, current_main_sha: str, admitted_paths: tuple[str, ...]) -> str | BranchRefreshMutationResult:
+        """#3772: a rejected intermediate replay does not imply a final-tree conflict.
+
+        Linear history keeps rebase-first preparation so clean replays preserve
+        the original commits. When the replay conflicts but the final tree
+        reconciles cleanly with current main, restore the working tree and
+        reuse the existing bounded merge-tree candidate preparation within the
+        same single mutation attempt. Failure of both routes stays blocked with
+        the reconciliation reason; an uncertain restore stays ambiguous. No
+        retry, alternate remote path, or second mutation is introduced. The
+        candidate preparation verifies its own checkout, head, and scope, so a
+        confirmed abort is sufficient restore evidence here.
+        """
+        abort = self.runner.run((self.git_binary, "rebase", "--abort"), cwd=self.repository_root, env=dict(self.environment))
+        if not abort.started:
+            return _blocked(expected_head_sha, "rebase-abort-not-started")
+        if abort.timed_out or not abort.termination_confirmed:
+            return _ambiguous(expected_head_sha, "rebase-abort-outcome-uncertain")
+        if abort.return_code != 0:
+            return _blocked(expected_head_sha, "rebase-abort-rejected")
+        return self._prepare_merge_shaped_candidate(expected_head_sha=expected_head_sha, current_main_sha=current_main_sha, admitted_paths=admitted_paths)
 
     def _lineage_integrity_blocker(
         self,
