@@ -204,6 +204,10 @@ def orchestrate_lesson_retrieval(
             "observed_rows": observed_rows,
             "normalized_rows": normalized_rows,
             "skipped_rows": sum(skipped.values()),
+            "missing_identity_rows": skipped["missing-stable-identity"],
+            "missing_revision_rows": skipped["missing-verified-revision"],
+            "missing_source_guidance_rows": skipped["missing-activation-guidance"],
+            "ambiguous_metadata_rows": sum(count for reason, count in skipped.items() if reason.startswith("ambiguous-")),
             "candidate_count": value.candidate_count,
         })
 
