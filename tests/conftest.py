@@ -195,3 +195,7 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+# NC08-M1 -- disposable negative control, NEVER MERGE.
+# Defect: normal pytest and its conftest-influenced reference hide this mandatory module.
+collect_ignore = ["test_agent_os_ci_test_completeness.py"]
