@@ -427,7 +427,95 @@ def classify_envelope(envelope: Ckr6Envelope) -> dict[str, object]:
     }
 
 
-def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dict[str, object]:
+# Observational-only retrieval diagnostics. They never enter the trusted result
+# comment (RESULT_FIELDS is unchanged) and never influence admission. Only a
+# finite reason vocabulary and bounded integer counters are ever emitted; raw
+# rows, cursors, provider text and unknown exception text cannot pass the filter.
+_RETRIEVAL_FINITE_REASONS = frozenset({
+    "lesson-read-incomplete",
+    "lesson-read-timeout",
+    "lesson-read-connection-error",
+    "lesson-read-runtime-error",
+})
+_NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
+_RETRIEVAL_COUNTERS = (
+    "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
+)
+_MAX_DIAGNOSTIC_COUNTER = 10_000
+
+
+def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, object] | None:
+    """Project existing sanitized retrieval diagnostics into a bounded form.
+
+    Returns ``None`` when the owner produced no diagnostics. Never raises on
+    malformed input: anything outside the allowlist is dropped or mapped to the
+    static ``none`` / ``0`` values.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    source = raw.get("retrieval_diagnostics")
+    reasons = raw.get("selection_reason_codes")
+    if not isinstance(source, Mapping) and not isinstance(reasons, (list, tuple)):
+        return None
+    reason = "none"
+    for item in reasons if isinstance(reasons, (list, tuple)) else ():
+        if isinstance(item, str) and (
+            item in _RETRIEVAL_FINITE_REASONS or _NOTION_REASON_RE.fullmatch(item)
+        ):
+            reason = item
+            break
+    projected: dict[str, object] = {"retrieval_reason_code": reason}
+    for name in _RETRIEVAL_COUNTERS:
+        value = source.get(name) if isinstance(source, Mapping) else None
+        if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_COUNTER:
+            projected[name] = value
+        else:
+            projected[name] = 0
+    return projected
+
+
+def write_retrieval_diagnostics_summary(
+    diagnostics: Mapping[str, object] | None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Append the bounded projection to the Actions step summary, if available.
+
+    Observational only: any failure is swallowed so it can never alter the
+    already-written result, the exit status, or admission.
+    """
+    if diagnostics is None:
+        return False
+    target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
+    if not target:
+        return False
+    lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
+    for name in ("retrieval_reason_code", *_RETRIEVAL_COUNTERS):
+        lines.append(f"- {name}: `{diagnostics.get(name)}`")
+    try:
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _record_diagnostics(
+    sink: list[dict[str, object]] | None,
+    raw: Mapping[str, object],
+) -> None:
+    if sink is None:
+        return
+    projected = retrieval_diagnostics_projection(raw)
+    if projected is not None:
+        sink.append(projected)
+
+
+def execute_envelope(
+    envelope: Ckr6Envelope,
+    *,
+    retrieval_required: bool,
+    diagnostics_sink: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     route = resolve_lesson_read_route() if retrieval_required else None
     if retrieval_required and (route is None or route.execute_read is None):
         route_reason = route.reason_code if route is not None else "lesson-read-route-unavailable"
@@ -478,6 +566,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     }
     if envelope.operation == "issue-start":
         raw = activate_issue_start_lesson_preflight(**common, execute_read=reader)
+        _record_diagnostics(diagnostics_sink, raw)
         # The handoff_projection is the host-consumable unit: the overlay
         # instructs the host to put exactly this projection into its governed
         # context packet. It was previously computed and dropped, which left
@@ -521,6 +610,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
         repair_context=envelope.repair_context,
         execute_read=reader,
     )
+    _record_diagnostics(diagnostics_sink, raw)
     return {
         "operation": envelope.operation,
         "repository": envelope.repository,
@@ -1318,6 +1408,8 @@ def main() -> int:
     parser.add_argument("--api-url", required=False, default="https://api.github.com")
     args = parser.parse_args()
 
+    diagnostics: list[dict[str, object]] = []
+
     event = _load_event(args.event)
     if args.phase == "postback":
         # The workflow job gate already admitted this event; postback needs no
@@ -1357,11 +1449,15 @@ def main() -> int:
             result = execute_envelope(
                 envelope,
                 retrieval_required=args.retrieval_required == "true",
+                diagnostics_sink=diagnostics,
             )
     Path(args.output).write_text(
         json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+    # Written after the result so diagnostics can never block or alter it.
+    for item in diagnostics:
+        write_retrieval_diagnostics_summary(item)
     return 0
 
 
