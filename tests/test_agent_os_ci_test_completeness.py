@@ -501,3 +501,11 @@ def test_helper_failures_fail_closed_and_ignore_stale_receipts(
     row = _completeness(junit_dir)
     assert row[2:5] == ("FAIL", code, classification)
     assert row[1] == "no"  # the stale receipt was cleared, never reused as evidence
+
+@pytest.mark.parametrize("variant", ["alpha", "beta", "gamma"])
+def test_nc08_positive_shared_fixture_preserves_collection(
+    nc08_positive_fixture: str, variant: str
+) -> None:
+    """Legitimate fixture and parameter cases must all survive CI collection."""
+    assert nc08_positive_fixture == "collection-preserved"
+    assert variant in {"alpha", "beta", "gamma"}
