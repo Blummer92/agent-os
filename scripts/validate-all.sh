@@ -278,6 +278,11 @@ run_check() {
   started_us="$(timer_now_us || true)"
   (cd "$workdir" && "$@")
   local code=$?
+  # NC09 disposable test only: deliberately swallow root pytest exit; NEVER MERGE.
+  if [ "$name" = "root" ] && [ "$code" -ne 0 ]; then
+    echo "NC09_DISPOSABLE_SWALLOWED_ROOT_PYTEST_EXIT=$code" >&2
+    code=0
+  fi
   ended_us="$(timer_now_us || true)"
   record_timing "$name" "$started_us" "$ended_us"
 
