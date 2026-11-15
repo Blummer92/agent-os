@@ -117,34 +117,38 @@ response. Concurrency with external Notion clients is not atomic CAS. Titles tha
 have been renamed or semantically similar lessons require human reconciliation.
 Public evidence contains only bounded status, identifiers and revision.
 
-## Independent live persistence verification (reviewed addition)
+## Independent live persisted-state verification (reviewed addition)
 
-The owner-authorized `/agent-os notion-write` job already executes one
-write and an immediate canonical GET. Its existing offline unit tests prove
-that the mocked writer follows that contract; those tests do **not** prove a
-live Notion write happened.
+The owner-authorized `/agent-os notion-write` job performs one governed
+Notion create/update and an immediate canonical GET. Offline unit tests
+exercise an injected fake client; they do **not** prove a live Notion write.
 
-After a successful live writer execution, a separate **read-only** verification
-step uses the existing Notion reader to GET the exact returned page. It accepts
-only a trusted same-job `persisted` result with one attempted write and
-`readback_verified=true`, then checks the canonical destination, page ID,
-Lesson ID, exact revision and every reviewed catalog property. Only that
-second successful GET reports `verified-persisted` and `write_verified=true`.
-A mismatch, unavailable read or missing receipt is `unverified` and fails the
-job without retrying a mutation. A result of `unchanged` is explicitly
-`no-new-write` / `write_verified=false`.
+The existing **single credential-bearing execute step** now also performs a
+second, read-only canonical GET through the same trusted adapter boundary.
+No second secret-bearing workflow step or separate verification CLI exists.
+The verifier requires the same-run writer receipt with `status=persisted`,
+strict integer `write_attempts=1`, `readback_verified=true`, and the
+admitted catalog request ID. It verifies the exact page, source, Lesson ID,
+revision, and every reviewed catalog property. Any drift or read failure
+returns `unverified` and fails that job without a write retry.
 
-The verification step creates **no new write route** or credentials; it runs
-only inside the already owner-authorized writer job after an admitted create
-or update. It calls no create/update method. Its public summary contains
-only finite codes and booleans, never raw Notion properties or tokens.
-This stronger evidence still does not authorize lesson activation or prove
-CKR6 later selected/used the lesson.
+A successful second read reports `verified-current-state` and
+`persisted_state_verified=true`. This is **independent state-consistency
+evidence**, not proof that this run caused the mutation: a pre-existing
+identical page can satisfy a forged persisted receipt. The verifier explicitly
+reports `write_causality_established=false` and never claims a new write
+solely from a page GET. An unchanged writer receipt yields `no-new-write`
+and `persisted_state_verified=false`, with no extra provider call.
 
-Ordinary CI tests use an injected fake client and cannot claim live
-persistence. Actual end-to-end proof requires a separately approved owner
-write request, a successful hosted verification step, and a live readback
-receipt for that exact request. No automatic canary write is permitted.
+The workflow's public summary shows only bounded status codes and booleans,
+not provider data or credentials. Activation fields, write authority,
+reviewed catalog, concurrency, permissions, and owner admission are unchanged.
+The verifier creates no new Notion write route, does not call create/update,
+and never authorizes lesson activation or CKR6 reuse.
+
+A live canary still requires its own reviewed catalog entry, explicit owner
+command, hosted workflow evidence and authenticated Notion readback.
+CI with an injected fake client cannot establish live persistence.
 
 ## Persistence versus CKR6 use
 
