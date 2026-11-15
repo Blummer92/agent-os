@@ -416,9 +416,6 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(json.loads((root / "result.json").read_text())["write_attempts"], 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 # ---------------------------------------------------------------- independent live-write verification
 
 from scripts.agent_os_notion_lessons_write.verify_live_write import verify_persisted_write
@@ -507,3 +504,7 @@ class IndependentPersistedWriteTests(unittest.TestCase):
         outcome = verify_persisted_write(receipt, lambda request_id: called.append(request_id))
         self.assertEqual(outcome["status"], "unverified")
         self.assertEqual(called, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
