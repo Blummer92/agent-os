@@ -3,6 +3,7 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     RetrievalEscalation,
 )
 from agent_memory_context_manager.lesson_preflight import (
+    MAX_LESSON_RECORDS,
     FailedRepairAttempt,
     LessonRetrievalStatus,
     RepairContext,
@@ -57,6 +58,22 @@ def test_exact_lookup_is_not_the_same_query_as_filtered_query():
     )
     assert exact != filtered
     assert exact["page_size"] <= filtered["page_size"]
+
+
+def test_generic_exact_narrow_lookup_keeps_first_controlled_clause():
+    """N2 / M05d: CKR6-only complementary routing must not apply to generic work."""
+    req = request(capability_keywords=("testing",), language_hints=("Python",))
+    filtered = build_escalation_query(
+        req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY,
+    )
+    exact = build_escalation_query(
+        req, RetrievalEscalation.EXACT_NARROW_LOOKUP,
+    )
+    assert "or" in filtered["filter"]["and"][-1]
+    assert exact["filter"]["and"][-1] == {
+        "property": "Area", "select": {"equals": "Automation"},
+    }
+    assert exact["page_size"] == MAX_LESSON_RECORDS
 
 
 def test_bounded_empty_escalation_terminates_at_manual_review():
