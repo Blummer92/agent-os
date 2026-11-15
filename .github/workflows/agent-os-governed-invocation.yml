@@ -24,7 +24,7 @@ env:
 jobs:
   ingress:
     name: Validate and transport bounded Agent OS invocation
-    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') && !startsWith(github.event.comment.body, '/agent-os validate-draft') && !startsWith(github.event.comment.body, '/agent-os recover-ready') && github.event.comment.body != '/agent-os codespace-start' }}
+    if: ${{ github.event.issue.pull_request == null && !startsWith(github.event.comment.body, '/agent-os ready-admit') && !startsWith(github.event.comment.body, '/agent-os merge-admit') && !startsWith(github.event.comment.body, '/agent-os validate-draft') && !startsWith(github.event.comment.body, '/agent-os recover-ready') && github.event.comment.body != '/agent-os codespace-start' && github.event.comment.body != '/agent-os ai-navigation-discover' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source

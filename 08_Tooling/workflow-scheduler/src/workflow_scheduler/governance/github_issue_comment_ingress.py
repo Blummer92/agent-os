@@ -116,6 +116,7 @@ IngressReason = Literal[
     "accepted-ppux-projection-envelope", "accepted-ready-admission-envelope",
     "accepted-merge-admission-envelope", "accepted-draft-validation-envelope",
     "accepted-ready-recovery-envelope",
+    "accepted-ai-navigation-discover-envelope",
     "event-not-created", "pull-request-comment",
     "repository-mismatch", "workflow-rerun", "actor-not-allowed", "actor-evidence-mismatch",
     "ruleset-admin-issue-mismatch", "malformed-trigger", "invalid-event-envelope",
@@ -284,6 +285,8 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
             return _result(status="blocked", reason="codespace-start-issue-mismatch", **common)
         return _result(status="accepted", reason="accepted-codespace-start-envelope", operation="codespace-start", **common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
+    # Read-only AI Navigation handoff discovery. The target issue is the issue the owner commented on; no selector is parsed from the body.
+    if body=="/agent-os ai-navigation-discover":return _result(status="accepted",reason="accepted-ai-navigation-discover-envelope",operation="ai-navigation-discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
     ruleset_admin=_RULESET_ADMIN_RE.fullmatch(body)
     if ruleset_admin is not None:
