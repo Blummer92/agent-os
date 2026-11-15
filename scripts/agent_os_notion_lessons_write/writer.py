@@ -22,7 +22,21 @@ def properties(request_id: str = REQUEST_ID) -> dict:
         if name == SUPPORTING_SOURCE_LINKS:
             # One canonical ref per rich_text item; the catalog already
             # bounded and validated the tuple (max five, distinct, canonical).
-            payload[name] = {"rich_text": [{"type": "text", "text": {"content": ref}} for ref in value]}
+            # A GitHub ref also carries a link annotation with the same
+            # URL: that annotation is what Notion renders clickable. A
+            # plain-text URL sent through the API is not reliably linkified,
+            # so without it the refs would be visible but not clickable.
+            # The link belongs INSIDE the `text` object per the Notion
+            # rich_text schema (responses mirror it as top-level `href`);
+            # a top-level `link` key is not part of the API shape.
+            # Repo-relative governance paths are not URLs and stay plain.
+            items = []
+            for ref in value:
+                item = {"type": "text", "text": {"content": ref}}
+                if ref.startswith("https://"):
+                    item["text"]["link"] = {"url": ref}
+                items.append(item)
+            payload[name] = {"rich_text": items}
         elif kind in ("title", "rich_text"):
             payload[name] = {kind: [{"type": "text", "text": {"content": value}}]}
         elif kind == "select":

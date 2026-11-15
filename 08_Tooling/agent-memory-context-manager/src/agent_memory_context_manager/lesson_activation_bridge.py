@@ -43,6 +43,14 @@ from .lesson_preflight import (
 MAX_ROW_TEXT_CHARS = 512
 MAX_ROW_LIST_ITEMS = 20
 MAX_RETRIEVAL_ROWS = MAX_LESSON_RECORDS * 5
+# #3973 full-database repair: a Notion query page is not the database.
+# The live Lessons Learned database holds more rows than one page_size=25
+# response can carry, and the provider may return smaller pages. Follow
+# `next_cursor` until `has_more` is false, bounded by the row cap above
+# and by this page cap so a lying executor can never loop forever. Hitting
+# the page cap with pages still outstanding fails closed (a
+# LessonActivationError) instead of silently truncating the database tail.
+MAX_RETRIEVAL_PAGES = 5
 
 _LESSON_ID_PROPERTY = "Lesson ID"
 _TITLE_PROPERTY = "Lesson Learned"
@@ -443,8 +451,33 @@ def orchestrate_lesson_activation(
     else:
         query = build_filtered_query(request)
 
-    raw = execute_read(query)
-    rows = _extract_bounded_rows(raw)
+    # Exhaust every provider page up to the bounded row/page caps. A single
+    # first page is NOT the database: rows past the first page are real
+    # lessons, and silently dropping them would make CKR6 retrieval
+    # incomplete exactly when the database grows past one page. Follow-up
+    # pages carry only `start_cursor`; the real read adapter forwards the
+    # query body to the Notion data-source query endpoint, which accepts it.
+    rows: list[Mapping[str, Any]] = []
+    seen_cursors: set[str | None] = set()
+    cursor: str | None = None
+    for _page_index in range(MAX_RETRIEVAL_PAGES):
+        if cursor in seen_cursors:
+            raise LessonActivationError("repeated pagination cursor")
+        seen_cursors.add(cursor)
+        page_query = query if cursor is None else {**query, "start_cursor": cursor}
+        raw = execute_read(page_query)
+        rows.extend(_extract_bounded_rows(raw))
+        if len(rows) >= MAX_RETRIEVAL_ROWS:
+            rows = rows[:MAX_RETRIEVAL_ROWS]
+            break
+        has_more, next_cursor = _page_cursor(raw)
+        if not has_more:
+            break
+        if next_cursor is None:
+            raise LessonActivationError("paginated retrieval missing next cursor")
+        cursor = next_cursor
+    else:
+        raise LessonActivationError("paginated retrieval exceeded page bound")
 
     lessons: list[LessonRecordEvidence] = []
     for row in rows:
@@ -463,6 +496,25 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     if not isinstance(results, list):
         raise LessonActivationError("read executor result is missing 'results'")
     return [item for item in results if isinstance(item, Mapping)][:MAX_RETRIEVAL_ROWS]
+
+
+def _page_cursor(raw: Any) -> tuple[bool, str | None]:
+    """Validate one page's pagination state, or fail closed.
+
+    A missing ``has_more`` is a single-page (legacy executor) response.
+    ``has_more: true`` without a non-empty string ``next_cursor`` is
+    malformed: following it would loop, and ignoring it would silently
+    truncate the database.
+    """
+    if not isinstance(raw, Mapping):
+        raise LessonActivationError("read executor must return a mapping")
+    has_more = raw.get("has_more", False)
+    if type(has_more) is not bool:
+        raise LessonActivationError("read executor returned a non-boolean has_more")
+    next_cursor = raw.get("next_cursor")
+    if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
+        raise LessonActivationError("read executor returned a malformed next_cursor")
+    return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
 
 
 def _plain_text(rich_text: Any) -> str | None:
@@ -593,6 +645,42 @@ def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str,
         ref = text.strip()
         if not ref:
             continue
+        # A link annotation (what Notion makes clickable) must agree with
+        # the displayed text: a live row whose display text names one
+        # canonical ref while its link target points elsewhere is a spoof
+        # shape, so drop the item rather than admitting the display while
+        # the UI links somewhere else. Real API responses carry the link
+        # target as top-level `href` (and requests as nested `text.link`);
+        # the pre-repair writer emitted a top-level `link` key, so all
+        # three shapes are checked. Any present container that is malformed
+        # or disagrees with the displayed ref drops the item.
+        link_targets: list[str] = []
+        malformed_link = False
+        # Real API response field: `href` is always a string or null.
+        href = item.get("href")
+        if href is not None:
+            if isinstance(href, str) and href.strip():
+                link_targets.append(href.strip())
+            else:
+                malformed_link = True
+        # Legacy mock/pre-repair-writer shape: top-level `link` object.
+        legacy = item.get("link")
+        if legacy is not None:
+            if isinstance(legacy, Mapping) and isinstance(legacy.get("url"), str) and legacy["url"].strip():
+                link_targets.append(legacy["url"].strip())
+            else:
+                malformed_link = True
+        text_obj = item.get("text")
+        if isinstance(text_obj, Mapping):
+            nested = text_obj.get("link")
+            if nested is not None:
+                if isinstance(nested, Mapping) and isinstance(nested.get("url"), str) and nested["url"].strip():
+                    link_targets.append(nested["url"].strip())
+                else:
+                    malformed_link = True
+        if malformed_link or any(target != ref for target in link_targets):
+            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
+            continue
         if len(valid) >= MAX_SUPPORTING_REFS:
             dropped.append(ref[:MAX_ROW_TEXT_CHARS])
             continue
@@ -612,6 +700,17 @@ def _github_source_link(prop: Any) -> str | None:
         return None
     value = value.strip()
     if len(value) > MAX_ROW_TEXT_CHARS:
+        return None
+    # CKR6 full-database readback (2026-11-14): a `#` fragment names a
+    # sub-resource of a page, not a canonical resource -- one live lesson's
+    # primary was a pull-request review anchor (`.../pull/1858` plus a
+    # `#pullrequestreview-...` fragment) and was admitted as CURRENT.
+    # A review/comment anchor is not a canonical issue/PR resource, so it
+    # is rejected here (UNVERIFIABLE) rather than admitted as the lesson's
+    # provenance. Plain resource URLs are unaffected: blob-URL primaries
+    # (relied on by an existing test) and governance-path primaries still
+    # normalize as CURRENT.
+    if "#" in value:
         return None
     if not (
         value.startswith("https://github.com/")

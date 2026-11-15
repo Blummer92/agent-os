@@ -101,6 +101,55 @@ class WriterSupportingRefsTests(unittest.TestCase):
             self.assertEqual(execute(request, client)["status"], "unchanged")
             self.assertEqual(client.calls.count("write"), 1)
 
+    def test_supporting_ref_items_carry_clickable_link_annotations(self):
+        # Each GitHub ref must be its own rich_text item AND carry a link
+        # annotation with the same URL: the annotation is what Notion
+        # renders clickable. A bare plain-text URL sent through the API is
+        # not reliably linkified. The annotation belongs INSIDE the `text`
+        # object per the Notion rich_text schema; a top-level `link` key is
+        # not part of the API shape and must never be emitted.
+        with patch("scripts.agent_os_notion_lessons_write.catalog.LESSONS",
+                   {**LESSONS, REQUEST_ID: supporting_entry()}):
+            request = admit(
+                event(f"/agent-os notion-write {REQUEST_ID} LL-93 {REVISION}", number=3417),
+                **CONTEXT,
+            )
+            client = self._client_with_empty_supporting_field()
+            result = execute(request, client)
+            self.assertEqual(result["status"], "persisted")
+            self.assertTrue(result["readback_verified"])
+            sent = client.sent[0]["Supporting Source Links"]
+            self.assertEqual(len(sent["rich_text"]), len(SUPPORTING))
+            for item, ref in zip(sent["rich_text"], SUPPORTING):
+                self.assertEqual(item["text"]["content"], ref)
+                self.assertEqual(item["text"].get("link"), {"url": ref})
+                self.assertNotIn("link", item)
+            # The exact readback still succeeds with link annotations present.
+            self.assertEqual(
+                tuple(item["text"]["content"]
+                      for item in client.page["properties"]["Supporting Source Links"]["rich_text"]),
+                SUPPORTING,
+            )
+
+    def test_governance_ref_item_has_no_link_annotation(self):
+        # Repo-relative governance paths are not URLs: a `link` annotation
+        # requires a URL, so the item stays plain text.
+        with patch("scripts.agent_os_notion_lessons_write.catalog.LESSONS",
+                   {**LESSONS, REQUEST_ID: supporting_entry((GOVERNANCE_REF,))}):
+            request = admit(
+                event(f"/agent-os notion-write {REQUEST_ID} LL-93 {REVISION}", number=3417),
+                **CONTEXT,
+            )
+            client = self._client_with_empty_supporting_field()
+            result = execute(request, client)
+            self.assertEqual(result["status"], "persisted")
+            self.assertTrue(result["readback_verified"])
+            sent = client.sent[0]["Supporting Source Links"]
+            self.assertEqual(len(sent["rich_text"]), 1)
+            self.assertEqual(sent["rich_text"][0]["text"]["content"], GOVERNANCE_REF)
+            self.assertNotIn("link", sent["rich_text"][0])
+            self.assertNotIn("link", sent["rich_text"][0]["text"])
+
     def test_missing_live_schema_property_blocks_the_write(self):
         with patch("scripts.agent_os_notion_lessons_write.catalog.LESSONS",
                    {**LESSONS, REQUEST_ID: supporting_entry()}):
