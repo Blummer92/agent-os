@@ -431,3 +431,162 @@ def test_generic_python_testing_request_retains_broad_query():
     query = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
     assert "or" in query["filter"]["and"][-1]
     assert {"property": "Learning Type", "select": {"equals": "Testing lesson"}} in query["filter"]["and"][-1]["or"]
+
+
+# #3990 F1: real filter evaluation, not a stub that returns a lesson for
+# every non-OR query. Reproduce the independent QA's S1/S2 mixed-area cases.
+def _ckr6_filter_value(prop):
+    kind = prop.get("type")
+    if kind == "select":
+        return (prop.get("select") or {}).get("name")
+    if kind == "checkbox":
+        return prop.get("checkbox")
+    if kind == "multi_select":
+        return [entry["name"] for entry in prop.get("multi_select", ())]
+    if kind in ("title", "rich_text"):
+        return "".join(entry.get("plain_text", "") for entry in prop.get(kind, ()))
+    raise AssertionError("unexpected property type")
+
+
+def _ckr6_matches_provider_filter(row, expression):
+    if "and" in expression:
+        return all(_ckr6_matches_provider_filter(row, part) for part in expression["and"])
+    if "or" in expression:
+        return any(_ckr6_matches_provider_filter(row, part) for part in expression["or"])
+    value = _ckr6_filter_value(row["properties"][expression["property"]])
+    for kind in ("select", "checkbox"):
+        if kind in expression:
+            constraint = expression[kind]
+            if "equals" in constraint:
+                return value == constraint["equals"]
+            if "does_not_equal" in constraint:
+                return value != constraint["does_not_equal"]
+    if "multi_select" in expression:
+        return expression["multi_select"]["contains"] in value
+    if "title" in expression:
+        return expression["title"]["contains"] in value
+    raise AssertionError("unsupported provider filter")
+
+
+def _ckr6_area_row(n, area, *, relevant=False):
+    row = _lesson_row(f"LL-{n}")
+    row["properties"]["Area"] = _select(area)
+    row["properties"]["Learning Type"] = _select("Mistake")
+    row["properties"]["Lesson Learned"] = _title(
+        f"CKR6 mutation boundary guard {n}" if relevant else f"Generic lesson {n}"
+    )
+    row["properties"]["What To Do Next Time"] = _rich_text(
+        "Bind CKR6 mutation admission to the exact head."
+        if relevant else "Review general implementation guidance."
+    )
+    return row
+
+
+def _ckr6_filter_evaluating_reader(rows, calls):
+    def read(query):
+        calls.append(query)
+        filtered = [
+            row for row in rows
+            if _ckr6_matches_provider_filter(row, query["filter"])
+        ]
+        start = int(query.get("start_cursor") or 0)
+        size = query["page_size"]
+        page = filtered[start:start + size]
+        more = start + size < len(filtered)
+        return {
+            "results": page,
+            "has_more": more,
+            "next_cursor": str(start + size) if more else None,
+        }
+    return read
+
+
+def _ckr6_qa_request():
+    return request(
+        task_reference="PR #3989 CKR6 sanitized diagnostics artifact",
+        ecosystem_hints=("GitHub Actions", "CKR6 trusted owner request", "Notion learned lessons"),
+        language_hints=("Python", "YAML"),
+        capability_keywords=(
+            "CKR6 mutation boundary", "sanitized diagnostics artifact",
+            "exact-head binding", "fail-closed admission",
+        ),
+        target_path_hints=(".github/workflows/",),
+    )
+
+
+def test_ckr6_complementary_query_preserves_automation_lesson_recall():
+    req = _ckr6_qa_request()
+    first = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
+    second = build_escalation_query(req, RetrievalEscalation.EXACT_NARROW_LOOKUP)
+    testing = {"property": "Area", "select": {"equals": "Testing"}}
+    automation = {"property": "Area", "select": {"equals": "Automation"}}
+    dashboard = {"property": "Area", "select": {"equals": "Dashboard"}}
+    assert first["filter"]["and"][-1] == testing
+    assert second["filter"]["and"][-1] == {"or": [automation, dashboard]}
+    assert second["page_size"] == MAX_LESSON_RECORDS
+    assert first["filter"] != second["filter"]
+    rows = (
+        [_ckr6_area_row(i, "Testing") for i in range(1, 11)]
+        + [_ckr6_area_row(300, "Automation", relevant=True)]
+        + [_ckr6_area_row(400 + i, "Governance") for i in range(30)]
+    )
+    calls = []
+    result = orchestrate_lesson_retrieval(
+        req, execute_read=_ckr6_filter_evaluating_reader(rows, calls)
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-300",)
+    assert result.selection.selected[0].candidate.source_revision == "2026-11-04T12:00:00.000Z"
+    assert result.selection.selected[0].candidate.canonical_github_refs
+    assert len(calls) == 2
+    assert calls[0]["filter"]["and"][-1] == testing
+    assert calls[1]["filter"]["and"][-1] == {"or": [automation, dashboard]}
+
+
+def test_ckr6_complementary_query_retains_testing_first_cure():
+    req = _ckr6_qa_request()
+    rows = (
+        [_ckr6_area_row(i, "Testing") for i in range(1, 20)]
+        + [_ckr6_area_row(100, "Testing", relevant=True)]
+        + [_ckr6_area_row(200 + i, "Automation") for i in range(20)]
+    )
+    calls = []
+    result = orchestrate_lesson_retrieval(
+        req, execute_read=_ckr6_filter_evaluating_reader(rows, calls)
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-100",)
+    assert len(calls) == 1
+
+
+def test_ckr6_complementary_query_still_rejects_incomplete_automation_page():
+    req = _ckr6_qa_request()
+    rows = (
+        [_ckr6_area_row(i, "Testing") for i in range(1, 3)]
+        + [_ckr6_area_row(300 + i, "Automation") for i in range(MAX_LESSON_RECORDS + 1)]
+    )
+    calls = []
+    result = orchestrate_lesson_retrieval(
+        req, execute_read=_ckr6_filter_evaluating_reader(rows, calls)
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    assert len(calls) == 2
+
+
+def test_ckr6_exact_lookup_without_other_area_stays_finite():
+    req = request(
+        ecosystem_hints=(),
+        language_hints=(),
+        capability_keywords=("CKR6 mutation boundary",),
+    )
+    first = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
+    second = build_escalation_query(req, RetrievalEscalation.EXACT_NARROW_LOOKUP)
+    assert first["filter"]["and"][-1] == {
+        "property": "Area", "select": {"equals": "Testing"}
+    }
+    assert second["page_size"] == MAX_LESSON_RECORDS
+    assert second["filter"]["and"][-1] == {
+        "property": "Area", "select": {"equals": "Testing"}
+    }
