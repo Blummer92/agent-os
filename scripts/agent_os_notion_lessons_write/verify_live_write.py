@@ -1,34 +1,29 @@
 """Independent read-only verification of one already-authorized Notion write.
 
-This is a post-write observer, not a writer or a new trigger. It accepts only
-the writer's same-job bounded result, then performs a separate exact-page GET
-through the existing Notion read adapter. It never claims a write for an
-"unchanged" result, nor trusts a writer receipt without fresh canonical data.
+This is a pure read-only post-write observer invoked by the existing
+owner-authorized execution runner. It performs a separate exact-page GET
+through the canonical Notion reader. Matching state is not proof of write
+causality; unchanged results cannot claim a new write.
 """
 from __future__ import annotations
 
-import argparse
-import json
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any
 
 from .admission import notion_id
 from .catalog import LESSON_ID, lesson_for
 from .writer import _lesson_id, _page, _values
 
-_MAX_RESULT_BYTES = 16 * 1024
-_OK = frozenset({"verified-persisted", "no-new-write"})
-
-
 def _outcome(status: str, reason_code: str, *, read_performed: bool = False) -> dict[str, object]:
     return {
         "status": status,
         "reason_code": reason_code,
-        "independent_readback_verified": status == "verified-persisted",
-        "write_verified": status == "verified-persisted",
+        "independent_readback_verified": status == "verified-current-state",
+        "persisted_state_verified": status == "verified-current-state",
+        # State equality cannot prove that this particular write caused it.
+        "write_causality_established": False,
         "read_performed": read_performed,
-        "notion_write_performed": False,
+        "verification_write_performed": False,
         "publication_authorized": False,
         "activation_authorized": False,
     }
@@ -37,29 +32,35 @@ def _outcome(status: str, reason_code: str, *, read_performed: bool = False) -> 
 def verify_persisted_write(
     writer_result: object,
     client_factory: Callable[[str], Any],
+    *,
+    expected_request_id: str | None = None,
 ) -> dict[str, object]:
-    """Require writer persistence evidence AND a new exact-page provider GET.
+    """Verify current state after an authorized, reported write attempt.
 
-    The factory is not called for a missing/invalid receipt or an unchanged
-    lesson. Result fields are finite codes only; no provider rows, credentials,
-    exception messages, or arbitrary request text may enter the output.
+    No client is created for invalid or unchanged receipts. Only finite codes
+    are returned, never raw Notion properties, credentials or provider errors.
+    A matching page does NOT prove this execution caused the data to change.
     """
     if not isinstance(writer_result, Mapping):
         return _outcome("unverified", "invalid-writer-result")
     status = writer_result.get("status")
     if status == "unchanged":
-        if writer_result.get("write_attempts") == 0 and writer_result.get("readback_verified") is True:
+        if type(writer_result.get("write_attempts")) is int and writer_result["write_attempts"] == 0 and writer_result.get("readback_verified") is True:
             return _outcome("no-new-write", "writer-confirmed-unchanged")
         return _outcome("unverified", "invalid-unchanged-receipt")
     if status != "persisted":
         return _outcome("unverified", "writer-did-not-confirm-persistence")
-    if writer_result.get("write_attempts") != 1 or writer_result.get("readback_verified") is not True:
+    if (type(writer_result.get("write_attempts")) is not int
+            or writer_result["write_attempts"] != 1
+            or writer_result.get("readback_verified") is not True):
         return _outcome("unverified", "writer-receipt-incomplete")
 
     request_id = writer_result.get("request_id")
     page_id = writer_result.get("page_id")
     lesson_id = writer_result.get("lesson_id")
     revision = writer_result.get("revision")
+    if expected_request_id is not None and request_id != expected_request_id:
+        return _outcome("unverified", "writer-request-binding-mismatch")
     if (type(request_id) is not str or type(page_id) is not str
             or type(lesson_id) is not str or LESSON_ID.fullmatch(lesson_id) is None
             or type(revision) is not str or not revision):
@@ -92,33 +93,5 @@ def verify_persisted_write(
             return _outcome("unverified", "independent-content-mismatch", read_performed=True)
     except Exception:
         return _outcome("unverified", "independent-content-invalid", read_performed=True)
-    return _outcome("verified-persisted", "independent-exact-canonical-readback-confirmed", read_performed=True)
+    return _outcome("verified-current-state", "independent-exact-canonical-state-confirmed", read_performed=True)
 
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--writer-result", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args(argv)
-    try:
-        raw = args.writer_result.read_bytes()
-        if len(raw) > _MAX_RESULT_BYTES:
-            raise ValueError("bounded result exceeded")
-        writer_result = json.loads(raw)
-    except Exception:
-        writer_result = None
-
-    def live_client(request_id: str) -> object:
-        # Lazy credential access: only an eligible same-run persisted receipt
-        # reaches this path. Reuse the production read adapter, not a new token.
-        from .live import LiveLessonsClient
-        return LiveLessonsClient(request_id)
-
-    verified = verify_persisted_write(writer_result, live_client)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(verified, sort_keys=True) + "\n", encoding="utf-8")
-    return 0 if verified["status"] in _OK else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

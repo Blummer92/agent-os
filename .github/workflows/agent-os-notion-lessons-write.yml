@@ -40,7 +40,7 @@ jobs:
             --phase admit --event "$GITHUB_EVENT_PATH" \
             --output "$RUNNER_TEMP/agent-os-lessons-write/admission.json"
 
-      - name: Execute one bounded write and immediate canonical readback
+      - name: Execute one bounded write and two canonical readbacks
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
@@ -48,15 +48,6 @@ jobs:
           python -m scripts.agent_os_notion_lessons_write.runner \
             --phase execute --event "$GITHUB_EVENT_PATH" \
             --output "$RUNNER_TEMP/agent-os-lessons-write/result.json"
-
-      - name: Independently verify persisted lesson via a second canonical GET
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
-        run: |
-          python -m scripts.agent_os_notion_lessons_write.verify_live_write \
-            --writer-result "$RUNNER_TEMP/agent-os-lessons-write/result.json" \
-            --output "$RUNNER_TEMP/agent-os-lessons-write/verification.json"
 
       - name: Publish sanitized result summary
         if: ${{ always() }}
@@ -76,8 +67,8 @@ jobs:
               summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
               for key in ('reason_code', 'write_attempts', 'readback_verified', 'page_id', 'revision'):
                   summary.write(f'{key}: `{result.get(key)}`\n\n')
-              summary.write('independent_write_verification: `' + verification.get('status', 'not-run') + '`\n\n')
-              summary.write('write_verified: `' + str(verification.get('write_verified') is True) + '`\n\n')
+              summary.write('independent_state_verification: `' + verification.get('status', 'not-run') + '`\n\n')
+              summary.write('persisted_state_verified: `' + str(verification.get('persisted_state_verified') is True) + '`\n\n')
               summary.write('independent_reason_code: `' + verification.get('reason_code', 'not-run') + '`\n\n')
               prerequisites = result.get('activation_prerequisites')
               if isinstance(prerequisites, dict):
