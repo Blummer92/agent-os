@@ -11,6 +11,7 @@ unbounded raw Notion workspace scan.
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import Counter
 import re
 from typing import Any, Callable, Mapping
 
@@ -191,6 +192,24 @@ def orchestrate_lesson_retrieval(
     current_request = request
     accumulated: list[LessonRecordEvidence] = []
     result: LessonPreflightResult | None = None
+    observed_rows = 0
+    normalized_rows = 0
+    skipped = Counter()
+    read_count = 0
+
+    def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
+        # Only finite counts and static normalization reason names; no raw rows.
+        return replace(value, retrieval_diagnostics={
+            "read_count": read_count,
+            "observed_rows": observed_rows,
+            "normalized_rows": normalized_rows,
+            "skipped_rows": sum(skipped.values()),
+            "missing_identity_rows": skipped["missing-stable-identity"],
+            "missing_revision_rows": skipped["missing-verified-revision"],
+            "missing_source_guidance_rows": skipped["missing-activation-guidance"],
+            "ambiguous_metadata_rows": sum(count for reason, count in skipped.items() if reason.startswith("ambiguous-")),
+            "candidate_count": value.candidate_count,
+        })
 
     for _ in range(MAX_ESCALATION_STEPS):
         step = select_coding_knowledge(
@@ -199,8 +218,8 @@ def orchestrate_lesson_retrieval(
         ).recommended_escalation
         if step in {RetrievalEscalation.NONE, RetrievalEscalation.MANUAL_REVIEW}:
             if result is not None:
-                return result
-            return consume_lesson_preflight(current_request, ())
+                return with_diagnostics(result)
+            return with_diagnostics(consume_lesson_preflight(current_request, ()))
 
         if step is RetrievalEscalation.KNOWN_REFERENCE and not known_lesson_numbers(
             current_request.known_knowledge_refs
@@ -213,14 +232,17 @@ def orchestrate_lesson_retrieval(
         query = build_escalation_query(current_request, step)
         try:
             raw = execute_read(query)
+            read_count += 1
         except (ConnectionError, TimeoutError, RuntimeError) as exc:
-            return _unavailable_result(current_request, exc)
+            return with_diagnostics(_unavailable_result(current_request, exc))
 
         current_request = record_retrieval_attempt(current_request, step)
         rows = _extract_bounded_rows(raw)
+        observed_rows += len(rows)
         for row in rows:
             normalized = normalize_lesson_row(row)
             if isinstance(normalized, LessonRecordEvidence):
+                normalized_rows += 1
                 # R1 (#2425): accumulate keyed by full record equality.
                 # An identical record (same ID, same revision, same fields)
                 # collapses; a same-ID record that differs in any field is
@@ -228,17 +250,19 @@ def orchestrate_lesson_retrieval(
                 # the selector instead of being silently overwritten.
                 if normalized not in accumulated:
                     accumulated.append(normalized)
+            else:
+                skipped[normalized.reason] += 1
 
         bounded = _bound_relevant_lessons(current_request, accumulated)
         result = consume_lesson_preflight(current_request, bounded)
         if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
-            return result
+            return with_diagnostics(result)
         if result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW:
-            return result
+            return with_diagnostics(result)
 
     if result is None:
         raise RuntimeError("lesson retrieval bound was reached without a result")
-    return result
+    return with_diagnostics(result)
 
 
 __all__ = [

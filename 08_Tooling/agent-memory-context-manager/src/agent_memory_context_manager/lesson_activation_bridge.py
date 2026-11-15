@@ -199,6 +199,10 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
     capability_hints = _normalized(request.capability_keywords)
 
     clauses: list[dict[str, Any]] = []
+    # Only a finite exact CI/CKR6 hint maps to the existing Testing area.
+    # No arbitrary request prose is sent as a provider option identity.
+    if {"ckr6 mutation boundary", "fail-closed lesson preflight"} & capability_hints:
+        clauses.append({"property": _AREA_PROPERTY, "select": {"equals": "Testing"}})
     for area, ecosystem in sorted(_AREA_ECOSYSTEM.items()):
         if ecosystem.casefold() in ecosystem_hints:
             clauses.append({"property": _AREA_PROPERTY, "select": {"equals": area}})
@@ -221,7 +225,8 @@ def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str,
             clauses.append(
                 {"property": _APPLIES_TO_PROPERTY, "multi_select": {"contains": term}}
             )
-    return clauses
+    # Repeated canonical clauses must not consume the bounded query budget.
+    return list({str(clause): clause for clause in clauses}.values())
 
 
 def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:

@@ -106,3 +106,22 @@ def test_each_new_failed_attempt_requires_its_own_runtime_activation():
     assert second["retry_reentry_outcome"] == "consumed"
     assert first["mutation_admissible"] is True
     assert second["mutation_admissible"] is True
+
+
+def test_failed_repair_exposes_bounded_read_diagnostics_without_raw_rows():
+    result = _call(execute_read=lambda _query: {"results": [_lesson()]})
+    assert result["candidate_count"] == 1
+    assert result["retrieval_diagnostics"]["observed_rows"] == 1
+    assert result["retrieval_diagnostics"]["normalized_rows"] == 1
+    assert result["retrieval_diagnostics"]["read_count"] == 1
+    assert result["selection_reason_codes"] == ["knowledge-sufficient"]
+    assert "properties" not in str(result["retrieval_diagnostics"])
+    assert result["mutation_admissible"] is True
+
+
+def test_failed_repair_empty_read_reports_zero_candidates_and_stays_blocked():
+    result = _call(execute_read=lambda _query: {"results": []})
+    assert result["candidate_count"] == 0
+    assert result["retrieval_diagnostics"]["normalized_rows"] == 0
+    assert result["lesson_disposition"] == "no-relevant-lesson"
+    assert result["mutation_admissible"] is False
