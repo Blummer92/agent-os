@@ -117,6 +117,35 @@ response. Concurrency with external Notion clients is not atomic CAS. Titles tha
 have been renamed or semantically similar lessons require human reconciliation.
 Public evidence contains only bounded status, identifiers and revision.
 
+## Independent live persistence verification (reviewed addition)
+
+The owner-authorized `/agent-os notion-write` job already executes one
+write and an immediate canonical GET. Its existing offline unit tests prove
+that the mocked writer follows that contract; those tests do **not** prove a
+live Notion write happened.
+
+After a successful live writer execution, a separate **read-only** verification
+step uses the existing Notion reader to GET the exact returned page. It accepts
+only a trusted same-job `persisted` result with one attempted write and
+`readback_verified=true`, then checks the canonical destination, page ID,
+Lesson ID, exact revision and every reviewed catalog property. Only that
+second successful GET reports `verified-persisted` and `write_verified=true`.
+A mismatch, unavailable read or missing receipt is `unverified` and fails the
+job without retrying a mutation. A result of `unchanged` is explicitly
+`no-new-write` / `write_verified=false`.
+
+The verification step creates **no new write route** or credentials; it runs
+only inside the already owner-authorized writer job after an admitted create
+or update. It calls no create/update method. Its public summary contains
+only finite codes and booleans, never raw Notion properties or tokens.
+This stronger evidence still does not authorize lesson activation or prove
+CKR6 later selected/used the lesson.
+
+Ordinary CI tests use an injected fake client and cannot claim live
+persistence. Actual end-to-end proof requires a separately approved owner
+write request, a successful hosted verification step, and a live readback
+receipt for that exact request. No automatic canary write is permitted.
+
 ## Persistence versus CKR6 use
 
 A successful readback proves persistence only. The existing consumer additionally
