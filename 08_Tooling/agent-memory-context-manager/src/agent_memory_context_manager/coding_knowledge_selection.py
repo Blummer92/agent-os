@@ -399,6 +399,18 @@ def _match_candidate(
     if candidate_library:
         path_match = any(candidate_library in _norm(path) for path in request.target_path_hints)
 
+    # Explicit CKR6 mutation-boundary requests may match a lesson's verified
+    # title/guidance even when Notion's controlled vocabulary is generic.
+    # Require BOTH distinctive tokens, as whole words, in the lesson-owned
+    # text. This is relevance only, never eligibility or authorization.
+    import re
+    ci_request = "ckr6 mutation boundary" in capability_hints
+    if ci_request:
+        lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
+        if all(re.search(r"(?<![a-z0-9])" + term + r"(?![a-z0-9])", lesson_text)
+               for term in ("ckr6", "mutation")):
+            return 2, ("verified-ckr6-mutation-context-match",)
+
     if exact_library:
         reasons = ["exact-library-match"]
         if path_match:
