@@ -563,7 +563,7 @@ def test_ckr6_complementary_query_still_rejects_incomplete_automation_page():
     req = _ckr6_qa_request()
     rows = (
         [_ckr6_area_row(i, "Testing") for i in range(1, 3)]
-        + [_ckr6_area_row(300 + i, "Automation") for i in range(MAX_LESSON_RECORDS + 1)]
+        + [_ckr6_area_row(300 + i, "Automation") for i in range(MAX_RETRIEVAL_ROWS + 1)]
     )
     calls = []
     result = orchestrate_lesson_retrieval(
@@ -572,7 +572,7 @@ def test_ckr6_complementary_query_still_rejects_incomplete_automation_page():
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert len(calls) == 2
+    assert len(calls) == 1 + MAX_RETRIEVAL_PAGES
 
 
 def test_ckr6_exact_lookup_without_other_area_stays_finite():
