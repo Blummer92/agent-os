@@ -243,14 +243,14 @@ def test_not_needed_and_unbound_reader_diagnostics_stay_finite_and_zero_reads():
         specialized_knowledge_required=False, execute_read=lambda q: 1 / 0,
     )
     assert skipped["lesson_retrieval_status"] == "not-needed"
-    assert "read_count" in skipped["retrieval_diagnostics"]
-    assert skipped["retrieval_diagnostics"]["read_count"] == 0
-    assert skipped["retrieval_diagnostics"]["observed_rows"] == 0
+    # CKR11 exits before creating counters for not-needed work.
+    # Assert the exact empty diagnostic contract rather than defaulting a
+    # missing read_count to zero or fabricating a measured provider read.
+    assert skipped["retrieval_diagnostics"] == {}
     unbound = activate_issue_start_lesson_preflight(
         repository="Blummer92/agent-os", issue_number=1, task_reference="issue:#1",
         specialized_knowledge_required=True, execute_read=None,
     )
     assert unbound["lesson_retrieval_status"] == "insufficient"
-    assert "read_count" in unbound["retrieval_diagnostics"]
-    assert unbound["retrieval_diagnostics"]["read_count"] == 0
-    assert unbound["retrieval_diagnostics"]["observed_rows"] == 0
+    # An unavailable reader also exits before the counted-read loop.
+    assert unbound["retrieval_diagnostics"] == {}
