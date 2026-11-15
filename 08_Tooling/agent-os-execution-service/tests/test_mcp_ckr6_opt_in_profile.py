@@ -233,6 +233,18 @@ def test_wrapper_admits_consumed_sufficient_issue_start() -> None:
     assert result["ckr6_admits_boundary"] is True
     assert result["status"] == "sufficient"
     assert result["selected_lesson_ids"] == ["LL-87"]
+    assert result["selected_lessons"] == [{
+        "lesson_id": "LL-87",
+        "source_revision": "2026-08-24 13:45:32Z",
+        "selection_reason_codes": ["relevant"],
+    }]
+    assert result["handoff_projection"] == {
+        "known_facts": ["coding-knowledge-sufficiency:sufficient"],
+        "prior_decisions": [],
+        "allowed_inspect_first": [],
+        "stop_conditions": [],
+    }
+    assert result["source_authority"] == "advisory-only"
     assert result["substantial_hypothesis_admissible"] is True
     assert result["host_read_path_available"] is True
     _assert_no_authority(result)
@@ -264,6 +276,8 @@ def test_wrapper_denied_result_returns_stop_not_error() -> None:
     assert result["status"] == "manual-review"
     assert result["reason_codes"] == ["no-relevant-candidate"]
     assert result["selected_lesson_ids"] == []
+    assert result["selected_lessons"] == []
+    assert result["handoff_projection"]["known_facts"] == []
     assert result["substantial_hypothesis_admissible"] is False
     assert result["mutation_admissible"] is False
     assert result["host_read_path_available"] is True
@@ -302,6 +316,78 @@ def test_wrapper_returns_stop_on_api_failure() -> None:
     assert result["ckr6_admits_boundary"] is False
     assert result["host_read_path_available"] is False
     assert result["reason_codes"] == ["github-api-failure"]
+    _assert_no_authority(result)
+
+
+
+# --- CKR6 advisory handoff remains bound to trusted result evidence ---------
+
+@pytest.mark.parametrize("overrides", [
+    {"selected_lessons": []},
+    {"selected_lessons": [{
+        "lesson_id": "LL-87", "source_revision": "",
+        "selection_reason_codes": ["relevant"],
+    }]},
+    {"selected_lessons": [{
+        "lesson_id": "LL-other", "source_revision": "2026-08-24 13:45:32Z",
+        "selection_reason_codes": ["relevant"],
+    }]},
+    {"selected_lessons": [{
+        "lesson_id": "LL-87", "source_revision": "2026-08-24 13:45:32Z",
+        "selection_reason_codes": ["relevant"], "untrusted_raw_notion": "secret",
+    }]},
+    {"handoff_projection": {}},
+    {"handoff_projection": {
+        "known_facts": ["coding-knowledge-sufficiency:sufficient"],
+        "prior_decisions": [],
+        "allowed_inspect_first": [], "stop_conditions": [], "extra": [],
+    }},
+    {"handoff_projection": {
+        "known_facts": [1], "prior_decisions": [],
+        "allowed_inspect_first": [], "stop_conditions": [],
+    }},
+    {"handoff_projection": {
+        "known_facts": [], "prior_decisions": [],
+        "allowed_inspect_first": [], "stop_conditions": [],
+    }},
+])
+def test_wrapper_invalid_sufficient_handoff_fails_closed(overrides):
+    _install_reader([_comment(_result(**overrides))])
+    result = _consume()
+    assert result["ckr6_admits_boundary"] is False
+    assert result["reason_codes"] == ["ckr6-lesson-handoff-invalid"]
+    assert result["status"] == "manual-review"
+    assert result["selected_lesson_ids"] == []
+    assert result["selected_lessons"] == []
+    assert result["handoff_projection"]["known_facts"] == []
+    _assert_no_authority(result)
+
+
+def test_wrapper_verified_handoff_preserves_existing_projection_and_revision():
+    projection = {
+        "known_facts": [
+            "coding-knowledge-sufficiency:sufficient",
+            "coding-knowledge:LL-87",
+        ],
+        "prior_decisions": ["qualification:verified"],
+        "allowed_inspect_first": ["Blummer92/agent-os#2425"],
+        "stop_conditions": [],
+    }
+    _install_reader([_comment(_result(handoff_projection=projection))])
+    result = _consume()
+    assert result["ckr6_admits_boundary"] is True
+    assert result["handoff_projection"] == projection
+    assert result["selected_lessons"][0]["source_revision"] == "2026-08-24 13:45:32Z"
+    assert result["source_authority"] == "advisory-only"
+    _assert_no_authority(result)
+
+
+def test_wrapper_untrusted_result_never_projects_lessons():
+    _install_reader([_comment(_result(), login="outsider", account_id=12345)])
+    result = _consume()
+    assert result["ckr6_admits_boundary"] is False
+    assert result["selected_lessons"] == []
+    assert result["handoff_projection"]["known_facts"] == []
     _assert_no_authority(result)
 
 

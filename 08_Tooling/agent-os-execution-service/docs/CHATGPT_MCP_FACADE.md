@@ -171,6 +171,21 @@ one page of at most 100 comments with a 30-second timeout and an 8 MiB
 response bound enforced during the HTTP read; a result past page 1 is missed and fails closed as
 `ckr6-result-not-returned`.
 
+For an admitted, trusted result, the tool now preserves the existing CKR2
+`handoff_projection` (only `known_facts`, `prior_decisions`,
+`allowed_inspect_first`, `stop_conditions`) and the existing #3418
+`selected_lessons` identity/source-revision/selection-reason records alongside
+`selected_lesson_ids`. The projection is advisory-only, not new authority or
+raw Notion content. A `sufficient` result whose selected IDs/revisions or
+handoff projection are missing or inconsistent now returns
+`ckr6-lesson-handoff-invalid` STOP rather than success without usable context.
+Blocked/untrusted results project empty lesson context. The downstream host must
+put the verified projection into the existing governed context packet BEFORE
+forming a substantial repair hypothesis; retaining it in the MCP tool result
+alone does not prove that the native ChatGPT host consumed it. Lesson-use receipts
+remain separately required as evidence of applied/skipped decisions; a
+passing CKR6 gate does not prove lesson application.
+
 The wrapper's decision is execution-order only: `ckr6_admits_boundary: True`
 means the consumed result admits its own CKR6 boundary. All five authority
 flags in every return are literal `False`; admission grants no execution,

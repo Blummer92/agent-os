@@ -484,6 +484,8 @@ def _ckr6_result_decision(
     substantial_hypothesis_admissible: bool,
     mutation_admissible: bool,
     host_read_path_available: bool,
+    selected_lessons: list[dict[str, object]] | None = None,
+    handoff_projection: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     """Project one CKR6 boundary decision. All authority flags are literal False.
 
@@ -501,6 +503,14 @@ def _ckr6_result_decision(
         "status": status,
         "reason_codes": list(reason_codes),
         "selected_lesson_ids": list(selected_lesson_ids),
+        # The existing CKR2 projection and #3418 identity/revision fields.
+        # Empty on STOP: blocked results never leak an apparently usable lesson.
+        "selected_lessons": list(selected_lessons or []),
+        "handoff_projection": dict(handoff_projection or {
+            "known_facts": [], "prior_decisions": [],
+            "allowed_inspect_first": [], "stop_conditions": [],
+        }),
+        "source_authority": "advisory-only",
         "substantial_hypothesis_admissible": substantial_hypothesis_admissible,
         "mutation_admissible": mutation_admissible,
         "host_read_path_available": host_read_path_available,
@@ -537,6 +547,76 @@ def _ckr6_stop(
         mutation_admissible=False,
         host_read_path_available=host_read_path_available,
     )
+
+
+
+# The canonical CKR2 handoff already has this four-key vocabulary. Do not
+# invent a second context-packet schema or return raw Notion provider records.
+_CKR6_HANDOFF_FIELDS = frozenset({
+    "known_facts", "prior_decisions", "allowed_inspect_first", "stop_conditions",
+})
+_CKR6_SELECTED_PROVENANCE_FIELDS = frozenset({
+    "lesson_id", "source_revision", "selection_reason_codes",
+})
+
+
+def _verified_ckr6_lesson_handoff(
+    consumed: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, list[str]]]:
+    """Project canonical lesson context only after trusted R07 consumption.
+
+    The R07 adapter authenticates the result before this function is called.
+    This adds a narrow structural binding so a status='sufficient' result
+    cannot admit a host that lacks the selected lessons' exact revisions or
+    the usable context projection. Any inconsistency is a STOP, not an empty
+    but supposedly successful handoff.
+    """
+    projection = consumed.get("handoff_projection")
+    if not isinstance(projection, dict) or set(projection) != _CKR6_HANDOFF_FIELDS:
+        raise ValueError("CKR6 handoff projection missing or malformed")
+    clean_projection: dict[str, list[str]] = {}
+    for key in _CKR6_HANDOFF_FIELDS:
+        values = projection[key]
+        if (
+            type(values) is not list or len(values) > 32
+            or any(type(item) is not str or len(item) > 2048 for item in values)
+        ):
+            raise ValueError("CKR6 handoff projection contains invalid values")
+        clean_projection[key] = list(values)
+
+    selected = consumed.get("selected_lesson_ids")
+    provenance = consumed.get("selected_lessons")
+    if type(selected) is not list or type(provenance) is not list:
+        raise ValueError("CKR6 selected lesson provenance unavailable")
+    if len(selected) > 5 or len(provenance) > 5:
+        raise ValueError("CKR6 lesson handoff exceeds selection bound")
+    clean_provenance: list[dict[str, object]] = []
+    for record in provenance:
+        if not isinstance(record, dict) or set(record) != _CKR6_SELECTED_PROVENANCE_FIELDS:
+            raise ValueError("CKR6 lesson provenance fields invalid")
+        lesson_id = record.get("lesson_id")
+        revision = record.get("source_revision")
+        reasons = record.get("selection_reason_codes")
+        if (
+            type(lesson_id) is not str or not lesson_id.strip()
+            or type(revision) is not str or not revision.strip() or len(revision) > 128
+            or type(reasons) is not list or len(reasons) > 16
+            or any(type(reason) is not str or len(reason) > 128 for reason in reasons)
+        ):
+            raise ValueError("CKR6 lesson provenance values invalid")
+        clean_provenance.append({
+            "lesson_id": lesson_id,
+            "source_revision": revision,
+            "selection_reason_codes": list(reasons),
+        })
+    selected_ids = [record["lesson_id"] for record in clean_provenance]
+    if selected_ids != selected or len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("CKR6 lesson IDs do not bind to selected revisions")
+    if consumed.get("status") == "sufficient" and not selected_ids:
+        raise ValueError("CKR6 sufficient result lacks lesson revisions")
+    if consumed.get("status") == "sufficient" and not clean_projection["known_facts"]:
+        raise ValueError("CKR6 sufficient result lacks usable handoff context")
+    return clean_provenance, clean_projection
 
 
 @mcp.tool()
@@ -761,6 +841,20 @@ def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expect
             mutation_admissible=False,
             host_read_path_available=True,
         )
+    try:
+        selected_lessons, handoff_projection = _verified_ckr6_lesson_handoff(consumed)
+    except ValueError:
+        # A trusted sufficient result without an intact advisory projection
+        # cannot be used by the next agent. No partial/empty projection admit.
+        return _ckr6_stop(
+            repository=repository,
+            issue_number=issue_number,
+            operation=expected_operation,
+            request_comment_id=expected_request_comment_id,
+            attempt_id=expected_attempt_id,
+            reason_code="ckr6-lesson-handoff-invalid",
+            host_read_path_available=True,
+        )
     return _ckr6_result_decision(
         repository=repository,
         issue_number=issue_number,
@@ -771,6 +865,8 @@ def consume_agent_os_ckr6_result_tool(repository: str, issue_number: int, expect
         status=str(consumed.get("status")),
         reason_codes=list(reason_codes) if isinstance(reason_codes, list) else [],
         selected_lesson_ids=list(selected) if isinstance(selected, list) else [],
+        selected_lessons=selected_lessons,
+        handoff_projection=handoff_projection,
         substantial_hypothesis_admissible=consumed.get("substantial_hypothesis_admissible") is True,
         mutation_admissible=consumed.get("mutation_admissible") is True,
         host_read_path_available=True,
