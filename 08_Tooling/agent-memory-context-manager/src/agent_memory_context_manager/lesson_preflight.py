@@ -149,6 +149,8 @@ class LessonPreflightResult:
     handoff_projection: dict[str, list[str]]
     rejected_candidate_provenance: tuple[dict[str, str], ...] = ()
     selection: CodingKnowledgeSelectionResult | None = None
+    # Read-only, bounded per-request counters. Never retain provider rows or secrets.
+    retrieval_diagnostics: dict[str, int] = field(default_factory=dict)
     notion_write_performed: bool = field(default=False, init=False)
     github_write_performed: bool = field(default=False, init=False)
     authority_created: bool = field(default=False, init=False)
