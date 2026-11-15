@@ -399,6 +399,11 @@ def _match_candidate(
     if candidate_library:
         path_match = any(candidate_library in _norm(path) for path in request.target_path_hints)
 
+    if exact_library:
+        reasons = ["exact-library-match"]
+        if path_match:
+            reasons.append("target-path-match")
+        return 3, tuple(reasons)
     # Explicit CKR6 mutation-boundary requests may match a lesson's verified
     # title/guidance even when Notion's controlled vocabulary is generic.
     # Require BOTH distinctive tokens, as whole words, in the lesson-owned
@@ -411,11 +416,6 @@ def _match_candidate(
                for term in ("ckr6", "mutation")):
             return 2, ("verified-ckr6-mutation-context-match",)
 
-    if exact_library:
-        reasons = ["exact-library-match"]
-        if path_match:
-            reasons.append("target-path-match")
-        return 3, tuple(reasons)
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
     if path_match:
