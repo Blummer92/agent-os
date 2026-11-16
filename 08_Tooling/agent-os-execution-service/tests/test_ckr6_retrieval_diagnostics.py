@@ -479,3 +479,60 @@ def test_failed_repair_artifact_values_unchanged_alongside_issue_start(monkeypat
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
     assert sink[0]["read_count"] == 3
     _assert_partitioned_row_bound_calls(reader.calls)
+
+def test_read_budget_stop_is_distinguishable_and_still_fails_closed(monkeypatch, tmp_path):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 2)
+    reader = _counting({"results": [_row(n) for n in range(25)],
+                        "has_more": True, "next_cursor": CURSOR})
+    result, sink = _run(monkeypatch, reader)
+    assert result["mutation_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert sink[0]["incomplete_reason_code"] == "read-budget-exceeded"
+    assert sink[0]["read_count"] == 2
+    assert sink[0]["terminal_query_bucket"] == "area:Automation"
+    target = tmp_path / "budget.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
+    assert json.loads(target.read_text())["incomplete_reason_code"] == "read-budget-exceeded"
+    assert set(result) <= bridge.RESULT_FIELDS
+
+
+def test_terminal_query_bucket_survives_only_sanitized_diagnostic_artifact(monkeypatch, tmp_path):
+    reader = _counting({"results": [_row(n) for n in range(25)],
+                        "has_more": True, "next_cursor": CURSOR})
+    result, sink = _run(monkeypatch, reader)
+    assert result["mutation_admissible"] is False
+    assert sink[0]["terminal_query_bucket"] == "area:Automation/type:Deployment lesson"
+    target = tmp_path / "bucket.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
+    assert json.loads(target.read_text())["terminal_query_bucket"] == sink[0]["terminal_query_bucket"]
+    assert CURSOR not in target.read_text()
+    assert "terminal_query_bucket" not in json.dumps(result)
+    assert set(result) <= bridge.RESULT_FIELDS
+
+
+def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path):
+    base = {
+        "retrieval_reason_code": "lesson-read-incomplete",
+        "incomplete_reason_code": "row-bound-exceeded",
+        "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
+        "skipped_rows": 0, "candidate_count": 0,
+        "terminal_query_bucket": "area:Testing/type:Testing lesson",
+    }
+    path = tmp_path / "bucket.json"
+    assert bridge.write_retrieval_diagnostics_artifact(base, path)
+    before = path.read_text()
+    for attack in (SENSITIVE_SAMPLE, CURSOR, 4, True, None, ["Testing"]):
+        hostile = {**base, "terminal_query_bucket": attack}
+        assert bridge.write_retrieval_diagnostics_artifact(hostile, path) is False
+        assert path.read_text() == before
+        projected = bridge.retrieval_diagnostics_projection({
+            "retrieval_diagnostics": hostile,
+            "selection_reason_codes": ["lesson-read-incomplete"],
+        })
+        assert projected["terminal_query_bucket"] == "unobserved"
+        assert SENSITIVE_SAMPLE not in json.dumps(projected)
+    assert "terminal_query_bucket" not in bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": {"read_count": 2},
+    })
+
