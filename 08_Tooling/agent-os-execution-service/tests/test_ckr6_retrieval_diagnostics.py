@@ -480,6 +480,23 @@ def test_failed_repair_artifact_values_unchanged_alongside_issue_start(monkeypat
     assert sink[0]["read_count"] == 3
     _assert_partitioned_row_bound_calls(reader.calls)
 
+def test_read_budget_stop_is_distinguishable_and_still_fails_closed(monkeypatch, tmp_path):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 2)
+    reader = _counting({"results": [_row(n) for n in range(25)],
+                        "has_more": True, "next_cursor": CURSOR})
+    result, sink = _run(monkeypatch, reader)
+    assert result["mutation_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert sink[0]["incomplete_reason_code"] == "read-budget-exceeded"
+    assert sink[0]["read_count"] == 2
+    assert sink[0]["terminal_query_bucket"] == "area:Automation"
+    target = tmp_path / "budget.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
+    assert json.loads(target.read_text())["incomplete_reason_code"] == "read-budget-exceeded"
+    assert set(result) <= bridge.RESULT_FIELDS
+
+
 def test_terminal_query_bucket_survives_only_sanitized_diagnostic_artifact(monkeypatch, tmp_path):
     reader = _counting({"results": [_row(n) for n in range(25)],
                         "has_more": True, "next_cursor": CURSOR})
@@ -518,5 +535,4 @@ def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path
     assert "terminal_query_bucket" not in bridge.retrieval_diagnostics_projection({
         "retrieval_diagnostics": {"read_count": 2},
     })
-
 
