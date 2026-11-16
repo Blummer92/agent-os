@@ -650,3 +650,30 @@ def test_4011_no_response_does_not_invent_page_signature(monkeypatch):
     _assert_fail_closed(result)
     assert not any(k.startswith("terminal_page_") for k in sink[0])
     assert "PRIVATE" not in json.dumps(result) + json.dumps(sink)
+
+
+def test_4011_direct_summary_writer_refuses_hostile_or_partial_page_signature(tmp_path):
+    valid = {
+        "retrieval_reason_code": "lesson-read-incomplete",
+        "incomplete_reason_code": "row-bound-exceeded",
+        "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
+        "skipped_rows": 0, "candidate_count": 0,
+        "terminal_query_bucket": "workspace",
+        "terminal_page_row_count_bucket": "25",
+        "terminal_page_has_more": "true",
+        "terminal_page_cursor_present": True,
+    }
+    target = tmp_path / "summary.md"
+    env = {"GITHUB_STEP_SUMMARY": str(target)}
+    assert bridge.write_retrieval_diagnostics_summary(valid, env) is True
+    safe_text = target.read_text()
+    for invalid in (
+        {**valid, "terminal_page_row_count_bucket": SENSITIVE_SAMPLE},
+        {**valid, "terminal_page_has_more": CURSOR},
+        {**valid, "terminal_page_cursor_present": "yes"},
+        {**valid, "incomplete_reason_code": "none"},
+        {k: v for k, v in valid.items() if k != "terminal_page_has_more"},
+    ):
+        assert bridge.write_retrieval_diagnostics_summary(invalid, env) is False
+        assert target.read_text() == safe_text
+    assert CURSOR not in safe_text and SENSITIVE_SAMPLE not in safe_text
