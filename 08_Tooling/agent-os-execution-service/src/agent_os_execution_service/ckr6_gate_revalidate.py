@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -318,12 +319,23 @@ def evaluate(event, token, *, postback_complete=False):
     if run_id is None:
         raise RevalidationBlocked("gate-run-missing")
     if postback_complete:
-        run = api("GET", f"/actions/runs/{run_id}", token)
-        if (not isinstance(run, dict) or run.get("id") != run_id
-                or type(run.get("run_attempt")) is not int):
-            raise RevalidationBlocked("gate-run-invalid")
-        if run.get("status") != "completed":
-            raise RevalidationBlocked("gate-run-in-progress")
+        # Wait only for the already verified exact-head gate run. The first
+        # read is immediate; at most twelve further reads are allowed.
+        # No rerun is posted while the gate remains active.
+        for poll_index in range(13):
+            run = api("GET", f"/actions/runs/{run_id}", token)
+            if (not isinstance(run, dict) or run.get("id") != run_id
+                    or type(run.get("run_attempt")) is not int
+                    or run["run_attempt"] < 1):
+                raise RevalidationBlocked("gate-run-invalid")
+            state = run.get("status")
+            if state == "completed":
+                break
+            if state not in {"queued", "in_progress", "waiting", "pending", "requested"}:
+                raise RevalidationBlocked("gate-run-invalid")
+            if poll_index == 12:
+                raise RevalidationBlocked("gate-run-in-progress")
+            time.sleep(5)
         # Receipt-correlated idempotency on the START of the latest gate
         # attempt (run_started_at is the latest attempt's start; created_at
         # is not). An attempt that started before this request's result
