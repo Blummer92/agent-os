@@ -11,13 +11,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-os-ckr11-stage1-probe
+  group: agent-os-ckr11-stage1-probe-${{ github.actor_id }}-${{ github.triggering_actor }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   probe:
     name: Owner-only bounded CKR11 lesson inventory snapshot
-    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'Blummer92' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'Blummer92' && github.actor_id == 32861845 && github.triggering_actor == 'Blummer92' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

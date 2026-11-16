@@ -506,9 +506,27 @@ class OwnerDispatchBindingTests(unittest.TestCase):
         cond = self.condition()
         self.assertIn("github.event_name == 'workflow_dispatch'", cond)
         self.assertIn("github.actor == 'Blummer92'", cond)
+        self.assertIn("github.actor_id == 32861845", cond)
+        self.assertIn("github.triggering_actor == 'Blummer92'", cond)
         self.assertIn("github.ref == 'refs/heads/main'", cond)
         self.assertNotIn("||", cond)
         self.assertNotIn("issue.number", cond)
+
+    def test_non_owner_rerun_cannot_reuse_original_actor_authority(self):
+        # github.actor persists across reruns, triggering_actor identifies the re-run initiator.
+        condition = self.condition()
+        self.assertIn("github.actor_id == 32861845", condition)
+        self.assertIn("github.triggering_actor == 'Blummer92'", condition)
+        self.assertNotIn("||", condition)
+
+    def test_concurrency_cannot_mix_other_actors_with_owner_run(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "group: agent-os-ckr11-stage1-probe-"
+            "${{ github.actor_id }}-${{ github.triggering_actor }}-${{ github.ref }}",
+            text,
+        )
+        self.assertIn("cancel-in-progress: false", text)
 
     def test_manifest_is_static_and_hash_guard_still_precedes_secrets(self):
         text = WORKFLOW.read_text(encoding="utf-8")
