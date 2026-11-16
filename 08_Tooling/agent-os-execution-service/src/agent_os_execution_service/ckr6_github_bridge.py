@@ -458,6 +458,7 @@ _INCOMPLETE_REASON_CODES = frozenset({
     "page-bound-exceeded",
     "missing-cursor",
     "repeated-cursor",
+    "read-budget-exceeded",
     "malformed-page",
     "malformed-pagination",
     "unknown-incomplete",
