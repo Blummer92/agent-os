@@ -1,0 +1,81 @@
+# TEMPORARY one-shot read-only probe. Remove after the single approved run.
+# Output is counts by Area and Learning Type. Artifacts and the step summary may be
+# visible in public GitHub Actions. No row content, IDs, titles, URLs or cursors are written.
+# issue_comment runs the default-branch copy, so this file only fires after it is merged.
+# Trigger is bound to ONE dedicated issue number. The value 0 is an unbound sentinel that never matches
+# (issue numbers are positive); the real number is substituted only after the owner creates the issue.
+# This is not a global one-shot: each new owner comment on that issue starts a separate bounded read-only run.
+name: Agent OS CKR11 Stage-1 Probe
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-ckr11-stage1-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: One-shot read-only CKR11 retrieval-shape probe
+    if: ${{ github.event.issue.pull_request == null && github.event.issue.number == 3995 && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os ckr11-stage1-probe ') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Bind the exact manifest hash from the owner comment
+        id: bind
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re
+          m = re.fullmatch(r"/agent-os ckr11-stage1-probe ([0-9a-f]{64})", os.environ["COMMENT_BODY"].strip())
+          if not m:
+              raise SystemExit("comment must be exactly: /agent-os ckr11-stage1-probe <64-hex manifest sha256>")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("manifest_sha256=" + m.group(1) + "\n")
+          PY
+      - name: Verify reviewed probe.py SHA-256 before any secret or import
+        env:
+          EXPECTED_PROBE_SHA256: d3a5e23a1bd9ec3f9fe297a1a148e8b6b8f51a56ee6c14ec21d7f8d13e68f755
+        run: |
+          set -euo pipefail
+          echo "${EXPECTED_PROBE_SHA256}  scripts/agent_os_ckr11_stage1_probe/probe.py" | sha256sum --check --strict -
+      - name: Offline probe tests (no secrets in this step)
+        env:
+          PYTHONPATH: 08_Tooling/workflow-scheduler/src:.
+        run: python -m unittest tests.agent_os_ckr11_stage1_probe.test_probe
+      - name: Run the bounded read-only probe (at most 14 query POSTs)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+          PYTHONPATH: 08_Tooling/workflow-scheduler/src:.
+          EXPECTED: ${{ steps.bind.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ckr11-stage1"
+          python -m scripts.agent_os_ckr11_stage1_probe.probe \
+            --output "$RUNNER_TEMP/ckr11-stage1/result.json" \
+            --expected-manifest-sha256 "$EXPECTED"
+      - name: Publish sanitized counts
+        if: ${{ always() }}
+        run: |
+          f="$RUNNER_TEMP/ckr11-stage1/result.json"
+          { echo '## CKR11 stage-1 probe (sanitized counts only; may be public)'; if [ -f "$f" ]; then echo '```json'; cat "$f"; echo '```'; else echo 'No result file.'; fi; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: ckr11-stage1-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr11-stage1/result.json
+          if-no-files-found: warn
+          retention-days: 3
