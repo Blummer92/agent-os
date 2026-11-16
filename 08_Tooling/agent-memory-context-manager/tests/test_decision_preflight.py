@@ -261,3 +261,27 @@ def test_no_external_mutation_or_second_authority_is_created():
     assert result.notion_write_performed is False
     assert result.github_write_performed is False
     assert result.authority_created is False
+
+
+def test_explicit_no_retrieval_overrides_architecture_sensitive_signals():
+    req = request(specialized_knowledge_required=False)
+    plan = plan_decision_preflight(req)
+    assert plan.retrieval_required is False
+    assert plan.recommended_escalation is RetrievalEscalation.NONE
+
+    result = consume_decision_preflight(req, (decision(),))
+    assert result.decision_retrieval_status is DecisionRetrievalStatus.NOT_NEEDED
+    assert result.candidate_count == 0
+
+
+def test_stale_and_conflicting_decisions_are_counted():
+    for overrides in (
+        {"currentness": KnowledgeCurrentness.UNVERIFIABLE},
+        {"authority_conflict": True},
+    ):
+        result = consume_decision_preflight(
+            request(), (decision(**overrides),)
+        )
+        assert result.decision_retrieval_status is DecisionRetrievalStatus.MANUAL_REVIEW
+        assert result.selected_count == 0
+        assert result.superseded_or_stale_count == 1
