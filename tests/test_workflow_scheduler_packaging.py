@@ -317,7 +317,18 @@ def _loader_aliases(tree: ast.Module) -> set[str]:
     return aliases
 
 
-_ALLOWED_IMPORTERS = (ALLOWED_IMPORTER, ALLOWED_IMPORTER_2)
+# Temporary #3995 S8 diagnostic exception: exact one importer and three symbols.
+# This entry is removed with the six-file probe teardown; all other scripts
+# remain prohibited from importing workflow_scheduler.
+S8_PROBE_IMPORTER = SCRIPTS_ROOT / "agent_os_ckr11_stage1_probe" / "probe.py"
+S8_PROBE_ALLOWED_IMPORTS = frozenset({
+    ("workflow_scheduler.adapters.notion_readonly_adapter", "NOTION_API_BASE"),
+    ("workflow_scheduler.adapters.notion_readonly_adapter", "NotionReadOnlyAdapter"),
+    ("workflow_scheduler.adapters.notion_readonly_adapter", "_default_http_post_read"),
+    ("workflow_scheduler.models", "Task"),
+})
+
+_ALLOWED_IMPORTERS = (ALLOWED_IMPORTER, ALLOWED_IMPORTER_2, S8_PROBE_IMPORTER)
 
 
 def test_only_the_allowlisted_scripts_module_imports_workflow_scheduler() -> None:
@@ -328,11 +339,30 @@ def test_only_the_allowlisted_scripts_module_imports_workflow_scheduler() -> Non
     ]
     assert offending == []
 
+    # The temporary S8 probe must import ONLY the exact reviewed symbols.
+    # Do not grant an open-ended importer exemption or allow unrelated paths.
+    assert S8_PROBE_IMPORTER.is_file()
+    assert set(_workflow_scheduler_imports(S8_PROBE_IMPORTER)) == S8_PROBE_ALLOWED_IMPORTS
+
     # Each allowlist entry exists only to serve its governed call (#752 WSC3,
     # #754 packet preparation). If that call is ever removed, the exception
     # must be removed with it.
     assert _workflow_scheduler_imports(ALLOWED_IMPORTER)
     assert _workflow_scheduler_imports(ALLOWED_IMPORTER_2)
+
+
+def test_s8_temporary_import_allowlist_is_exact_and_non_expandable() -> None:
+    """Only the five-file probe's fixed dependency set is temporarily permitted."""
+    assert S8_PROBE_IMPORTER.relative_to(ROOT).as_posix() == (
+        "scripts/agent_os_ckr11_stage1_probe/probe.py"
+    )
+    assert len(S8_PROBE_ALLOWED_IMPORTS) == 4
+    assert set(_workflow_scheduler_imports(S8_PROBE_IMPORTER)) == S8_PROBE_ALLOWED_IMPORTS
+    assert S8_PROBE_IMPORTER in _ALLOWED_IMPORTERS
+    assert len(_ALLOWED_IMPORTERS) == 3
+    assert S8_PROBE_ALLOWED_IMPORTS != S8_PROBE_ALLOWED_IMPORTS | {
+        ("workflow_scheduler.adapters.notion_readonly_adapter", "execute_write")
+    }
 
 
 def test_allowlisted_importer_uses_only_the_permitted_module_and_symbols() -> None:
