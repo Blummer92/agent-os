@@ -218,7 +218,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Install existing Agent OS runtime in isolated environment
+      - name: Install revalidation runtime in isolated environment
         run: |
           python3 -m venv "$RUNNER_TEMP/ckr6-revalidation-venv"
           "$RUNNER_TEMP/ckr6-revalidation-venv/bin/python" -m pip install \
