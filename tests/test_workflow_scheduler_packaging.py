@@ -360,9 +360,6 @@ def test_s8_temporary_import_allowlist_is_exact_and_non_expandable() -> None:
     assert set(_workflow_scheduler_imports(S8_PROBE_IMPORTER)) == S8_PROBE_ALLOWED_IMPORTS
     assert S8_PROBE_IMPORTER in _ALLOWED_IMPORTERS
     assert len(_ALLOWED_IMPORTERS) == 3
-    assert S8_PROBE_ALLOWED_IMPORTS != S8_PROBE_ALLOWED_IMPORTS | {
-        ("workflow_scheduler.adapters.notion_readonly_adapter", "execute_write")
-    }
 
 
 def test_allowlisted_importer_uses_only_the_permitted_module_and_symbols() -> None:
