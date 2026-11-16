@@ -536,3 +536,117 @@ def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path
         "retrieval_diagnostics": {"read_count": 2},
     })
 
+
+
+# #4011: New page fields are emitted only in separate sanitized artifacts.
+@pytest.mark.parametrize(("count", "has_more", "row_bucket", "more_bucket", "cursor"), [
+    (25, True, "25", "true", True),
+    (26, False, "over-25", "false", False),
+])
+def test_4011_two_terminal_page_shapes_are_finite_and_fail_closed(
+    monkeypatch, tmp_path, count, has_more, row_bucket, more_bucket, cursor
+):
+    reader = _counting({
+        "results": [_row(n) for n in range(count)],
+        "has_more": has_more,
+        "next_cursor": CURSOR if has_more else None,
+    })
+    result, sink = _run(monkeypatch, reader)
+    _assert_fail_closed(result)
+    assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
+    assert sink[0]["terminal_page_row_count_bucket"] == row_bucket
+    assert sink[0]["terminal_page_has_more"] == more_bucket
+    assert sink[0]["terminal_page_cursor_present"] is cursor
+    assert "terminal_page_row_count_bucket" not in json.dumps(result)
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
+    written = json.loads(target.read_text())
+    assert written["terminal_page_row_count_bucket"] == row_bucket
+    assert written["terminal_page_has_more"] == more_bucket
+    assert written["terminal_page_cursor_present"] is cursor
+    assert CURSOR not in target.read_text()
+    assert SENSITIVE_SAMPLE not in target.read_text()
+    summary = tmp_path / "summary.md"
+    assert bridge.write_retrieval_diagnostics_summary(
+        sink[0], {"GITHUB_STEP_SUMMARY": str(summary)}
+    )
+    assert CURSOR not in summary.read_text()
+
+
+def test_4011_legacy_success_has_no_terminal_page_metadata(monkeypatch, tmp_path):
+    result, sink = _run(monkeypatch, _counting({
+        "results": [_row(1)], "has_more": False
+    }))
+    assert result["status"] == "sufficient"
+    assert not any(key.startswith("terminal_page_") for key in sink[0])
+    path = tmp_path / "normal.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], path)
+    assert not any(key.startswith("terminal_page_") for key in json.loads(path.read_text()))
+
+
+def test_4011_projection_drops_partial_invalid_or_untrusted_page_signature(tmp_path):
+    valid = {
+        "retrieval_reason_code": "lesson-read-incomplete",
+        "incomplete_reason_code": "row-bound-exceeded",
+        "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
+        "skipped_rows": 0, "candidate_count": 0,
+        "terminal_query_bucket": "workspace",
+        "terminal_page_row_count_bucket": "25",
+        "terminal_page_has_more": "true",
+        "terminal_page_cursor_present": True,
+    }
+    dest = tmp_path / "sanitized.json"
+    assert bridge.write_retrieval_diagnostics_artifact(valid, dest)
+    before = dest.read_text()
+    for name, bad in [
+        ("terminal_page_row_count_bucket", "26:" + SENSITIVE_SAMPLE),
+        ("terminal_page_row_count_bucket", True),
+        ("terminal_page_has_more", CURSOR),
+        ("terminal_page_has_more", 1),
+        ("terminal_page_cursor_present", "yes"),
+        ("terminal_page_cursor_present", 1),
+    ]:
+        damaged = {**valid, name: bad}
+        assert bridge.write_retrieval_diagnostics_artifact(damaged, dest) is False
+        assert dest.read_text() == before
+        projected = bridge.retrieval_diagnostics_projection({
+            "retrieval_diagnostics": damaged,
+            "selection_reason_codes": ["lesson-read-incomplete"],
+        })
+        assert projected is not None
+        assert not any(k.startswith("terminal_page_") for k in projected)
+    for absent in valid.keys() & bridge._TERMINAL_PAGE_KEYS:
+        partial = {k: v for k, v in valid.items() if k != absent}
+        assert bridge.write_retrieval_diagnostics_artifact(partial, dest) is False
+        assert dest.read_text() == before
+    assert bridge.write_retrieval_diagnostics_artifact(
+        {**valid, "raw_cursor": CURSOR}, dest
+    ) is False
+    assert dest.read_text() == before
+    assert CURSOR not in dest.read_text()
+
+
+def test_4011_invalid_incomplete_code_blocks_page_fields(tmp_path):
+    valid = {
+        "retrieval_reason_code": "none", "incomplete_reason_code": "none",
+        "read_count": 1, "observed_rows": 0, "normalized_rows": 0,
+        "skipped_rows": 0, "candidate_count": 0,
+        "terminal_query_bucket": "workspace",
+        "terminal_page_row_count_bucket": "25",
+        "terminal_page_has_more": "true",
+        "terminal_page_cursor_present": True,
+    }
+    target = tmp_path / "invalid.json"
+    assert bridge.write_retrieval_diagnostics_artifact(valid, target) is False
+    projected = bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": valid, "selection_reason_codes": [],
+    })
+    assert projected is not None
+    assert "terminal_page_row_count_bucket" not in projected
+
+
+def test_4011_no_response_does_not_invent_page_signature(monkeypatch):
+    result, sink = _run(monkeypatch, _counting(ConnectionError("PRIVATE NO RESPONSE")))
+    _assert_fail_closed(result)
+    assert not any(k.startswith("terminal_page_") for k in sink[0])
+    assert "PRIVATE" not in json.dumps(result) + json.dumps(sink)
