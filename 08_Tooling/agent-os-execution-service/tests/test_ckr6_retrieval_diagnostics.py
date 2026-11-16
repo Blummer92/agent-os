@@ -77,6 +77,20 @@ def _counting(response_or_exc):
     return execute_read
 
 
+def _assert_partitioned_row_bound_calls(calls):
+    """A broad overflow is retried only through finite, narrower partitions."""
+    assert len(calls) == 3
+    assert all(query["page_size"] == 25 for query in calls)
+    assert all("start_cursor" not in query for query in calls)
+    broad, area, cell = [query["filter"]["and"] for query in calls]
+    assert "or" in broad[-1]
+    assert area[-1] == {"property": "Area", "select": {"equals": "Automation"}}
+    assert cell[-2:] == [
+        {"property": "Area", "select": {"equals": "Automation"}},
+        {"property": "Learning Type", "select": {"equals": "Deployment lesson"}},
+    ]
+
+
 def _assert_fail_closed(result):
     assert result["status"] == "insufficient"
     assert result["selected_lesson_ids"] == []
@@ -110,7 +124,7 @@ def test_case_b_incomplete_pagination_is_distinct_and_fail_closed(monkeypatch):
     _assert_fail_closed(result)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
-    assert len(reader.calls) == 1  # no unauthorized continuation after the STOP
+    _assert_partitioned_row_bound_calls(reader.calls)  # no cursor continuation; bounded STOP
     assert CURSOR not in json.dumps(result) + json.dumps(sink)
 
 
@@ -188,7 +202,7 @@ def test_trusted_result_schema_and_default_behavior_unchanged(monkeypatch):
 
 
 @pytest.mark.parametrize(("scenario", "expected_code", "expected_reads"), [
-    ("row-bound", "row-bound-exceeded", 1),
+    ("row-bound", "row-bound-exceeded", 3),
     ("page-bound", "page-bound-exceeded", 5),
     ("missing-cursor", "missing-cursor", 1),
     ("repeated-cursor", "repeated-cursor", 2),
@@ -221,6 +235,8 @@ def test_incomplete_subreasons_are_finite_and_fail_closed(
     result, sink = _run(monkeypatch, read)
     _assert_fail_closed(result)
     assert len(calls) == expected_reads
+    if scenario == "row-bound":
+        _assert_partitioned_row_bound_calls(calls)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
     assert sink[0]["incomplete_reason_code"] == expected_code
     assert "incomplete_reason_code" not in json.dumps(result)
@@ -276,7 +292,8 @@ def test_sanitized_retrieval_diagnostics_artifact_tracks_exact_failure(tmp_path,
     data = json.loads(target.read_text())
     assert data["retrieval_reason_code"] == "lesson-read-incomplete"
     assert data["incomplete_reason_code"] == "row-bound-exceeded"
-    assert data["read_count"] == 1
+    assert data["read_count"] == 3
+    _assert_partitioned_row_bound_calls(reader.calls)
     assert CURSOR not in target.read_text()
     assert SENSITIVE_SAMPLE not in target.read_text()
     assert "retrieval_diagnostics" not in json.dumps(result)
@@ -418,14 +435,14 @@ def test_issue_start_incomplete_page_reaches_artifact_with_row_bound_and_read_co
     result, sink = _run_issue_start(monkeypatch, reader)
     assert result["status"] == "insufficient"
     assert result["selected_lesson_ids"] == []
-    assert len(reader.calls) == 1
+    _assert_partitioned_row_bound_calls(reader.calls)
     _assert_issue_start_governance(result)
     target = tmp_path / "retrieval-diagnostics.json"
     assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
     data = json.loads(target.read_text())
     assert data["retrieval_reason_code"] == "lesson-read-incomplete"
     assert data["incomplete_reason_code"] == "row-bound-exceeded"
-    assert data["read_count"] == 1
+    assert data["read_count"] == 3
     text = target.read_text()
     assert CURSOR not in text and CURSOR not in json.dumps(result)
 
@@ -460,4 +477,5 @@ def test_failed_repair_artifact_values_unchanged_alongside_issue_start(monkeypat
     reader = _counting({"results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR})
     _, sink = _run(monkeypatch, reader)
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
-    assert sink[0]["read_count"] == 1
+    assert sink[0]["read_count"] == 3
+    _assert_partitioned_row_bound_calls(reader.calls)
