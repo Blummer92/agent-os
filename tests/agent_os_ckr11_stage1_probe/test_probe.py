@@ -389,6 +389,7 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(json.loads(text)["stop_reason"], "http_429")
 
 
+DEDICATED_ISSUE_NUMBER = 3995
 REVIEWED_PROBE_SHA256 = "d3a5e23a1bd9ec3f9fe297a1a148e8b6b8f51a56ee6c14ec21d7f8d13e68f755"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "agent-os-ckr11-stage1-probe.yml"
@@ -497,7 +498,7 @@ class IssueBindingTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"github\.event\.issue\.number", cond)), 1)
         match = re.search(r"github\.event\.issue\.number == (\d+) &&", cond)
         self.assertIsNotNone(match, cond)
-        self.assertGreaterEqual(int(match.group(1)), 0)
+        self.assertEqual(int(match.group(1)), DEDICATED_ISSUE_NUMBER)
 
     def test_condition_keeps_owner_issue_only_and_command_prefix(self):
         cond = self.condition()
@@ -507,9 +508,10 @@ class IssueBindingTests(unittest.TestCase):
         self.assertNotIn("||", cond)
 
     def test_unbound_or_bound_state_is_declared_not_ambiguous(self):
-        # 0 means unbound and inert. Anything else must be one positive integer (the dedicated issue).
+        # The trigger is bound to exactly the dedicated probe issue, not any positive integer.
         number = int(re.search(r"github\.event\.issue\.number == (\d+)", self.condition()).group(1))
-        self.assertTrue(number == 0 or number > 0)
+        self.assertEqual(number, DEDICATED_ISSUE_NUMBER)
+        self.assertGreater(number, 0)
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("not a global one-shot", text)
 
