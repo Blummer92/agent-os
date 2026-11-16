@@ -399,6 +399,7 @@ def orchestrate_lesson_retrieval(
     read_count = 0
     incomplete_reason_code: str | None = None
     terminal_query_bucket = "unobserved"
+    terminal_page_signature: dict[str, object] | None = None
 
     def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
         # Only finite counts and static normalization reason names; no raw rows.
@@ -416,12 +417,14 @@ def orchestrate_lesson_retrieval(
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
             diagnostics["terminal_query_bucket"] = terminal_query_bucket
+            if terminal_page_signature is not None:
+                diagnostics.update(terminal_page_signature)
         return replace(value, retrieval_diagnostics=diagnostics)
 
     def read_sequence(query: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         # One bounded sequence: at most MAX_RETRIEVAL_PAGES pages and
         # MAX_RETRIEVAL_ROWS rows, following cursors as before (#3973).
-        nonlocal read_count, terminal_query_bucket
+        nonlocal read_count, terminal_query_bucket, terminal_page_signature
         rows: list[Mapping[str, Any]] = []
         cursor: str | None = None
         seen_cursors: set[str | None] = set()
@@ -435,8 +438,36 @@ def orchestrate_lesson_retrieval(
             # Name only a query that is actually sent: a budget stop above leaves
             # the bucket of the last issued query, never the one it refused.
             terminal_query_bucket = _terminal_query_bucket(query)
+            # A subsequent failed read must not inherit the previous page's
+            # signature. Budget/cursor stops above retain the last issued page.
+            terminal_page_signature = None
             raw = execute_read(page_query)
             read_count += 1
+            # Only finite metadata derived from the final provider response;
+            # never retain a cursor, row, URL, query, or provider string.
+            if isinstance(raw, Mapping):
+                supplied = raw.get("results")
+                if isinstance(supplied, list):
+                    row_bucket = (
+                        "0-24" if len(supplied) < MAX_RETRIEVAL_ROWS
+                        else "25" if len(supplied) == MAX_RETRIEVAL_ROWS
+                        else "over-25"
+                    )
+                else:
+                    row_bucket = "unobserved"
+                more = raw.get("has_more", False)
+                more_bucket = (
+                    "true" if more is True else "false" if more is False
+                    else "invalid"
+                )
+                cursor_value = raw.get("next_cursor")
+                terminal_page_signature = {
+                    "terminal_page_row_count_bucket": row_bucket,
+                    "terminal_page_has_more": more_bucket,
+                    "terminal_page_cursor_present": (
+                        isinstance(cursor_value, str) and bool(cursor_value.strip())
+                    ),
+                }
             page_rows = _extract_bounded_rows(raw)
             # Reject an oversized supplied page instead of truncating it.
             if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
