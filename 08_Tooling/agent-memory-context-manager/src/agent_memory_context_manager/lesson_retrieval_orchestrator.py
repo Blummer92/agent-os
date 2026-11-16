@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from collections import Counter
+import json
 import re
 from typing import Any, Callable, Mapping
 
@@ -24,6 +25,10 @@ from .lesson_activation_bridge import (
     MAX_RETRIEVAL_PAGES,
     MAX_RETRIEVAL_ROWS,
     LessonActivationError,
+    _AREA_ECOSYSTEM,
+    _AREA_PROPERTY,
+    _LEARNING_TYPE_CAPABILITY,
+    _LEARNING_TYPE_PROPERTY,
     _page_cursor,
     _bound_relevant_lessons,
     _extract_bounded_rows,
@@ -50,6 +55,22 @@ _EXECUTABLE_STEPS = (
     RetrievalEscalation.WORKSPACE_SEARCH,
 )
 MAX_ESCALATION_STEPS = len(_EXECUTABLE_STEPS)
+# Only the two relevance-filtered steps partition. The broad workspace-search
+# step and exact-title fallback stay fail-closed on overflow, as before.
+_PARTITIONED_STEPS = frozenset(
+    {RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY, RetrievalEscalation.EXACT_NARROW_LOOKUP}
+)
+# Shared per-preflight read ceiling (previously derived as 4 steps x 5 pages = 20).
+# Partitioned sequences spend from it. Offline replays, not live measurements:
+# on a fixture consistent with the measured counts the cross-Area OR hit takes
+# 21 reads and the longest miss path 30; an adversarial stress fixture reaches
+# 31. Exhaustion fails closed, so 32 bounds refusal and does not guarantee
+# complete retrieval. Per-sequence bounds (25 rows, 5 pages) and the 4-step
+# per-preflight limit are unchanged; the 5-identity selection budget is a
+# separate CKR2 limit.
+MAX_PREFLIGHT_READS = 32
+_ROW_BOUND_MESSAGE = "paginated retrieval exceeded row bound"
+_READ_BUDGET_MESSAGE = "preflight read budget exceeded"
 _SANITIZED_PROVIDER_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 
 
@@ -64,6 +85,7 @@ _INCOMPLETE_REASON_CODES = {
     "read executor result is missing 'results'": "malformed-page",
     "read executor returned a non-boolean has_more": "malformed-pagination",
     "read executor returned a malformed next_cursor": "malformed-pagination",
+    _READ_BUDGET_MESSAGE: "read-budget-exceeded",
 }
 
 
@@ -239,6 +261,73 @@ def build_escalation_query(
     raise ValueError("manual-review and none do not execute provider queries")
 
 
+def _select_equals(clause: Any, property_name: str) -> bool:
+    return (
+        isinstance(clause, dict)
+        and clause.get("property") == property_name
+        and isinstance(clause.get("select"), dict)
+        and isinstance(clause["select"].get("equals"), str)
+    )
+
+
+def _query_key(query: Mapping[str, Any]) -> str:
+    filter_value = query.get("filter")
+    clauses = filter_value.get("and") if isinstance(filter_value, dict) else None
+    items = clauses if isinstance(clauses, list) else [filter_value]
+    return json.dumps(sorted(json.dumps(c, sort_keys=True) for c in items))
+
+
+def _partition_queries(query: Mapping[str, Any], *, crossed: bool) -> tuple[list[dict[str, Any]], bool]:
+    """Split an overflowing query into exact sub-queries over the controlled vocabularies.
+
+    Level 1 gives each OR alternative its own sequence. Level 2 crosses a single
+    Area (or Learning Type) clause with every value of the other controlled
+    vocabulary, enumerated from the normalizer's own tables, never from
+    observed counts. Anything else returns no partition and the caller fails
+    closed. Sub-query results are unioned by the existing full-record dedup.
+    """
+    filter_value = query.get("filter")
+    clauses = filter_value.get("and") if isinstance(filter_value, dict) else None
+    if not isinstance(clauses, list) or not clauses:
+        return [], crossed
+    head, last = clauses[:-1], clauses[-1]
+
+    def with_last(*tail: Any) -> dict[str, Any]:
+        return {**query, "filter": {"and": [*head, *tail]}}
+
+    if (
+        isinstance(last, dict)
+        and isinstance(last.get("or"), list)
+        and len(last["or"]) == 1
+    ):
+        # A single-alternative OR is that alternative.
+        last = last["or"][0]
+    if isinstance(last, dict) and isinstance(last.get("or"), list):
+        alternatives = last["or"]
+        if len(alternatives) > 1 and not crossed:
+            return [with_last(item) for item in alternatives], False
+        return [], crossed
+    if crossed:
+        return [], crossed
+    if _select_equals(last, _AREA_PROPERTY):
+        return [
+            with_last(
+                last,
+                {"property": _LEARNING_TYPE_PROPERTY, "select": {"equals": value}},
+            )
+            for value in sorted(_LEARNING_TYPE_CAPABILITY)
+        ], True
+    if _select_equals(last, _LEARNING_TYPE_PROPERTY):
+        return [
+            with_last(
+                last,
+                {"property": _AREA_PROPERTY, "select": {"equals": value}},
+            )
+            for value in sorted(_AREA_ECOSYSTEM)
+        ], True
+    return [], crossed
+
+
 def orchestrate_lesson_retrieval(
     request: CodingKnowledgeRequest,
     *,
@@ -280,6 +369,71 @@ def orchestrate_lesson_retrieval(
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
         return replace(value, retrieval_diagnostics=diagnostics)
 
+    def read_sequence(query: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        # One bounded sequence: at most MAX_RETRIEVAL_PAGES pages and
+        # MAX_RETRIEVAL_ROWS rows, following cursors as before (#3973).
+        nonlocal read_count
+        rows: list[Mapping[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str | None] = set()
+        for _page_index in range(MAX_RETRIEVAL_PAGES):
+            if cursor in seen_cursors:
+                raise LessonActivationError("repeated pagination cursor")
+            seen_cursors.add(cursor)
+            if read_count >= MAX_PREFLIGHT_READS:
+                raise LessonActivationError(_READ_BUDGET_MESSAGE)
+            page_query = query if cursor is None else {**query, "start_cursor": cursor}
+            raw = execute_read(page_query)
+            read_count += 1
+            page_rows = _extract_bounded_rows(raw)
+            # Reject an oversized supplied page instead of truncating it.
+            if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
+                raise LessonActivationError(_ROW_BOUND_MESSAGE)
+            rows.extend(page_rows)
+            has_more, next_cursor = _page_cursor(raw)
+            if not has_more:
+                return rows
+            if len(rows) >= MAX_RETRIEVAL_ROWS:
+                raise LessonActivationError(_ROW_BOUND_MESSAGE)
+            if next_cursor is None:
+                raise LessonActivationError("paginated retrieval missing next cursor")
+            cursor = next_cursor
+        raise LessonActivationError("paginated retrieval exceeded page bound")
+
+    def read_step(
+        query: Mapping[str, Any],
+        *,
+        crossed: bool,
+        partitionable: bool,
+        seen: set[str] | None = None,
+    ) -> list[Mapping[str, Any]]:
+        # A row-bound overflow is never truncated or selected from. When the
+        # step is partitionable, the same query is re-read as exact controlled
+        # sub-queries that each keep the unchanged 25-row/5-page bound. Any
+        # sub-query that still overflows, or the shared read budget running
+        # out, fails the whole step closed with no partial population.
+        seen = set() if seen is None else seen
+        key = _query_key(query)
+        if key in seen:
+            # The same exact sub-query (for example Area=A and Type=T reached
+            # from two alternatives) is read once; its rows are already merged.
+            return []
+        seen.add(key)
+        try:
+            return read_sequence(query)
+        except LessonActivationError as exc:
+            if not partitionable or str(exc) != _ROW_BOUND_MESSAGE:
+                raise
+            parts, parts_crossed = _partition_queries(query, crossed=crossed)
+            if not parts:
+                raise
+            merged: list[Mapping[str, Any]] = []
+            for part in parts:
+                merged.extend(
+                    read_step(part, crossed=parts_crossed, partitionable=True, seen=seen)
+                )
+            return merged
+
     for _ in range(MAX_ESCALATION_STEPS):
         step = select_coding_knowledge(
             current_request,
@@ -299,35 +453,8 @@ def orchestrate_lesson_retrieval(
             continue
 
         query = build_escalation_query(current_request, step)
-        rows: list[Mapping[str, Any]] = []
-        cursor: str | None = None
-        seen_cursors: set[str | None] = set()
         try:
-            # #3973's existing, bounded cursor contract also applies to CKR11:
-            # selecting from a truncated page is never sufficient evidence.
-            for _page_index in range(MAX_RETRIEVAL_PAGES):
-                if cursor in seen_cursors:
-                    raise LessonActivationError("repeated pagination cursor")
-                seen_cursors.add(cursor)
-                page_query = query if cursor is None else {**query, "start_cursor": cursor}
-                raw = execute_read(page_query)
-                read_count += 1
-                page_rows = _extract_bounded_rows(raw)
-                # _extract_bounded_rows is intentionally bounded; reject an
-                # oversized supplied page instead of silently truncating it.
-                if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
-                    raise LessonActivationError("paginated retrieval exceeded row bound")
-                rows.extend(page_rows)
-                has_more, next_cursor = _page_cursor(raw)
-                if not has_more:
-                    break
-                if len(rows) >= MAX_RETRIEVAL_ROWS:
-                    raise LessonActivationError("paginated retrieval exceeded row bound")
-                if next_cursor is None:
-                    raise LessonActivationError("paginated retrieval missing next cursor")
-                cursor = next_cursor
-            else:
-                raise LessonActivationError("paginated retrieval exceeded page bound")
+            rows = read_step(query, crossed=False, partitionable=step in _PARTITIONED_STEPS)
         except (ConnectionError, TimeoutError, RuntimeError, LessonActivationError) as exc:
             # No partial page population may reach CKR2 or admit a repair.
             # Preserve the generic reason and admission outcome; only append a
@@ -368,6 +495,7 @@ def orchestrate_lesson_retrieval(
 
 __all__ = [
     "MAX_ESCALATION_STEPS",
+    "MAX_PREFLIGHT_READS",
     "build_escalation_query",
     "orchestrate_lesson_retrieval",
     "record_retrieval_attempt",
