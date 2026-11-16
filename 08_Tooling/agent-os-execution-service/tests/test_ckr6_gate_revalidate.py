@@ -419,6 +419,89 @@ def test_producer_postback_job_separates_actions_write_from_notion_secret():
     assert "contents: write" not in new_job
     assert "pull-requests: write" not in new_job
     assert "github.event.comment.user.id == 32861845" not in old
-    assert "github.event.comment.user.id == 41898282" in old
+    assert "if: ${{ false }}" in old
+    assert "github.event.comment.user.id == 41898282" not in old
+
+
+
+def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(monkeypatch):
+    """One valid receipt does not make a full, possibly truncated page complete."""
+    from agent_os_execution_service.ckr6_github_bridge import serialize_ckr6_result_comment
+
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    payload = {
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "status": "insufficient", "attempt_id": "one",
+        "selected_lesson_ids": [], "mutation_admissible": False,
+    }
+    receipt = {
+        "id": 200, "user": {"id": r.BOT_ID},
+        "created_at": "2026-11-14T15:56:08Z",
+        "updated_at": "2026-11-14T15:56:08Z",
+        "body": serialize_ckr6_result_comment(payload, request_comment_id=6880156571),
+    }
+    filler = [
+        {"id": i + 300, "user": {"id": 12345},
+         "created_at": "2026-11-14T15:56:09Z",
+         "updated_at": "2026-11-14T15:56:09Z", "body": "irrelevant"}
+        for i in range(99)
+    ]
+    state = {"count": 100}
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        assert "/comments?per_page=100&since=" in path
+        return [receipt, *filler[:state["count"] - 1]]
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r._completed_result_for_owner(event, "unused")
+    assert len(calls) == 1
+    assert all(method != "POST" for method, _ in calls)
+
+    state["count"] = 99
+    calls.clear()
+    result = r._completed_result_for_owner(event, "unused")
+    assert result["request_comment_id"] == event["comment"]["id"]
+    assert result["status"] == "insufficient"
+    assert len(calls) == 1
+    assert all(method != "POST" for method, _ in calls)
+
+
+def test_postback_completed_gate_attempt_two_is_not_rerun(monkeypatch):
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    monkeypatch.setattr(r, "_completed_result_for_owner", lambda *_: {"status": "insufficient"})
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        if path == "/pulls/3824":
+            return pr(3824, sha=SHA, body="Part of #3418")
+        if path.startswith("/actions/workflows/"):
+            listing = runs()
+            listing["workflow_runs"][0]["pull_requests"] = [{"number": 3824}]
+            return listing
+        if path == "/actions/runs/88":
+            return {"id": 88, "status": "completed", "run_attempt": 2}
+        if method == "POST":
+            pytest.fail("a second rerun is not permitted")
+        raise AssertionError(path)
+    monkeypatch.setattr(r, "api", fake)
+    result = r.evaluate(event, "unused", postback_complete=True)
+    assert result == {
+        "disposition": "not-applicable",
+        "reason_code": "already-rerun",
+        "run_ids": [],
+    }
+    assert not any(method == "POST" for method, _ in calls)
 
 
