@@ -200,6 +200,42 @@ jobs:
             --result "$RUNNER_TEMP/agent-os-ckr6/result.json" \
             --api-url "$GITHUB_API_URL"
 
+
+  revalidate-after-postback:
+    name: Revalidate exact-head CKR6 gate after trusted result postback
+    needs: [classify, execute]
+    if: ${{ needs.classify.result == 'success' && needs.execute.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted default-branch code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Install existing Agent OS runtime in isolated environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ckr6-revalidation-venv"
+          "$RUNNER_TEMP/ckr6-revalidation-venv/bin/python" -m pip install \
+            -e 08_Tooling/reusable-capability-registry \
+            -e 08_Tooling/agent-memory-context-manager \
+            -e 08_Tooling/workflow-scheduler \
+            -e src \
+            -e . \
+            -e 08_Tooling/agent-os-execution-service
+
+      - name: Verify completed result and rerun only one exact-head gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          "$RUNNER_TEMP/ckr6-revalidation-venv/bin/python" \
+            -m agent_os_execution_service.ckr6_gate_revalidate --postback-complete
+
   report-failure:
     name: Report CKR6 infrastructure failure
     # #3691: when classify or execute fails before the bridge can post its

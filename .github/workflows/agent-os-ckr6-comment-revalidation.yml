@@ -1,5 +1,7 @@
 name: Agent OS CKR6 Comment Revalidation
 
+# Legacy bot-event fallback only. The owner request no longer triggers a premature
+# rerun; postback-complete runs in the producer workflow after successful postback.
 # Trusted default-branch-only workflow. Reruns EXISTING PR gate checks; never
 # grants CKR6 admission or publishes a new check/status. Unrelated learning
 # operations and unbound issue-level requests return non-admitting not-applicable.
@@ -20,8 +22,6 @@ jobs:
     if: >-
       github.repository == 'Blummer92/agent-os' &&
       (
-        (github.event.comment.user.id == 32861845 &&
-         startsWith(github.event.comment.body, '/agent-os ckr6 ')) ||
         (github.event.comment.user.id == 41898282 &&
          startsWith(github.event.comment.body, '<!-- agent-os-ckr6-result:v1 -->'))
       )

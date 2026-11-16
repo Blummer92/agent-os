@@ -313,3 +313,112 @@ def test_edited_owner_record_fails_closed_even_if_head_is_exact(monkeypatch):
     monkeypatch.setattr(r, "api", lambda *_: pytest.fail("edited request cannot route"))
     with pytest.raises(r.RevalidationBlocked, match="request-provenance-unverified"):
         r.evaluate(event, "unused")
+
+def test_postback_complete_refuses_missing_result_and_never_posts(monkeypatch):
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        if "/comments?per_page=100&since=" in path:
+            return []
+        raise AssertionError(path)
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-not-returned"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert not any(method == "POST" for method, _ in calls)
+
+
+def test_postback_complete_requires_single_correlated_bot_result(monkeypatch):
+    from agent_os_execution_service.ckr6_github_bridge import serialize_ckr6_result_comment
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    result = {
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "status": "insufficient", "attempt_id": "one",
+        "selected_lesson_ids": [], "mutation_admissible": False,
+    }
+    receipt = {
+        "id": 200, "user": {"id": r.BOT_ID},
+        "created_at": "2026-11-14T15:56:08Z",
+        "updated_at": "2026-11-14T15:56:08Z",
+        "body": serialize_ckr6_result_comment(result, request_comment_id=6880156571),
+    }
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        if "/comments?per_page=100&since=" in path:
+            return [receipt]
+        if path == "/pulls/3824":
+            return pr(3824, sha=SHA, body="Part of #3418")
+        if path.startswith("/actions/workflows/"):
+            return runs()
+        if path == "/actions/runs/88":
+            return {"id": 88, "status": "completed", "run_attempt": 1}
+        if path == "/actions/runs/88/rerun" and method == "POST":
+            return None
+        raise AssertionError(path)
+    monkeypatch.setattr(r, "api", fake)
+    # The request and receipt are verified, but the synthetic run association
+    # belongs to PR #3966, so this must fail closed before any POST.
+    with pytest.raises(r.RevalidationBlocked, match="gate-run"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert not any(method == "POST" for method, _ in calls)
+    receipt["body"] = serialize_ckr6_result_comment(
+        {**result, "attempt_id": "wrong"}, request_comment_id=6880156571
+    )
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r.evaluate(event, "unused", postback_complete=True)
+
+
+def test_postback_complete_rejects_active_or_repeated_run(monkeypatch):
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    # Exercise the completed-run guard after the separately tested receipt
+    # check; never create a check or synthesize a successful gate.
+    monkeypatch.setattr(r, "_completed_result_for_owner", lambda *_: {"status": "insufficient"})
+    def fake(method, path, token):
+        if path == "/pulls/3824":
+            return pr(3824, sha=SHA, body="Part of #3418")
+        if path.startswith("/actions/workflows/"):
+            listing = runs()
+            listing["workflow_runs"][0]["pull_requests"] = [{"number": 3824}]
+            return listing
+        if path == "/actions/runs/88":
+            return {"id": 88, "status": "in_progress", "run_attempt": 1}
+        if method == "POST":
+            pytest.fail("active gate must not be rerun")
+        raise AssertionError(path)
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="gate-run-in-progress"):
+        r.evaluate(event, "unused", postback_complete=True)
+
+
+def test_producer_postback_job_separates_actions_write_from_notion_secret():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    workflow = (root / ".github/workflows/agent-os-ckr6.yml").read_text()
+    old = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
+    new_job = workflow.split("  revalidate-after-postback:", 1)[1].split("  report-failure:", 1)[0]
+    assert "needs: [classify, execute]" in new_job
+    assert "actions: write" in new_job
+    assert "--postback-complete" in new_job
+    assert "NOTION_TOKEN" not in new_job
+    assert "contents: write" not in new_job
+    assert "pull-requests: write" not in new_job
+    assert "github.event.comment.user.id == 32861845" not in old
+    assert "github.event.comment.user.id == 41898282" in old
+
+

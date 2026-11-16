@@ -5,6 +5,7 @@ Learning-only comments and unbound issue-level preflights are not PR mutations.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -41,6 +42,7 @@ class RevalidationBlocked(ValueError):
         "gate-run-missing", "gate-run-association-unverified",
         "gate-run-population-incomplete", "gate-run-invalid",
         "rerun-permission-denied", "rerun-request-failed", "github-read-failed",
+        "result-not-returned", "result-provenance-unverified", "gate-run-in-progress",
     })
 
     def __init__(self, code: str):
@@ -228,11 +230,54 @@ def select_run(pr, listing):
     return None
 
 
-def evaluate(event, token):
+
+def _completed_result_for_owner(event, token):
+    """Read back one correlated bot receipt; do not trust job success alone."""
+    comment = event["comment"]
+    if not _unedited_comment(comment) or comment.get("user", {}).get("id") != OWNER_ID:
+        raise RevalidationBlocked("request-provenance-unverified")
+    request_id = comment["id"]
+    number = event["issue"]["number"]
+    since = urllib.parse.quote(comment["created_at"], safe="")
+    listing = api("GET", f"/issues/{number}/comments?per_page=100&since={since}", token)
+    if not isinstance(listing, list) or len(listing) >= 100:
+        raise RevalidationBlocked("result-provenance-unverified")
+    matching = []
+    for item in listing:
+        if not isinstance(item, dict) or item.get("user", {}).get("id") != BOT_ID:
+            continue
+        if not _unedited_comment(item):
+            continue
+        try:
+            result = parse_ckr6_result_comment(item.get("body"))
+        except (ValueError, TypeError):
+            continue
+        if (result.get("request_comment_id") != request_id
+                or result.get("issue_number") != number
+                or result.get("repository") != REPO):
+            continue
+        if item["created_at"] < comment["created_at"]:
+            continue
+        matching.append(result)
+    if len(matching) != 1:
+        raise RevalidationBlocked(
+            "result-not-returned" if not matching else "result-provenance-unverified"
+        )
+    envelope = _parse_owner_request(event, comment)
+    if matching[0].get("operation") != envelope.operation:
+        raise RevalidationBlocked("result-provenance-unverified")
+    if envelope.operation == "failed-repair" and matching[0].get("attempt_id") != envelope.attempt_id:
+        raise RevalidationBlocked("result-provenance-unverified")
+    return matching[0]
+
+
+def evaluate(event, token, *, postback_complete=False):
     """Non-admission disposition for reporting; only an exact match may rerun."""
     if not triggered(event):
         return {"disposition": "not-applicable", "reason_code": "event-not-eligible", "run_ids": []}
     target, reason = _target(event, token)
+    if postback_complete and target is not None:
+        _completed_result_for_owner(event, token)
     if target is None:
         return {"disposition": "not-applicable", "reason_code": reason, "run_ids": []}
     number, sha = target
@@ -261,6 +306,15 @@ def evaluate(event, token):
     run_id = select_run(pr, runs)
     if run_id is None:
         raise RevalidationBlocked("gate-run-missing")
+    if postback_complete:
+        run = api("GET", f"/actions/runs/{run_id}", token)
+        if (not isinstance(run, dict) or run.get("id") != run_id
+                or type(run.get("run_attempt")) is not int):
+            raise RevalidationBlocked("gate-run-invalid")
+        if run.get("status") != "completed":
+            raise RevalidationBlocked("gate-run-in-progress")
+        if run["run_attempt"] != 1:
+            return {"disposition": "not-applicable", "reason_code": "already-rerun", "run_ids": []}
     api("POST", f"/actions/runs/{run_id}/rerun", token)
     return {"disposition": "rerun-requested", "reason_code": "exact-head-run-verified", "run_ids": [run_id]}
 
@@ -271,6 +325,9 @@ def revalidate(event, token):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--postback-complete", action="store_true")
+    args = parser.parse_args()
     token = os.environ.get("GITHUB_TOKEN", "")
     path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not token or not path:
@@ -279,7 +336,7 @@ def main():
     try:
         with open(path, encoding="utf-8") as f:
             event = json.load(f)
-        result = evaluate(event, token)
+        result = evaluate(event, token, postback_complete=args.postback_complete)
     except RevalidationBlocked as exc:
         print(json.dumps({"disposition": "blocked", "reason_code": str(exc), "rerun_count": 0}))
         return 1
