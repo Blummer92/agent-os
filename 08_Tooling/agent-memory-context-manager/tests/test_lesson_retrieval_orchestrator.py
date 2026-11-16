@@ -1243,7 +1243,7 @@ def test_terminal_query_bucket_has_only_closed_controlled_values():
     query = {**base, "filter": {"and": [
         *base["filter"]["and"],
         {"or": [{"property": "Area", "select": {"equals": "Testing"}},
-                {"property": "Learning Type", "select": {"equals": "Testing lesson"}}],
+                {"property": "Learning Type", "select": {"equals": "Testing lesson"}}]},
     ]}}
     assert orch._terminal_query_bucket(query) == "broad-or"
     query["filter"]["and"][-1] = {"property": "Area", "select": {"equals": "Testing"}}
@@ -1252,6 +1252,16 @@ def test_terminal_query_bucket_has_only_closed_controlled_values():
         {"property": "Learning Type", "select": {"equals": "Testing lesson"}}
     )
     assert orch._terminal_query_bucket(query) == "area:Testing/type:Testing lesson"
+    reversed_query = {"filter": {"and": [
+        *base["filter"]["and"],
+        {"property": "Learning Type", "select": {"equals": "Testing lesson"}},
+        {"property": "Area", "select": {"equals": "Testing"}},
+    ]}}
+    assert orch._terminal_query_bucket(reversed_query) == (
+        "area:Testing/type:Testing lesson"
+    )
+    reversed_query["filter"]["and"][-1]["select"]["equals"] = "SENSITIVE_UNTRUSTED"
+    assert orch._terminal_query_bucket(reversed_query) == "unobserved"
     query["filter"]["and"][-1]["select"]["equals"] = "SENSITIVE_UNTRUSTED"
     assert orch._terminal_query_bucket(query) == "unobserved"
     assert orch._terminal_query_bucket({"filter": {"or": []}}) == "known-reference"

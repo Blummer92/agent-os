@@ -357,8 +357,12 @@ def _terminal_query_bucket(query: Mapping[str, Any]) -> str:
         return value if type(value) is str and value in vocabulary else None
 
     if len(clauses) == 4:
+        # Partitions can be refined Area-first or Learning Type-first.
         area = selected(clauses[-2], _AREA_PROPERTY, _AREA_ECOSYSTEM)
         kind = selected(last, _LEARNING_TYPE_PROPERTY, _LEARNING_TYPE_CAPABILITY)
+        if area is None or kind is None:
+            area = selected(last, _AREA_PROPERTY, _AREA_ECOSYSTEM)
+            kind = selected(clauses[-2], _LEARNING_TYPE_PROPERTY, _LEARNING_TYPE_CAPABILITY)
         if area is not None and kind is not None:
             return "area:" + area + "/type:" + kind
     if len(clauses) == 3:
