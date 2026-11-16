@@ -1327,10 +1327,7 @@ def test_budget_stop_names_last_issued_query_not_the_refused_one(monkeypatch):
 # #4011: the terminal provider-page signature is observational and finite.
 # Workspace remains intentionally unpartitioned; these are synthetic reads.
 def _terminal_page_case(response):
-    req = request(
-        ecosystem_hints=(), language_hints=(), capability_keywords=(),
-        target_path_hints=(), known_knowledge_refs=(),
-    )
+    req = request()  # task-specific reads before the broad workspace fallback
     calls = []
 
     def read(query):
@@ -1396,10 +1393,7 @@ def test_4011_malformed_page_signature_is_sanitized():
 
 
 def test_4011_reader_error_discards_previous_page_signature():
-    req = request(
-        ecosystem_hints=(), language_hints=(), capability_keywords=(),
-        target_path_hints=(), known_knowledge_refs=(),
-    )
+    req = request()  # task-specific reads before the broad workspace fallback
     def read(query):
         if len(query["filter"]["and"]) != 2:
             return {"results": [], "has_more": False}
