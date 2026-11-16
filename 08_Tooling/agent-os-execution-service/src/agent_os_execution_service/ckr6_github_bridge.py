@@ -17,6 +17,7 @@ from typing import Any, Mapping, TypedDict, cast
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_preflight import RepairContext, plan_lesson_preflight
+from agent_memory_context_manager.lesson_activation_bridge import _AREA_ECOSYSTEM, _LEARNING_TYPE_CAPABILITY
 
 from .ckr6_github_reader import (
     ALLOWED_REPOSITORY as GITHUB_REPOSITORY,
@@ -442,6 +443,16 @@ _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
 )
 _MAX_DIAGNOSTIC_COUNTER = 10_000
+
+# Only source-controlled Area and Learning Type names may enter this optional
+# diagnostic. No caller strings, query filters, page payloads or cursors.
+_TERMINAL_QUERY_BUCKETS = frozenset({
+    "unobserved", "broad-or", "workspace", "title-fallback", "known-reference",
+    *(f"area:{area}" for area in _AREA_ECOSYSTEM),
+    *(f"type:{kind}" for kind in _LEARNING_TYPE_CAPABILITY),
+    *(f"area:{area}/type:{kind}" for area in _AREA_ECOSYSTEM
+      for kind in _LEARNING_TYPE_CAPABILITY),
+})
 _INCOMPLETE_REASON_CODES = frozenset({
     "row-bound-exceeded",
     "page-bound-exceeded",
@@ -487,6 +498,12 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             projected[name] = value
         else:
             projected[name] = 0
+    if isinstance(source, Mapping) and "terminal_query_bucket" in source:
+        value = source.get("terminal_query_bucket")
+        projected["terminal_query_bucket"] = (
+            value if type(value) is str and value in _TERMINAL_QUERY_BUCKETS
+            else "unobserved"
+        )
     return projected
 
 
@@ -505,7 +522,9 @@ def write_retrieval_diagnostics_summary(
     if not target:
         return False
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
-    for name in ("retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS):
+    for name in ("retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS, "terminal_query_bucket"):
+        if name == "terminal_query_bucket" and name not in diagnostics:
+            continue
         lines.append(f"- {name}: `{diagnostics.get(name)}`")
     try:
         with open(target, "a", encoding="utf-8") as handle:
@@ -530,7 +549,10 @@ def write_retrieval_diagnostics_artifact(
     expected_keys = {
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
     }
-    if set(diagnostics) != expected_keys:
+    if set(diagnostics) not in (expected_keys, expected_keys | {"terminal_query_bucket"}):
+        return False
+    bucket = diagnostics.get("terminal_query_bucket")
+    if "terminal_query_bucket" in diagnostics and (type(bucket) is not str or bucket not in _TERMINAL_QUERY_BUCKETS):
         return False
     reason = diagnostics.get("retrieval_reason_code")
     if type(reason) is not str or not (
@@ -552,6 +574,8 @@ def write_retrieval_diagnostics_artifact(
         "incomplete_reason_code": incomplete,
         **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
     }
+    if "terminal_query_bucket" in diagnostics:
+        safe["terminal_query_bucket"] = bucket
     try:
         path.write_text(
             json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",

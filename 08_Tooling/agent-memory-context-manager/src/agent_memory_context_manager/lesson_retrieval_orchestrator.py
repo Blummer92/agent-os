@@ -328,6 +328,49 @@ def _partition_queries(query: Mapping[str, Any], *, crossed: bool) -> tuple[list
     return [], crossed
 
 
+
+def _terminal_query_bucket(query: Mapping[str, Any]) -> str:
+    """Finite internal query-shape diagnostic; never echo provider or caller text."""
+    filt = query.get("filter")
+    if not isinstance(filt, dict):
+        return "unobserved"
+    if isinstance(filt.get("or"), list):
+        return "known-reference"
+    clauses = filt.get("and")
+    if not isinstance(clauses, list) or len(clauses) < 2:
+        return "unobserved"
+    if len(clauses) == 2:
+        return "workspace"
+    last = clauses[-1]
+    if not isinstance(last, dict):
+        return "unobserved"
+    if isinstance(last.get("or"), list):
+        return "broad-or"
+    if last.get("property") == "Lesson Learned" and isinstance(last.get("title"), dict):
+        return "title-fallback"
+
+    def selected(clause: object, prop: str, vocabulary: Mapping[str, str]) -> str | None:
+        if not isinstance(clause, dict) or clause.get("property") != prop:
+            return None
+        field = clause.get("select")
+        value = field.get("equals") if isinstance(field, dict) else None
+        return value if type(value) is str and value in vocabulary else None
+
+    if len(clauses) == 4:
+        area = selected(clauses[-2], _AREA_PROPERTY, _AREA_ECOSYSTEM)
+        kind = selected(last, _LEARNING_TYPE_PROPERTY, _LEARNING_TYPE_CAPABILITY)
+        if area is not None and kind is not None:
+            return "area:" + area + "/type:" + kind
+    if len(clauses) == 3:
+        area = selected(last, _AREA_PROPERTY, _AREA_ECOSYSTEM)
+        if area is not None:
+            return "area:" + area
+        kind = selected(last, _LEARNING_TYPE_PROPERTY, _LEARNING_TYPE_CAPABILITY)
+        if kind is not None:
+            return "type:" + kind
+    return "unobserved"
+
+
 def orchestrate_lesson_retrieval(
     request: CodingKnowledgeRequest,
     *,
@@ -351,6 +394,7 @@ def orchestrate_lesson_retrieval(
     skipped = Counter()
     read_count = 0
     incomplete_reason_code: str | None = None
+    terminal_query_bucket = "unobserved"
 
     def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
         # Only finite counts and static normalization reason names; no raw rows.
@@ -367,12 +411,14 @@ def orchestrate_lesson_retrieval(
         }
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
+            diagnostics["terminal_query_bucket"] = terminal_query_bucket
         return replace(value, retrieval_diagnostics=diagnostics)
 
     def read_sequence(query: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         # One bounded sequence: at most MAX_RETRIEVAL_PAGES pages and
         # MAX_RETRIEVAL_ROWS rows, following cursors as before (#3973).
-        nonlocal read_count
+        nonlocal read_count, terminal_query_bucket
+        terminal_query_bucket = _terminal_query_bucket(query)
         rows: list[Mapping[str, Any]] = []
         cursor: str | None = None
         seen_cursors: set[str | None] = set()

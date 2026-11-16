@@ -1232,3 +1232,58 @@ def test_count_consistent_replay_cross_area_or_needs_21_reads_because_testing_le
     )
     assert capped.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
     assert capped.selected_lesson_ids == ()
+
+def test_terminal_query_bucket_has_only_closed_controlled_values():
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    base = {"filter": {"and": [
+        {"property": "Surface Before Work?", "checkbox": {"equals": True}},
+        {"property": "Status", "select": {"does_not_equal": "Archived note"}},
+    ]}}
+    assert orch._terminal_query_bucket(base) == "workspace"
+    query = {**base, "filter": {"and": [
+        *base["filter"]["and"],
+        {"or": [{"property": "Area", "select": {"equals": "Testing"}},
+                {"property": "Learning Type", "select": {"equals": "Testing lesson"}}],
+    ]}}
+    assert orch._terminal_query_bucket(query) == "broad-or"
+    query["filter"]["and"][-1] = {"property": "Area", "select": {"equals": "Testing"}}
+    assert orch._terminal_query_bucket(query) == "area:Testing"
+    query["filter"]["and"].append(
+        {"property": "Learning Type", "select": {"equals": "Testing lesson"}}
+    )
+    assert orch._terminal_query_bucket(query) == "area:Testing/type:Testing lesson"
+    query["filter"]["and"][-1]["select"]["equals"] = "SENSITIVE_UNTRUSTED"
+    assert orch._terminal_query_bucket(query) == "unobserved"
+    assert orch._terminal_query_bucket({"filter": {"or": []}}) == "known-reference"
+
+
+def test_terminal_leaf_overflow_reports_exact_bucket_without_selecting():
+    req = request(capability_keywords=("testing",))
+    seen = []
+    def read(query):
+        seen.append(query)
+        return {"results": [_lesson_row("LL-1")] * 25,
+                "has_more": True, "next_cursor": "private-cursor"}
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    # After OR -> Automation -> first exact controlled type cell.
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == (
+        "area:Automation/type:Deployment lesson"
+    )
+    assert result.retrieval_diagnostics["read_count"] == len(seen) == 3
+
+
+def test_terminal_read_budget_diagnostic_still_fails_closed(monkeypatch):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
+    result = orchestrate_lesson_retrieval(
+        request(capability_keywords=("testing",)),
+        execute_read=lambda _query: {"results": [_lesson_row("LL-1")] * 25,
+                                     "has_more": True, "next_cursor": "private"},
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "area:Automation"
+
+
