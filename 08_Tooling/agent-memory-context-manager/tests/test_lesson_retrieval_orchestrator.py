@@ -1294,6 +1294,31 @@ def test_terminal_read_budget_diagnostic_still_fails_closed(monkeypatch):
     )
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-    assert result.retrieval_diagnostics["terminal_query_bucket"] == "area:Automation"
+    # Only the broad OR query was sent; the refused Area=Automation sub-query is
+    # never named as the terminal bucket.
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "broad-or"
 
+
+def _budget_stop_bucket(monkeypatch, cap):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", cap)
+    seen = []
+
+    def read(query):
+        seen.append(query)
+        return {"results": [_lesson_row("LL-1")] * 25,
+                "has_more": True, "next_cursor": "private"}
+
+    result = orchestrate_lesson_retrieval(
+        request(capability_keywords=("testing",)), execute_read=read
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
+    assert result.retrieval_diagnostics["read_count"] == len(seen) == cap
+    return result.retrieval_diagnostics["terminal_query_bucket"]
+
+
+def test_budget_stop_names_last_issued_query_not_the_refused_one(monkeypatch):
+    # Cap 2: broad OR then Area=Automation were sent; the exact cell was refused.
+    assert _budget_stop_bucket(monkeypatch, 2) == "area:Automation"
 
