@@ -6,6 +6,7 @@ Learning-only comments and unbound issue-level preflights are not PR mutations.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -258,7 +259,7 @@ def _completed_result_for_owner(event, token):
             continue
         if item["created_at"] < comment["created_at"]:
             continue
-        matching.append(result)
+        matching.append({**result, "receipt_created_at": item["created_at"]})
     if len(matching) != 1:
         raise RevalidationBlocked(
             "result-not-returned" if not matching else "result-provenance-unverified"
@@ -271,13 +272,23 @@ def _completed_result_for_owner(event, token):
     return matching[0]
 
 
+def _parse_time(value):
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+
+
 def evaluate(event, token, *, postback_complete=False):
     """Non-admission disposition for reporting; only an exact match may rerun."""
     if not triggered(event):
         return {"disposition": "not-applicable", "reason_code": "event-not-eligible", "run_ids": []}
     target, reason = _target(event, token)
+    receipt = None
     if postback_complete and target is not None:
-        _completed_result_for_owner(event, token)
+        receipt = _completed_result_for_owner(event, token)
     if target is None:
         return {"disposition": "not-applicable", "reason_code": reason, "run_ids": []}
     number, sha = target
@@ -313,7 +324,20 @@ def evaluate(event, token, *, postback_complete=False):
             raise RevalidationBlocked("gate-run-invalid")
         if run.get("status") != "completed":
             raise RevalidationBlocked("gate-run-in-progress")
-        if run["run_attempt"] != 1:
+        # Receipt-correlated idempotency on the START of the latest gate
+        # attempt (run_started_at is the latest attempt's start; created_at
+        # is not). An attempt that started before this request's result
+        # receipt may not have seen it, even when it finished after the
+        # receipt (straddle), so it is rerun once. An attempt that started
+        # after the receipt was triggered by it (or a later event) and is
+        # not rerun again. Equal or unparseable timestamps are ambiguous at
+        # the API's one-second resolution and fail closed. This is bounded
+        # to one rerun per receipt, never a proof that the gate saw it.
+        receipt_at = _parse_time(receipt.get("receipt_created_at") if isinstance(receipt, dict) else None)
+        started_at = _parse_time(run.get("run_started_at"))
+        if receipt_at is None or started_at is None or started_at == receipt_at:
+            raise RevalidationBlocked("gate-run-invalid")
+        if started_at > receipt_at:
             return {"disposition": "not-applicable", "reason_code": "already-rerun", "run_ids": []}
     api("POST", f"/actions/runs/{run_id}/rerun", token)
     return {"disposition": "rerun-requested", "reason_code": "exact-head-run-verified", "run_ids": [run_id]}
