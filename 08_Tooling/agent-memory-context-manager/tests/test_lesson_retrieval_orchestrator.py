@@ -1423,3 +1423,52 @@ def test_4011_missing_cursor_keeps_safe_metadata():
     assert diag["terminal_page_row_count_bucket"] == "0-24"
     assert diag["terminal_page_has_more"] == "true"
     assert diag["terminal_page_cursor_present"] is False
+
+
+def test_4011_two_page_24_plus_2_overflow_reports_last_page_only():
+    req = request()
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        if len(query["filter"]["and"]) != 2:
+            return {"results": [], "has_more": False}
+        if "start_cursor" not in query:
+            return {
+                "results": [_lesson_row("LL-42")] * 24,
+                "has_more": True, "next_cursor": "SECRET-PAGE-2",
+            }
+        return {"results": [_lesson_row("LL-42")] * 2, "has_more": False}
+
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    diag = result.retrieval_diagnostics
+    assert len(calls) == 4
+    assert diag["incomplete_reason_code"] == "row-bound-exceeded"
+    assert diag["terminal_query_bucket"] == "workspace"
+    assert diag["terminal_page_row_count_bucket"] == "0-24"
+    assert diag["terminal_page_has_more"] == "false"
+    assert diag["terminal_page_cursor_present"] is False
+    assert result.selected_lesson_ids == ()
+    assert "SECRET-PAGE-2" not in str(diag)
+
+
+def test_4011_global_budget_stop_never_reports_a_hypothetical_next_page(monkeypatch):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orchestrator
+    monkeypatch.setattr(orchestrator, "MAX_PREFLIGHT_READS", 2)
+    req = request()
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [], "has_more": False}
+
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    diag = result.retrieval_diagnostics
+    assert len(calls) == 2
+    assert diag["incomplete_reason_code"] == "read-budget-exceeded"
+    assert diag["read_count"] == 2
+    assert diag["terminal_page_row_count_bucket"] == "0-24"
+    assert diag["terminal_page_has_more"] == "false"
+    assert diag["terminal_page_cursor_present"] is False
+    assert diag["terminal_query_bucket"] != "workspace"
+    assert result.selected_lesson_ids == ()
