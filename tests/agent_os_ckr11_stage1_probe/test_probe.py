@@ -484,8 +484,8 @@ class ScriptHashGuardTests(unittest.TestCase):
         self.assertLess(step_index("EXPECTED_PROBE_SHA256:"), step_index("unittest tests.agent_os_ckr11_stage1_probe"))
 
 
-class IssueBindingTests(unittest.TestCase):
-    """The comment trigger must be bound to exactly one issue number (0 is an inert, unbound sentinel)."""
+class OwnerDispatchBindingTests(unittest.TestCase):
+    """Only a manual, owner-initiated main-branch run may reach the secret step."""
 
     def condition(self):
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -493,27 +493,39 @@ class IssueBindingTests(unittest.TestCase):
         self.assertIsNotNone(match)
         return match.group(1)
 
-    def test_condition_has_exactly_one_issue_number_equality(self):
-        cond = self.condition()
-        self.assertEqual(len(re.findall(r"github\.event\.issue\.number", cond)), 1)
-        match = re.search(r"github\.event\.issue\.number == (\d+) &&", cond)
-        self.assertIsNotNone(match, cond)
-        self.assertEqual(int(match.group(1)), DEDICATED_ISSUE_NUMBER)
-
-    def test_condition_keeps_owner_issue_only_and_command_prefix(self):
-        cond = self.condition()
-        self.assertIn("github.event.issue.pull_request == null", cond)
-        self.assertIn("github.event.comment.user.id == 32861845", cond)
-        self.assertIn("startsWith(github.event.comment.body, '/agent-os ckr11-stage1-probe ')", cond)
-        self.assertNotIn("||", cond)
-
-    def test_unbound_or_bound_state_is_declared_not_ambiguous(self):
-        # The trigger is bound to exactly the dedicated probe issue, not any positive integer.
-        number = int(re.search(r"github\.event\.issue\.number == (\d+)", self.condition()).group(1))
-        self.assertEqual(number, DEDICATED_ISSUE_NUMBER)
-        self.assertGreater(number, 0)
+    def test_manual_only_trigger_and_no_issue_comment_or_schedule(self):
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("not a global one-shot", text)
+        trigger = text.split("on:\\n", 1)[1].split("permissions:\\n", 1)[0]
+        self.assertEqual(trigger.strip(), "workflow_dispatch:")
+        self.assertNotIn("issue_comment:", text)
+        self.assertNotIn("schedule:", text)
+        self.assertNotIn("github.event.comment.body", text)
+        self.assertNotIn("steps.bind.outputs", text)
+
+    def test_exact_owner_event_and_main_branch_required(self):
+        cond = self.condition()
+        self.assertIn("github.event_name == 'workflow_dispatch'", cond)
+        self.assertIn("github.actor == 'Blummer92'", cond)
+        self.assertIn("github.ref == 'refs/heads/main'", cond)
+        self.assertNotIn("||", cond)
+        self.assertNotIn("issue.number", cond)
+
+    def test_manifest_is_static_and_hash_guard_still_precedes_secrets(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("EXPECTED: " + P.MANIFEST_SHA256, text)
+        self.assertLess(step_index("EXPECTED_PROBE_SHA256:"), step_index("NOTION_TOKEN:"))
+        self.assertEqual(text.count("secrets."), 1)
+        self.assertIn("retention-days: 3", text)
+        self.assertIn("contents: read", text)
+        self.assertNotIn("contents: write", text)
+
+    def test_no_unreviewed_automatic_execution_or_unbounded_reads(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("at most 14 query POSTs", text)
+        self.assertNotIn("cron:", text)
+        self.assertNotIn("pull_request:", text)
+        self.assertNotIn("push:", text)
+        self.assertIn("EXPECTED_PROBE_SHA256: " + REVIEWED_PROBE_SHA256, text)
 
 
 if __name__ == "__main__":
