@@ -495,7 +495,7 @@ class OwnerDispatchBindingTests(unittest.TestCase):
 
     def test_manual_only_trigger_and_no_issue_comment_or_schedule(self):
         text = WORKFLOW.read_text(encoding="utf-8")
-        trigger = text.split("on:\\n", 1)[1].split("permissions:\\n", 1)[0]
+        trigger = text.split("on:\n", 1)[1].split("permissions:\n", 1)[0]
         self.assertEqual(trigger.strip(), "workflow_dispatch:")
         self.assertNotIn("issue_comment:", text)
         self.assertNotIn("schedule:", text)
