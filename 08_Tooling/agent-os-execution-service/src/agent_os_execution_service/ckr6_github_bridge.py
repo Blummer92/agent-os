@@ -539,8 +539,23 @@ def write_retrieval_diagnostics_summary(
     Observational only: any failure is swallowed so it can never alter the
     already-written result, the exit status, or admission.
     """
-    if diagnostics is None:
+    if not isinstance(diagnostics, Mapping):
         return False
+    # The summary is independently fail-closed on the new optional fields,
+    # even when a caller bypasses the usual finite projection.
+    page_keys_present = _TERMINAL_PAGE_KEYS & diagnostics.keys()
+    if page_keys_present:
+        if page_keys_present != _TERMINAL_PAGE_KEYS:
+            return False
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") not in _INCOMPLETE_REASON_CODES
+        ):
+            return False
     target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
     if not target:
         return False
