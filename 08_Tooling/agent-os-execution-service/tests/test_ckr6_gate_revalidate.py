@@ -405,6 +405,7 @@ def test_postback_complete_rejects_active_or_repeated_run(monkeypatch):
             pytest.fail("active gate must not be rerun")
         raise AssertionError(path)
     monkeypatch.setattr(r, "api", fake)
+    monkeypatch.setattr(r.time, "sleep", lambda _: None)
     with pytest.raises(r.RevalidationBlocked, match="gate-run-in-progress"):
         r.evaluate(event, "unused", postback_complete=True)
 
