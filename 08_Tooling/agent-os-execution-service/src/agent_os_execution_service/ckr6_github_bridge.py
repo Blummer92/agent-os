@@ -453,6 +453,13 @@ _TERMINAL_QUERY_BUCKETS = frozenset({
     *(f"area:{area}/type:{kind}" for area in _AREA_ECOSYSTEM
       for kind in _LEARNING_TYPE_CAPABILITY),
 })
+_TERMINAL_PAGE_ROW_BUCKETS = frozenset({"0-24", "25", "over-25", "unobserved"})
+_TERMINAL_PAGE_HAS_MORE = frozenset({"true", "false", "invalid"})
+_TERMINAL_PAGE_KEYS = frozenset({
+    "terminal_page_row_count_bucket",
+    "terminal_page_has_more",
+    "terminal_page_cursor_present",
+})
 _INCOMPLETE_REASON_CODES = frozenset({
     "row-bound-exceeded",
     "page-bound-exceeded",
@@ -505,6 +512,21 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             value if type(value) is str and value in _TERMINAL_QUERY_BUCKETS
             else "unobserved"
         )
+    if isinstance(source, Mapping) and _TERMINAL_PAGE_KEYS <= source.keys():
+        row_bucket = source["terminal_page_row_count_bucket"]
+        more = source["terminal_page_has_more"]
+        cursor_present = source["terminal_page_cursor_present"]
+        if (
+            type(row_bucket) is str and row_bucket in _TERMINAL_PAGE_ROW_BUCKETS
+            and type(more) is str and more in _TERMINAL_PAGE_HAS_MORE
+            and type(cursor_present) is bool
+            and projected["incomplete_reason_code"] != "none"
+        ):
+            projected.update({
+                "terminal_page_row_count_bucket": row_bucket,
+                "terminal_page_has_more": more,
+                "terminal_page_cursor_present": cursor_present,
+            })
     return projected
 
 
@@ -523,8 +545,12 @@ def write_retrieval_diagnostics_summary(
     if not target:
         return False
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
-    for name in ("retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS, "terminal_query_bucket"):
-        if name == "terminal_query_bucket" and name not in diagnostics:
+    for name in (
+        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
+        "terminal_query_bucket", "terminal_page_row_count_bucket",
+        "terminal_page_has_more", "terminal_page_cursor_present",
+    ):
+        if name not in diagnostics:
             continue
         lines.append(f"- {name}: `{diagnostics.get(name)}`")
     try:
@@ -550,8 +576,23 @@ def write_retrieval_diagnostics_artifact(
     expected_keys = {
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
     }
-    if set(diagnostics) not in (expected_keys, expected_keys | {"terminal_query_bucket"}):
+    allowed_keys = (
+        expected_keys,
+        expected_keys | {"terminal_query_bucket"},
+        expected_keys | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    )
+    if set(diagnostics) not in allowed_keys:
         return False
+    if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") == "none"
+        ):
+            return False
     bucket = diagnostics.get("terminal_query_bucket")
     if "terminal_query_bucket" in diagnostics and (type(bucket) is not str or bucket not in _TERMINAL_QUERY_BUCKETS):
         return False
@@ -577,6 +618,9 @@ def write_retrieval_diagnostics_artifact(
     }
     if "terminal_query_bucket" in diagnostics:
         safe["terminal_query_bucket"] = bucket
+    for name in _TERMINAL_PAGE_KEYS:
+        if name in diagnostics:
+            safe[name] = diagnostics[name]
     try:
         path.write_text(
             json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
