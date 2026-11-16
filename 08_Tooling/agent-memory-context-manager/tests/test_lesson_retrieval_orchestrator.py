@@ -1322,3 +1322,110 @@ def test_budget_stop_names_last_issued_query_not_the_refused_one(monkeypatch):
     # Cap 2: broad OR then Area=Automation were sent; the exact cell was refused.
     assert _budget_stop_bucket(monkeypatch, 2) == "area:Automation"
 
+
+
+# #4011: the terminal provider-page signature is observational and finite.
+# Workspace remains intentionally unpartitioned; these are synthetic reads.
+def _terminal_page_case(response):
+    req = request(
+        ecosystem_hints=(), language_hints=(), capability_keywords=(),
+        target_path_hints=(), known_knowledge_refs=(),
+    )
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        # Preserve existing CKR2 escalation until the broad final query.
+        if len(query["filter"]["and"]) != 2:
+            return {"results": [], "has_more": False}
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    return orchestrate_lesson_retrieval(req, execute_read=read), calls
+
+
+@pytest.mark.parametrize(("response", "bucket", "more", "cursor"), [
+    ({"results": [_lesson_row("LL-42")] * 25,
+      "has_more": True, "next_cursor": "SECRET-CURSOR"}, "25", "true", True),
+    ({"results": [_lesson_row("LL-42")] * 26,
+      "has_more": False, "next_cursor": None}, "over-25", "false", False),
+])
+def test_4011_terminal_workspace_row_bound_distinguishes_page_signature(
+    response, bucket, more, cursor
+):
+    result, calls = _terminal_page_case(response)
+    diag = result.retrieval_diagnostics
+    assert len(calls) == 3
+    assert diag["incomplete_reason_code"] == "row-bound-exceeded"
+    assert diag["terminal_query_bucket"] == "workspace"
+    assert diag["terminal_page_row_count_bucket"] == bucket
+    assert diag["terminal_page_has_more"] == more
+    assert diag["terminal_page_cursor_present"] is cursor
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "SECRET-CURSOR" not in str(diag)
+
+
+@pytest.mark.parametrize("count", [24, 25])
+def test_4011_completed_terminal_page_does_not_emit_page_signature(count):
+    result, calls = _terminal_page_case({
+        "results": [_lesson_row("LL-42")] * count,
+        "has_more": False,
+    })
+    assert len(calls) == 3
+    assert "incomplete_reason_code" not in result.retrieval_diagnostics
+    assert not any(
+        key.startswith("terminal_page_") for key in result.retrieval_diagnostics
+    )
+
+
+def test_4011_malformed_page_signature_is_sanitized():
+    result, _ = _terminal_page_case({
+        "results": "untrusted provider content",
+        "has_more": "untrusted boolean",
+        "next_cursor": {"secret": "TOKEN"},
+    })
+    diag = result.retrieval_diagnostics
+    assert diag["incomplete_reason_code"] == "malformed-page"
+    assert diag["terminal_page_row_count_bucket"] == "unobserved"
+    assert diag["terminal_page_has_more"] == "invalid"
+    assert diag["terminal_page_cursor_present"] is False
+    assert "TOKEN" not in str(diag)
+    assert "untrusted" not in str(diag)
+
+
+def test_4011_reader_error_discards_previous_page_signature():
+    req = request(
+        ecosystem_hints=(), language_hints=(), capability_keywords=(),
+        target_path_hints=(), known_knowledge_refs=(),
+    )
+    def read(query):
+        if len(query["filter"]["and"]) != 2:
+            return {"results": [], "has_more": False}
+        if "start_cursor" not in query:
+            return {
+                "results": [_lesson_row("LL-42")], "has_more": True,
+                "next_cursor": "never-publish",
+            }
+        raise ConnectionError("sensitive provider detail")
+
+    result = orchestrate_lesson_retrieval(req, execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert not any(
+        key.startswith("terminal_page_") for key in result.retrieval_diagnostics
+    )
+    assert "never-publish" not in str(result.retrieval_diagnostics)
+
+
+def test_4011_missing_cursor_keeps_safe_metadata():
+    result, _ = _terminal_page_case({
+        "results": [_lesson_row("LL-42")],
+        "has_more": True, "next_cursor": None,
+    })
+    diag = result.retrieval_diagnostics
+    assert diag["incomplete_reason_code"] == "missing-cursor"
+    assert diag["terminal_page_row_count_bucket"] == "0-24"
+    assert diag["terminal_page_has_more"] == "true"
+    assert diag["terminal_page_cursor_present"] is False
