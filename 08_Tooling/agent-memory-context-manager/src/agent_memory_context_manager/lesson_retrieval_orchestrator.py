@@ -422,7 +422,6 @@ def orchestrate_lesson_retrieval(
         # One bounded sequence: at most MAX_RETRIEVAL_PAGES pages and
         # MAX_RETRIEVAL_ROWS rows, following cursors as before (#3973).
         nonlocal read_count, terminal_query_bucket
-        terminal_query_bucket = _terminal_query_bucket(query)
         rows: list[Mapping[str, Any]] = []
         cursor: str | None = None
         seen_cursors: set[str | None] = set()
@@ -433,6 +432,9 @@ def orchestrate_lesson_retrieval(
             if read_count >= MAX_PREFLIGHT_READS:
                 raise LessonActivationError(_READ_BUDGET_MESSAGE)
             page_query = query if cursor is None else {**query, "start_cursor": cursor}
+            # Name only a query that is actually sent: a budget stop above leaves
+            # the bucket of the last issued query, never the one it refused.
+            terminal_query_bucket = _terminal_query_bucket(query)
             raw = execute_read(page_query)
             read_count += 1
             page_rows = _extract_bounded_rows(raw)
