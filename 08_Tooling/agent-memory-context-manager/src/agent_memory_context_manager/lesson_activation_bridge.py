@@ -337,7 +337,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
         evidence_refs = (page_url.strip()[:MAX_ROW_TEXT_CHARS],)
 
     try:
-        return LessonRecordEvidence(
+        lesson = LessonRecordEvidence(
             lesson_id=lesson_id,
             source_revision=source_revision,
             title=title,
@@ -354,6 +354,11 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
+        # CKR2 validates additional text invariants, including control
+        # characters. Check them inside this row's isolation boundary so
+        # a malformed lesson cannot abort selection of the complete corpus.
+        _as_selection_candidate(lesson)
+        return lesson
     except (TypeError, ValueError):
         return LessonActivationSkip(lesson_id, "oversized-or-malformed-field")
 
@@ -727,3 +732,4 @@ def _github_source_link(prop: Any) -> str | None:
     ):
         return None
     return value
+
