@@ -206,19 +206,26 @@ def test_issue_start_diagnostics_are_a_copy_not_the_orchestrator_mapping(monkeyp
 
 
 def test_issue_start_bounded_page_with_more_preserves_row_bound_and_read_count():
+    # Snapshot A is independently bounded at 100 rows/page, 5 pages and
+    # 500 total. Even a relevant first page cannot admit a partial corpus.
     calls = []
 
     def reader(query):
-        calls.append(query)
-        return {"results": [_lesson() for _ in range(25)], "has_more": True,
-                "next_cursor": "SENSITIVE-CURSOR-DO-NOT-LEAK"}
+        calls.append(dict(query))
+        return {
+            "results": [_lesson() for _ in range(100)],
+            "has_more": True,
+            "next_cursor": "SENSITIVE-CURSOR-DO-NOT-LEAK-" + str(len(calls)),
+        }
 
     result = _material_call(reader)
-    assert len(calls) == 1
+    assert len(calls) == 5
+    assert calls[0]["page_size"] == 100
     assert result["lesson_retrieval_status"] == "insufficient"
     assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
     assert result["retrieval_diagnostics"]["incomplete_reason_code"] == "row-bound-exceeded"
-    assert result["retrieval_diagnostics"]["read_count"] == 1
+    assert result["retrieval_diagnostics"]["read_count"] == 5
     assert "SENSITIVE-CURSOR-DO-NOT-LEAK" not in repr(result)
 
 
