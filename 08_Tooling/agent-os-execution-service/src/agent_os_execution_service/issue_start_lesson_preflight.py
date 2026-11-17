@@ -11,7 +11,6 @@ from typing import Any, Callable, Mapping
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_activation_bridge import (
-    MAX_RETRIEVAL_ROWS,
     LessonActivationSkip,
     LessonRecordEvidence,
     known_lesson_numbers,
@@ -23,7 +22,10 @@ from agent_memory_context_manager.lesson_preflight import MAX_LESSON_RECORDS, Le
 from agent_memory_context_manager.lesson_preflight import (
     _ALLOWED_STATUSES as _ALLOWED_LESSON_STATUSES,
 )
-from agent_memory_context_manager.lesson_retrieval_orchestrator import orchestrate_lesson_retrieval
+from agent_memory_context_manager.lesson_retrieval_orchestrator import (
+    SNAPSHOT_PAGE_SIZE,
+    orchestrate_lesson_retrieval,
+)
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
@@ -88,7 +90,10 @@ def _requested_lesson_skips(
         return
     # Cap raw entries inspected, not just valid mapping entries. A response
     # containing unlimited malformed values must not expand diagnostic work.
-    for row in rows[:MAX_RETRIEVAL_ROWS]:
+    # The cap is the snapshot page bound (#4016 R-4): a requested lesson
+    # anywhere on one complete snapshot page is diagnosed, while inspection
+    # of any single returned page stays bounded.
+    for row in rows[:SNAPSHOT_PAGE_SIZE]:
         if not isinstance(row, Mapping):
             continue
         normalized = normalize_lesson_row(row)
@@ -190,7 +195,14 @@ def activate_issue_start_lesson_preflight(
     rejected = [dict(item) for item in result.rejected_candidate_provenance][:MAX_LESSON_RECORDS]
     excluded_ids = set(result.selected_lesson_ids)
     excluded_ids.update(item["lesson_id"] for item in rejected)
-    rejected.extend(item for item in skipped if item["lesson_id"] not in excluded_ids)
+    # #4016 R-4: skips observed while pages were arriving are provisional.
+    # When the retrieval later fails closed, the rows they describe were never
+    # part of a complete retrieval: drop them instead of presenting them as
+    # though they came from an accepted complete retrieval. The pinned
+    # precedence (eligible rejections before requested skips, within the
+    # five-record cap) is unchanged.
+    if result.retrieval_diagnostics.get("incomplete_reason_code") is None:
+        rejected.extend(item for item in skipped if item["lesson_id"] not in excluded_ids)
     rejected = rejected[:MAX_LESSON_RECORDS]
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
     handoff = dict(result.handoff_projection)

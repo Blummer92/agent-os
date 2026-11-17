@@ -163,3 +163,75 @@ def test_retired_query_database_action_is_not_registered():
     assert result["status"] == "failure"
     assert "Unsupported action" in result["message"]
     assert http_post.calls == []
+
+
+def test_query_data_source_rejects_missing_has_more():
+    # #4016 R-1: a provider page without pagination metadata must fail, never
+    # become an apparently complete read.
+    http_post = FakePost([{"results": [{"id": "a"}]}])
+    result = NotionReadOnlyAdapter(http_post_query_data_source=http_post).execute(
+        make_task({"action": "query_data_source", "data_source_id": "ds-1"})
+    )
+    assert result["status"] == "failure"
+    assert "pagination metadata is malformed" in result["message"]
+    assert "missing required field 'has_more'" in result["message"]
+
+
+@pytest.mark.parametrize(
+    "has_more", [None, "false", 0, 1], ids=["null", "string", "zero", "one"]
+)
+def test_query_data_source_rejects_wrong_type_has_more(has_more):
+    http_post = FakePost([{"results": [{"id": "a"}], "has_more": has_more}])
+    result = NotionReadOnlyAdapter(http_post_query_data_source=http_post).execute(
+        make_task({"action": "query_data_source", "data_source_id": "ds-1"})
+    )
+    assert result["status"] == "failure"
+    assert "'has_more' must be a boolean" in result["message"]
+
+
+def test_query_data_source_returns_oversized_page_whole_without_slicing():
+    # #4016 R-2: the adapter reports the provider page whole; the consuming
+    # layer owns the row bound and rejects it there.
+    rows = [{"id": f"row-{n}"} for n in range(3)]
+    http_post = FakePost([{"results": rows, "has_more": False, "next_cursor": None}])
+    result = NotionReadOnlyAdapter(http_post_query_data_source=http_post).execute(
+        make_task(
+            {
+                "action": "query_data_source",
+                "data_source_id": "ds-1",
+                "page_size": 1,
+                "max_pages": 1,
+                "max_results": 2,
+            }
+        )
+    )
+    assert result["status"] == "success"
+    assert [row["id"] for row in result["output"]["results"]] == ["row-0", "row-1", "row-2"]
+    assert result["output"]["has_more"] is False
+
+
+def test_query_data_source_reports_cumulative_overflow_with_truthful_has_more():
+    # The read stops at max_results, but the returned has_more is the
+    # provider's own: more results remain, so no consumer may call this complete.
+    http_post = FakePost(
+        [
+            {"results": [{"id": "a"}, {"id": "b"}], "has_more": True, "next_cursor": "c1"},
+            {"results": [{"id": "c"}], "has_more": True, "next_cursor": "c2"},
+        ]
+    )
+    result = NotionReadOnlyAdapter(http_post_query_data_source=http_post).execute(
+        make_task(
+            {
+                "action": "query_data_source",
+                "data_source_id": "ds-1",
+                "page_size": 2,
+                "max_pages": 2,
+                "max_results": 3,
+            }
+        )
+    )
+    assert result["status"] == "success"
+    assert [row["id"] for row in result["output"]["results"]] == ["a", "b", "c"]
+    assert result["output"]["has_more"] is True
+    assert result["output"]["next_cursor"] == "c2"
+    assert len(http_post.calls) == 2

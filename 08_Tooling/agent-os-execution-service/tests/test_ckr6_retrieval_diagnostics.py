@@ -77,18 +77,12 @@ def _counting(response_or_exc):
     return execute_read
 
 
-def _assert_partitioned_row_bound_calls(calls):
-    """A broad overflow is retried only through finite, narrower partitions."""
-    assert len(calls) == 3
-    assert all(query["page_size"] == 25 for query in calls)
-    assert all("start_cursor" not in query for query in calls)
-    broad, area, cell = [query["filter"]["and"] for query in calls]
-    assert "or" in broad[-1]
-    assert area[-1] == {"property": "Area", "select": {"equals": "Automation"}}
-    assert cell[-2:] == [
-        {"property": "Area", "select": {"equals": "Automation"}},
-        {"property": "Learning Type", "select": {"equals": "Deployment lesson"}},
-    ]
+def _assert_snapshot_row_bound_calls(calls):
+    """An oversized snapshot page is rejected before normalization or selection."""
+    assert len(calls) == 1
+    assert calls[0]["page_size"] == 100
+    assert "start_cursor" not in calls[0]
+    assert len(calls[0]["filter"]["and"]) == 2
 
 
 def _assert_fail_closed(result):
@@ -118,19 +112,19 @@ def test_case_a_complete_retrieval_selects_normally_and_reports_none(monkeypatch
 
 def test_case_b_incomplete_pagination_is_distinct_and_fail_closed(monkeypatch):
     reader = _counting({
-        "results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR,
+        "results": [_row(n) for n in range(101)], "has_more": True, "next_cursor": CURSOR,
     })
     result, sink = _run(monkeypatch, reader)
     _assert_fail_closed(result)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
-    _assert_partitioned_row_bound_calls(reader.calls)  # no cursor continuation; bounded STOP
+    _assert_snapshot_row_bound_calls(reader.calls)  # no cursor continuation; bounded STOP
     assert CURSOR not in json.dumps(result) + json.dumps(sink)
 
 
 def test_case_c_provider_429_is_distinct_and_fail_closed(monkeypatch):
     result_b, _ = _run(monkeypatch, _counting({
-        "results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR,
+        "results": [_row(n) for n in range(101)], "has_more": True, "next_cursor": CURSOR,
     }))
     reader = _counting(RuntimeError("notion-http-429"))
     result_c, sink = _run(monkeypatch, reader)
@@ -202,7 +196,7 @@ def test_trusted_result_schema_and_default_behavior_unchanged(monkeypatch):
 
 
 @pytest.mark.parametrize(("scenario", "expected_code", "expected_reads"), [
-    ("row-bound", "row-bound-exceeded", 3),
+    ("row-bound", "row-bound-exceeded", 1),
     ("page-bound", "page-bound-exceeded", 5),
     ("missing-cursor", "missing-cursor", 1),
     ("repeated-cursor", "repeated-cursor", 2),
@@ -217,7 +211,7 @@ def test_incomplete_subreasons_are_finite_and_fail_closed(
     def read(query):
         calls.append(dict(query))
         if scenario == "row-bound":
-            return {"results": [_row(n) for n in range(25)],
+            return {"results": [_row(n) for n in range(101)],
                     "has_more": True, "next_cursor": "cursor-next"}
         if scenario == "page-bound":
             return {"results": [], "has_more": True,
@@ -236,7 +230,7 @@ def test_incomplete_subreasons_are_finite_and_fail_closed(
     _assert_fail_closed(result)
     assert len(calls) == expected_reads
     if scenario == "row-bound":
-        _assert_partitioned_row_bound_calls(calls)
+        _assert_snapshot_row_bound_calls(calls)
     assert sink[0]["retrieval_reason_code"] == "lesson-read-incomplete"
     assert sink[0]["incomplete_reason_code"] == expected_code
     assert "incomplete_reason_code" not in json.dumps(result)
@@ -281,7 +275,7 @@ def test_transport_failures_are_distinct_and_fail_closed(monkeypatch, failure, e
 
 def test_sanitized_retrieval_diagnostics_artifact_tracks_exact_failure(tmp_path, monkeypatch):
     reader = _counting({
-        "results": [_row(n) for n in range(25)],
+        "results": [_row(n) for n in range(101)],
         "has_more": True,
         "next_cursor": CURSOR,
     })
@@ -292,8 +286,8 @@ def test_sanitized_retrieval_diagnostics_artifact_tracks_exact_failure(tmp_path,
     data = json.loads(target.read_text())
     assert data["retrieval_reason_code"] == "lesson-read-incomplete"
     assert data["incomplete_reason_code"] == "row-bound-exceeded"
-    assert data["read_count"] == 3
-    _assert_partitioned_row_bound_calls(reader.calls)
+    assert data["read_count"] == 1
+    _assert_snapshot_row_bound_calls(reader.calls)
     assert CURSOR not in target.read_text()
     assert SENSITIVE_SAMPLE not in target.read_text()
     assert "retrieval_diagnostics" not in json.dumps(result)
@@ -430,19 +424,19 @@ def test_issue_start_normal_read_reaches_artifact_with_actual_counters(monkeypat
 
 def test_issue_start_incomplete_page_reaches_artifact_with_row_bound_and_read_count(monkeypatch, tmp_path):
     reader = _counting({
-        "results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR,
+        "results": [_row(n) for n in range(101)], "has_more": True, "next_cursor": CURSOR,
     })
     result, sink = _run_issue_start(monkeypatch, reader)
     assert result["status"] == "insufficient"
     assert result["selected_lesson_ids"] == []
-    _assert_partitioned_row_bound_calls(reader.calls)
+    _assert_snapshot_row_bound_calls(reader.calls)
     _assert_issue_start_governance(result)
     target = tmp_path / "retrieval-diagnostics.json"
     assert bridge.write_retrieval_diagnostics_artifact(sink[0], target) is True
     data = json.loads(target.read_text())
     assert data["retrieval_reason_code"] == "lesson-read-incomplete"
     assert data["incomplete_reason_code"] == "row-bound-exceeded"
-    assert data["read_count"] == 3
+    assert data["read_count"] == 1
     text = target.read_text()
     assert CURSOR not in text and CURSOR not in json.dumps(result)
 
@@ -474,23 +468,31 @@ def test_issue_start_malformed_page_and_unsupported_values_stay_finite(monkeypat
 
 
 def test_failed_repair_artifact_values_unchanged_alongside_issue_start(monkeypatch):
-    reader = _counting({"results": [_row(n) for n in range(25)], "has_more": True, "next_cursor": CURSOR})
+    reader = _counting({"results": [_row(n) for n in range(101)], "has_more": True, "next_cursor": CURSOR})
     _, sink = _run(monkeypatch, reader)
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
-    assert sink[0]["read_count"] == 3
-    _assert_partitioned_row_bound_calls(reader.calls)
+    assert sink[0]["read_count"] == 1
+    _assert_snapshot_row_bound_calls(reader.calls)
 
 def test_read_budget_stop_is_distinguishable_and_still_fails_closed(monkeypatch, tmp_path):
     import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
     monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 2)
-    reader = _counting({"results": [_row(n) for n in range(25)],
-                        "has_more": True, "next_cursor": CURSOR})
+    calls = []
+
+    def reader(query):
+        calls.append(dict(query))
+        return {"results": [_row(n) for n in range(25)],
+                "has_more": True, "next_cursor": f"{CURSOR}-{len(calls)}"}
+
     result, sink = _run(monkeypatch, reader)
     assert result["mutation_admissible"] is False
     assert result["selected_lesson_ids"] == []
     assert sink[0]["incomplete_reason_code"] == "read-budget-exceeded"
     assert sink[0]["read_count"] == 2
-    assert sink[0]["terminal_query_bucket"] == "area:Automation"
+    assert len(calls) == 2
+    assert calls[1]["start_cursor"] == f"{CURSOR}-1"
+    assert all(query["page_size"] == 100 for query in calls)
+    assert sink[0]["terminal_query_bucket"] == "workspace"
     target = tmp_path / "budget.json"
     assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
     assert json.loads(target.read_text())["incomplete_reason_code"] == "read-budget-exceeded"
@@ -498,11 +500,11 @@ def test_read_budget_stop_is_distinguishable_and_still_fails_closed(monkeypatch,
 
 
 def test_terminal_query_bucket_survives_only_sanitized_diagnostic_artifact(monkeypatch, tmp_path):
-    reader = _counting({"results": [_row(n) for n in range(25)],
+    reader = _counting({"results": [_row(n) for n in range(101)],
                         "has_more": True, "next_cursor": CURSOR})
     result, sink = _run(monkeypatch, reader)
     assert result["mutation_admissible"] is False
-    assert sink[0]["terminal_query_bucket"] == "area:Automation/type:Deployment lesson"
+    assert sink[0]["terminal_query_bucket"] == "workspace"
     target = tmp_path / "bucket.json"
     assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
     assert json.loads(target.read_text())["terminal_query_bucket"] == sink[0]["terminal_query_bucket"]
@@ -540,8 +542,8 @@ def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path
 
 # #4011: New page fields are emitted only in separate sanitized artifacts.
 @pytest.mark.parametrize(("count", "has_more", "row_bucket", "more_bucket", "cursor"), [
-    (25, True, "25", "true", True),
-    (26, False, "over-25", "false", False),
+    (100, True, "over-25", "true", True),
+    (101, False, "over-25", "false", False),
 ])
 def test_4011_two_terminal_page_shapes_are_finite_and_fail_closed(
     monkeypatch, tmp_path, count, has_more, row_bucket, more_bucket, cursor

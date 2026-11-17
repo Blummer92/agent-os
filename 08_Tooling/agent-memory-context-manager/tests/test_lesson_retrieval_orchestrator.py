@@ -21,7 +21,6 @@ from agent_memory_context_manager.lesson_retrieval_orchestrator import (
     record_retrieval_attempt,
 )
 
-
 def request(**overrides):
     data = dict(
         task_reference="issue:#2141",
@@ -78,36 +77,8 @@ def test_generic_exact_narrow_lookup_keeps_first_controlled_clause():
     assert exact["page_size"] == MAX_LESSON_RECORDS
 
 
-def test_bounded_empty_escalation_terminates_at_manual_review():
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": []}
-
-    result = orchestrate_lesson_retrieval(request(), execute_read=read)
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
-    assert len(calls) == 3
-    assert len(calls) <= MAX_ESCALATION_STEPS
-    assert calls[0] != calls[1]
-    assert calls[1] != calls[2]
 
 
-def test_known_reference_is_attempted_before_other_steps_and_still_terminates():
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": []}
-
-    result = orchestrate_lesson_retrieval(
-        request(known_knowledge_refs=("LL-63",)),
-        execute_read=read,
-    )
-    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
-    assert len(calls) == MAX_ESCALATION_STEPS
-    assert calls[0]["filter"]["or"][0]["property"] == "Lesson ID"
 
 
 def test_unavailable_executor_uses_existing_ckr6_unavailability_contract():
@@ -233,26 +204,6 @@ def _lesson_row(lesson_id, *, last_edited="2026-11-04T12:00:00.000Z"):
     }
 
 
-def test_pr_a01_identical_windows_collapse_across_escalation_steps():
-    # Two distinct lessons, returned identically on every escalation step.
-    # The retrieval escalates because a required library hint is uncovered,
-    # so the same window is read three times. Identical records must collapse
-    # by full equality in the accumulation: two candidates, not six (and not
-    # five, the old record-counted bound's silent truncation).
-    rows = [_lesson_row("LL-01"), _lesson_row("LL-02")]
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": rows}
-
-    req = request(library_hints=("hypothesis",))
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    assert len(calls) == 3
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert "required-library-uncovered" in result.selection_reason_codes
-    assert result.candidate_count == 2
-    assert result.selected_lesson_ids == ("LL-01", "LL-02")
 
 
 # --- CKR11 cursor-completeness regression (reuses #3973's finite contract) ---
@@ -281,15 +232,24 @@ def test_ckr11_finds_current_relevant_lesson_on_second_page():
     assert result.retrieval_diagnostics["observed_rows"] == 2
 
 
-def test_ckr11_legacy_single_page_response_is_unchanged():
+def test_ckr11_explicit_single_page_response_is_unchanged():
     calls = []
     def read(query):
         calls.append(dict(query))
-        return {"results": [_lesson_row("LL-42")]}
+        return {"results": [_lesson_row("LL-42")], "has_more": False}
     result = orchestrate_lesson_retrieval(request(), execute_read=read)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-42",)
     assert len(calls) == 1
+
+
+def test_ckr11_missing_has_more_fails_closed_with_truthful_code():
+    # P6 fix: missing has_more is malformed pagination, not a complete page.
+    result = orchestrate_lesson_retrieval(
+        request(), execute_read=lambda _q: {"results": [_lesson_row("LL-42")]}
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
 
 
 def test_ckr11_relevant_first_page_cannot_admit_when_next_page_is_broken():
@@ -357,16 +317,6 @@ def test_ckr11_row_cap_with_more_results_refuses_partial_selection():
     assert "lesson-read-incomplete" in result.selection_reason_codes
 
 
-def test_ckr11_oversized_provider_page_fails_closed_without_silent_truncation():
-    def read(_query):
-        return {
-            "results": [_lesson_row(f"LL-{n}") for n in range(1, MAX_RETRIEVAL_ROWS + 2)],
-            "has_more": False,
-        }
-    result = orchestrate_lesson_retrieval(request(), execute_read=read)
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert "lesson-read-incomplete" in result.selection_reason_codes
-    assert result.selected_lesson_ids == ()
 
 
 def test_ckr11_malformed_pagination_state_fails_closed():
@@ -399,56 +349,8 @@ def test_ckr6_exact_context_first_query_targets_testing_only():
     assert len(broad["filter"]["and"]) == 2
 
 
-def test_ckr6_focused_query_retrieves_verified_lesson_without_broad_overflow():
-    req = request(
-        task_reference="PR #3989 exact head",
-        ecosystem_hints=("GitHub Actions",),
-        language_hints=("Python", "YAML"),
-        capability_keywords=("CKR6 mutation boundary", "trusted owner request"),
-    )
-    row = _lesson_row("LL-63")
-    row["properties"]["Lesson Learned"] = _title("CKR6 mutation boundary verification")
-    row["properties"]["What To Do Next Time"] = _rich_text(
-        "Verify CKR6 mutation admission against the exact head."
-    )
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        # A broad Python union would return 25 rows with has_more=True;
-        # the focused controlled Testing query returns a complete result.
-        if "or" in query["filter"]["and"][-1]:
-            return {"results": [row] * MAX_RETRIEVAL_ROWS,
-                    "has_more": True, "next_cursor": "overflow"}
-        return {"results": [row], "has_more": False, "next_cursor": None}
-
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    assert len(calls) == 1
-    assert calls[0]["filter"]["and"][-1]["select"]["equals"] == "Testing"
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids == ("LL-63",)
-    assert result.selection.selected[0].candidate.source_revision == "2026-11-04T12:00:00.000Z"
-    assert result.selection.selected[0].candidate.canonical_github_refs
-    assert result.retrieval_diagnostics["read_count"] == 1
 
 
-def test_ckr6_testing_query_still_stops_when_it_overflows():
-    req = request(capability_keywords=("CKR6 mutation boundary",))
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": [_lesson_row("LL-63")] * MAX_RETRIEVAL_ROWS,
-                "has_more": True, "next_cursor": "more"}
-
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    # 1 overflowing Testing read, then the first Testing x Learning Type cell
-    # overflows too: the step fails closed immediately, never a truncated
-    # selection and never a partial union.
-    assert len(calls) == 1 + 1
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert result.selected_lesson_ids == ()
 
 
 def test_generic_python_testing_request_retains_broad_query():
@@ -539,33 +441,6 @@ def _ckr6_qa_request():
     )
 
 
-def test_ckr6_complementary_query_preserves_automation_lesson_recall():
-    req = _ckr6_qa_request()
-    first = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
-    second = build_escalation_query(req, RetrievalEscalation.EXACT_NARROW_LOOKUP)
-    testing = {"property": "Area", "select": {"equals": "Testing"}}
-    automation = {"property": "Area", "select": {"equals": "Automation"}}
-    dashboard = {"property": "Area", "select": {"equals": "Dashboard"}}
-    assert first["filter"]["and"][-1] == testing
-    assert second["filter"]["and"][-1] == {"or": [automation, dashboard]}
-    assert second["page_size"] == MAX_LESSON_RECORDS
-    assert first["filter"] != second["filter"]
-    rows = (
-        [_ckr6_area_row(i, "Testing") for i in range(1, 11)]
-        + [_ckr6_area_row(300, "Automation", relevant=True)]
-        + [_ckr6_area_row(400 + i, "Governance") for i in range(30)]
-    )
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        req, execute_read=_ckr6_filter_evaluating_reader(rows, calls)
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids == ("LL-300",)
-    assert result.selection.selected[0].candidate.source_revision == "2026-11-04T12:00:00.000Z"
-    assert result.selection.selected[0].candidate.canonical_github_refs
-    assert len(calls) == 2
-    assert calls[0]["filter"]["and"][-1] == testing
-    assert calls[1]["filter"]["and"][-1] == {"or": [automation, dashboard]}
 
 
 def test_ckr6_complementary_query_retains_testing_first_cure():
@@ -584,20 +459,6 @@ def test_ckr6_complementary_query_retains_testing_first_cure():
     assert len(calls) == 1
 
 
-def test_ckr6_complementary_query_still_rejects_incomplete_automation_page():
-    req = _ckr6_qa_request()
-    rows = (
-        [_ckr6_area_row(i, "Testing") for i in range(1, 3)]
-        + [_ckr6_area_row(300 + i, "Automation") for i in range(MAX_RETRIEVAL_ROWS + 1)]
-    )
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        req, execute_read=_ckr6_filter_evaluating_reader(rows, calls)
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert result.selected_lesson_ids == ()
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert len(calls) <= MAX_PREFLIGHT_READS
 
 
 def test_ckr6_exact_lookup_without_other_area_stays_finite():
@@ -634,87 +495,12 @@ def _testing_rows(per_type, *, relevant_id=None):
     return rows
 
 
-def test_testing_overflow_is_partitioned_by_learning_type_and_selects_lesson():
-    # Measured shape on 2026-11-15: Testing is 26+ but each Learning Type cell
-    # is at most 25 (Testing lesson exactly 25).
-    rows = _testing_rows(
-        {"Mistake": 13, "QA feedback": 15, "Testing lesson": 24, "Trigger lesson": 5},
-        relevant_id=9001,
-    )
-    assert len(rows) > MAX_RETRIEVAL_ROWS
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, calls)
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert "LL-9001" in result.selected_lesson_ids
-    assert len(calls) == 1 + 6
-    # Every controlled Learning Type is queried, including empty ones: no
-    # snapshot count is hard-coded.
-    cell_types = sorted(c["filter"]["and"][-1]["select"]["equals"] for c in calls[1:])
-    assert cell_types == sorted(
-        ["Mistake", "QA feedback", "Testing lesson", "Deployment lesson",
-         "Scope/permission lesson", "Trigger lesson"]
-    )
-    for call in calls[1:]:
-        assert call["filter"]["and"][-2] == {"property": "Area", "select": {"equals": "Testing"}}
-        assert call["page_size"] == MAX_LESSON_RECORDS * 5
-    assert result.retrieval_diagnostics["read_count"] == 7
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
 
 
-def test_exactly_25_row_cell_completes_but_a_26th_row_fails_closed():
-    base = {"Mistake": 13, "QA feedback": 15, "Testing lesson": 24}
-    ok_rows = _testing_rows(base, relevant_id=9001)  # Testing lesson cell == 25
-    calls = []
-    ok = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(ok_rows, calls)
-    )
-    assert ok.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    grown = _testing_rows({**base, "Testing lesson": 25}, relevant_id=9001)  # 26
-    calls = []
-    bad = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(grown, calls)
-    )
-    assert bad.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert bad.selected_lesson_ids == ()
-    assert bad.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert "lesson-read-incomplete" in bad.selection_reason_codes
 
 
-def test_partition_spends_the_unchanged_preflight_read_budget_and_fails_closed():
-    # A reader that overflows every sequence; the shared 20-read ceiling is
-    # never exceeded and the failure code is a closed vocabulary value.
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": [_lesson_row("LL-1")] * MAX_RETRIEVAL_ROWS,
-                "has_more": True, "next_cursor": "x"}
-
-    result = orchestrate_lesson_retrieval(request(), execute_read=read)
-    assert MAX_PREFLIGHT_READS == 32
-    assert len(calls) <= MAX_PREFLIGHT_READS
-    assert result.retrieval_diagnostics["incomplete_reason_code"] in {
-        "row-bound-exceeded", "read-budget-exceeded"}
-    assert result.selected_lesson_ids == ()
 
 
-def test_broad_workspace_search_step_is_not_partitioned():
-    req = request(
-        ecosystem_hints=(), language_hints=(), capability_keywords=(),
-        target_path_hints=(), known_knowledge_refs=(),
-    )
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        return {"results": [_lesson_row("LL-1")] * MAX_RETRIEVAL_ROWS,
-                "has_more": True, "next_cursor": "x"}
-
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert len(calls) <= MAX_ESCALATION_STEPS
 
 
 def _stress_snapshot_rows():
@@ -742,18 +528,6 @@ def _stress_snapshot_rows():
     return rows
 
 
-def test_stress_replay_testing_only_shape_no_longer_row_bound_fails():
-    rows = _stress_snapshot_rows() + [
-        _ckr6_area_row(9001, "Testing", relevant=True, learning_type="Mistake")
-    ]
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, calls)
-    )
-    assert "lesson-read-incomplete" not in result.selection_reason_codes
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
-    assert "LL-9001" in result.selected_lesson_ids
-    assert result.retrieval_diagnostics["read_count"] == 7
 
 
 def _stress_or_shape_rows(*, with_testing_lesson_overflow):
@@ -780,60 +554,10 @@ def _stress_or_shape_rows(*, with_testing_lesson_overflow):
     return rows
 
 
-def test_stress_replay_or_shape_selects_planted_row_inside_the_20_read_ceiling():
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(
-            _stress_or_shape_rows(with_testing_lesson_overflow=False), calls),
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids == ("LL-9003",)
-    # 1 OR overflow + Automation (1+6) + Dashboard 1 + Testing (1+6) + Learning Type 1
-    assert result.retrieval_diagnostics["read_count"] == 17 <= MAX_PREFLIGHT_READS
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
 
 
-def test_stress_replay_or_shape_needs_21_reads_when_testing_lesson_also_overflows(monkeypatch):
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-
-    rows = _stress_or_shape_rows(with_testing_lesson_overflow=True)
-    # Negative control: at the previous 20-read ceiling this shape fails closed
-    # rather than truncating.
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 20)
-    calls = []
-    capped = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(rows, calls),
-    )
-    assert capped.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-    assert capped.retrieval_diagnostics["read_count"] == 20
-    assert capped.selected_lesson_ids == ()
-    # At the production ceiling (32) it completes in 21 reads and selects.
-    monkeypatch.undo()
-    assert MAX_PREFLIGHT_READS == 32
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(rows, calls),
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids  # 25 generic Testing-lesson rows also compete
-    assert result.retrieval_diagnostics["read_count"] == 21
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
 
 
-def test_stress_replay_overflow_in_a_cell_never_truncates_to_a_selection():
-    rows = _stress_snapshot_rows() + [
-        _ckr6_area_row(9100 + i, "Testing", learning_type="Testing lesson") for i in range(2)
-    ]  # Testing x Testing lesson = 27
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, calls)
-    )
-    assert result.selected_lesson_ids == ()
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    assert "lesson-read-incomplete" in result.selection_reason_codes
 
 
 def test_identical_sub_queries_reached_from_two_alternatives_are_read_once():
@@ -879,38 +603,6 @@ def test_partition_rules_enumerate_every_controlled_value_and_every_alternative(
     assert _partition_queries({"filter": {"and": [*base, title]}}, crossed=False)[0] == []
 
 
-@pytest.mark.parametrize(
-    ("label", "make_request", "expected_reads", "expected_code"),
-    [
-        ("stress: testing-only miss path", lambda: request(capability_keywords=("CKR6 mutation boundary",)), 28, "row-bound-exceeded"),
-        ("stress: QA shape miss path", _ckr6_qa_request, 28, "row-bound-exceeded"),
-        ("stress: OR shape miss path", lambda: request(capability_keywords=()), 31, "row-bound-exceeded"),
-    ],
-)
-def test_stress_miss_paths_fit_a_32_read_ceiling_and_end_at_the_unpartitioned_broad_step(
-    monkeypatch, label, make_request, expected_reads, expected_code
-):
-    # STRESS fixture (Mistake 30 vs 13 measured), no relevant row: every step runs. The only
-    # terminal failure is the unchanged, unpartitioned broad step (base filter
-    # is 26+ on this snapshot), which stays fail closed.
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 32)
-    calls = []
-    result = orchestrate_lesson_retrieval(
-        make_request(), execute_read=_ckr6_filter_evaluating_reader(_stress_snapshot_rows(), calls)
-    )
-    assert result.retrieval_diagnostics["read_count"] == expected_reads, label
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == expected_code
-    assert result.selected_lesson_ids == ()
-    # And at the unchanged 20 ceiling the same shapes fail closed earlier.
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 20)
-    calls = []
-    capped = orchestrate_lesson_retrieval(
-        make_request(), execute_read=_ckr6_filter_evaluating_reader(_stress_snapshot_rows(), calls)
-    )
-    assert capped.retrieval_diagnostics["read_count"] == 20
-    assert capped.selected_lesson_ids == ()
 
 
 # --- independent-QA checklist additions (coverage, conflicts, boundaries, P6) ---
@@ -955,114 +647,10 @@ def test_identical_record_returned_by_two_cells_collapses_to_one(monkeypatch):
     assert len(ids) == len(set(ids))
 
 
-@pytest.mark.parametrize("failing_call", [2, 4, 7])
-def test_no_partial_result_reaches_ckr2_after_a_sub_query_failure(monkeypatch, failing_call):
-    seen = _spy_bound(monkeypatch)
-    rows = _testing_rows({"Mistake": 13, "QA feedback": 15, "Testing lesson": 24}, relevant_id=9001)
-    inner = _ckr6_filter_evaluating_reader(rows, [])
-    count = {"n": 0}
-
-    def read(query):
-        count["n"] += 1
-        if count["n"] == failing_call:
-            raise ConnectionError("provider failure")
-        return inner(query)
-
-    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=read)
-    assert seen == []  # the bounding/selection stage never saw partial rows
-    assert result.selected_lesson_ids == ()
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert result.retrieval_diagnostics["candidate_count"] == 0
 
 
-@pytest.mark.parametrize("req_kind", ["area-or-type-or", "learning-type-only", "single-area"])
-@pytest.mark.parametrize("seed", range(40))
-def test_partitioned_union_equals_direct_filter_for_every_area_and_learning_type(seed, req_kind):
-    # Randomized coverage: rows spread over every Area x Learning Type cell plus
-    # rows with missing or out-of-vocabulary metadata. With every cell at most
-    # 25 rows, the union the partition reads must contain every row the direct
-    # filter matches that the normalizer can use; unsupported rows are skipped
-    # by the normalizer either way.
-    import random
-    from agent_memory_context_manager.lesson_activation_bridge import (
-        LessonActivationSkip, normalize_lesson_row)
-
-    rng = random.Random(seed)
-    areas = ["Curriculum", "Automation", "Dashboard", "Governance", "Documentation", "Testing"]
-    types = ["Mistake", "QA feedback", "Testing lesson", "Deployment lesson",
-             "Scope/permission lesson", "Trigger lesson"]
-    rows, n = [], 5000
-    for area in areas:
-        for lt in types:
-            for _ in range(rng.randint(0, 6)):
-                n += 1
-                rows.append(_ckr6_area_row(n, area, learning_type=lt))
-    for _ in range(rng.randint(0, 6)):
-        n += 1
-        row = _ckr6_area_row(n, rng.choice(areas), learning_type="Mistake")
-        row["properties"]["Learning Type"] = {"type": "select", "select": None}
-        rows.append(row)
-    for _ in range(rng.randint(0, 6)):
-        n += 1
-        row = _ckr6_area_row(n, "Testing", learning_type="Mistake")
-        row["properties"]["Area"] = _select("Retired area")
-        rows.append(row)
-    req = {
-        "area-or-type-or": request(capability_keywords=("testing",)),  # 3 Areas + TL
-        "learning-type-only": request(ecosystem_hints=(), capability_keywords=("testing",)),
-        "single-area": request(capability_keywords=("CKR6 mutation boundary",)),
-    }[req_kind]
-    from agent_memory_context_manager.lesson_retrieval_orchestrator import build_escalation_query
-    query = build_escalation_query(req, RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
-    direct = {
-        r["id"] for r in rows
-        if _ckr6_matches_provider_filter(r, query["filter"])
-        and not isinstance(normalize_lesson_row(r), LessonActivationSkip)
-    }
-    returned = set()
-    inner = _ckr6_filter_evaluating_reader(rows, [])
-
-    def read(q):
-        out = inner(q)
-        returned.update(r["id"] for r in out["results"])
-        return out
-
-    # Force the partition path: a mutated reader that overflows only the
-    # first (unpartitioned) query.
-    def forcing(q):
-        # Overflow every query that is not already an Area x Learning Type
-        # cell (base clauses plus one relevance clause or an OR), so the
-        # whole two-level partition is exercised.
-        if len(q["filter"]["and"]) <= 3:
-            return {"results": rows[:MAX_RETRIEVAL_ROWS], "has_more": True, "next_cursor": "x"}
-        return read(q)
-
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-    orch.orchestrate_lesson_retrieval(req, execute_read=forcing)
-    usable = {
-        r["id"] for r in rows
-        if r["id"] in returned and not isinstance(normalize_lesson_row(r), LessonActivationSkip)
-    }
-    assert direct, "fixture must contain usable rows"
-    assert direct <= usable
 
 
-@pytest.mark.parametrize(("cap", "expect_ok"), [(21, True), (20, False)])
-def test_read_ceiling_boundary_for_the_21_read_shape(monkeypatch, cap, expect_ok):
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", cap)
-    result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(
-            _stress_or_shape_rows(with_testing_lesson_overflow=True), []),
-    )
-    if expect_ok:
-        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-        assert result.retrieval_diagnostics["read_count"] == 21
-    else:
-        assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-        assert result.selected_lesson_ids == ()
 
 
 @pytest.mark.parametrize("capability", [
@@ -1174,64 +762,10 @@ def test_count_consistent_generated_rows_use_controlled_vocabulary_and_normalize
     assert set(area_counts) <= set(_AREA_ECOSYSTEM) and set(type_counts) <= set(_LEARNING_TYPE_CAPABILITY)
 
 
-@pytest.mark.parametrize(
-    ("label", "make_request", "reads_at_32", "code_at_32"),
-    [
-        ("testing-only miss path", lambda: request(capability_keywords=("CKR6 mutation boundary",)), 27, "row-bound-exceeded"),
-        ("QA shape miss path", _ckr6_qa_request, 27, "row-bound-exceeded"),
-        ("OR shape miss path", lambda: request(capability_keywords=()), 30, "row-bound-exceeded"),
-    ],
-)
-def test_count_consistent_replay_miss_paths(monkeypatch, label, make_request, reads_at_32, code_at_32):
-    # Replay on the count-consistent fixture, not a live execution path.
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-
-    result = orchestrate_lesson_retrieval(
-        make_request(), execute_read=_ckr6_filter_evaluating_reader(_count_consistent_rows(), [])
-    )
-    assert result.retrieval_diagnostics["read_count"] == reads_at_32, label
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == code_at_32
-    assert result.selected_lesson_ids == ()
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 20)
-    capped = orchestrate_lesson_retrieval(
-        make_request(), execute_read=_ckr6_filter_evaluating_reader(_count_consistent_rows(), [])
-    )
-    assert capped.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-    assert capped.selected_lesson_ids == ()
 
 
-def test_count_consistent_replay_testing_only_hit_completes_in_7_reads():
-    rows = _count_consistent_rows(
-        [_ckr6_area_row(9001, "Testing", relevant=True, learning_type="Mistake")]
-    )
-    result = orchestrate_lesson_retrieval(
-        _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, [])
-    )
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
-    assert "LL-9001" in result.selected_lesson_ids
-    assert result.retrieval_diagnostics["read_count"] == 7
 
 
-def test_count_consistent_replay_cross_area_or_needs_21_reads_because_testing_lesson_has_33_rows(monkeypatch):
-    # Testing lesson totals 33 rows on this fixture (25 + 8), so the Learning
-    # Type alternative overflows and is partitioned by Area.
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-
-    rows = _count_consistent_rows()
-    result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(rows, []),
-    )
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids
-    assert result.retrieval_diagnostics["read_count"] == 21
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 20)
-    capped = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=_ckr6_filter_evaluating_reader(rows, []),
-    )
-    assert capped.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-    assert capped.selected_lesson_ids == ()
 
 def test_terminal_query_bucket_has_only_closed_controlled_values():
     import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
@@ -1267,208 +801,283 @@ def test_terminal_query_bucket_has_only_closed_controlled_values():
     assert orch._terminal_query_bucket({"filter": {"or": []}}) == "known-reference"
 
 
-def test_terminal_leaf_overflow_reports_exact_bucket_without_selecting():
-    req = request(capability_keywords=("testing",))
-    seen = []
-    def read(query):
-        seen.append(query)
-        return {"results": [_lesson_row("LL-1")] * 25,
-                "has_more": True, "next_cursor": "private-cursor"}
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    assert result.selected_lesson_ids == ()
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
-    # After OR -> Automation -> first exact controlled type cell.
-    assert result.retrieval_diagnostics["terminal_query_bucket"] == (
-        "area:Automation/type:Deployment lesson"
-    )
-    assert result.retrieval_diagnostics["read_count"] == len(seen) == 3
 
 
-def test_terminal_read_budget_diagnostic_still_fails_closed(monkeypatch):
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
-    result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)),
-        execute_read=lambda _query: {"results": [_lesson_row("LL-1")] * 25,
-                                     "has_more": True, "next_cursor": "private"},
-    )
-    assert result.selected_lesson_ids == ()
-    assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
-    # Only the broad OR query was sent; the refused Area=Automation sub-query is
-    # never named as the terminal bucket.
-    assert result.retrieval_diagnostics["terminal_query_bucket"] == "broad-or"
 
 
-def _budget_stop_bucket(monkeypatch, cap):
+def _budget_stop_bucket(monkeypatch, cap, req=None, reader=None):
     import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
     monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", cap)
     seen = []
 
     def read(query):
         seen.append(query)
+        if reader is not None:
+            return reader(query)
         return {"results": [_lesson_row("LL-1")] * 25,
                 "has_more": True, "next_cursor": "private"}
 
     result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)), execute_read=read
+        req if req is not None else request(capability_keywords=("testing",)),
+        execute_read=read,
     )
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
     assert result.retrieval_diagnostics["read_count"] == len(seen) == cap
     return result.retrieval_diagnostics["terminal_query_bucket"]
 
+def test_max_preflight_reads_constant_is_pinned_at_32():
+    # Restored coverage (GAP 1): A must keep the read budget pinned at 32.
+    assert MAX_PREFLIGHT_READS == 32
+
 
 def test_budget_stop_names_last_issued_query_not_the_refused_one(monkeypatch):
-    # Cap 2: broad OR then Area=Automation were sent; the exact cell was refused.
-    assert _budget_stop_bucket(monkeypatch, 2) == "area:Automation"
+    # Restored coverage (GAP 1b): execute the surviving helper. With known
+    # knowledge refs and the budget capped at 1, the known-reference read is
+    # ISSUED (bucket "known-reference") and the workspace snapshot read is
+    # REFUSED (bucket "workspace"). The diagnostic must name the issued
+    # query; a mutant naming the refused snapshot query would report
+    # "workspace" and fail this pin.
+    req = request(known_knowledge_refs=("LL-1",))
+    complete_page = lambda _q: {"results": [], "has_more": False}
+    assert _budget_stop_bucket(monkeypatch, 1, req, complete_page) == "known-reference"
 
 
-
-# #4011: the terminal provider-page signature is observational and finite.
-# Workspace remains intentionally unpartitioned; these are synthetic reads.
-def _terminal_page_case(response):
-    req = request()  # task-specific reads before the broad workspace fallback
-    calls = []
+def test_terminal_row_overflow_reports_exact_bucket_and_read_count_without_selecting():
+    # Restored coverage (GAP 2): exact terminal bucket and read_count pins.
+    # Full 100-row pages with advancing cursors overflow the snapshot row
+    # bound at exactly 5 reads; the bucket names the issued snapshot query
+    # and nothing is selected.
+    seen = []
 
     def read(query):
-        calls.append(query)
-        # Preserve existing CKR2 escalation until the broad final query.
-        if len(query["filter"]["and"]) != 2:
-            return {"results": [], "has_more": False}
-        if isinstance(response, BaseException):
-            raise response
-        return response
+        seen.append(query)
+        return {
+            "results": [_lesson_row(f"LL-{len(seen)}x{i}") for i in range(100)],
+            "has_more": True,
+            "next_cursor": f"cursor-{len(seen)}",
+        }
 
-    return orchestrate_lesson_retrieval(req, execute_read=read), calls
+    result = orchestrate_lesson_retrieval(
+        request(capability_keywords=("testing",)), execute_read=read
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "workspace"
+    assert result.retrieval_diagnostics["read_count"] == len(seen) == 5
 
 
-@pytest.mark.parametrize(("response", "bucket", "more", "cursor"), [
-    ({"results": [_lesson_row("LL-42")] * 25,
-      "has_more": True, "next_cursor": "SECRET-CURSOR"}, "25", "true", True),
-    ({"results": [_lesson_row("LL-42")] * 26,
-      "has_more": False, "next_cursor": None}, "over-25", "false", False),
-])
-def test_4011_terminal_workspace_row_bound_distinguishes_page_signature(
-    response, bucket, more, cursor
-):
-    result, calls = _terminal_page_case(response)
+def _adapter_executor(pages):
+    """Real adapter + ordered fake provider pages, via lesson_reader_composition.
+
+    The sibling packages are imported here, not at module scope: CI runs
+    each 08_Tooling package's tests with only that package's src on
+    sys.path, and agent_os_execution_service is not an installed
+    distribution in that environment, so a module-level import fails
+    collection of this whole module (and of test_lesson_snapshot_replacement,
+    which imports helpers from here). This is the same sys.path.insert
+    convention test_provider_failure_detail_survives_canonical_reader_chain
+    already uses in this file; repo root is included because
+    agent_os_execution_service.models resolves
+    scripts.agent_os_execution_capabilities through the shared namespace
+    package.
+    """
+    import sys
+    from pathlib import Path
+
+    _test_file = Path(__file__).resolve()
+    _tooling = _test_file.parents[2]
+    sys.path.insert(0, str(_tooling / "agent-os-execution-service" / "src"))
+    sys.path.insert(0, str(_tooling / "workflow-scheduler" / "src"))
+    sys.path.insert(0, str(_tooling.parent))
+
+    from agent_os_execution_service.lesson_reader_composition import (
+        build_lesson_read_executor,
+    )
+    from workflow_scheduler.adapters.notion_readonly_adapter import (
+        NotionReadOnlyAdapter,
+    )
+
+    state = {"pages": list(pages)}
+
+    def post(url, headers, body, timeout):
+        return dict(state["pages"].pop(0))
+
+    adapter = NotionReadOnlyAdapter(
+        token="fake-token-for-qa", http_post_query_data_source=post
+    )
+    return build_lesson_read_executor(data_source_id="ds-qa", adapter=adapter)
+
+
+def _planted_testing_row():
+    return _ckr6_area_row(9001, "Testing", relevant=True, learning_type="Mistake")
+
+
+def test_adapter_missing_has_more_fails_closed_with_malformed_pagination():
+    # #4016 R-1: a provider page without has_more must not become an
+    # apparently complete snapshot through the canonical adapter.
+    executor = _adapter_executor([{"results": [_planted_testing_row()]}])
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+    assert "notion-malformed-pagination" in result.selection_reason_codes
+
+
+def test_adapter_wrong_type_has_more_fails_closed_with_malformed_pagination():
+    executor = _adapter_executor(
+        [{"results": [_planted_testing_row()], "has_more": "false", "next_cursor": None}]
+    )
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+
+
+def test_adapter_missing_has_more_on_second_page_fails_closed():
+    # #4016 R-1 (late page): a valid first page must not leave a lesson
+    # selected when the second page's pagination metadata is missing.
+    executor = _adapter_executor(
+        [
+            {
+                "results": [_planted_testing_row()],
+                "has_more": True,
+                "next_cursor": "c1",
+            },
+            {"results": [_ckr6_area_row(7001, "Documentation", learning_type="Mistake")]},
+        ]
+    )
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+
+
+def test_adapter_oversized_page_fails_closed_with_row_bound():
+    # #4016 R-2: an oversized provider page is rejected by the snapshot's
+    # row bound instead of being silently sliced by the adapter.
+    rows = [
+        _ckr6_area_row(7000 + i, "Documentation", learning_type="Mistake")
+        for i in range(100)
+    ]
+    rows.append(_planted_testing_row())
+    executor = _adapter_executor([{"results": rows, "has_more": False}])
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "row-bound-exceeded"
+
+
+
+# #4011 finite terminal-page diagnostics on the merged snapshot path.
+@pytest.mark.parametrize("count,bucket", [(24,"0-24"),(25,"25"),(26,"over-25")])
+def test_4011_snapshot_missing_cursor_signature(count, bucket):
+    seen = []
+    def read(query):
+        seen.append(query)
+        return {"results": [_lesson_row("LL-42")] * count,
+                "has_more": True, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
     diag = result.retrieval_diagnostics
-    assert len(calls) == 3
-    assert diag["incomplete_reason_code"] == "row-bound-exceeded"
+    assert len(seen) == 1
+    assert diag["incomplete_reason_code"] == "missing-cursor"
     assert diag["terminal_query_bucket"] == "workspace"
     assert diag["terminal_page_row_count_bucket"] == bucket
-    assert diag["terminal_page_has_more"] == more
-    assert diag["terminal_page_cursor_present"] is cursor
-    assert result.selected_lesson_ids == ()
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert "SECRET-CURSOR" not in str(diag)
-
-
-@pytest.mark.parametrize("count", [24, 25])
-def test_4011_completed_terminal_page_does_not_emit_page_signature(count):
-    result, calls = _terminal_page_case({
-        "results": [_lesson_row("LL-42")] * count,
-        "has_more": False,
-    })
-    assert len(calls) == 3
-    assert "incomplete_reason_code" not in result.retrieval_diagnostics
-    assert not any(
-        key.startswith("terminal_page_") for key in result.retrieval_diagnostics
-    )
-
-
-def test_4011_malformed_page_signature_is_sanitized():
-    result, _ = _terminal_page_case({
-        "results": "untrusted provider content",
-        "has_more": "untrusted boolean",
-        "next_cursor": {"secret": "TOKEN"},
-    })
-    diag = result.retrieval_diagnostics
-    assert diag["incomplete_reason_code"] == "malformed-page"
-    assert diag["terminal_page_row_count_bucket"] == "unobserved"
-    assert diag["terminal_page_has_more"] == "invalid"
-    assert diag["terminal_page_cursor_present"] is False
-    assert "TOKEN" not in str(diag)
-    assert "untrusted" not in str(diag)
-
-
-def test_4011_reader_error_discards_previous_page_signature():
-    req = request()  # task-specific reads before the broad workspace fallback
-    def read(query):
-        if len(query["filter"]["and"]) != 2:
-            return {"results": [], "has_more": False}
-        if "start_cursor" not in query:
-            return {
-                "results": [_lesson_row("LL-42")], "has_more": True,
-                "next_cursor": "never-publish",
-            }
-        raise ConnectionError("sensitive provider detail")
-
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
-    assert result.selected_lesson_ids == ()
-    assert not any(
-        key.startswith("terminal_page_") for key in result.retrieval_diagnostics
-    )
-    assert "never-publish" not in str(result.retrieval_diagnostics)
-
-
-def test_4011_missing_cursor_keeps_safe_metadata():
-    result, _ = _terminal_page_case({
-        "results": [_lesson_row("LL-42")],
-        "has_more": True, "next_cursor": None,
-    })
-    diag = result.retrieval_diagnostics
-    assert diag["incomplete_reason_code"] == "missing-cursor"
-    assert diag["terminal_page_row_count_bucket"] == "0-24"
     assert diag["terminal_page_has_more"] == "true"
     assert diag["terminal_page_cursor_present"] is False
+    assert result.selected_lesson_ids == ()
 
 
-def test_4011_two_page_24_plus_2_overflow_reports_last_page_only():
-    req = request()
-    calls = []
-
-    def read(query):
-        calls.append(query)
-        if len(query["filter"]["and"]) != 2:
-            return {"results": [], "has_more": False}
-        if "start_cursor" not in query:
-            return {
-                "results": [_lesson_row("LL-42")] * 24,
-                "has_more": True, "next_cursor": "SECRET-PAGE-2",
-            }
-        return {"results": [_lesson_row("LL-42")] * 2, "has_more": False}
-
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
+def test_4011_oversize_snapshot_signature():
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": [_lesson_row("LL-42")] * 101,
+        "has_more": False, "next_cursor": None})
     diag = result.retrieval_diagnostics
-    assert len(calls) == 4
     assert diag["incomplete_reason_code"] == "row-bound-exceeded"
-    assert diag["terminal_query_bucket"] == "workspace"
-    assert diag["terminal_page_row_count_bucket"] == "0-24"
+    assert diag["terminal_page_row_count_bucket"] == "over-25"
     assert diag["terminal_page_has_more"] == "false"
     assert diag["terminal_page_cursor_present"] is False
     assert result.selected_lesson_ids == ()
-    assert "SECRET-PAGE-2" not in str(diag)
 
 
-def test_4011_global_budget_stop_never_reports_a_hypothetical_next_page(monkeypatch):
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orchestrator
-    monkeypatch.setattr(orchestrator, "MAX_PREFLIGHT_READS", 2)
-    req = request()
-    calls = []
+@pytest.mark.parametrize("count", [24,25,26,100])
+def test_4011_complete_snapshot_omits_signature(count):
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": [_lesson_row("LL-42")] * count, "has_more": False})
+    assert "incomplete_reason_code" not in result.retrieval_diagnostics
+    assert not any(k.startswith("terminal_page_") for k in result.retrieval_diagnostics)
 
-    def read(query):
-        calls.append(query)
+
+def test_4011_malformed_page_signature_no_leak():
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": "PRIVATE_UNTRUSTED", "has_more": "PRIVATE_UNTRUSTED",
+        "next_cursor": {"token": "PRIVATE_UNTRUSTED"}})
+    d = result.retrieval_diagnostics
+    assert d["incomplete_reason_code"] == "malformed-page"
+    assert d["terminal_page_row_count_bucket"] == "unobserved"
+    assert d["terminal_page_has_more"] == "invalid"
+    assert d["terminal_page_cursor_present"] is False
+    assert "PRIVATE" not in str(d)
+
+
+def test_4011_no_stale_page_metadata_after_failed_continuation():
+    def read(q):
+        if "start_cursor" not in q:
+            return {"results": [_lesson_row("LL-42")],
+                    "has_more": True, "next_cursor": "SECRET_CURSOR"}
+        raise ConnectionError("SECRET_EXCEPTION")
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.selected_lesson_ids == ()
+    assert not any(k.startswith("terminal_page_") for k in result.retrieval_diagnostics)
+    assert "SECRET" not in str(result.retrieval_diagnostics)
+
+
+def test_4011_read_budget_stop_retains_issued_page_signature(monkeypatch):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
+    seen = []
+    def read(q):
+        seen.append(q)
         return {"results": [], "has_more": False}
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=("LL-1",)), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == d["read_count"] == 1
+    assert d["incomplete_reason_code"] == "read-budget-exceeded"
+    assert d["terminal_query_bucket"] == "known-reference"
+    assert d["terminal_page_row_count_bucket"] == "0-24"
+    assert d["terminal_page_has_more"] == "false"
+    assert d["terminal_page_cursor_present"] is False
 
-    result = orchestrate_lesson_retrieval(req, execute_read=read)
-    diag = result.retrieval_diagnostics
-    assert len(calls) == 2
-    assert diag["incomplete_reason_code"] == "read-budget-exceeded"
-    assert diag["read_count"] == 2
-    assert diag["terminal_page_row_count_bucket"] == "0-24"
-    assert diag["terminal_page_has_more"] == "false"
-    assert diag["terminal_page_cursor_present"] is False
-    assert diag["terminal_query_bucket"] != "workspace"
+
+def test_4011_snapshot_late_page_overflow_signature_is_latest_only():
+    seen = []
+    def read(q):
+        seen.append(q)
+        if len(seen) == 1:
+            return {"results": [_lesson_row("LL-42")] * 100,
+                    "has_more": True, "next_cursor": "SECRET_CURSOR"}
+        return {"results": [_lesson_row("LL-42")] * 101,
+                "has_more": False, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == 2
+    assert d["incomplete_reason_code"] == "row-bound-exceeded"
+    assert d["terminal_page_row_count_bucket"] == "over-25"
+    assert d["terminal_page_has_more"] == "false"
+    assert d["terminal_page_cursor_present"] is False
+    assert "SECRET_CURSOR" not in str(d)
+
+
+def test_4011_snapshot_exact_500_with_more_is_incomplete():
+    seen = []
+    def read(q):
+        seen.append(q)
+        return {"results": [_lesson_row("LL-42")] * 100,
+                "has_more": True, "next_cursor": f"SECRET-{len(seen)}"}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == 5
+    assert d["incomplete_reason_code"] == "row-bound-exceeded"
+    assert d["terminal_query_bucket"] == "workspace"
+    assert d["terminal_page_row_count_bucket"] == "over-25"
+    assert d["terminal_page_has_more"] == "true"
+    assert d["terminal_page_cursor_present"] is True
     assert result.selected_lesson_ids == ()
