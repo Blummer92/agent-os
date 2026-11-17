@@ -405,8 +405,108 @@ def test_postback_complete_rejects_active_or_repeated_run(monkeypatch):
             pytest.fail("active gate must not be rerun")
         raise AssertionError(path)
     monkeypatch.setattr(r, "api", fake)
+    monkeypatch.setattr(r.time, "sleep", lambda _: None)
     with pytest.raises(r.RevalidationBlocked, match="gate-run-in-progress"):
         r.evaluate(event, "unused", postback_complete=True)
+
+
+
+def test_postback_waits_for_existing_gate_to_complete_then_reruns_once(monkeypatch):
+    event, calls = _postback_fixture(monkeypatch, {
+        "id": 88, "status": "completed", "run_attempt": 1,
+        "run_started_at": "2026-11-14T15:50:00Z",
+    })
+    original = r.api
+    count = {"n": 0}
+    sleeps = []
+    def fake(method, path, token):
+        if method == "GET" and path == "/actions/runs/88":
+            count["n"] += 1
+            if count["n"] < 3:
+                calls.append((method, path))
+                return {"id": 88, "status": "in_progress", "run_attempt": 1}
+        return original(method, path, token)
+    monkeypatch.setattr(r, "api", fake)
+    monkeypatch.setattr(r.time, "sleep", lambda seconds: sleeps.append(seconds))
+    result = r.evaluate(event, "unused", postback_complete=True)
+    assert result["disposition"] == "rerun-requested"
+    assert count["n"] == 3
+    assert sleeps == [5, 5]
+    assert [x for x in calls if x[0] == "POST"] == [
+        ("POST", "/actions/runs/88/rerun")
+    ]
+
+
+def test_postback_wait_timeout_is_finite_and_posts_nothing(monkeypatch):
+    event, calls = _postback_fixture(monkeypatch, {
+        "id": 88, "status": "in_progress", "run_attempt": 1,
+    })
+    sleeps = []
+    monkeypatch.setattr(r.time, "sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(r.RevalidationBlocked, match="gate-run-in-progress"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert len([x for x in calls if x == ("GET", "/actions/runs/88")]) == 13
+    assert sleeps == [5] * 12
+    assert not any(x[0] == "POST" for x in calls)
+
+
+@pytest.mark.parametrize("payload", [
+    {"id": 89, "status": "completed", "run_attempt": 1},
+    {"id": 88, "status": "completed", "run_attempt": True},
+    {"id": 88, "status": "unknown", "run_attempt": 1},
+    {"id": 88, "status": "completed", "run_attempt": 0},
+])
+def test_postback_wait_rejects_invalid_run_without_post(monkeypatch, payload):
+    event, calls = _postback_fixture(monkeypatch, payload)
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("invalid state must not sleep"))
+    with pytest.raises(r.RevalidationBlocked, match="gate-run-invalid"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert not any(x[0] == "POST" for x in calls)
+
+
+def test_postback_attempt_drift_fails_closed_without_post(monkeypatch):
+    event, calls = _postback_fixture(monkeypatch, {
+        "id": 88, "status": "completed", "run_attempt": 2,
+        "run_started_at": "2026-11-14T15:50:00Z",
+    })
+    original = r.api
+    seen = {"n": 0}
+    def fake(method, path, token):
+        if method == "GET" and path == "/actions/runs/88":
+            seen["n"] += 1
+            if seen["n"] == 1:
+                calls.append((method, path))
+                return {"id": 88, "status": "in_progress", "run_attempt": 1}
+        return original(method, path, token)
+    monkeypatch.setattr(r, "api", fake)
+    monkeypatch.setattr(r.time, "sleep", lambda _: None)
+    with pytest.raises(r.RevalidationBlocked, match="gate-run-invalid"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert seen["n"] == 2
+    assert not any(method == "POST" for method, _ in calls)
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "skipped", "timed_out", "action_required"])
+def test_postback_nonrunnable_completed_gate_never_reruns(monkeypatch, conclusion):
+    event, calls = _postback_fixture(monkeypatch, {
+        "id": 88, "status": "completed", "conclusion": conclusion,
+        "run_attempt": 1, "run_started_at": "2026-11-14T15:50:00Z",
+    })
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("no sleep"))
+    with pytest.raises(r.RevalidationBlocked, match="gate-run-invalid"):
+        r.evaluate(event, "unused", postback_complete=True)
+    assert not any(method == "POST" for method, _ in calls)
+
+
+def test_postback_immediate_completion_never_sleeps(monkeypatch):
+    event, calls = _postback_fixture(monkeypatch, {
+        "id": 88, "status": "completed", "run_attempt": 2,
+        "run_started_at": "2026-11-14T15:56:09Z",
+    })
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("completed gate must not wait"))
+    result = r.evaluate(event, "unused", postback_complete=True)
+    assert result["reason_code"] == "already-rerun"
+    assert not any(x[0] == "POST" for x in calls)
 
 
 def test_producer_postback_job_separates_actions_write_from_notion_secret():
