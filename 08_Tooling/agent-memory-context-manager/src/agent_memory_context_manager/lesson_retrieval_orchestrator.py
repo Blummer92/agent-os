@@ -69,6 +69,16 @@ _PARTITIONED_STEPS = frozenset(
 # per-preflight limit are unchanged; the 5-identity selection budget is a
 # separate CKR2 limit.
 MAX_PREFLIGHT_READS = 32
+# Complete bounded snapshot bounds (CKR11 retrieval completeness replacement).
+# The canonical read-only Notion adapter already bounds page_size at 100
+# (_MAX_PAGE_SIZE), so one snapshot page asks for 100 rows. A snapshot is
+# complete only when the provider reports has_more false within
+# SNAPSHOT_MAX_PAGES pages and SNAPSHOT_MAX_ROWS rows; anything oversized,
+# incomplete, or malformed fails closed with the existing reason codes and
+# admits nothing.
+SNAPSHOT_PAGE_SIZE = 100
+SNAPSHOT_MAX_PAGES = 5
+SNAPSHOT_MAX_ROWS = SNAPSHOT_PAGE_SIZE * SNAPSHOT_MAX_PAGES
 _ROW_BOUND_MESSAGE = "paginated retrieval exceeded row bound"
 _READ_BUDGET_MESSAGE = "preflight read budget exceeded"
 _SANITIZED_PROVIDER_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
@@ -255,7 +265,9 @@ def build_escalation_query(
             known_knowledge_refs=(),
         )
         query = build_filtered_query(broad_request)
-        query["page_size"] = MAX_RETRIEVAL_ROWS
+        # The canonical snapshot query reads at the adapter's maximum page
+        # size; completeness is enforced by the cursor chain, not the window.
+        query["page_size"] = SNAPSHOT_PAGE_SIZE
         return query
 
     raise ValueError("manual-review and none do not execute provider queries")
@@ -411,6 +423,11 @@ def orchestrate_lesson_retrieval(
             "missing_revision_rows": skipped["missing-verified-revision"],
             "missing_source_guidance_rows": skipped["missing-activation-guidance"],
             "ambiguous_metadata_rows": sum(count for reason, count in skipped.items() if reason.startswith("ambiguous-")),
+            # Complete skip accounting: every normalization skip reason, named.
+            # Without this, reasons outside the four legacy buckets (e.g.
+            # "oversized-or-malformed-field") vanish from diagnostics while
+            # skipped_rows still counts them.
+            "skip_reasons": {reason: skipped[reason] for reason in sorted(skipped)},
             "candidate_count": value.candidate_count,
         }
         if incomplete_reason_code is not None:
@@ -486,62 +503,104 @@ def orchestrate_lesson_retrieval(
                 )
             return merged
 
-    for _ in range(MAX_ESCALATION_STEPS):
-        step = select_coding_knowledge(
-            current_request,
-            (),
-        ).recommended_escalation
-        if step in {RetrievalEscalation.NONE, RetrievalEscalation.MANUAL_REVIEW}:
-            if result is not None:
-                return with_diagnostics(result)
-            return with_diagnostics(consume_lesson_preflight(current_request, ()))
+    def read_snapshot(query: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        # One complete bounded snapshot of the canonical data source. Only a
+        # complete snapshot is returned; a partial one never reaches
+        # normalization, the CKR2 bound, or selection. Cursor discipline and
+        # the shared read budget are unchanged from read_sequence; page and
+        # row bounds are the snapshot's own.
+        nonlocal read_count, terminal_query_bucket
+        rows: list[Mapping[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str | None] = set()
+        for _page_index in range(SNAPSHOT_MAX_PAGES):
+            if cursor in seen_cursors:
+                raise LessonActivationError("repeated pagination cursor")
+            seen_cursors.add(cursor)
+            if read_count >= MAX_PREFLIGHT_READS:
+                raise LessonActivationError(_READ_BUDGET_MESSAGE)
+            page_query = query if cursor is None else {**query, "start_cursor": cursor}
+            terminal_query_bucket = _terminal_query_bucket(query)
+            raw = execute_read(page_query)
+            read_count += 1
+            if not isinstance(raw, Mapping):
+                raise LessonActivationError("read executor must return a mapping")
+            results = raw.get("results")
+            if not isinstance(results, list):
+                raise LessonActivationError("read executor result is missing 'results'")
+            # Reject an oversized supplied page instead of truncating it.
+            if len(results) > SNAPSHOT_PAGE_SIZE:
+                raise LessonActivationError(_ROW_BOUND_MESSAGE)
+            rows.extend(item for item in results if isinstance(item, Mapping))
+            has_more, next_cursor = _page_cursor(raw)
+            if not has_more:
+                return rows
+            if len(rows) >= SNAPSHOT_MAX_ROWS:
+                raise LessonActivationError(_ROW_BOUND_MESSAGE)
+            if next_cursor is None:
+                raise LessonActivationError("paginated retrieval missing next cursor")
+            cursor = next_cursor
+        raise LessonActivationError("paginated retrieval exceeded page bound")
 
-        if step is RetrievalEscalation.KNOWN_REFERENCE and not known_lesson_numbers(
-            current_request.known_knowledge_refs
-        ):
-            # References such as ``#2638`` name no Lesson ID; there is nothing to
-            # look up, so advance the existing ledger without a provider read.
-            current_request = record_retrieval_attempt(current_request, step)
-            continue
-
-        query = build_escalation_query(current_request, step)
-        try:
-            rows = read_step(query, crossed=False, partitionable=step in _PARTITIONED_STEPS)
-        except (ConnectionError, TimeoutError, RuntimeError, LessonActivationError) as exc:
-            # No partial page population may reach CKR2 or admit a repair.
-            # Preserve the generic reason and admission outcome; only append a
-            # finite, internal diagnostic identifying the incomplete condition.
-            if isinstance(exc, LessonActivationError):
-                incomplete_reason_code = _INCOMPLETE_REASON_CODES.get(
-                    str(exc), "unknown-incomplete"
-                )
-            return with_diagnostics(_unavailable_result(current_request, exc))
-
-        current_request = record_retrieval_attempt(current_request, step)
+    def accumulate(rows: list[Mapping[str, Any]]) -> None:
+        # R1 (#2425): accumulate keyed by full record equality, unchanged.
+        nonlocal observed_rows, normalized_rows
         observed_rows += len(rows)
         for row in rows:
             normalized = normalize_lesson_row(row)
             if isinstance(normalized, LessonRecordEvidence):
                 normalized_rows += 1
-                # R1 (#2425): accumulate keyed by full record equality.
-                # An identical record (same ID, same revision, same fields)
-                # collapses; a same-ID record that differs in any field is
-                # kept, so a conflicting identity survives to the bound and
-                # the selector instead of being silently overwritten.
                 if normalized not in accumulated:
                     accumulated.append(normalized)
             else:
                 skipped[normalized.reason] += 1
 
-        bounded = _bound_relevant_lessons(current_request, accumulated)
-        result = consume_lesson_preflight(current_request, bounded)
-        if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
-            return with_diagnostics(result)
-        if result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW:
-            return with_diagnostics(result)
+    try:
+        if known_lesson_numbers(request.known_knowledge_refs):
+            # Explicitly referenced lessons keep their exact identity lookup:
+            # bounded by the number of referenced IDs, complete by identity.
+            known_query = build_known_reference_query(request.known_knowledge_refs)
+            accumulate(
+                read_step(known_query, crossed=False, partitionable=False)
+            )
+            current_request = record_retrieval_attempt(
+                current_request, RetrievalEscalation.KNOWN_REFERENCE
+            )
+            result = consume_lesson_preflight(
+                current_request, _bound_relevant_lessons(current_request, accumulated)
+            )
+            if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
+                return with_diagnostics(result)
+        # Relevance retrieval is one complete bounded snapshot of the
+        # canonical data source, replacing the fragmented filtered/exact/
+        # workspace cascade: normalization, dedup, the CKR2 bound and
+        # selection all see the same complete corpus.
+        snapshot_query = build_escalation_query(
+            current_request, RetrievalEscalation.WORKSPACE_SEARCH
+        )
+        snapshot_rows = read_snapshot(snapshot_query)
+        current_request = record_retrieval_attempt(
+            current_request, RetrievalEscalation.WORKSPACE_SEARCH
+        )
+    except (ConnectionError, TimeoutError, RuntimeError, LessonActivationError) as exc:
+        # No partial page population may reach CKR2 or admit a repair.
+        if isinstance(exc, LessonActivationError):
+            incomplete_reason_code = _INCOMPLETE_REASON_CODES.get(
+                str(exc), "unknown-incomplete"
+            )
+        return with_diagnostics(_unavailable_result(current_request, exc))
 
-    if result is None:
-        raise RuntimeError("lesson retrieval bound was reached without a result")
+    accumulate(snapshot_rows)
+    result = consume_lesson_preflight(
+        current_request, _bound_relevant_lessons(current_request, accumulated)
+    )
+    if (
+        result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+        and result.retrieval_escalation is not RetrievalEscalation.MANUAL_REVIEW
+    ):
+        # A complete snapshot leaves no further retrieval step: the honest
+        # next recommendation is manual review, not a cascade re-read.
+        result = replace(result, retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW)
     return with_diagnostics(result)
 
 
