@@ -45,7 +45,7 @@ def test_issue_start_preflight_consumes_relevant_lesson_before_hypothesis():
         capability_keywords=("automation", "repair", "lessons"),
         canonical_rule_refs=("https://github.com/Blummer92/agent-os/issues/2247",),
         specialized_knowledge_required=True,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] == "sufficient"
@@ -64,7 +64,7 @@ def test_not_needed_issue_start_performs_zero_notion_reads():
         issue_number=2247,
         task_reference="issue:#2247",
         specialized_knowledge_required=False,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -93,7 +93,7 @@ def test_2780_ordinary_paths_do_not_make_issue_start_lessons_material():
         issue_number=2780,
         task_reference="issue:#2780",
         target_path_hints=("src/example.py",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -106,7 +106,7 @@ def test_2780_generic_capability_metadata_does_not_make_lessons_material():
         issue_number=2780,
         task_reference="issue:#2780",
         capability_keywords=("validation",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -119,7 +119,7 @@ def test_2780_known_lesson_reference_remains_material_without_explicit_override(
         issue_number=2780,
         task_reference="issue:#2780",
         known_knowledge_refs=("LL-63",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
@@ -132,7 +132,7 @@ def test_2780_library_requirement_remains_material_without_explicit_override():
         issue_number=2780,
         task_reference="issue:#2780",
         library_hints=("specialized-library",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
@@ -146,7 +146,7 @@ def test_2780_explicit_specialized_decision_remains_authoritative():
         task_reference="issue:#2780 architecture-sensitive",
         capability_keywords=("architecture",),
         specialized_knowledge_required=True,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
@@ -206,19 +206,26 @@ def test_issue_start_diagnostics_are_a_copy_not_the_orchestrator_mapping(monkeyp
 
 
 def test_issue_start_bounded_page_with_more_preserves_row_bound_and_read_count():
+    # Snapshot A is independently bounded at 100 rows/page, 5 pages and
+    # 500 total. Even a relevant first page cannot admit a partial corpus.
     calls = []
 
     def reader(query):
-        calls.append(query)
-        return {"results": [_lesson() for _ in range(25)], "has_more": True,
-                "next_cursor": "SENSITIVE-CURSOR-DO-NOT-LEAK"}
+        calls.append(dict(query))
+        return {
+            "results": [_lesson() for _ in range(100)],
+            "has_more": True,
+            "next_cursor": "SENSITIVE-CURSOR-DO-NOT-LEAK-" + str(len(calls)),
+        }
 
     result = _material_call(reader)
-    assert len(calls) == 1
+    assert len(calls) == 5
+    assert calls[0]["page_size"] == 100
     assert result["lesson_retrieval_status"] == "insufficient"
     assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
     assert result["retrieval_diagnostics"]["incomplete_reason_code"] == "row-bound-exceeded"
-    assert result["retrieval_diagnostics"]["read_count"] == 1
+    assert result["retrieval_diagnostics"]["read_count"] == 5
     assert "SENSITIVE-CURSOR-DO-NOT-LEAK" not in repr(result)
 
 

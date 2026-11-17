@@ -337,7 +337,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
         evidence_refs = (page_url.strip()[:MAX_ROW_TEXT_CHARS],)
 
     try:
-        return LessonRecordEvidence(
+        lesson = LessonRecordEvidence(
             lesson_id=lesson_id,
             source_revision=source_revision,
             title=title,
@@ -354,6 +354,11 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
+        # CKR2 validates additional text invariants, including control
+        # characters. Check them inside this row's isolation boundary so
+        # a malformed lesson cannot abort selection of the complete corpus.
+        _as_selection_candidate(lesson)
+        return lesson
     except (TypeError, ValueError):
         return LessonActivationSkip(lesson_id, "oversized-or-malformed-field")
 
@@ -471,13 +476,17 @@ def orchestrate_lesson_activation(
         seen_cursors.add(cursor)
         page_query = query if cursor is None else {**query, "start_cursor": cursor}
         raw = execute_read(page_query)
-        rows.extend(_extract_bounded_rows(raw))
-        if len(rows) >= MAX_RETRIEVAL_ROWS:
-            rows = rows[:MAX_RETRIEVAL_ROWS]
-            break
+        page_rows = _extract_bounded_rows(raw)
+        # Validate pagination BEFORE admitting any rows. At the row boundary
+        # a complete 25-row page is acceptable only with has_more=False.
         has_more, next_cursor = _page_cursor(raw)
+        if len(rows) + len(page_rows) > MAX_RETRIEVAL_ROWS:
+            raise LessonActivationError("paginated retrieval exceeded row bound")
+        rows.extend(page_rows)
         if not has_more:
             break
+        if len(rows) >= MAX_RETRIEVAL_ROWS:
+            raise LessonActivationError("paginated retrieval exceeded row bound")
         if next_cursor is None:
             raise LessonActivationError("paginated retrieval missing next cursor")
         cursor = next_cursor
@@ -500,20 +509,29 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     results = raw.get("results")
     if not isinstance(results, list):
         raise LessonActivationError("read executor result is missing 'results'")
-    return [item for item in results if isinstance(item, Mapping)][:MAX_RETRIEVAL_ROWS]
+    # A page is admitted only whole: any non-mapping item makes the page
+    # malformed, never silently filtered.
+    if not all(isinstance(item, Mapping) for item in results):
+        raise LessonActivationError("read executor result contains non-mapping items")
+    if len(results) > MAX_RETRIEVAL_ROWS:
+        raise LessonActivationError("paginated retrieval exceeded row bound")
+    return list(results)
 
 
 def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     """Validate one page's pagination state, or fail closed.
 
-    A missing ``has_more`` is a single-page (legacy executor) response.
+    A missing ``has_more`` is malformed, not a complete single page:
+    assuming completeness could silently truncate the database.
     ``has_more: true`` without a non-empty string ``next_cursor`` is
     malformed: following it would loop, and ignoring it would silently
     truncate the database.
     """
     if not isinstance(raw, Mapping):
         raise LessonActivationError("read executor must return a mapping")
-    has_more = raw.get("has_more", False)
+    if "has_more" not in raw:
+        raise LessonActivationError("read executor result is missing 'has_more'")
+    has_more = raw["has_more"]
     if type(has_more) is not bool:
         raise LessonActivationError("read executor returned a non-boolean has_more")
     next_cursor = raw.get("next_cursor")
@@ -727,3 +745,4 @@ def _github_source_link(prop: Any) -> str | None:
     ):
         return None
     return value
+

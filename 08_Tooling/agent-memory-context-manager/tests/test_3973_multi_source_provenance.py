@@ -187,7 +187,7 @@ def test_missing_primary_still_fails_closed_supporting_refs_never_substitute():
                 "Source Link": _url(None),
                 "Supporting Source Links": _rich_text_items(SUPPORTING_PR),
             }
-        )]}
+        )], "has_more": False}
     )
     assert orchestrated.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
     assert "unverifiable-relevant-candidate" in orchestrated.selection_reason_codes
@@ -227,7 +227,7 @@ def test_multi_source_lesson_is_still_one_ckr2_candidate():
     row = live_row(properties={"Supporting Source Links": _rich_text_items(SUPPORTING_PR, SUPPORTING_GOVERNANCE)})
     result = orchestrate_lesson_activation(
         request(capability_keywords=("failure-avoidance",)),
-        execute_read=lambda query: {"results": [row]},
+        execute_read=lambda query: {"results": [row], "has_more": False},
     )
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-73",)
@@ -257,7 +257,7 @@ def test_task_reference_is_never_lesson_owned_provenance():
     # #1520: request-owned refs stay inspect-first evidence only.
     req = request(capability_keywords=("failure-avoidance",), canonical_rule_refs=(SUPPORTING_PR,))
     row = live_row(properties={"Source Link": _url(None)})
-    result = orchestrate_lesson_activation(req, execute_read=lambda query: {"results": [row]})
+    result = orchestrate_lesson_activation(req, execute_read=lambda query: {"results": [row], "has_more": False})
     assert result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
     assert SUPPORTING_PR in result.handoff_projection["allowed_inspect_first"]
 
