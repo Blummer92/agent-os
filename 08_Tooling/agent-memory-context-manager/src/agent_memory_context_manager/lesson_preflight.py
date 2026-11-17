@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from .coding_knowledge_selection import (
+    MAX_GUIDANCE_TEXT_CHARS,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     CodingKnowledgeSelectionResult,
@@ -110,9 +111,11 @@ class LessonRecordEvidence:
     def __post_init__(self) -> None:
         for name in (
             "lesson_id", "source_revision", "title", "ecosystem", "capability_kind",
-            "status", "what_to_do_next_time", "guardrail",
+            "status",
         ):
             _text(getattr(self, name), name)
+        for name in ("what_to_do_next_time", "guardrail"):
+            _text(getattr(self, name), name, max_chars=MAX_GUIDANCE_TEXT_CHARS)
         if self.library_name is not None:
             _text(self.library_name, "library_name")
         for name in ("canonical_github_refs", "evidence_refs", "keywords", "dropped_supporting_refs"):
@@ -426,12 +429,12 @@ def _fallback(
     )
 
 
-def _text(value: object, name: str) -> None:
+def _text(value: object, name: str, *, max_chars: int = 512) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be a string")
     if not value.strip():
         raise ValueError(f"{name} must be non-empty")
-    if len(value) > 512:
+    if len(value) > max_chars:
         raise ValueError(f"{name} is oversized")
 
 
