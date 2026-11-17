@@ -556,6 +556,22 @@ def write_retrieval_diagnostics_summary(
             or diagnostics.get("incomplete_reason_code") not in _INCOMPLETE_REASON_CODES
         ):
             return False
+    # The summary and artifact must enforce the same finite allowlist.
+    # Otherwise direct calls can expose hostile reason text or unbounded
+    # counters in the Actions summary despite strict artifact validation.
+    required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
+    if set(diagnostics) not in (
+        required,
+        required | {"terminal_query_bucket"},
+        required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    ):
+        return False
+    finite = retrieval_diagnostics_projection({
+        "retrieval_diagnostics": diagnostics,
+        "selection_reason_codes": [diagnostics.get("retrieval_reason_code")],
+    })
+    if finite != dict(diagnostics):
+        return False
     target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
     if not target:
         return False
