@@ -547,7 +547,13 @@ def orchestrate_lesson_retrieval(
         nonlocal observed_rows, normalized_rows
         observed_rows += len(rows)
         for row in rows:
-            normalized = normalize_lesson_row(row)
+            # One invalid corpus row must not crash an otherwise complete
+            # snapshot. Invalid evidence is skipped, never sent to CKR2.
+            try:
+                normalized = normalize_lesson_row(row)
+            except (TypeError, ValueError):
+                skipped["oversized-or-malformed-field"] += 1
+                continue
             if isinstance(normalized, LessonRecordEvidence):
                 normalized_rows += 1
                 if normalized not in accumulated:
