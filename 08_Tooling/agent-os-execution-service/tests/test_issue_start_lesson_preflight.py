@@ -45,7 +45,7 @@ def test_issue_start_preflight_consumes_relevant_lesson_before_hypothesis():
         capability_keywords=("automation", "repair", "lessons"),
         canonical_rule_refs=("https://github.com/Blummer92/agent-os/issues/2247",),
         specialized_knowledge_required=True,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] == "sufficient"
@@ -64,7 +64,7 @@ def test_not_needed_issue_start_performs_zero_notion_reads():
         issue_number=2247,
         task_reference="issue:#2247",
         specialized_knowledge_required=False,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -93,7 +93,7 @@ def test_2780_ordinary_paths_do_not_make_issue_start_lessons_material():
         issue_number=2780,
         task_reference="issue:#2780",
         target_path_hints=("src/example.py",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -106,7 +106,7 @@ def test_2780_generic_capability_metadata_does_not_make_lessons_material():
         issue_number=2780,
         task_reference="issue:#2780",
         capability_keywords=("validation",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
@@ -119,7 +119,7 @@ def test_2780_known_lesson_reference_remains_material_without_explicit_override(
         issue_number=2780,
         task_reference="issue:#2780",
         known_knowledge_refs=("LL-63",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
@@ -132,7 +132,7 @@ def test_2780_library_requirement_remains_material_without_explicit_override():
         issue_number=2780,
         task_reference="issue:#2780",
         library_hints=("specialized-library",),
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
@@ -146,7 +146,7 @@ def test_2780_explicit_specialized_decision_remains_authoritative():
         task_reference="issue:#2780 architecture-sensitive",
         capability_keywords=("architecture",),
         specialized_knowledge_required=True,
-        execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
+        execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False},
     )
     assert calls
     assert result["lesson_retrieval_status"] != "not-needed"
