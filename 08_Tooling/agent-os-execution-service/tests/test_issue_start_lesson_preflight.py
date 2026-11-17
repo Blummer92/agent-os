@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent_os_execution_service import issue_start_lesson_preflight as preflight
 from agent_os_execution_service.issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 
@@ -261,3 +263,88 @@ def test_not_needed_and_unbound_reader_diagnostics_stay_finite_and_zero_reads():
     assert unbound["lesson_retrieval_status"] == "insufficient"
     # An unavailable reader also exits before the counted-read loop.
     assert unbound["retrieval_diagnostics"] == {}
+
+
+def _archived_lesson(lesson_id):
+    row = _lesson()
+    row["properties"]["Lesson ID"] = _rich(lesson_id)
+    row["properties"]["Status"] = _select("Archived note")
+    return row
+
+
+def _is_known_query(query):
+    return "Lesson ID" in json.dumps(query.get("filter", {}))
+
+
+def _issue_start(**overrides):
+    args = dict(
+        repository="Blummer92/agent-os",
+        issue_number=4016,
+        task_reference="issue:#4016",
+        capability_keywords=("testing",),
+        known_knowledge_refs=("LL-42",),
+    )
+    args.update(overrides)
+    return activate_issue_start_lesson_preflight(**args)
+
+
+def test_requested_skip_dropped_when_retrieval_fails_closed():
+    # #4016 R-4: a skip observed on a page the canonical reader later rejects
+    # as incomplete must not survive into rejected-candidate provenance.
+    def read(query):
+        if _is_known_query(query):
+            return {"results": [_archived_lesson("LL-42")], "has_more": False}
+        if "start_cursor" not in query:
+            return {"results": [_lesson()], "has_more": True, "next_cursor": "c1"}
+        return {"results": [_lesson()]}  # missing has_more -> rejected
+
+    result = _issue_start(execute_read=read)
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["retrieval_diagnostics"]["incomplete_reason_code"] == "malformed-pagination"
+    assert result["selected_lesson_ids"] == []
+    assert "LL-42" not in [
+        item["lesson_id"] for item in result["rejected_candidate_provenance"]
+    ]
+
+
+def test_requested_skip_reported_when_retrieval_completes():
+    # Same archived requested lesson, but the retrieval completes: the skip
+    # is genuine rejected-candidate evidence and is reported.
+    def read(query):
+        if _is_known_query(query):
+            return {"results": [_archived_lesson("LL-42")], "has_more": False}
+        if "start_cursor" not in query:
+            return {"results": [_lesson()], "has_more": True, "next_cursor": "c1"}
+        return {"results": [_lesson()], "has_more": False}
+
+    result = _issue_start(execute_read=read)
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert "incomplete_reason_code" not in result["retrieval_diagnostics"]
+    rejected = result["rejected_candidate_provenance"]
+    assert "LL-42" in [item["lesson_id"] for item in rejected]
+
+
+def test_requested_skip_found_beyond_row_25_on_snapshot_page():
+    # #4016 R-4: the diagnostic inspection cap is the snapshot page bound, so
+    # a requested lesson at index 30 of a 100-row page is still diagnosed.
+    # The filler rows carry no Lesson ID, so they are not candidates and do
+    # not fill the five-record rejected list; only the requested skip is
+    # reported. (When five canonical eligible rejections already fill the
+    # cap, a requested skip still cannot surface: that precedence is pinned
+    # by test_eligible_rejections_precede_requested_skips_regardless_of_row_order
+    # and is out of scope for this repair.)
+    page = []
+    for _ in range(30):
+        row = _lesson()
+        del row["properties"]["Lesson ID"]
+        page.append(row)
+    page.append(_archived_lesson("LL-42"))
+
+    def read(query):
+        if _is_known_query(query):
+            return {"results": [], "has_more": False}
+        return {"results": page, "has_more": False}
+
+    result = _issue_start(execute_read=read)
+    rejected = result["rejected_candidate_provenance"]
+    assert "LL-42" in [item["lesson_id"] for item in rejected]

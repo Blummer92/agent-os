@@ -21,7 +21,6 @@ from agent_memory_context_manager.lesson_retrieval_orchestrator import (
     record_retrieval_attempt,
 )
 
-
 def request(**overrides):
     data = dict(
         task_reference="issue:#2141",
@@ -866,3 +865,101 @@ def test_terminal_row_overflow_reports_exact_bucket_and_read_count_without_selec
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
     assert result.retrieval_diagnostics["terminal_query_bucket"] == "workspace"
     assert result.retrieval_diagnostics["read_count"] == len(seen) == 5
+
+
+def _adapter_executor(pages):
+    """Real adapter + ordered fake provider pages, via lesson_reader_composition.
+
+    The sibling packages are imported here, not at module scope: CI runs
+    each 08_Tooling package's tests with only that package's src on
+    sys.path, and agent_os_execution_service is not an installed
+    distribution in that environment, so a module-level import fails
+    collection of this whole module (and of test_lesson_snapshot_replacement,
+    which imports helpers from here). This is the same sys.path.insert
+    convention test_provider_failure_detail_survives_canonical_reader_chain
+    already uses in this file; repo root is included because
+    agent_os_execution_service.models resolves
+    scripts.agent_os_execution_capabilities through the shared namespace
+    package.
+    """
+    import sys
+    from pathlib import Path
+
+    _test_file = Path(__file__).resolve()
+    _tooling = _test_file.parents[2]
+    sys.path.insert(0, str(_tooling / "agent-os-execution-service" / "src"))
+    sys.path.insert(0, str(_tooling / "workflow-scheduler" / "src"))
+    sys.path.insert(0, str(_tooling.parent))
+
+    from agent_os_execution_service.lesson_reader_composition import (
+        build_lesson_read_executor,
+    )
+    from workflow_scheduler.adapters.notion_readonly_adapter import (
+        NotionReadOnlyAdapter,
+    )
+
+    state = {"pages": list(pages)}
+
+    def post(url, headers, body, timeout):
+        return dict(state["pages"].pop(0))
+
+    adapter = NotionReadOnlyAdapter(
+        token="fake-token-for-qa", http_post_query_data_source=post
+    )
+    return build_lesson_read_executor(data_source_id="ds-qa", adapter=adapter)
+
+
+def _planted_testing_row():
+    return _ckr6_area_row(9001, "Testing", relevant=True, learning_type="Mistake")
+
+
+def test_adapter_missing_has_more_fails_closed_with_malformed_pagination():
+    # #4016 R-1: a provider page without has_more must not become an
+    # apparently complete snapshot through the canonical adapter.
+    executor = _adapter_executor([{"results": [_planted_testing_row()]}])
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+    assert "notion-malformed-pagination" in result.selection_reason_codes
+
+
+def test_adapter_wrong_type_has_more_fails_closed_with_malformed_pagination():
+    executor = _adapter_executor(
+        [{"results": [_planted_testing_row()], "has_more": "false", "next_cursor": None}]
+    )
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+
+
+def test_adapter_missing_has_more_on_second_page_fails_closed():
+    # #4016 R-1 (late page): a valid first page must not leave a lesson
+    # selected when the second page's pagination metadata is missing.
+    executor = _adapter_executor(
+        [
+            {
+                "results": [_planted_testing_row()],
+                "has_more": True,
+                "next_cursor": "c1",
+            },
+            {"results": [_ckr6_area_row(7001, "Documentation", learning_type="Mistake")]},
+        ]
+    )
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "malformed-pagination"
+
+
+def test_adapter_oversized_page_fails_closed_with_row_bound():
+    # #4016 R-2: an oversized provider page is rejected by the snapshot's
+    # row bound instead of being silently sliced by the adapter.
+    rows = [
+        _ckr6_area_row(7000 + i, "Documentation", learning_type="Mistake")
+        for i in range(100)
+    ]
+    rows.append(_planted_testing_row())
+    executor = _adapter_executor([{"results": rows, "has_more": False}])
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics.get("incomplete_reason_code") == "row-bound-exceeded"

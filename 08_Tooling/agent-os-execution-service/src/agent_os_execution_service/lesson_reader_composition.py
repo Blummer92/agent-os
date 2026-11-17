@@ -58,6 +58,11 @@ def _notion_provider_failure_code(message: object) -> str | None:
     if message.startswith("Notion API request timed out:"):
         return "notion-timeout"
     if (
+        message.startswith("Notion API pagination metadata is malformed")
+        or message.startswith("Notion API set has_more without a valid opaque next_cursor")
+    ):
+        return "notion-malformed-pagination"
+    if (
         message.startswith("Notion API returned invalid JSON:")
         or message.startswith("Notion API returned a non-object JSON payload")
         or message.startswith("Notion API returned a malformed response")
