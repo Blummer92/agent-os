@@ -540,6 +540,10 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     next_cursor = raw.get("next_cursor")
     if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
         raise LessonActivationError("read executor returned a malformed next_cursor")
+    # A terminal page must not simultaneously advertise a continuation.
+    # Do not admit an incomplete or internally contradictory corpus to CKR2.
+    if not has_more and next_cursor is not None:
+        raise LessonActivationError("read executor returned a malformed next_cursor")
     return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
 
 
