@@ -965,6 +965,135 @@ def test_adapter_oversized_page_fails_closed_with_row_bound():
     assert result.retrieval_diagnostics.get("incomplete_reason_code") == "row-bound-exceeded"
 
 
+
+# #4011 finite terminal-page diagnostics on the merged snapshot path.
+@pytest.mark.parametrize("count,bucket", [(24,"0-99"),(25,"0-99"),(26,"0-99"),(99,"0-99"),(100,"100")])
+def test_4011_snapshot_missing_cursor_signature(count, bucket):
+    seen = []
+    def read(query):
+        seen.append(query)
+        return {"results": [_lesson_row("LL-42")] * count,
+                "has_more": True, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    diag = result.retrieval_diagnostics
+    assert len(seen) == 1
+    assert diag["incomplete_reason_code"] == "missing-cursor"
+    assert diag["terminal_query_bucket"] == "workspace"
+    assert diag["terminal_page_row_count_bucket"] == bucket
+    assert diag["terminal_page_has_more"] == "true"
+    assert diag["terminal_page_cursor_present"] is False
+    assert result.selected_lesson_ids == ()
+
+
+def test_4011_oversize_snapshot_signature():
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": [_lesson_row("LL-42")] * 101,
+        "has_more": False, "next_cursor": None})
+    diag = result.retrieval_diagnostics
+    assert diag["incomplete_reason_code"] == "row-bound-exceeded"
+    assert diag["terminal_page_row_count_bucket"] == "over-100"
+    assert diag["terminal_page_has_more"] == "false"
+    assert diag["terminal_page_cursor_present"] is False
+    assert result.selected_lesson_ids == ()
+
+
+@pytest.mark.parametrize("metadata", [{}, {"has_more": None}, {"has_more": "false"}, {"has_more": 0}])
+def test_4011_missing_or_malformed_completion_flag_reports_invalid(metadata):
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda _q: {
+        "results": [_lesson_row("LL-42")], **metadata,
+    })
+    assert result.selected_lesson_ids == ()
+    diagnostics = result.retrieval_diagnostics
+    assert diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert diagnostics["terminal_page_has_more"] == "invalid"
+    assert diagnostics["terminal_page_row_count_bucket"] == "0-99"
+
+
+@pytest.mark.parametrize("count", [24,25,26,100])
+def test_4011_complete_snapshot_omits_signature(count):
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": [_lesson_row("LL-42")] * count, "has_more": False})
+    assert "incomplete_reason_code" not in result.retrieval_diagnostics
+    assert not any(k.startswith("terminal_page_") for k in result.retrieval_diagnostics)
+
+
+def test_4011_malformed_page_signature_no_leak():
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda q: {
+        "results": "PRIVATE_UNTRUSTED", "has_more": "PRIVATE_UNTRUSTED",
+        "next_cursor": {"token": "PRIVATE_UNTRUSTED"}})
+    d = result.retrieval_diagnostics
+    assert d["incomplete_reason_code"] == "malformed-page"
+    assert d["terminal_page_row_count_bucket"] == "unobserved"
+    assert d["terminal_page_has_more"] == "invalid"
+    assert d["terminal_page_cursor_present"] is False
+    assert "PRIVATE" not in str(d)
+
+
+def test_4011_no_stale_page_metadata_after_failed_continuation():
+    def read(q):
+        if "start_cursor" not in q:
+            return {"results": [_lesson_row("LL-42")],
+                    "has_more": True, "next_cursor": "SECRET_CURSOR"}
+        raise ConnectionError("SECRET_EXCEPTION")
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert result.selected_lesson_ids == ()
+    assert not any(k.startswith("terminal_page_") for k in result.retrieval_diagnostics)
+    assert "SECRET" not in str(result.retrieval_diagnostics)
+
+
+def test_4011_read_budget_stop_retains_issued_page_signature(monkeypatch):
+    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
+    monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
+    seen = []
+    def read(q):
+        seen.append(q)
+        return {"results": [], "has_more": False}
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=("LL-1",)), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == d["read_count"] == 1
+    assert d["incomplete_reason_code"] == "read-budget-exceeded"
+    assert d["terminal_query_bucket"] == "known-reference"
+    assert d["terminal_page_row_count_bucket"] == "0-24"
+    assert d["terminal_page_has_more"] == "false"
+    assert d["terminal_page_cursor_present"] is False
+
+
+def test_4011_snapshot_late_page_overflow_signature_is_latest_only():
+    seen = []
+    def read(q):
+        seen.append(q)
+        if len(seen) == 1:
+            return {"results": [_lesson_row("LL-42")] * 100,
+                    "has_more": True, "next_cursor": "SECRET_CURSOR"}
+        return {"results": [_lesson_row("LL-42")] * 101,
+                "has_more": False, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == 2
+    assert d["incomplete_reason_code"] == "row-bound-exceeded"
+    assert d["terminal_page_row_count_bucket"] == "over-100"
+    assert d["terminal_page_has_more"] == "false"
+    assert d["terminal_page_cursor_present"] is False
+    assert "SECRET_CURSOR" not in str(d)
+
+
+def test_4011_snapshot_exact_500_with_more_is_incomplete():
+    seen = []
+    def read(q):
+        seen.append(q)
+        return {"results": [_lesson_row("LL-42")] * 100,
+                "has_more": True, "next_cursor": f"SECRET-{len(seen)}"}
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    d = result.retrieval_diagnostics
+    assert len(seen) == 5
+    assert d["incomplete_reason_code"] == "row-bound-exceeded"
+    assert d["terminal_query_bucket"] == "workspace"
+    assert d["terminal_page_row_count_bucket"] == "100"
+    assert d["terminal_page_has_more"] == "true"
+    assert d["terminal_page_cursor_present"] is True
+    assert result.selected_lesson_ids == ()
+
 # #4016 follow-up: complete-page metadata must not carry a continuation cursor.
 @pytest.mark.parametrize("cursor", ["dangling-cursor", "  dangling-cursor  "])
 def test_ckr11_terminal_has_more_false_with_cursor_is_malformed(cursor):
