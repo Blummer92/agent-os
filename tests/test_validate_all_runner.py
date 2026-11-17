@@ -605,8 +605,13 @@ def test_scheduler_starts_root_early_and_preserves_coach_exclusivity(
     coach_end = _trace_ns(trace, "instructional-materials-coach", "end")
     for name in ("repo", "pkg-a", "pkg-b"):
         assert coach_end <= _trace_ns(trace, name, "start")
-    # The root runner is launched before the alphabetical package suites.
-    assert _trace_ns(trace, "repo", "start") < _trace_ns(trace, "pkg-a", "start")
+    # The scheduler dispatches root first, but OS process startup can race:
+    # a later-launched package can enter Python before root does. Assert the
+    # intended overlap instead of assuming subprocess startup order.
+    assert _trace_ns(trace, "repo", "start") < _trace_ns(trace, "pkg-a", "end")
+    script = (repo / "scripts" / "validate-all.sh").read_text(encoding="utf-8")
+    root_dispatch = '[ "${suite_names[$i]}" = "root" ] && schedule_indices+=("$i")'
+    assert script.index(root_dispatch) < script.index('case "${suite_names[$i]}" in')
     checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
     assert checks.index("PASS | 08_Tooling/instructional-materials-coach |") < checks.index(
         "PASS | pkg-a |"
