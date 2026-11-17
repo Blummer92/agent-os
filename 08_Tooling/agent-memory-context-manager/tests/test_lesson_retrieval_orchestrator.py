@@ -797,23 +797,63 @@ def test_terminal_query_bucket_has_only_closed_controlled_values():
 
 
 
-def _budget_stop_bucket(monkeypatch, cap):
+def _budget_stop_bucket(monkeypatch, cap, req=None, reader=None):
     import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
     monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", cap)
     seen = []
 
     def read(query):
         seen.append(query)
+        if reader is not None:
+            return reader(query)
         return {"results": [_lesson_row("LL-1")] * 25,
                 "has_more": True, "next_cursor": "private"}
 
     result = orchestrate_lesson_retrieval(
-        request(capability_keywords=("testing",)), execute_read=read
+        req if req is not None else request(capability_keywords=("testing",)),
+        execute_read=read,
     )
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "read-budget-exceeded"
     assert result.retrieval_diagnostics["read_count"] == len(seen) == cap
     return result.retrieval_diagnostics["terminal_query_bucket"]
 
+def test_max_preflight_reads_constant_is_pinned_at_32():
+    # Restored coverage (GAP 1): A must keep the read budget pinned at 32.
+    assert MAX_PREFLIGHT_READS == 32
 
 
+def test_budget_stop_names_last_issued_query_not_the_refused_one(monkeypatch):
+    # Restored coverage (GAP 1b): execute the surviving helper. With known
+    # knowledge refs and the budget capped at 1, the known-reference read is
+    # ISSUED (bucket "known-reference") and the workspace snapshot read is
+    # REFUSED (bucket "workspace"). The diagnostic must name the issued
+    # query; a mutant naming the refused snapshot query would report
+    # "workspace" and fail this pin.
+    req = request(known_knowledge_refs=("LL-1",))
+    complete_page = lambda _q: {"results": [], "has_more": False}
+    assert _budget_stop_bucket(monkeypatch, 1, req, complete_page) == "known-reference"
+
+
+def test_terminal_row_overflow_reports_exact_bucket_and_read_count_without_selecting():
+    # Restored coverage (GAP 2): exact terminal bucket and read_count pins.
+    # Full 100-row pages with advancing cursors overflow the snapshot row
+    # bound at exactly 5 reads; the bucket names the issued snapshot query
+    # and nothing is selected.
+    seen = []
+
+    def read(query):
+        seen.append(query)
+        return {
+            "results": [_lesson_row(f"LL-{len(seen)}x{i}") for i in range(100)],
+            "has_more": True,
+            "next_cursor": f"cursor-{len(seen)}",
+        }
+
+    result = orchestrate_lesson_retrieval(
+        request(capability_keywords=("testing",)), execute_read=read
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "workspace"
+    assert result.retrieval_diagnostics["read_count"] == len(seen) == 5
