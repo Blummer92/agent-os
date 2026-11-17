@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 from .coding_knowledge_selection import (
+    MAX_GUIDANCE_TEXT_CHARS,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
@@ -305,8 +306,12 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
     if capability_kind is None:
         return LessonActivationSkip(lesson_id, "ambiguous-learning-type-vocabulary")
 
-    guardrail = _rich_text(properties.get(_GUARDRAIL_PROPERTY))
-    what_to_do_next_time = _rich_text(properties.get(_NEXT_TIME_PROPERTY))
+    guardrail, guardrail_state = _guidance_text(properties.get(_GUARDRAIL_PROPERTY))
+    what_to_do_next_time, next_time_state = _guidance_text(properties.get(_NEXT_TIME_PROPERTY))
+    if guardrail_state == "oversized" or next_time_state == "oversized":
+        # Present but over the shared guidance bound: fail closed with a
+        # distinct reason, never mislabeled as missing guidance.
+        return LessonActivationSkip(lesson_id, "oversized-activation-guidance")
     if guardrail is None or what_to_do_next_time is None:
         return LessonActivationSkip(lesson_id, "missing-activation-guidance")
 
@@ -520,6 +525,36 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
         raise LessonActivationError("read executor returned a malformed next_cursor")
     return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
+
+
+def _guidance_text(prop: Any) -> tuple[str | None, str]:
+    """Advisory narrative text under the shared guidance bound.
+
+    Returns (text, "ok") when the property is present and within
+    MAX_GUIDANCE_TEXT_CHARS; (None, "missing") when absent, malformed, or
+    empty; (None, "oversized") when present but over the shared bound, so a
+    long Guardrail is never reported as "missing-activation-guidance".
+    Nothing is truncated; over-bound guidance fails closed.
+    """
+    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
+        return None, "missing"
+    items = prop.get("rich_text")
+    if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
+        return None, "missing"
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            return None, "missing"
+        text = item.get("plain_text")
+        if not isinstance(text, str):
+            return None, "missing"
+        parts.append(text)
+    joined = "".join(parts).strip()
+    if not joined:
+        return None, "missing"
+    if len(joined) > MAX_GUIDANCE_TEXT_CHARS:
+        return None, "oversized"
+    return joined, "ok"
 
 
 def _plain_text(rich_text: Any) -> str | None:

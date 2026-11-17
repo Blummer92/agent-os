@@ -11,6 +11,13 @@ MAX_CANDIDATES = 5
 MAX_SELECTED = 3
 MAX_SIGNAL_ITEMS = 20
 MAX_TEXT_CHARS = 512
+# Advisory narrative text (candidate use_when / avoid_when guidance) is bounded
+# separately from structured identity text. The bound aligns with the provider's
+# own rich-text item limit (2000 chars) plus headroom and is shared with
+# lesson_preflight and lesson_activation_bridge so one lesson's guidance is
+# validated against exactly one bound across the CKR11 -> CKR6 -> CKR2 path.
+# Guidance over this bound still fails closed; nothing is truncated.
+MAX_GUIDANCE_TEXT_CHARS = 2048
 
 
 class KnowledgeCurrentness(str, Enum):
@@ -115,14 +122,12 @@ class CodingKnowledgeCandidate:
             value = getattr(self, name)
             if value is not None:
                 _validate_text(value, name)
-        for name in (
-            "keywords",
-            "use_when",
-            "avoid_when",
-            "canonical_github_refs",
-            "evidence_refs",
-        ):
+        for name in ("keywords", "canonical_github_refs", "evidence_refs"):
             _validate_text_tuple(getattr(self, name), name)
+        for name in ("use_when", "avoid_when"):
+            _validate_text_tuple(
+                getattr(self, name), name, max_chars=MAX_GUIDANCE_TEXT_CHARS
+            )
         if type(self.currentness) is not KnowledgeCurrentness:
             raise TypeError("currentness must be a KnowledgeCurrentness value")
         if type(self.authority_conflict) is not bool:
@@ -497,24 +502,26 @@ def _result(
     )
 
 
-def _validate_text(value: object, field: str) -> None:
+def _validate_text(value: object, field: str, *, max_chars: int = MAX_TEXT_CHARS) -> None:
     if type(value) is not str:
         raise TypeError(f"{field} must be a string")
     if not value.strip():
         raise ValueError(f"{field} must be non-empty")
-    if len(value) > MAX_TEXT_CHARS:
+    if len(value) > max_chars:
         raise ValueError(f"{field} is oversized")
     if any(ord(char) < 32 and char not in "\t" for char in value):
         raise ValueError(f"{field} contains control characters")
 
 
-def _validate_text_tuple(values: object, field: str) -> None:
+def _validate_text_tuple(
+    values: object, field: str, *, max_chars: int = MAX_TEXT_CHARS
+) -> None:
     if type(values) is not tuple:
         raise TypeError(f"{field} must be a tuple")
     if len(values) > MAX_SIGNAL_ITEMS:
         raise ValueError(f"{field} is oversized")
     for value in values:
-        _validate_text(value, field)
+        _validate_text(value, field, max_chars=max_chars)
 
 
 def _norm(value: str) -> str:
