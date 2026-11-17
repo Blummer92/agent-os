@@ -415,7 +415,13 @@ def _match_candidate(
     # Require BOTH distinctive tokens, as whole words, in the lesson-owned
     # text. This is relevance only, never eligibility or authorization.
     import re
-    ci_request = "ckr6 mutation boundary" in capability_hints
+    # Only these owner-supplied CKR6 capability labels are equivalent.
+    # No fuzzy task-text matching or new eligibility/authority path.
+    ci_request = bool(capability_hints & {
+        "ckr6 mutation boundary",
+        "ckr6 mutation gate",
+        "ckr6 mutation boundary gate",
+    })
     if ci_request:
         lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
         if all(re.search(r"(?<![a-z0-9])" + term + r"(?![a-z0-9])", lesson_text)
