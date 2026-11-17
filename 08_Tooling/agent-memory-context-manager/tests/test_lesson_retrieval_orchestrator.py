@@ -963,3 +963,87 @@ def test_adapter_oversized_page_fails_closed_with_row_bound():
     result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics.get("incomplete_reason_code") == "row-bound-exceeded"
+
+
+# #4016 follow-up: complete-page metadata must not carry a continuation cursor.
+@pytest.mark.parametrize("cursor", ["dangling-cursor", "  dangling-cursor  "])
+def test_ckr11_terminal_has_more_false_with_cursor_is_malformed(cursor):
+    from agent_memory_context_manager.lesson_activation_bridge import (
+        LessonActivationError,
+        _page_cursor,
+    )
+
+    with pytest.raises(LessonActivationError, match="malformed next_cursor"):
+        _page_cursor({"results": [], "has_more": False, "next_cursor": cursor})
+
+
+def test_ckr11_contradictory_terminal_page_never_selects_lesson():
+    # Source-level reproduction: a complete-looking page must not admit
+    # an eligible lesson if it also advertises a continuation cursor.
+    result = orchestrate_lesson_retrieval(
+        request(), execute_read=lambda _q: {
+            "results": [_lesson_row("LL-42")],
+            "has_more": False,
+            "next_cursor": "dangling-cursor",
+        }
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_later_contradictory_terminal_page_discards_earlier_lesson():
+    # No partial lesson population may reach CKR2 after a later-page failure.
+    seen = []
+
+    def read(query):
+        seen.append(dict(query))
+        if len(seen) == 1:
+            return {
+                "results": [_lesson_row("LL-42")],
+                "has_more": True,
+                "next_cursor": "page-two",
+            }
+        assert query["start_cursor"] == "page-two"
+        return {
+            "results": [],
+            "has_more": False,
+            "next_cursor": "unexpected-page-three",
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(seen) == 2
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+
+
+def test_ckr11_adapter_contradictory_terminal_page_fails_closed():
+    # Exercise real Notion adapter -> read composition -> CKR11 -> CKR2.
+    executor = _adapter_executor([{
+        "results": [_planted_testing_row()],
+        "has_more": False,
+        "next_cursor": "unexpected-continuation",
+    }])
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=executor
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_adapter_valid_terminal_page_still_selects_lesson():
+    # Positive control: a null cursor on a genuinely complete page works.
+    executor = _adapter_executor([{
+        "results": [_planted_testing_row()],
+        "has_more": False,
+        "next_cursor": None,
+    }])
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=executor
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-9001" in result.selected_lesson_ids
