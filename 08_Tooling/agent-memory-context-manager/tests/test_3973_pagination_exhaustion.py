@@ -7,11 +7,14 @@ failure a full-database inventory cannot tolerate (the live database holds
 more rows than one page_size=25 response can carry). These tests pin:
 
 - multi-page exhaustion: a lesson that only exists on page 2 reaches CKR2;
-- legacy single-page executors (no pagination keys) behave exactly as before;
+- explicit single-page executors with `has_more: false` remain supported;
+  missing `has_more` is malformed (P6), never assumed complete;
 - malformed pagination state fails closed instead of looping or truncating:
   `has_more` without a cursor, a repeated cursor, a non-boolean `has_more`,
   a non-string cursor, and an executor that never ends its pages;
-- the bounded row cap still stops pagination without a follow-up call.
+- exactly 25 rows with `has_more: false` are allowed; an oversized page,
+  cumulative overflow, or 25 rows with `has_more: true` fail closed
+  without admitting a truncated partial candidate set.
 """
 import pytest
 
