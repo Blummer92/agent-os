@@ -477,3 +477,25 @@ def test_selection_stays_bounded_when_relevant_lessons_exceed_the_candidate_budg
     )
     assert result.candidate_count <= 20
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+
+
+def test_bad_unrelated_corpus_row_is_skipped_without_losing_valid_lesson():
+    bad = _lesson_row("LL-8701")
+    bad["properties"]["Guardrail"] = {
+        "type": "rich_text", "rich_text": [{"plain_text": "invalid\\ncontrol"}],
+    }
+    rows = _count_consistent_rows() + [bad, _planted()]
+    assert len(rows) == 88
+    calls = []
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=_ckr6_filter_evaluating_reader(rows, calls),
+    )
+    assert len(calls) == 1
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-9001" in result.selected_lesson_ids
+    assert "LL-8701" not in result.selected_lesson_ids
+    assert result.retrieval_diagnostics["skip_reasons"].get(
+        "oversized-or-malformed-field", 0
+    ) >= 1
+    assert "incomplete_reason_code" not in result.retrieval_diagnostics
