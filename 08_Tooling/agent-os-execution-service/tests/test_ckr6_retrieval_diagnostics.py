@@ -677,3 +677,36 @@ def test_4011_direct_summary_writer_refuses_hostile_or_partial_page_signature(tm
         assert bridge.write_retrieval_diagnostics_summary(invalid, env) is False
         assert target.read_text() == safe_text
     assert CURSOR not in safe_text and SENSITIVE_SAMPLE not in safe_text
+
+
+def test_4011_direct_summary_refuses_untrusted_reason_counters_and_extra_fields(tmp_path):
+    """The Actions summary is an export boundary even when called directly."""
+    valid = {
+        "retrieval_reason_code": "lesson-read-incomplete",
+        "incomplete_reason_code": "row-bound-exceeded",
+        "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
+        "skipped_rows": 0, "candidate_count": 0,
+        "terminal_query_bucket": "workspace",
+        "terminal_page_row_count_bucket": "25",
+        "terminal_page_has_more": "true",
+        "terminal_page_cursor_present": True,
+    }
+    target = tmp_path / "summary.md"
+    env = {"GITHUB_STEP_SUMMARY": str(target)}
+    assert bridge.write_retrieval_diagnostics_summary(valid, env)
+    expected = target.read_text()
+    hostile_inputs = (
+        {**valid, "retrieval_reason_code": SENSITIVE_SAMPLE},
+        {**valid, "incomplete_reason_code": CURSOR},
+        {**valid, "terminal_query_bucket": SENSITIVE_SAMPLE},
+        {**valid, "read_count": "3 with SECRET"},
+        {**valid, "candidate_count": 10001},
+        {**valid, "observed_rows": True},
+        {**valid, "raw_provider_row": SENSITIVE_SAMPLE},
+        {**valid, "incomplete_reason_code": "none"},
+    )
+    for payload in hostile_inputs:
+        assert bridge.write_retrieval_diagnostics_summary(payload, env) is False
+        assert target.read_text() == expected
+    assert CURSOR not in expected
+    assert SENSITIVE_SAMPLE not in expected
