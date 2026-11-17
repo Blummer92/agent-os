@@ -499,3 +499,28 @@ def test_bad_unrelated_corpus_row_is_skipped_without_losing_valid_lesson():
         "oversized-or-malformed-field", 0
     ) >= 1
     assert "incomplete_reason_code" not in result.retrieval_diagnostics
+
+
+def test_one_normalization_value_error_cannot_crash_complete_snapshot(monkeypatch):
+    # Mutation-sensitive boundary probe: simulate one row-normalizer rejecting
+    # a corpus row while preserving the valid lesson and diagnostics.
+    rows = _count_consistent_rows() + [_planted()]
+    target = rows[0]
+    real_normalize = orch.normalize_lesson_row
+
+    def normalizer(row):
+        if row is target:
+            raise ValueError("invalid control character")
+        return real_normalize(row)
+
+    monkeypatch.setattr(orch, "normalize_lesson_row", normalizer)
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=_ckr6_filter_evaluating_reader(rows, []),
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-9001" in result.selected_lesson_ids
+    assert result.retrieval_diagnostics["skip_reasons"].get(
+        "oversized-or-malformed-field", 0
+    ) >= 1
+    assert "incomplete_reason_code" not in result.retrieval_diagnostics
