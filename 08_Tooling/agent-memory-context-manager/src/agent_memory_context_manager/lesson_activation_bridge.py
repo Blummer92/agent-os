@@ -471,13 +471,17 @@ def orchestrate_lesson_activation(
         seen_cursors.add(cursor)
         page_query = query if cursor is None else {**query, "start_cursor": cursor}
         raw = execute_read(page_query)
-        rows.extend(_extract_bounded_rows(raw))
-        if len(rows) >= MAX_RETRIEVAL_ROWS:
-            rows = rows[:MAX_RETRIEVAL_ROWS]
-            break
+        page_rows = _extract_bounded_rows(raw)
+        # Validate pagination BEFORE admitting any rows. At the row boundary
+        # a complete 25-row page is acceptable only with has_more=False.
         has_more, next_cursor = _page_cursor(raw)
+        if len(rows) + len(page_rows) > MAX_RETRIEVAL_ROWS:
+            raise LessonActivationError("paginated retrieval exceeded row bound")
+        rows.extend(page_rows)
         if not has_more:
             break
+        if len(rows) >= MAX_RETRIEVAL_ROWS:
+            raise LessonActivationError("paginated retrieval exceeded row bound")
         if next_cursor is None:
             raise LessonActivationError("paginated retrieval missing next cursor")
         cursor = next_cursor
@@ -504,7 +508,9 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     # malformed, never silently filtered.
     if not all(isinstance(item, Mapping) for item in results):
         raise LessonActivationError("read executor result contains non-mapping items")
-    return list(results)[:MAX_RETRIEVAL_ROWS]
+    if len(results) > MAX_RETRIEVAL_ROWS:
+        raise LessonActivationError("paginated retrieval exceeded row bound")
+    return list(results)
 
 
 def _page_cursor(raw: Any) -> tuple[bool, str | None]:
