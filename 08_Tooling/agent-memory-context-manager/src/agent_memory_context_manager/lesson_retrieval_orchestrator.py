@@ -533,8 +533,12 @@ def orchestrate_lesson_retrieval(
             # Reject an oversized supplied page instead of truncating it.
             if len(results) > SNAPSHOT_PAGE_SIZE:
                 raise LessonActivationError(_ROW_BOUND_MESSAGE)
-            if any(not isinstance(item, Mapping) for item in results):
-                raise LessonActivationError("read executor result contains non-mapping items")
+            # A page is admitted only whole: any non-mapping item makes the
+            # page malformed, never silently filtered.
+            if not all(isinstance(item, Mapping) for item in results):
+                raise LessonActivationError(
+                    "read executor result contains non-mapping items"
+                )
             rows.extend(results)
             has_more, next_cursor = _page_cursor(raw)
             if not has_more:
@@ -551,8 +555,8 @@ def orchestrate_lesson_retrieval(
         nonlocal observed_rows, normalized_rows
         observed_rows += len(rows)
         for row in rows:
-            # One invalid corpus row must not crash an otherwise complete
-            # snapshot. Invalid evidence is skipped, never sent to CKR2.
+            # Invalid rows must not crash a fully retrieved corpus or leak
+            # unchecked candidates into CKR2.
             try:
                 normalized = normalize_lesson_row(row)
             except (TypeError, ValueError):
@@ -621,4 +625,3 @@ __all__ = [
     "orchestrate_lesson_retrieval",
     "record_retrieval_attempt",
 ]
-

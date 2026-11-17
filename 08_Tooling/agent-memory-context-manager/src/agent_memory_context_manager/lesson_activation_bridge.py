@@ -359,9 +359,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
-        # CKR2 validates additional text invariants, including control
-        # characters. Check them inside this row's isolation boundary so
-        # a malformed lesson cannot abort selection of the complete corpus.
+        # Validate CKR2 text invariants inside the per-row isolation boundary.
         _as_selection_candidate(lesson)
         return lesson
     except (TypeError, ValueError):
@@ -780,4 +778,3 @@ def _github_source_link(prop: Any) -> str | None:
     ):
         return None
     return value
-
