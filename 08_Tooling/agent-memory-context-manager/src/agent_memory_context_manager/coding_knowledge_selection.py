@@ -12,10 +12,11 @@ MAX_SELECTED = 3
 MAX_SIGNAL_ITEMS = 20
 MAX_TEXT_CHARS = 512
 # Advisory narrative text (candidate use_when / avoid_when guidance) is bounded
-# separately from structured identity text. The bound aligns with the provider's
-# own rich-text item limit (2000 chars) plus headroom and is shared with
-# lesson_preflight and lesson_activation_bridge so one lesson's guidance is
-# validated against exactly one bound across the CKR11 -> CKR6 -> CKR2 path.
+# separately from structured identity text. This approved 2048-character limit
+# applies to EACH logical guidance field after Notion rich_text segments are
+# joined and whitespace is stripped; it is not a provider per-segment limit.
+# Notion's 2000-character per-segment limit is a distinct transport constraint.
+# The same logical-field policy is shared across CKR11 -> CKR6 -> CKR2.
 # Guidance over this bound still fails closed; nothing is truncated.
 MAX_GUIDANCE_TEXT_CHARS = 2048
 
