@@ -108,17 +108,35 @@ def test_second_page_rows_reach_ckr2():
     assert set(result.selected_lesson_ids) == {"LL-1", "LL-2", "LL-3"}
 
 
-def test_single_page_legacy_executor_unchanged():
+def test_single_page_explicit_has_more_false_is_unchanged():
     calls = []
 
     def executor(query):
         calls.append(dict(query))
-        return {"results": [live_row(1)]}
+        return {"results": [live_row(1)], "has_more": False}
 
     result = orchestrate_lesson_activation(request(), execute_read=executor)
     assert len(calls) == 1
     assert "start_cursor" not in calls[0]
     assert result.selected_lesson_ids == ("LL-1",)
+
+
+def test_missing_has_more_is_malformed_not_a_complete_page():
+    # P6 fix: a page without has_more is rejected, never assumed complete.
+    def executor(query):
+        return {"results": [live_row(1)]}
+
+    with pytest.raises(LessonActivationError, match="missing 'has_more'"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+
+
+def test_non_mapping_result_items_fail_closed():
+    # P5 fix: any non-mapping item makes the whole page malformed.
+    def executor(query):
+        return {"results": [live_row(1), "not-a-mapping"], "has_more": False}
+
+    with pytest.raises(LessonActivationError, match="non-mapping items"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
 
 
 def test_has_more_without_cursor_fails_closed():

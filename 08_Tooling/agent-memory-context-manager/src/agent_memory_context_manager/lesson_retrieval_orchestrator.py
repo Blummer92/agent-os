@@ -93,6 +93,8 @@ _INCOMPLETE_REASON_CODES = {
     "repeated pagination cursor": "repeated-cursor",
     "read executor must return a mapping": "malformed-page",
     "read executor result is missing 'results'": "malformed-page",
+    "read executor result contains non-mapping items": "malformed-page",
+    "read executor result is missing 'has_more'": "malformed-pagination",
     "read executor returned a non-boolean has_more": "malformed-pagination",
     "read executor returned a malformed next_cursor": "malformed-pagination",
     _READ_BUDGET_MESSAGE: "read-budget-exceeded",
@@ -531,7 +533,13 @@ def orchestrate_lesson_retrieval(
             # Reject an oversized supplied page instead of truncating it.
             if len(results) > SNAPSHOT_PAGE_SIZE:
                 raise LessonActivationError(_ROW_BOUND_MESSAGE)
-            rows.extend(item for item in results if isinstance(item, Mapping))
+            # A page is admitted only whole: any non-mapping item makes the
+            # page malformed, never silently filtered.
+            if not all(isinstance(item, Mapping) for item in results):
+                raise LessonActivationError(
+                    "read executor result contains non-mapping items"
+                )
+            rows.extend(results)
             has_more, next_cursor = _page_cursor(raw)
             if not has_more:
                 return rows

@@ -500,20 +500,27 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     results = raw.get("results")
     if not isinstance(results, list):
         raise LessonActivationError("read executor result is missing 'results'")
-    return [item for item in results if isinstance(item, Mapping)][:MAX_RETRIEVAL_ROWS]
+    # A page is admitted only whole: any non-mapping item makes the page
+    # malformed, never silently filtered.
+    if not all(isinstance(item, Mapping) for item in results):
+        raise LessonActivationError("read executor result contains non-mapping items")
+    return list(results)[:MAX_RETRIEVAL_ROWS]
 
 
 def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     """Validate one page's pagination state, or fail closed.
 
-    A missing ``has_more`` is a single-page (legacy executor) response.
+    A missing ``has_more`` is malformed, not a complete single page:
+    assuming completeness could silently truncate the database.
     ``has_more: true`` without a non-empty string ``next_cursor`` is
     malformed: following it would loop, and ignoring it would silently
     truncate the database.
     """
     if not isinstance(raw, Mapping):
         raise LessonActivationError("read executor must return a mapping")
-    has_more = raw.get("has_more", False)
+    if "has_more" not in raw:
+        raise LessonActivationError("read executor result is missing 'has_more'")
+    has_more = raw["has_more"]
     if type(has_more) is not bool:
         raise LessonActivationError("read executor returned a non-boolean has_more")
     next_cursor = raw.get("next_cursor")

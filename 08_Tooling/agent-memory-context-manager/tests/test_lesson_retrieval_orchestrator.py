@@ -233,15 +233,24 @@ def test_ckr11_finds_current_relevant_lesson_on_second_page():
     assert result.retrieval_diagnostics["observed_rows"] == 2
 
 
-def test_ckr11_legacy_single_page_response_is_unchanged():
+def test_ckr11_explicit_single_page_response_is_unchanged():
     calls = []
     def read(query):
         calls.append(dict(query))
-        return {"results": [_lesson_row("LL-42")]}
+        return {"results": [_lesson_row("LL-42")], "has_more": False}
     result = orchestrate_lesson_retrieval(request(), execute_read=read)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-42",)
     assert len(calls) == 1
+
+
+def test_ckr11_missing_has_more_fails_closed_with_truthful_code():
+    # P6 fix: missing has_more is malformed pagination, not a complete page.
+    result = orchestrate_lesson_retrieval(
+        request(), execute_read=lambda _q: {"results": [_lesson_row("LL-42")]}
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
 
 
 def test_ckr11_relevant_first_page_cannot_admit_when_next_page_is_broken():

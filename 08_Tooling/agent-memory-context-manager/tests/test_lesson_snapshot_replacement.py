@@ -209,6 +209,32 @@ def test_missing_repeated_and_malformed_cursors_fail_closed():
         assert result.retrieval_diagnostics["incomplete_reason_code"] == code, code
 
 
+def test_non_mapping_result_items_reject_the_whole_page():
+    # P5 fix: a page containing any non-mapping item is malformed as a whole;
+    # the mapping items on it are never admitted.
+    rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
+    cases = (
+        {"results": rows[:99] + ["not-a-mapping"], "has_more": False},
+        {"results": rows[:99] + [None], "has_more": False},
+    )
+    for page in cases:
+        result = orchestrate_lesson_retrieval(
+            _ckr6_testing_request(), execute_read=lambda _q, _p=page: _p
+        )
+        assert result.selected_lesson_ids == ()
+        assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-page"
+
+
+def test_missing_has_more_rejects_the_page():
+    # P6 fix: a page without has_more is rejected, never assumed complete.
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=lambda _q: {"results": [_planted()]},
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+
+
 def test_budget_exhaustion_fails_closed(monkeypatch):
     monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
     rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
