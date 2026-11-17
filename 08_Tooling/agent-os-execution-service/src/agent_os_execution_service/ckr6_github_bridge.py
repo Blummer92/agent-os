@@ -453,7 +453,7 @@ _TERMINAL_QUERY_BUCKETS = frozenset({
     *(f"area:{area}/type:{kind}" for area in _AREA_ECOSYSTEM
       for kind in _LEARNING_TYPE_CAPABILITY),
 })
-_TERMINAL_PAGE_ROW_BUCKETS = frozenset({"0-24", "25", "over-25", "unobserved"})
+_TERMINAL_PAGE_ROW_BUCKETS = frozenset({"0-24", "25", "over-25", "0-99", "100", "over-100", "unobserved"})
 _TERMINAL_PAGE_HAS_MORE = frozenset({"true", "false", "invalid"})
 _TERMINAL_PAGE_KEYS = frozenset({
     "terminal_page_row_count_bucket",
@@ -512,7 +512,14 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             value if type(value) is str and value in _TERMINAL_QUERY_BUCKETS
             else "unobserved"
         )
-    if isinstance(source, Mapping) and _TERMINAL_PAGE_KEYS <= source.keys():
+    # The writers only accept the triple alongside terminal_query_bucket;
+    # the projection must apply the same rule, or it emits a diagnostic
+    # neither export boundary will write.
+    if (
+        isinstance(source, Mapping)
+        and _TERMINAL_PAGE_KEYS <= source.keys()
+        and "terminal_query_bucket" in source
+    ):
         row_bucket = source["terminal_page_row_count_bucket"]
         more = source["terminal_page_has_more"]
         cursor_present = source["terminal_page_cursor_present"]
@@ -1631,3 +1638,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

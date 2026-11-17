@@ -542,20 +542,31 @@ def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path
 
 # #4011: New page fields are emitted only in separate sanitized artifacts.
 @pytest.mark.parametrize(("count", "has_more", "row_bucket", "more_bucket", "cursor"), [
-    (100, True, "over-25", "true", True),
-    (101, False, "over-25", "false", False),
+    (100, True, "100", "true", True),
+    (101, False, "over-100", "false", False),
 ])
 def test_4011_two_terminal_page_shapes_are_finite_and_fail_closed(
     monkeypatch, tmp_path, count, has_more, row_bucket, more_bucket, cursor
 ):
-    reader = _counting({
-        "results": [_row(n) for n in range(count)],
-        "has_more": has_more,
-        "next_cursor": CURSOR if has_more else None,
-    })
+    # A constant cursor trips the repeated-cursor guard on the third snapshot
+    # page (read_snapshot refuses to re-issue a seen cursor), so the 100-row
+    # case reported 'repeated-cursor' instead of the intended
+    # 'row-bound-exceeded'. Each issued page needs its own cursor.
+    calls = []
+
+    def reader(query):
+        calls.append(dict(query))
+        return {
+            "results": [_row(n) for n in range(count)],
+            "has_more": has_more,
+            "next_cursor": f"{CURSOR}-{len(calls)}" if has_more else None,
+        }
+
     result, sink = _run(monkeypatch, reader)
     _assert_fail_closed(result)
     assert sink[0]["incomplete_reason_code"] == "row-bound-exceeded"
+    assert len(calls) == (5 if has_more else 1)
+    assert all(query["page_size"] == 100 for query in calls)
     assert sink[0]["terminal_page_row_count_bucket"] == row_bucket
     assert sink[0]["terminal_page_has_more"] == more_bucket
     assert sink[0]["terminal_page_cursor_present"] is cursor
@@ -621,11 +632,60 @@ def test_4011_projection_drops_partial_invalid_or_untrusted_page_signature(tmp_p
         partial = {k: v for k, v in valid.items() if k != absent}
         assert bridge.write_retrieval_diagnostics_artifact(partial, dest) is False
         assert dest.read_text() == before
+        projected = bridge.retrieval_diagnostics_projection({
+            "retrieval_diagnostics": partial,
+        })
+        assert not any(key.startswith("terminal_page_") for key in projected)
     assert bridge.write_retrieval_diagnostics_artifact(
         {**valid, "raw_cursor": CURSOR}, dest
     ) is False
     assert dest.read_text() == before
     assert CURSOR not in dest.read_text()
+
+
+def test_4011_projection_drops_page_signature_without_query_bucket(tmp_path):
+    raw = {
+        "incomplete_reason_code": "malformed-pagination",
+        "terminal_page_row_count_bucket": "100",
+        "terminal_page_has_more": "invalid",
+        "terminal_page_cursor_present": False,
+    }
+    projected = bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": raw,
+        "selection_reason_codes": ["lesson-read-incomplete"],
+    })
+    assert projected["incomplete_reason_code"] == "malformed-pagination"
+    assert not any(key.startswith("terminal_page_") for key in projected)
+    artifact = tmp_path / "diagnostics.json"
+    summary = tmp_path / "summary.md"
+    assert bridge.write_retrieval_diagnostics_artifact(projected, artifact)
+    assert bridge.write_retrieval_diagnostics_summary(
+        projected, {"GITHUB_STEP_SUMMARY": str(summary)}
+    )
+    assert not any(key.startswith("terminal_page_") for key in json.loads(artifact.read_text()))
+
+
+@pytest.mark.parametrize("bucket", ["0-24", "25", "over-25", "0-99", "100", "over-100", "unobserved"])
+def test_4011_finite_row_buckets_round_trip_both_writers(bucket, tmp_path):
+    projected = bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": {
+            "incomplete_reason_code": "row-bound-exceeded",
+            "terminal_query_bucket": "workspace",
+            "terminal_page_row_count_bucket": bucket,
+            "terminal_page_has_more": "false",
+            "terminal_page_cursor_present": False,
+        },
+        "selection_reason_codes": ["lesson-read-incomplete"],
+    })
+    assert projected["terminal_page_row_count_bucket"] == bucket
+    artifact = tmp_path / "diagnostics.json"
+    summary = tmp_path / "summary.md"
+    assert bridge.write_retrieval_diagnostics_artifact(projected, artifact)
+    assert bridge.write_retrieval_diagnostics_summary(
+        projected, {"GITHUB_STEP_SUMMARY": str(summary)}
+    )
+    assert json.loads(artifact.read_text())["terminal_page_row_count_bucket"] == bucket
+    assert bucket in summary.read_text()
 
 
 def test_4011_invalid_incomplete_code_blocks_page_fields(tmp_path):
@@ -712,3 +772,4 @@ def test_4011_direct_summary_refuses_untrusted_reason_counters_and_extra_fields(
         assert target.read_text() == expected
     assert CURSOR not in expected
     assert SENSITIVE_SAMPLE not in expected
+

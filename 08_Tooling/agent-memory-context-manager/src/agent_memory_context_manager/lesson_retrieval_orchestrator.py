@@ -399,24 +399,29 @@ def _terminal_query_bucket(query: Mapping[str, Any]) -> str:
     return "unobserved"
 
 
-def _finite_terminal_page_signature(raw: object) -> dict[str, object] | None:
+def _finite_terminal_page_signature(
+    raw: object, *, page_size: int
+) -> dict[str, object] | None:
     """Classify finite, provider-response-only page metadata (#4011).
 
-    These buckets are intentionally the legacy contract vocabulary;
-    for the newer 100-row snapshot, 'over-25' is not a row overflow.
+    Buckets are relative to the regime's page size: the legacy 25-row
+    vocabulary for read_sequence, the 100-row snapshot bound for
+    read_snapshot. A normal 100-row snapshot page is '100', not 'over-25',
+    so it can no longer be confused with an oversized page.
     """
     if not isinstance(raw, Mapping):
         return None
     results = raw.get("results")
     if isinstance(results, list):
         bucket = (
-            "0-24" if len(results) < MAX_RETRIEVAL_ROWS
-            else "25" if len(results) == MAX_RETRIEVAL_ROWS
-            else "over-25"
+            f"0-{page_size - 1}" if len(results) < page_size
+            else str(page_size) if len(results) == page_size
+            else f"over-{page_size}"
         )
     else:
         bucket = "unobserved"
-    has_more = raw.get("has_more", False)
+    # Missing metadata is invalid, just like a non-boolean completion flag.
+    has_more = raw.get("has_more")
     cursor = raw.get("next_cursor")
     return {
         "terminal_page_row_count_bucket": bucket,
@@ -503,7 +508,9 @@ def orchestrate_lesson_retrieval(
             terminal_page_signature = None
             raw = execute_read(page_query)
             read_count += 1
-            terminal_page_signature = _finite_terminal_page_signature(raw)
+            terminal_page_signature = _finite_terminal_page_signature(
+                raw, page_size=MAX_RETRIEVAL_ROWS
+            )
             page_rows = _extract_bounded_rows(raw)
             # Reject an oversized supplied page instead of truncating it.
             if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
@@ -575,7 +582,9 @@ def orchestrate_lesson_retrieval(
             terminal_page_signature = None
             raw = execute_read(page_query)
             read_count += 1
-            terminal_page_signature = _finite_terminal_page_signature(raw)
+            terminal_page_signature = _finite_terminal_page_signature(
+                raw, page_size=SNAPSHOT_PAGE_SIZE
+            )
             if not isinstance(raw, Mapping):
                 raise LessonActivationError("read executor must return a mapping")
             results = raw.get("results")
@@ -678,3 +687,4 @@ __all__ = [
     "orchestrate_lesson_retrieval",
     "record_retrieval_attempt",
 ]
+

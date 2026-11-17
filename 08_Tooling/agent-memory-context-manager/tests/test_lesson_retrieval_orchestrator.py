@@ -967,7 +967,7 @@ def test_adapter_oversized_page_fails_closed_with_row_bound():
 
 
 # #4011 finite terminal-page diagnostics on the merged snapshot path.
-@pytest.mark.parametrize("count,bucket", [(24,"0-24"),(25,"25"),(26,"over-25")])
+@pytest.mark.parametrize("count,bucket", [(24,"0-99"),(25,"0-99"),(26,"0-99"),(99,"0-99"),(100,"100")])
 def test_4011_snapshot_missing_cursor_signature(count, bucket):
     seen = []
     def read(query):
@@ -991,10 +991,22 @@ def test_4011_oversize_snapshot_signature():
         "has_more": False, "next_cursor": None})
     diag = result.retrieval_diagnostics
     assert diag["incomplete_reason_code"] == "row-bound-exceeded"
-    assert diag["terminal_page_row_count_bucket"] == "over-25"
+    assert diag["terminal_page_row_count_bucket"] == "over-100"
     assert diag["terminal_page_has_more"] == "false"
     assert diag["terminal_page_cursor_present"] is False
     assert result.selected_lesson_ids == ()
+
+
+@pytest.mark.parametrize("metadata", [{}, {"has_more": None}, {"has_more": "false"}, {"has_more": 0}])
+def test_4011_missing_or_malformed_completion_flag_reports_invalid(metadata):
+    result = orchestrate_lesson_retrieval(request(), execute_read=lambda _q: {
+        "results": [_lesson_row("LL-42")], **metadata,
+    })
+    assert result.selected_lesson_ids == ()
+    diagnostics = result.retrieval_diagnostics
+    assert diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert diagnostics["terminal_page_has_more"] == "invalid"
+    assert diagnostics["terminal_page_row_count_bucket"] == "0-99"
 
 
 @pytest.mark.parametrize("count", [24,25,26,100])
@@ -1060,7 +1072,7 @@ def test_4011_snapshot_late_page_overflow_signature_is_latest_only():
     d = result.retrieval_diagnostics
     assert len(seen) == 2
     assert d["incomplete_reason_code"] == "row-bound-exceeded"
-    assert d["terminal_page_row_count_bucket"] == "over-25"
+    assert d["terminal_page_row_count_bucket"] == "over-100"
     assert d["terminal_page_has_more"] == "false"
     assert d["terminal_page_cursor_present"] is False
     assert "SECRET_CURSOR" not in str(d)
@@ -1077,7 +1089,8 @@ def test_4011_snapshot_exact_500_with_more_is_incomplete():
     assert len(seen) == 5
     assert d["incomplete_reason_code"] == "row-bound-exceeded"
     assert d["terminal_query_bucket"] == "workspace"
-    assert d["terminal_page_row_count_bucket"] == "over-25"
+    assert d["terminal_page_row_count_bucket"] == "100"
     assert d["terminal_page_has_more"] == "true"
     assert d["terminal_page_cursor_present"] is True
     assert result.selected_lesson_ids == ()
+
