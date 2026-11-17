@@ -524,3 +524,49 @@ def test_one_normalization_value_error_cannot_crash_complete_snapshot(monkeypatc
         "oversized-or-malformed-field", 0
     ) >= 1
     assert "incomplete_reason_code" not in result.retrieval_diagnostics
+
+@pytest.mark.parametrize("field,kind", [
+    ("Lesson Learned", "title"),
+    ("Guardrail", "rich_text"),
+    ("What To Do Next Time", "rich_text"),
+])
+@pytest.mark.parametrize("control", ["\n", "\r", "\x00"])
+def test_candidate_text_rejection_is_isolated_to_one_row(field, kind, control):
+    bad = _planted(9002)
+    bad["properties"][field] = {
+        "type": kind, kind: [{"plain_text": f"invalid{control}text"}],
+    }
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=lambda _: {"results": [bad, _planted()], "has_more": False},
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-9001",)
+    diagnostics = result.retrieval_diagnostics
+    assert diagnostics["observed_rows"] == 2
+    assert diagnostics["normalized_rows"] == 1
+    assert diagnostics["skipped_rows"] == 1
+    assert diagnostics["skip_reasons"]["oversized-or-malformed-field"] == 1
+    assert "incomplete_reason_code" not in diagnostics
+
+
+@pytest.mark.parametrize("invalid", [None, 7, "invalid page item"])
+@pytest.mark.parametrize("later_page", [False, True])
+def test_non_mapping_snapshot_item_rejects_entire_population(invalid, later_page):
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        if later_page and "start_cursor" not in query:
+            return {"results": [_planted()], "has_more": True, "next_cursor": "page-2"}
+        return {"results": [_planted(), invalid], "has_more": False}
+
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=read)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.candidate_count == 0
+    diagnostics = result.retrieval_diagnostics
+    assert diagnostics["incomplete_reason_code"] == "malformed-page"
+    assert diagnostics["terminal_query_bucket"] == "workspace"
+    assert diagnostics["read_count"] == (2 if later_page else 1)
+    assert diagnostics["normalized_rows"] == 0
