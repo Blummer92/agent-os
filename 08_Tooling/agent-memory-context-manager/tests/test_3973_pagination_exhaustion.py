@@ -179,7 +179,7 @@ def test_page_cap_fails_closed_instead_of_silent_truncation():
     assert len(calls) == MAX_RETRIEVAL_PAGES
 
 
-def test_row_cap_stops_pagination_without_follow_up():
+def test_row_cap_with_more_fails_closed_without_follow_up():
     calls = []
 
     def executor(query):
@@ -190,9 +190,63 @@ def test_row_cap_stops_pagination_without_follow_up():
             "next_cursor": "c1",
         }
 
+    with pytest.raises(LessonActivationError, match="exceeded row bound"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert len(calls) == 1
+
+
+def test_exact_row_cap_complete_page_remains_admissible():
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        return {
+            "results": [live_row(n) for n in range(1, MAX_RETRIEVAL_ROWS + 1)],
+            "has_more": False,
+        }
+
     result = orchestrate_lesson_activation(request(), execute_read=executor)
     assert len(calls) == 1
     assert result.candidate_count == 5
+
+
+def test_oversized_single_page_fails_closed_without_truncation():
+    def executor(query):
+        return {
+            "results": [live_row(n) for n in range(1, MAX_RETRIEVAL_ROWS + 2)],
+            "has_more": False,
+        }
+
+    with pytest.raises(LessonActivationError, match="exceeded row bound"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+
+
+def test_exact_row_cap_without_has_more_fails_closed():
+    def executor(query):
+        return {"results": [live_row(n) for n in range(1, MAX_RETRIEVAL_ROWS + 1)]}
+
+    with pytest.raises(LessonActivationError, match="missing 'has_more'"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+
+
+def test_partial_first_page_cannot_admit_if_second_exceeds_total_budget():
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        if "start_cursor" not in query:
+            return {
+                "results": [live_row(n) for n in range(1, 21)],
+                "has_more": True, "next_cursor": "second",
+            }
+        return {
+            "results": [live_row(n) for n in range(21, 27)],
+            "has_more": False,
+        }
+
+    with pytest.raises(LessonActivationError, match="exceeded row bound"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert len(calls) == 2
 
 
 def test_malformed_has_more_fails_closed():
