@@ -1049,7 +1049,7 @@ def test_ckr11_adapter_valid_terminal_page_still_selects_lesson():
     assert "LL-9001" in result.selected_lesson_ids
 
 # Mutation control M05: never accept blank cursors on an unfinished page.
-@pytest.mark.parametrize("cursor", ["", " ", "  \\t  "], ids=[
+@pytest.mark.parametrize("cursor", ["", " ", "  \t  "], ids=[
     "empty", "single-space", "whitespace-only",
 ])
 def test_ckr11_nonterminal_whitespace_cursor_is_rejected(cursor):
@@ -1077,7 +1077,7 @@ def test_ckr11_whitespace_cursor_never_reads_second_page_or_selects():
             return {
                 "results": [_lesson_row("LL-42")],
                 "has_more": True,
-                "next_cursor": " \\t ",
+                "next_cursor": " \t ",
             }
         return {
             "results": [_lesson_row("LL-43")],
