@@ -625,70 +625,114 @@ parallel_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-os-validate.XXXXXX")" || runner
 trap 'rm -rf "$parallel_tmp"' EXIT
 mkdir -p "$parallel_tmp/junit" || runner_error "unable to create private JUnit directory."
 
-pending_names=()
-pending_commands=()
-pending_outputs=()
-pending_statuses=()
-pending_pids=()
-
-flush_parallel_batch() {
-  local i
-  for i in "${!pending_pids[@]}"; do
-    wait "${pending_pids[$i]}" || true
-  done
-  for i in "${!pending_names[@]}"; do
-    consume_captured_suite "${pending_names[$i]}" "${pending_commands[$i]}" "${pending_outputs[$i]}" "${pending_statuses[$i]}"
-  done
-  pending_names=()
-  pending_commands=()
-  pending_outputs=()
-  pending_statuses=()
-  pending_pids=()
-}
-
+# Keep suite identity and report order equal to the canonical sorted discovery.
+# Scheduling order is deliberately separate from evidence/manifest order.
+suite_names=()
+suite_dirs=()
 for test_dir in "${test_dirs[@]}"; do
   suite_dir="$(dirname "$test_dir")"
   if [ "$suite_dir" = "." ]; then
-    suite_name="root"
-    suite_dir="$ROOT_DIR"
+    suite_names+=("root")
+    suite_dirs+=("$ROOT_DIR")
   else
-    suite_name="${suite_dir#./}"
+    suite_names+=("${suite_dir#./}")
+    suite_dirs+=("$suite_dir")
   fi
+done
+
+# The coach suite is exclusively foregrounded before starting other pytest
+# processes. Start the long root suite next so it does not sit behind the
+# short package suites and the previous full-batch synchronization barriers.
+schedule_indices=()
+for i in "${!suite_names[@]}"; do
+  [ "${suite_names[$i]}" = "08_Tooling/instructional-materials-coach" ] && schedule_indices+=("$i")
+done
+for i in "${!suite_names[@]}"; do
+  [ "${suite_names[$i]}" = "root" ] && schedule_indices+=("$i")
+done
+for i in "${!suite_names[@]}"; do
+  case "${suite_names[$i]}" in
+    root|08_Tooling/instructional-materials-coach) ;;
+    *) schedule_indices+=("$i") ;;
+  esac
+done
+
+captured_commands=()
+captured_outputs=()
+captured_statuses=()
+pending_pids=()
+pending_statuses=()
+pending_outputs=()
+
+# Bash 3.2 on local macOS does not have wait -n. Status files are written by
+# run_captured_suite immediately before it exits, so they work as portable
+# completion signals. Reap just one finished worker and refill its slot.
+reap_one_completed_suite() {
+  local i pid status_file output_file
+  while :; do
+    for i in "${!pending_pids[@]}"; do
+      pid="${pending_pids[$i]}"
+      status_file="${pending_statuses[$i]}"
+      output_file="${pending_outputs[$i]}"
+      if [ -f "$status_file" ] || ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" || true
+        # A crashed wrapper must never become an apparent passing suite.
+        if [ ! -f "$status_file" ]; then
+          echo "suite subprocess ended without a status receipt" >>"$output_file"
+          printf '2|unavailable|unavailable\n' >"$status_file"
+        fi
+        unset "pending_pids[$i]" "pending_statuses[$i]" "pending_outputs[$i]"
+        pending_pids=("${pending_pids[@]}")
+        pending_statuses=("${pending_statuses[@]}")
+        pending_outputs=("${pending_outputs[@]}")
+        return 0
+      fi
+    done
+    sleep 0.05
+  done
+}
+
+# A full drain is necessary only at the coach isolation boundary and end.
+flush_parallel_batch() {
+  while [ "${#pending_pids[@]}" -gt 0 ]; do
+    reap_one_completed_suite
+  done
+}
+
+for index in "${schedule_indices[@]}"; do
+  suite_dir="${suite_dirs[$index]}"
+  suite_name="${suite_names[$index]}"
+  output_file="$parallel_tmp/output-$index"
+  status_file="$parallel_tmp/status-$index"
+  captured_commands[$index]="$(suite_command_text "$suite_dir" "$suite_name")"
+  captured_outputs[$index]="$output_file"
+  captured_statuses[$index]="$status_file"
 
   if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then
     flush_parallel_batch
-    # Sequential suite: capture its output (as the parallel path does)
-    # so the subtest receipt can be extracted from the same text the
-    # operator sees. The output is replayed in full before any other
-    # step, preserving the foreground behaviour.
-    coach_output_file="$parallel_tmp/output-coach"
-    if run_pytest_suite "$suite_dir" "$suite_name" >"$coach_output_file" 2>&1; then
-      cat "$coach_output_file"
-      check_test_completeness "$suite_name"
-    else
-      cat "$coach_output_file"
-    fi
-    write_subtest_receipt "$suite_name" "$coach_output_file"
+    # Foreground, exclusive pytest execution. Capture stdout/stderr so the
+    # report and subtest receipt retain canonical discovery order.
+    (run_captured_suite "$suite_dir" "$suite_name" "$output_file" "$status_file")
     continue
   fi
 
-  index="${#pending_names[@]}"
-  output_file="$parallel_tmp/output-$index"
-  status_file="$parallel_tmp/status-$index"
-  command_text="$(suite_command_text "$suite_dir" "$suite_name")"
-  pending_names+=("$suite_name")
-  pending_commands+=("$command_text")
-  pending_outputs+=("$output_file")
-  pending_statuses+=("$status_file")
+  while [ "${#pending_pids[@]}" -ge "$VALIDATE_ALL_MAX_PARALLEL" ]; do
+    reap_one_completed_suite
+  done
+
   run_captured_suite "$suite_dir" "$suite_name" "$output_file" "$status_file" &
   pending_pids+=("$!")
-
-  if [ "${#pending_pids[@]}" -ge "$VALIDATE_ALL_MAX_PARALLEL" ]; then
-    flush_parallel_batch
-  fi
+  pending_statuses+=("$status_file")
+  pending_outputs+=("$output_file")
 done
 flush_parallel_batch
 
+# No concurrent pytest process remains. Verify execution against independently
+# collected test selection and publish JUnit/manifest results in discovery order,
+# regardless of which suite completed first. Failures are never short-circuited.
+for index in "${!suite_names[@]}"; do
+  consume_captured_suite "${suite_names[$index]}" "${captured_commands[$index]}" "${captured_outputs[$index]}" "${captured_statuses[$index]}"
+done
 if [ -n "${CI_JUNIT_DIR:-}" ]; then
   mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
   manifest_file="$CI_JUNIT_DIR/manifest.tsv"
