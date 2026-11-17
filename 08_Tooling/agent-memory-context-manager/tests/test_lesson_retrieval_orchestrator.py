@@ -1047,3 +1047,73 @@ def test_ckr11_adapter_valid_terminal_page_still_selects_lesson():
     )
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert "LL-9001" in result.selected_lesson_ids
+
+# Mutation control M05: never accept blank cursors on an unfinished page.
+@pytest.mark.parametrize("cursor", ["", " ", "  \\t  "], ids=[
+    "empty", "single-space", "whitespace-only",
+])
+def test_ckr11_nonterminal_whitespace_cursor_is_rejected(cursor):
+    from agent_memory_context_manager.lesson_activation_bridge import (
+        LessonActivationError,
+        _page_cursor,
+    )
+
+    with pytest.raises(LessonActivationError, match="malformed next_cursor"):
+        _page_cursor({
+            "results": [],
+            "has_more": True,
+            "next_cursor": cursor,
+        })
+
+
+def test_ckr11_whitespace_cursor_never_reads_second_page_or_selects():
+    # M05: a cursor with no non-whitespace characters must fail on page one,
+    # not reach the next provider query (which could return an eligible row).
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {
+                "results": [_lesson_row("LL-42")],
+                "has_more": True,
+                "next_cursor": " \\t ",
+            }
+        return {
+            "results": [_lesson_row("LL-43")],
+            "has_more": False,
+            "next_cursor": None,
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 1
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_nonempty_spaced_cursor_still_reaches_next_page():
+    # Positive control: valid opaque text with surrounding whitespace is
+    # normalized by the established shared pagination contract.
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {
+                "results": [],
+                "has_more": True,
+                "next_cursor": "  page-two  ",
+            }
+        assert query["start_cursor"] == "page-two"
+        return {
+            "results": [_lesson_row("LL-42")],
+            "has_more": False,
+            "next_cursor": None,
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 2
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-42" in result.selected_lesson_ids
