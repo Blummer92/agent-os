@@ -101,6 +101,16 @@ _INCOMPLETE_REASON_CODES = {
 }
 
 
+# Adapter-projected provider pagination failures carry the same incomplete
+# classification as a direct-executor pagination failure (#4016 R-1): the
+# composition projects a missing/malformed ``has_more`` into a finite
+# provider code, and the retrieval result records the existing CKR11 reason
+# instead of leaving the failure without an incomplete classification.
+_NOTION_INCOMPLETE_REASON_CODES = {
+    "notion-malformed-pagination": "malformed-pagination",
+}
+
+
 def _sanitized_read_failure_reason(exc: BaseException) -> str:
     """Keep only finite provider reason codes; never expose raw exception text."""
 
@@ -602,6 +612,8 @@ def orchestrate_lesson_retrieval(
             incomplete_reason_code = _INCOMPLETE_REASON_CODES.get(
                 str(exc), "unknown-incomplete"
             )
+        elif str(exc) in _NOTION_INCOMPLETE_REASON_CODES:
+            incomplete_reason_code = _NOTION_INCOMPLETE_REASON_CODES[str(exc)]
         return with_diagnostics(_unavailable_result(current_request, exc))
 
     accumulate(snapshot_rows)
