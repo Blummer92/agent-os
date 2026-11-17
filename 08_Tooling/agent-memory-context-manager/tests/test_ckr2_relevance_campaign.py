@@ -166,7 +166,15 @@ def test_ckr6_retry_through_ckr11_and_ckr2(name,word,kind):
         assert result.boundary.mutation_admissible
     else:
         assert result.lesson_result.selected_lesson_ids==()
-        assert result.lesson_result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+        # Missing primary provenance is represented as an unverifiable candidate
+        # (manual-review), not an ordinary no-match insufficiency.
+        expected = (
+            LessonRetrievalStatus.MANUAL_REVIEW
+            if kind == "no-ref" else LessonRetrievalStatus.INSUFFICIENT
+        )
+        assert result.lesson_result.lesson_retrieval_status is expected
+        if kind == "no-ref":
+            assert "unverifiable-relevant-candidate" in result.lesson_result.selection_reason_codes
         assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
         assert not result.boundary.mutation_admissible
         if kind=="malformed":assert result.lesson_result.retrieval_diagnostics["incomplete_reason_code"]=="malformed-pagination"
