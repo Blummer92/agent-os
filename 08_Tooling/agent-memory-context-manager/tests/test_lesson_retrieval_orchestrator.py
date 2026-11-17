@@ -21,14 +21,6 @@ from agent_memory_context_manager.lesson_retrieval_orchestrator import (
     record_retrieval_attempt,
 )
 
-from agent_os_execution_service.lesson_reader_composition import (
-    build_lesson_read_executor,
-)
-from workflow_scheduler.adapters.notion_readonly_adapter import (
-    NotionReadOnlyAdapter,
-)
-
-
 def request(**overrides):
     data = dict(
         task_reference="issue:#2141",
@@ -876,7 +868,36 @@ def test_terminal_row_overflow_reports_exact_bucket_and_read_count_without_selec
 
 
 def _adapter_executor(pages):
-    """Real adapter + ordered fake provider pages, via lesson_reader_composition."""
+    """Real adapter + ordered fake provider pages, via lesson_reader_composition.
+
+    The sibling packages are imported here, not at module scope: CI runs
+    each 08_Tooling package's tests with only that package's src on
+    sys.path, and agent_os_execution_service is not an installed
+    distribution in that environment, so a module-level import fails
+    collection of this whole module (and of test_lesson_snapshot_replacement,
+    which imports helpers from here). This is the same sys.path.insert
+    convention test_provider_failure_detail_survives_canonical_reader_chain
+    already uses in this file; repo root is included because
+    agent_os_execution_service.models resolves
+    scripts.agent_os_execution_capabilities through the shared namespace
+    package.
+    """
+    import sys
+    from pathlib import Path
+
+    _test_file = Path(__file__).resolve()
+    _tooling = _test_file.parents[2]
+    sys.path.insert(0, str(_tooling / "agent-os-execution-service" / "src"))
+    sys.path.insert(0, str(_tooling / "workflow-scheduler" / "src"))
+    sys.path.insert(0, str(_tooling.parent))
+
+    from agent_os_execution_service.lesson_reader_composition import (
+        build_lesson_read_executor,
+    )
+    from workflow_scheduler.adapters.notion_readonly_adapter import (
+        NotionReadOnlyAdapter,
+    )
+
     state = {"pages": list(pages)}
 
     def post(url, headers, body, timeout):
