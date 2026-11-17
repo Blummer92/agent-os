@@ -458,7 +458,7 @@ def test_bad_unrelated_corpus_row_is_skipped_without_losing_valid_lesson():
     # used to abort normalization after an otherwise complete snapshot.
     good = _planted()
     bad = _lesson_row("LL-8701")
-    bad["properties"]["Guardrail"] = {"type": "rich_text", "rich_text": [{"plain_text": "invalid\\ncontrol"}]}
+    bad["properties"]["Guardrail"] = {"type": "rich_text", "rich_text": [{"plain_text": "invalid\ncontrol"}]}
     rows = _count_consistent_rows() + [bad, good]
     assert len(rows) == 88
     calls = []
