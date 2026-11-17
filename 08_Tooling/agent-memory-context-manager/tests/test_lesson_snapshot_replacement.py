@@ -570,3 +570,38 @@ def test_non_mapping_snapshot_item_rejects_entire_population(invalid, later_page
     assert diagnostics["terminal_query_bucket"] == "workspace"
     assert diagnostics["read_count"] == (2 if later_page else 1)
     assert diagnostics["normalized_rows"] == 0
+
+def test_missing_has_more_on_second_page_fails_closed():
+    # A relevant first page must not become an eligible partial snapshot
+    # when page 2 omits the authoritative has_more completion flag.
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if "start_cursor" not in query:
+            return {
+                "results": [_planted()],
+                "has_more": True,
+                "next_cursor": "second-page",
+            }
+        assert query["start_cursor"] == "second-page"
+        return {"results": [_planted(9002)]}  # malformed: no has_more
+
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=read,
+    )
+    assert len(calls) == 2
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_missing_has_more_on_single_snapshot_page_fails_closed():
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=lambda _query: {"results": [_planted()]},
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
