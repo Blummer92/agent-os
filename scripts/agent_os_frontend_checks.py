@@ -85,6 +85,11 @@ PROJECTS: tuple[Project, ...] = (
         "08_Tooling/workspace-automation-builder",
         (("node", "tests/validate-fixtures.test.js"),),
     ),
+    Project(
+        "apps-script-visual-placement",
+        "08_Tooling/instructional-materials-coach/apps-script",
+        (("node", "test/visual-placement-transport.conformance.test.mjs"),),
+    ),
 )
 
 

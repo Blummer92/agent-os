@@ -6,6 +6,7 @@
   "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements-dev.txt", "pytest.ini"],
   "aggregate_prefixes": [".github/workflows/", "tests/test_agent_os_validation_workflow.py"],
   "focused_rules": [
+    {"name":"apps-script-visual-placement","prefixes":["08_Tooling/instructional-materials-coach/apps-script/"],"commands":["node 08_Tooling/instructional-materials-coach/apps-script/test/visual-placement-transport.conformance.test.mjs"]},
     {"name":"issue-acceptance","prefixes":["scripts/agent_os_issue_acceptance/","tests/agent_os_issue_acceptance/"],"commands":["python -m pytest tests/agent_os_issue_acceptance"]},
     {"name":"issue-labels","prefixes":["scripts/agent_os_issue_labels/","tests/agent_os_issue_labels/"],"commands":["python -m pytest tests/agent_os_issue_labels"]},
     {"name":"execution-interface","prefixes":["scripts/agent_os_execution_interface/","tests/agent_os_execution_interface/"],"commands":["python -m pytest tests/agent_os_execution_interface"]},
