@@ -50,6 +50,7 @@ def _kwargs(**overrides):
         review_state="clear",
         branch_freshness="current",
         mergeability="mergeable",
+        failed_repair_attempt_id="attempt-3277",
     )
     values.update(overrides)
     return values
@@ -84,7 +85,7 @@ def test_zero_job_evidence_skips_ckr6_reentry_even_when_lessons_unconsumed() -> 
     record = evaluate_failed_repair_admission(
         **_kwargs(
             activation_result=_activation(
-                retry_reentry_outcome="not-material", mutation_admissible=False
+                retry_reentry_outcome="unavailable-or-failed", mutation_admissible=False
             ),
             zero_job=_zero_job(Run(1, "action_required", 0)),
         )
@@ -220,6 +221,7 @@ def _json_arguments(runs: list[dict[str, object]], **zero_job_overrides):
     zero_job.update(zero_job_overrides)
     return {
         "activation_result": _activation(),
+        "failed_repair_attempt_id": "attempt-3277",
         "check_state": "red",
         "required_check_configuration_state": "current",
         "review_state": "clear",

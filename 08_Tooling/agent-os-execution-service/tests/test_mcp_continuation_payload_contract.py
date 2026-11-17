@@ -209,6 +209,7 @@ def test_continuation_named_facade_functions_share_the_canonical_payload() -> No
                 "selected_lesson_ids": ["63"],
                 "mutation_admissible": True,
             },
+            failed_repair_attempt_id="attempt-1",
             check_state="red",
             required_check_configuration_state="current",
             review_state="clear",
