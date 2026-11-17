@@ -1094,3 +1094,155 @@ def test_4011_snapshot_exact_500_with_more_is_incomplete():
     assert d["terminal_page_cursor_present"] is True
     assert result.selected_lesson_ids == ()
 
+# #4016 follow-up: complete-page metadata must not carry a continuation cursor.
+@pytest.mark.parametrize("cursor", ["dangling-cursor", "  dangling-cursor  "])
+def test_ckr11_terminal_has_more_false_with_cursor_is_malformed(cursor):
+    from agent_memory_context_manager.lesson_activation_bridge import (
+        LessonActivationError,
+        _page_cursor,
+    )
+
+    with pytest.raises(LessonActivationError, match="malformed next_cursor"):
+        _page_cursor({"results": [], "has_more": False, "next_cursor": cursor})
+
+
+def test_ckr11_contradictory_terminal_page_never_selects_lesson():
+    # Source-level reproduction: a complete-looking page must not admit
+    # an eligible lesson if it also advertises a continuation cursor.
+    result = orchestrate_lesson_retrieval(
+        request(), execute_read=lambda _q: {
+            "results": [_lesson_row("LL-42")],
+            "has_more": False,
+            "next_cursor": "dangling-cursor",
+        }
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_later_contradictory_terminal_page_discards_earlier_lesson():
+    # No partial lesson population may reach CKR2 after a later-page failure.
+    seen = []
+
+    def read(query):
+        seen.append(dict(query))
+        if len(seen) == 1:
+            return {
+                "results": [_lesson_row("LL-42")],
+                "has_more": True,
+                "next_cursor": "page-two",
+            }
+        assert query["start_cursor"] == "page-two"
+        return {
+            "results": [],
+            "has_more": False,
+            "next_cursor": "unexpected-page-three",
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(seen) == 2
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+
+
+def test_ckr11_adapter_contradictory_terminal_page_fails_closed():
+    # Exercise real Notion adapter -> read composition -> CKR11 -> CKR2.
+    executor = _adapter_executor([{
+        "results": [_planted_testing_row()],
+        "has_more": False,
+        "next_cursor": "unexpected-continuation",
+    }])
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=executor
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_adapter_valid_terminal_page_still_selects_lesson():
+    # Positive control: a null cursor on a genuinely complete page works.
+    executor = _adapter_executor([{
+        "results": [_planted_testing_row()],
+        "has_more": False,
+        "next_cursor": None,
+    }])
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=executor
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-9001" in result.selected_lesson_ids
+
+# Mutation control M05: never accept blank cursors on an unfinished page.
+@pytest.mark.parametrize("cursor", ["", " ", "  \t  "], ids=[
+    "empty", "single-space", "whitespace-only",
+])
+def test_ckr11_nonterminal_whitespace_cursor_is_rejected(cursor):
+    from agent_memory_context_manager.lesson_activation_bridge import (
+        LessonActivationError,
+        _page_cursor,
+    )
+
+    with pytest.raises(LessonActivationError, match="malformed next_cursor"):
+        _page_cursor({
+            "results": [],
+            "has_more": True,
+            "next_cursor": cursor,
+        })
+
+
+def test_ckr11_whitespace_cursor_never_reads_second_page_or_selects():
+    # M05: a cursor with no non-whitespace characters must fail on page one,
+    # not reach the next provider query (which could return an eligible row).
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {
+                "results": [_lesson_row("LL-42")],
+                "has_more": True,
+                "next_cursor": " \t ",
+            }
+        return {
+            "results": [_lesson_row("LL-43")],
+            "has_more": False,
+            "next_cursor": None,
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 1
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+def test_ckr11_nonempty_spaced_cursor_still_reaches_next_page():
+    # Positive control: valid opaque text with surrounding whitespace is
+    # normalized by the established shared pagination contract.
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {
+                "results": [],
+                "has_more": True,
+                "next_cursor": "  page-two  ",
+            }
+        assert query["start_cursor"] == "page-two"
+        return {
+            "results": [_lesson_row("LL-42")],
+            "has_more": False,
+            "next_cursor": None,
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 2
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-42" in result.selected_lesson_ids
