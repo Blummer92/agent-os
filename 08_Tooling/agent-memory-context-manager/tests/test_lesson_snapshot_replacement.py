@@ -482,7 +482,7 @@ def test_selection_stays_bounded_when_relevant_lessons_exceed_the_candidate_budg
 def test_bad_unrelated_corpus_row_is_skipped_without_losing_valid_lesson():
     bad = _lesson_row("LL-8701")
     bad["properties"]["Guardrail"] = {
-        "type": "rich_text", "rich_text": [{"plain_text": "invalid\\ncontrol"}],
+        "type": "rich_text", "rich_text": [{"plain_text": "invalid\ncontrol"}],
     }
     rows = _count_consistent_rows() + [bad, _planted()]
     assert len(rows) == 88
