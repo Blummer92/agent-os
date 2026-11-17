@@ -94,6 +94,7 @@ _INCOMPLETE_REASON_CODES = {
     "read executor must return a mapping": "malformed-page",
     "read executor result is missing 'results'": "malformed-page",
     "read executor result contains non-mapping items": "malformed-page",
+    "read executor result is missing 'has_more'": "malformed-pagination",
     "read executor returned a non-boolean has_more": "malformed-pagination",
     "read executor returned a malformed next_cursor": "malformed-pagination",
     _READ_BUDGET_MESSAGE: "read-budget-exceeded",
