@@ -76,6 +76,8 @@ LONG_NEXT_TIME = (
 assert 512 < len(LONG_GUARDRAIL) <= MAX_GUIDANCE_TEXT_CHARS
 assert 512 < len(LONG_NEXT_TIME) <= MAX_GUIDANCE_TEXT_CHARS
 
+# Policy value must be pinned independently of the implementation constant.
+assert MAX_GUIDANCE_TEXT_CHARS == 2048
 OVERSIZED_GUIDANCE = "x" * (MAX_GUIDANCE_TEXT_CHARS + 1)
 
 
@@ -395,3 +397,32 @@ def test_candidate_avoid_when_over_shared_bound_fails_closed():
 
     with pytest.raises(ValueError):
         _candidate(avoid_when=(OVERSIZED_GUIDANCE,))
+
+
+def test_literal_2048_and_2049_guidance_boundary_across_all_three_layers():
+    # Keep a literal oracle: deriving expected values from the implementation
+    # constant allows a 2048 -> 2049 mutant to survive.
+    import pytest
+
+    valid = "g" * 2048
+    invalid = "g" * 2049
+    # Real Notion rich_text segments are individually <= 2000 characters.
+    valid_items = _rich_text_items("g" * 2000, "g" * 48)
+    invalid_items = _rich_text_items("g" * 2000, "g" * 49)
+
+    normalized = normalize_lesson_row(live_row(properties={"Guardrail": valid_items}))
+    assert isinstance(normalized, LessonRecordEvidence)
+    assert normalized.guardrail == valid
+    oversized = normalize_lesson_row(live_row(properties={"Guardrail": invalid_items}))
+    assert isinstance(oversized, LessonActivationSkip)
+    assert oversized.reason == "oversized-activation-guidance"
+
+    assert evidence(guardrail=valid).guardrail == valid
+    with pytest.raises(ValueError):
+        evidence(guardrail=invalid)
+    assert _candidate(use_when=(valid,)).use_when == (valid,)
+    assert _candidate(avoid_when=(valid,)).avoid_when == (valid,)
+    with pytest.raises(ValueError):
+        _candidate(use_when=(invalid,))
+    with pytest.raises(ValueError):
+        _candidate(avoid_when=(invalid,))
