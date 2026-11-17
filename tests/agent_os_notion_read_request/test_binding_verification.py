@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,6 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     CANONICAL_REGISTRY_DATABASE_ID,
     CANONICAL_REGISTRY_TITLE,
     BINDING_VERIFICATION_REQUEST_IDS,
-    CANDY_BRANDING_STABLE_ID,
-    CANDY_BRANDING_TITLE,
-    CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER,
-    CANDY_BRANDING_VERIFICATION_REQUEST_ID,
     LESSONS_LEARNED_REFERENCE_PAGE_ID,
     LESSONS_LEARNED_VERIFICATION_ISSUE_NUMBER,
     LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
@@ -30,13 +27,20 @@ from scripts.agent_os_notion_read_request.binding_verification import (
     VISUAL_ASSET_LIBRARY_TITLE,
     admit_binding_verification_request,
     verify_additional_unit_binding,
-    verify_candy_branding_binding,
     verify_lessons_learned_binding,
     verify_live_bindings,
     verify_teacher_modeling_binding,
 )
 from scripts.agent_os_notion_read_request.models import NotionReadRequestError
 from tests.agent_os_notion_read_request.notion_read_support import ACTOR, REPOSITORY, transport
+
+# Historical Candy Branding scenario data is test-only, never a runtime unit binding.
+CANDY_BRANDING_UNIT_KEY = "candy-branding"
+CANDY_BRANDING_STABLE_ID = "canonical-unit-candy-branding"
+CANDY_BRANDING_TITLE = "Candy Branding / Candy Brand Design"
+CANDY_BRANDING_VERIFICATION_REQUEST_ID = "verify-candy-branding-binding"
+CANDY_BRANDING_VERIFICATION_ISSUE_NUMBER = 2816
+verify_staged_unit_binding = partial(verify_additional_unit_binding, canonical_unit_key=CANDY_BRANDING_UNIT_KEY)
 
 
 @pytest.fixture
@@ -380,6 +384,8 @@ def test_public_exports_resolve_after_title_contract_removal() -> None:
 
     assert missing == []
     assert "LESSONS_LEARNED_TITLE" not in binding_verification_module.__all__
+    assert "verify_candy_branding_binding" not in binding_verification_module.__all__
+    assert not hasattr(binding_verification_module, "verify_candy_branding_binding")
 
 
 def test_ambiguous_data_source_identity_fails_closed() -> None:
@@ -446,7 +452,7 @@ def test_candy_binding_is_discovered_by_exact_registered_title_only(staged_candy
             }
         ]
     )
-    evidence = verify_candy_branding_binding(
+    evidence = verify_staged_unit_binding(
         adapter,
         canonical_registry_data_source_id="canonical-data-source-current",
         generated_at="run:2816",
@@ -488,7 +494,7 @@ def test_candy_binding_fails_closed_when_title_schema_is_missing_or_ambiguous(ti
         NotionReadRequestError,
         match="exactly one title property",
     ):
-        verify_candy_branding_binding(
+        verify_staged_unit_binding(
             CandyVerificationAdapter(
                 [],
                 title_properties=title_properties,
@@ -503,7 +509,7 @@ def test_candy_binding_fails_closed_on_registry_data_source_identity_mismatch(st
         NotionReadRequestError,
         match="data source identity mismatch",
     ):
-        verify_candy_branding_binding(
+        verify_staged_unit_binding(
             CandyVerificationAdapter(
                 [],
                 data_source_id="different-data-source",
@@ -528,7 +534,7 @@ def test_candy_binding_missing_or_ambiguous_fails_closed(results, staged_candy_c
         NotionReadRequestError,
         match="identity is missing or ambiguous",
     ):
-        verify_candy_branding_binding(
+        verify_staged_unit_binding(
             CandyVerificationAdapter(results),
             canonical_registry_data_source_id="canonical-data-source-current",
             generated_at="run:2816",
@@ -589,7 +595,7 @@ def test_candy_binding_archived_or_trashed_fails_closed(staged_candy_catalog) ->
             NotionReadRequestError,
             match="canonical page is archived or trashed",
         ):
-            verify_candy_branding_binding(
+            verify_staged_unit_binding(
                 CandyVerificationAdapter(
                     [{"id": "33333333-3333-3333-3333-333333333333", **state}]
                 ),
