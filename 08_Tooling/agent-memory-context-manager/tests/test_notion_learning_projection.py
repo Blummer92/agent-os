@@ -106,3 +106,37 @@ def test_backfill_pages_more_than_fifty_without_global_cap():
     assert len(second.results) == 7
     assert second.next_offset is None
     assert second.complete is True
+
+
+def test_projection_rejects_missing_canonical_evidence():
+    from dataclasses import replace
+
+    original = reusable_result()
+    assert original.proposal is not None
+
+    incomplete = replace(
+        original,
+        proposal=replace(original.proposal, canonical_github_refs=()),
+    )
+    result = project_lesson_to_notion(incomplete)
+
+    assert result.disposition is ProjectionDisposition.MANUAL_REVIEW
+    assert result.reason_codes == ("canonical-evidence-missing",)
+    assert result.record is None
+
+
+def test_projection_rejects_missing_supporting_evidence():
+    from dataclasses import replace
+
+    original = reusable_result()
+    assert original.proposal is not None
+
+    incomplete = replace(
+        original,
+        proposal=replace(original.proposal, evidence_refs=()),
+    )
+    result = project_lesson_to_notion(incomplete)
+
+    assert result.disposition is ProjectionDisposition.MANUAL_REVIEW
+    assert result.reason_codes == ("canonical-evidence-missing",)
+    assert result.record is None
