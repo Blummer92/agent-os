@@ -423,6 +423,10 @@ def _bound_relevant_lessons(
 # PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
 # lessons. A value states mechanism only -- never relevance, truth or
 # verification -- and never feeds selection, status or admission.
+# ``not-evaluated`` means selection was skipped, unavailable or could not
+# complete (not-needed, no read executor, read error, incomplete pagination);
+# ``no-relevant-signal`` is reserved for a COMPLETED evaluation that found no
+# qualifying match.
 SELECTION_BASIS_VALUES = frozenset({
     "no-relevant-signal",
     "identity-scoped",
@@ -431,6 +435,7 @@ SELECTION_BASIS_VALUES = frozenset({
     "rule-ckr6-mutation-boundary",
     "generic-unique",
     "generic-tie-lexical-cut",
+    "not-evaluated",
 })
 _GENERIC_REASONS = frozenset({
     "keyword-overlap", "ecosystem-capability-match", "target-path-match",
@@ -442,6 +447,11 @@ class SelectionBasis:
     basis: str
     best_bucket: int
     tied_identities: int
+
+
+# Recorded when no evaluation completed. Never produced by
+# ``describe_selection_basis`` itself, which always describes a completed one.
+NOT_EVALUATED = SelectionBasis(basis="not-evaluated", best_bucket=0, tied_identities=0)
 
 
 def describe_selection_basis(

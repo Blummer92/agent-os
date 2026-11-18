@@ -25,6 +25,7 @@ from .lesson_activation_bridge import (
     MAX_RETRIEVAL_PAGES,
     MAX_RETRIEVAL_ROWS,
     LessonActivationError,
+    NOT_EVALUATED,
     SelectionBasis,
     _AREA_ECOSYSTEM,
     _AREA_PROPERTY,
@@ -678,7 +679,9 @@ def orchestrate_lesson_retrieval(
             )
         elif str(exc) in _NOTION_INCOMPLETE_REASON_CODES:
             incomplete_reason_code = _NOTION_INCOMPLETE_REASON_CODES[str(exc)]
-        return with_diagnostics(_unavailable_result(current_request, exc))
+        # Retrieval could not complete: selection was not evaluated. The
+        # separate reason codes above/below are preserved unchanged.
+        return with_diagnostics(_unavailable_result(current_request, exc), NOT_EVALUATED)
 
     accumulate(snapshot_rows)
     result = consume_lesson_preflight(

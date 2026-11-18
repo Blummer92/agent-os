@@ -535,8 +535,9 @@ def test_2851_execute_envelope_carries_handoff_projection(monkeypatch):
         "coding-knowledge-sufficiency:not-needed",
         # #3418: materiality provenance travels with the host-consumable unit.
         "coding-knowledge-materiality:caller-asserted-not-material",
-        # PR-1: observational selection basis; no retrieval occurred.
-        "coding-knowledge-selection-basis:no-relevant-signal",
+        # PR-1: observational selection basis; no retrieval occurred, so
+        # selection was not evaluated (not "evaluated and found nothing").
+        "coding-knowledge-selection-basis:not-evaluated",
     ]
 
 

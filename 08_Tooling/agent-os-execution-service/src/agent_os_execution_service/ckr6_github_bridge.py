@@ -454,6 +454,7 @@ _SELECTION_BASIS_VALUES = frozenset({
     "rule-ckr6-mutation-boundary",
     "generic-unique",
     "generic-tie-lexical-cut",
+    "not-evaluated",
 })
 _OPTIONAL_BASIS_KEY = "selection_basis"
 _MAX_DIAGNOSTIC_COUNTER = 10_000

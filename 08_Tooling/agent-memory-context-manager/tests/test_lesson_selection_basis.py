@@ -44,6 +44,8 @@ SEVEN = {
     "generic-unique",
     "generic-tie-lexical-cut",
 }
+# Owner decision 2026-11-18: not-evaluated joins the closed vocabulary.
+EIGHT = SEVEN | {"not-evaluated"}
 
 
 def req(task="issue:#1", **overrides):
@@ -85,9 +87,19 @@ def test_selection_basis_is_a_frozen_value_with_three_fields():
     ]
 
 
-def test_vocabulary_constant_is_exactly_the_seven_closed_values():
-    assert set(bridge.SELECTION_BASIS_VALUES) == SEVEN
+def test_vocabulary_constant_is_exactly_the_eight_closed_values():
+    assert set(bridge.SELECTION_BASIS_VALUES) == EIGHT
     assert isinstance(bridge.SELECTION_BASIS_VALUES, frozenset)
+
+
+def test_not_evaluated_constant_is_inert_and_never_produced_by_the_describer():
+    assert (bridge.NOT_EVALUATED.basis, bridge.NOT_EVALUATED.best_bucket,
+            bridge.NOT_EVALUATED.tied_identities) == ("not-evaluated", 0, 0)
+    # describe_selection_basis always describes a COMPLETED evaluation.
+    for pool in ([], many(1), many(34)):
+        for route in (False, True):
+            for request in (req(), req(capability_keywords=("none",))):
+                assert describe(request, pool, identity_route=route).basis != "not-evaluated"
 
 
 # --- the seven values (spec order) ---
@@ -261,7 +273,7 @@ def test_n7_unverifiable_lesson_in_the_best_tie_is_still_counted_without_error()
 
 
 def test_basis_strings_never_imply_relevance_or_verification():
-    for value in SEVEN:
+    for value in EIGHT:
         assert "relevant" not in value.replace("no-relevant-signal", "")
         assert "verified" not in value
 
@@ -351,6 +363,9 @@ def _rows(count, start=10):
 def test_p1_orchestrator_records_snapshot_basis_in_diagnostics_only():
     result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(34)))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    # Pinned literal: identical on pristine main (selection must not move).
+    assert result.selected_lesson_ids == ("LL-10", "LL-11", "LL-12")
+    assert result.selection_reason_codes == ("knowledge-sufficient",)
     assert len(result.selected_lesson_ids) == MAX_SELECTED
     diag = result.retrieval_diagnostics
     assert diag["selection_basis"] == "generic-tie-lexical-cut"
@@ -408,15 +423,142 @@ def test_orchestrator_result_is_unchanged_apart_from_the_two_diagnostics():
     }
 
 
-def test_not_needed_and_unavailable_paths_add_no_basis_diagnostics():
-    not_needed = orchestrate_lesson_retrieval(
-        req(specialized_knowledge_required=False), execute_read=_reader(_rows(3))
-    )
-    assert "selection_basis" not in not_needed.retrieval_diagnostics
+# --- not-evaluated vs no-relevant-signal control matrix (owner decision 2026-11-18) ---
+#
+# not-evaluated: selection skipped / unavailable / could not complete.
+# no-relevant-signal: a COMPLETED, trustworthy evaluation with no qualifying match.
+# Status, selected IDs, escalation and reason codes are pinned as literals so a
+# fallback or status-mapping change cannot hide behind the new diagnostic.
 
+def _diag(result):
+    return result.retrieval_diagnostics
+
+
+def test_not_needed_is_skipped_with_no_reads_and_no_basis_diagnostics():
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [], "has_more": False}
+
+    result = orchestrate_lesson_retrieval(
+        req(specialized_knowledge_required=False), execute_read=read
+    )
+    assert calls == []
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.NOT_NEEDED
+    assert result.selected_lesson_ids == ()
+    assert "selection_basis" not in _diag(result)
+    assert "best_bucket_tied_identities" not in _diag(result)
+
+
+def test_no_read_executor_is_unavailable_with_no_basis_diagnostics():
+    result = orchestrate_lesson_retrieval(req(), execute_read=None)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == (
+        "lesson-retrieval-unavailable-specialized-knowledge-required",
+    )
+    assert "selection_basis" not in _diag(result)
+
+
+@pytest.mark.parametrize("error,code", [
+    (ConnectionError("down"), "lesson-read-connection-error"),
+    (TimeoutError("slow"), "lesson-read-timeout"),
+    (RuntimeError("boom"), "lesson-read-runtime-error"),
+])
+def test_read_failures_are_not_evaluated_and_keep_their_reason_codes(error, code):
+    def failing(query):
+        raise error
+
+    result = orchestrate_lesson_retrieval(req(), execute_read=failing)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert code in result.selection_reason_codes
+    assert _diag(result).get("selection_basis") == "not-evaluated"
+    assert _diag(result).get("best_bucket_tied_identities") == 0
+    assert "incomplete_reason_code" not in _diag(result)
+
+
+@pytest.mark.parametrize("page,code", [
+    ({"results": [], "has_more": True, "next_cursor": None}, "missing-cursor"),
+    ({"results": [_lesson_row("LL-1")] * 101, "has_more": False, "next_cursor": None}, "row-bound-exceeded"),
+])
+def test_incomplete_pagination_is_not_evaluated_and_keeps_its_reason_code(page, code):
+    result = orchestrate_lesson_retrieval(req(), execute_read=lambda query: page)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+    assert _diag(result).get("incomplete_reason_code") == code
+    assert _diag(result).get("selection_basis") == "not-evaluated"
+    assert _diag(result).get("best_bucket_tied_identities") == 0
+
+
+def test_complete_empty_snapshot_is_a_completed_evaluation_no_relevant_signal():
+    result = orchestrate_lesson_retrieval(req(), execute_read=_reader([]))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("no-relevant-candidate",)
+    assert _diag(result).get("selection_basis") == "no-relevant-signal"
+    assert _diag(result).get("best_bucket_tied_identities") == 0
+    assert "incomplete_reason_code" not in _diag(result)
+
+
+def test_complete_no_match_snapshot_is_a_completed_evaluation_no_relevant_signal():
+    request = req(capability_keywords=("no-such-capability",))
+    result = orchestrate_lesson_retrieval(request, execute_read=_reader(_rows(12)))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("no-relevant-candidate",)
+    assert _diag(result).get("selection_basis") == "no-relevant-signal"
+    assert _diag(result).get("best_bucket_tied_identities") == 0
+    assert _diag(result).get("observed_rows") == 12
+
+
+def test_empty_and_no_match_differ_from_failure_only_in_the_basis_not_in_status():
+    failing = orchestrate_lesson_retrieval(
+        req(), execute_read=lambda q: (_ for _ in ()).throw(ConnectionError("x"))
+    )
+    empty = orchestrate_lesson_retrieval(req(), execute_read=_reader([]))
+    assert failing.lesson_retrieval_status is empty.lesson_retrieval_status
+    assert failing.selected_lesson_ids == empty.selected_lesson_ids == ()
+    assert _diag(failing).get("selection_basis") == "not-evaluated"
+    assert _diag(empty).get("selection_basis") == "no-relevant-signal"
+
+
+def test_known_reference_read_failure_is_not_evaluated():
     def failing(query):
         raise ConnectionError("down")
 
-    unavailable = orchestrate_lesson_retrieval(req(), execute_read=failing)
-    assert "selection_basis" not in unavailable.retrieval_diagnostics
-    assert "best_bucket_tied_identities" not in unavailable.retrieval_diagnostics
+    result = orchestrate_lesson_retrieval(
+        req(known_knowledge_refs=("LL-65",)), execute_read=failing
+    )
+    assert result.selected_lesson_ids == ()
+    assert _diag(result).get("selection_basis") == "not-evaluated"
+
+
+def test_snapshot_failure_after_an_insufficient_known_reference_is_not_evaluated():
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        clauses = (query.get("filter") or {}).get("or") or []
+        if clauses and all(c.get("property") == "Lesson ID" for c in clauses):
+            return {"results": [], "has_more": False, "next_cursor": None}
+        raise ConnectionError("snapshot down")
+
+    result = orchestrate_lesson_retrieval(
+        req(known_knowledge_refs=("LL-65",)), execute_read=read
+    )
+    assert len(calls) == 2
+    assert _diag(result).get("selection_basis") == "not-evaluated"
+
+
+def test_completed_evaluations_never_report_not_evaluated():
+    for rows, request in (
+        (_rows(34), req()),
+        ([*_rows(3), _lesson_row("LL-65")], req(known_knowledge_refs=("LL-65",))),
+        (_rows(3), req(capability_keywords=("none",))),
+        ([], req()),
+    ):
+        result = orchestrate_lesson_retrieval(request, execute_read=_reader(rows))
+        assert _diag(result).get("selection_basis") != "not-evaluated"

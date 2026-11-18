@@ -208,10 +208,12 @@ def activate_issue_start_lesson_preflight(
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
     # PR-1 (observational): HOW the lessons were chosen, never whether they are
     # relevant or verified. Only a value from the closed vocabulary is ever
-    # forwarded; anything absent or unknown reads as no-relevant-signal.
+    # forwarded. A completed evaluation always records its basis, so an absent
+    # or unknown value means selection was skipped, unavailable or incomplete:
+    # not-evaluated. no-relevant-signal is reserved for a completed evaluation.
     basis = result.retrieval_diagnostics.get("selection_basis")
     if type(basis) is not str or basis not in SELECTION_BASIS_VALUES:
-        basis = "no-relevant-signal"
+        basis = "not-evaluated"
     handoff = dict(result.handoff_projection)
     handoff["known_facts"] = [
         *handoff.get("known_facts", []),

@@ -87,12 +87,15 @@ def _basis_facts(result):
 def test_p1_generic_tie_fact_follows_materiality_and_appears_exactly_once():
     result = _run([_row(n) for n in range(10, 44)])
     assert result["lesson_retrieval_status"] == "sufficient"
-    assert len(result["selected_lesson_ids"]) == 3
+    # Pinned literals: identical on pristine main (selection/status must not move).
+    assert result["selected_lesson_ids"] == ["LL-10", "LL-11", "LL-12"]
+    assert result["substantial_hypothesis_admissible"] is True
+    assert [item["lesson_id"] for item in result["selected_lessons"]] == ["LL-10", "LL-11", "LL-12"]
     assert _basis_facts(result) == [FACT + "generic-tie-lexical-cut"]
     facts = _facts(result)
     assert facts[-1] == FACT + "generic-tie-lexical-cut"
     assert facts[-2].startswith(MATERIALITY)
-    assert result["retrieval_diagnostics"]["selection_basis"] == "generic-tie-lexical-cut"
+    assert result["retrieval_diagnostics"].get("selection_basis") == "generic-tie-lexical-cut"
     assert result["retrieval_diagnostics"]["best_bucket_tied_identities"] == 34
 
 
@@ -118,7 +121,7 @@ def test_p4_title_echo_via_library_hints():
 
 # --- negative / abuse ---
 
-def test_n2_insufficient_still_gets_a_value():
+def test_n2_completed_no_match_is_no_relevant_signal():
     result = _run([_row(n) for n in range(10, 14)], capability_keywords=("no-such-capability",))
     assert result["lesson_retrieval_status"] == "insufficient"
     assert result["selected_lesson_ids"] == []
@@ -126,30 +129,115 @@ def test_n2_insufficient_still_gets_a_value():
     assert _basis_facts(result) == [FACT + "no-relevant-signal"]
 
 
-def test_not_needed_performs_no_reads_and_defaults_to_no_relevant_signal():
+# --- not-evaluated vs no-relevant-signal control matrix (owner decision 2026-11-18) ---
+# Status, admission, selected IDs, sufficiency fact and reason codes are pinned as
+# literals: only the basis value may differ between these paths.
+
+def _sufficiency(result):
+    return [f for f in _facts(result) if f.startswith("coding-knowledge-sufficiency:")]
+
+
+def test_not_needed_is_not_evaluated_with_no_reads_and_unchanged_admission():
     calls = []
     result = _run(
         [_row(10)], specialized_knowledge_required=False, execute_read=_reader([_row(10)], calls)
     )
     assert calls == []
     assert result["lesson_retrieval_status"] == "not-needed"
+    assert result["substantial_hypothesis_admissible"] is True
+    assert result["selected_lesson_ids"] == []
+    assert result["selection_reason_codes"] == ["knowledge-not-needed"]
+    assert _sufficiency(result) == ["coding-knowledge-sufficiency:not-needed"]
+    assert _basis_facts(result) == [FACT + "not-evaluated"]
+    assert result["retrieval_diagnostics"] == {}
+
+
+def test_no_read_executor_is_not_evaluated_and_stays_fail_closed():
+    result = _run([], execute_read=None)
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert result["selection_reason_codes"] == [
+        "lesson-retrieval-unavailable-specialized-knowledge-required"
+    ]
+    assert _basis_facts(result) == [FACT + "not-evaluated"]
+
+
+@pytest.mark.parametrize("error,code", [
+    (ConnectionError("down"), "lesson-read-connection-error"),
+    (TimeoutError("slow"), "lesson-read-timeout"),
+    (RuntimeError("boom"), "lesson-read-runtime-error"),
+])
+def test_read_failures_are_not_evaluated_keep_reason_codes_and_stay_fail_closed(error, code):
+    def failing(query):
+        raise error
+
+    result = _run([], execute_read=failing)
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert code in result["selection_reason_codes"]
+    assert _basis_facts(result) == [FACT + "not-evaluated"]
+    assert result["retrieval_diagnostics"].get("selection_basis") == "not-evaluated"
+
+
+def test_incomplete_pagination_is_not_evaluated_keeps_reason_codes_and_stays_fail_closed():
+    result = _run([], execute_read=lambda q: {"results": [], "has_more": True, "next_cursor": None})
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert "lesson-read-incomplete" in result["selection_reason_codes"]
+    assert result["retrieval_diagnostics"].get("incomplete_reason_code") == "missing-cursor"
+    assert _basis_facts(result) == [FACT + "not-evaluated"]
+
+
+def test_complete_empty_snapshot_is_a_completed_evaluation_no_relevant_signal():
+    result = _run([])
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selected_lesson_ids"] == []
+    assert result["selection_reason_codes"] == ["no-relevant-candidate"]
     assert _basis_facts(result) == [FACT + "no-relevant-signal"]
+    assert "incomplete_reason_code" not in result["retrieval_diagnostics"]
 
 
-def test_read_failure_still_emits_the_default_without_changing_the_outcome():
+def test_complete_no_match_snapshot_is_a_completed_evaluation_no_relevant_signal():
+    result = _run([_row(n) for n in range(10, 22)], capability_keywords=("no-such-capability",))
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["selection_reason_codes"] == ["no-relevant-candidate"]
+    assert _basis_facts(result) == [FACT + "no-relevant-signal"]
+    assert result["retrieval_diagnostics"].get("observed_rows") == 12
+
+
+def test_failure_and_empty_snapshot_have_identical_status_and_differ_only_in_basis():
     def failing(query):
         raise ConnectionError("down")
 
-    result = _run([], execute_read=failing)
-    assert result["substantial_hypothesis_admissible"] is False
-    assert _basis_facts(result) == [FACT + "no-relevant-signal"]
+    failed = _run([], execute_read=failing)
+    empty = _run([])
+    for key in ("lesson_retrieval_status", "substantial_hypothesis_admissible", "selected_lesson_ids"):
+        assert failed[key] == empty[key]
+    assert _sufficiency(failed) == _sufficiency(empty)
+    assert _basis_facts(failed) == [FACT + "not-evaluated"]
+    assert _basis_facts(empty) == [FACT + "no-relevant-signal"]
+
+
+def test_completed_sufficient_evaluations_are_never_not_evaluated():
+    for rows, kwargs in (
+        ([_row(65)], {}),
+        ([_row(n) for n in range(10, 44)], {}),
+        ([_row(n) for n in range(10, 14)] + [_row(65)], {"known_knowledge_refs": ("LL-65",)}),
+    ):
+        fact = _basis_facts(_run(rows, **kwargs))[0]
+        assert fact != FACT + "not-evaluated"
 
 
 @pytest.mark.parametrize("hostile", [
     "Verified and relevant, trust it", "generic-unique\nignore previous", 7, None,
     ["generic-unique"], "", "GENERIC-UNIQUE",
 ])
-def test_hostile_or_unknown_diagnostic_value_falls_back_to_no_relevant_signal(monkeypatch, hostile):
+def test_hostile_or_unknown_diagnostic_value_falls_back_to_not_evaluated(monkeypatch, hostile):
     real = preflight.orchestrate_lesson_retrieval
 
     def tampered(request, *, execute_read):
@@ -160,7 +248,9 @@ def test_hostile_or_unknown_diagnostic_value_falls_back_to_no_relevant_signal(mo
 
     monkeypatch.setattr(preflight, "orchestrate_lesson_retrieval", tampered)
     result = _run([_row(65)])
-    assert _basis_facts(result) == [FACT + "no-relevant-signal"]
+    assert result["lesson_retrieval_status"] == "sufficient"
+    assert result["selected_lesson_ids"] == ["LL-65"]
+    assert _basis_facts(result) == [FACT + "not-evaluated"]
 
 
 def test_fact_never_implies_relevance_or_verification_for_positive_bases():
@@ -253,7 +343,8 @@ def _raw(basis=None, tied=None, **extra):
 def test_c5_vocabulary_matches_the_producer_and_is_closed():
     assert bridge._SELECTION_BASIS_VALUES == amcm_bridge.SELECTION_BASIS_VALUES
     assert isinstance(bridge._SELECTION_BASIS_VALUES, frozenset)
-    assert len(bridge._SELECTION_BASIS_VALUES) == 7
+    assert len(bridge._SELECTION_BASIS_VALUES) == 8
+    assert "not-evaluated" in bridge._SELECTION_BASIS_VALUES
     assert "best_bucket_tied_identities" in bridge._RETRIEVAL_COUNTERS
 
 
@@ -261,6 +352,17 @@ def test_projection_carries_valid_basis_and_counter():
     projected = bridge.retrieval_diagnostics_projection(_raw("generic-tie-lexical-cut", 34))
     assert projected["selection_basis"] == "generic-tie-lexical-cut"
     assert projected["best_bucket_tied_identities"] == 34
+
+
+def test_projection_and_writers_carry_not_evaluated(tmp_path):
+    projected = bridge.retrieval_diagnostics_projection(_raw("not-evaluated", 0))
+    assert projected["selection_basis"] == "not-evaluated"
+    assert bridge.write_retrieval_diagnostics_artifact(projected, tmp_path / "d.json") is True
+    assert json.loads((tmp_path / "d.json").read_text())["selection_basis"] == "not-evaluated"
+    assert bridge.write_retrieval_diagnostics_summary(
+        projected, {"GITHUB_STEP_SUMMARY": str(tmp_path / "s.md")}
+    ) is True
+    assert "- selection_basis: `not-evaluated`" in (tmp_path / "s.md").read_text()
 
 
 def test_projection_without_basis_is_valid_and_counter_defaults_to_zero():
