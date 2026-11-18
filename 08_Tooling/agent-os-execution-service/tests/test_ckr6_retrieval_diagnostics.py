@@ -107,6 +107,8 @@ def test_case_a_complete_retrieval_selects_normally_and_reports_none(monkeypatch
         "retrieval_reason_code": "none", "incomplete_reason_code": "none",
         "read_count": 1, "observed_rows": 3,
         "normalized_rows": 3, "skipped_rows": 0, "candidate_count": 3,
+        # PR-1: observational selection basis (mechanism only).
+        "best_bucket_tied_identities": 3, "selection_basis": "generic-unique",
     }]
 
 
@@ -166,7 +168,7 @@ def test_case_d_projection_rejects_hostile_values():
         "retrieval_reason_code": "notion-http-503",
         "incomplete_reason_code": "none",
         "read_count": 0, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 4,
+        "skipped_rows": 0, "candidate_count": 4, "best_bucket_tied_identities": 0,
     }
     assert bridge.retrieval_diagnostics_projection({}) is None
     assert bridge.retrieval_diagnostics_projection("not a mapping") is None  # type: ignore[arg-type]
@@ -303,6 +305,7 @@ def test_diagnostic_artifact_rejects_untrusted_fields_boolean_counters_and_secre
         "normalized_rows": 0,
         "skipped_rows": 0,
         "candidate_count": 0,
+        "best_bucket_tied_identities": 0,
     }
     target = tmp_path / "retrieval-diagnostics.json"
     assert bridge.write_retrieval_diagnostics_artifact(valid, target)
@@ -518,7 +521,7 @@ def test_terminal_query_bucket_rejects_hostile_values_and_summary_leaks(tmp_path
         "retrieval_reason_code": "lesson-read-incomplete",
         "incomplete_reason_code": "row-bound-exceeded",
         "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 0,
+        "skipped_rows": 0, "candidate_count": 0, "best_bucket_tied_identities": 0,
         "terminal_query_bucket": "area:Testing/type:Testing lesson",
     }
     path = tmp_path / "bucket.json"
@@ -602,7 +605,7 @@ def test_4011_projection_drops_partial_invalid_or_untrusted_page_signature(tmp_p
         "retrieval_reason_code": "lesson-read-incomplete",
         "incomplete_reason_code": "row-bound-exceeded",
         "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 0,
+        "skipped_rows": 0, "candidate_count": 0, "best_bucket_tied_identities": 0,
         "terminal_query_bucket": "workspace",
         "terminal_page_row_count_bucket": "25",
         "terminal_page_has_more": "true",
@@ -692,7 +695,7 @@ def test_4011_invalid_incomplete_code_blocks_page_fields(tmp_path):
     valid = {
         "retrieval_reason_code": "none", "incomplete_reason_code": "none",
         "read_count": 1, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 0,
+        "skipped_rows": 0, "candidate_count": 0, "best_bucket_tied_identities": 0,
         "terminal_query_bucket": "workspace",
         "terminal_page_row_count_bucket": "25",
         "terminal_page_has_more": "true",
@@ -719,7 +722,7 @@ def test_4011_direct_summary_writer_refuses_hostile_or_partial_page_signature(tm
         "retrieval_reason_code": "lesson-read-incomplete",
         "incomplete_reason_code": "row-bound-exceeded",
         "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 0,
+        "skipped_rows": 0, "candidate_count": 0, "best_bucket_tied_identities": 0,
         "terminal_query_bucket": "workspace",
         "terminal_page_row_count_bucket": "25",
         "terminal_page_has_more": "true",
@@ -747,7 +750,7 @@ def test_4011_direct_summary_refuses_untrusted_reason_counters_and_extra_fields(
         "retrieval_reason_code": "lesson-read-incomplete",
         "incomplete_reason_code": "row-bound-exceeded",
         "read_count": 3, "observed_rows": 0, "normalized_rows": 0,
-        "skipped_rows": 0, "candidate_count": 0,
+        "skipped_rows": 0, "candidate_count": 0, "best_bucket_tied_identities": 0,
         "terminal_query_bucket": "workspace",
         "terminal_page_row_count_bucket": "25",
         "terminal_page_has_more": "true",

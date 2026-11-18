@@ -441,7 +441,22 @@ _RETRIEVAL_FINITE_REASONS = frozenset({
 _NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
+    "best_bucket_tied_identities",
 )
+# PR-1 (observational): HOW the CKR2 matcher chose lessons. Mechanism only,
+# never relevance or verification. Closed vocabulary; any other value is
+# dropped by the projection and refused by both writers.
+_SELECTION_BASIS_VALUES = frozenset({
+    "no-relevant-signal",
+    "identity-scoped",
+    "title-echo",
+    "exact-library",
+    "rule-ckr6-mutation-boundary",
+    "generic-unique",
+    "generic-tie-lexical-cut",
+    "not-evaluated",
+})
+_OPTIONAL_BASIS_KEY = "selection_basis"
 _MAX_DIAGNOSTIC_COUNTER = 10_000
 
 # Only source-controlled Area and Learning Type names may enter this optional
@@ -506,6 +521,9 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             projected[name] = value
         else:
             projected[name] = 0
+    basis = source.get(_OPTIONAL_BASIS_KEY) if isinstance(source, Mapping) else None
+    if type(basis) is str and basis in _SELECTION_BASIS_VALUES:
+        projected[_OPTIONAL_BASIS_KEY] = basis
     if isinstance(source, Mapping) and "terminal_query_bucket" in source:
         value = source.get("terminal_query_bucket")
         projected["terminal_query_bucket"] = (
@@ -567,7 +585,12 @@ def write_retrieval_diagnostics_summary(
     # Otherwise direct calls can expose hostile reason text or unbounded
     # counters in the Actions summary despite strict artifact validation.
     required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
-    if set(diagnostics) not in (
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
+        return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in (
         required,
         required | {"terminal_query_bucket"},
         required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
@@ -585,7 +608,7 @@ def write_retrieval_diagnostics_summary(
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
     for name in (
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
-        "terminal_query_bucket", "terminal_page_row_count_bucket",
+        _OPTIONAL_BASIS_KEY, "terminal_query_bucket", "terminal_page_row_count_bucket",
         "terminal_page_has_more", "terminal_page_cursor_present",
     ):
         if name not in diagnostics:
@@ -619,7 +642,12 @@ def write_retrieval_diagnostics_artifact(
         expected_keys | {"terminal_query_bucket"},
         expected_keys | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
     )
-    if set(diagnostics) not in allowed_keys:
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
+        return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in allowed_keys:
         return False
     if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
         if (
@@ -654,6 +682,8 @@ def write_retrieval_diagnostics_artifact(
         "incomplete_reason_code": incomplete,
         **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
     }
+    if _OPTIONAL_BASIS_KEY in diagnostics:
+        safe[_OPTIONAL_BASIS_KEY] = diagnostics[_OPTIONAL_BASIS_KEY]
     if "terminal_query_bucket" in diagnostics:
         safe["terminal_query_bucket"] = bucket
     for name in _TERMINAL_PAGE_KEYS:
