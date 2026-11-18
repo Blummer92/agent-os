@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_activation_bridge import (
+    SELECTION_BASIS_VALUES,
     LessonActivationSkip,
     LessonRecordEvidence,
     known_lesson_numbers,
@@ -205,9 +206,17 @@ def activate_issue_start_lesson_preflight(
         rejected.extend(item for item in skipped if item["lesson_id"] not in excluded_ids)
     rejected = rejected[:MAX_LESSON_RECORDS]
     admissible = result.lesson_retrieval_status in _ADMISSIBLE
+    # PR-1 (observational): HOW the lessons were chosen, never whether they are
+    # relevant or verified. Only a value from the closed vocabulary is ever
+    # forwarded; anything absent or unknown reads as no-relevant-signal.
+    basis = result.retrieval_diagnostics.get("selection_basis")
+    if type(basis) is not str or basis not in SELECTION_BASIS_VALUES:
+        basis = "no-relevant-signal"
     handoff = dict(result.handoff_projection)
     handoff["known_facts"] = [
-        *handoff.get("known_facts", []), "coding-knowledge-materiality:" + materiality_source,
+        *handoff.get("known_facts", []),
+        "coding-knowledge-materiality:" + materiality_source,
+        "coding-knowledge-selection-basis:" + basis,
     ]
     return {
         "repository": repository,

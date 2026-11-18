@@ -25,6 +25,7 @@ from .lesson_activation_bridge import (
     MAX_RETRIEVAL_PAGES,
     MAX_RETRIEVAL_ROWS,
     LessonActivationError,
+    SelectionBasis,
     _AREA_ECOSYSTEM,
     _AREA_PROPERTY,
     _LEARNING_TYPE_CAPABILITY,
@@ -34,6 +35,7 @@ from .lesson_activation_bridge import (
     _extract_bounded_rows,
     build_filtered_query,
     build_known_reference_query,
+    describe_selection_basis,
     known_lesson_numbers,
     normalize_lesson_row,
 )
@@ -462,7 +464,9 @@ def orchestrate_lesson_retrieval(
     terminal_query_bucket = "unobserved"
     terminal_page_signature: dict[str, object] | None = None
 
-    def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
+    def with_diagnostics(
+        value: LessonPreflightResult, basis: SelectionBasis | None = None
+    ) -> LessonPreflightResult:
         # Only finite counts and static normalization reason names; no raw rows.
         diagnostics = {
             "read_count": read_count,
@@ -480,6 +484,11 @@ def orchestrate_lesson_retrieval(
             "skip_reasons": {reason: skipped[reason] for reason in sorted(skipped)},
             "candidate_count": value.candidate_count,
         }
+        if basis is not None:
+            # PR-1 (observational): HOW the lessons were chosen. Never read
+            # back by selection, status mapping or admission.
+            diagnostics["selection_basis"] = basis.basis
+            diagnostics["best_bucket_tied_identities"] = basis.tied_identities
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
             diagnostics["terminal_query_bucket"] = terminal_query_bucket
@@ -644,7 +653,12 @@ def orchestrate_lesson_retrieval(
                 current_request, _bound_relevant_lessons(current_request, accumulated)
             )
             if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
-                return with_diagnostics(result)
+                return with_diagnostics(
+                    result,
+                    describe_selection_basis(
+                        current_request, accumulated, identity_route=True
+                    ),
+                )
         # Relevance retrieval is one complete bounded snapshot of the
         # canonical data source, replacing the fragmented filtered/exact/
         # workspace cascade: normalization, dedup, the CKR2 bound and
@@ -677,7 +691,10 @@ def orchestrate_lesson_retrieval(
         # A complete snapshot leaves no further retrieval step: the honest
         # next recommendation is manual review, not a cascade re-read.
         result = replace(result, retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW)
-    return with_diagnostics(result)
+    return with_diagnostics(
+        result,
+        describe_selection_basis(current_request, accumulated, identity_route=False),
+    )
 
 
 __all__ = [
