@@ -1724,3 +1724,14 @@ def test_every_npm_focused_rule_is_covered_by_node_setup():
                 directory = command[3:].split(" && ", 1)[0]
                 assert directory in known, f"npm rule {rule['name']} project {directory} is not in _NODE_PROJECTS"
                 assert node_setup_requirements((command,))["needs_node"] is True
+
+
+def test_frontend_driver_and_its_regression_tests_select_focused_pytest() -> None:
+    paths = [
+        "scripts/agent_os_frontend_checks.py",
+        "tests/test_agent_os_frontend_checks.py",
+    ]
+    for selection in ([paths[0]], [paths[1]], paths):
+        plan = _select(_input(selection))
+        assert plan.profile == "focused"
+        assert plan.commands == ("python -m pytest tests/test_agent_os_frontend_checks.py",)

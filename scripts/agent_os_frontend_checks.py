@@ -26,14 +26,17 @@ commands), so they survive aggregate-profile selection. The real-process
 integration suite (``playwright.integration.config.ts``) still runs only in the
 path-filtered advisory ``teacher-os-react-ci`` workflow; promoting it is a
 separate owner decision. The Picture Perfect pinned tests run as their own
-``npm test`` command in this lane, not only embedded inside ``npm run check``,
-so the lane's per-command receipt proves the pinned tests executed.
+``npm test`` command in this lane, not only embedded inside ``npm run check``.
+Both required browser/pinned test commands must provide structured case
+evidence in addition to a successful subprocess exit.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, NamedTuple, Sequence
 
@@ -68,6 +71,18 @@ _PICTURE_PERFECT_PINNED_TESTS = (
     "src/executorContract.test.ts",
     "src/provenanceValidator.test.ts",
 )
+_PP_TEST = ("npm", "test", "--", *_PICTURE_PERFECT_PINNED_TESTS)
+_TEACHER_INSTALL = ("npx", "playwright", "install", "chromium")
+_TEACHER_TEST = ("npx", "playwright", "test")
+_TEACHER_PROJECTS = ("desktop", "phone")
+# Matching by directory keeps the contract independent of the projects'
+# editable command lists and display labels.
+_REQUIRED_TEST_COMMANDS = {
+    "08_Tooling/instructional-materials-coach/picture-perfect-coach": (_PP_TEST,),
+    "08_Tooling/teacher-os-web": (_TEACHER_INSTALL, _TEACHER_TEST),
+}
+_MAX_TEST_REPORT_BYTES = 8 * 1024 * 1024
+_TEST_EVIDENCE_FAILED = 78
 
 
 # Install commands mirror each project's existing plan: the reference UI project has
@@ -79,7 +94,7 @@ PROJECTS: tuple[Project, ...] = (
         "08_Tooling/instructional-materials-coach/picture-perfect-coach",
         (
             ("npm", "ci"),
-            ("npm", "test", "--", *_PICTURE_PERFECT_PINNED_TESTS),
+            _PP_TEST,
             ("npm", "run", "check"),
         ),
         # src/uiEvidence.test.ts imports ../../capture/safe_recording.mjs
@@ -108,8 +123,8 @@ PROJECTS: tuple[Project, ...] = (
             # teacher-os-web commands. Without these, an aggregate-qualifying
             # file dropped Playwright from every required lane: the aggregate
             # job is Python-only and teacher-os-react-ci is advisory.
-            ("npx", "playwright", "install", "chromium"),
-            ("npx", "playwright", "test"),
+            _TEACHER_INSTALL,
+            _TEACHER_TEST,
         ),
         "Playwright integration suite (playwright.integration.config.ts) still runs only in the advisory teacher-os-react-ci workflow.",
     ),
@@ -207,11 +222,120 @@ _NPM_RETRY_ENV = {
 }
 
 
+def _read_test_report(path: Path) -> dict:
+    with path.open("rb") as handle:
+        data = handle.read(_MAX_TEST_REPORT_BYTES + 1)
+    if len(data) > _MAX_TEST_REPORT_BYTES:
+        raise ValueError("oversized reporter output")
+    report = json.loads(data)
+    if not isinstance(report, dict):
+        raise ValueError("reporter output is not an object")
+    return report
+
+
+def _vitest_counts(report: dict, cwd: Path) -> dict[str, int]:
+    entries = report.get("testResults")
+    if report.get("success") is not True or not isinstance(entries, list):
+        raise ValueError("Vitest did not report success")
+    counts: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise ValueError("malformed Vitest file entry")
+        path = Path(entry["name"])
+        name = (path.relative_to(cwd.resolve()) if path.is_absolute() else path).as_posix()
+        assertions = entry.get("assertionResults")
+        if (
+            name in counts or name not in _PICTURE_PERFECT_PINNED_TESTS
+            or entry.get("status") != "passed" or not isinstance(assertions, list)
+        ):
+            raise ValueError("invalid pinned Vitest file receipt")
+        if any(not isinstance(a, dict) or a.get("status") not in (
+            "passed", "skipped", "pending", "todo", "disabled",
+        ) for a in assertions):
+            raise ValueError("invalid Vitest case receipt")
+        counts[name] = sum(a["status"] == "passed" for a in assertions)
+    total = report.get("numPassedTests")
+    if (
+        set(counts) != set(_PICTURE_PERFECT_PINNED_TESTS) or not all(counts.values())
+        or type(total) is not int or total != sum(counts.values())
+    ):
+        raise ValueError("missing pinned Vitest file or passed case evidence")
+    return counts
+
+
+def _playwright_counts(report: dict) -> dict[str, int]:
+    suites = report.get("suites")
+    stats = report.get("stats")
+    if (
+        not isinstance(suites, list) or not isinstance(stats, dict)
+        or any(type(stats.get(key)) is not int or stats[key] < 0 for key in (
+            "expected", "flaky", "unexpected",
+        ))
+        or stats["unexpected"] != 0
+        or report.get("errors") != []
+    ):
+        raise ValueError("Playwright did not report a clean run")
+    counts = dict.fromkeys(_TEACHER_PROJECTS, 0)
+    pending = list(suites)
+    while pending:
+        suite = pending.pop()
+        if not isinstance(suite, dict):
+            raise ValueError("malformed Playwright suite")
+        child_suites, specs = suite.get("suites", []), suite.get("specs")
+        if not isinstance(child_suites, list) or not isinstance(specs, list):
+            raise ValueError("malformed Playwright specs")
+        pending.extend(child_suites)
+        for spec in specs:
+            cases = spec.get("tests") if isinstance(spec, dict) else None
+            if not isinstance(cases, list):
+                raise ValueError("malformed Playwright cases")
+            for case in cases:
+                if not isinstance(case, dict) or case.get("projectName") not in _TEACHER_PROJECTS:
+                    raise ValueError("unexpected Playwright project")
+                results = case.get("results")
+                if not isinstance(results, list):
+                    raise ValueError("malformed Playwright case results")
+                if (
+                    case.get("expectedStatus") == "passed" and case.get("status") in ("expected", "flaky")
+                    and results and isinstance(results[-1], dict) and results[-1].get("status") == "passed"
+                ):
+                    counts[case["projectName"]] += 1
+    if not all(counts.values()) or sum(counts.values()) > stats["expected"] + stats["flaky"]:
+        raise ValueError("both default Playwright projects must have passing cases")
+    return counts
+
+
+def _run_with_test_evidence(argv: tuple[str, ...], cwd: Path, env: dict[str, str]) -> int:
+    with tempfile.TemporaryDirectory(prefix="agent-os-frontend-") as temp:
+        report_path = Path(temp) / "test-results.json"
+        if argv == _PP_TEST:
+            reporters = ("--reporter=default", "--reporter=json", f"--outputFile.json={report_path}")
+            if env.get("GITHUB_ACTIONS") == "true":
+                reporters += ("--reporter=github-actions",)
+        else:
+            reporters = ("--reporter=dot,json",)
+            env = {**env, "PLAYWRIGHT_JSON_OUTPUT_FILE": str(report_path)}
+        code = subprocess.run([*argv, *reporters], cwd=cwd, check=False, env=env).returncode
+        if code:
+            return code
+        try:
+            report = _read_test_report(report_path)
+            counts = _vitest_counts(report, cwd) if argv == _PP_TEST else _playwright_counts(report)
+        except (OSError, ValueError, RecursionError):
+            # Report files can contain arbitrary test output. Log no raw data.
+            print(f"missing or invalid test-case evidence for `{' '.join(argv)}`", file=sys.stderr)
+            return _TEST_EVIDENCE_FAILED
+        print("frontend test evidence: " + json.dumps(counts, sort_keys=True), flush=True)
+        return 0
+
+
 def _run_command(argv: Sequence[str], cwd: Path) -> int:
     try:
-        return subprocess.run(
-            list(argv), cwd=cwd, check=False, env={**_NPM_RETRY_ENV, **os.environ}
-        ).returncode
+        env = {**_NPM_RETRY_ENV, **os.environ}
+        command = tuple(argv)
+        if command in (_PP_TEST, _TEACHER_TEST):
+            return _run_with_test_evidence(command, cwd, env)
+        return subprocess.run(list(argv), cwd=cwd, check=False, env=env).returncode
     except OSError as exc:
         # A registered project whose directory or executable is missing (for example a
         # PR that deletes the project but keeps its registration) is a recorded failure
@@ -252,13 +376,23 @@ def evaluate(
     """Return failure reasons; empty means every applicable project fully passed."""
     problems: list[str] = []
     for project in applicable:
+        required = _REQUIRED_TEST_COMMANDS.get(project.directory, ())
+        if tuple(argv for argv in project.commands if argv in required) != required:
+            problems.append(f"{project.name}: required test commands missing, duplicated, or out of order")
+            continue
         record = results.get(project.name)
         if record is None:
             problems.append(f"{project.name}: applicable but not executed")
             continue
-        if len(record) != len(project.commands) or any(code != 0 for _, code in record):
-            failed = [f"`{cmd}` exit {code}" for cmd, code in record if code != 0]
-            problems.append(f"{project.name}: " + (", ".join(failed) or "incomplete"))
+        expected = [" ".join(argv) for argv in project.commands]
+        if [cmd for cmd, _ in record] != expected[:len(record)]:
+            problems.append(f"{project.name}: command receipt identity or order mismatch")
+            continue
+        failed = [f"`{cmd}` exit {code}" for cmd, code in record if type(code) is not int or code != 0]
+        if failed:
+            problems.append(f"{project.name}: " + ", ".join(failed))
+        elif len(record) != len(expected):
+            problems.append(f"{project.name}: incomplete")
     return problems
 
 

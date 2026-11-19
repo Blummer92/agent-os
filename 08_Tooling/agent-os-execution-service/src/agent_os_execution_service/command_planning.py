@@ -54,6 +54,9 @@ _COMMAND_REGISTRY = MappingProxyType(
         "python -m pytest tests/test_agent_os_ci_evidence_collector.py": ("python", "-m", "pytest", "tests/test_agent_os_ci_evidence_collector.py"),
         "python -m pytest tests/test_agent_os_ci_evidence_collector_provider_fidelity.py": ("python", "-m", "pytest", "tests/test_agent_os_ci_evidence_collector_provider_fidelity.py"),
         "python -m pytest tests/test_collector_download_redirect.py": ("python", "-m", "pytest", "tests/test_collector_download_redirect.py"),
+        "python -m pytest tests/test_agent_os_frontend_checks.py": (
+            "python", "-m", "pytest", "tests/test_agent_os_frontend_checks.py",
+        ),
         "python -m pytest tests/test_collector_failure_receipt.py": ("python", "-m", "pytest", "tests/test_collector_failure_receipt.py"),
         "python -m pytest tests/agent_os_issue_acceptance": (
             "python",
