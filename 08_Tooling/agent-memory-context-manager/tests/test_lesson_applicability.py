@@ -485,6 +485,17 @@ def test_trusted_provenance_claim_in_json_rejected():
     assert "trusted-provenance-requires-authenticated-acquisition" in result.reason_codes
 
 
+def test_evidence_reference_with_newline_returns_invalid_registry():
+    record = record_dict()
+    record["evidence"][0]["reference"] = "first line\nsecond line"
+    # Exercise parsed JSON, the public validator's input contract.
+    raw = json.loads(json.dumps(registry_dict(record)))
+    result = validate_registry(raw, mechanisms=MECHANISMS, boundaries=BOUNDARIES)
+    assert not result.valid
+    assert not result.complete
+    assert result.records == ()
+    assert result.reason_codes == ("malformed-evidence",)
+
 def test_malformed_and_ambiguous_evidence_rejected():
     raw = record_dict()
     raw["evidence"] = [{"kind": "not-a-kind", "reference": "x"}]
@@ -950,6 +961,30 @@ def test_d120_duplicate_identity_still_fails_closed():
     assert result.matched is False
     assert "conflicting-observation-identity" in result.reason_codes
 
+
+def test_conflicting_observation_identity_contributes_no_evidence_in_either_order():
+    first = verified(observation_id="collision")
+    second = verified(
+        mechanism="test-mechanism-beta",
+        boundary_id="test-boundary-two",
+        observation_id="collision",
+    )
+    independent = verified(
+        mechanism="test-mechanism-gamma", boundary_id=None, observation_id="independent"
+    )
+    # A repeated exact copy of either conflicting observation must not
+    # reintroduce that identity, but independent evidence stays visible.
+    observations = (first, first, independent, second)
+    forward = match(observations=observations)
+    reverse = match(observations=tuple(reversed(observations)))
+    assert forward.to_dict() == reverse.to_dict()
+    assert not forward.matched
+    assert forward.reason_codes == (
+        "conflicting-observation-identity",
+        "positive-applicability-condition-unsatisfied",
+    )
+    assert forward.verified_mechanisms == ("test-mechanism-gamma",)
+    assert forward.verified_boundaries == ()
 
 def test_d120_foreign_repo_stale_freshness_and_stale_revision_still_rejected():
     """D120: repository, freshness, and revision gating are unchanged."""

@@ -837,7 +837,9 @@ def _validate_evidence(raw: Any) -> tuple[list[EvidenceRef] | None, set[str]]:
         if type(kind) is not str or kind not in EVIDENCE_KINDS:
             reasons.add("malformed-evidence")
             continue
-        if type(reference) is not str or not reference.strip() or len(reference) > MAX_TEXT_CHARS:
+        try:
+            _bounded_text(reference, "reference")
+        except (TypeError, ValueError):
             reasons.add("malformed-evidence")
             continue
         if repository is not None and (
@@ -927,10 +929,8 @@ def describe_applicability_match(
     # carrying that mechanism AND that boundary together. The unions below
     # are kept for the explanatory output only; they never satisfy a
     # condition on their own.
-    verified_mechanisms: set[str] = set()
-    verified_boundaries: set[str] = set()
-    verified_pairs: set[tuple[str, str | None]] = set()
     seen_observation_ids: dict[str, VerifiedObservation] = {}
+    conflicting_observation_ids: set[str] = set()
     for observation in verified_observations:
         if observation.repository != task.repository:
             reasons.add("conflicting-repository-identity")
@@ -941,18 +941,25 @@ def describe_applicability_match(
         if observation.freshness != "fresh":
             reasons.add("stale-evidence")
             continue
-        previous = seen_observation_ids.get(observation.observation_id)
+        observation_id = observation.observation_id
+        previous = seen_observation_ids.get(observation_id)
         if previous is not None:
             if previous != observation:
-                # One observation ID naming two different observations is a
-                # copied/conflicting identity: fail closed, trust neither.
+                # A conflicting identity contributes no verified evidence.
+                conflicting_observation_ids.add(observation_id)
                 reasons.add("conflicting-observation-identity")
             continue
-        seen_observation_ids[observation.observation_id] = observation
-        verified_mechanisms.add(observation.mechanism)
-        if observation.boundary_id is not None:
-            verified_boundaries.add(observation.boundary_id)
-        verified_pairs.add((observation.mechanism, observation.boundary_id))
+        seen_observation_ids[observation_id] = observation
+
+    # Collect pairs after duplicate checking so neither the match nor its
+    # explanation can depend on which conflict arrived first.
+    verified_pairs = {
+        (observation.mechanism, observation.boundary_id)
+        for observation_id, observation in seen_observation_ids.items()
+        if observation_id not in conflicting_observation_ids
+    }
+    verified_mechanisms = {mechanism for mechanism, _ in verified_pairs}
+    verified_boundaries = {boundary for _, boundary in verified_pairs if boundary is not None}
 
     def _satisfied(condition: ApplicabilityCondition) -> bool:
         # D120 Option A: one observation must carry the mechanism and the

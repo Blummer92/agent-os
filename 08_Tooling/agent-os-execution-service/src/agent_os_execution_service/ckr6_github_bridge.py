@@ -917,6 +917,10 @@ def _canonical_result_json(payload: Mapping[str, object]) -> str:
     )
 
 
+class _ResultCommentTooLarge(ValueError):
+    """The exact encoded result exceeds the postback byte budget."""
+
+
 def serialize_ckr6_result_comment(
     result: Mapping[str, object], *, request_comment_id: int
 ) -> str:
@@ -938,7 +942,7 @@ def serialize_ckr6_result_comment(
     payload = {**result, "request_comment_id": request_comment_id}
     body = CKR6_RESULT_MARKER + "\n" + _canonical_result_json(payload)
     if len(body.encode("utf-8")) > MAX_RESULT_COMMENT_BYTES:
-        raise ValueError("serialized CKR6 result exceeds the bounded comment size")
+        raise _ResultCommentTooLarge("serialized CKR6 result exceeds the bounded comment size")
     return body
 
 
@@ -1544,7 +1548,33 @@ def postback_result_comment(
     issue_number: int = issue["number"]
     request_comment_id: int = comment["id"]
     payload = result if result is not None else _fallback_result(repository, issue_number)
-    body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    try:
+        body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    except _ResultCommentTooLarge:
+        proposal = payload.get("lesson_proposal")
+        reasons = payload.get("reason_codes")
+        hints = proposal.get("proposed_applicability_hints") if isinstance(proposal, dict) else None
+        if (
+            payload.get("operation") != "lesson-candidate"
+            or not isinstance(proposal, dict)
+            or not isinstance(hints, list)
+            or not hints
+            or not isinstance(reasons, list)
+        ):
+            raise
+        # The Actions evidence artifact already contains the unaltered
+        # result.json. Omit only the new optional field from the comment,
+        # explicitly; keep the legacy draft and request correlation intact.
+        bounded_proposal = {
+            key: value for key, value in proposal.items()
+            if key != "proposed_applicability_hints"
+        }
+        comment_payload = {
+            **payload,
+            "lesson_proposal": bounded_proposal,
+            "reason_codes": [*reasons, "proposed-applicability-hints-omitted-from-comment"],
+        }
+        body = serialize_ckr6_result_comment(comment_payload, request_comment_id=request_comment_id)
 
     import urllib.request
 
