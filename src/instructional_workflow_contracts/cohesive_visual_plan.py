@@ -626,6 +626,8 @@ def _resolve_eligible_candidates(
                 "authority": projection["authority"],
             }
         )
+        if "source_context" in projection:
+            resolved[-1]["source_context"] = projection["source_context"]
     return resolved
 
 
@@ -730,6 +732,11 @@ def _select_for_role(
         viable.append((score, _candidate_sort_key(candidate), candidate))
 
     if not viable:
+        if any(
+            "asset-concept-evidence-unverified" in reasons
+            for _, reasons in role_rejections
+        ):
+            manual.add("manual-review-visual-concept-evidence")
         return {
             "candidate": None,
             "manual_review": tuple(sorted(manual)),
@@ -769,6 +776,12 @@ def _classify_unfilled_role(
         return (
             OUTCOME_REVIEW_PENDING,
             (OUTCOME_REVIEW_PENDING, "asset-required-role-tie-blocked"),
+            (),
+        )
+    if "manual-review-visual-concept-evidence" in match["manual_review"]:
+        return (
+            OUTCOME_REVIEW_PENDING,
+            (OUTCOME_REVIEW_PENDING, "manual-review-visual-concept-evidence"),
             (),
         )
     role_eligible = match["role_eligible"]
@@ -831,6 +844,48 @@ def _classify_unfilled_role(
     return (OUTCOME_PROVEN_ABSENCE, (OUTCOME_PROVEN_ABSENCE,), ())
 
 
+def _title_words(value: str) -> list[str]:
+    return "".join(ch if ch.isalnum() else " " for ch in value.casefold()).split()
+
+
+def _concept_match_tier(role: dict[str, Any], candidate: dict[str, Any]) -> int:
+    """Deterministic contextual-relevance tier for one candidate (#3672).
+
+    Tiers, strongest first:
+    - 2 (EXACT): the fingerprint-bound asset title contains the role's
+      explicit concept as a contiguous word sequence.
+    - 1 (SUPPORTED RELATED): the verified title contains every concept
+      word, but not contiguously. The title is governed metadata, so this
+      is an explicit lexical relationship, never an invented synonym or
+      semantic/image-content claim.
+    - 0 (INSUFFICIENT EVIDENCE): no verified title, a missing concept
+      word, or no concept on the role. Tier 0 candidates are rejected
+      for concept roles and never ranked on guessed relevance.
+    """
+    context = candidate.get("source_context")
+    title = context.get("asset_title") if isinstance(context, dict) else None
+    concept = role.get("concept")
+    if not isinstance(title, str) or not isinstance(concept, str):
+        return 0
+    wanted, available = _title_words(concept), _title_words(title)
+    if not wanted:
+        return 0
+    if any(
+        available[i:i + len(wanted)] == wanted
+        for i in range(len(available) - len(wanted) + 1)
+    ):
+        return 2
+    if len(wanted) > 1 and all(word in available for word in wanted):
+        return 1
+    return 0
+
+
+def _source_title_matches_concept(role: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    """True when the verified title establishes at least a supported related
+    match (tier >= 1). Retained for the original Phase 1 callers/tests."""
+    return _concept_match_tier(role, candidate) >= 1
+
+
 def _role_rejection_reasons(
     role: dict[str, Any],
     candidate: dict[str, Any],
@@ -859,6 +914,8 @@ def _role_rejection_reasons(
         reasons.append("asset-cohesion-missing")
     if candidate["cohesion_profile"]["audience_compatibility"]["state"] != "approved":
         reasons.append("asset-audience-incompatible")
+    if role.get("concept") is not None and not _source_title_matches_concept(role, candidate):
+        reasons.append("asset-concept-evidence-unverified")
     return tuple(sorted(reasons))
 
 
@@ -934,8 +991,19 @@ def _cohesion_conflict_reasons(
     return tuple(sorted(reasons))
 
 
+# Contextual-relevance weights (#3672). A viable candidate's non-contextual
+# components sum to at most 59 (20 purpose + 20 approved use + 10 canonical
+# + 5 orientation + 4 cognitive preference), so a full tier step (30) can
+# never be overtaken by non-contextual components: an exact match always
+# outranks a supported related match, and relevance never overrides the
+# eligibility gates, which run before scoring.
+_CONCEPT_TIER_WEIGHT = 30
+
+
 def _score(role: dict[str, Any], candidate: dict[str, Any]) -> tuple[int, int, int, int]:
     score = 0
+    if role.get("concept") is not None:
+        score += _CONCEPT_TIER_WEIGHT * _concept_match_tier(role, candidate)
     role_type = role["role_type"]
     if role_type in candidate["purpose"]["role_types"]:
         score += 20
@@ -976,6 +1044,19 @@ def _assignment(
         "selected_candidate": _candidate_identity(candidate),
         "assignment_score": score[0],
         "score_evidence": {
+            # #3672: deterministic contextual-relevance tier, present only
+            # for concept roles (no-concept payloads are unchanged).
+            **(
+                {
+                    "concept_match": (
+                        "exact"
+                        if _concept_match_tier(role, candidate) == 2
+                        else "supported-related"
+                    )
+                }
+                if role.get("concept") is not None
+                else {}
+            ),
             "exact_role_match": role["role_type"] in candidate["purpose"]["role_types"],
             "approved_use_match": role["role_type"] in candidate["approved_use"]["role_types"],
             "canonical_asset": candidate["matched_asset"]["disposition"] == "canonical",

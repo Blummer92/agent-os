@@ -591,6 +591,8 @@ def _candidate_entry(
             "authority": payload["authority"],
         }
     )
+    if "source_context" in payload:
+        entry["source_context"] = payload["source_context"]
     return entry
 
 

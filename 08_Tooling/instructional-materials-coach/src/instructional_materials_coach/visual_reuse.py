@@ -41,6 +41,14 @@ def _scope_candidates_to_current_assets(
     - "malformed": candidate or current-asset evidence is malformed;
     - "identity-conflict": one exact library page + Drive identity maps to two
       competing Asset IDs (fail closed; no precedence invented);
+    - "title-conflict": a candidate's claimed Asset Title contradicts the
+      authoritative current-asset evidence title for its exact identity
+      (#3672; fail closed, the candidate's title is never trusted over the
+      governed Notion projection);
+    - "title-unverifiable": a candidate claims an Asset Title but the
+      authoritative evidence for its exact identity carries no title, so
+      the claim has no provenance (fail closed to manual review, never a
+      gap and never an admission);
     - "no-read-evidence": zero candidates admitted and no read is identified
       (no source_revision), so absence cannot be proven.
 
@@ -64,6 +72,14 @@ def _scope_candidates_to_current_assets(
 
     admitted: set[tuple[str, str, str]] = set()
     asset_ids_by_external_identity: dict[tuple[str, str], set[str]] = {}
+    # #3672: authoritative titles, keyed by the exact identity triple they
+    # were projected with. Only the governed evidence field ``asset_title``
+    # (produced by project_notion_asset_page -> _normalize_assets from the
+    # Notion record's Asset Title property) is read here. A caller-provided
+    # flag such as ``verified=True`` is never consulted: it is not proof of
+    # provenance, and no such field is read anywhere in this boundary.
+    authoritative_titles: dict[tuple[str, str, str], str | None] = {}
+    authoritative_title_conflict = False
     for item in current_asset_evidence:
         if type(item) is not dict:
             continue
@@ -82,11 +98,26 @@ def _scope_candidates_to_current_assets(
         if not drive_file_id and scope == "unit-specific":
             continue
         if all(isinstance(value, str) and value for value in (asset_id, page_id)):
-            admitted.add((asset_id, page_id, drive_file_id))
+            identity_key = (asset_id, page_id, drive_file_id)
+            admitted.add(identity_key)
             asset_ids_by_external_identity.setdefault((page_id, drive_file_id), set()).add(asset_id)
+            raw_title = item.get("asset_title")
+            title = raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else None
+            if identity_key in authoritative_titles:
+                previous = authoritative_titles[identity_key]
+                if previous is not None and title is not None and previous != title:
+                    # The authoritative evidence contradicts itself for one
+                    # exact identity: fail closed like any identity conflict.
+                    authoritative_title_conflict = True
+                elif previous is None:
+                    authoritative_titles[identity_key] = title
+            else:
+                authoritative_titles[identity_key] = title
 
     if current_asset_evidence and not admitted:
         return ("malformed", [])
+    if authoritative_title_conflict:
+        return ("title-conflict", [])
 
     # #3104: one exact library page + Drive identity cannot authorize two
     # competing Asset IDs. Canonical reconciliation belongs to #1387; this
@@ -118,6 +149,31 @@ def _scope_candidates_to_current_assets(
             and isinstance(identity[1], str) and identity[1]
             and identity in admitted
         ):
+            # #3672 provenance reconciliation: the candidate's claimed
+            # title is the library_record title its compatibility evidence
+            # will fingerprint. It is a claim, not proof. Compare it with
+            # the authoritative title for this exact identity.
+            claimed_title: str | None = None
+            library_record = candidate.get("library_record")
+            if isinstance(library_record, dict):
+                # Read the stored key directly so a dict subclass cannot
+                # reroute the claim through an overridden .get (#3672 QA P3).
+                raw_claimed = dict.get(library_record, "asset_title")
+            else:
+                # The compatibility contract also accepts an
+                # ExistingAssetRecord object form; its claimed title is
+                # reconciled identically, never skipped fail-open (#3672 QA).
+                raw_claimed = getattr(library_record, "asset_title", None)
+            if isinstance(raw_claimed, str) and raw_claimed.strip():
+                claimed_title = raw_claimed.strip()
+            if claimed_title is not None:
+                authoritative_title = authoritative_titles.get(
+                    (identity[0], identity[1], identity[2])
+                )
+                if authoritative_title is None:
+                    return ("title-unverifiable", [])
+                if claimed_title != authoritative_title:
+                    return ("title-conflict", [])
             scoped.append(candidate)
     if not scoped:
         if not source_revision:
@@ -168,6 +224,45 @@ class GovernedVisualReusePlan:
             return ()
         payload = result.record.to_dict()
         return tuple(payload["image_gap_briefs"])
+
+
+def _filter_eligible_asset_ids(
+    candidate_filter_result: ValidationResult,
+    scoped_candidates: list[object],
+) -> set[str]:
+    """Asset IDs the candidate filter actually classified eligible (#3672 QA).
+
+    Teacher-decision eligibility is this set, never the whole scoped set:
+    a candidate whose compatibility classification is a hard rejection
+    (e.g. approved_use revoked to ``denied``) or manual review is scoped
+    but NOT eligible, and a decision naming it must invalidate — a
+    restricted image can never be honored back into an unblocked plan.
+    By-reference entries carry no asset reference, so they are resolved
+    through the same fingerprint-verified projection store the planner
+    uses.
+    """
+    if candidate_filter_result.record is None:
+        return set()
+    payload = candidate_filter_result.record.to_dict()
+    store: dict[tuple[str, str], object] | None = None
+    eligible_ids: set[str] = set()
+    for entry in payload.get("eligible", []):
+        if not isinstance(entry, dict):
+            continue
+        reference = entry.get("asset_reference")
+        if isinstance(reference, dict):
+            asset_id = reference.get("asset_id")
+            if isinstance(asset_id, str) and asset_id:
+                eligible_ids.add(asset_id)
+            continue
+        if store is None:
+            store = _candidate_projection_store(scoped_candidates)
+        record = store.get((entry.get("compatibility_id"), entry.get("fingerprint")))
+        if record is not None:
+            asset_id = record.to_dict()["asset_reference"]["asset_id"]
+            if isinstance(asset_id, str) and asset_id:
+                eligible_ids.add(asset_id)
+    return eligible_ids
 
 
 def _eligible_asset_content_identities(
@@ -414,6 +509,30 @@ def plan_governed_visual_reuse(
             visual_needs_result=visual_needs_result,
             artifact_reuse_result=artifact_reuse_result,
         )
+    if scope_state == "title-conflict":
+        # #3672: candidate metadata contradicts the authoritative Notion
+        # projection for its exact identity. Blocked and named; never a
+        # visual gap (the asset may exist — its evidence is untrustworthy).
+        return GovernedVisualReusePlan(
+            outcome="title-conflict",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
+    if scope_state == "title-unverifiable":
+        # #3672: a claimed title with no authoritative counterpart routes
+        # to manual review via the blocked title-unverifiable outcome —
+        # it is neither admitted nor reported as proven absence.
+        return GovernedVisualReusePlan(
+            outcome="title-unverifiable",
+            final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
     if scope_state == "no-read-evidence":
         return GovernedVisualReusePlan(
             outcome="retrieval-failure",
@@ -510,7 +629,12 @@ def plan_governed_visual_reuse(
             cohesive_payload,
             tuple(teacher_decisions),
             candidate_set_fingerprint=scoped_fingerprint,
-            eligible_asset_ids=set(scoped_identities),
+            # #3672 QA (P1): eligibility is the filter's eligible set, so a
+            # rights-denied or otherwise rejected asset invalidates the
+            # decision instead of being resurrected by it.
+            eligible_asset_ids=_filter_eligible_asset_ids(
+                candidate_filter_result, scoped_candidates
+            ),
             content_identities=scoped_identities,
             source_revision=source_revision,
         )

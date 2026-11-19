@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from instructional_workflow_contracts import ValidationStatus
 from instructional_workflow_contracts.teacher_visual_decision import (
     REASON_ASSET_CONTENT_CHANGED,
     REASON_ASSET_NO_LONGER_ELIGIBLE,
@@ -318,14 +319,64 @@ def _fixture(name):
 def _two_candidates():
     c1 = _fixture("valid_visual_asset_compatibility_v2.json")
     c2 = copy.deepcopy(c1)
-    c2["compatibility_evidence"]["asset_reference"]["asset_id"] = "asset-2"
-    c2["compatibility_evidence"]["asset_reference"]["stable_ref"] = "asset-ref-2"
-    c2["compatibility_evidence"]["asset_reference"]["content_fingerprint"] = SHA_B
-    c2["compatibility_evidence"]["library_reference"] = {
+    # #3672 QA repair: c2 must be a real governed candidate — its own
+    # re-signed manifest actually containing asset-2 — not a shallow
+    # identity relabel. The previous fixture's envelope did not validate
+    # (stray top-level field, no manifest association), so the candidate
+    # classified as rejected and a teacher decision honoring it exercised
+    # exactly the decision-eligibility hole #3672 closes. The planner
+    # still deterministically prefers asset-1 (lower cognitive load).
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_idempotency_key,
+        artifact_manifest_source_fingerprint,
+        validate_artifact_manifest,
+    )
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+
+    manifest = c2["artifact_manifest"]
+    manifest["identity"]["manifest_id"] = "manifest-2"
+    manifest["external_identity"]["file_id"] = "file-2"
+    manifest["external_identity"]["exact_reference"] = "drive:file-2"
+    manifest["external_identity"]["web_view_link"] = "https://example.invalid/file-2"
+    asset = manifest["assets"][0]
+    asset["asset_id"] = "asset-2"
+    asset["stable_ref"] = "asset-ref-2"
+    asset["content_fingerprint"] = SHA_B
+    manifest["operation"]["idempotency_key"] = artifact_manifest_idempotency_key(manifest)
+    manifest["custom_properties"]["manifest_id"] = "manifest-2"
+    manifest["custom_properties"]["idempotency_key"] = manifest["operation"]["idempotency_key"]
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(manifest)
+    manifest_result = validate_artifact_manifest(manifest)
+    assert manifest_result.record is not None
+    manifest_record = manifest_result.record
+
+    library = c2["library_record"]
+    library["page_id"] = "page-2"
+    library["drive_file_id"] = "file-2"
+
+    evidence = c2["compatibility_evidence"]
+    evidence["manifest_reference"] = {
+        "manifest_id": manifest_record.record_id,
+        "record_revision": manifest_record.record_revision,
+        "fingerprint": manifest_record.fingerprint,
+        "verified_at": manifest["identity"]["verified_at"],
+        "external_file_id": "file-2",
+    }
+    evidence["freshness"]["manifest_record_revision"] = manifest_record.record_revision
+    evidence["freshness"]["manifest_fingerprint"] = manifest_record.fingerprint
+    evidence["freshness"]["manifest_verified_at"] = manifest["identity"]["verified_at"]
+    evidence["asset_reference"]["asset_id"] = "asset-2"
+    evidence["asset_reference"]["stable_ref"] = "asset-ref-2"
+    evidence["asset_reference"]["content_fingerprint"] = SHA_B
+    evidence["library_reference"] = {
         "page_id": "page-2",
         "drive_file_id": "file-2",
     }
-    c2["compatibility_id"] = "compat-2"
+    evidence["cohesion_profile"]["cognitive_load_rating"] = 3
+    validated = validate_visual_asset_compatibility_evidence(c2)
+    assert validated.status is ValidationStatus.VALID, validated.reason_codes
     return [c1, c2]
 
 
