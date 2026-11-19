@@ -530,8 +530,17 @@ consume_captured_suite() {
   local status_file="$4"
   local code started_us ended_us
 
-  cat "$output_file"
-  IFS='|' read -r code started_us ended_us <"$status_file"
+  if [ -f "$output_file" ]; then
+    cat "$output_file"
+  fi
+  # A foreground coach wrapper can exit before writing this receipt too.
+  # Preserve its failure, then consume other suites and publish the manifest.
+  if [ ! -f "$status_file" ] || ! IFS='|' read -r code started_us ended_us <"$status_file" || ! [[ "$code" =~ ^(0|[1-9][0-9]{0,2})$ ]]; then
+    echo "suite subprocess ended without a valid status receipt: $suite_name" >&2
+    code=2
+    started_us=unavailable
+    ended_us=unavailable
+  fi
   commands_executed+=("$command_text")
   record_timing "$suite_name" "$started_us" "$ended_us"
   if [ "$code" -eq 0 ]; then

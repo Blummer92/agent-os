@@ -649,3 +649,37 @@ def test_scheduler_preserves_junit_manifest_and_failure_propagation(
         receipt = junit / ("test-completeness-" + name + ".json")
         assert receipt.is_file()
     assert manifest.index("pkg-fail\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
+
+def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receipt(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Lose the coach worker before its receipt, not just a normal pytest failure."""
+    coach_name = "08_Tooling/instructional-materials-coach"
+    _write_test(repo / coach_name / "tests" / "test_ok.py")
+    _write_test(repo / "pkg-pass" / "tests" / "test_ok.py")
+    runner = repo / "scripts" / "validate-all.sh"
+    text = runner.read_text(encoding="utf-8")
+    anchor = '  started_us="$(timer_now_us || true)"\n  run_pytest_suite '
+    assert text.count(anchor) == 1
+    # Inject only into the disposable worker body; it exits before logs/JUnit or
+    # status are written. All other workflow and evidence paths are unchanged.
+    runner.write_text(
+        text.replace(anchor, f'  [ "$suite_name" != "{coach_name}" ] || exit 2\n' + anchor),
+        encoding="utf-8",
+    )
+    junit_dir = tmp_path / "junit"
+    result = run(repo, env={"CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "OVERALL STATUS\nFAIL" in result.stdout
+    assert f"suite subprocess ended without a valid status receipt: {coach_name}" in result.stderr
+    assert f"FAIL | {coach_name} | exit 2" in result.stdout
+    assert "PASS | pkg-pass | exit 0" in result.stdout
+    assert "PASS | root | exit 0" in result.stdout
+    manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+    suites = [line.split("\t") for line in manifest.splitlines()[1:]]
+    rows = {row[0]: row for row in suites}
+    assert rows[coach_name][2:] == ["no", "FAIL", "2", "NOT_EXECUTED_SETUP_FAILURE"]
+    for name in ("pkg-pass", "root"):
+        assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
+    assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
