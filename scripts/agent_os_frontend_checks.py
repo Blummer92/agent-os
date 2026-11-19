@@ -20,17 +20,23 @@ that project. Unknown projects fail closed: a changed ``package.json`` directory
 JS/TS source file that no registered project owns fails the job instead of being
 silently unvalidated.
 
-Playwright browser suites stay in their own path-filtered workflow
-(``teacher-os-react-ci``): that workflow documents itself as not a Ready/merge
-decision, and a path-filtered workflow cannot be globally required without
-stranding unrelated PRs. Making them mandatory is an owner decision; the smallest
-change is to add the two Playwright commands to the ``teacher-os-web`` entry.
+Playwright browser suites for teacher-os-web run in this lane (the default
+``playwright.config.ts`` suite, mirroring the selector's focused teacher-os-web
+commands), so they survive aggregate-profile selection. The real-process
+integration suite (``playwright.integration.config.ts``) still runs only in the
+path-filtered advisory ``teacher-os-react-ci`` workflow; promoting it is a
+separate owner decision. The Picture Perfect pinned tests run as their own
+``npm test`` command in this lane, not only embedded inside ``npm run check``.
+Both required browser/pinned test commands must provide structured case
+evidence in addition to a successful subprocess exit.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, NamedTuple, Sequence
 
@@ -51,6 +57,43 @@ class Project(NamedTuple):
     also_triggered_by: tuple[str, ...] = ()
 
 
+# The pinned Picture Perfect tests run as their own command (the same six files
+# the selector's focused picture-perfect-coach command pins), before `check`
+# re-runs the full vitest suite as part of typecheck/lint/test/build/guard.
+# `check` alone cannot prove the pinned tests executed: its single exit code
+# cannot distinguish a test failure from a typecheck/build failure, and a
+# typecheck failure would stop the suite before any test ran.
+_PICTURE_PERFECT_PINNED_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+_PP_TEST = ("npm", "test", "--", *_PICTURE_PERFECT_PINNED_TESTS)
+_PP_CHECK = ("npm", "run", "check")
+_TEACHER_INSTALL = ("npx", "playwright", "install", "chromium")
+_TEACHER_TEST = ("npx", "playwright", "test")
+_TEACHER_PROJECTS = ("desktop", "phone")
+_TEACHER_REQUIRED_SPECS = frozenset({
+    "draft-identity.spec.ts", "fixture.spec.ts", "mobile-reflow.spec.ts", "teacher.spec.ts",
+})
+_PLAYWRIGHT_OUTCOMES = ("expected", "flaky", "skipped", "unexpected")
+# Matching by directory keeps the contract independent of the projects'
+# editable command lists and display labels.
+_REQUIRED_TEST_COMMANDS = {
+    "08_Tooling/instructional-materials-coach/picture-perfect-coach": (_PP_TEST, _PP_CHECK),
+    "08_Tooling/teacher-os-web": (_TEACHER_INSTALL, _TEACHER_TEST),
+}
+_CASE_SCOPES = {
+    _PP_TEST: frozenset(_PICTURE_PERFECT_PINNED_TESTS),
+    _TEACHER_TEST: frozenset(_TEACHER_PROJECTS),
+}
+_MAX_TEST_REPORT_BYTES = 8 * 1024 * 1024
+_TEST_EVIDENCE_FAILED = 78
+
+
 # Install commands mirror each project's existing plan: the reference UI project has
 # no committed lockfile, so it keeps ``npm install``; the workspace-automation-builder
 # fixture validator needs no install (Node built-ins only).
@@ -58,7 +101,11 @@ PROJECTS: tuple[Project, ...] = (
     Project(
         "picture-perfect-coach",
         "08_Tooling/instructional-materials-coach/picture-perfect-coach",
-        (("npm", "ci"), ("npm", "run", "check")),
+        (
+            ("npm", "ci"),
+            _PP_TEST,
+            _PP_CHECK,
+        ),
         # src/uiEvidence.test.ts imports ../../capture/safe_recording.mjs
         also_triggered_by=("08_Tooling/instructional-materials-coach/capture",),
     ),
@@ -77,8 +124,18 @@ PROJECTS: tuple[Project, ...] = (
     Project(
         "teacher-os-web",
         "08_Tooling/teacher-os-web",
-        (("npm", "ci"), ("npm", "run", "build"), ("npm", "run", "test:unit")),
-        "Playwright browser suites run in teacher-os-react-ci (advisory) and are not part of this lane.",
+        (
+            ("npm", "ci"),
+            ("npm", "run", "build"),
+            ("npm", "run", "test:unit"),
+            # Playwright (default config only), mirroring the selector's focused
+            # teacher-os-web commands. Without these, an aggregate-qualifying
+            # file dropped Playwright from every required lane: the aggregate
+            # job is Python-only and teacher-os-react-ci is advisory.
+            _TEACHER_INSTALL,
+            _TEACHER_TEST,
+        ),
+        "Playwright integration suite (playwright.integration.config.ts) still runs only in the advisory teacher-os-react-ci workflow.",
     ),
     Project(
         "workspace-automation-builder",
@@ -161,7 +218,20 @@ def unowned_node_changes(
     return tuple(sorted(unowned))
 
 
-Runner = Callable[[Sequence[str], Path], int]
+class _CaseEvidence(NamedTuple):
+    argv: tuple[str, ...]
+    passed_by_scope: tuple[tuple[str, int], ...]
+
+
+class CommandReceipt(NamedTuple):
+    command: str
+    exit_code: int
+    evidence: _CaseEvidence | None = None
+
+
+RunOutcome = int | _CaseEvidence
+Receipt = CommandReceipt | tuple[str, int]
+Runner = Callable[[Sequence[str], Path], RunOutcome]
 
 
 # npm retries a failed registry fetch twice by default; a transient outage would otherwise turn a
@@ -174,11 +244,138 @@ _NPM_RETRY_ENV = {
 }
 
 
-def _run_command(argv: Sequence[str], cwd: Path) -> int:
+def _read_test_report(path: Path) -> dict:
+    with path.open("rb") as handle:
+        data = handle.read(_MAX_TEST_REPORT_BYTES + 1)
+    if len(data) > _MAX_TEST_REPORT_BYTES:
+        raise ValueError("oversized reporter output")
+    report = json.loads(data)
+    if not isinstance(report, dict):
+        raise ValueError("reporter output is not an object")
+    return report
+
+
+def _vitest_counts(report: dict, cwd: Path) -> dict[str, int]:
+    entries = report.get("testResults")
+    if report.get("success") is not True or not isinstance(entries, list):
+        raise ValueError("Vitest did not report success")
+    counts: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise ValueError("malformed Vitest file entry")
+        path = Path(entry["name"])
+        name = (path.relative_to(cwd.resolve()) if path.is_absolute() else path).as_posix()
+        assertions = entry.get("assertionResults")
+        if (
+            name in counts or name not in _PICTURE_PERFECT_PINNED_TESTS
+            or entry.get("status") != "passed" or not isinstance(assertions, list)
+        ):
+            raise ValueError("invalid pinned Vitest file receipt")
+        if any(not isinstance(a, dict) or a.get("status") not in (
+            "passed", "skipped", "pending", "todo", "disabled",
+        ) for a in assertions):
+            raise ValueError("invalid Vitest case receipt")
+        counts[name] = sum(a["status"] == "passed" for a in assertions)
+    total = report.get("numPassedTests")
+    if (
+        set(counts) != set(_PICTURE_PERFECT_PINNED_TESTS) or not all(counts.values())
+        or type(total) is not int or total != sum(counts.values())
+    ):
+        raise ValueError("missing pinned Vitest file or passed case evidence")
+    return counts
+
+
+def _playwright_counts(report: dict) -> dict[str, int]:
+    suites = report.get("suites")
+    stats = report.get("stats")
+    if (
+        not isinstance(suites, list) or not isinstance(stats, dict)
+        or any(type(stats.get(key)) is not int or stats[key] < 0 for key in _PLAYWRIGHT_OUTCOMES)
+        or stats["unexpected"] != 0
+        or report.get("errors") != []
+    ):
+        raise ValueError("Playwright did not report a clean run")
+    counts = dict.fromkeys(_TEACHER_PROJECTS, 0)
+    outcomes = dict.fromkeys(_PLAYWRIGHT_OUTCOMES, 0)
+    discovered = {project: set() for project in _TEACHER_PROJECTS}
+    seen: set[tuple[str, str]] = set()
+    pending = list(suites)
+    while pending:
+        suite = pending.pop()
+        if not isinstance(suite, dict):
+            raise ValueError("malformed Playwright suite")
+        child_suites, specs = suite.get("suites", []), suite.get("specs")
+        if not isinstance(child_suites, list) or not isinstance(specs, list):
+            raise ValueError("malformed Playwright specs")
+        pending.extend(child_suites)
+        for spec in specs:
+            if not isinstance(spec, dict):
+                raise ValueError("malformed Playwright spec")
+            cases, spec_id, file = spec.get("tests"), spec.get("id"), spec.get("file")
+            if not isinstance(cases, list) or not isinstance(spec_id, str) or not spec_id:
+                raise ValueError("malformed Playwright case identity")
+            if not isinstance(file, str) or not file:
+                raise ValueError("malformed Playwright file identity")
+            for case in cases:
+                if not isinstance(case, dict) or case.get("projectName") not in _TEACHER_PROJECTS:
+                    raise ValueError("unexpected Playwright project")
+                project, outcome = case["projectName"], case.get("status")
+                identity = (spec_id, project)
+                if identity in seen or outcome not in _PLAYWRIGHT_OUTCOMES:
+                    raise ValueError("invalid or duplicate Playwright case")
+                seen.add(identity)
+                outcomes[outcome] += 1
+                discovered[project].add(file)
+                results = case.get("results")
+                if not isinstance(results, list):
+                    raise ValueError("malformed Playwright case results")
+                if (
+                    case.get("expectedStatus") == "passed" and outcome in ("expected", "flaky")
+                    and results and isinstance(results[-1], dict) and results[-1].get("status") == "passed"
+                ):
+                    counts[project] += 1
+    # The locked reporter assigns stats and each case.status from the same
+    # test.outcome(). A claimed total is not a substitute for named records.
+    if any(outcomes[key] != stats[key] for key in _PLAYWRIGHT_OUTCOMES):
+        raise ValueError("Playwright case outcomes disagree with reporter summary")
+    if any(not _TEACHER_REQUIRED_SPECS <= files for files in discovered.values()):
+        raise ValueError("missing intended Playwright spec discovery")
+    if not all(counts.values()):
+        raise ValueError("both default Playwright projects must have passing cases")
+    return counts
+
+
+def _run_with_test_evidence(argv: tuple[str, ...], cwd: Path, env: dict[str, str]) -> RunOutcome:
+    with tempfile.TemporaryDirectory(prefix="agent-os-frontend-") as temp:
+        report_path = Path(temp) / "test-results.json"
+        if argv == _PP_TEST:
+            reporters = ("--reporter=default", "--reporter=json", f"--outputFile.json={report_path}")
+            if env.get("GITHUB_ACTIONS") == "true":
+                reporters += ("--reporter=github-actions",)
+        else:
+            reporters = ("--reporter=dot,json",)
+            env = {**env, "PLAYWRIGHT_JSON_OUTPUT_FILE": str(report_path)}
+        code = subprocess.run([*argv, *reporters], cwd=cwd, check=False, env=env).returncode
+        if code:
+            return code
+        try:
+            report = _read_test_report(report_path)
+            counts = _vitest_counts(report, cwd) if argv == _PP_TEST else _playwright_counts(report)
+        except (OSError, ValueError, RecursionError):
+            # Report files can contain arbitrary test output. Log no raw data.
+            print(f"missing or invalid test-case evidence for `{' '.join(argv)}`", file=sys.stderr)
+            return _TEST_EVIDENCE_FAILED
+        print("frontend test evidence: " + json.dumps(counts, sort_keys=True), flush=True)
+        return _CaseEvidence(argv, tuple(sorted(counts.items())))
+
+
+def _run_command(argv: Sequence[str], cwd: Path) -> RunOutcome:
     try:
-        return subprocess.run(
-            list(argv), cwd=cwd, check=False, env={**_NPM_RETRY_ENV, **os.environ}
-        ).returncode
+        env = {**_NPM_RETRY_ENV, **os.environ}
+        command = tuple(argv)
+        if command in _CASE_SCOPES:
+            return _run_with_test_evidence(command, cwd, env)
+        return subprocess.run(list(argv), cwd=cwd, check=False, env=env).returncode
     except OSError as exc:
         # A registered project whose directory or executable is missing (for example a
         # PR that deletes the project but keeps its registration) is a recorded failure
@@ -192,40 +389,85 @@ def run_projects(
     *,
     root: Path = ROOT,
     runner: Runner = _run_command,
-) -> dict[str, list[tuple[str, int]]]:
+) -> dict[str, list[CommandReceipt]]:
     """Execute each project's commands in order; stop a project at its first failure.
 
-    Returns ``{project name: [(command text, exit code), ...]}``. Every selected
+    Returns ordered command receipts with case evidence when required. Every selected
     project is recorded even when an earlier project failed, so the caller can
     prove nothing applicable was left unexecuted.
     """
-    results: dict[str, list[tuple[str, int]]] = {}
+    results: dict[str, list[CommandReceipt]] = {}
     for project in projects:
-        record: list[tuple[str, int]] = []
+        record: list[CommandReceipt] = []
         results[project.name] = record
         for argv in project.commands:
             print(f"::group::{project.name}: {' '.join(argv)}", flush=True)
-            code = runner(argv, root / project.directory)
+            outcome = runner(argv, root / project.directory)
             print("::endgroup::", flush=True)
-            record.append((" ".join(argv), code))
-            if code != 0:
+            receipt = (
+                CommandReceipt(" ".join(argv), 0, outcome) if isinstance(outcome, _CaseEvidence)
+                else CommandReceipt(" ".join(argv), outcome)
+            )
+            record.append(receipt)
+            if receipt.exit_code != 0:
                 break
     return results
 
 
+def _receipt_parts(receipt: Receipt) -> CommandReceipt:
+    # A legacy exit-only receipt can describe an ordinary command or a
+    # failure, but is not sufficient evidence of successful test execution.
+    if isinstance(receipt, CommandReceipt):
+        return receipt
+    return CommandReceipt(*receipt)
+
+
+def _case_evidence_matches(argv: tuple[str, ...], evidence: _CaseEvidence | None) -> bool:
+    if not isinstance(evidence, _CaseEvidence) or evidence.argv != argv:
+        return False
+    counts = dict(evidence.passed_by_scope)
+    return (
+        len(counts) == len(evidence.passed_by_scope)
+        and set(counts) == _CASE_SCOPES[argv]
+        and all(type(count) is int and count > 0 for count in counts.values())
+    )
+
+
 def evaluate(
-    applicable: Sequence[Project], results: dict[str, list[tuple[str, int]]]
+    applicable: Sequence[Project], results: dict[str, list[Receipt]]
 ) -> list[str]:
     """Return failure reasons; empty means every applicable project fully passed."""
     problems: list[str] = []
     for project in applicable:
+        required = _REQUIRED_TEST_COMMANDS.get(project.directory, ())
+        if tuple(argv for argv in project.commands if argv in required) != required:
+            problems.append(f"{project.name}: required test commands missing, duplicated, or out of order")
+            continue
         record = results.get(project.name)
         if record is None:
             problems.append(f"{project.name}: applicable but not executed")
             continue
-        if len(record) != len(project.commands) or any(code != 0 for _, code in record):
-            failed = [f"`{cmd}` exit {code}" for cmd, code in record if code != 0]
-            problems.append(f"{project.name}: " + (", ".join(failed) or "incomplete"))
+        expected = [" ".join(argv) for argv in project.commands]
+        receipts = [_receipt_parts(receipt) for receipt in record]
+        if [receipt.command for receipt in receipts] != expected[:len(receipts)]:
+            problems.append(f"{project.name}: command receipt identity or order mismatch")
+            continue
+        failed = [
+            f"`{receipt.command}` exit {receipt.exit_code}" for receipt in receipts
+            if type(receipt.exit_code) is not int or receipt.exit_code != 0
+        ]
+        if failed:
+            problems.append(f"{project.name}: " + ", ".join(failed))
+        elif len(receipts) != len(expected):
+            problems.append(f"{project.name}: incomplete")
+        else:
+            missing = [
+                f"`{receipt.command}` missing or invalid test-case evidence"
+                for argv, receipt in zip(project.commands, receipts, strict=True)
+                if argv in _CASE_SCOPES and not _case_evidence_matches(argv, receipt.evidence)
+            ]
+            if missing:
+                problems.append(f"{project.name}: " + ", ".join(missing))
     return problems
 
 
@@ -327,8 +569,9 @@ def main() -> int:
     results = run_projects(applicable)
     problems = evaluate(applicable, results)
     for project in applicable:
-        for command, code in results.get(project.name, []):
-            lines.append(f"- {project.name}: `{command}` exit {code}")
+        for raw in results.get(project.name, []):
+            receipt = _receipt_parts(raw)
+            lines.append(f"- {project.name}: `{receipt.command}` exit {receipt.exit_code}")
         if project.note:
             lines.append(f"- {project.name} note: {project.note}")
     if problems:

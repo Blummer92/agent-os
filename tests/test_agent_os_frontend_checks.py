@@ -1,9 +1,14 @@
 """Behavior of the profile-independent frontend lane (scripts/agent_os_frontend_checks.py)."""
 from __future__ import annotations
 
+import copy
+import json
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -45,6 +50,293 @@ def test_mixed_python_and_frontend_still_selects_frontend():
     )
     assert plan.profile == "aggregate" and plan.commands == ("python -m pytest",)
     assert names(files) == ["picture-perfect-coach"]
+
+
+# Track B (D07 G4/G12): the pinned Picture Perfect test selection must run as its
+# own command in this lane, not only embedded inside `npm run check` (whose
+# typecheck/lint/build/guard steps are not a test substitute and whose single
+# exit code cannot prove the pinned tests executed).
+_PP_PINNED_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+
+
+def _project_by_name(name):
+    return next(p for p in fe.PROJECTS if p.name == name)
+
+
+def test_picture_perfect_lane_runs_pinned_npm_test_as_its_own_command():
+    project = _project_by_name("picture-perfect-coach")
+    assert project.commands == (
+        ("npm", "ci"),
+        ("npm", "test", "--", *_PP_PINNED_TESTS),
+        ("npm", "run", "check"),
+    )
+
+
+def test_picture_perfect_pinned_tests_match_the_selector_focused_command():
+    # Drift guard: the lane's pinned files must be exactly the selector's
+    # focused picture-perfect-coach command, so the two registries cannot
+    # silently disagree about which tests are pinned.
+    rule = next(r for r in load_rule_map()["focused_rules"] if r["name"] == "picture-perfect-coach")
+    assert rule["commands"] == [
+        "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm test -- "
+        + " ".join(_PP_PINNED_TESTS)
+    ]
+    project = _project_by_name("picture-perfect-coach")
+    assert project.commands[1] == ("npm", "test", "--", *_PP_PINNED_TESTS)
+
+
+def test_teacher_os_lane_runs_playwright_in_the_required_lane():
+    # Track B (D07 G5/G12): Playwright must run in this required lane. The
+    # selector's focused teacher-os-web commands include it, but any
+    # aggregate-qualifying file drops all five; the advisory path-filtered
+    # teacher-os-react-ci workflow cannot gate a merge.
+    project = _project_by_name("teacher-os-web")
+    assert project.commands == (
+        ("npm", "ci"),
+        ("npm", "run", "build"),
+        ("npm", "run", "test:unit"),
+        ("npx", "playwright", "install", "chromium"),
+        ("npx", "playwright", "test"),
+    )
+
+
+def test_teacher_os_playwright_commands_match_the_selector_focused_commands():
+    rule = next(r for r in load_rule_map()["focused_rules"] if r["name"] == "teacher-os-web")
+    assert rule["commands"][-2:] == [
+        "cd 08_Tooling/teacher-os-web && npx playwright install chromium",
+        "cd 08_Tooling/teacher-os-web && npx playwright test",
+    ]
+    project = _project_by_name("teacher-os-web")
+    assert project.commands[-2:] == (
+        ("npx", "playwright", "install", "chromium"),
+        ("npx", "playwright", "test"),
+    )
+
+
+def test_teacher_os_playwright_failure_blocks_and_stops_later_commands():
+    project = _project_by_name("teacher-os-web")
+    seen = []
+
+    def runner(argv, cwd):
+        seen.append(" ".join(argv))
+        return 1 if argv[:3] == ("npx", "playwright", "install") else 0
+
+    results = fe.run_projects([project], runner=runner)
+    assert seen == ["npm ci", "npm run build", "npm run test:unit", "npx playwright install chromium"]
+    problems = fe.evaluate([project], results)
+    assert len(problems) == 1 and "playwright" in problems[0] and "exit 1" in problems[0]
+
+
+def test_teacher_os_record_missing_playwright_is_not_a_pass():
+    # A record that stops after test:unit (skipped/aborted Playwright, or a
+    # stale receipt from before Playwright joined the lane) must never read
+    # as EXECUTED_PASS for the required lane.
+    project = _project_by_name("teacher-os-web")
+    record = [("npm ci", 0), ("npm run build", 0), ("npm run test:unit", 0)]
+    problems = fe.evaluate([project], {"teacher-os-web": record})
+    assert problems and problems[0].startswith("teacher-os-web:")
+
+
+def test_picture_perfect_record_missing_pinned_test_is_not_a_pass():
+    project = _project_by_name("picture-perfect-coach")
+    record = [("npm ci", 0), ("npm run check", 0)]
+    problems = fe.evaluate([project], {"picture-perfect-coach": record})
+    assert problems and problems[0].startswith("picture-perfect-coach:")
+
+
+def _passing_receipt(argv):
+    # This is a unit-fixture receipt, not machine evidence from a runner.
+    scopes = fe._CASE_SCOPES.get(argv)
+    evidence = fe._CaseEvidence(argv, tuple((key, 1) for key in sorted(scopes))) if scopes else None
+    return fe.CommandReceipt(" ".join(argv), 0, evidence)
+
+
+def test_frontend_rejects_wrong_or_reordered_same_length_command_receipts():
+    project = _project_by_name("teacher-os-web")
+    correct = [_passing_receipt(argv) for argv in project.commands]
+    assert fe.evaluate([project], {project.name: correct}) == []
+    wrong = [*correct[:-1], ("wrong command", 0)]
+    swapped = [*correct[:-2], correct[-1], correct[-2]]
+    for record in (wrong, swapped, [*correct, correct[-1]]):
+        assert "identity or order mismatch" in fe.evaluate([project], {project.name: record})[0]
+
+
+def test_frontend_requires_case_evidence_for_the_same_command_and_scopes():
+    project = _project_by_name("teacher-os-web")
+    correct = [_passing_receipt(argv) for argv in project.commands]
+    evidence = correct[-1].evidence
+    assert fe.evaluate([project], {project.name: correct}) == []
+    for invalid in (
+        (correct[-1].command, 0),
+        correct[-1]._replace(evidence=evidence._replace(argv=("different", "argv"))),
+        correct[-1]._replace(evidence=evidence._replace(passed_by_scope=(("desktop", 1),))),
+        correct[-1]._replace(evidence=evidence._replace(passed_by_scope=(("desktop", 1), ("phone", 0)))),
+    ):
+        problems = fe.evaluate([project], {project.name: [*correct[:-1], invalid]})
+        assert problems and "missing or invalid test-case evidence" in problems[0]
+
+
+def test_frontend_rejects_removed_required_commands_even_if_the_registry_and_receipts_agree():
+    for name, drop in (
+        ("teacher-os-web", ("npx", "playwright", "test")),
+        ("picture-perfect-coach", ("npm", "test", "--", *_PP_PINNED_TESTS)),
+        ("picture-perfect-coach", ("npm", "run", "check")),
+    ):
+        original = _project_by_name(name)
+        reduced = original._replace(commands=tuple(argv for argv in original.commands if argv != drop))
+        receipts = fe.run_projects([reduced], runner=lambda argv, cwd: 0)
+        assert "required test commands missing" in fe.evaluate([reduced], receipts)[0]
+
+
+def _fixture_vitest(cwd):
+    return {
+        "success": True,
+        "numPassedTests": len(_PP_PINNED_TESTS),
+        "testResults": [
+            {
+                "name": str(cwd / path),
+                "status": "passed",
+                "assertionResults": [{"status": "passed"}],
+            }
+            for path in _PP_PINNED_TESTS
+        ],
+    }
+
+
+_PW_REQUIRED_SPECS = ("draft-identity.spec.ts", "fixture.spec.ts", "mobile-reflow.spec.ts", "teacher.spec.ts")
+
+
+def _fixture_playwright(files=_PW_REQUIRED_SPECS):
+    return {
+        "stats": {"expected": 2 * len(files), "unexpected": 0, "flaky": 0, "skipped": 0},
+        "errors": [],
+        "suites": [{"specs": [], "suites": [{"specs": [
+            {
+                "file": file,
+                "id": file,
+                "tests": [
+                    {
+                        "projectName": name, "status": "expected", "expectedStatus": "passed",
+                        "results": [{"status": "passed"}],
+                    }
+                    for name in ("desktop", "phone")
+                ],
+            }
+            for file in files
+        ]}]}],
+    }
+
+
+def test_playwright_rejects_two_cases_despite_summary_claiming_full_run():
+    cut = _fixture_playwright(("fixture.spec.ts",))
+    cut["stats"]["expected"] = 134
+    with pytest.raises(ValueError, match="outcomes disagree"):
+        fe._playwright_counts(cut)
+
+
+def test_playwright_rejects_duplicate_cases_even_with_balanced_claims():
+    report = _fixture_playwright()
+    specs = report["suites"][0]["suites"][0]["specs"]
+    specs.append(copy.deepcopy(specs[0]))
+    report["stats"]["expected"] += 2
+    with pytest.raises(ValueError, match="duplicate"):
+        fe._playwright_counts(report)
+
+
+def test_playwright_requires_intended_specs_independent_of_filtered_run_totals():
+    cut = _fixture_playwright(("fixture.spec.ts",))
+    with pytest.raises(ValueError, match="missing intended"):
+        fe._playwright_counts(cut)
+
+    expanded = _fixture_playwright((*_PW_REQUIRED_SPECS, "new.spec.ts"))
+    assert fe._playwright_counts(expanded) == {"desktop": 5, "phone": 5}
+
+    # A legitimate rename moves the obligation with the test, not silently
+    # by narrowing Playwright configuration.
+    renamed_names = (*_PW_REQUIRED_SPECS[:-1], "teacher-renamed.spec.ts")
+    renamed = _fixture_playwright(renamed_names)
+    with pytest.raises(ValueError, match="missing intended"):
+        fe._playwright_counts(renamed)
+    with patch.object(fe, "_TEACHER_REQUIRED_SPECS", frozenset(renamed_names)):
+        assert fe._playwright_counts(renamed) == {"desktop": 4, "phone": 4}
+
+
+def test_playwright_counts_a_discovered_intentionally_skipped_case_as_skipped():
+    report = _fixture_playwright()
+    case = report["suites"][0]["suites"][0]["specs"][0]["tests"][0]
+    case.update(status="skipped", expectedStatus="skipped", results=[])
+    report["stats"]["expected"] -= 1
+    report["stats"]["skipped"] += 1
+    assert fe._playwright_counts(report) == {"desktop": 3, "phone": 4}
+
+
+def test_pinned_vitest_uses_reporter_and_rejects_missing_zero_and_wrong_file_evidence():
+    project = _project_by_name("picture-perfect-coach")
+    expected = project.commands[1]
+    with TemporaryDirectory() as temp:
+        cwd = Path(temp).resolve()
+        good = _fixture_vitest(cwd)
+        missing = copy.deepcopy(good)
+        missing["testResults"].pop()
+        missing["numPassedTests"] -= 1
+        skipped = copy.deepcopy(good)
+        skipped["testResults"][0]["assertionResults"][0]["status"] = "skipped"
+        skipped["numPassedTests"] -= 1
+        wrong = copy.deepcopy(good)
+        wrong["testResults"][0]["name"] = str(cwd / "src/anotherFile.test.ts")
+        for body, expected_code in ((good, 0), (missing, 78), (skipped, 78), (wrong, 78), (None, 78)):
+            def fake_run(argv, **kwargs):
+                assert tuple(argv[:len(expected)]) == expected
+                assert "--reporter=json" in argv
+                target = next(arg for arg in argv if arg.startswith("--outputFile.json=")).split("=", 1)[1]
+                if body is not None:
+                    Path(target).write_text(json.dumps(body), encoding="utf-8")
+                return SimpleNamespace(returncode=0)
+            with patch.object(fe.subprocess, "run", fake_run):
+                outcome = fe._run_command(expected, cwd)
+                if expected_code == 0:
+                    assert outcome == _passing_receipt(expected).evidence
+                else:
+                    assert outcome == expected_code
+
+
+def test_playwright_requires_actual_passes_for_both_projects_and_keeps_real_exit():
+    expected = _project_by_name("teacher-os-web").commands[-1]
+    good = _fixture_playwright()
+    missing_phone = copy.deepcopy(good)
+    for spec in missing_phone["suites"][0]["suites"][0]["specs"]:
+        spec["tests"].pop()
+    missing_phone["stats"]["expected"] = len(_PW_REQUIRED_SPECS)
+    skipped_phone = copy.deepcopy(good)
+    for spec in skipped_phone["suites"][0]["suites"][0]["specs"]:
+        spec["tests"][-1].update(status="skipped", expectedStatus="skipped", results=[])
+    skipped_phone["stats"]["expected"] = len(_PW_REQUIRED_SPECS)
+    skipped_phone["stats"]["skipped"] = len(_PW_REQUIRED_SPECS)
+    malformed = "not-json"
+    runs = ((good, 0, 0), (missing_phone, 0, 78), (skipped_phone, 0, 78), (None, 0, 78),
+            (malformed, 0, 78), (None, 3, 3))
+    with TemporaryDirectory() as temp:
+        for body, returncode, expected_code in runs:
+            def fake_run(argv, **kwargs):
+                assert argv == [*expected, "--reporter=dot,json"]
+                target = kwargs["env"]["PLAYWRIGHT_JSON_OUTPUT_FILE"]
+                if body is not None:
+                    payload = body if isinstance(body, str) else json.dumps(body)
+                    Path(target).write_text(payload, encoding="utf-8")
+                return SimpleNamespace(returncode=returncode)
+            with patch.object(fe.subprocess, "run", fake_run):
+                outcome = fe._run_command(expected, Path(temp))
+                if expected_code == 0:
+                    assert outcome == fe._CaseEvidence(expected, (("desktop", 4), ("phone", 4)))
+                else:
+                    assert outcome == expected_code
 
 
 def test_dependency_bot_lockfile_only_changes_select_every_touched_project():
@@ -109,7 +401,7 @@ def _project(name="p"):
 def test_all_commands_passing_is_success():
     project = _project()
     results = fe.run_projects([project], runner=lambda argv, cwd: 0)
-    assert [c for c, _ in results["p"]] == ["one", "two", "three"]
+    assert [receipt.command for receipt in results["p"]] == ["one", "two", "three"]
     assert fe.evaluate([project], results) == []
 
 
@@ -153,7 +445,7 @@ def test_incomplete_command_record_is_a_failure():
 @pytest.fixture
 def lane(monkeypatch, tmp_path):
     """Drive main() against a fake git, recording outputs and annotations."""
-    state = {"head": "a" * 40, "changed": [], "deleted": [], "tracked": [], "run": lambda projects: {p.name: [(" ".join(c), 0) for c in p.commands] for p in projects}}
+    state = {"head": "a" * 40, "changed": [], "deleted": [], "tracked": [], "run": lambda projects: {p.name: [_passing_receipt(c) for c in p.commands] for p in projects}}
     out, summary = tmp_path / "out.txt", tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -199,7 +491,10 @@ def test_main_applicable_success_reports_projects_and_tested_sha(lane, capsys):
 
 def test_main_failing_project_exits_nonzero_with_error_annotation(lane, capsys):
     lane["changed"] = [f"{PP}/src/a.ts"]
-    lane["run"] = lambda projects: {"picture-perfect-coach": [("npm ci", 0), ("npm run check", 1)]}
+    lane["run"] = lambda projects: {"picture-perfect-coach": [
+        fe.CommandReceipt("npm ci", 0), _passing_receipt(("npm", "test", "--", *_PP_PINNED_TESTS)),
+        fe.CommandReceipt("npm run check", 1),
+    ]}
     assert fe.main() == 1
     assert "::error title=Frontend checks::picture-perfect-coach: `npm run check` exit 1" in capsys.readouterr().out
 
@@ -242,10 +537,13 @@ def test_changed_files_against_main_requests_nul_delimited_output(monkeypatch):
     assert "--diff-filter=d" in calls[2] and "--diff-filter=d" not in calls[1]
 
 
-def test_main_teacher_os_note_discloses_advisory_playwright(lane):
+def test_main_teacher_os_reports_playwright_commands_in_the_required_lane(lane, capsys):
     lane["changed"] = [f"{TEACHER}/src/App.tsx"]
     assert fe.main() == 0
-    assert "Playwright browser suites run in teacher-os-react-ci (advisory)" in lane["summary_text"]()
+    summary = lane["summary_text"]()
+    assert "teacher-os-web: `npx playwright install chromium` exit 0" in summary
+    assert "teacher-os-web: `npx playwright test` exit 0" in summary
+    assert "teacher-os-react-ci (advisory)" not in summary
 
 
 def test_script_entrypoint_runs_as_a_file():
@@ -282,7 +580,7 @@ def test_missing_project_directory_or_executable_is_a_recorded_failure(tmp_path,
 def test_deleting_a_registered_project_without_unregistering_it_fails_with_a_named_cause(tmp_path):
     ghost = fe.Project("ghost", "08_Tooling/removed-project", (("npm", "ci"), ("npm", "test")))
     results = fe.run_projects([ghost], root=tmp_path)
-    assert results == {"ghost": [("npm ci", 127)]}
+    assert results == {"ghost": [fe.CommandReceipt("npm ci", 127)]}
     assert fe.evaluate([ghost], results) == ["ghost: `npm ci` exit 127"]
 
 
