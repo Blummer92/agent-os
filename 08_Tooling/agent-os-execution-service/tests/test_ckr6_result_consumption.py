@@ -871,3 +871,10 @@ def test_p1_early_unbound_route_issue_start_result_has_no_attempt_id(monkeypatch
          "task_reference": "issue:#2425", "specialized_knowledge_required": True}
     )
     assert "attempt_id" not in bridge.execute_envelope(envelope, retrieval_required=True)
+
+def test_issue_start_consumer_rejects_non_string_status_as_invalid_result():
+    # A corrupted producer record must be rejected via the consumer's
+    # documented ValueError contract, not an uncaught type exception.
+    result = _result(status=[], substantial_hypothesis_admissible=False)
+    with pytest.raises(ValueError):
+        _consume(_comment(result))
