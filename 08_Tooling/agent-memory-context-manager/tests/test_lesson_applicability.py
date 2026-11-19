@@ -750,6 +750,43 @@ def test_e09_mechanism_only_observation_cannot_trigger_boundary_qualified_negati
     assert "negative-applicability-condition" not in result.reason_codes
 
 
+# ---------------------------------------------------------------------------
+# D124 regex-drift pinning test (PR #4030 deletion QA)
+# ---------------------------------------------------------------------------
+# Latent only: on the unmodified head the _IDENTIFIER regex caps
+# identifiers at 64 characters, so a 100-character identifier is rejected
+# before it can reach a dataclass constructor. If that regex ever drifts
+# wider, _validate_conditions would let the over-long identifier reach
+# ApplicabilityCondition.__post_init__, whose _identifier length check
+# raises ValueError out of validate_registry instead of returning an
+# invalid ValidationResult. This test pins the fail-closed behavior:
+# oversized condition identifiers must yield invalid, never an exception.
+# (The mechanisms/invariants lists already have an explicit length check;
+# see the D124 drift probe in the repair evidence package.)
+
+
+def test_d124_oversized_condition_identifiers_fail_closed_without_exception():
+    long_mechanism = "m" * 100
+    long_boundary = "b" * 100
+    result = validate_registry(
+        registry_dict(
+            record_dict(
+                mechanisms=[long_mechanism],
+                invariants=[
+                    {"boundary_id": long_boundary, "kind": "production-boundary"}
+                ],
+                positive_conditions=[
+                    {"mechanism": long_mechanism, "boundary_id": long_boundary}
+                ],
+            )
+        ),
+        mechanisms=frozenset({long_mechanism}),
+        boundaries=frozenset({long_boundary}),
+    )
+    assert result.valid is False
+    assert "invalid-applicability-condition" in result.reason_codes
+
+
 def test_unreviewed_record_never_matched():
     record = ApplicabilityRecord(
         lesson_id="LL-12",
