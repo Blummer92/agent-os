@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     result = {"request_id": None, "status": "blocked", "reason_code": "admission-failed",
               "write_attempts": 0, "readback_verified": False}
+    admitted_request_id = None
     try:
         with args.event.open("rb") as source:
             raw = source.read(MAX_EVENT_BYTES + 1)
@@ -28,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
                        workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF", ""),
                        run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""))
         request = admit(event, **context)
+        admitted_request_id = request.request_id
         result["request_id"] = request.request_id
         if args.phase == "admit":
             result.update(status="admitted", reason_code="explicit-bounded-owner-request",
@@ -41,9 +43,41 @@ def main(argv: list[str] | None = None) -> int:
         result["reason_code"] = str(exc)
     except Exception:
         result["reason_code"] = "bounded-request-unavailable"
+    # This read-only second GET stays inside the SINGLE credential-bearing
+    # execute step. A failure never retries the original mutation.
+    verification = None
+    if args.phase == "execute":
+        from .verify_live_write import verify_persisted_write
+
+        def live_client(request_id: str):
+            from .live import LiveLessonsClient
+            return LiveLessonsClient(request_id)
+
+        try:
+            verification = verify_persisted_write(
+                result, live_client, expected_request_id=admitted_request_id
+            )
+        except Exception:
+            verification = {
+                "status": "unverified", "reason_code": "independent-verifier-unavailable",
+                "independent_readback_verified": False,
+                "persisted_state_verified": False,
+                "write_causality_established": False,
+                "read_performed": False, "verification_write_performed": False,
+                "publication_authorized": False, "activation_authorized": False,
+            }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    return 0 if result["status"] in {"admitted", "persisted", "unchanged"} else 1
+    if verification is not None:
+        args.output.with_name("verification.json").write_text(
+            json.dumps(verification, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+    if args.phase == "admit":
+        return 0 if result["status"] == "admitted" else 1
+    return 0 if (
+        (result["status"] == "persisted" and verification["status"] == "verified-current-state")
+        or (result["status"] == "unchanged" and verification["status"] == "no-new-write")
+    ) else 1
 
 
 if __name__ == "__main__":

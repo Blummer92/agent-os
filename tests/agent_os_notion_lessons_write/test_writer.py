@@ -416,5 +416,175 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(json.loads((root / "result.json").read_text())["write_attempts"], 0)
 
 
+# ---------------------------------------------------------------- independent live-write verification
+
+from scripts.agent_os_notion_lessons_write.verify_live_write import verify_persisted_write
+
+
+class IndependentPersistedWriteTests(unittest.TestCase):
+    def test_second_canonical_get_confirms_state_after_writer_attempt(self):
+        client = Client()
+        written = execute(AdmittedRequest(100), client)
+        before = len(client.calls)
+        verified = verify_persisted_write(written, lambda request_id: client)
+        self.assertEqual(written["status"], "persisted")
+        self.assertEqual(verified["status"], "verified-current-state")
+        self.assertTrue(verified["independent_readback_verified"])
+        self.assertTrue(verified["persisted_state_verified"])
+        self.assertFalse(verified["verification_write_performed"])
+        self.assertEqual(client.calls[before:], ["binding", "get"])
+
+    def test_unchanged_is_not_misreported_as_a_new_write(self):
+        client = Client(page())
+        receipt = execute(AdmittedRequest(100), client)
+        factories = []
+        outcome = verify_persisted_write(receipt, lambda request_id: factories.append(request_id))
+        self.assertEqual(outcome["status"], "no-new-write")
+        self.assertFalse(outcome["persisted_state_verified"])
+        self.assertEqual(factories, [])
+        self.assertNotIn("write", client.calls)
+
+    def test_no_verification_from_failure_or_fabricated_writer_success(self):
+        invalid = (
+            None, {}, {"status": "uncertain", "write_attempts": 1},
+            {"status": "persisted", "write_attempts": 0, "readback_verified": True},
+            {"status": "persisted", "write_attempts": 1, "readback_verified": False},
+            {"status": "unchanged", "write_attempts": 1, "readback_verified": True},
+        )
+        for receipt in invalid:
+            with self.subTest(receipt=receipt):
+                called = []
+                outcome = verify_persisted_write(receipt, lambda request_id: called.append(request_id))
+                self.assertEqual(outcome["status"], "unverified")
+                self.assertFalse(outcome["persisted_state_verified"])
+                self.assertEqual(called, [])
+
+    def test_exact_page_content_revision_identity_and_destination_are_checked(self):
+        client = Client()
+        receipt = execute(AdmittedRequest(100), client)
+        cases = ("content", "revision", "lesson", "parent", "page")
+        for case in cases:
+            other = Client(deepcopy(client.page))
+            altered = deepcopy(receipt)
+            if case == "content":
+                other.page["properties"]["Guardrail"]["rich_text"] = []
+            elif case == "revision":
+                other.page["last_edited_time"] = "2026-10-08T22:00:00.000Z"
+            elif case == "lesson":
+                other.page["properties"]["Lesson ID"]["unique_id"]["number"] = 94
+            elif case == "parent":
+                other.page["parent"]["data_source_id"] = PAGE_ID
+            elif case == "page":
+                altered["page_id"] = SOURCE_ID
+            with self.subTest(case=case):
+                outcome = verify_persisted_write(altered, lambda _request_id: other)
+                self.assertEqual(outcome["status"], "unverified")
+                self.assertFalse(outcome["persisted_state_verified"])
+                self.assertTrue(outcome["read_performed"])
+
+    def test_timeout_and_sensitive_provider_error_fail_closed(self):
+        client = Client()
+        receipt = execute(AdmittedRequest(100), client)
+        class FailingReader:
+            def verify_binding(self):
+                return SOURCE_ID
+            def get_page(self, _page_id):
+                raise TimeoutError("private-synthetic-diagnostic")
+        outcome = verify_persisted_write(receipt, lambda _: FailingReader())
+        self.assertEqual(outcome["status"], "unverified")
+        self.assertEqual(outcome["reason_code"], "independent-read-unavailable")
+        self.assertNotIn("private-synthetic", json.dumps(outcome))
+        self.assertFalse(outcome["verification_write_performed"])
+
+    def test_only_registered_catalog_requests_can_be_independently_verified(self):
+        client = Client()
+        receipt = execute(AdmittedRequest(100), client)
+        receipt["request_id"] = "unregistered-lesson"
+        called = []
+        outcome = verify_persisted_write(receipt, lambda request_id: called.append(request_id))
+        self.assertEqual(outcome["status"], "unverified")
+        self.assertEqual(called, [])
+
+    def test_receipt_counters_reject_boolean_not_integers(self):
+        client = Client()
+        receipt = execute(AdmittedRequest(100), client)
+        receipt["write_attempts"] = True
+        called = []
+        outcome = verify_persisted_write(receipt, lambda rid: called.append(rid))
+        self.assertEqual(outcome["status"], "unverified")
+        self.assertEqual(called, [])
+        unchanged = execute(AdmittedRequest(101), Client(page()))
+        unchanged["write_attempts"] = False
+        outcome = verify_persisted_write(unchanged, lambda rid: called.append(rid))
+        self.assertEqual(outcome["status"], "unverified")
+        self.assertEqual(called, [])
+
+    def test_matching_preexisting_page_cannot_prove_this_run_wrote(self):
+        client = Client(page())
+        receipt = execute(AdmittedRequest(100), client)
+        self.assertEqual(receipt["status"], "unchanged")
+        self.assertNotIn("write", client.calls)
+        forged = {**receipt, "status": "persisted", "write_attempts": 1}
+        outcome = verify_persisted_write(forged, lambda _rid: client)
+        self.assertEqual(outcome["status"], "verified-current-state")
+        self.assertTrue(outcome["persisted_state_verified"])
+        self.assertFalse(outcome["write_causality_established"])
+        self.assertNotIn("write_verified", outcome)
+        self.assertNotIn("write", client.calls)
+
+    def test_receipt_must_match_exact_admitted_catalog_request(self):
+        client = Client()
+        receipt = execute(AdmittedRequest(100), client)
+        called = []
+        outcome = verify_persisted_write(
+            receipt, lambda rid: called.append(rid), expected_request_id="different-reviewed-request"
+        )
+        self.assertEqual(outcome["reason_code"], "writer-request-binding-mismatch")
+        self.assertEqual(called, [])
+
+
+class RunnerIndependentReadbackTests(unittest.TestCase):
+    def _execute(self, client):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch("scripts.agent_os_notion_lessons_write.admission.verify_current_request", return_value=None), patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", return_value=client
+            ):
+                # Verify-current is imported into runner, not looked up through admission.
+                with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request", return_value=None):
+                    status = main(["--phase", "execute", "--event", str(root / "event.json"),
+                                   "--output", str(root / "result.json")])
+            result = json.loads((root / "result.json").read_text())
+            verification = json.loads((root / "verification.json").read_text())
+        return status, result, verification
+
+    def test_single_execute_run_writes_once_then_reads_twice(self):
+        client = Client()
+        status, result, verification = self._execute(client)
+        self.assertEqual(status, 0)
+        self.assertEqual(result["status"], "persisted")
+        self.assertEqual(verification["status"], "verified-current-state")
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls.count("get"), 2)
+
+    def test_independent_stale_revision_fails_the_runner_without_retry(self):
+        class DriftClient(Client):
+            def get_page(self, page_id):
+                data = super().get_page(page_id)
+                if self.reads > 1:
+                    data["last_edited_time"] = "2026-10-09T00:00:00.000Z"
+                return data
+        client = DriftClient()
+        status, result, verification = self._execute(client)
+        self.assertEqual(status, 1)
+        self.assertEqual(result["status"], "persisted")
+        self.assertEqual(verification["reason_code"], "independent-revision-mismatch")
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertFalse(verification["persisted_state_verified"])
+
+
 if __name__ == "__main__":
     unittest.main()
