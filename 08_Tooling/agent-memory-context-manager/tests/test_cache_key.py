@@ -337,3 +337,5 @@ def test_build_from_source_fingerprint_rejects_non_digest_input():
     for candidate in ("", "not-hex", "A" * 64, "a" * 63, None, 5):
         with pytest.raises(ValueError):
             cache_key_module.build_cache_key_v2_from_source_fingerprint(candidate)
+
+# D07 hosted verification probe (disposable): comment-only change to prove the amcm focused suite is selected and executed on this Track A head.
