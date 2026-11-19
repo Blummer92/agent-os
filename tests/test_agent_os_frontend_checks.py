@@ -210,18 +210,71 @@ def _fixture_vitest(cwd):
     }
 
 
-def _fixture_playwright():
+_PW_REQUIRED_SPECS = ("draft-identity.spec.ts", "fixture.spec.ts", "mobile-reflow.spec.ts", "teacher.spec.ts")
+
+
+def _fixture_playwright(files=_PW_REQUIRED_SPECS):
     return {
-        "stats": {"expected": 2, "unexpected": 0, "flaky": 0, "skipped": 0},
+        "stats": {"expected": 2 * len(files), "unexpected": 0, "flaky": 0, "skipped": 0},
         "errors": [],
-        "suites": [{"specs": [], "suites": [{"specs": [{"tests": [
+        "suites": [{"specs": [], "suites": [{"specs": [
             {
-                "projectName": name, "status": "expected", "expectedStatus": "passed",
-                "results": [{"status": "passed"}],
+                "file": file,
+                "id": file,
+                "tests": [
+                    {
+                        "projectName": name, "status": "expected", "expectedStatus": "passed",
+                        "results": [{"status": "passed"}],
+                    }
+                    for name in ("desktop", "phone")
+                ],
             }
-            for name in ("desktop", "phone")
-        ]}]}]}],
+            for file in files
+        ]}]}],
     }
+
+
+def test_playwright_rejects_two_cases_despite_summary_claiming_full_run():
+    cut = _fixture_playwright(("fixture.spec.ts",))
+    cut["stats"]["expected"] = 134
+    with pytest.raises(ValueError, match="outcomes disagree"):
+        fe._playwright_counts(cut)
+
+
+def test_playwright_rejects_duplicate_cases_even_with_balanced_claims():
+    report = _fixture_playwright()
+    specs = report["suites"][0]["suites"][0]["specs"]
+    specs.append(copy.deepcopy(specs[0]))
+    report["stats"]["expected"] += 2
+    with pytest.raises(ValueError, match="duplicate"):
+        fe._playwright_counts(report)
+
+
+def test_playwright_requires_intended_specs_independent_of_filtered_run_totals():
+    cut = _fixture_playwright(("fixture.spec.ts",))
+    with pytest.raises(ValueError, match="missing intended"):
+        fe._playwright_counts(cut)
+
+    expanded = _fixture_playwright((*_PW_REQUIRED_SPECS, "new.spec.ts"))
+    assert fe._playwright_counts(expanded) == {"desktop": 5, "phone": 5}
+
+    # A legitimate rename moves the obligation with the test, not silently
+    # by narrowing Playwright configuration.
+    renamed_names = (*_PW_REQUIRED_SPECS[:-1], "teacher-renamed.spec.ts")
+    renamed = _fixture_playwright(renamed_names)
+    with pytest.raises(ValueError, match="missing intended"):
+        fe._playwright_counts(renamed)
+    with patch.object(fe, "_TEACHER_REQUIRED_SPECS", frozenset(renamed_names)):
+        assert fe._playwright_counts(renamed) == {"desktop": 4, "phone": 4}
+
+
+def test_playwright_counts_a_discovered_intentionally_skipped_case_as_skipped():
+    report = _fixture_playwright()
+    case = report["suites"][0]["suites"][0]["specs"][0]["tests"][0]
+    case.update(status="skipped", expectedStatus="skipped", results=[])
+    report["stats"]["expected"] -= 1
+    report["stats"]["skipped"] += 1
+    assert fe._playwright_counts(report) == {"desktop": 3, "phone": 4}
 
 
 def test_pinned_vitest_uses_reporter_and_rejects_missing_zero_and_wrong_file_evidence():
@@ -258,10 +311,14 @@ def test_playwright_requires_actual_passes_for_both_projects_and_keeps_real_exit
     expected = _project_by_name("teacher-os-web").commands[-1]
     good = _fixture_playwright()
     missing_phone = copy.deepcopy(good)
-    missing_phone["suites"][0]["suites"][0]["specs"][0]["tests"].pop()
-    missing_phone["stats"]["expected"] = 1
+    for spec in missing_phone["suites"][0]["suites"][0]["specs"]:
+        spec["tests"].pop()
+    missing_phone["stats"]["expected"] = len(_PW_REQUIRED_SPECS)
     skipped_phone = copy.deepcopy(good)
-    skipped_phone["suites"][0]["suites"][0]["specs"][0]["tests"][-1]["results"] = []
+    for spec in skipped_phone["suites"][0]["suites"][0]["specs"]:
+        spec["tests"][-1].update(status="skipped", expectedStatus="skipped", results=[])
+    skipped_phone["stats"]["expected"] = len(_PW_REQUIRED_SPECS)
+    skipped_phone["stats"]["skipped"] = len(_PW_REQUIRED_SPECS)
     malformed = "not-json"
     runs = ((good, 0, 0), (missing_phone, 0, 78), (skipped_phone, 0, 78), (None, 0, 78),
             (malformed, 0, 78), (None, 3, 3))
@@ -277,7 +334,7 @@ def test_playwright_requires_actual_passes_for_both_projects_and_keeps_real_exit
             with patch.object(fe.subprocess, "run", fake_run):
                 outcome = fe._run_command(expected, Path(temp))
                 if expected_code == 0:
-                    assert outcome == _passing_receipt(expected).evidence
+                    assert outcome == fe._CaseEvidence(expected, (("desktop", 4), ("phone", 4)))
                 else:
                     assert outcome == expected_code
 

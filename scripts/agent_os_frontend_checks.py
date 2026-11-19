@@ -76,6 +76,10 @@ _PP_CHECK = ("npm", "run", "check")
 _TEACHER_INSTALL = ("npx", "playwright", "install", "chromium")
 _TEACHER_TEST = ("npx", "playwright", "test")
 _TEACHER_PROJECTS = ("desktop", "phone")
+_TEACHER_REQUIRED_SPECS = frozenset({
+    "draft-identity.spec.ts", "fixture.spec.ts", "mobile-reflow.spec.ts", "teacher.spec.ts",
+})
+_PLAYWRIGHT_OUTCOMES = ("expected", "flaky", "skipped", "unexpected")
 # Matching by directory keeps the contract independent of the projects'
 # editable command lists and display labels.
 _REQUIRED_TEST_COMMANDS = {
@@ -286,14 +290,15 @@ def _playwright_counts(report: dict) -> dict[str, int]:
     stats = report.get("stats")
     if (
         not isinstance(suites, list) or not isinstance(stats, dict)
-        or any(type(stats.get(key)) is not int or stats[key] < 0 for key in (
-            "expected", "flaky", "unexpected",
-        ))
+        or any(type(stats.get(key)) is not int or stats[key] < 0 for key in _PLAYWRIGHT_OUTCOMES)
         or stats["unexpected"] != 0
         or report.get("errors") != []
     ):
         raise ValueError("Playwright did not report a clean run")
     counts = dict.fromkeys(_TEACHER_PROJECTS, 0)
+    outcomes = dict.fromkeys(_PLAYWRIGHT_OUTCOMES, 0)
+    discovered = {project: set() for project in _TEACHER_PROJECTS}
+    seen: set[tuple[str, str]] = set()
     pending = list(suites)
     while pending:
         suite = pending.pop()
@@ -304,21 +309,38 @@ def _playwright_counts(report: dict) -> dict[str, int]:
             raise ValueError("malformed Playwright specs")
         pending.extend(child_suites)
         for spec in specs:
-            cases = spec.get("tests") if isinstance(spec, dict) else None
-            if not isinstance(cases, list):
-                raise ValueError("malformed Playwright cases")
+            if not isinstance(spec, dict):
+                raise ValueError("malformed Playwright spec")
+            cases, spec_id, file = spec.get("tests"), spec.get("id"), spec.get("file")
+            if not isinstance(cases, list) or not isinstance(spec_id, str) or not spec_id:
+                raise ValueError("malformed Playwright case identity")
+            if not isinstance(file, str) or not file:
+                raise ValueError("malformed Playwright file identity")
             for case in cases:
                 if not isinstance(case, dict) or case.get("projectName") not in _TEACHER_PROJECTS:
                     raise ValueError("unexpected Playwright project")
+                project, outcome = case["projectName"], case.get("status")
+                identity = (spec_id, project)
+                if identity in seen or outcome not in _PLAYWRIGHT_OUTCOMES:
+                    raise ValueError("invalid or duplicate Playwright case")
+                seen.add(identity)
+                outcomes[outcome] += 1
+                discovered[project].add(file)
                 results = case.get("results")
                 if not isinstance(results, list):
                     raise ValueError("malformed Playwright case results")
                 if (
-                    case.get("expectedStatus") == "passed" and case.get("status") in ("expected", "flaky")
+                    case.get("expectedStatus") == "passed" and outcome in ("expected", "flaky")
                     and results and isinstance(results[-1], dict) and results[-1].get("status") == "passed"
                 ):
-                    counts[case["projectName"]] += 1
-    if not all(counts.values()) or sum(counts.values()) > stats["expected"] + stats["flaky"]:
+                    counts[project] += 1
+    # The locked reporter assigns stats and each case.status from the same
+    # test.outcome(). A claimed total is not a substitute for named records.
+    if any(outcomes[key] != stats[key] for key in _PLAYWRIGHT_OUTCOMES):
+        raise ValueError("Playwright case outcomes disagree with reporter summary")
+    if any(not _TEACHER_REQUIRED_SPECS <= files for files in discovered.values()):
+        raise ValueError("missing intended Playwright spec discovery")
+    if not all(counts.values()):
         raise ValueError("both default Playwright projects must have passing cases")
     return counts
 
