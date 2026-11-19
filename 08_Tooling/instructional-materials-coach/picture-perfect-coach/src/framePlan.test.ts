@@ -415,3 +415,5 @@ describe('planTutorialFrame fail-closed behaviour', () => {
     expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.referenceMissing]);
   });
 });
+
+// D07 hosted verification probe (disposable): comment-only change to prove the pinned PP tests run in the required frontend lane on this Track B head.

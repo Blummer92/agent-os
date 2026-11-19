@@ -158,3 +158,5 @@ test("every lesson must name the requested unit, not just the envelope", () => {
   }
   assert.equal(decodeLessons(200, lessonsBody([lesson(1), lesson(2)]), A).kind, "ready");
 });
+
+// D07 hosted verification probe (disposable): comment-only change to prove Teacher OS unit + Playwright obligations run in the required frontend lane on this Track B head.
