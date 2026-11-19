@@ -188,6 +188,23 @@ result; nothing in this repository forces the host to do so. The
 opt-in MCP profile (`chatgpt-ckr6-opt-in`) remains optional and is not
 required for this route.
 
+### Named CKR6 relevance hint
+
+For a task genuinely about the CKR6 mutation boundary, send
+`CKR6 mutation boundary` as **one** item in `capability_keywords`.
+For example: `"capability_keywords": ["CKR6 mutation boundary"]`.
+Case and surrounding whitespace are normalized. Separate tags such as
+`ckr6` and `mutation-boundary` are not joined and do not enable this
+named matcher. The same words in `task_reference` also do not enable it.
+
+This hint requests a relevance check; it does not force a lesson ID or
+grant authority. The named matcher still requires the distinctive words
+`ckr6` and `mutation` in the lesson-owned title or guidance, and existing
+eligibility, provenance, and result-consumption checks still apply.
+For an owner-bound PR canary, use a fresh disposable Draft, bind the
+request to its exact full head SHA, and have the repository owner post
+the request personally. A bot-authored comment is not a substitute.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure

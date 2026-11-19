@@ -1125,6 +1125,8 @@ def _check_admission_semantics(payload: Mapping[str, object], operation: str) ->
             raise ValueError("CKR6 result admission flag must be a boolean")
         if mutation not in (None, False):
             raise ValueError("issue-start result must not claim mutation admission")
+        if type(status) is not str:
+            raise ValueError("CKR6 result status must be a string")
         if admissible != (status in _ISSUE_START_ADMITTING):
             raise ValueError("CKR6 result status contradicts its admission flag")
     elif operation == "failed-repair":
