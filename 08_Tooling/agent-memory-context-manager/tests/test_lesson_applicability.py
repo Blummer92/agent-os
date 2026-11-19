@@ -709,6 +709,47 @@ def test_not_applicable_when_dominates():
     assert "negative-applicability-condition" in result.reason_codes
 
 
+# ---------------------------------------------------------------------------
+# D121 / E09 regression detectors (PR #4030 independent QA)
+# ---------------------------------------------------------------------------
+# E09: dropping the boundary_id conjunction in _satisfied lets a
+# mechanism-only observation satisfy a boundary-qualified condition. The
+# committed suite had no test for that conjunction, so E09 survived all
+# 59 tests. These two detectors pin it in both polarities.
+
+
+def test_e09_mechanism_only_observation_cannot_satisfy_boundary_qualified_positive():
+    """E09 detector: (m1, None) must not satisfy positive (m1, b1)."""
+    result = match(
+        observations=(
+            verified(boundary_id=None, observation_id="obs-mech-only"),
+        )
+    )
+    assert result.matched is False
+    assert "positive-applicability-condition-unsatisfied" in result.reason_codes
+
+
+def test_e09_mechanism_only_observation_cannot_trigger_boundary_qualified_negative():
+    """E09 detector (negative polarity): (m1, None) must not veto via (m1, b1)."""
+    record = valid_record(
+        positive_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": "test-boundary-two"}
+        ],
+        negative_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": "test-boundary-one"}
+        ],
+    )
+    result = match(
+        record=record,
+        observations=(
+            verified(boundary_id="test-boundary-two", observation_id="obs-pos"),
+            verified(boundary_id=None, observation_id="obs-mech-only"),
+        ),
+    )
+    assert result.matched is True
+    assert "negative-applicability-condition" not in result.reason_codes
+
+
 def test_unreviewed_record_never_matched():
     record = ApplicabilityRecord(
         lesson_id="LL-12",
