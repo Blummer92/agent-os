@@ -85,6 +85,24 @@ def _require_text(value: object, name: str) -> str:
         raise ValueError(f"{name} exceeds the length bound")
     return value
 
+def canonical_decision_slot_id(slot: object) -> str | None:
+    """Map a decision slot to its exact governed visual slot identifier.
+
+    Legacy integer slots refer to the literal string form (0 -> "0").
+    An integer is NEVER a position in a list of named slots; "page-1" must
+    be recorded as "page-1". Keep integer serialization for legacy records.
+    The string grammar matches MaterialRequirement's visual slot contract.
+    """
+    if type(slot) is int:
+        return str(slot) if slot >= 0 else None
+    if type(slot) is not str or not slot or len(slot) > 64:
+        return None
+    if not (slot[0].isascii() and slot[0].isalnum()):
+        return None
+    if not all(c.isascii() and (c.isalnum() or c in "_-") for c in slot[1:]):
+        return None
+    return slot
+
 
 @dataclasses.dataclass(frozen=True)
 class SelectedAssetIdentity:
@@ -128,7 +146,7 @@ class TeacherVisualDecisionRecord:
     requirement_id: str
     source_revision: str
     role: str
-    slot: int
+    slot: int | str
     selected_asset: SelectedAssetIdentity
     overridden_recommendation: str | None
     candidate_set_fingerprint: str
@@ -144,8 +162,8 @@ class TeacherVisualDecisionRecord:
         _require_text(self.requirement_id, "requirement_id")
         _require_text(self.source_revision, "source_revision")
         _require_text(self.role, "role")
-        if not isinstance(self.slot, int) or isinstance(self.slot, bool) or self.slot < 0:
-            raise ValueError("slot must be a non-negative integer")
+        if canonical_decision_slot_id(self.slot) is None:
+            raise ValueError("slot must be a non-negative integer or valid named slot ID")
         if self.overridden_recommendation is not None:
             _require_text(self.overridden_recommendation, "overridden_recommendation")
         if not _is_sha256(self.candidate_set_fingerprint):
