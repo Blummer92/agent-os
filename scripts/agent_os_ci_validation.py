@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +55,66 @@ _TEACHER_OS_COMMANDS = {
     "cd 08_Tooling/teacher-os-web && npx playwright install chromium": ("npx", "playwright", "install", "chromium"),
     "cd 08_Tooling/teacher-os-web && npx playwright test": ("npx", "playwright", "test"),
 }
-_CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
+_CI_VALIDATION_SELF_TESTS = {
+    f"python -m pytest {target}": ("python", "-m", "pytest", target)
+    for target in (
+        "tests/test_agent_os_ci_validation.py",
+        "tests/test_agent_os_ci_validation_junit.py",
+        "tests/test_agent_os_ci_validation_receipt.py",
+    )
+}
+# Match the authoritative runner: these plugins can produce passing-looking
+# JUnit without executing test bodies.
+_PYTEST_EXECUTION_GUARD = ("-p", "no:setuponly", "-p", "no:setupplan")
+
+# D07 Track A (G2/G3): the 10 newly mapped Python suites, keyed by their exact
+# focused command string. The command string keeps the existing root-relative
+# form (``python -m pytest 08_Tooling/<dir>/tests``) so the command-plan
+# registry still binds the canonical root-relative argv, but the bounded
+# executor resolves suite-locally: the suite directory is the working
+# directory and ``tests`` is the target. That is exactly how
+# ``scripts/validate-all.sh`` runs each suite, and it is required, not
+# cosmetic -- five of the ten packages (notion-operational-guidance-writer,
+# visual-asset-drive-writer, visual-asset-ingestion-coordinator,
+# visual-asset-notion-writer, visual-asset-routing) are not importable from
+# the repository root, so a plain root-relative run fails at collection with
+# ModuleNotFoundError. Suite-local execution also applies each suite's own
+# pytest configuration (e.g. reusable-capability-registry's norecursedirs
+# exclusion of its fixtures file, dashboard-migration-verification's
+# pythonpath) instead of the root pytest.ini.
+_PYTHON_FOCUSED_SUITE_COMMANDS = {
+    "python -m pytest 08_Tooling/agent-memory-context-manager/tests": (
+        ROOT / "08_Tooling/agent-memory-context-manager"
+    ),
+    "python -m pytest 08_Tooling/dashboard-migration-verification/tests": (
+        ROOT / "08_Tooling/dashboard-migration-verification"
+    ),
+    "python -m pytest 08_Tooling/notion-compute-decision-writer/tests": (
+        ROOT / "08_Tooling/notion-compute-decision-writer"
+    ),
+    "python -m pytest 08_Tooling/notion-operational-guidance-writer/tests": (
+        ROOT / "08_Tooling/notion-operational-guidance-writer"
+    ),
+    "python -m pytest 08_Tooling/reusable-capability-registry/tests": (
+        ROOT / "08_Tooling/reusable-capability-registry"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-drive-writer/tests": (
+        ROOT / "08_Tooling/visual-asset-drive-writer"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-ingestion-coordinator/tests": (
+        ROOT / "08_Tooling/visual-asset-ingestion-coordinator"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-intake/tests": (
+        ROOT / "08_Tooling/visual-asset-intake"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-notion-writer/tests": (
+        ROOT / "08_Tooling/visual-asset-notion-writer"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-routing/tests": (
+        ROOT / "08_Tooling/visual-asset-routing"
+    ),
+}
+_PYTHON_FOCUSED_SUITE_DIRS = frozenset(_PYTHON_FOCUSED_SUITE_COMMANDS.values())
 
 
 def _decode_plan(encoded: str) -> ValidationPlan:
@@ -117,6 +177,12 @@ def _current_head() -> str:
 
 
 def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
+    suite_dir = _PYTHON_FOCUSED_SUITE_COMMANDS.get(command)
+    if suite_dir is not None:
+        # Checked before the registry on purpose: the registry binds the
+        # canonical root-relative argv, but these suites must execute from
+        # their own directory (see _PYTHON_FOCUSED_SUITE_COMMANDS).
+        return ("python", "-m", "pytest", "tests"), suite_dir
     argv = _COMMAND_REGISTRY.get(command)
     if argv is not None:
         return argv, ROOT
@@ -131,8 +197,9 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     teacher_argv = _TEACHER_OS_COMMANDS.get(command)
     if teacher_argv is not None:
         return teacher_argv, _TEACHER_OS_DIR
-    if command == _CI_VALIDATION_SELF_TEST:
-        return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
+    ci_test = _CI_VALIDATION_SELF_TESTS.get(command)
+    if ci_test is not None:
+        return ci_test, ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
 
 
@@ -146,6 +213,17 @@ def _command_env(cwd: Path) -> dict[str, str]:
     """
     env = dict(os.environ)
     if cwd != ROOT:
+        if cwd in _PYTHON_FOCUSED_SUITE_DIRS and (cwd / "src").is_dir():
+            # Suite-local focused execution (see _PYTHON_FOCUSED_SUITE_COMMANDS):
+            # mirror validate-all.sh, which runs ``PYTHONPATH=src python -m
+            # pytest tests`` inside a suite directory when it has a src/
+            # layout. Suites without src/ (dashboard-migration-verification)
+            # get no PYTHONPATH addition, exactly as validate-all.sh runs them.
+            src_entry = str(cwd / "src")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                src_entry + os.pathsep + existing if existing else src_entry
+            )
         return env
     src_entry = str(ROOT / "src")
     existing = env.get("PYTHONPATH", "")
@@ -167,14 +245,9 @@ def _is_pytest_argv(argv: tuple[str, ...]) -> bool:
     return len(argv) >= 3 and argv[0] in ("python", "python3") and argv[1] == "-m" and argv[2] == "pytest"
 
 
-def _junit_counts(path: Path) -> dict | None:
-    """Best-effort node counts from a JUnit file, or None when absent/malformed.
-
-    This is a receipt field only; strict schema validation stays with the
-    evidence-health verifier, which must still reject malformed reports.
-    """
+def _junit_counts(path: Path, *, check_cases: bool = False) -> dict[str, int] | None:
+    """Read JUnit counts; a successful child also needs consistent case nodes."""
     try:
-        import hashlib as _hashlib
         from xml.etree import ElementTree as _ET
 
         root = _ET.fromstring(path.read_bytes())
@@ -185,11 +258,31 @@ def _junit_counts(path: Path) -> dict | None:
         return None
     counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
     for suite in suites:
-        for field in counts:
-            raw = suite.attrib.get(field, "")
-            if not raw.isdigit():
+        totals = {}
+        try:
+            for field in counts:
+                raw = suite.attrib.get(field, "")
+                if not raw.isascii() or not raw.isdecimal():
+                    return None
+                totals[field] = int(raw)
+        except ValueError:
+            return None
+        if check_cases:
+            observed = dict.fromkeys(counts, 0)
+            outcome_fields = {"failure": "failures", "error": "errors", "skipped": "skipped"}
+            for case in suite.findall("testcase"):
+                if not case.get("name"):
+                    return None
+                outcomes = [outcome_fields[child.tag] for child in case if child.tag in outcome_fields]
+                if len(outcomes) > 1:
+                    return None
+                observed["tests"] += 1
+                if outcomes:
+                    observed[outcomes[0]] += 1
+            if totals != observed:
                 return None
-            counts[field] += int(raw)
+        for field, total in totals.items():
+            counts[field] += total
     return counts
 
 
@@ -202,27 +295,14 @@ def _sha256_file(path: Path) -> str | None:
         return None
 
 
-def _pytest_classification(code: int, junit_path: Path | None) -> str:
-    """Truth classification for a pytest exit code. Exit 5 (no tests
-    collected) is ZERO_COLLECTED, never a pass and never a generic failure.
-
-    QA-A D1 considered: a nonzero exit with a missing JUnit report is
-    labelled EXECUTED_FAIL here, NOT NOT_EXECUTED_SETUP_FAILURE, because
-    the command did execute and its exit code is recorded. The missing
-    report is carried separately in the receipt (junit_sha256=None,
-    junit_counts=None); downstream ingestion must check those fields
-    before treating EXECUTED_FAIL as node-level evidence. Labelling it
-    NOT_EXECUTED would misstate an executed-and-failed command as never
-    run, and would break the prior patch's established contract. Exit 0
-    with a missing report keeps NOT_EXECUTED_SETUP_FAILURE: a claimed
-    pass with no report is not executed-pass evidence."""
-    if code == 0:
-        if junit_path is not None and not junit_path.is_file():
-            return "NOT_EXECUTED_SETUP_FAILURE"
-        return "EXECUTED_PASS"
-    if code == 5:
-        return "ZERO_COLLECTED"
-    return "EXECUTED_FAIL"
+def _pytest_evidence_error(junit_counts: dict[str, int] | None) -> str | None:
+    if junit_counts is None:
+        return "pytest exited 0 without fresh, valid, count-consistent JUnit"
+    if junit_counts["failures"] or junit_counts["errors"]:
+        return "pytest exited 0 but JUnit reports failures or errors"
+    if junit_counts["tests"] <= junit_counts["skipped"]:
+        return "pytest exited 0 without executing a passing test"
+    return None
 
 
 def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
@@ -236,7 +316,8 @@ def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
             f"checked-out SHA {checked_out} does not match expected PR head {expected_head_sha}"
         )
     junit_dir_raw = os.environ.get("CI_JUNIT_DIR", "")
-    junit_dir = Path(junit_dir_raw) if junit_dir_raw else None
+    junit_dir = Path(junit_dir_raw).resolve() if junit_dir_raw else None
+    private_junit: tempfile.TemporaryDirectory[str] | None = None
     if junit_dir is not None:
         junit_dir.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, str]] = []
@@ -269,27 +350,49 @@ def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
                     first_failure = exc
                 continue
             language = "python" if argv and argv[0] in ("python", "python3") else "npm" if argv and argv[0] == "npm" else "other"
-            junit_path: Path | None = None
+            junit_path = None
             run_argv = argv
-            if junit_dir is not None and _is_pytest_argv(argv):
-                junit_path = _junit_path_for_command(command, junit_dir, index)
-                run_argv = (*argv, f"--junitxml={junit_path}")
             code: int | None = None
             error: str | None = None
+            evidence_error: str | None = None
+            junit_counts = None
             try:
-                subprocess.run(run_argv, cwd=cwd, check=True, env=_command_env(cwd))
+                env = _command_env(cwd)
+                if _is_pytest_argv(argv):
+                    # Fix the selected command environment, not the parent process.
+                    env.pop("PYTEST_ADDOPTS", None)
+                    evidence_dir = junit_dir
+                    if evidence_dir is None:
+                        if private_junit is None:
+                            private_junit = tempfile.TemporaryDirectory(prefix="agent-os-focused-")
+                        evidence_dir = Path(private_junit.name)
+                    junit_path = _junit_path_for_command(command, evidence_dir, index)
+                    # A successful no-op may not borrow an earlier report.
+                    junit_path.unlink(missing_ok=True)
+                    run_argv = (*argv, f"--junitxml={junit_path}", *_PYTEST_EXECUTION_GUARD)
+                subprocess.run(run_argv, cwd=cwd, check=True, env=env)
                 code = 0
             except subprocess.CalledProcessError as exc:
                 code = int(exc.returncode)
                 error = str(exc)
             except OSError as exc:
                 error = str(exc)
+            if junit_path is not None and code is not None:
+                junit_counts = _junit_counts(junit_path, check_cases=code == 0)
+                if code == 0:
+                    evidence_error = _pytest_evidence_error(junit_counts)
+                    if evidence_error is not None:
+                        error = evidence_error
             if junit_dir is not None:
                 if junit_path is not None:
-                    if code is None:
+                    if code is None or evidence_error is not None:
                         classification = "NOT_EXECUTED_SETUP_FAILURE"
+                    elif code == 0:
+                        classification = "EXECUTED_PASS"
+                    elif code == 5:
+                        classification = "ZERO_COLLECTED"
                     else:
-                        classification = _pytest_classification(code, junit_path)
+                        classification = "EXECUTED_FAIL"
                     entry = {"command": command, "classification": classification, "junit_file": str(junit_path)}
                 elif language == "npm":
                     classification = "EXECUTED_FAIL" if (code is not None and code != 0) or code is None else "NODE_REPORTER_NOT_AVAILABLE"
@@ -309,22 +412,26 @@ def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
                         "classification": classification,
                         "junit_file": str(junit_path) if junit_path is not None else "",
                         "junit_sha256": _sha256_file(junit_path) if junit_path is not None and junit_path.is_file() else None,
-                        "junit_counts": _junit_counts(junit_path) if junit_path is not None and junit_path.is_file() else None,
+                        "junit_counts": junit_counts,
                         "error": error,
                     }
                 )
-            if code is None or (code != 0):
+            if code is None or code != 0 or evidence_error is not None:
                 # Record the first failure, keep executing the remaining
                 # selected commands so the receipt covers the whole plan,
                 # then fail the step at the end with the first code.
                 failure: BaseException
                 if code is None:
                     failure = OSError(error or "command could not be executed")
+                elif evidence_error is not None:
+                    failure = ValueError(evidence_error)
                 else:
                     failure = subprocess.CalledProcessError(code, run_argv)
                 if first_failure is None:
                     first_failure = failure
     finally:
+        if private_junit is not None:
+            private_junit.cleanup()
         if junit_dir is not None:
             lines = ["command\tjunit_file\tclassification"]
             for entry in manifest:
