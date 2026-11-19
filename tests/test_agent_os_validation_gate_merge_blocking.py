@@ -100,7 +100,9 @@ def test_pending_supersedes_prior_green_before_current_tests(tmp_path: Path) -> 
         "path = pathlib.Path(os.environ['GH_FIXTURE'])\n"
         "statuses = json.loads(path.read_text())\n"
         "statuses.append(dict(id=2, state='pending', context='agent-os/authoritative-aggregate'))\n"
-        "path.write_text(json.dumps(statuses))\n",
+        "path.write_text(json.dumps(statuses))\n"
+        "assert args[-2:] == ['--jq', '.id']\n"
+        "print(2)\n",
         encoding="utf-8",
     )
     gh.chmod(0o755)
@@ -117,6 +119,7 @@ def test_pending_supersedes_prior_green_before_current_tests(tmp_path: Path) -> 
         env={
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "GH_FIXTURE": str(statuses),
+            "GITHUB_OUTPUT": str(tmp_path / "outputs"),
             "GITHUB_REPOSITORY": "Blummer92/agent-os",
             "STATUS_SHA": "d3501c232181963deda648483c9c65f4290f8ba7",
             "TARGET_URL": "https://example.invalid/actions/runs/123",
@@ -126,6 +129,7 @@ def test_pending_supersedes_prior_green_before_current_tests(tmp_path: Path) -> 
     from scripts.agent_os_aggregate_gate import latest_authoritative_state
 
     assert latest_authoritative_state(json.loads(statuses.read_text())) == "pending"
+    assert (tmp_path / "outputs").read_text() == "id=2\n"
 
 
 def test_dispatch_modes_keep_their_authority_contract() -> None:
@@ -168,3 +172,95 @@ def test_latest_authoritative_status_helper_preserves_history_ordering(
     from scripts.agent_os_aggregate_gate import evaluate_reuse
 
     assert evaluate_reuse(statuses) == (run_required == "false", state)
+
+
+_SHA = "a" * 40
+_TARGET = "https://github.com/Blummer92/agent-os/actions/runs/123"
+
+
+def _terminal_status(tmp_path: Path, statuses: list[dict], *,
+                     pending_id: str = "10", outcome: str = "success",
+                     read_failure: bool = False) -> tuple[subprocess.CompletedProcess, list[dict]]:
+    """Replay the exact terminal shell and real gate CLI with a disk-only fake gh."""
+    fixture = tmp_path / "terminal-statuses.json"
+    fixture.write_text(json.dumps(statuses), encoding="utf-8")
+    gh = tmp_path / "gh"
+    gh.write_text(
+        """#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+repo = os.environ["GITHUB_REPOSITORY"]
+sha = os.environ["STATUS_SHA"]
+store = pathlib.Path(os.environ["GH_FIXTURE"])
+statuses = json.loads(store.read_text())
+if args[:2] == ["api", "--paginate"]:
+    assert args[2:] == [f"/repos/{repo}/commits/{sha}/statuses?per_page=100"]
+    if os.environ["READ_FAILURE"] == "yes":
+        sys.exit(1)
+    print(json.dumps(statuses[:2]))
+    print(json.dumps(statuses[2:]))
+elif args[:3] == ["api", "-X", "POST"]:
+    assert args[3] == f"/repos/{repo}/statuses/{sha}"
+    fields = dict(item.split("=", 1) for item in args[5::2])
+    statuses.append(dict(id=1 + max((row["id"] for row in statuses), default=0), **fields))
+    store.write_text(json.dumps(statuses))
+else:
+    raise AssertionError(args)
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    job = yaml.safe_load(_workflow())["jobs"]["aggregate-gate"]
+    step = next(s for s in job["steps"] if s["name"] == "Publish terminal authoritative aggregate status")
+    env = dict(
+        os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}", GH_FIXTURE=str(fixture),
+        GITHUB_REPOSITORY="Blummer92/agent-os", STATUS_SHA=_SHA, TARGET_URL=_TARGET,
+        PENDING_STATUS_ID=pending_id, READ_FAILURE="yes" if read_failure else "no",
+        AUTHORITATIVE="true", VALIDATE_RESULT=outcome, AGGREGATE_OUTCOME=outcome,
+        PLAN_RESULT="success", FRONTEND_RESULT="success", FRONTEND_REQUIRED="true",
+        FRONTEND_EXPECTED_SHA=_SHA, FRONTEND_TESTED_SHA=_SHA,
+        MAIN_HEALTH_OUTCOME="", MAIN_RECOVERY_STOP_OUTCOME="", REUSED="false",
+    )
+    result = subprocess.run(["bash", "-c", step["run"]], cwd=ROOT, env=env, capture_output=True, text=True)
+    return result, json.loads(fixture.read_text())
+
+
+def _own_pending() -> dict:
+    return dict(_status(10, "pending"), target_url=_TARGET)
+
+
+def test_late_old_success_cannot_overwrite_already_published_ready_failure(tmp_path: Path) -> None:
+    # Deliberately put the governing status on the second provider page.
+    statuses = [_status(15, "success", "ci/unrelated"), _own_pending(),
+                _status(11, "pending"), _status(12, "failure")]
+    result, after = _terminal_status(tmp_path, statuses)
+    assert result.returncode != 0, after
+    assert after == statuses
+    assert "no longer owns" in result.stderr
+
+
+def test_terminal_accepts_own_current_pending_and_ignores_other_contexts(tmp_path: Path) -> None:
+    statuses = [_own_pending(), _status(15, "failure", "ci/unrelated")]
+    result, after = _terminal_status(tmp_path, statuses)
+    assert result.returncode == 0, result.stderr
+    assert after[-1]["state"] == "success"
+
+
+@pytest.mark.parametrize("pending_id,read_failure,replace_url", [
+    ("", False, False), ("10", True, False), ("10", False, True),
+])
+def test_terminal_success_fails_closed_without_current_owned_receipt(
+    tmp_path: Path, pending_id: str, read_failure: bool, replace_url: bool,
+) -> None:
+    statuses = [_own_pending()]
+    if replace_url:
+        statuses[0]["target_url"] = "https://github.com/Blummer92/agent-os/actions/runs/124"
+    result, after = _terminal_status(tmp_path, statuses, pending_id=pending_id, read_failure=read_failure)
+    assert result.returncode != 0, after
+    assert after == statuses
+
+
+def test_terminal_failure_stays_available_when_pending_was_not_established(tmp_path: Path) -> None:
+    result, after = _terminal_status(tmp_path, [], pending_id="", outcome="failure")
+    assert result.returncode == 0, result.stderr
+    assert after[-1]["state"] == "failure"

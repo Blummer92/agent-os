@@ -302,6 +302,7 @@ jobs:
     outputs:
       authoritative: ${{ steps.authority.outputs.authoritative }}
       head_sha: ${{ steps.authority.outputs.head_sha }}
+      pending_status_id: ${{ steps.pending_status.outputs.id }}
       aggregate_outcome: ${{ steps.aggregate.outcome }}
       main_health_outcome: ${{ steps.main_health.outcome }}
       main_recovery_stop_outcome: ${{ steps.main_recovery_stop.outcome }}
@@ -604,17 +605,23 @@ jobs:
         # Ready must revalidate; do not keep a previous green visible while
         # this run waits for current plan, frontend and aggregate verdicts.
         if: ${{ steps.authority.outputs.authoritative == 'true' }}
+        id: pending_status
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS_SHA: ${{ steps.authority.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
-            -f state=pending \
-            -f context=agent-os/authoritative-aggregate \
-            -f description="Authoritative aggregate validation running on this exact head" \
-            -f target_url="$TARGET_URL"
+          pending_id="$(
+            gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
+              -f state=pending \
+              -f context=agent-os/authoritative-aggregate \
+              -f description="Authoritative aggregate validation running on this exact head" \
+              -f target_url="$TARGET_URL" \
+              --jq '.id'
+          )"
+          [[ "$pending_id" =~ ^[1-9][0-9]*$ ]]
+          echo "id=$pending_id" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
         uses: actions/checkout@v7
@@ -1242,6 +1249,7 @@ jobs:
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           STATUS_SHA: ${{ steps.terminal_authority.outputs.head_sha }}
+          PENDING_STATUS_ID: ${{ needs.validate.outputs.pending_status_id }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -1250,8 +1258,28 @@ jobs:
             echo "No authoritative aggregate status to publish for this run."
             exit 0
           fi
+          state="$(jq -r .state <<<"$decision")"
+          if [[ "$state" == success && ! "${PENDING_STATUS_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Refusing success without this run's pending status receipt." >&2
+            exit 1
+          fi
+          if [[ -n "${PENDING_STATUS_ID:-}" ]]; then
+            # Suppress terminal writes already known to be stale. GitHub's
+            # status POST has no compare-and-swap; this is not a transaction.
+            latest="$(
+              gh api --paginate \
+                "/repos/$GITHUB_REPOSITORY/commits/$STATUS_SHA/statuses?per_page=100" \
+                | jq -sce 'add | map(select(.context == "agent-os/authoritative-aggregate")) | max_by(.id)'
+            )"
+            if ! jq -e --arg id "$PENDING_STATUS_ID" --arg url "$TARGET_URL" \
+              '(.id | tostring) == $id and .state == "pending" and .target_url == $url' \
+              >/dev/null <<<"$latest"; then
+              echo "Refusing terminal status: this run no longer owns the latest pending status." >&2
+              exit 1
+            fi
+          fi
           gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
-            -f state="$(jq -r .state <<<"$decision")" \
+            -f state="$state" \
             -f context=agent-os/authoritative-aggregate \
             -f description="$(jq -r .description <<<"$decision")" \
             -f target_url="$TARGET_URL"
