@@ -20,11 +20,14 @@ that project. Unknown projects fail closed: a changed ``package.json`` directory
 JS/TS source file that no registered project owns fails the job instead of being
 silently unvalidated.
 
-Playwright browser suites stay in their own path-filtered workflow
-(``teacher-os-react-ci``): that workflow documents itself as not a Ready/merge
-decision, and a path-filtered workflow cannot be globally required without
-stranding unrelated PRs. Making them mandatory is an owner decision; the smallest
-change is to add the two Playwright commands to the ``teacher-os-web`` entry.
+Playwright browser suites for teacher-os-web run in this lane (the default
+``playwright.config.ts`` suite, mirroring the selector's focused teacher-os-web
+commands), so they survive aggregate-profile selection. The real-process
+integration suite (``playwright.integration.config.ts``) still runs only in the
+path-filtered advisory ``teacher-os-react-ci`` workflow; promoting it is a
+separate owner decision. The Picture Perfect pinned tests run as their own
+``npm test`` command in this lane, not only embedded inside ``npm run check``,
+so the lane's per-command receipt proves the pinned tests executed.
 """
 from __future__ import annotations
 
@@ -51,6 +54,22 @@ class Project(NamedTuple):
     also_triggered_by: tuple[str, ...] = ()
 
 
+# The pinned Picture Perfect tests run as their own command (the same six files
+# the selector's focused picture-perfect-coach command pins), before `check`
+# re-runs the full vitest suite as part of typecheck/lint/test/build/guard.
+# `check` alone cannot prove the pinned tests executed: its single exit code
+# cannot distinguish a test failure from a typecheck/build failure, and a
+# typecheck failure would stop the suite before any test ran.
+_PICTURE_PERFECT_PINNED_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+
+
 # Install commands mirror each project's existing plan: the reference UI project has
 # no committed lockfile, so it keeps ``npm install``; the workspace-automation-builder
 # fixture validator needs no install (Node built-ins only).
@@ -58,7 +77,11 @@ PROJECTS: tuple[Project, ...] = (
     Project(
         "picture-perfect-coach",
         "08_Tooling/instructional-materials-coach/picture-perfect-coach",
-        (("npm", "ci"), ("npm", "run", "check")),
+        (
+            ("npm", "ci"),
+            ("npm", "test", "--", *_PICTURE_PERFECT_PINNED_TESTS),
+            ("npm", "run", "check"),
+        ),
         # src/uiEvidence.test.ts imports ../../capture/safe_recording.mjs
         also_triggered_by=("08_Tooling/instructional-materials-coach/capture",),
     ),
@@ -77,8 +100,18 @@ PROJECTS: tuple[Project, ...] = (
     Project(
         "teacher-os-web",
         "08_Tooling/teacher-os-web",
-        (("npm", "ci"), ("npm", "run", "build"), ("npm", "run", "test:unit")),
-        "Playwright browser suites run in teacher-os-react-ci (advisory) and are not part of this lane.",
+        (
+            ("npm", "ci"),
+            ("npm", "run", "build"),
+            ("npm", "run", "test:unit"),
+            # Playwright (default config only), mirroring the selector's focused
+            # teacher-os-web commands. Without these, an aggregate-qualifying
+            # file dropped Playwright from every required lane: the aggregate
+            # job is Python-only and teacher-os-react-ci is advisory.
+            ("npx", "playwright", "install", "chromium"),
+            ("npx", "playwright", "test"),
+        ),
+        "Playwright integration suite (playwright.integration.config.ts) still runs only in the advisory teacher-os-react-ci workflow.",
     ),
     Project(
         "workspace-automation-builder",

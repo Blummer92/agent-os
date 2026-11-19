@@ -47,6 +47,105 @@ def test_mixed_python_and_frontend_still_selects_frontend():
     assert names(files) == ["picture-perfect-coach"]
 
 
+# Track B (D07 G4/G12): the pinned Picture Perfect test selection must run as its
+# own command in this lane, not only embedded inside `npm run check` (whose
+# typecheck/lint/build/guard steps are not a test substitute and whose single
+# exit code cannot prove the pinned tests executed).
+_PP_PINNED_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+
+
+def _project_by_name(name):
+    return next(p for p in fe.PROJECTS if p.name == name)
+
+
+def test_picture_perfect_lane_runs_pinned_npm_test_as_its_own_command():
+    project = _project_by_name("picture-perfect-coach")
+    assert project.commands == (
+        ("npm", "ci"),
+        ("npm", "test", "--", *_PP_PINNED_TESTS),
+        ("npm", "run", "check"),
+    )
+
+
+def test_picture_perfect_pinned_tests_match_the_selector_focused_command():
+    # Drift guard: the lane's pinned files must be exactly the selector's
+    # focused picture-perfect-coach command, so the two registries cannot
+    # silently disagree about which tests are pinned.
+    rule = next(r for r in load_rule_map()["focused_rules"] if r["name"] == "picture-perfect-coach")
+    assert rule["commands"] == [
+        "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm test -- "
+        + " ".join(_PP_PINNED_TESTS)
+    ]
+    project = _project_by_name("picture-perfect-coach")
+    assert project.commands[1] == ("npm", "test", "--", *_PP_PINNED_TESTS)
+
+
+def test_teacher_os_lane_runs_playwright_in_the_required_lane():
+    # Track B (D07 G5/G12): Playwright must run in this required lane. The
+    # selector's focused teacher-os-web commands include it, but any
+    # aggregate-qualifying file drops all five; the advisory path-filtered
+    # teacher-os-react-ci workflow cannot gate a merge.
+    project = _project_by_name("teacher-os-web")
+    assert project.commands == (
+        ("npm", "ci"),
+        ("npm", "run", "build"),
+        ("npm", "run", "test:unit"),
+        ("npx", "playwright", "install", "chromium"),
+        ("npx", "playwright", "test"),
+    )
+
+
+def test_teacher_os_playwright_commands_match_the_selector_focused_commands():
+    rule = next(r for r in load_rule_map()["focused_rules"] if r["name"] == "teacher-os-web")
+    assert rule["commands"][-2:] == [
+        "cd 08_Tooling/teacher-os-web && npx playwright install chromium",
+        "cd 08_Tooling/teacher-os-web && npx playwright test",
+    ]
+    project = _project_by_name("teacher-os-web")
+    assert project.commands[-2:] == (
+        ("npx", "playwright", "install", "chromium"),
+        ("npx", "playwright", "test"),
+    )
+
+
+def test_teacher_os_playwright_failure_blocks_and_stops_later_commands():
+    project = _project_by_name("teacher-os-web")
+    seen = []
+
+    def runner(argv, cwd):
+        seen.append(" ".join(argv))
+        return 1 if argv[:3] == ("npx", "playwright", "install") else 0
+
+    results = fe.run_projects([project], runner=runner)
+    assert seen == ["npm ci", "npm run build", "npm run test:unit", "npx playwright install chromium"]
+    problems = fe.evaluate([project], results)
+    assert len(problems) == 1 and "playwright" in problems[0] and "exit 1" in problems[0]
+
+
+def test_teacher_os_record_missing_playwright_is_not_a_pass():
+    # A record that stops after test:unit (skipped/aborted Playwright, or a
+    # stale receipt from before Playwright joined the lane) must never read
+    # as EXECUTED_PASS for the required lane.
+    project = _project_by_name("teacher-os-web")
+    record = [("npm ci", 0), ("npm run build", 0), ("npm run test:unit", 0)]
+    problems = fe.evaluate([project], {"teacher-os-web": record})
+    assert problems and problems[0].startswith("teacher-os-web:")
+
+
+def test_picture_perfect_record_missing_pinned_test_is_not_a_pass():
+    project = _project_by_name("picture-perfect-coach")
+    record = [("npm ci", 0), ("npm run check", 0)]
+    problems = fe.evaluate([project], {"picture-perfect-coach": record})
+    assert problems and problems[0].startswith("picture-perfect-coach:")
+
+
 def test_dependency_bot_lockfile_only_changes_select_every_touched_project():
     # Dependabot (#3743) and Renovate (#3789) PRs change only package(-lock).json.
     assert names([f"{PP}/package-lock.json", f"{CAPTURE}/package-lock.json"]) == [
@@ -242,10 +341,13 @@ def test_changed_files_against_main_requests_nul_delimited_output(monkeypatch):
     assert "--diff-filter=d" in calls[2] and "--diff-filter=d" not in calls[1]
 
 
-def test_main_teacher_os_note_discloses_advisory_playwright(lane):
+def test_main_teacher_os_reports_playwright_commands_in_the_required_lane(lane, capsys):
     lane["changed"] = [f"{TEACHER}/src/App.tsx"]
     assert fe.main() == 0
-    assert "Playwright browser suites run in teacher-os-react-ci (advisory)" in lane["summary_text"]()
+    summary = lane["summary_text"]()
+    assert "teacher-os-web: `npx playwright install chromium` exit 0" in summary
+    assert "teacher-os-web: `npx playwright test` exit 0" in summary
+    assert "teacher-os-react-ci (advisory)" not in summary
 
 
 def test_script_entrypoint_runs_as_a_file():
