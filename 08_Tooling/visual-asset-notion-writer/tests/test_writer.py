@@ -418,3 +418,5 @@ def test_all_icon_and_sync_authority_flags_are_false():
         assert not result.privacy_authorized
         assert not result.publication_authorized
         assert not result.production_authorized
+
+# D07 disposable hosted focused-selection probe; comment only.

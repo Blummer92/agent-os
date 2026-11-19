@@ -111,3 +111,5 @@ def test_parser_consumes_exact_1097_fields():
     parsed = parse_coding_command_center_handoff(payload)
     assert parsed.smallest_next_action == "x"
     assert parsed.primary_blocker is None
+
+# D07 disposable hosted focused-selection probe; comment only.

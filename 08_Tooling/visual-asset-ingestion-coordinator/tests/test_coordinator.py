@@ -142,3 +142,5 @@ def test_manual_review_duplicate_never_calls_writers():
     )
     assert result.state is CoordinatorState.PRECHECK_BLOCKED
     assert called == []
+
+# D07 disposable hosted focused-selection probe; comment only.

@@ -443,3 +443,5 @@ def test_no_authority_is_ever_created():
     request = _request(dry_run=True)
     result = plan_and_write_compute_decision(request)
     assert result.authority_created is False
+
+# D07 disposable hosted focused-selection probe; comment only.

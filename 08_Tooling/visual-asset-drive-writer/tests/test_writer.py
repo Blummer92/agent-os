@@ -125,3 +125,5 @@ def test_authority_flags_are_always_false():
     assert not result.classroom_readiness_authorized
     assert not result.publication_authorized
     assert not result.production_authorized
+
+# D07 disposable hosted focused-selection probe; comment only.

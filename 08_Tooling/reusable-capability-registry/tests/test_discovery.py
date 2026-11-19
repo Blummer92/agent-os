@@ -149,3 +149,5 @@ def test_100_record_reused_and_fresh_results_match():
     assert reused.parse_count == 1
     assert reused.index_build_count == 1
     assert reused.record_count == 100
+
+# D07 disposable hosted focused-selection probe; comment only.

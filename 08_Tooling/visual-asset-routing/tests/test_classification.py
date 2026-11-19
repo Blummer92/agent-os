@@ -49,3 +49,5 @@ def test_gate_never_grants_governed_authority():
         result.source_authority_granted,
         result.production_authorized,
     ))
+
+# D07 disposable hosted focused-selection probe; comment only.

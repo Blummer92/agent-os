@@ -190,3 +190,5 @@ def test_serialized_graph_is_deterministic_and_sorted():
 
     assert one == two
     assert [node["id"] for node in one["nodes"]] == ["a:first", "z:last"]
+
+# D07 disposable hosted focused-selection probe; comment only.

@@ -206,3 +206,5 @@ def _fake_intake(original_sha: str, normalized_sha: str):
         icc_profile_present=False,
         warnings=(),
     )
+
+# D07 disposable hosted focused-selection probe; comment only.
