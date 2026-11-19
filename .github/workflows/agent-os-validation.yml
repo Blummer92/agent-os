@@ -138,6 +138,39 @@ jobs:
           print("NODE_LOCK_PATHS")
           PY
 
+      # Disposable D07 probe. Do not merge this observer to main.
+      - name: Verify real D07 rename projection in the canonical plan input
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'd07/verify-a-real-rename-20261119' }}
+        env:
+          PROBE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROBE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROBE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          old_path = "08_Tooling/dashboard-migration-verification/docs/directory_structure.md"
+          new_path = "docs/d07-rename-probe-directory-structure.md"
+          plan_input = Path(os.environ["RUNNER_TEMP"], "changed-files.txt")
+          collected = plan_input.read_text(encoding="utf-8").splitlines()
+          tested_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if tested_sha != os.environ["PROBE_HEAD_SHA"]:
+              raise SystemExit("D07 rename probe checkout mismatch")
+          if collected.count(old_path) != 1 or collected.count(new_path) != 1:
+              raise SystemExit("D07 rename probe did not capture both planned endpoints exactly once")
+          print("D07_RENAME_OBSERVATION " + json.dumps({
+              "base_sha": os.environ["PROBE_BASE_SHA"],
+              "head_sha": tested_sha,
+              "pull_request": int(os.environ["PROBE_PR_NUMBER"]),
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "observed_paths": [old_path, new_path],
+          }, sort_keys=True))
+          PY
+
       - name: Fail closed on manual review
         if: ${{ steps.plan.outputs.profile == 'manual-review' }}
         run: |
