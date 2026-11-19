@@ -270,6 +270,12 @@ def capture_lesson_candidate(payload: Mapping[str, Any]) -> dict[str, object]:
             "canonical_github_refs": list(record.canonical_github_refs),
             "evidence_refs": list(record.evidence_refs),
             "surface_before_work_recommendation": record.surface_before_work,
+            # PR-2: CKR5 future_use_hints preserved as proposed,
+            # non-authoritative applicability hints. They travel on the
+            # reviewable proposal only -- never a Notion property, never
+            # verified applicability evidence, never an activation signal.
+            # catalog_entry_draft properties above are unchanged.
+            "proposed_applicability_hints": list(projection.proposed_applicability_hints),
             # Reviewed through an ordinary catalog PR; the owner then issues
             # one /agent-os notion-write command (#3417). Never auto-written.
             "catalog_entry_draft": {

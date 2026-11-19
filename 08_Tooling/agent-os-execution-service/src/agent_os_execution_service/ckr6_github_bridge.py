@@ -441,7 +441,22 @@ _RETRIEVAL_FINITE_REASONS = frozenset({
 _NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
+    "best_bucket_tied_identities",
 )
+# PR-1 (observational): HOW the CKR2 matcher chose lessons. Mechanism only,
+# never relevance or verification. Closed vocabulary; any other value is
+# dropped by the projection and refused by both writers.
+_SELECTION_BASIS_VALUES = frozenset({
+    "no-relevant-signal",
+    "identity-scoped",
+    "title-echo",
+    "exact-library",
+    "rule-ckr6-mutation-boundary",
+    "generic-unique",
+    "generic-tie-lexical-cut",
+    "not-evaluated",
+})
+_OPTIONAL_BASIS_KEY = "selection_basis"
 _MAX_DIAGNOSTIC_COUNTER = 10_000
 
 # Only source-controlled Area and Learning Type names may enter this optional
@@ -452,6 +467,13 @@ _TERMINAL_QUERY_BUCKETS = frozenset({
     *(f"type:{kind}" for kind in _LEARNING_TYPE_CAPABILITY),
     *(f"area:{area}/type:{kind}" for area in _AREA_ECOSYSTEM
       for kind in _LEARNING_TYPE_CAPABILITY),
+})
+_TERMINAL_PAGE_ROW_BUCKETS = frozenset({"0-24", "25", "over-25", "0-99", "100", "over-100", "unobserved"})
+_TERMINAL_PAGE_HAS_MORE = frozenset({"true", "false", "invalid"})
+_TERMINAL_PAGE_KEYS = frozenset({
+    "terminal_page_row_count_bucket",
+    "terminal_page_has_more",
+    "terminal_page_cursor_present",
 })
 _INCOMPLETE_REASON_CODES = frozenset({
     "row-bound-exceeded",
@@ -499,12 +521,37 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
             projected[name] = value
         else:
             projected[name] = 0
+    basis = source.get(_OPTIONAL_BASIS_KEY) if isinstance(source, Mapping) else None
+    if type(basis) is str and basis in _SELECTION_BASIS_VALUES:
+        projected[_OPTIONAL_BASIS_KEY] = basis
     if isinstance(source, Mapping) and "terminal_query_bucket" in source:
         value = source.get("terminal_query_bucket")
         projected["terminal_query_bucket"] = (
             value if type(value) is str and value in _TERMINAL_QUERY_BUCKETS
             else "unobserved"
         )
+    # The writers only accept the triple alongside terminal_query_bucket;
+    # the projection must apply the same rule, or it emits a diagnostic
+    # neither export boundary will write.
+    if (
+        isinstance(source, Mapping)
+        and _TERMINAL_PAGE_KEYS <= source.keys()
+        and "terminal_query_bucket" in source
+    ):
+        row_bucket = source["terminal_page_row_count_bucket"]
+        more = source["terminal_page_has_more"]
+        cursor_present = source["terminal_page_cursor_present"]
+        if (
+            type(row_bucket) is str and row_bucket in _TERMINAL_PAGE_ROW_BUCKETS
+            and type(more) is str and more in _TERMINAL_PAGE_HAS_MORE
+            and type(cursor_present) is bool
+            and projected["incomplete_reason_code"] != "none"
+        ):
+            projected.update({
+                "terminal_page_row_count_bucket": row_bucket,
+                "terminal_page_has_more": more,
+                "terminal_page_cursor_present": cursor_present,
+            })
     return projected
 
 
@@ -517,14 +564,54 @@ def write_retrieval_diagnostics_summary(
     Observational only: any failure is swallowed so it can never alter the
     already-written result, the exit status, or admission.
     """
-    if diagnostics is None:
+    if not isinstance(diagnostics, Mapping):
+        return False
+    # The summary is independently fail-closed on the new optional fields,
+    # even when a caller bypasses the usual finite projection.
+    page_keys_present = _TERMINAL_PAGE_KEYS & diagnostics.keys()
+    if page_keys_present:
+        if page_keys_present != _TERMINAL_PAGE_KEYS:
+            return False
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") not in _INCOMPLETE_REASON_CODES
+        ):
+            return False
+    # The summary and artifact must enforce the same finite allowlist.
+    # Otherwise direct calls can expose hostile reason text or unbounded
+    # counters in the Actions summary despite strict artifact validation.
+    required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
+        return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in (
+        required,
+        required | {"terminal_query_bucket"},
+        required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    ):
+        return False
+    finite = retrieval_diagnostics_projection({
+        "retrieval_diagnostics": diagnostics,
+        "selection_reason_codes": [diagnostics.get("retrieval_reason_code")],
+    })
+    if finite != dict(diagnostics):
         return False
     target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
     if not target:
         return False
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
-    for name in ("retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS, "terminal_query_bucket"):
-        if name == "terminal_query_bucket" and name not in diagnostics:
+    for name in (
+        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
+        _OPTIONAL_BASIS_KEY, "terminal_query_bucket", "terminal_page_row_count_bucket",
+        "terminal_page_has_more", "terminal_page_cursor_present",
+    ):
+        if name not in diagnostics:
             continue
         lines.append(f"- {name}: `{diagnostics.get(name)}`")
     try:
@@ -550,8 +637,28 @@ def write_retrieval_diagnostics_artifact(
     expected_keys = {
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
     }
-    if set(diagnostics) not in (expected_keys, expected_keys | {"terminal_query_bucket"}):
+    allowed_keys = (
+        expected_keys,
+        expected_keys | {"terminal_query_bucket"},
+        expected_keys | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    )
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
         return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in allowed_keys:
+        return False
+    if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") == "none"
+        ):
+            return False
     bucket = diagnostics.get("terminal_query_bucket")
     if "terminal_query_bucket" in diagnostics and (type(bucket) is not str or bucket not in _TERMINAL_QUERY_BUCKETS):
         return False
@@ -575,8 +682,13 @@ def write_retrieval_diagnostics_artifact(
         "incomplete_reason_code": incomplete,
         **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
     }
+    if _OPTIONAL_BASIS_KEY in diagnostics:
+        safe[_OPTIONAL_BASIS_KEY] = diagnostics[_OPTIONAL_BASIS_KEY]
     if "terminal_query_bucket" in diagnostics:
         safe["terminal_query_bucket"] = bucket
+    for name in _TERMINAL_PAGE_KEYS:
+        if name in diagnostics:
+            safe[name] = diagnostics[name]
     try:
         path.write_text(
             json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
@@ -805,6 +917,10 @@ def _canonical_result_json(payload: Mapping[str, object]) -> str:
     )
 
 
+class _ResultCommentTooLarge(ValueError):
+    """The exact encoded result exceeds the postback byte budget."""
+
+
 def serialize_ckr6_result_comment(
     result: Mapping[str, object], *, request_comment_id: int
 ) -> str:
@@ -826,7 +942,7 @@ def serialize_ckr6_result_comment(
     payload = {**result, "request_comment_id": request_comment_id}
     body = CKR6_RESULT_MARKER + "\n" + _canonical_result_json(payload)
     if len(body.encode("utf-8")) > MAX_RESULT_COMMENT_BYTES:
-        raise ValueError("serialized CKR6 result exceeds the bounded comment size")
+        raise _ResultCommentTooLarge("serialized CKR6 result exceeds the bounded comment size")
     return body
 
 
@@ -1432,7 +1548,33 @@ def postback_result_comment(
     issue_number: int = issue["number"]
     request_comment_id: int = comment["id"]
     payload = result if result is not None else _fallback_result(repository, issue_number)
-    body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    try:
+        body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    except _ResultCommentTooLarge:
+        proposal = payload.get("lesson_proposal")
+        reasons = payload.get("reason_codes")
+        hints = proposal.get("proposed_applicability_hints") if isinstance(proposal, dict) else None
+        if (
+            payload.get("operation") != "lesson-candidate"
+            or not isinstance(proposal, dict)
+            or not isinstance(hints, list)
+            or not hints
+            or not isinstance(reasons, list)
+        ):
+            raise
+        # The Actions evidence artifact already contains the unaltered
+        # result.json. Omit only the new optional field from the comment,
+        # explicitly; keep the legacy draft and request correlation intact.
+        bounded_proposal = {
+            key: value for key, value in proposal.items()
+            if key != "proposed_applicability_hints"
+        }
+        comment_payload = {
+            **payload,
+            "lesson_proposal": bounded_proposal,
+            "reason_codes": [*reasons, "proposed-applicability-hints-omitted-from-comment"],
+        }
+        body = serialize_ckr6_result_comment(comment_payload, request_comment_id=request_comment_id)
 
     import urllib.request
 
@@ -1556,3 +1698,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

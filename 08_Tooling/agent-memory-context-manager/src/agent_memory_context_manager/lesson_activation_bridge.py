@@ -27,11 +27,13 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .coding_knowledge_selection import (
     MAX_GUIDANCE_TEXT_CHARS,
+    MAX_SELECTED,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
     _match_candidate,
+    _norm,
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
@@ -418,6 +420,88 @@ def _bound_relevant_lessons(
     return _take_distinct_ids(unranked)
 
 
+# PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
+# lessons. A value states mechanism only -- never relevance, truth or
+# verification -- and never feeds selection, status or admission.
+# ``not-evaluated`` means selection was skipped, unavailable or could not
+# complete (not-needed, no read executor, read error, incomplete pagination);
+# ``no-relevant-signal`` is reserved for a COMPLETED evaluation that found no
+# qualifying match.
+SELECTION_BASIS_VALUES = frozenset({
+    "no-relevant-signal",
+    "identity-scoped",
+    "title-echo",
+    "exact-library",
+    "rule-ckr6-mutation-boundary",
+    "generic-unique",
+    "generic-tie-lexical-cut",
+    "not-evaluated",
+})
+_GENERIC_REASONS = frozenset({
+    "keyword-overlap", "ecosystem-capability-match", "target-path-match",
+})
+
+
+@dataclass(frozen=True)
+class SelectionBasis:
+    basis: str
+    best_bucket: int
+    tied_identities: int
+
+
+# Recorded when no evaluation completed. Never produced by
+# ``describe_selection_basis`` itself, which always describes a completed one.
+NOT_EVALUATED = SelectionBasis(basis="not-evaluated", best_bucket=0, tied_identities=0)
+
+
+def describe_selection_basis(
+    request: CodingKnowledgeRequest,
+    lessons: Sequence[LessonRecordEvidence],
+    *,
+    identity_route: bool,
+) -> SelectionBasis:
+    """Describe how the canonical CKR2 matcher chose among ``lessons``.
+
+    Pure and observational: reuses ``_match_candidate`` unchanged, reads
+    only the request's hint fields (never ``task_reference``), does not
+    mutate or reorder its inputs, and is never consulted by selection.
+    ``tied_identities`` counts DISTINCT lesson IDs in the best bucket over
+    the whole pool given (before the five-ID bound), so a duplicate revision
+    counts once.
+    """
+    best = 0
+    tied: set[str] = set()
+    reasons: set[str] = set()
+    via_library_name = False
+    hints = {_norm(value) for value in request.library_hints}
+    for lesson in lessons:
+        bucket, matched = _match_candidate(request, _as_selection_candidate(lesson))
+        if not bucket:
+            continue
+        if bucket > best:
+            best, tied, reasons, via_library_name = bucket, set(), set(), False
+        if bucket == best:
+            tied.add(lesson.lesson_id)
+            reasons.update(matched)
+            if lesson.library_name and _norm(lesson.library_name) in hints:
+                via_library_name = True
+
+    # Evaluated in the documented order; the first matching row wins.
+    if not best:
+        basis = "no-relevant-signal"
+    elif identity_route:
+        basis = "identity-scoped"
+    elif best == 3:
+        basis = "exact-library" if via_library_name else "title-echo"
+    elif "verified-ckr6-mutation-context-match" in reasons:
+        basis = "rule-ckr6-mutation-boundary"
+    elif reasons & _GENERIC_REASONS:
+        basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
+    else:  # pragma: no cover - the matcher has no other reason vocabulary
+        basis = "no-relevant-signal"
+    return SelectionBasis(basis=basis, best_bucket=best, tied_identities=len(tied))
+
+
 def _take_distinct_ids(
     ordered: Sequence[LessonRecordEvidence],
 ) -> tuple[LessonRecordEvidence, ...]:
@@ -539,6 +623,10 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
         raise LessonActivationError("read executor returned a non-boolean has_more")
     next_cursor = raw.get("next_cursor")
     if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
+        raise LessonActivationError("read executor returned a malformed next_cursor")
+    # A terminal page must not simultaneously advertise a continuation.
+    # Do not admit an incomplete or internally contradictory corpus to CKR2.
+    if not has_more and next_cursor is not None:
         raise LessonActivationError("read executor returned a malformed next_cursor")
     return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
 
