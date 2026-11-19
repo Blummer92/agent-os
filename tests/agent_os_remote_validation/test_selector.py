@@ -485,11 +485,18 @@ def test_documentation_only_remains_static() -> None:
 
 
 def test_tooling_documentation_only_reproduces_2630_as_static() -> None:
+    # D07 Track A: the visual-asset-drive-writer and visual-asset-routing
+    # READMEs that used to stand here are now owned by focused rules (whole-
+    # directory ownership, the execution-service precedent), so they select
+    # their focused suites -- see
+    # test_focused_tooling_documentation_outranks_generic_static_classification.
+    # The #2630 case is preserved with documentation from tool directories
+    # that still have no focused owner.
     paths = [
         "03_Templates/prompts/workspace-automation-builder.md",
         "08_Tooling/workspace-automation-builder/README.md",
-        "08_Tooling/visual-asset-drive-writer/README.md",
-        "08_Tooling/visual-asset-routing/README.md",
+        "08_Tooling/ckr4-benchmark-harness/README.md",
+        "08_Tooling/teacher-os-web/README.md",
     ]
     plan = _select(_input(paths))
     assert plan.profile == "static"

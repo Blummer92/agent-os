@@ -130,3 +130,77 @@ def test_teacher_os_fixed_command_allowlist_and_working_directory():
 def test_teacher_os_rejects_unregistered_commands(suffix):
     with pytest.raises(ValueError, match="not in the bounded CI executor"):
         module._resolve_command("cd 08_Tooling/teacher-os-web && " + suffix)
+
+
+# --- D07 Track A: the 10 newly mapped Python suites (G2/G3) -------------------
+# The focused command string keeps the existing root-relative form
+# (``python -m pytest 08_Tooling/<dir>/tests``), but the bounded executor runs
+# it exactly the way ``scripts/validate-all.sh`` runs the suite: with the
+# suite directory as the working directory and ``tests`` as the target, so
+# each suite's own pytest configuration and ``PYTHONPATH=src`` layout apply.
+# A plain root-relative run cannot import five of the ten packages
+# (notion-operational-guidance-writer, visual-asset-drive-writer,
+# visual-asset-ingestion-coordinator, visual-asset-notion-writer,
+# visual-asset-routing), which is why resolution is suite-local, not a
+# registry-only lookup from ROOT.
+import os
+
+_D07_PYTHON_SUITES = (
+    "agent-memory-context-manager",
+    "dashboard-migration-verification",
+    "notion-compute-decision-writer",
+    "notion-operational-guidance-writer",
+    "reusable-capability-registry",
+    "visual-asset-drive-writer",
+    "visual-asset-ingestion-coordinator",
+    "visual-asset-intake",
+    "visual-asset-notion-writer",
+    "visual-asset-routing",
+)
+
+
+@pytest.mark.parametrize("directory", _D07_PYTHON_SUITES)
+def test_d07_executor_resolves_new_python_suite_to_suite_directory(directory):
+    command = f"python -m pytest 08_Tooling/{directory}/tests"
+    argv, cwd = module._resolve_command(command)
+    assert argv == ("python", "-m", "pytest", "tests")
+    assert cwd == ROOT / "08_Tooling" / directory
+
+
+@pytest.mark.parametrize("directory", _D07_PYTHON_SUITES)
+def test_d07_executor_supplies_suite_src_on_pythonpath(directory, monkeypatch):
+    command = f"python -m pytest 08_Tooling/{directory}/tests"
+    _, cwd = module._resolve_command(command)
+    monkeypatch.setenv("PYTHONPATH", "/existing-entry")
+    env = module._command_env(cwd)
+    suite_src = str(cwd / "src")
+    if (cwd / "src").is_dir():
+        assert env["PYTHONPATH"] == suite_src + os.pathsep + "/existing-entry"
+    else:
+        # dashboard-migration-verification has no src/ layout; validate-all.sh
+        # runs it without PYTHONPATH, and the executor must match exactly.
+        assert env["PYTHONPATH"] == "/existing-entry"
+
+
+def test_d07_executor_root_cwd_still_gets_repository_src_on_pythonpath(monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/existing-entry")
+    env = module._command_env(ROOT)
+    assert env["PYTHONPATH"] == str(ROOT / "src") + os.pathsep + "/existing-entry"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Single-file variants are not registered suite commands.
+        "python -m pytest 08_Tooling/visual-asset-routing/tests/test_routing.py",
+        "python -m pytest 08_Tooling/agent-memory-context-manager/tests/test_lesson_retrieval_orchestrator.py",
+        # Trailing-slash and extra-flag variants are not registered either.
+        "python -m pytest 08_Tooling/visual-asset-routing/tests/",
+        "python -m pytest 08_Tooling/visual-asset-routing/tests -q",
+        # A directory outside the mapped ten is not admitted by analogy.
+        "python -m pytest 08_Tooling/workspace-automation-builder/tests",
+    ],
+)
+def test_d07_executor_rejects_unregistered_python_suite_variants(command):
+    with pytest.raises(ValueError, match="not in the bounded CI executor"):
+        module._resolve_command(command)

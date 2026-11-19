@@ -56,6 +56,55 @@ _TEACHER_OS_COMMANDS = {
 }
 _CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
+# D07 Track A (G2/G3): the 10 newly mapped Python suites, keyed by their exact
+# focused command string. The command string keeps the existing root-relative
+# form (``python -m pytest 08_Tooling/<dir>/tests``) so the command-plan
+# registry still binds the canonical root-relative argv, but the bounded
+# executor resolves suite-locally: the suite directory is the working
+# directory and ``tests`` is the target. That is exactly how
+# ``scripts/validate-all.sh`` runs each suite, and it is required, not
+# cosmetic -- five of the ten packages (notion-operational-guidance-writer,
+# visual-asset-drive-writer, visual-asset-ingestion-coordinator,
+# visual-asset-notion-writer, visual-asset-routing) are not importable from
+# the repository root, so a plain root-relative run fails at collection with
+# ModuleNotFoundError. Suite-local execution also applies each suite's own
+# pytest configuration (e.g. reusable-capability-registry's norecursedirs
+# exclusion of its fixtures file, dashboard-migration-verification's
+# pythonpath) instead of the root pytest.ini.
+_PYTHON_FOCUSED_SUITE_COMMANDS = {
+    "python -m pytest 08_Tooling/agent-memory-context-manager/tests": (
+        ROOT / "08_Tooling/agent-memory-context-manager"
+    ),
+    "python -m pytest 08_Tooling/dashboard-migration-verification/tests": (
+        ROOT / "08_Tooling/dashboard-migration-verification"
+    ),
+    "python -m pytest 08_Tooling/notion-compute-decision-writer/tests": (
+        ROOT / "08_Tooling/notion-compute-decision-writer"
+    ),
+    "python -m pytest 08_Tooling/notion-operational-guidance-writer/tests": (
+        ROOT / "08_Tooling/notion-operational-guidance-writer"
+    ),
+    "python -m pytest 08_Tooling/reusable-capability-registry/tests": (
+        ROOT / "08_Tooling/reusable-capability-registry"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-drive-writer/tests": (
+        ROOT / "08_Tooling/visual-asset-drive-writer"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-ingestion-coordinator/tests": (
+        ROOT / "08_Tooling/visual-asset-ingestion-coordinator"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-intake/tests": (
+        ROOT / "08_Tooling/visual-asset-intake"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-notion-writer/tests": (
+        ROOT / "08_Tooling/visual-asset-notion-writer"
+    ),
+    "python -m pytest 08_Tooling/visual-asset-routing/tests": (
+        ROOT / "08_Tooling/visual-asset-routing"
+    ),
+}
+_PYTHON_FOCUSED_SUITE_DIRS = frozenset(_PYTHON_FOCUSED_SUITE_COMMANDS.values())
+
 
 def _decode_plan(encoded: str) -> ValidationPlan:
     try:
@@ -117,6 +166,12 @@ def _current_head() -> str:
 
 
 def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
+    suite_dir = _PYTHON_FOCUSED_SUITE_COMMANDS.get(command)
+    if suite_dir is not None:
+        # Checked before the registry on purpose: the registry binds the
+        # canonical root-relative argv, but these suites must execute from
+        # their own directory (see _PYTHON_FOCUSED_SUITE_COMMANDS).
+        return ("python", "-m", "pytest", "tests"), suite_dir
     argv = _COMMAND_REGISTRY.get(command)
     if argv is not None:
         return argv, ROOT
@@ -146,6 +201,17 @@ def _command_env(cwd: Path) -> dict[str, str]:
     """
     env = dict(os.environ)
     if cwd != ROOT:
+        if cwd in _PYTHON_FOCUSED_SUITE_DIRS and (cwd / "src").is_dir():
+            # Suite-local focused execution (see _PYTHON_FOCUSED_SUITE_COMMANDS):
+            # mirror validate-all.sh, which runs ``PYTHONPATH=src python -m
+            # pytest tests`` inside a suite directory when it has a src/
+            # layout. Suites without src/ (dashboard-migration-verification)
+            # get no PYTHONPATH addition, exactly as validate-all.sh runs them.
+            src_entry = str(cwd / "src")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                src_entry + os.pathsep + existing if existing else src_entry
+            )
         return env
     src_entry = str(ROOT / "src")
     existing = env.get("PYTHONPATH", "")
