@@ -922,8 +922,14 @@ def describe_applicability_match(
         reasons.add("unreviewed-record")
 
     # Verified observations only: fresh, same repository, unique identity.
+    # D120 Option A (owner-approved): satisfaction is per-observation. A
+    # condition (mechanism, boundary) is satisfied only by ONE observation
+    # carrying that mechanism AND that boundary together. The unions below
+    # are kept for the explanatory output only; they never satisfy a
+    # condition on their own.
     verified_mechanisms: set[str] = set()
     verified_boundaries: set[str] = set()
+    verified_pairs: set[tuple[str, str | None]] = set()
     seen_observation_ids: dict[str, VerifiedObservation] = {}
     for observation in verified_observations:
         if observation.repository != task.repository:
@@ -946,11 +952,18 @@ def describe_applicability_match(
         verified_mechanisms.add(observation.mechanism)
         if observation.boundary_id is not None:
             verified_boundaries.add(observation.boundary_id)
+        verified_pairs.add((observation.mechanism, observation.boundary_id))
 
     def _satisfied(condition: ApplicabilityCondition) -> bool:
-        if condition.mechanism not in verified_mechanisms:
-            return False
-        return condition.boundary_id is None or condition.boundary_id in verified_boundaries
+        # D120 Option A: one observation must carry the mechanism and the
+        # boundary together. A boundary-less condition needs only one
+        # observation carrying the mechanism.
+        if condition.boundary_id is None:
+            return any(
+                mechanism == condition.mechanism
+                for mechanism, _ in verified_pairs
+            )
+        return (condition.mechanism, condition.boundary_id) in verified_pairs
 
     if not record.positive_conditions:
         reasons.add("no-positive-applicability-condition")

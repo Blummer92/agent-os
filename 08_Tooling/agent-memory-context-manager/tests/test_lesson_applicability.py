@@ -787,6 +787,195 @@ def test_d124_oversized_condition_identifiers_fail_closed_without_exception():
     assert "invalid-applicability-condition" in result.reason_codes
 
 
+# ---------------------------------------------------------------------------
+# D120 Option A per-observation conjunction (owner-approved)
+# ---------------------------------------------------------------------------
+# A condition (mechanism, boundary) is satisfied only by ONE verified
+# observation carrying that mechanism AND that boundary together. A
+# mechanism from one observation combined with a boundary from another
+# must not satisfy a condition, in either polarity. Boundary-less
+# conditions keep their existing behavior: any one eligible observation
+# carrying the mechanism satisfies them.
+
+
+def test_d120_split_positive_must_not_match():
+    """D120: (m1, b2) + (m2, b1) must not satisfy positive (m1, b1)."""
+    result = match(
+        observations=(
+            verified(
+                mechanism="test-mechanism-alpha",
+                boundary_id="test-boundary-two",
+                observation_id="o1",
+            ),
+            verified(
+                mechanism="test-mechanism-beta",
+                boundary_id="test-boundary-one",
+                observation_id="o2",
+            ),
+        )
+    )
+    assert result.matched is False
+    assert "positive-applicability-condition-unsatisfied" in result.reason_codes
+
+
+def test_d120_same_positive_must_match():
+    """D120: one observation (m1, b1) satisfies positive (m1, b1)."""
+    result = match(observations=(verified(),))
+    assert result.matched is True
+
+
+def test_d120_split_negative_must_not_veto():
+    """D120: split (m1, b2) + (m2, b1) must not veto via negative (m1, b1)."""
+    record = valid_record(
+        mechanisms=[
+            "test-mechanism-alpha",
+            "test-mechanism-beta",
+            "test-mechanism-gamma",
+        ],
+        invariants=[
+            {"boundary_id": "test-boundary-one", "kind": "production-boundary"},
+            {"boundary_id": "test-boundary-two", "kind": "production-boundary"},
+        ],
+        positive_conditions=[
+            {"mechanism": "test-mechanism-gamma", "boundary_id": "test-boundary-two"}
+        ],
+        negative_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": "test-boundary-one"}
+        ],
+    )
+    result = match(
+        record=record,
+        observations=(
+            verified(
+                mechanism="test-mechanism-gamma",
+                boundary_id="test-boundary-two",
+                observation_id="o0",
+            ),
+            verified(
+                mechanism="test-mechanism-alpha",
+                boundary_id="test-boundary-two",
+                observation_id="o1",
+            ),
+            verified(
+                mechanism="test-mechanism-beta",
+                boundary_id="test-boundary-one",
+                observation_id="o2",
+            ),
+        ),
+    )
+    assert result.matched is True
+    assert "negative-applicability-condition" not in result.reason_codes
+
+
+def test_d120_same_negative_must_veto():
+    """D120: one observation (m1, b1) vetoes via negative (m1, b1)."""
+    record = valid_record(
+        mechanisms=[
+            "test-mechanism-alpha",
+            "test-mechanism-beta",
+            "test-mechanism-gamma",
+        ],
+        invariants=[
+            {"boundary_id": "test-boundary-one", "kind": "production-boundary"},
+            {"boundary_id": "test-boundary-two", "kind": "production-boundary"},
+        ],
+        positive_conditions=[
+            {"mechanism": "test-mechanism-gamma", "boundary_id": "test-boundary-two"}
+        ],
+        negative_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": "test-boundary-one"}
+        ],
+    )
+    result = match(
+        record=record,
+        observations=(
+            verified(
+                mechanism="test-mechanism-gamma",
+                boundary_id="test-boundary-two",
+                observation_id="o0",
+            ),
+            verified(
+                mechanism="test-mechanism-alpha",
+                boundary_id="test-boundary-one",
+                observation_id="o1",
+            ),
+        ),
+    )
+    assert result.matched is False
+    assert "negative-applicability-condition" in result.reason_codes
+
+
+def test_d120_mechanism_only_condition_still_satisfied_by_mechanism_only_observation():
+    """D120: (m1, None) condition is satisfied by a (m1, None) observation."""
+    record = valid_record(
+        positive_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": None}
+        ]
+    )
+    result = match(
+        record=record,
+        observations=(verified(boundary_id=None, observation_id="o1"),),
+    )
+    assert result.matched is True
+
+
+def test_d120_mechanism_only_condition_satisfied_by_boundaried_observation():
+    """D120: (m1, None) condition is satisfied by a (m1, b2) observation."""
+    record = valid_record(
+        positive_conditions=[
+            {"mechanism": "test-mechanism-alpha", "boundary_id": None}
+        ]
+    )
+    result = match(
+        record=record,
+        observations=(
+            verified(boundary_id="test-boundary-two", observation_id="o1"),
+        ),
+    )
+    assert result.matched is True
+
+
+def test_d120_duplicate_identity_still_fails_closed():
+    """D120: one observation ID naming two observations fails closed."""
+    result = match(
+        observations=(
+            verified(observation_id="same"),
+            verified(
+                mechanism="test-mechanism-beta",
+                boundary_id="test-boundary-two",
+                observation_id="same",
+            ),
+        )
+    )
+    assert result.matched is False
+    assert "conflicting-observation-identity" in result.reason_codes
+
+
+def test_d120_foreign_repo_stale_freshness_and_stale_revision_still_rejected():
+    """D120: repository, freshness, and revision gating are unchanged."""
+    assert (
+        match(
+            observations=(
+                verified(repository="Other/repo", observation_id="o1"),
+            )
+        ).matched
+        is False
+    )
+    assert (
+        match(
+            observations=(verified(freshness="stale", observation_id="o1"),)
+        ).matched
+        is False
+    )
+    assert (
+        match(
+            state=lesson_state(source_revision=OTHER_REVISION),
+            observations=(verified(observation_id="o1"),),
+        ).matched
+        is False
+    )
+
+
 def test_unreviewed_record_never_matched():
     record = ApplicabilityRecord(
         lesson_id="LL-12",
