@@ -38,6 +38,7 @@ def sample_packet():
 
 
 def test_valid_packet_returns_string():
+    assert False, "D07 hosted negative control (disposable): deliberate failure must make the focused plan job go red"
     key = build_handoff_packet_cache_key(sample_packet())
 
     assert isinstance(key, str)
