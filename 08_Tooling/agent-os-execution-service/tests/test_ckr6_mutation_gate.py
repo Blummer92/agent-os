@@ -979,3 +979,10 @@ def test_linked_issue_extraction_rejects_non_authoritative(body):
 def test_linked_issue_extraction_ambiguous_closing_looking(body):
     with pytest.raises(ValueError, match=ISSUE_LINK_AMBIGUOUS):
         _linked_issue_from_pr_body(body)
+
+
+# Disposable post-4030 live canary #4044. NEVER MERGE.
+# This fixture is intentionally independent of production behavior and cannot
+# certify CKR6 lesson retrieval, trusted owner admission, or host application.
+def test_post4030_canary_test_only_marker():
+    assert "NEVER MERGE" == "NEVER MERGE"
