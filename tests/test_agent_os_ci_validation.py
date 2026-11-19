@@ -339,3 +339,12 @@ def test_d07_focused_preserves_first_real_failure_and_runs_later_commands(tmp_pa
     records = json.loads((tmp_path / "manifest.json").read_text())["commands"]
     assert len(calls) == 2
     assert [record["classification"] for record in records] == [classification, "EXECUTED_PASS"]
+
+
+def test_focused_executor_resolves_receipt_and_junit_regression_commands():
+    for suffix in ("junit", "receipt"):
+        target = f"tests/test_agent_os_ci_validation_{suffix}.py"
+        assert module._resolve_command(f"python -m pytest {target}") == (
+            ("python", "-m", "pytest", target),
+            ROOT,
+        )

@@ -56,6 +56,18 @@ def _select(value: SelectionInput, rules: dict[str, object] | None = None):
     return select_validation_plan(value, rules or RULES)
 
 
+def test_ci_executor_receipt_changes_select_bounded_junit_and_receipt_tests() -> None:
+    paths = (
+        "tests/test_agent_os_ci_validation_junit.py",
+        "tests/test_agent_os_ci_validation_receipt.py",
+    )
+    commands = tuple(f"python -m pytest {path}" for path in paths)
+    for path in paths:
+        plan = _select(_input([path]))
+        assert plan.profile == "focused"
+        assert plan.commands == commands
+
+
 def test_documentation_only_is_static_and_zero_build() -> None:
     plan = _select(_input(_fixtures()["static"]))
     assert plan.profile == "static"

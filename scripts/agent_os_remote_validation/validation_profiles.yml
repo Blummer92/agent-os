@@ -8,6 +8,7 @@
   "focused_rules": [
     {"name":"issue-acceptance","prefixes":["scripts/agent_os_issue_acceptance/","tests/agent_os_issue_acceptance/"],"commands":["python -m pytest tests/agent_os_issue_acceptance"]},
     {"name":"issue-labels","prefixes":["scripts/agent_os_issue_labels/","tests/agent_os_issue_labels/"],"commands":["python -m pytest tests/agent_os_issue_labels"]},
+    {"name":"ci-validation-evidence-tests","exact_paths":["tests/test_agent_os_ci_validation_junit.py","tests/test_agent_os_ci_validation_receipt.py"],"commands":["python -m pytest tests/test_agent_os_ci_validation_junit.py","python -m pytest tests/test_agent_os_ci_validation_receipt.py"]},
     {"name":"execution-interface","prefixes":["scripts/agent_os_execution_interface/","tests/agent_os_execution_interface/"],"commands":["python -m pytest tests/agent_os_execution_interface"]},
     {"name":"execution-service","prefixes":["08_Tooling/agent-os-execution-service/"],"commands":["python -m pytest 08_Tooling/agent-os-execution-service/tests"]},
     {"name":"remote-validation","prefixes":["scripts/agent_os_remote_validation/","tests/agent_os_remote_validation/"],"commands":["python -m pytest tests/agent_os_remote_validation"]},

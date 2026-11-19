@@ -55,7 +55,14 @@ _TEACHER_OS_COMMANDS = {
     "cd 08_Tooling/teacher-os-web && npx playwright install chromium": ("npx", "playwright", "install", "chromium"),
     "cd 08_Tooling/teacher-os-web && npx playwright test": ("npx", "playwright", "test"),
 }
-_CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
+_CI_VALIDATION_SELF_TESTS = {
+    f"python -m pytest {target}": ("python", "-m", "pytest", target)
+    for target in (
+        "tests/test_agent_os_ci_validation.py",
+        "tests/test_agent_os_ci_validation_junit.py",
+        "tests/test_agent_os_ci_validation_receipt.py",
+    )
+}
 # Match the authoritative runner: these plugins can produce passing-looking
 # JUnit without executing test bodies.
 _PYTEST_EXECUTION_GUARD = ("-p", "no:setuponly", "-p", "no:setupplan")
@@ -190,8 +197,9 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     teacher_argv = _TEACHER_OS_COMMANDS.get(command)
     if teacher_argv is not None:
         return teacher_argv, _TEACHER_OS_DIR
-    if command == _CI_VALIDATION_SELF_TEST:
-        return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
+    ci_test = _CI_VALIDATION_SELF_TESTS.get(command)
+    if ci_test is not None:
+        return ci_test, ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
 
 
