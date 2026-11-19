@@ -102,7 +102,6 @@ _REVIEW_REFERENCE = re.compile(
     r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}"
     r"(?:#[A-Za-z0-9_-]{1,64})?"
 )
-_TASK_REFERENCE = _REVIEW_REFERENCE
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _OBSERVATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
@@ -128,6 +127,13 @@ OWNER_DECISIONS_PENDING = (
 # ---------------------------------------------------------------------------
 # Contract types
 # ---------------------------------------------------------------------------
+
+
+def _lesson_identity(lesson_id: object, source_revision: object) -> None:
+    if type(lesson_id) is not str or _LESSON_ID.fullmatch(lesson_id) is None:
+        raise ValueError("lesson_id must be a canonical lesson ID")
+    if type(source_revision) is not str or _REVISION.fullmatch(source_revision) is None:
+        raise ValueError("source_revision must be an exact revision timestamp")
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,13 +223,7 @@ class ApplicabilityRecord:
     evidence: tuple[EvidenceRef, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.lesson_id) is not str or _LESSON_ID.fullmatch(self.lesson_id) is None:
-            raise ValueError("lesson_id must be a canonical lesson ID")
-        if (
-            type(self.source_revision) is not str
-            or _REVISION.fullmatch(self.source_revision) is None
-        ):
-            raise ValueError("source_revision must be an exact revision timestamp")
+        _lesson_identity(self.lesson_id, self.source_revision)
         _bounded_tuple(self.mechanisms, "mechanisms", _identifier)
         if not self.mechanisms:
             raise ValueError("mechanisms must be non-empty")
@@ -341,13 +341,7 @@ class ShadowLessonState:
     currentness: str  # "current" | "stale" | "unverifiable"
 
     def __post_init__(self) -> None:
-        if type(self.lesson_id) is not str or _LESSON_ID.fullmatch(self.lesson_id) is None:
-            raise ValueError("lesson_id must be a canonical lesson ID")
-        if (
-            type(self.source_revision) is not str
-            or _REVISION.fullmatch(self.source_revision) is None
-        ):
-            raise ValueError("source_revision must be an exact revision timestamp")
+        _lesson_identity(self.lesson_id, self.source_revision)
         _bounded_text(self.title, "title")
         if type(self.archived) is not bool or type(self.surface_before_work) is not bool:
             raise TypeError("archived and surface_before_work must be bool")
@@ -376,7 +370,7 @@ class TaskEvidence:
     def __post_init__(self) -> None:
         if (
             type(self.task_reference) is not str
-            or _TASK_REFERENCE.fullmatch(self.task_reference) is None
+            or _REVIEW_REFERENCE.fullmatch(self.task_reference) is None
         ):
             raise ValueError("task_reference must be a canonical GitHub URL")
         if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
