@@ -42,6 +42,16 @@ dependencies = [
 # Installing the command grants no host registration, deployment, credentials,
 # external-write, merge, or lifecycle authority.
 agent-os-mcp = "agent_os_execution_service.mcp_server:main"
+# #3333 supplies five narrowly typed host-local D61 ingress operations on a
+# qualified trusted host. Installing these commands grants no approval,
+# execution, publication, merge, host registration, deployment, credential,
+# external-write, retry, or lifecycle authority; all five fail closed unless
+# existing canonical owners reacquire current evidence.
+agent-os-host-capture-custody = "agent_os_execution_service.host_ingress:main_capture_custody"
+agent-os-host-freeze-pre-validation-evidence = "agent_os_execution_service.host_ingress:main_freeze_pre_validation"
+agent-os-host-record-dependency-readiness = "agent_os_execution_service.host_ingress:main_record_dependency_readiness"
+agent-os-host-originate-authorized-validation-request = "agent_os_execution_service.host_ingress:main_originate_authorized_validation_request"
+agent-os-host-run-authorized-validation = "agent_os_execution_service.host_ingress:main_run_authorized_validation"
 
 # The ``scripts.*`` packages below stay canonical where they are and are
 # imported only by this distribution's runtime (``agent_os_candidate_packet``

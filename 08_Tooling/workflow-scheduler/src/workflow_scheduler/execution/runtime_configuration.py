@@ -28,6 +28,9 @@ from scripts.agent_os_execution_capabilities.dependencies import (
 )
 from scripts.agent_os_execution_capabilities.models import RepositoryIdentity
 from workflow_scheduler.execution.frozen_test_validation_adapter import FrozenTestCommand
+from workflow_scheduler.governance.dev_validation_profiles import (
+    validation_command_identities_bind,
+)
 from workflow_scheduler.execution.single_issue_pilot import (
     RUNTIME_EXECUTION_MODES,
     STANDARD_EXECUTION_MODE,
@@ -260,7 +263,9 @@ def _required_environment(
         raise ConcreteRuntimeConfigurationError(
             "required_environment_spec must be exact RequiredEnvironmentSpec or None"
         )
-    if value.required_validation_command_ids != tuple(sorted(expected_test_ids)):
+    if not validation_command_identities_bind(
+        value.required_validation_command_ids, tuple(sorted(expected_test_ids))
+    ):
         raise ConcreteRuntimeConfigurationError(
             "required environment validation-command identities drifted"
         )

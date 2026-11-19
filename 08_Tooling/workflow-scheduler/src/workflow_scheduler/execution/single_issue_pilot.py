@@ -192,6 +192,8 @@ PILOT_REASON_CODES: frozenset[str] = frozenset(
         "lease.release-ambiguous",
         "lease.release-forced",
         "lease.release-withheld-unproven-termination",
+        "lease.release-withheld-missing-terminal-record",
+        "lease.terminal-record-failed",
         "workspace.creation-failed",
         "workspace.repository-mismatch",
         "workspace.branch-mismatch",
@@ -376,6 +378,26 @@ class PilotLeaseReleaseObservation:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PilotLeaseTerminalRecord:
+    """Observed result of one terminal-disposition recording attempt.
+
+    The durable terminal record is the completed-invocation fence: once an
+    invocation's lease identity has a recorded terminal disposition, no
+    later process may newly acquire that identity. Recording happens only
+    after every dispatched lane proved terminal and before the active lease
+    is released, so a completed validation can never repeat after a
+    restart. There is deliberately no path that converts an unresolved
+    termination into a terminal record.
+    """
+
+    recorded: bool
+    lease_identity: str
+    holder_identity: str
+    generation: int
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class WorkspaceRequest:
     """One request for a single bounded workspace."""
 
@@ -509,6 +531,10 @@ class LeaseAdapter(Protocol):
     def acquire(self, request: PilotLeaseRequest) -> PilotLeaseGrant: ...
 
     def release(self, grant: PilotLeaseGrant) -> PilotLeaseReleaseObservation: ...
+
+    def record_terminal_disposition(
+        self, grant: PilotLeaseGrant, disposition: str
+    ) -> PilotLeaseTerminalRecord: ...
 
 
 @runtime_checkable
@@ -943,6 +969,8 @@ class _PilotState:
     lease_acquired: bool = False
     lease_release_attempts: int = 0
     lease_released: bool = False
+    lease_terminal_record_attempts: int = 0
+    lease_terminal_recorded: bool = False
 
     workspace_handle: WorkspaceHandle | None = None
     workspace_identity: str | None = None
@@ -2167,6 +2195,22 @@ def _finalize(
         state.quarantined = True
         hard_stop = exc
     try:
+        _record_terminal_disposition(state, lease_adapter)
+    except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
+        state.release_errors.append(
+            f"lease-terminal-record:unexpected-error:{type(exc).__name__}:{exc}"
+        )
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
+    except BaseException as exc:
+        state.release_errors.append(
+            f"lease-terminal-record:process-terminated:{type(exc).__name__}:{exc}"
+        )
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
+        if hard_stop is None:
+            hard_stop = exc
+    try:
         _release_lease(state, lease_adapter)
     except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
         state.release_errors.append(
@@ -2290,9 +2334,76 @@ def _release_permitted(state: _PilotState) -> bool:
     return not _execution_started(state) or _termination_proven(state)
 
 
+def _record_terminal_disposition(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
+    """Record the durable terminal disposition before any release.
+
+    The record is written only when a governed worker was dispatched and
+    every dispatched lane proved terminal: the completed-and-cleanly-
+    released case is exactly the duplicate-execution gap this fence closes.
+    Nothing was dispatched, or termination is unresolved, means no record;
+    the retained active lease already fences the uncertain case. A failed
+    or ambiguous recording withholds the release itself, so a completed
+    validation can never become re-acquirable without its terminal record.
+    """
+    grant = state.lease_grant
+    if grant is None or not state.lease_acquired or state.lease_terminal_record_attempts:
+        return
+    if not _execution_started(state) or not _release_permitted(state):
+        return
+
+    state.lease_terminal_record_attempts = 1
+    try:
+        record = lease_adapter.record_terminal_disposition(grant, state.primary_status)
+    except _EXPECTED_ADAPTER_EXCEPTIONS as exc:
+        state.release_errors.append(f"lease-terminal-record:error:{exc}")
+        state.reason_codes.add("lease.terminal-record-failed")
+        state.quarantined = True
+        return
+
+    if not isinstance(record, PilotLeaseTerminalRecord):
+        state.release_errors.append("lease-terminal-record:unsupported-observation")
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
+        return
+    if record.lease_identity != grant.lease_identity:
+        state.release_errors.append("lease-terminal-record:identity-mismatch")
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
+        return
+    if record.holder_identity != grant.holder_identity:
+        state.release_errors.append("lease-terminal-record:holder-drift")
+        state.reason_codes.add("lease.holder-drift")
+        state.quarantined = True
+        return
+    if record.generation != grant.generation:
+        state.release_errors.append("lease-terminal-record:generation-drift")
+        state.reason_codes.add("lease.generation-drift")
+        state.quarantined = True
+        return
+    if not record.recorded:
+        state.release_errors.append(
+            "lease-terminal-record:not-recorded"
+            + (f":{record.reason}" if record.reason else "")
+        )
+        state.reason_codes.add("lease.terminal-record-failed")
+        state.quarantined = True
+        return
+
+    state.lease_terminal_recorded = True
+
+
 def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
     grant = state.lease_grant
     if grant is None or not state.lease_acquired or state.lease_release_attempts:
+        return
+
+    if _execution_started(state) and _release_permitted(state) and not state.lease_terminal_recorded:
+        # A dispatched-and-proven-terminal invocation must never become
+        # re-acquirable without its durable terminal record. Withhold the
+        # release and retain exact active ownership instead.
+        state.release_errors.append("lease-release:withheld:terminal-record-missing")
+        state.reason_codes.add("lease.release-withheld-missing-terminal-record")
+        state.quarantined = True
         return
 
     if not _release_permitted(state):

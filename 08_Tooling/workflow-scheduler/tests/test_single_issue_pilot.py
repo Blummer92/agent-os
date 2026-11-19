@@ -75,6 +75,7 @@ from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
     PilotLeaseGrant,
     PilotLeaseReleaseObservation,
     PilotLeaseRequest,
+    PilotLeaseTerminalRecord,
     PilotValidationObservation,
     PilotValidationRequest,
     SingleIssuePilotInput,
@@ -495,6 +496,7 @@ class FakeLease:
         self._held = False
         self.acquire_calls: list[PilotLeaseRequest] = []
         self.release_calls: list[PilotLeaseGrant] = []
+        self.terminal_record_calls: list[tuple[PilotLeaseGrant, str]] = []
         self.last_grant: PilotLeaseGrant | None = None
 
     def acquire(self, request: PilotLeaseRequest):
@@ -529,6 +531,15 @@ class FakeLease:
             return self._release
         return PilotLeaseReleaseObservation(
             released=True,
+            lease_identity=grant.lease_identity,
+            holder_identity=grant.holder_identity,
+            generation=grant.generation,
+        )
+
+    def record_terminal_disposition(self, grant: PilotLeaseGrant, disposition: str):
+        self.terminal_record_calls.append((grant, disposition))
+        return PilotLeaseTerminalRecord(
+            recorded=True,
             lease_identity=grant.lease_identity,
             holder_identity=grant.holder_identity,
             generation=grant.generation,
@@ -2936,3 +2947,41 @@ def test_lease1_withheld_release_always_forces_quarantine_precedence() -> None:
 
     assert pilot_module._side_effects_were_possible(state) is True
     assert pilot_module._final_status(state) == "quarantined"
+
+
+# --------------------------------------------------------------------------
+# Durable terminal disposition (#3333 once-only after restart)
+# --------------------------------------------------------------------------
+
+
+def test_completed_pilot_records_terminal_disposition_before_release() -> None:
+    lease = FakeLease()
+    result = _run(lease=lease)
+
+    assert result.status == "completed"
+    assert len(lease.terminal_record_calls) == 1
+    grant, disposition = lease.terminal_record_calls[0]
+    assert grant.lease_identity == result.lease_identity
+    assert disposition == "completed"
+    assert len(lease.release_calls) == 1
+
+
+def test_failed_terminal_recording_withholds_release_and_quarantines() -> None:
+    class _RefusingLease(FakeLease):
+        def record_terminal_disposition(self, grant, disposition):
+            return PilotLeaseTerminalRecord(
+                recorded=False,
+                lease_identity=grant.lease_identity,
+                holder_identity=grant.holder_identity,
+                generation=grant.generation,
+                reason="store unavailable",
+            )
+
+    lease = _RefusingLease()
+    result = _run(lease=lease)
+
+    assert result.lease_released is False
+    assert len(lease.release_calls) == 0
+    assert "lease.terminal-record-failed" in result.reason_codes
+    assert "lease.release-withheld-missing-terminal-record" in result.reason_codes
+    assert result.status != "completed"

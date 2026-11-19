@@ -36,12 +36,18 @@ SUPPORTED_VALIDATION_IDS = frozenset({VALIDATION_ID})
 _FRAME_START = "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-CODESPACES-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
-_REMOTE_MAX_BOUNDED_SECONDS = 350
+# Exact worst-case serial remote budget: environment health 20 + ls-remote 30
+# + cat-file 10 + fetch 60 + pytest-version assertion 10 + worktree add 60 +
+# head verify 10 + manifest/project digest walks 10 + pip --version 60 +
+# approved-source reachability probe 10 + bounded pip install 240 + pip freeze
+# 60 + post-preparation pytest-version re-assertion 10 + fixed validation 120
+# + worktree remove 30 + temporary-tree removal 10 = 750.
+_REMOTE_MAX_BOUNDED_SECONDS = 750
 _TRANSPORT_OVERHEAD_SECONDS = 70
 _RUN_TIMEOUT_SECONDS = _REMOTE_MAX_BOUNDED_SECONDS + _TRANSPORT_OVERHEAD_SECONDS
 _UNSAFE_DIAGNOSTIC_CHAR_RE = re.compile(r"[^\x09\x0a\x0d\x20-\x7e]")
 
-_REMOTE_RUNNER_SOURCE = r'''import hashlib,json,os,re,shutil,subprocess,sys,tempfile
+_REMOTE_RUNNER_SOURCE = r'''import datetime,hashlib,json,os,re,shutil,subprocess,sys,tempfile,urllib.request
 REPOSITORY="Blummer92/agent-os"
 VALIDATION_ID="remote-validation-suite"
 CANONICAL_PROFILE_ID="remote-validation"
@@ -58,6 +64,105 @@ def bounded(value):
 
 def run(argv,*,cwd=None,env=None,timeout=120):
  return subprocess.run(tuple(argv),cwd=cwd,env=env,check=False,capture_output=True,text=True,timeout=timeout)
+
+def utc_now():
+ return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def utc_plus(seconds):
+ return (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def file_digest(path):
+ try:
+  with open(path,"rb") as handle:return hashlib.sha256(handle.read()).hexdigest()
+ except OSError:return None
+
+def tree_digest(path):
+ # Canonical local-project digest: same convention as
+ # workflow_scheduler.execution.concrete_runtime_adapters._local_project_sha256
+ # (pinned by host-side tests); candidate content never supplies it.
+ if os.path.islink(path):return None
+ if os.path.isfile(path):return file_digest(path)
+ if not os.path.isdir(path):return None
+ entries=[]
+ try:
+  for root,dirnames,filenames in os.walk(path,topdown=True,followlinks=False):
+   dirnames.sort();filenames.sort()
+   for dirname in dirnames:
+    full=os.path.join(root,dirname)
+    if os.path.islink(full):return None
+    entries.append(("d",os.path.relpath(full,path).replace(os.sep,"/")))
+   for filename in filenames:
+    full=os.path.join(root,filename)
+    if os.path.islink(full):return None
+    digest=file_digest(full)
+    if digest is None:return None
+    entries.append(("f",os.path.relpath(full,path).replace(os.sep,"/"),digest))
+ except OSError:return None
+ return hashlib.sha256(json.dumps(entries,sort_keys=False,separators=(",",":"),ensure_ascii=False,allow_nan=False).encode("utf-8")).hexdigest()
+
+def source_reachable(url):
+ try:
+  with urllib.request.urlopen(url,timeout=10) as response:return response.status<500
+ except Exception:return False
+
+def classify_prep_failure(stderr):
+ # Canonical marker sets of ConcreteDependencyCommandRunner._failure_reason
+ # (pinned by host-side tests).
+ text=(stderr or "").casefold()
+ if any(marker in text for marker in ("eai_again","temporary failure in name resolution","network is unreachable","connection timed out")):return "dependency.source-unavailable"
+ if any(marker in text for marker in ("no matching distribution found","could not find a version that satisfies","notarget","e404")):return "dependency.package-unavailable"
+ return "dependency.preparation-failed"
+
+PINNED_PROJECTS=("08_Tooling/agent-memory-context-manager","08_Tooling/reusable-capability-registry","08_Tooling/visual-asset-intake","08_Tooling/workflow-scheduler","src")
+EDITABLE_RE=re.compile(r"^(?:-e|--editable)\s+\./([A-Za-z0-9._/-]+?)(?:\[[A-Za-z0-9._, -]+\])?$",re.ASCII)
+REQ_RE=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._, -]+\])?\s*(?:(?:===|==|>=|<=|~=|!=|>|<)\s*[A-Za-z0-9._*!+ -]+(?:\s*,\s*(?:===|==|>=|<=|~=|!=|>|<)\s*[A-Za-z0-9._*!+ -]+)*)?$",re.ASCII)
+
+def manifest_source_forms_approved(path):
+ # Fixed-script egress screen mirroring the canonical validator's rejections
+ # (direct URLs/VCS/local paths/interpolation/unsupported options/undeclared
+ # editables). The host re-validates the same bytes through the canonical
+ # owner at record time; this screen gates execution on the remote.
+ try:
+  with open(path,"r",encoding="utf-8") as handle:text=handle.read()
+ except OSError:return False
+ for raw in text.splitlines():
+  line=raw.strip()
+  if not line or line.startswith("#"):continue
+  if "#" in line or "${" in line or "$(" in line or "%(" in line:return False
+  editable=EDITABLE_RE.fullmatch(line)
+  if editable:
+   if editable.group(1) not in PINNED_PROJECTS:return False
+   continue
+  if line.startswith("-"):return False
+  if "://" in line or "@" in line or "/" in line or "\\" in line:return False
+  if REQ_RE.fullmatch(line) is None:return False
+ return True
+
+def pip_env():
+ # Mirrors the canonical concrete-adapter environment policy: a minimal
+ # allowlist plus PIP_CONFIG_FILE=/devnull disables ambient pip configuration
+ # and PIP_* variables, so the pinned approved source stays authoritative.
+ env={key:os.environ[key] for key in ("PATH","HOME","TMPDIR","TERM") if key in os.environ}
+ env.update({"LANG":"C","LC_ALL":"C","PIP_CONFIG_FILE":os.devnull,"PYTHONNOUSERSITE":"1"})
+ return env
+
+def pip_run(argv,cwd,timeout):
+ # Bounded pip execution with process-group termination: a local editable's
+ # build backend can spawn children, and timeout evidence must reflect real
+ # termination. On timeout the group is SIGKILLed; failure to confirm
+ # termination reports timed_out=True and never becomes READY.
+ process=subprocess.Popen(tuple(argv),cwd=cwd,env=pip_env(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+ try:
+  out,err=process.communicate(timeout=timeout)
+  return process.returncode,out or "",err or "",False,True
+ except subprocess.TimeoutExpired:
+  terminated=True
+  try:os.killpg(os.getpgid(process.pid),9)
+  except OSError:terminated=False
+  try:out,err=process.communicate(timeout=10)
+  except subprocess.TimeoutExpired:
+   out,err="","";terminated=False
+  return None,out or "",err or "",True,terminated
 
 def base(status,reason,repository,issue,branch,sha,validation_id,request_id):
  return {"schema_version":"1.0","status":status,"reason_codes":[reason],"repository":repository,"issue_number":issue,"branch":branch,"tested_sha":sha,"validation_id":validation_id,"request_id":request_id,"exit_code":None,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False,"cleanup_complete":False,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False,"codespaces_profile_id":PROFILE_ID,"execution_surface_id":None,"environment_health_evidence_id":None}
@@ -117,13 +222,59 @@ try:
   if head.returncode!=0 or head.stdout.strip()!=sha:
    result["reason_codes"]=["checkout-head-mismatch"]
   else:
-   try:
-    completed=run(("python3","-m","pytest","tests/agent_os_remote_validation"),cwd=worktree,env={**os.environ,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"},timeout=120)
-    out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
-    result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
-   except subprocess.TimeoutExpired as exc:
-    out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
-    result.update({"status":"timeout","reason_codes":["validation-timeout"],"exit_code":None,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+   # #3333: genuine dependency preparation. This fixed host-compiled script
+   # is the only trusted attestor: it measures the tested content (manifest
+   # and project digests, runtime, package manager, source reachability),
+   # executes exactly the pinned bounded argv below (wheels-only, the single
+   # approved PyPI index, the fixed manifest, the five declared editable
+   # projects), and reports raw measurements. Candidate code is the subject,
+   # never the attestor: the host replays these measurements through the
+   # canonical planner/executor/evidence owners and reconstructs readiness
+   # itself. Preparation failure is fail-closed: the fixed validation
+   # command does not run against an unprepared environment.
+   prep={"execution_surface_id":result["execution_surface_id"],"workspace_identity":"codespace:%s:worktree-sha:%s"%(codespace_name,sha),"source_sha":sha,"environment_health_evidence_id":result["environment_health_evidence_id"],"manifest_sha256":file_digest(os.path.join(worktree,"requirements-dev.txt")),"local_project_sha256":{path:tree_digest(os.path.join(worktree,*path.split("/"))) for path in ("08_Tooling/agent-memory-context-manager","08_Tooling/reusable-capability-registry","08_Tooling/visual-asset-intake","08_Tooling/workflow-scheduler","src")},"runtime_version":".".join(str(part) for part in sys.version_info[:3]),"source_identity":"pypi.org/simple","observed_at":utc_now(),"expires_at":utc_plus(3600),"install_attempted":False,"install_succeeded":False,"failure_reason_code":None,"resolved_dependency_identity":None}
+   result["dependency_preparation"]=prep
+   probe_rc,probe_out,_,_,_=pip_run((sys.executable,"-m","pip","--version"),worktree,60)
+   pip_parts=probe_out.split() if probe_rc==0 else []
+   prep["package_manager_version"]=pip_parts[1] if len(pip_parts)>=2 and pip_parts[0]=="pip" else None
+   prep["source_reachable"]=source_reachable("https://pypi.org/simple/")
+   prep_argv=(sys.executable,"-m","pip","install","--only-binary=:all:","--index-url=https://pypi.org/simple","-r","requirements-dev.txt","-e","08_Tooling/agent-memory-context-manager","-e","08_Tooling/reusable-capability-registry","-e","08_Tooling/visual-asset-intake","-e","08_Tooling/workflow-scheduler","-e","src")
+   prep["argv"]=list(prep_argv)
+   prep["install_terminated_on_timeout"]=False
+   prep_ready=False
+   if not manifest_source_forms_approved(os.path.join(worktree,"requirements-dev.txt")):
+    prep["failure_reason_code"]="dependency.manifest-source-form-unapproved"
+   elif prep["manifest_sha256"] is not None and sys.version_info[:2]>=(3,11) and prep["package_manager_version"] is not None and prep["source_reachable"]:
+    prep["install_attempted"]=True
+    install_rc,_,install_err,install_to,install_dead=pip_run(prep_argv,worktree,240)
+    if install_to:
+     prep["install_terminated_on_timeout"]=install_dead
+     prep["failure_reason_code"]="dependency.preparation-failed"
+    elif install_rc==0:
+     freeze_rc,freeze_out,_,freeze_to,freeze_dead=pip_run((sys.executable,"-m","pip","freeze","--all"),worktree,60)
+     if freeze_rc==0 and not freeze_to:
+      lines=sorted(line.strip() for line in freeze_out.splitlines() if line.strip())
+      prep["resolved_dependency_identity"]="pip-freeze:"+hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+      prep["install_succeeded"]=True
+     else:
+      if freeze_to:prep["install_terminated_on_timeout"]=freeze_dead
+      prep["failure_reason_code"]="dependency.preparation-failed"
+    else:prep["failure_reason_code"]=classify_prep_failure(install_err)
+   if prep["install_succeeded"] and prep["resolved_dependency_identity"]:
+    runtime_check=run(("python3","-c","import pytest; assert pytest.__version__ == '8.3.5'"),cwd=worktree,timeout=10)
+    if runtime_check.returncode!=0:
+     prep["install_succeeded"]=False;prep["failure_reason_code"]="dependency.prepared-runtime-drift"
+    else:prep_ready=True
+   if not prep_ready:
+    result["reason_codes"]=["dependency-preparation-not-ready"]+([prep["failure_reason_code"]] if prep["failure_reason_code"] else [])
+   if prep_ready:
+    try:
+     completed=run(("python3","-m","pytest","tests/agent_os_remote_validation"),cwd=worktree,env={**os.environ,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"},timeout=120)
+     out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
+     result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+    except subprocess.TimeoutExpired as exc:
+     out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
+     result.update({"status":"timeout","reason_codes":["validation-timeout"],"exit_code":None,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
 finally:
  remove=run(("git","worktree","remove","--force",worktree),cwd=primary,timeout=30) if os.path.exists(worktree) else None
  try:shutil.rmtree(root)
@@ -513,6 +664,16 @@ def run_dev_validation_over_codespaces(
         "needs-decision",
     }:
         return _unobserved_failure(request, "dev-validation-codespaces-status-invalid", codespace_name)
+    # #3333: genuine dependency preparation measurements are produced by the
+    # fixed remote script before the validation command runs. They pass
+    # through here uninterpreted; the host-side record operation replays them
+    # through the canonical owners and re-derives the readiness evidence. A
+    # success claim without preparation measurements is a mismatched runner.
+    preparation = payload.get("dependency_preparation")
+    if preparation is not None and type(preparation) is not dict:
+        return _unobserved_failure(request, "dev-validation-codespaces-evidence-malformed", codespace_name)
+    if payload["status"] == "success" and preparation is None:
+        return _unobserved_failure(request, "dev-validation-codespaces-readiness-missing", codespace_name)
     environment_id = payload.get("environment_health_evidence_id")
     if (
         type(environment_id) is not str
