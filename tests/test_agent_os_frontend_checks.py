@@ -151,9 +151,16 @@ def test_picture_perfect_record_missing_pinned_test_is_not_a_pass():
     assert problems and problems[0].startswith("picture-perfect-coach:")
 
 
+def _passing_receipt(argv):
+    # This is a unit-fixture receipt, not machine evidence from a runner.
+    scopes = fe._CASE_SCOPES.get(argv)
+    evidence = fe._CaseEvidence(argv, tuple((key, 1) for key in sorted(scopes))) if scopes else None
+    return fe.CommandReceipt(" ".join(argv), 0, evidence)
+
+
 def test_frontend_rejects_wrong_or_reordered_same_length_command_receipts():
     project = _project_by_name("teacher-os-web")
-    correct = [(" ".join(argv), 0) for argv in project.commands]
+    correct = [_passing_receipt(argv) for argv in project.commands]
     assert fe.evaluate([project], {project.name: correct}) == []
     wrong = [*correct[:-1], ("wrong command", 0)]
     swapped = [*correct[:-2], correct[-1], correct[-2]]
@@ -161,10 +168,26 @@ def test_frontend_rejects_wrong_or_reordered_same_length_command_receipts():
         assert "identity or order mismatch" in fe.evaluate([project], {project.name: record})[0]
 
 
+def test_frontend_requires_case_evidence_for_the_same_command_and_scopes():
+    project = _project_by_name("teacher-os-web")
+    correct = [_passing_receipt(argv) for argv in project.commands]
+    evidence = correct[-1].evidence
+    assert fe.evaluate([project], {project.name: correct}) == []
+    for invalid in (
+        (correct[-1].command, 0),
+        correct[-1]._replace(evidence=evidence._replace(argv=("different", "argv"))),
+        correct[-1]._replace(evidence=evidence._replace(passed_by_scope=(("desktop", 1),))),
+        correct[-1]._replace(evidence=evidence._replace(passed_by_scope=(("desktop", 1), ("phone", 0)))),
+    ):
+        problems = fe.evaluate([project], {project.name: [*correct[:-1], invalid]})
+        assert problems and "missing or invalid test-case evidence" in problems[0]
+
+
 def test_frontend_rejects_removed_required_commands_even_if_the_registry_and_receipts_agree():
     for name, drop in (
         ("teacher-os-web", ("npx", "playwright", "test")),
         ("picture-perfect-coach", ("npm", "test", "--", *_PP_PINNED_TESTS)),
+        ("picture-perfect-coach", ("npm", "run", "check")),
     ):
         original = _project_by_name(name)
         reduced = original._replace(commands=tuple(argv for argv in original.commands if argv != drop))
@@ -224,7 +247,11 @@ def test_pinned_vitest_uses_reporter_and_rejects_missing_zero_and_wrong_file_evi
                     Path(target).write_text(json.dumps(body), encoding="utf-8")
                 return SimpleNamespace(returncode=0)
             with patch.object(fe.subprocess, "run", fake_run):
-                assert fe._run_command(expected, cwd) == expected_code
+                outcome = fe._run_command(expected, cwd)
+                if expected_code == 0:
+                    assert outcome == _passing_receipt(expected).evidence
+                else:
+                    assert outcome == expected_code
 
 
 def test_playwright_requires_actual_passes_for_both_projects_and_keeps_real_exit():
@@ -248,7 +275,11 @@ def test_playwright_requires_actual_passes_for_both_projects_and_keeps_real_exit
                     Path(target).write_text(payload, encoding="utf-8")
                 return SimpleNamespace(returncode=returncode)
             with patch.object(fe.subprocess, "run", fake_run):
-                assert fe._run_command(expected, Path(temp)) == expected_code
+                outcome = fe._run_command(expected, Path(temp))
+                if expected_code == 0:
+                    assert outcome == _passing_receipt(expected).evidence
+                else:
+                    assert outcome == expected_code
 
 
 def test_dependency_bot_lockfile_only_changes_select_every_touched_project():
@@ -313,7 +344,7 @@ def _project(name="p"):
 def test_all_commands_passing_is_success():
     project = _project()
     results = fe.run_projects([project], runner=lambda argv, cwd: 0)
-    assert [c for c, _ in results["p"]] == ["one", "two", "three"]
+    assert [receipt.command for receipt in results["p"]] == ["one", "two", "three"]
     assert fe.evaluate([project], results) == []
 
 
@@ -357,7 +388,7 @@ def test_incomplete_command_record_is_a_failure():
 @pytest.fixture
 def lane(monkeypatch, tmp_path):
     """Drive main() against a fake git, recording outputs and annotations."""
-    state = {"head": "a" * 40, "changed": [], "deleted": [], "tracked": [], "run": lambda projects: {p.name: [(" ".join(c), 0) for c in p.commands] for p in projects}}
+    state = {"head": "a" * 40, "changed": [], "deleted": [], "tracked": [], "run": lambda projects: {p.name: [_passing_receipt(c) for c in p.commands] for p in projects}}
     out, summary = tmp_path / "out.txt", tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -404,7 +435,8 @@ def test_main_applicable_success_reports_projects_and_tested_sha(lane, capsys):
 def test_main_failing_project_exits_nonzero_with_error_annotation(lane, capsys):
     lane["changed"] = [f"{PP}/src/a.ts"]
     lane["run"] = lambda projects: {"picture-perfect-coach": [
-        ("npm ci", 0), (" ".join(("npm", "test", "--", *_PP_PINNED_TESTS)), 0), ("npm run check", 1)
+        fe.CommandReceipt("npm ci", 0), _passing_receipt(("npm", "test", "--", *_PP_PINNED_TESTS)),
+        fe.CommandReceipt("npm run check", 1),
     ]}
     assert fe.main() == 1
     assert "::error title=Frontend checks::picture-perfect-coach: `npm run check` exit 1" in capsys.readouterr().out
@@ -491,7 +523,7 @@ def test_missing_project_directory_or_executable_is_a_recorded_failure(tmp_path,
 def test_deleting_a_registered_project_without_unregistering_it_fails_with_a_named_cause(tmp_path):
     ghost = fe.Project("ghost", "08_Tooling/removed-project", (("npm", "ci"), ("npm", "test")))
     results = fe.run_projects([ghost], root=tmp_path)
-    assert results == {"ghost": [("npm ci", 127)]}
+    assert results == {"ghost": [fe.CommandReceipt("npm ci", 127)]}
     assert fe.evaluate([ghost], results) == ["ghost: `npm ci` exit 127"]
 
 

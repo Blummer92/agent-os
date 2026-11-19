@@ -72,14 +72,19 @@ _PICTURE_PERFECT_PINNED_TESTS = (
     "src/provenanceValidator.test.ts",
 )
 _PP_TEST = ("npm", "test", "--", *_PICTURE_PERFECT_PINNED_TESTS)
+_PP_CHECK = ("npm", "run", "check")
 _TEACHER_INSTALL = ("npx", "playwright", "install", "chromium")
 _TEACHER_TEST = ("npx", "playwright", "test")
 _TEACHER_PROJECTS = ("desktop", "phone")
 # Matching by directory keeps the contract independent of the projects'
 # editable command lists and display labels.
 _REQUIRED_TEST_COMMANDS = {
-    "08_Tooling/instructional-materials-coach/picture-perfect-coach": (_PP_TEST,),
+    "08_Tooling/instructional-materials-coach/picture-perfect-coach": (_PP_TEST, _PP_CHECK),
     "08_Tooling/teacher-os-web": (_TEACHER_INSTALL, _TEACHER_TEST),
+}
+_CASE_SCOPES = {
+    _PP_TEST: frozenset(_PICTURE_PERFECT_PINNED_TESTS),
+    _TEACHER_TEST: frozenset(_TEACHER_PROJECTS),
 }
 _MAX_TEST_REPORT_BYTES = 8 * 1024 * 1024
 _TEST_EVIDENCE_FAILED = 78
@@ -95,7 +100,7 @@ PROJECTS: tuple[Project, ...] = (
         (
             ("npm", "ci"),
             _PP_TEST,
-            ("npm", "run", "check"),
+            _PP_CHECK,
         ),
         # src/uiEvidence.test.ts imports ../../capture/safe_recording.mjs
         also_triggered_by=("08_Tooling/instructional-materials-coach/capture",),
@@ -209,7 +214,20 @@ def unowned_node_changes(
     return tuple(sorted(unowned))
 
 
-Runner = Callable[[Sequence[str], Path], int]
+class _CaseEvidence(NamedTuple):
+    argv: tuple[str, ...]
+    passed_by_scope: tuple[tuple[str, int], ...]
+
+
+class CommandReceipt(NamedTuple):
+    command: str
+    exit_code: int
+    evidence: _CaseEvidence | None = None
+
+
+RunOutcome = int | _CaseEvidence
+Receipt = CommandReceipt | tuple[str, int]
+Runner = Callable[[Sequence[str], Path], RunOutcome]
 
 
 # npm retries a failed registry fetch twice by default; a transient outage would otherwise turn a
@@ -305,7 +323,7 @@ def _playwright_counts(report: dict) -> dict[str, int]:
     return counts
 
 
-def _run_with_test_evidence(argv: tuple[str, ...], cwd: Path, env: dict[str, str]) -> int:
+def _run_with_test_evidence(argv: tuple[str, ...], cwd: Path, env: dict[str, str]) -> RunOutcome:
     with tempfile.TemporaryDirectory(prefix="agent-os-frontend-") as temp:
         report_path = Path(temp) / "test-results.json"
         if argv == _PP_TEST:
@@ -326,14 +344,14 @@ def _run_with_test_evidence(argv: tuple[str, ...], cwd: Path, env: dict[str, str
             print(f"missing or invalid test-case evidence for `{' '.join(argv)}`", file=sys.stderr)
             return _TEST_EVIDENCE_FAILED
         print("frontend test evidence: " + json.dumps(counts, sort_keys=True), flush=True)
-        return 0
+        return _CaseEvidence(argv, tuple(sorted(counts.items())))
 
 
-def _run_command(argv: Sequence[str], cwd: Path) -> int:
+def _run_command(argv: Sequence[str], cwd: Path) -> RunOutcome:
     try:
         env = {**_NPM_RETRY_ENV, **os.environ}
         command = tuple(argv)
-        if command in (_PP_TEST, _TEACHER_TEST):
+        if command in _CASE_SCOPES:
             return _run_with_test_evidence(command, cwd, env)
         return subprocess.run(list(argv), cwd=cwd, check=False, env=env).returncode
     except OSError as exc:
@@ -349,29 +367,52 @@ def run_projects(
     *,
     root: Path = ROOT,
     runner: Runner = _run_command,
-) -> dict[str, list[tuple[str, int]]]:
+) -> dict[str, list[CommandReceipt]]:
     """Execute each project's commands in order; stop a project at its first failure.
 
-    Returns ``{project name: [(command text, exit code), ...]}``. Every selected
+    Returns ordered command receipts with case evidence when required. Every selected
     project is recorded even when an earlier project failed, so the caller can
     prove nothing applicable was left unexecuted.
     """
-    results: dict[str, list[tuple[str, int]]] = {}
+    results: dict[str, list[CommandReceipt]] = {}
     for project in projects:
-        record: list[tuple[str, int]] = []
+        record: list[CommandReceipt] = []
         results[project.name] = record
         for argv in project.commands:
             print(f"::group::{project.name}: {' '.join(argv)}", flush=True)
-            code = runner(argv, root / project.directory)
+            outcome = runner(argv, root / project.directory)
             print("::endgroup::", flush=True)
-            record.append((" ".join(argv), code))
-            if code != 0:
+            receipt = (
+                CommandReceipt(" ".join(argv), 0, outcome) if isinstance(outcome, _CaseEvidence)
+                else CommandReceipt(" ".join(argv), outcome)
+            )
+            record.append(receipt)
+            if receipt.exit_code != 0:
                 break
     return results
 
 
+def _receipt_parts(receipt: Receipt) -> CommandReceipt:
+    # A legacy exit-only receipt can describe an ordinary command or a
+    # failure, but is not sufficient evidence of successful test execution.
+    if isinstance(receipt, CommandReceipt):
+        return receipt
+    return CommandReceipt(*receipt)
+
+
+def _case_evidence_matches(argv: tuple[str, ...], evidence: _CaseEvidence | None) -> bool:
+    if not isinstance(evidence, _CaseEvidence) or evidence.argv != argv:
+        return False
+    counts = dict(evidence.passed_by_scope)
+    return (
+        len(counts) == len(evidence.passed_by_scope)
+        and set(counts) == _CASE_SCOPES[argv]
+        and all(type(count) is int and count > 0 for count in counts.values())
+    )
+
+
 def evaluate(
-    applicable: Sequence[Project], results: dict[str, list[tuple[str, int]]]
+    applicable: Sequence[Project], results: dict[str, list[Receipt]]
 ) -> list[str]:
     """Return failure reasons; empty means every applicable project fully passed."""
     problems: list[str] = []
@@ -385,14 +426,26 @@ def evaluate(
             problems.append(f"{project.name}: applicable but not executed")
             continue
         expected = [" ".join(argv) for argv in project.commands]
-        if [cmd for cmd, _ in record] != expected[:len(record)]:
+        receipts = [_receipt_parts(receipt) for receipt in record]
+        if [receipt.command for receipt in receipts] != expected[:len(receipts)]:
             problems.append(f"{project.name}: command receipt identity or order mismatch")
             continue
-        failed = [f"`{cmd}` exit {code}" for cmd, code in record if type(code) is not int or code != 0]
+        failed = [
+            f"`{receipt.command}` exit {receipt.exit_code}" for receipt in receipts
+            if type(receipt.exit_code) is not int or receipt.exit_code != 0
+        ]
         if failed:
             problems.append(f"{project.name}: " + ", ".join(failed))
-        elif len(record) != len(expected):
+        elif len(receipts) != len(expected):
             problems.append(f"{project.name}: incomplete")
+        else:
+            missing = [
+                f"`{receipt.command}` missing or invalid test-case evidence"
+                for argv, receipt in zip(project.commands, receipts, strict=True)
+                if argv in _CASE_SCOPES and not _case_evidence_matches(argv, receipt.evidence)
+            ]
+            if missing:
+                problems.append(f"{project.name}: " + ", ".join(missing))
     return problems
 
 
@@ -494,8 +547,9 @@ def main() -> int:
     results = run_projects(applicable)
     problems = evaluate(applicable, results)
     for project in applicable:
-        for command, code in results.get(project.name, []):
-            lines.append(f"- {project.name}: `{command}` exit {code}")
+        for raw in results.get(project.name, []):
+            receipt = _receipt_parts(raw)
+            lines.append(f"- {project.name}: `{receipt.command}` exit {receipt.exit_code}")
         if project.note:
             lines.append(f"- {project.name} note: {project.note}")
     if problems:
