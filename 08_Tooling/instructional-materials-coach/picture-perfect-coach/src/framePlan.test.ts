@@ -415,3 +415,8 @@ describe('planTutorialFrame fail-closed behaviour', () => {
     expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.referenceMissing]);
   });
 });
+
+// D07 hosted negative control (disposable): deliberate failure must make the frontend job go red.
+it("D07 hosted negative control (disposable)", () => {
+  expect(true).toBe(false);
+});
