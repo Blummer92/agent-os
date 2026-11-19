@@ -1,0 +1,56 @@
+{
+  "schema": "agent-os/ckr-pr3-intake/v2",
+  "stage": "draft",
+  "configuration": {
+    "production_pin": "07f9e0657d6fd8f5e3e2734e926856ded5111147",
+    "production_registry_git_blob_sha1": "2fdcaba19a384e3c4e6217cbb81b600289ebe6d2",
+    "exact_repository": "Blummer92/agent-os",
+    "rubric_sha256": null,
+    "recipe_sha256": null
+  },
+  "roles": {
+    "implementer": null,
+    "registry_author_r1": null,
+    "independent_labeller_r2": null,
+    "split_custodian": null,
+    "trusted_observation_issuer": null,
+    "scorer": null
+  },
+  "owner_approval": {
+    "ref": null,
+    "approved_at": null,
+    "scope": null,
+    "approved_vocabulary_sha256": null,
+    "approved_rubric_sha256": null,
+    "approved_recipe_sha256": null
+  },
+  "registry_freeze": {
+    "git_sha": null,
+    "sha256": null,
+    "reviewed_identity_count": null,
+    "frozen_at": null,
+    "author_attestation_no_holdout_access_ref": null,
+    "custodian_revision_cutoff_attestation_ref": null,
+    "reviewed_revisions_after_cutoff_count": null
+  },
+  "splits": {
+    "development": null,
+    "holdout": null,
+    "no_reuse_attestation_ref": null,
+    "frozen_at": null
+  },
+  "labels": {
+    "sealed_gold_sha256": null,
+    "custodian_counts_attestation_ref": null,
+    "label_count": null,
+    "positive_count": null,
+    "hard_negative_count": null,
+    "unsealed_at": null
+  },
+  "ci_observations": {
+    "source_manifest_sha256": null,
+    "custodian_authentication_ref": null,
+    "mapping_recipe_sha256": null
+  },
+  "production_activation": false
+}
