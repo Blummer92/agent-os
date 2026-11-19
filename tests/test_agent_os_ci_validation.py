@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -143,7 +146,6 @@ def test_teacher_os_rejects_unregistered_commands(suffix):
 # visual-asset-ingestion-coordinator, visual-asset-notion-writer,
 # visual-asset-routing), which is why resolution is suite-local, not a
 # registry-only lookup from ROOT.
-import os
 
 _D07_PYTHON_SUITES = (
     "agent-memory-context-manager",
@@ -204,3 +206,136 @@ def test_d07_executor_root_cwd_still_gets_repository_src_on_pythonpath(monkeypat
 def test_d07_executor_rejects_unregistered_python_suite_variants(command):
     with pytest.raises(ValueError, match="not in the bounded CI executor"):
         module._resolve_command(command)
+
+
+def _run_focused_fixture(monkeypatch, commands, run_child):
+    head = "b" * 40
+    monkeypatch.setattr(module, "_current_head", lambda: head)
+    monkeypatch.setattr(module.subprocess, "run", run_child)
+    plan = module.ValidationPlan(
+        selector_version="1.0.0",
+        repository="Blummer92/agent-os",
+        pull_request=4031,
+        head_sha=head,
+        base_sha="a" * 40,
+        profile="focused",
+        commands=commands,
+        reason_codes=("profile.focused-package",),
+        command_set_digest="1" * 64,
+        remote_build_required=True,
+    )
+    module.execute_focused(plan, expected_head_sha=head)
+
+
+def _junit_arg(argv):
+    return Path(next(item.partition("=")[2] for item in argv if item.startswith("--junitxml=")))
+
+
+def _junit_xml(tests, cases, *, skipped=0, failures=0):
+    return (
+        f'<testsuite tests="{tests}" skipped="{skipped}" failures="{failures}" errors="0">'
+        + cases + "</testsuite>"
+    )
+
+
+_CASE_PASS = '<testcase name="tested"/>'
+_CASE_SKIP = '<testcase name="skipped"><skipped/></testcase>'
+_CASE_FAIL = '<testcase name="failed"><failure/></testcase>'
+
+
+@pytest.mark.parametrize(
+    "report,expected",
+    [
+        (None, "without fresh, valid, count-consistent JUnit"),
+        ("<broken", "without fresh, valid, count-consistent JUnit"),
+        (_junit_xml(2, _CASE_PASS), "without fresh, valid, count-consistent JUnit"),
+        (_junit_xml(0, ""), "without executing a passing test"),
+        (_junit_xml(1, _CASE_SKIP, skipped=1), "without executing a passing test"),
+        (_junit_xml(1, _CASE_FAIL, failures=1), "JUnit reports failures or errors"),
+    ],
+)
+def test_d07_successful_child_requires_fresh_positive_case_evidence(tmp_path, monkeypatch, report, expected):
+    monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
+    command = "python -m pytest tests/test_agent_os_ci_validation.py"
+    def child(argv, **kwargs):
+        report_path = _junit_arg(argv)
+        assert not report_path.exists()
+        if report is not None:
+            report_path.write_text(report, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        _run_focused_fixture(monkeypatch, (command,), child)
+    record = json.loads((tmp_path / "manifest.json").read_text())["commands"][0]
+    assert record["exit_code"] == 0
+    assert record["classification"] == "NOT_EXECUTED_SETUP_FAILURE"
+    assert expected in record["error"]
+
+
+def test_d07_focused_does_not_reuse_stale_passing_junit(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
+    command = "python -m pytest tests/test_agent_os_ci_validation.py"
+    stale = module._junit_path_for_command(command, tmp_path, 0)
+    stale.write_text(_junit_xml(1, _CASE_PASS), encoding="utf-8")
+
+    def child(argv, **kwargs):
+        assert _junit_arg(argv) == stale
+
+    with pytest.raises(ValueError, match="without fresh, valid, count-consistent JUnit"):
+        _run_focused_fixture(monkeypatch, (command,), child)
+    assert not stale.exists()
+
+
+def test_d07_focused_python_applies_execution_guards_and_preserves_partial_skips(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--setup-plan")
+    command = "python -m pytest 08_Tooling/agent-memory-context-manager/tests"
+
+    def child(argv, *, cwd, env, check):
+        assert check is True
+        assert cwd == ROOT / "08_Tooling/agent-memory-context-manager"
+        assert argv[:4] == ("python", "-m", "pytest", "tests")
+        assert argv[-4:] == ("-p", "no:setuponly", "-p", "no:setupplan")
+        assert "PYTEST_ADDOPTS" not in env
+        _junit_arg(argv).write_text(_junit_xml(2, _CASE_SKIP + _CASE_PASS, skipped=1), encoding="utf-8")
+
+    _run_focused_fixture(monkeypatch, (command,), child)
+    assert os.environ["PYTEST_ADDOPTS"] == "--setup-plan"
+    record = json.loads((tmp_path / "manifest.json").read_text())["commands"][0]
+    assert record["classification"] == "EXECUTED_PASS"
+    assert record["junit_counts"] == {"tests": 2, "skipped": 1, "failures": 0, "errors": 0}
+    assert record["error"] is None
+
+
+def test_d07_focused_python_requires_evidence_even_without_published_receipt(monkeypatch):
+    monkeypatch.delenv("CI_JUNIT_DIR", raising=False)
+    paths = []
+
+    def child(argv, **kwargs):
+        paths.append(_junit_arg(argv))
+
+    with pytest.raises(ValueError, match="without fresh, valid, count-consistent JUnit"):
+        _run_focused_fixture(monkeypatch, ("python -m pytest tests/test_agent_os_ci_validation.py",), child)
+    assert len(paths) == 1 and not paths[0].parent.exists()
+
+
+@pytest.mark.parametrize("exit_code,classification", [(1, "EXECUTED_FAIL"), (5, "ZERO_COLLECTED")])
+def test_d07_focused_preserves_first_real_failure_and_runs_later_commands(tmp_path, monkeypatch, exit_code, classification):
+    monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
+    commands = (
+        "python -m pytest tests/test_agent_os_ci_validation.py",
+        "python -m pytest tests/agent_os_issue_acceptance",
+    )
+    calls = []
+
+    def child(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(exit_code, argv)
+        _junit_arg(argv).write_text(_junit_xml(1, _CASE_PASS), encoding="utf-8")
+
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _run_focused_fixture(monkeypatch, commands, child)
+    assert raised.value.returncode == exit_code
+    records = json.loads((tmp_path / "manifest.json").read_text())["commands"]
+    assert len(calls) == 2
+    assert [record["classification"] for record in records] == [classification, "EXECUTED_PASS"]
