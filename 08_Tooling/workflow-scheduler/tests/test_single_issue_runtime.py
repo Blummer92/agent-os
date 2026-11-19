@@ -424,7 +424,6 @@ _FORBIDDEN_IMPORT_ROOTS = (
 )
 
 _FORBIDDEN_MODULE_SUBSTRINGS = (
-    "executor.py",
     "request_dispatch",
     "retry_manager",
     "github",
@@ -436,11 +435,36 @@ def test_module_imports_no_execution_persistence_or_network_authority() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     imported_modules: list[str] = []
+    execution_package = ("workflow_scheduler", "execution")
+    executor_module = (*execution_package, "executor")
+    executor_package_exports = {"executor", "Executor", "ExecutionResult", "*"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported_modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.append(node.module)
+            for alias in node.names:
+                module_parts = tuple(alias.name.split("."))
+                assert module_parts[:len(executor_module)] != executor_module, (
+                    f"forbidden import: {alias.name}"
+                )
+                imported_modules.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported_modules.append(node.module)
+            base = tuple(node.module.split(".")) if node.module else ()
+            if node.level > len(execution_package):
+                continue
+            if node.level:
+                # Resolve sibling/parent imports in single_issue_runtime.py.
+                base = (*execution_package[:len(execution_package) - node.level + 1], *base)
+            assert base[:len(executor_module)] != executor_module, (
+                f"forbidden import: {'.'.join(base)}"
+            )
+            if base == execution_package:
+                # The execution package lazily exports Executor and ExecutionResult
+                # from the concrete module; a wildcard import also loads them.
+                for alias in node.names:
+                    assert alias.name not in executor_package_exports, (
+                        f"forbidden import: {'.'.join(base)}.{alias.name}"
+                    )
 
     for module_name in imported_modules:
         root = module_name.split(".")[0]
@@ -448,6 +472,46 @@ def test_module_imports_no_execution_persistence_or_network_authority() -> None:
         lowered = module_name.lower()
         for forbidden in _FORBIDDEN_MODULE_SUBSTRINGS:
             assert forbidden not in lowered, f"forbidden import: {module_name}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import workflow_scheduler.execution.executor",
+        "import workflow_scheduler.execution.executor as implementation",
+        "from workflow_scheduler.execution.executor import Executor",
+        "from workflow_scheduler.execution import executor as implementation",
+        "from .executor import Executor",
+        "from . import executor",
+        "from ..execution import executor",
+        "from workflow_scheduler.execution import Executor",
+        "from . import ExecutionResult as Result",
+        "from workflow_scheduler.execution import *",
+    ],
+)
+def test_runtime_import_guard_rejects_concrete_executor(source, tmp_path, monkeypatch) -> None:
+    candidate = tmp_path / "synthetic_module.py"
+    candidate.write_text(source + "\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "MODULE_PATH", candidate)
+    with pytest.raises(AssertionError, match="forbidden import"):
+        test_module_imports_no_execution_persistence_or_network_authority()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import math",
+        "import workflow_scheduler.execution",
+        "import workflow_scheduler.execution.executor_metadata",
+        "from . import executor_metadata",
+        "from .single_issue_pilot import PilotExecutor",
+    ],
+)
+def test_runtime_import_guard_allows_non_executor_imports(source, tmp_path, monkeypatch) -> None:
+    candidate = tmp_path / "synthetic_module.py"
+    candidate.write_text(source + "\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "MODULE_PATH", candidate)
+    test_module_imports_no_execution_persistence_or_network_authority()
 
 
 def test_module_defines_no_network_subprocess_or_persistence_calls() -> None:
