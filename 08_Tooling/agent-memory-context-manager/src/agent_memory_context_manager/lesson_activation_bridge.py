@@ -34,6 +34,7 @@ from .coding_knowledge_selection import (
     RetrievalEscalation,
     _match_candidate,
     _norm,
+    contextual_tie_scores,
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
@@ -411,6 +412,18 @@ def _bound_relevant_lessons(
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
+        # #4026: inside each relevance bucket, order by exact request-context
+        # overlap before the five-ID cut; the legacy id order breaks ties and
+        # is the whole order when nothing overlaps. Buckets never mix.
+        reordered: list[tuple[int, str, LessonRecordEvidence]] = []
+        for bucket in sorted({item[0] for item in ranked}, reverse=True):
+            group = [item for item in ranked if item[0] == bucket]
+            scores = contextual_tie_scores(
+                request, (_as_selection_candidate(item[2]) for item in group)
+            )
+            order = sorted(range(len(group)), key=lambda index: (-scores[index], group[index][1]))
+            reordered.extend(group[index] for index in order)
+        ranked = reordered
         # Rank identities, not individual revisions. A second revision of
         # a selected ID may be unranked, but must still reach CKR2's
         # fail-closed duplicate-identity conflict check.

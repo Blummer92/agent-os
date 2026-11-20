@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
+import re
 from typing import Any
 
 MAX_CANDIDATES = 5
@@ -224,6 +225,62 @@ class CodingKnowledgeSelectionResult:
         }
 
 
+# #4026: contextual tie-break INSIDE one relevance bucket only. It never creates
+# relevance (bucket 0 stays excluded), never moves a candidate across buckets,
+# never changes budgets, provenance or currentness checks, and adds no reason
+# code. With no overlap every score is 0 and the legacy id order is unchanged.
+_CONTEXT_TOKEN = re.compile(r"[a-z0-9]+")
+_MIN_CONTEXT_TOKEN_CHARS = 4
+
+
+def _context_tokens(texts: Any) -> frozenset[str]:
+    return frozenset(
+        token
+        for text in texts
+        for token in _CONTEXT_TOKEN.findall(text.casefold())
+        if len(token) >= _MIN_CONTEXT_TOKEN_CHARS
+    )
+
+
+def contextual_tie_scores(
+    request: CodingKnowledgeRequest,
+    tied: Any,
+) -> list[int]:
+    """Exact whole-word overlap between request context and tied candidates.
+
+    Request context is task_reference plus capability_keywords;
+    candidate text is its name and use_when. A shared token is weighted by
+    how many tied candidates do NOT contain it (n - df), so words common
+    to the whole tie group carry no weight. No stemming, synonyms or fuzzy
+    matching. Deterministic, integer-valued, aligned with tied by position.
+    """
+    candidates = list(tied)
+    if len(candidates) < 2:
+        return [0] * len(candidates)
+    # A capability keyword that already matched candidate vocabulary formed the
+    # relevance bucket; counting it again as context would reward any lesson
+    # that merely mentions the bucket's own term. Free-text phrases still count.
+    consumed = {_norm(candidate.capability_kind) for candidate in candidates} | {
+        _norm(keyword) for candidate in candidates for keyword in candidate.keywords
+    }
+    wanted = _context_tokens(
+        (
+            request.task_reference,
+            *(kw for kw in request.capability_keywords if _norm(kw) not in consumed),
+        )
+    )
+    shared = [
+        _context_tokens((candidate.name, *candidate.use_when)) & wanted
+        for candidate in candidates
+    ]
+    document_frequency: dict[str, int] = {}
+    for tokens in shared:
+        for token in tokens:
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+    total = len(candidates)
+    return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
+
+
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -289,6 +346,9 @@ def select_coding_knowledge(
     best_bucket = max(item[0] for item in ranked)
     best = [item for item in ranked if item[0] == best_bucket]
     best.sort(key=lambda item: item[1])
+    scores = contextual_tie_scores(request, (item[2] for item in best))
+    order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
+    best = [best[index] for index in order]
 
     if any(item[2].authority_conflict for item in best):
         return _result(
