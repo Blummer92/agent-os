@@ -177,7 +177,7 @@ class Executor:
                         reason="Task was rejected by approver",
                     )
                     task.status = TaskStatus.GOVERNANCE_BLOCKED
-                    self.repository.update_task(task)
+                    self._persist_task(task)
 
                     return ExecutionResult(
                         success=False,
@@ -200,7 +200,7 @@ class Executor:
                     self.audit_logger.log_approval_requested(task)
 
                 task.mark_approval_pending()
-                self.repository.update_task(task)
+                self._persist_task(task)
 
                 return ExecutionResult(
                     success=False,
@@ -218,7 +218,7 @@ class Executor:
                 reason=stop_result.reason,
             )
             task.status = TaskStatus.GOVERNANCE_BLOCKED
-            self.repository.update_task(task)
+            self._persist_task(task)
 
             return ExecutionResult(
                 success=False,
@@ -259,7 +259,7 @@ class Executor:
             if invalid_reason is not None:
                 self.audit_logger.log_adapter_result_invalid(task, reason=invalid_reason)
                 task.mark_failed(error=f"Invalid adapter result: {invalid_reason}", is_transient=False)
-                self.repository.update_task(task)
+                self._persist_task(task)
 
                 return ExecutionResult(
                     success=False,
@@ -276,7 +276,7 @@ class Executor:
             if adapter_result.get("success"):
                 task.mark_completed(result=adapter_result.get("output"))
                 self.audit_logger.log_task_completed(task, result=adapter_result.get("output"))
-                self.repository.update_task(task)
+                self._persist_task(task)
 
                 return ExecutionResult(
                     success=True,
@@ -295,7 +295,7 @@ class Executor:
                     task.payload["error"] = error
                     task.schedule_retry(delay)
                     self.audit_logger.log_retry_scheduled(task, delay_seconds=delay)
-                    self.repository.update_task(task)
+                    self._persist_task(task)
 
                     return ExecutionResult(
                         success=False,
@@ -312,7 +312,7 @@ class Executor:
 
                 task.mark_failed(error=error, is_transient=False)
                 self.audit_logger.log_task_failed(task, error=error, is_transient=False)
-                self.repository.update_task(task)
+                self._persist_task(task)
 
                 return ExecutionResult(
                     success=False,
@@ -382,7 +382,7 @@ class Executor:
         if status == "success":
             task.mark_completed(result=result.get("output"))
             self.audit_logger.log_task_completed(task, result=result.get("output"))
-            self.repository.update_task(task)
+            self._persist_task(task)
 
             return ExecutionResult(
                 success=True,
@@ -400,7 +400,7 @@ class Executor:
                 task.payload["error"] = message
                 task.schedule_retry(retry_after)
                 self.audit_logger.log_retry_scheduled(task, delay_seconds=retry_after)
-                self.repository.update_task(task)
+                self._persist_task(task)
 
                 return ExecutionResult(
                     success=False,
@@ -415,7 +415,7 @@ class Executor:
             self.audit_logger.log_retry_exhausted(task, attempts=task.retry_count)
             task.mark_failed(error=message, is_transient=False)
             self.audit_logger.log_task_failed(task, error=message, is_transient=False)
-            self.repository.update_task(task)
+            self._persist_task(task)
 
             return ExecutionResult(
                 success=False,
@@ -432,7 +432,7 @@ class Executor:
             self.audit_logger.log_governance_blocked(
                 task=task, blockers=["adapter_blocked"], reason=blocked_reason
             )
-            self.repository.update_task(task)
+            self._persist_task(task)
 
             return ExecutionResult(
                 success=False,
@@ -467,7 +467,7 @@ class Executor:
                 self.audit_logger.log_approval_requested(task)
 
             task.mark_approval_pending()
-            self.repository.update_task(task)
+            self._persist_task(task)
 
             return ExecutionResult(
                 success=False,
@@ -482,7 +482,7 @@ class Executor:
         # status == "failure" -- the remaining, simplest case.
         task.mark_failed(error=message, is_transient=False)
         self.audit_logger.log_task_failed(task, error=message, is_transient=False)
-        self.repository.update_task(task)
+        self._persist_task(task)
 
         return ExecutionResult(
             success=False,
@@ -493,29 +493,29 @@ class Executor:
             checks_failed=["execution"],
         )
 
+    def _persist_task(self, task: Task) -> None:
+        token = getattr(task, "_execution_claim_token", None)
+        if token is None:
+            self.repository.update_task(task)
+        elif not self.repository.update_claimed_task(task, token):
+            raise RuntimeError("Execution claim was lost; task update refused")
+
     def _acquire_lease(self, task: Task) -> bool:
-        """Acquire execution lease lock for a task.
-
-        Args:
-            task: Task to acquire lease for
-
-        Returns:
-            True if lease acquired, False if already held
-        """
-        # Check if task already has active lease
-        if task.has_active_lease(timeout_seconds=self.lease_timeout_seconds):
+        token = self.repository.try_claim_execution(task.id)
+        if token is None:
             return False
-
-        # Acquire lease
-        task.acquire_lease()
-        self.repository.update_task(task)
+        claimed = self.repository.get_task(task.id)
+        task.status = claimed.status
+        task.lease_lock = claimed.lease_lock
+        task.updated_at = claimed.updated_at
+        task._execution_claim_token = token
         return True
 
     def _release_lease(self, task: Task) -> None:
-        """Release execution lease lock for a task.
-
-        Args:
-            task: Task to release lease for
-        """
-        task.release_lease()
-        self.repository.update_task(task)
+        token = getattr(task, "_execution_claim_token", None)
+        if token is None:
+            return
+        if not self.repository.release_execution_claim(task.id, token):
+            raise RuntimeError("Execution claim release refused")
+        task.lease_lock = None
+        delattr(task, "_execution_claim_token")
