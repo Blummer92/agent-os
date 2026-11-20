@@ -313,3 +313,58 @@ def test_zero_context_overlap_preserves_lexical_cut():
     assert order[:3] == ("LL-10", "LL-18", "LL-21")
     outcome = consume_lesson_preflight(req, bounded, _ranked_order=order)
     assert outcome.selected_lesson_ids == order[:3]
+
+
+def _duplicate_ranking_rows():
+    return [
+        {
+            "object": "page",
+            "id": f"synthetic-{number}",
+            "last_edited_time": "2026-11-15T00:41:00.000Z",
+            "properties": {
+                "Lesson ID": {"type": "unique_id", "unique_id": {
+                    "prefix": "LL", "number": number}},
+                "Lesson Learned": _rich("Synthetic QA record", "title"),
+                "Status": {"type": "select", "select": {"name": "Applied"}},
+                "Surface Before Work?": {"type": "checkbox", "checkbox": True},
+                "Area": {"type": "select", "select": {"name": "Testing"}},
+                "Learning Type": {"type": "select", "select": {"name": "Testing lesson"}},
+                "Applies To": {"type": "multi_select", "multi_select": []},
+                "Source Link": {"type": "url", "url": REF},
+                "Guardrail": _rich("Synthetic QA guardrail"),
+                "What To Do Next Time": _rich(guidance),
+            },
+        }
+        for number, guidance in enumerate(
+            ("review timing planning", "review timing planning", "review timing", "pacing"), 1
+        )
+    ]
+
+
+@pytest.mark.parametrize(("orchestrate", "duplicate_count"), (
+    pytest.param(bridge.orchestrate_lesson_activation, 5, id="direct-activation"),
+    pytest.param(orchestrate_lesson_retrieval, 4, id="ckr11-retrieval"),
+))
+@pytest.mark.parametrize("extra", ("none", "exact-repeat", "different-revision"))
+def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_count, extra):
+    rows = _duplicate_ranking_rows()
+    if extra != "none":
+        repeated = deepcopy(rows[-1])
+        if extra == "different-revision":
+            repeated["last_edited_time"] = "2026-11-16T00:41:00.000Z"
+        rows.append(repeated)
+
+    result = orchestrate(
+        request(task_reference="pacing review timing planning", capability_keywords=("testing",)),
+        execute_read=_read(rows),
+    )
+
+    if extra == "different-revision":
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+        assert result.selection_reason_codes == ("duplicate-identity-conflict",)
+        assert result.selected_lesson_ids == ()
+        assert result.candidate_count == 5
+    else:
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+        assert result.selected_lesson_ids == ("LL-1", "LL-2", "LL-4")
+        assert result.candidate_count == (duplicate_count if extra == "exact-repeat" else 4)

@@ -420,7 +420,11 @@ def _bound_relevant_lessons_with_order(
         # is the whole order when nothing overlaps. Buckets never mix.
         reordered: list[tuple[int, str, LessonRecordEvidence]] = []
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
-            group = [item for item in ranked if item[0] == bucket]
+            # Score equal normalized records once, while retaining the
+            # original rows for raw counts and revision-conflict checks.
+            group = list(dict.fromkeys(
+                item for item in ranked if item[0] == bucket
+            ))
             scores = contextual_tie_scores(
                 request, (_as_selection_candidate(item[2]) for item in group)
             )
