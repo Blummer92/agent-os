@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeRequest,
+    KnowledgeCurrentness,
     RetrievalEscalation,
     SufficiencyStatus,
 )
@@ -15,6 +16,7 @@ from agent_memory_context_manager.lesson_activation_bridge import (
     orchestrate_lesson_activation,
 )
 from agent_memory_context_manager.lesson_preflight import LessonRecordEvidence, LessonRetrievalStatus
+from agent_memory_context_manager.lesson_retrieval_orchestrator import orchestrate_lesson_retrieval
 
 
 def request(**overrides):
@@ -440,3 +442,66 @@ def test_pr_a10_unranked_revision_of_ranked_id_fails_closed_at_bound_edge():
         assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
         assert "duplicate-identity-conflict" in result.selection_reason_codes
         assert result.selected_lesson_ids == ()
+
+
+def _snapshot_with_source(primary, *, supporting=None):
+    properties = {"Source Link": _url(primary)}
+    if supporting is not None:
+        properties["Supporting Source Links"] = _rich_text(supporting)
+    row = live_row(properties=properties)
+    return normalize_lesson_row(row), orchestrate_lesson_retrieval(
+        request(specialized_knowledge_required=True),
+        execute_read=lambda query: {"results": [row], "has_more": False, "next_cursor": None},
+    )
+
+
+def test_primary_source_requires_concrete_resource_in_qualified_snapshot():
+    incomplete = (
+        "https://github.com/",
+        "https://github.com/Blummer92",
+        "https://github.com/Blummer92/agent-os",
+        "https://github.com/Blummer92/agent-os/issues",
+        "https://github.com/Blummer92/agent-os/issues/0",
+        "https://github.com/Blummer92/agent-os/pull/notes",
+        "https://github.com/Blummer92/agent-os/pull/2425#issuecomment-1",
+        "https://github.com/Blummer92/agent-os/blob/main",
+        "https://github.com/Blummer92/agent-os/actions/runs",
+        "https://github.com/Blummer92/agent-os/actions/runs/44457169061/job",
+        "https://github.com/Blummer92/agent-os/actions/runs/44457169061/job/not-a-job-id",
+        "https://github.com.evidence.invalid/Blummer92/agent-os/issues/2425",
+        "00_Governance/",
+        "08_Tooling/../README.md",
+    )
+    for primary in incomplete:
+        lesson, result = _snapshot_with_source(
+            primary, supporting="https://github.com/Blummer92/agent-os/issues/2425"
+        )
+        assert lesson.currentness is KnowledgeCurrentness.UNVERIFIABLE, primary
+        assert lesson.canonical_github_refs == (), primary
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW, primary
+        assert result.selected_lesson_ids == (), primary
+        assert "unverifiable-relevant-candidate" in result.selection_reason_codes, primary
+
+
+def test_primary_source_concrete_resources_keep_qualified_snapshot_sufficient():
+    concrete = (
+        "https://github.com/Blummer92/agent-os/issues/2425",
+        "https://github.com/Blummer92/agent-os/pull/4030",
+        "https://github.com/Blummer92/agent-os/blob/main/00_Governance/README.md",
+        "https://github.com/Blummer92/agent-os/commit/07f9e0657d6fd8f5e3e2734e926856ded5111147",
+        "https://github.com/Blummer92/agent-os/actions/runs/44457169061",
+        "https://github.com/Blummer92/agent-os/actions/runs/44149572188/job/134274343781",
+        "https://github.com/other-owner/other.repo/issues/42",
+        "00_Governance/README.md",
+        "01_Shared_Standards/python/testing-standard.md",
+        "02_Agent_Overlays/chatgpt-orchestrator.md",
+        "04_Registry/README.md",
+        "08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md",
+    )
+    supporting = "https://github.com/Blummer92/agent-os/issues/3418"
+    for primary in concrete:
+        lesson, result = _snapshot_with_source(primary, supporting=supporting)
+        assert lesson.currentness is KnowledgeCurrentness.CURRENT, primary
+        assert lesson.canonical_github_refs == (primary, supporting), primary
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT, primary
+        assert result.selected_lesson_ids == ("LL-42",), primary

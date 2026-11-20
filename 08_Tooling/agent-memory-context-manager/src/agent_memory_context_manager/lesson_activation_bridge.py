@@ -75,6 +75,9 @@ MAX_SUPPORTING_REFS = 5
 _SUPPORTING_REF = re.compile(
     r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}"
 )
+_GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
+_GITHUB_NUMBER = re.compile(r"[1-9][0-9]*")
+_GITHUB_COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
 _GOVERNANCE_PREFIXES = (
     "00_Governance/",
     "01_Shared_Standards/",
@@ -854,15 +857,43 @@ def _github_source_link(prop: Any) -> str | None:
     # provenance. Plain resource URLs are unaffected: blob-URL primaries
     # (relied on by an existing test) and governance-path primaries still
     # normalize as CURRENT.
-    if "#" in value:
-        return None
-    if not (
-        value.startswith("https://github.com/")
-        or value.startswith("00_Governance/")
-        or value.startswith("01_Shared_Standards/")
-        or value.startswith("02_Agent_Overlays/")
-        or value.startswith("04_Registry/")
-        or value.startswith("08_Tooling/")
+    if (
+        "#" in value or "\\" in value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
         return None
-    return value
+
+    if value.startswith(_GOVERNANCE_PREFIXES):
+        # Keep the existing governed locations but require a path to a
+        # resource, not just the directory prefix.
+        return value if _has_source_segments(value.split("/")) else None
+
+    github = "https://github.com/"
+    if not value.startswith(github) or "?" in value or any(char.isspace() for char in value):
+        return None
+    segments = value.removeprefix(github).split("/")
+    if len(segments) < 4 or not _has_source_segments(segments):
+        return None
+    owner, repo, kind, *resource = segments
+    if _GITHUB_REPOSITORY.fullmatch(f"{owner}/{repo}") is None:
+        return None
+
+    # Validate shape only. This does not resolve a remote link or assert that
+    # the linked material substantiates the lesson.
+    if kind in {"issues", "pull"} and len(resource) == 1 and _GITHUB_NUMBER.fullmatch(resource[0]):
+        return value
+    if kind == "blob" and len(resource) >= 2:
+        return value  # a ref and a file path
+    if kind == "commit" and len(resource) == 1 and _GITHUB_COMMIT.fullmatch(resource[0]):
+        return value
+    if kind == "actions" and len(resource) in {2, 4}:
+        if resource[0] == "runs" and _GITHUB_NUMBER.fullmatch(resource[1]):
+            if len(resource) == 2 or (
+                resource[2] == "job" and _GITHUB_NUMBER.fullmatch(resource[3])
+            ):
+                return value
+    return None
+
+
+def _has_source_segments(segments: Sequence[str]) -> bool:
+    return all(segment.strip() and segment not in {".", ".."} for segment in segments)
