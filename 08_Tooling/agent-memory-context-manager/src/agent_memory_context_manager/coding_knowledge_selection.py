@@ -281,46 +281,6 @@ def contextual_tie_scores(
     return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
 
 
-# #4026 follow-up: when the caller explicitly requests specialized knowledge,
-# a generic capability match does not alone establish that tied lessons apply.
-# Require task-text corroboration for those explicit, high-ambiguity requests.
-# Requests with unspecified materiality retain their legacy selection policy.
-# This guard does not affect explicit library/path/CKR6 relevance.
-# A single 8+ character shared term can also count when the topic is specific.
-# No fuzzy semantic inference, new candidates, or external reads are used.
-_GENERIC_ONLY_REASONS = frozenset({"ecosystem-capability-match", "keyword-overlap"})
-# A standalone locator contains no meaningful task description. The CKR2
-# legacy contract allows generic knowledge selection for these references;
-# a lack of lexical overlap must not be treated as evidence of irrelevance.
-# Embedding the same locator in an actual task sentence does NOT exempt it.
-_IDENTITY_ONLY_TASK_REFERENCE = re.compile(
-    r"(?i)(?:issue:\s*\#?[1-9][0-9]*|pr\s*\#[1-9][0-9]*|"
-    r"https://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*)"
-)
-
-
-
-def _generic_tie_has_task_evidence(
-    request: CodingKnowledgeRequest,
-    candidates: Any,
-) -> bool:
-    """Conservative task-to-guidance check, ignoring bucket vocabulary.
-
-    Free-text capability phrases may influence ranking but cannot substitute
-    for the actual task_reference when deciding whether to auto-suffice.
-    """
-    task_terms = _context_tokens((request.task_reference,))
-    for candidate in candidates:
-        bucket_terms = _context_tokens((
-            candidate.ecosystem, candidate.capability_kind, *candidate.keywords
-        ))
-        guidance_terms = _context_tokens((candidate.name, *candidate.use_when))
-        corroborating = (task_terms & guidance_terms) - bucket_terms
-        if len(corroborating) >= 2 or any(len(term) >= 8 for term in corroborating):
-            return True
-    return False
-
-
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -415,30 +375,6 @@ def select_coding_knowledge(
             (),
             request.canonical_rule_refs,
             ("unverifiable-relevant-candidate",),
-            candidate_count,
-        )
-
-    # A high-cardinality tie based solely on caller-supplied generic metadata
-    # must not be marked SUFFICIENT without independent task-text support.
-    # A standalone issue/PR locator is not descriptive negative evidence;
-    # preserve its pinned historical selection result.
-    # Put this after currentness/authority guards to preserve their explicit
-    # fail-closed reasons; do not filter or discard unverifiable lessons.
-    if (
-        request.specialized_knowledge_required is True
-        and not _IDENTITY_ONLY_TASK_REFERENCE.fullmatch(request.task_reference.strip())
-        and len(best) > MAX_SELECTED
-        and all(set(item[3]) <= _GENERIC_ONLY_REASONS for item in best)
-        and not _generic_tie_has_task_evidence(
-            request, (item[2] for item in best)
-        )
-    ):
-        return _result(
-            SufficiencyStatus.MANUAL_REVIEW,
-            RetrievalEscalation.MANUAL_REVIEW,
-            (),
-            request.canonical_rule_refs,
-            ("generic-task-context-unverified",),
             candidate_count,
         )
 

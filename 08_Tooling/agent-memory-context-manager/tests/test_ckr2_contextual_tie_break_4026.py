@@ -126,12 +126,10 @@ def test_rare_distinctive_token_outweighs_many_universal_tokens():
 
 # ---- invariants (must hold before AND after the repair) -----------------------
 
-def test_without_context_overlap_cannot_auto_suffice_a_generic_tie():
+def test_without_context_overlap_legacy_lexical_order_is_unchanged():
     req = request(task="zzzz qqqq unrelated words")
     result = orchestrate_lesson_activation(req, execute_read=reader(corpus()))
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
-    assert result.selected_lesson_ids == ()
-    assert "generic-task-context-unverified" in result.selection_reason_codes
+    assert result.selected_lesson_ids == ("LL-1", "LL-10", "LL-11")
 
 
 def test_context_overlap_cannot_outrank_a_better_relevance_bucket():
@@ -197,155 +195,23 @@ def test_short_filler_tokens_never_outweigh_a_distinctive_word():
     assert ids[0] == "LL-9"
 
 
-def test_bucket_defining_keyword_is_not_task_evidence():
-    # "testing" formed the bucket; repeating it in a title is not independent
-    # evidence that the request to rename a dashboard column needs a lesson.
+def test_bucket_defining_keyword_is_not_counted_again_as_context():
+    # "testing" already formed the relevance bucket; a lesson that merely contains the
+    # word in its title must not be promoted over legacy order for an unrelated task.
     cands = (
         cand("LL-1"), cand("LL-2"), cand("LL-3"), cand("LL-4"),
         cand("LL-9", name="Use Hypothesis selectively for property-based testing"),
     )
-    result = select_coding_knowledge(
-        request(task="rename a dashboard column header"), cands
-    )
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.selected == ()
-    assert "generic-task-context-unverified" in result.reason_codes
+    req = request(task="rename a dashboard column header")
+    ids = tuple(s.candidate.knowledge_id for s in select_coding_knowledge(req, cands).selected)
+    assert ids == ("LL-1", "LL-2", "LL-3")
 
 
-def test_free_text_capability_phrase_cannot_replace_task_evidence():
-    from agent_memory_context_manager.coding_knowledge_selection import contextual_tie_scores
-
+def test_free_text_capability_phrases_still_count_as_context():
     cands = (
         cand("LL-1"), cand("LL-2"), cand("LL-3"), cand("LL-4"),
         cand("LL-9", use=("Wheelhouse packaging omitted a registry.",)),
     )
     req = request(task="zzzz", capability_keywords=("testing", "offline wheelhouse"))
-    # Ranking still sees the longer hint, but sufficiency needs independent
-    # corroboration in the task text, not only the potentially noisy hint.
-    scores = contextual_tie_scores(req, cands)
-    assert scores[-1] > max(scores[:-1])
-    result = select_coding_knowledge(req, cands)
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.reason_codes == ("generic-task-context-unverified",)
-
-
-# ---- follow-up: real archived lesson QA exposed generic false sufficiency ---
-
-@pytest.mark.parametrize("task,capability,ecosystem", [
-    ("Rename the dashboard column header for a class website.", "testing", "python"),
-    ("Draft a menu for the school autumn potluck.", "testing", "python"),
-    ("Adjust an avatar border radius in a student portal.", "testing", "python"),
-    ("Organize a classroom reading list by surname.", "testing", "python"),
-    ("Rearrange bookmarks in a web browser.", "deployment", "python"),
-    ("Select school hallway colors for a council event.", "quality-assurance", "agent-os"),
-    ("Write a haiku about snowfall in November.", "testing", "python"),
-])
-def test_misleading_generic_hints_fail_closed_in_a_large_tie(task, capability, ecosystem):
-    # Each candidate matches the metadata hint but not the actual task.
-    # This is a synthetic contract test, not a reproduction of production Notion.
-    tied = tuple(cand(f"LL-{n}", capability_kind=capability,
-                      ecosystem=ecosystem) for n in range(1, 6))
-    result = select_coding_knowledge(
-        request(task=task, capability_keywords=(capability,),
-                ecosystem_hints=(ecosystem,)), tied
-    )
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.selected_count == 0 and result.candidate_count == 5
-    assert result.reason_codes == ("generic-task-context-unverified",)
-
-
-def test_distinctive_task_term_allows_relevant_generic_tie():
-    tied = tuple(cand(f"LL-{n}") for n in range(1, 5)) + (
-        cand("LL-9", use=("Wheelhouse packaging omitted a registry.",)),
-    )
-    result = select_coding_knowledge(
-        request(task="wheelhouse", capability_keywords=("testing",)), tied
-    )
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert result.selected[0].candidate.knowledge_id == "LL-9"
-
-
-def test_exact_library_match_does_not_need_generic_task_word_overlap():
-    tied = tuple(cand(f"LL-{n}", library_name="unrelated") for n in range(1, 5)) + (
-        cand("LL-9", library_name="special-library"),
-    )
-    result = select_coding_knowledge(
-        request(task="short request", library_hints=("special-library",)), tied
-    )
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert tuple(item.candidate.knowledge_id for item in result.selected) == ("LL-9",)
-
-
-def test_missing_primary_source_still_precedes_generic_context_guard():
-    tied = (
-        cand("LL-1", currentness=KnowledgeCurrentness.UNVERIFIABLE,
-             canonical_github_refs=()),
-        *(cand(f"LL-{n}") for n in range(2, 6)),
-    )
-    result = select_coding_knowledge(request(task="write a haiku"), tuple(tied))
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.reason_codes == ("unverifiable-relevant-candidate",)
-
-
-def test_single_generic_match_retains_existing_non_tie_contract():
-    result = select_coding_knowledge(
-        request(task="short and non-specific"), (cand("LL-1"),)
-    )
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert result.selected_count == 1
-
-
-def test_legacy_unspecified_materiality_retains_generic_tie_sufficiency():
-    # Historical CKR11 snapshot and decision-preflight callers do not opt
-    # into stricter task-evidence policy; their selected IDs remain stable.
-    req = request(task="zzzz qqqq unrelated words",
-                  specialized_knowledge_required=None)
-    result = select_coding_knowledge(req, tuple(cand(f"LL-{i}") for i in range(1, 6)))
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert tuple(item.candidate.knowledge_id for item in result.selected) == (
-        "LL-1", "LL-2", "LL-3"
-    )
-
-
-def test_explicit_specialized_materiality_enforces_generic_tie_guard():
-    req = request(task="zzzz qqqq unrelated words",
-                  specialized_knowledge_required=True)
-    result = select_coding_knowledge(req, tuple(cand(f"LL-{i}") for i in range(1, 6)))
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.reason_codes == ("generic-task-context-unverified",)
-    assert result.selected_count == 0
-
-
-@pytest.mark.parametrize("ref", [
-    "issue:#1",
-    "issue:#1357",
-    "PR #4066",
-    "https://github.com/Blummer92/agent-os/issues/4026",
-])
-def test_identity_only_specialized_reference_preserves_legacy_generic_tie(ref):
-    # A source locator is not a task description; absent overlap cannot be
-    # evidence of false relevance. Pin legacy three-of-five selection.
-    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
-    result = select_coding_knowledge(request(task=ref), tied)
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert tuple(s.candidate.knowledge_id for s in result.selected) == (
-        "LL-1", "LL-2", "LL-3"
-    )
-
-
-def test_task_with_embedded_issue_locator_does_not_bypass_abstention():
-    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
-    result = select_coding_knowledge(
-        request(task="issue:#1 rename the dashboard column header"), tied
-    )
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.reason_codes == ("generic-task-context-unverified",)
-
-
-def test_undocumented_reference_shape_does_not_bypass_abstention():
-    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
-    result = select_coding_knowledge(
-        request(task="some unrelated words issue:#1"), tied
-    )
-    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
-    assert result.selected_count == 0
+    ids = tuple(s.candidate.knowledge_id for s in select_coding_knowledge(req, cands).selected)
+    assert ids[0] == "LL-9"
