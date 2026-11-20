@@ -356,14 +356,14 @@ def _select_coding_knowledge(
     # The pre-cut ranking is internal to the CKR11/CKR6 path. Reject
     # stale or forged identity priorities and cross-bucket inversions.
     if _ranked_order is not None:
-        ranked_buckets = {item[2].knowledge_id: item[0] for item in ranked}
+        ranked_buckets = {item.knowledge_id: 0 for item in deduped}
+        ranked_buckets.update((item[2].knowledge_id, item[0]) for item in ranked)
         invalid_order = (
             type(_ranked_order) is not tuple
             or any(type(identity) is not str for identity in _ranked_order)
-            or len(_ranked_order) != len(deduped)
-            or len(set(_ranked_order)) != len(deduped)
+            or len(_ranked_order) != len(set(_ranked_order))
             or set(_ranked_order) != {item.knowledge_id for item in deduped}
-            or len(ranked_buckets) != len(deduped)
+            or 0 in ranked_buckets.values()
         )
         if not invalid_order:
             invalid_order = any(

@@ -296,9 +296,11 @@ def consume_lesson_preflight(
         )
 
     eligible: list[LessonRecordEvidence] = []
+    ineligible_ids: set[str] = set()
     stale_or_conflicting = 0
     for lesson in lessons:
         if lesson.archived or lesson.status not in _ALLOWED_STATUSES or not lesson.surface_before_work:
+            ineligible_ids.add(lesson.lesson_id)
             continue
         if lesson.currentness is not KnowledgeCurrentness.CURRENT or lesson.authority_conflict:
             stale_or_conflicting += 1
@@ -311,6 +313,16 @@ def consume_lesson_preflight(
         # Eligibility may exclude some bounded lessons. Do not recompute
         # context scores when filtering their IDs from the original plan.
         eligible_ids = {item.lesson_id for item in eligible}
+        if eligible_ids & ineligible_ids:
+            # The order was chosen from the full pool. An eligible record
+            # cannot inherit the rank of a conflicting ineligible record of
+            # the same identity. Preserve the conflict before filtering.
+            return _fallback(
+                LessonRetrievalStatus.MANUAL_REVIEW,
+                "duplicate-identity-conflict",
+                RetrievalEscalation.MANUAL_REVIEW,
+                candidate_count=len(lessons),
+            )
         eligible_order = tuple(
             identity for identity in _ranked_order if identity in eligible_ids
         )

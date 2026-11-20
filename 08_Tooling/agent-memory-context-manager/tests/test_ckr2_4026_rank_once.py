@@ -5,6 +5,7 @@ from the original CKR6 failure (87 observed Notion rows). It is not gold
 applicability truth. Original historical selected IDs LL-50/LL-56/LL-18
 remain documented in Draft PR #4068 and issue #4026.
 """
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -168,18 +169,110 @@ def test_snapshot_order_does_not_affect_full_pool_ranking():
         )
 
 
-@pytest.mark.parametrize("rank_order", [
-    ("LL-50", "LL-18", "LL-9"),
-    ("LL-50", "LL-18", "LL-9", "LL-55", "LL-55"),
-    ("LL-50", "LL-18", "LL-9", "LL-55", "LL-99"),
+def _direct_candidates():
+    high, low = map(bridge._as_selection_candidate, _normalized()[:2])
+    # Named library = bucket 3; generic ecosystem + capability = bucket 2.
+    return replace(high, knowledge_id="high", library_name="pinned-lib"), replace(
+        low, knowledge_id="low"
+    )
+
+
+@pytest.mark.parametrize("invalid_plan", [
+    pytest.param(("high",), id="missing-identity"),
+    pytest.param(("high", "unexpected"), id="unexpected-identity"),
+    pytest.param(("high", "low", "low"), id="duplicate-identity"),
+    pytest.param(("low", "high"), id="cross-bucket-inversion"),
 ])
-def test_invalid_internal_priority_plan_fails_closed(rank_order):
+def test_direct_ckr2_rejects_invalid_rank_plan(invalid_plan):
+    req = request(library_hints=("pinned-lib",))
+    outcome = cks._select_coding_knowledge(
+        req, _direct_candidates(), _ranked_order=invalid_plan
+    )
+    assert outcome.sufficiency_status is cks.SufficiencyStatus.MANUAL_REVIEW
+    assert outcome.recommended_escalation is cks.RetrievalEscalation.MANUAL_REVIEW
+    assert outcome.reason_codes == ("upstream-ranking-order-mismatch",)
+    assert outcome.selected == ()
+
+
+def test_direct_ckr2_rejects_bucket_zero_identity_in_rank_plan():
+    req = request(library_hints=("pinned-lib",))
+    high, low = _direct_candidates()
+    irrelevant = replace(low, ecosystem="go", capability_kind="packaging", keywords=())
+    outcome = cks._select_coding_knowledge(
+        req, (high, irrelevant), _ranked_order=("high", "low")
+    )
+    assert outcome.sufficiency_status is cks.SufficiencyStatus.MANUAL_REVIEW
+    assert outcome.recommended_escalation is cks.RetrievalEscalation.MANUAL_REVIEW
+    assert outcome.reason_codes == ("upstream-ranking-order-mismatch",)
+    assert outcome.selected == ()
+
+
+def test_direct_ckr2_accepts_complete_rank_plan():
+    req = request(library_hints=("pinned-lib",))
+    outcome = cks._select_coding_knowledge(
+        req, _direct_candidates(), _ranked_order=("high", "low")
+    )
+    assert outcome.sufficiency_status is cks.SufficiencyStatus.SUFFICIENT
+    assert outcome.reason_codes == ("knowledge-sufficient",)
+    assert outcome.knowledge_refs == ("high",)
+
+
+@pytest.mark.parametrize("invalidity", [
+    "missing-ineligible", "duplicate-ineligible", "unexpected-identity",
+])
+def test_consume_rejects_invalid_plan_even_if_eligible_projection_is_valid(invalidity):
     req = request()
-    bounded, _ = bridge._bound_relevant_lessons_with_order(req, _normalized())
-    outcome = consume_lesson_preflight(req, bounded, _ranked_order=rank_order)
+    first, second = _normalized()[:2]
+    bounded = (first, replace(second, surface_before_work=False))
+    valid = (first.lesson_id, second.lesson_id)
+    # Every invalid plan would reduce to (first.lesson_id,) after filtering.
+    # A CKR2 rejection cannot substitute for this consume-level check.
+    invalid_plan = {
+        "missing-ineligible": valid[:1],
+        "duplicate-ineligible": (*valid, second.lesson_id),
+        "unexpected-identity": (first.lesson_id, "LL-999999"),
+    }[invalidity]
+    ok = consume_lesson_preflight(req, bounded, _ranked_order=valid)
+    assert ok.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert ok.selected_lesson_ids == valid[:1]
+    outcome = consume_lesson_preflight(req, bounded, _ranked_order=invalid_plan)
     assert outcome.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert outcome.retrieval_escalation is cks.RetrievalEscalation.MANUAL_REVIEW
+    assert outcome.selection_reason_codes == ("upstream-ranking-order-mismatch",)
     assert outcome.selected_lesson_ids == ()
-    assert "upstream-ranking-order-mismatch" in outcome.selection_reason_codes
+    assert outcome.selection is None
+
+
+def _rows_with_ineligible_50():
+    rows = _rows()
+    ranked = next(row for row in rows if row["id"] == "frozen-50")
+    alternate = deepcopy(ranked)
+    alternate["last_edited_time"] = "2026-11-21T00:00:00.000Z"
+    ranked["properties"]["Surface Before Work?"]["checkbox"] = False
+    return rows, alternate
+
+
+def test_production_filters_ineligible_before_selecting_without_rescoring():
+    rows, _ = _rows_with_ineligible_50()
+    result = _replay(snapshot=rows)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selection_reason_codes == ("knowledge-sufficient",)
+    assert result.selected_lesson_ids == ("LL-18", "LL-9", "LL-55")
+    assert result.candidate_count == 4
+
+
+@pytest.mark.parametrize("learning_type", [
+    pytest.param("Mistake", id="e2-bucket-zero-alternate"),
+    pytest.param("Testing lesson", id="e3-relevant-alternate"),
+])
+def test_production_mixed_eligibility_revisions_report_duplicate_conflict(learning_type):
+    rows, alternate = _rows_with_ineligible_50()
+    alternate["properties"]["Learning Type"]["select"]["name"] = learning_type
+    for snapshot in (rows + [alternate], [alternate] + list(reversed(rows))):
+        result = _replay(snapshot=snapshot)
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+        assert result.selection_reason_codes == ("duplicate-identity-conflict",)
+        assert result.selected_lesson_ids == ()
 
 
 def test_primary_provenance_is_not_overridden_by_rank_plan():
