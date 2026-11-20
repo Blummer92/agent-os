@@ -133,7 +133,8 @@ def test_full_population_scores_are_not_recomputed_after_cut(monkeypatch):
     monkeypatch.setattr(cks, "contextual_tie_scores", forbidden_second_pass)
     result = _replay()
     assert result.selected_lesson_ids == ("LL-50", "LL-18", "LL-9")
-    assert observed == [33]
+    # One 33-way bucket and one separate bucket-1 singleton are scored once.
+    assert observed == [33, 1]
 
 
 def test_full_pool_five_to_three_order_is_a_prefix():
