@@ -322,17 +322,16 @@ def test_navigation_registry_workflow_does_not_cross_event_dedupe():
     assert "github.head_ref" not in content
 
 
-def test_issue_acceptance_preserves_input_sensitive_triggers_and_supersedes_stale_runs():
+def test_issue_acceptance_runs_only_on_demand_without_pr_event_churn():
     content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
-    assert "types: [opened, edited, reopened, synchronize]" in content
-    assert "ready_for_review" not in content
-    assert "name: Classify acceptance inputs" in content
-    assert "python -m scripts.agent_os_issue_acceptance.edit_relevance" in content
-    assert "needs: relevance" in content
-    assert "if: needs.relevance.outputs.should_run == 'true'" in content
-    assert "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}" in content
+    assert "workflow_dispatch:" in content
+    assert "\n  pull_request:" not in content
+    assert "name: Classify acceptance inputs" not in content
+    assert "needs: relevance" not in content
+    assert "group: issue-acceptance-${{ inputs.pr_number || github.run_id }}" in content
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content
+    assert 'exit "$checker_exit_code"' in content
     assert "Report-only boundary" in content
 
 
