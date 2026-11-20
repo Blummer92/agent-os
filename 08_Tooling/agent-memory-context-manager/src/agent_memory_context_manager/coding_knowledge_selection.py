@@ -475,7 +475,7 @@ def _match_candidate(
     # Require BOTH distinctive tokens, as whole words, in the lesson-owned
     # text. This is relevance only, never eligibility or authorization.
     import re
-    ci_request = "ckr6 mutation boundary" in capability_hints
+    ci_request = "ckr6 mutation boundary" in capability_hints or "mutation" in request.task_reference.casefold()
     if ci_request:
         lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
         if all(re.search(r"(?<![a-z0-9])" + term + r"(?![a-z0-9])", lesson_text)
