@@ -8,6 +8,9 @@ from dataclasses import replace
 
 import pytest
 
+import agent_memory_context_manager.coding_knowledge_selection as selection_module
+import agent_memory_context_manager.lesson_activation_bridge as bridge_module
+
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
@@ -16,6 +19,7 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     select_coding_knowledge,
 )
 from agent_memory_context_manager.lesson_activation_bridge import (
+    LessonActivationError,
     orchestrate_lesson_activation,
 )
 from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
@@ -198,7 +202,7 @@ def test_incomplete_pagination_cannot_return_partial_positive():
     req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
     def incomplete(_query):
         return {"results": [row()], "has_more": True, "next_cursor": None}
-    with pytest.raises(Exception, match="cursor"):
+    with pytest.raises(LessonActivationError, match="cursor"):
         orchestrate_lesson_activation(req, execute_read=incomplete)
 
 
@@ -223,3 +227,83 @@ def test_negative_and_positive_selection_are_order_invariant():
             x.candidate.knowledge_id for x in backward.selected
         )
         assert forward.sufficiency_status == backward.sufficiency_status
+
+
+# --- in-process mutation discrimination, not isolated source mutation trials ---
+
+def test_current_candidate_with_missing_primary_provenance_is_not_sufficient():
+    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
+    result = select_coding_knowledge(req, (candidate(canonical_github_refs=()),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_bridge_missing_primary_source_cannot_become_sufficient():
+    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
+    result = orchestrate_lesson_activation(req, execute_read=reader([row(source=None)]))
+    assert result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ()
+
+
+def test_padded_opaque_cursor_is_forwarded_verbatim():
+    cursor = "  cursor-Ω-opaque  "
+    seen = []
+    pages = {
+        None: {"results": [], "has_more": True, "next_cursor": cursor},
+        cursor: {"results": [row()], "has_more": False, "next_cursor": None},
+    }
+
+    def read(query):
+        seen.append(query.get("start_cursor"))
+        return pages[query.get("start_cursor")]
+
+    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
+    result = orchestrate_lesson_activation(req, execute_read=read)
+    assert seen == [None, cursor]
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-51",)
+
+
+def test_mutant_broad_match_is_detected(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(selection_module, "_match_candidate",
+                      lambda _req, _cand: (2, ("mutant-broad-match",)))
+        with pytest.raises(AssertionError):
+            test_unrelated_packaging_request_does_not_select_ll51()
+
+
+def test_mutant_missing_positive_match_is_detected(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(selection_module, "_match_candidate",
+                      lambda _req, _cand: (0, ()))
+        with pytest.raises(AssertionError):
+            test_relevant_mutation_boundary_selects_current_ll51()
+
+
+def test_mutant_duplicate_conflict_bypass_is_detected(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(selection_module, "_deduplicate",
+                      lambda candidates: (candidates, False))
+        with pytest.raises(AssertionError):
+            test_conflicting_duplicate_revision_fails_closed()
+
+
+def test_mutant_missing_source_bypass_is_detected(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(selection_module, "_missing_candidate_provenance",
+                      lambda _selected: False)
+        with pytest.raises(AssertionError):
+            test_current_candidate_with_missing_primary_provenance_is_not_sufficient()
+
+
+def test_mutant_cursor_trim_is_detected(monkeypatch):
+    original = bridge_module._page_cursor
+
+    def broken_page_cursor(raw):
+        has_more, cursor = original(raw)
+        return has_more, cursor.strip() if cursor is not None else None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bridge_module, "_page_cursor", broken_page_cursor)
+        with pytest.raises(KeyError):
+            test_padded_opaque_cursor_is_forwarded_verbatim()
