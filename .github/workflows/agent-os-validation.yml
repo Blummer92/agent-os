@@ -303,7 +303,7 @@ jobs:
     outputs:
       authoritative: ${{ steps.authority.outputs.authoritative }}
       head_sha: ${{ steps.authority.outputs.head_sha }}
-      reused: ${{ steps.aggregate_evidence.outputs.run_required == 'false' }}
+      pending_status_id: ${{ steps.pending_status.outputs.id }}
       aggregate_outcome: ${{ steps.aggregate.outcome }}
       main_health_outcome: ${{ steps.main_health.outcome }}
       main_recovery_stop_outcome: ${{ steps.main_recovery_stop.outcome }}
@@ -602,58 +602,35 @@ jobs:
             echo "authoritative=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Reuse valid exact-head aggregate evidence
-        if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' }}
-        id: aggregate_evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          # Only the newest `agent-os/authoritative-aggregate` status for this
-          # exact SHA governs (#2761): an older success never masks a newer
-          # failure/error/pending, and check-run history is not consulted.
-          evidence_state="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" \
-              --jq '[.[] | select(.context == "agent-os/authoritative-aggregate")]
-                | sort_by(.id)
-                | last
-                | .state // "missing"'
-          )"
-          echo "state=$evidence_state" >> "$GITHUB_OUTPUT"
-          case "$evidence_state" in
-            success)
-              echo "run_required=false" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "run_required=true" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-
       - name: Publish authoritative aggregate pending status
-        if: ${{ steps.authority.outputs.authoritative == 'true' && steps.aggregate_evidence.outputs.run_required != 'false' }}
+        # Ready must revalidate; do not keep a previous green visible while
+        # this run waits for current plan, frontend and aggregate verdicts.
+        if: ${{ steps.authority.outputs.authoritative == 'true' }}
+        id: pending_status
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS_SHA: ${{ steps.authority.outputs.head_sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
-            -f state=pending \
-            -f context=agent-os/authoritative-aggregate \
-            -f description="Authoritative aggregate validation running on this exact head" \
-            -f target_url="$TARGET_URL"
+          pending_id="$(
+            gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
+              -f state=pending \
+              -f context=agent-os/authoritative-aggregate \
+              -f description="Authoritative aggregate validation running on this exact head" \
+              -f target_url="$TARGET_URL" \
+              --jq '.id'
+          )"
+          [[ "$pending_id" =~ ^[1-9][0-9]*$ ]]
+          echo "id=$pending_id" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out admitted candidate commit
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && github.event_name == 'workflow_dispatch' && (steps.candidate.outputs.mode == 'final-candidate' || steps.candidate.outputs.mode == 'ready-recovery') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (steps.candidate.outputs.mode == 'final-candidate' || steps.candidate.outputs.mode == 'ready-recovery') }}
         env:
           CANDIDATE_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
         run: |
@@ -662,7 +639,6 @@ jobs:
           git checkout --detach "$CANDIDATE_HEAD_SHA"
 
       - name: Verify aggregate checkout identity
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
@@ -684,7 +660,7 @@ jobs:
           fi
 
       - name: Recover missing exact-current main aggregate evidence
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' }}
         id: main_evidence_recovery
         env:
           GH_TOKEN: ${{ github.token }}
@@ -725,7 +701,7 @@ jobs:
           exit 1
 
       - name: Project exact-current main health
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && steps.main_evidence_recovery.outputs.recovery_required != 'true' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (steps.candidate.outputs.mode == 'final-candidate' || steps.candidate.outputs.mode == 'ready-recovery'))) }}
+        if: ${{ steps.main_evidence_recovery.outputs.recovery_required != 'true' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (steps.candidate.outputs.mode == 'final-candidate' || steps.candidate.outputs.mode == 'ready-recovery'))) }}
         id: main_health
         env:
           GH_TOKEN: ${{ github.token }}
@@ -975,7 +951,6 @@ jobs:
           PY
 
       - name: Set up Python
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -987,7 +962,6 @@ jobs:
             08_Tooling/notion-navigation-client/pyproject.toml
 
       - name: Install validation dependencies
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         run: |
           set -euo pipefail
           python -m pip install -r requirements-dev.txt
@@ -997,7 +971,6 @@ jobs:
 
       - name: Run aggregate validation
         id: aggregate
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         env:
           CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
           # Subtest receipt binding (JUnit counter repair): the producer
@@ -1021,7 +994,7 @@ jobs:
         # recovery step, PR #3813 run 42393965702). The terminal status
         # still reports the run as infrastructure error; this receipt
         # only preserves the cause in machine-readable form.
-        if: ${{ failure() && steps.aggregate_evidence.outputs.run_required != 'false' && steps.aggregate.outcome != 'success' && steps.aggregate.outcome != 'failure' }}
+        if: ${{ failure() && steps.aggregate.outcome != 'success' && steps.aggregate.outcome != 'failure' }}
         env:
           JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
           HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.candidate.outputs.head_sha }}
@@ -1060,7 +1033,7 @@ jobs:
             > "$JUNIT_DIR/not-executed-infrastructure.json"
 
       - name: Upload aggregate JUnit evidence
-        if: ${{ always() && steps.aggregate_evidence.outputs.run_required != 'false' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: junit-aggregate-${{ github.run_attempt }}
@@ -1074,18 +1047,13 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
-          RUN_REQUIRED: ${{ steps.aggregate_evidence.outputs.run_required }}
-          REUSE_STATE: ${{ steps.aggregate_evidence.outputs.state }}
           MAIN_HEALTH_OUTCOME: ${{ steps.main_health.outcome }}
           MAIN_HEALTH_CONCLUSION: ${{ steps.main_health.outputs.validation_conclusion }}
           MAIN_HEALTH_REASONS: ${{ steps.main_health.outputs.reason_codes }}
           MAIN_RECOVERY_STOP_OUTCOME: ${{ steps.main_recovery_stop.outcome }}
           AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
         run: |
-          tested_sha="not-executed-in-this-run"
-          if [ "${RUN_REQUIRED:-true}" != "false" ]; then
-            tested_sha="$(git rev-parse HEAD)"
-          fi
+          tested_sha="$(git rev-parse HEAD 2>/dev/null || printf %s not-checked-out-in-this-run)"
           {
             echo "## Agent OS Validation Gate"
             echo
@@ -1108,9 +1076,7 @@ jobs:
             elif [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
               echo "- Failure class: \`candidate-aggregate\`. Aggregate step failed; inspect JUnit and logs before classifying the failure."
             fi
-            if [ "${RUN_REQUIRED:-true}" = "false" ]; then
-              echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
-            elif [ "${AGGREGATE_OUTCOME:-}" = "success" ] || [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
+            if [ "${AGGREGATE_OUTCOME:-}" = "success" ] || [ "${AGGREGATE_OUTCOME:-}" = "failure" ]; then
               echo "- Aggregate step completed; verify test execution using JUnit and the manifest."
             else
               echo "- Aggregate execution not established in this run (outcome: \`${AGGREGATE_OUTCOME:-not-reached}\`)."
@@ -1275,7 +1241,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AUTHORITATIVE: ${{ steps.terminal_authority.outputs.authoritative }}
-          REUSED: ${{ needs.validate.outputs.reused }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           AGGREGATE_OUTCOME: ${{ needs.validate.outputs.aggregate_outcome }}
           MAIN_HEALTH_OUTCOME: ${{ needs.validate.outputs.main_health_outcome }}
@@ -1285,6 +1250,7 @@ jobs:
           FRONTEND_REQUIRED: ${{ github.event_name != 'push' }}
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           STATUS_SHA: ${{ steps.terminal_authority.outputs.head_sha }}
+          PENDING_STATUS_ID: ${{ needs.validate.outputs.pending_status_id }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -1293,8 +1259,28 @@ jobs:
             echo "No authoritative aggregate status to publish for this run."
             exit 0
           fi
+          state="$(jq -r .state <<<"$decision")"
+          if [[ "$state" == success && ! "${PENDING_STATUS_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Refusing success without this run's pending status receipt." >&2
+            exit 1
+          fi
+          if [[ -n "${PENDING_STATUS_ID:-}" ]]; then
+            # Suppress terminal writes already known to be stale. GitHub's
+            # status POST has no compare-and-swap; this is not a transaction.
+            latest="$(
+              gh api --paginate \
+                "/repos/$GITHUB_REPOSITORY/commits/$STATUS_SHA/statuses?per_page=100" \
+                | jq -sce 'add | map(select(.context == "agent-os/authoritative-aggregate")) | max_by(.id)'
+            )"
+            if ! jq -e --arg id "$PENDING_STATUS_ID" --arg url "$TARGET_URL" \
+              '(.id | tostring) == $id and .state == "pending" and .target_url == $url' \
+              >/dev/null <<<"$latest"; then
+              echo "Refusing terminal status: this run no longer owns the latest pending status." >&2
+              exit 1
+            fi
+          fi
           gh api -X POST "/repos/$GITHUB_REPOSITORY/statuses/$STATUS_SHA" \
-            -f state="$(jq -r .state <<<"$decision")" \
+            -f state="$state" \
             -f context=agent-os/authoritative-aggregate \
             -f description="$(jq -r .description <<<"$decision")" \
             -f target_url="$TARGET_URL"

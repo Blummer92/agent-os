@@ -30,7 +30,11 @@ Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`
 
 ## Ready-for-Review Validation Consumption (#3350)
 
-One canonical rule answers whether an exact-head successful Draft final-candidate aggregate satisfies the Ready-for-Review prerequisite: it does. The Ready transition consumes and reuses that evidence without requiring another same-head aggregate, and the manual `workflow_dispatch` final-candidate route is an authoritative pre-Ready route when it runs at the exact head. #2063 Draft admission safety and #2132 merge-blocking aggregate safety are preserved; #2215/#1904 same-head duplicate prevention still applies.
+An exact-head successful Draft final-candidate aggregate can satisfy the pre-Ready evidence prerequisite. Manual `workflow_dispatch` final-candidate validation remains authoritative pre-Ready when admitted at the exact head; ordinary Draft events still defer aggregate validation.
+
+An admitted `ready_for_review` event is a separate validation generation (#4059). It publishes fresh `pending` on the same exact head before checkout and reruns authoritative aggregate validation; it does not reuse or re-mint the pre-Ready success. The current plan, frontend, and aggregate outcomes determine the terminal status. The canonical `agent-os/authoritative-aggregate` check name and protection settings are unchanged.
+
+An authoritative run that published pending checks that its own pending status is still the newest canonical record before posting a terminal status. This filters terminal writes already known to be stale. GitHub does not make the read and status write atomic, and the Ready job cannot post before it starts. Neither the pre-pending interval nor arbitrary overlap between already-admitted publishers is a proven merge barrier. Do not treat a pre-Ready green as proof of completed Ready validation.
 
 The `validation_admission_mode` label names which validation story the caller ran and belongs to a closed vocabulary: `draft-final-candidate` (ordinary path) and `pull-request-draft-focused` (provisional path, used only when the Draft trigger deferred the aggregate). The server derives the effective mode from the authoritative aggregate evidence: a successful exact-head authoritative aggregate proves final-candidate mode regardless of the mode label supplied, so a genuine success with a wrong or missing label converges instead of forcing re-dispatch. Any other mode label fails closed with `unknown-validation-admission-mode`.
 
@@ -132,6 +136,8 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 0.8.0
 
 ## Changelog
+
+- #4059 separates the pre-Ready evidence prerequisite from fresh aggregate authority after Ready. The 0.7.0 reuse rule below is historical, not current Ready-event behavior.
 
 - 0.8.0 closes the #3407 converse gap in the one-issue-one-PR invariant: one primary PR claims exactly one primary implementation issue, and a PR body naming two issues as primary is a `needs-decision` stop (shared-file overlap is not an exception, per the #3392 repair-and-split). No new registry, scheduler, lineage store, or orchestration framework is added.
 
