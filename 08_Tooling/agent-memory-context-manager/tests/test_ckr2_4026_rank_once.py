@@ -13,6 +13,7 @@ import pytest
 
 from agent_memory_context_manager import coding_knowledge_selection as cks
 from agent_memory_context_manager import lesson_activation_bridge as bridge
+from agent_memory_context_manager import lesson_retrieval_orchestrator as ckr11
 from agent_memory_context_manager.lesson_preflight import (
     LessonRetrievalStatus,
     consume_lesson_preflight,
@@ -101,6 +102,29 @@ def _replay(kind="original", snapshot=None):
     )
 
 
+def _replay_with_rank_receipt(monkeypatch, req, rows):
+    """Capture the actual rank-once selection, respecting CKR11 abstention."""
+    evaluated = []
+    actual_consume = ckr11.consume_lesson_preflight
+
+    def record_prepolicy_result(*args, **kwargs):
+        result = actual_consume(*args, **kwargs)
+        evaluated.append(result)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ckr11, "consume_lesson_preflight", record_prepolicy_result)
+        result = orchestrate_lesson_retrieval(req, execute_read=_read(rows))
+    assert len(evaluated) == 1
+    return result, evaluated[0]
+
+
+def _assert_generic_abstention(result):
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("generic-relevance-unverified",)
+
+
 def _normalized():
     result = [bridge.normalize_lesson_row(item) for item in _rows()]
     assert all(isinstance(item, bridge.LessonRecordEvidence) for item in result)
@@ -108,11 +132,11 @@ def _normalized():
 
 
 @pytest.mark.parametrize("kind", tuple(REQUEST_TEXT))
-def test_rank_once_production_snapshot_preserves_original_priority(kind):
-    # Sufficiency is historical policy, not evidence that lessons apply.
-    result = _replay(kind)
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selected_lesson_ids == EXPECTED_RANK_ONCE[kind]
+def test_rank_once_production_snapshot_preserves_original_priority(kind, monkeypatch):
+    result, ranked = _replay_with_rank_receipt(monkeypatch, request(kind), _rows())
+    assert ranked.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert ranked.selected_lesson_ids == EXPECTED_RANK_ONCE[kind]
+    _assert_generic_abstention(result)
     assert result.candidate_count == 5
     assert result.retrieval_diagnostics["best_bucket_tied_identities"] == 33
     assert result.retrieval_diagnostics["selection_basis"] == "generic-tie-lexical-cut"
@@ -132,8 +156,9 @@ def test_full_population_scores_are_not_recomputed_after_cut(monkeypatch):
 
     monkeypatch.setattr(bridge, "contextual_tie_scores", full_population)
     monkeypatch.setattr(cks, "contextual_tie_scores", forbidden_second_pass)
-    result = _replay()
-    assert result.selected_lesson_ids == ("LL-50", "LL-18", "LL-9")
+    result, ranked = _replay_with_rank_receipt(monkeypatch, request(), _rows())
+    assert ranked.selected_lesson_ids == ("LL-50", "LL-18", "LL-9")
+    _assert_generic_abstention(result)
     # One 33-way bucket and one separate bucket-1 singleton are scored once.
     assert observed == [33, 1]
 
@@ -161,12 +186,12 @@ def test_standalone_ckr2_keeps_existing_five_way_scoring():
     )
 
 
-def test_snapshot_order_does_not_affect_full_pool_ranking():
+def test_snapshot_order_does_not_affect_full_pool_ranking(monkeypatch):
     source = _rows()
     for current in (source, source[::-1], source[12:] + source[:12]):
-        assert _replay(snapshot=current).selected_lesson_ids == (
-            "LL-50", "LL-18", "LL-9"
-        )
+        result, ranked = _replay_with_rank_receipt(monkeypatch, request(), current)
+        assert ranked.selected_lesson_ids == ("LL-50", "LL-18", "LL-9")
+        _assert_generic_abstention(result)
 
 
 def _direct_candidates():
@@ -252,12 +277,13 @@ def _rows_with_ineligible_50():
     return rows, alternate
 
 
-def test_production_filters_ineligible_before_selecting_without_rescoring():
+def test_production_filters_ineligible_before_selecting_without_rescoring(monkeypatch):
     rows, _ = _rows_with_ineligible_50()
-    result = _replay(snapshot=rows)
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert result.selection_reason_codes == ("knowledge-sufficient",)
-    assert result.selected_lesson_ids == ("LL-18", "LL-9", "LL-55")
+    result, ranked = _replay_with_rank_receipt(monkeypatch, request(), rows)
+    assert ranked.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert ranked.selection_reason_codes == ("knowledge-sufficient",)
+    assert ranked.selected_lesson_ids == ("LL-18", "LL-9", "LL-55")
+    _assert_generic_abstention(result)
     assert result.candidate_count == 4
 
 
@@ -346,7 +372,7 @@ def _duplicate_ranking_rows():
     pytest.param(orchestrate_lesson_retrieval, 4, id="ckr11-retrieval"),
 ))
 @pytest.mark.parametrize("extra", ("none", "exact-repeat", "different-revision"))
-def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_count, extra):
+def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_count, extra, monkeypatch):
     rows = _duplicate_ranking_rows()
     if extra != "none":
         repeated = deepcopy(rows[-1])
@@ -354,10 +380,11 @@ def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_coun
             repeated["last_edited_time"] = "2026-11-16T00:41:00.000Z"
         rows.append(repeated)
 
-    result = orchestrate(
-        request(task_reference="pacing review timing planning", capability_keywords=("testing",)),
-        execute_read=_read(rows),
-    )
+    req = request(task_reference="pacing review timing planning", capability_keywords=("testing",))
+    if orchestrate is orchestrate_lesson_retrieval:
+        result, ranked = _replay_with_rank_receipt(monkeypatch, req, rows)
+    else:
+        result = ranked = orchestrate(req, execute_read=_read(rows))
 
     if extra == "different-revision":
         assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
@@ -365,14 +392,16 @@ def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_coun
         assert result.selected_lesson_ids == ()
         assert result.candidate_count == 5
     else:
-        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-        assert result.selected_lesson_ids == ("LL-1", "LL-2", "LL-4")
+        assert ranked.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+        assert ranked.selected_lesson_ids == ("LL-1", "LL-2", "LL-4")
         assert result.candidate_count == (duplicate_count if extra == "exact-repeat" else 4)
+        if orchestrate is orchestrate_lesson_retrieval:
+            _assert_generic_abstention(result)
 
 
 @pytest.mark.parametrize("reverse_pair", (False, True), ids=("upper-first", "lower-first"))
 @pytest.mark.parametrize("cut", (3, 5), ids=("final-selection", "bridge-bound"))
-def test_rank_once_orders_case_distinct_ids_independently_of_provider_order(cut, reverse_pair):
+def test_rank_once_orders_case_distinct_ids_independently_of_provider_order(cut, reverse_pair, monkeypatch):
     pair = ("ID_A", "id_a")
     if reverse_pair:
         pair = pair[::-1]
@@ -400,8 +429,10 @@ def test_rank_once_orders_case_distinct_ids_independently_of_provider_order(cut,
     )
     assert rank_plan == expected_plan
 
-    for orchestrate in (bridge.orchestrate_lesson_activation, orchestrate_lesson_retrieval):
-        result = orchestrate(req, execute_read=_read(rows))
-        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-        assert result.candidate_count == 5
-        assert result.selected_lesson_ids == expected_plan[:3]
+    direct = bridge.orchestrate_lesson_activation(req, execute_read=_read(rows))
+    result, ranked = _replay_with_rank_receipt(monkeypatch, req, rows)
+    for prepolicy in (direct, ranked):
+        assert prepolicy.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+        assert prepolicy.candidate_count == 5
+        assert prepolicy.selected_lesson_ids == expected_plan[:3]
+    _assert_generic_abstention(result)

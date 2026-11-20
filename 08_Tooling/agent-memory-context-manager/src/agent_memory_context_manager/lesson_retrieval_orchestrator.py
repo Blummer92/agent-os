@@ -51,6 +51,45 @@ from .lesson_preflight import (
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
+
+# A large generic-only tie is not evidence that any of the finalists are
+# genuinely applicable to the task. Preserve the existing tie diagnostics but
+# require manual adjudication instead of admitting a lexical-cut result.
+# This does not change the CKR2 candidate/selection budgets or direct callers.
+_GENERIC_TIE_UNVERIFIED = "generic-relevance-unverified"
+
+
+def _abstain_on_generic_tie(
+    result: LessonPreflightResult, basis: SelectionBasis,
+    canonical_rule_refs: tuple[str, ...],
+) -> LessonPreflightResult:
+    if (
+        basis.basis != "generic-tie-lexical-cut"
+        or result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
+    ):
+        return result
+    # Drop lesson-owned references with the unreviewed selection. Keep the
+    # caller's independent canonical rules available for the manual review.
+    canonical_rule_refs = tuple(sorted(set(canonical_rule_refs)))
+    return replace(
+        result,
+        lesson_retrieval_status=LessonRetrievalStatus.MANUAL_REVIEW,
+        selected_count=0,
+        selected_lesson_ids=(),
+        selection_reason_codes=(_GENERIC_TIE_UNVERIFIED,),
+        canonical_github_refs=canonical_rule_refs,
+        knowledge_refs=(),
+        retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW,
+        handoff_projection={
+            "known_facts": ["coding-knowledge-sufficiency:manual-review"],
+            "prior_decisions": [],
+            "allowed_inspect_first": list(canonical_rule_refs),
+            "stop_conditions": ["coding-knowledge:" + _GENERIC_TIE_UNVERIFIED],
+        },
+        selection=None,
+    )
+
+
 _EXECUTABLE_STEPS = (
     RetrievalEscalation.KNOWN_REFERENCE,
     RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY,
@@ -700,9 +739,12 @@ def orchestrate_lesson_retrieval(
         # A complete snapshot leaves no further retrieval step: the honest
         # next recommendation is manual review, not a cascade re-read.
         result = replace(result, retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW)
+    basis = describe_selection_basis(
+        current_request, accumulated, identity_route=False
+    )
     return with_diagnostics(
-        result,
-        describe_selection_basis(current_request, accumulated, identity_route=False),
+        _abstain_on_generic_tie(result, basis, current_request.canonical_rule_refs),
+        basis,
     )
 
 

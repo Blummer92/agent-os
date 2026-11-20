@@ -10,6 +10,7 @@ exists, so nothing here is a precision/recall claim.
 import itertools
 import pytest
 
+from agent_memory_context_manager import lesson_retrieval_orchestrator as ckr11
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
@@ -94,10 +95,24 @@ def test_bridge_bound_keeps_relevant_lesson_outside_first_five_lexical_ids():
     assert "LL-65" in result.selected_lesson_ids
 
 
-def test_ckr11_snapshot_path_keeps_relevant_lesson_outside_first_five_lexical_ids():
+def test_ckr11_still_prioritizes_context_before_generic_tie_abstention(monkeypatch):
+    evaluated = []
+    actual_consume = ckr11.consume_lesson_preflight
+
+    def record_prepolicy_result(*args, **kwargs):
+        result = actual_consume(*args, **kwargs)
+        evaluated.append(result)
+        return result
+
+    monkeypatch.setattr(ckr11, "consume_lesson_preflight", record_prepolicy_result)
     result = orchestrate_lesson_retrieval(request(), execute_read=reader(corpus()))
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert "LL-65" in result.selected_lesson_ids
+    assert len(evaluated) == 1
+    assert evaluated[0].lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-65" in evaluated[0].selected_lesson_ids
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("generic-relevance-unverified",)
+    assert result.retrieval_diagnostics["best_bucket_tied_identities"] == 25
 
 
 def test_ckr2_three_item_cut_does_not_drop_relevant_lesson_by_id_string():
