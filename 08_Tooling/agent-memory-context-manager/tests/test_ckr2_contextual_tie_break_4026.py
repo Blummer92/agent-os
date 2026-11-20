@@ -293,3 +293,24 @@ def test_single_generic_match_retains_existing_non_tie_contract():
     )
     assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
     assert result.selected_count == 1
+
+
+def test_legacy_unspecified_materiality_retains_generic_tie_sufficiency():
+    # Historical CKR11 snapshot and decision-preflight callers do not opt
+    # into stricter task-evidence policy; their selected IDs remain stable.
+    req = request(task="zzzz qqqq unrelated words",
+                  specialized_knowledge_required=None)
+    result = select_coding_knowledge(req, tuple(cand(f"LL-{i}") for i in range(1, 6)))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert tuple(item.candidate.knowledge_id for item in result.selected) == (
+        "LL-1", "LL-2", "LL-3"
+    )
+
+
+def test_explicit_specialized_materiality_enforces_generic_tie_guard():
+    req = request(task="zzzz qqqq unrelated words",
+                  specialized_knowledge_required=True)
+    result = select_coding_knowledge(req, tuple(cand(f"LL-{i}") for i in range(1, 6)))
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("generic-task-context-unverified",)
+    assert result.selected_count == 0

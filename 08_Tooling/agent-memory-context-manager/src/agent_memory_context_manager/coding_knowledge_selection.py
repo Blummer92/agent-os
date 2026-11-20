@@ -281,10 +281,11 @@ def contextual_tie_scores(
     return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
 
 
-# #4026 follow-up: a generic capability match does not itself establish that
-# one of several tied lessons is applicable. The caller's task text must
-# corroborate at least one tied lesson before we return SUFFICIENT. This
-# guards a high-ambiguity tie, not explicit library/path/CKR6 relevance.
+# #4026 follow-up: when the caller explicitly requests specialized knowledge,
+# a generic capability match does not alone establish that tied lessons apply.
+# Require task-text corroboration for those explicit, high-ambiguity requests.
+# Requests with unspecified materiality retain their legacy selection policy.
+# This guard does not affect explicit library/path/CKR6 relevance.
 # A single 8+ character shared term can also count when the topic is specific.
 # No fuzzy semantic inference, new candidates, or external reads are used.
 _GENERIC_ONLY_REASONS = frozenset({"ecosystem-capability-match", "keyword-overlap"})
@@ -413,7 +414,8 @@ def select_coding_knowledge(
     # Put this after currentness/authority guards to preserve their explicit
     # fail-closed reasons; do not filter or discard unverifiable lessons.
     if (
-        len(best) > MAX_SELECTED
+        request.specialized_knowledge_required is True
+        and len(best) > MAX_SELECTED
         and all(set(item[3]) <= _GENERIC_ONLY_REASONS for item in best)
         and not _generic_tie_has_task_evidence(
             request, (item[2] for item in best)
