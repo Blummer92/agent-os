@@ -616,6 +616,12 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     ``has_more: true`` without a non-empty string ``next_cursor`` is
     malformed: following it would loop, and ignoring it would silently
     truncate the database.
+
+    A valid ``next_cursor`` is an opaque Notion token
+    (https://developers.notion.com/reference/pagination) and is returned
+    byte-for-byte as received. ``.strip()`` is used only to reject a
+    whitespace-only token; it must never rewrite the value forwarded as
+    ``start_cursor``.
     """
     if not isinstance(raw, Mapping):
         raise LessonActivationError("read executor must return a mapping")
@@ -631,7 +637,7 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     # Do not admit an incomplete or internally contradictory corpus to CKR2.
     if not has_more and next_cursor is not None:
         raise LessonActivationError("read executor returned a malformed next_cursor")
-    return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
+    return has_more, next_cursor
 
 
 def _guidance_text(prop: Any) -> tuple[str | None, str]:
