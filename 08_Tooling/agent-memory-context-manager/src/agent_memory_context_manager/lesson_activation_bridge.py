@@ -404,21 +404,22 @@ def _bound_relevant_lessons_with_order(
     conflict at the bound edge is reported by the selector instead of being
     silently dropped with the second revision.
     """
-    ranked: list[tuple[int, str, LessonRecordEvidence]] = []
+    ranked: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
     unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
         bucket, _ = _match_candidate(request, _as_selection_candidate(lesson))
         if bucket:
-            ranked.append((bucket, lesson.lesson_id.casefold(), lesson))
+            lesson_id = lesson.lesson_id
+            ranked.append((bucket, (lesson_id.casefold(), lesson_id), lesson))
         else:
             unranked.append(lesson)
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
         # #4026: inside each relevance bucket, order by exact request-context
-        # overlap before the five-ID cut; the legacy id order breaks ties and
+        # overlap before the five-ID cut; the total ID order breaks ties and
         # is the whole order when nothing overlaps. Buckets never mix.
-        reordered: list[tuple[int, str, LessonRecordEvidence]] = []
+        reordered: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
             # Score equal normalized records once, while retaining the
             # original rows for raw counts and revision-conflict checks.
@@ -441,7 +442,7 @@ def _bound_relevant_lessons_with_order(
             tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
             ranked_ids,
         )
-    unranked.sort(key=lambda item: item.lesson_id.casefold())
+    unranked.sort(key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
     chosen = _take_distinct_ids(unranked)
     return chosen, tuple(dict.fromkeys(item.lesson_id for item in chosen))
 

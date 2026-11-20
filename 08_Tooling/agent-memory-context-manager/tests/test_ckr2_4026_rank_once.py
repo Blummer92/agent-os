@@ -368,3 +368,40 @@ def test_rank_once_scores_normalized_duplicates_once(orchestrate, duplicate_coun
         assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
         assert result.selected_lesson_ids == ("LL-1", "LL-2", "LL-4")
         assert result.candidate_count == (duplicate_count if extra == "exact-repeat" else 4)
+
+
+@pytest.mark.parametrize("reverse_pair", (False, True), ids=("upper-first", "lower-first"))
+@pytest.mark.parametrize("cut", (3, 5), ids=("final-selection", "bridge-bound"))
+def test_rank_once_orders_case_distinct_ids_independently_of_provider_order(cut, reverse_pair):
+    pair = ("ID_A", "id_a")
+    if reverse_pair:
+        pair = pair[::-1]
+    ids = (
+        ("a", "b", *pair, "y", "z")
+        if cut == 3
+        else ("a", "b", "c", "d", *pair)
+    )
+    seed = _duplicate_ranking_rows()[0]
+    rows = []
+    for index, identity in enumerate(ids):
+        row = deepcopy(seed)
+        row["id"] = f"case-distinct-{index}"
+        row["properties"]["Lesson ID"] = _rich(identity)
+        rows.append(row)
+
+    req = request(task_reference="zzzz qqqq", capability_keywords=("testing",))
+    records = tuple(bridge.normalize_lesson_row(row) for row in rows)
+    assert tuple(record.lesson_id for record in records) == ids
+    _, rank_plan = bridge._bound_relevant_lessons_with_order(req, records)
+    expected_plan = (
+        ("a", "b", "ID_A", "id_a", "y")
+        if cut == 3
+        else ("a", "b", "c", "d", "ID_A")
+    )
+    assert rank_plan == expected_plan
+
+    for orchestrate in (bridge.orchestrate_lesson_activation, orchestrate_lesson_retrieval):
+        result = orchestrate(req, execute_read=_read(rows))
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+        assert result.candidate_count == 5
+        assert result.selected_lesson_ids == expected_plan[:3]
