@@ -63,7 +63,7 @@ def rows():
     for line in FIXTURE.read_text(encoding="utf-8").splitlines():
         if not line or line.startswith("#"):
             continue
-        ident, area, kind, status, source, revision, tokens = line.split("|", 6)
+        ident, area, kind, status, source, revision, tokens, applies = line.split("|", 7)
         assert source in {"src", "missing"}
         assert all(token.isascii() for token in tokens.split())
         number = int(ident.split("-")[1])
@@ -78,7 +78,9 @@ def rows():
                 "Surface Before Work?": {"type": "checkbox", "checkbox": True},
                 "Area": {"type": "select", "select": {"name": area}},
                 "Learning Type": {"type": "select", "select": {"name": kind}},
-                "Applies To": {"type": "multi_select", "multi_select": []},
+                "Applies To": {"type": "multi_select", "multi_select": [
+                    {"name": value} for value in applies.split(",") if value
+                ]},
                 "Source Link": {"type": "url", "url": SYNTHETIC_REF if source == "src" else None},
                 "Guardrail": rich("Masked guidance without extra request terms"),
                 "What To Do Next Time": rich(tokens or "masked guidance"),
