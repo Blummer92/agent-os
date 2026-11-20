@@ -391,10 +391,13 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
     )
 
 
-def _bound_relevant_lessons(
+def _bound_relevant_lessons_with_order(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
-) -> tuple[LessonRecordEvidence, ...]:
-    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher.
+) -> tuple[tuple[LessonRecordEvidence, ...], tuple[str, ...]]:
+    """Keep the five-identity bound and original full-pool ranking.
+
+    Return selected records in input order to preserve duplicate-revision
+    behavior, plus an immutable rank order for the final CKR2 selection.
 
     R1 (#2425): the budget counts DISTINCT lesson IDs. A conflicting
     identity counts once, and ALL its records enter the bound set, so a
@@ -427,13 +430,23 @@ def _bound_relevant_lessons(
         # Rank identities, not individual revisions. A second revision of
         # a selected ID may be unranked, but must still reach CKR2's
         # fail-closed duplicate-identity conflict check.
-        selected_ids = {
-            lesson.lesson_id
-            for lesson in _take_distinct_ids([item[2] for item in ranked])
-        }
-        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
+        chosen = _take_distinct_ids([item[2] for item in ranked])
+        ranked_ids = tuple(dict.fromkeys(item.lesson_id for item in chosen))
+        selected_ids = set(ranked_ids)
+        return (
+            tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
+            ranked_ids,
+        )
     unranked.sort(key=lambda item: item.lesson_id.casefold())
-    return _take_distinct_ids(unranked)
+    chosen = _take_distinct_ids(unranked)
+    return chosen, tuple(dict.fromkeys(item.lesson_id for item in chosen))
+
+
+def _bound_relevant_lessons(
+    request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
+) -> tuple[LessonRecordEvidence, ...]:
+    """Backward-compatible tuple-only bridge boundary."""
+    return _bound_relevant_lessons_with_order(request, lessons)[0]
 
 
 # PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
@@ -602,8 +615,8 @@ def orchestrate_lesson_activation(
         if isinstance(normalized, LessonRecordEvidence):
             lessons.append(normalized)
 
-    bounded = _bound_relevant_lessons(request, lessons)
-    return consume_lesson_preflight(request, bounded)
+    bounded, rank_order = _bound_relevant_lessons_with_order(request, lessons)
+    return consume_lesson_preflight(request, bounded, _ranked_order=rank_order)
 
 
 def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:

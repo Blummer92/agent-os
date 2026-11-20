@@ -32,7 +32,7 @@ from .lesson_activation_bridge import (
     _LEARNING_TYPE_CAPABILITY,
     _LEARNING_TYPE_PROPERTY,
     _page_cursor,
-    _bound_relevant_lessons,
+    _bound_relevant_lessons_with_order,
     _extract_bounded_rows,
     build_filtered_query,
     build_known_reference_query,
@@ -650,8 +650,11 @@ def orchestrate_lesson_retrieval(
             current_request = record_retrieval_attempt(
                 current_request, RetrievalEscalation.KNOWN_REFERENCE
             )
+            bounded, rank_order = _bound_relevant_lessons_with_order(
+                current_request, accumulated
+            )
             result = consume_lesson_preflight(
-                current_request, _bound_relevant_lessons(current_request, accumulated)
+                current_request, bounded, _ranked_order=rank_order
             )
             if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
                 return with_diagnostics(
@@ -684,8 +687,11 @@ def orchestrate_lesson_retrieval(
         return with_diagnostics(_unavailable_result(current_request, exc), NOT_EVALUATED)
 
     accumulate(snapshot_rows)
+    bounded, rank_order = _bound_relevant_lessons_with_order(
+        current_request, accumulated
+    )
     result = consume_lesson_preflight(
-        current_request, _bound_relevant_lessons(current_request, accumulated)
+        current_request, bounded, _ranked_order=rank_order
     )
     if (
         result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT

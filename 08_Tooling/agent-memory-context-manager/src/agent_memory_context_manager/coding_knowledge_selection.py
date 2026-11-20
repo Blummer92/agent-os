@@ -285,7 +285,17 @@ def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
 ) -> CodingKnowledgeSelectionResult:
-    """Select the smallest current relevant knowledge set from supplied evidence."""
+    """Standalone CKR2: rank once within the caller's bounded candidate pool."""
+    return _select_coding_knowledge(request, candidates, _ranked_order=None)
+
+
+def _select_coding_knowledge(
+    request: CodingKnowledgeRequest,
+    candidates: tuple[CodingKnowledgeCandidate, ...],
+    *,
+    _ranked_order: tuple[str, ...] | None,
+) -> CodingKnowledgeSelectionResult:
+    """Run CKR2 safeguards; trusted retrieval may supply a frozen rank order."""
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
     if type(candidates) is not tuple:
@@ -343,12 +353,45 @@ def select_coding_knowledge(
             candidate_count,
         )
 
+    # The pre-cut ranking is internal to the CKR11/CKR6 path. Reject
+    # stale or forged identity priorities and cross-bucket inversions.
+    if _ranked_order is not None:
+        ranked_buckets = {item[2].knowledge_id: item[0] for item in ranked}
+        invalid_order = (
+            type(_ranked_order) is not tuple
+            or any(type(identity) is not str for identity in _ranked_order)
+            or len(_ranked_order) != len(deduped)
+            or len(set(_ranked_order)) != len(deduped)
+            or set(_ranked_order) != {item.knowledge_id for item in deduped}
+            or len(ranked_buckets) != len(deduped)
+        )
+        if not invalid_order:
+            invalid_order = any(
+                ranked_buckets[earlier] < ranked_buckets[later]
+                for earlier, later in zip(_ranked_order, _ranked_order[1:])
+            )
+        if invalid_order:
+            return _result(
+                SufficiencyStatus.MANUAL_REVIEW,
+                RetrievalEscalation.MANUAL_REVIEW,
+                (),
+                request.canonical_rule_refs,
+                ("upstream-ranking-order-mismatch",),
+                candidate_count,
+            )
+
     best_bucket = max(item[0] for item in ranked)
     best = [item for item in ranked if item[0] == best_bucket]
     best.sort(key=lambda item: item[1])
-    scores = contextual_tie_scores(request, (item[2] for item in best))
-    order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
-    best = [best[index] for index in order]
+    if _ranked_order is None:
+        # Standalone CKR2 callers retain the original bounded ranking.
+        scores = contextual_tie_scores(request, (item[2] for item in best))
+        order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
+        best = [best[index] for index in order]
+    else:
+        # Never recompute document frequency on the five finalists.
+        priority = {identity: index for index, identity in enumerate(_ranked_order)}
+        best.sort(key=lambda item: priority[item[2].knowledge_id])
 
     if any(item[2].authority_conflict for item in best):
         return _result(
