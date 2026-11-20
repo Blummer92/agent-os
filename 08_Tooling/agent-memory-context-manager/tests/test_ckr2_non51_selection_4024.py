@@ -79,7 +79,7 @@ def ll51_candidate(**changes):
     return CodingKnowledgeCandidate(**fields)
 
 
-def testing_candidate():
+def _testing_candidate():
     # Real LL-50 metadata; it explicitly prefers ordinary pytest for exact,
     # deterministic regressions. Used as an example of generic false sufficiency.
     return CodingKnowledgeCandidate(
@@ -198,7 +198,7 @@ def test_real_ll51_is_not_selected_by_generic_testing_hint():
 def test_generic_testing_can_still_make_unrelated_lesson_sufficient():
     # Known open #4026 issue. This does not falsely identify LL-51 as testing.
     req = request(capability_keywords=("testing",), ecosystem_hints=("python",))
-    result = select_coding_knowledge(req, (testing_candidate(),))
+    result = select_coding_knowledge(req, (_testing_candidate(),))
     assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
     assert tuple(item.candidate.knowledge_id for item in result.selected) == ("LL-50",)
 
@@ -278,7 +278,7 @@ def test_production_path_forwards_padded_opaque_cursor_verbatim():
 
 
 def test_positive_negative_order_independence():
-    pool = (ll51_candidate(), testing_candidate())
+    pool = (ll51_candidate(), _testing_candidate())
     for req in (request(), ckr6_request()):
         first = select_coding_knowledge(req, pool)
         second = select_coding_knowledge(req, pool[::-1])
