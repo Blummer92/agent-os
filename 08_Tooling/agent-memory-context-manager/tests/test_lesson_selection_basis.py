@@ -362,10 +362,10 @@ def _rows(count, start=10):
 
 def test_p1_orchestrator_records_snapshot_basis_in_diagnostics_only():
     result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(34)))
-    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    # Pinned literal: identical on pristine main (selection must not move).
-    assert result.selected_lesson_ids == ("LL-10", "LL-11", "LL-12")
-    assert result.selection_reason_codes == ("knowledge-sufficient",)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("generic-relevance-unverified",)
+    assert result.retrieval_escalation.value == "manual-review"
     assert len(result.selected_lesson_ids) == MAX_SELECTED
     diag = result.retrieval_diagnostics
     assert diag["selection_basis"] == "generic-tie-lexical-cut"
