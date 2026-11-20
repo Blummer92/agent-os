@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from ._stdout_frame import extract_framed_payload
 from .dev_validation import (
     DevValidationRequest,
     REPOSITORY,
@@ -364,22 +365,6 @@ def select_codespaces_dev_validation(
     )
 
 
-def _extract_framed_payload(stdout: object) -> str | None:
-    if (
-        type(stdout) is not str
-        or stdout.count(_FRAME_START) != 1
-        or stdout.count(_FRAME_END) != 1
-    ):
-        return None
-    start = stdout.find(_FRAME_START)
-    end = stdout.find(_FRAME_END)
-    return (
-        stdout[start + len(_FRAME_START) : end].strip()
-        if start >= 0 and end > start
-        else None
-    )
-
-
 def run_dev_validation_over_codespaces(
     request: DevValidationRequest,
     *,
@@ -455,7 +440,9 @@ def run_dev_validation_over_codespaces(
             }
         )
         return evidence
-    framed = _extract_framed_payload(completed.stdout)
+    framed = extract_framed_payload(
+        completed.stdout, frame_start=_FRAME_START, frame_end=_FRAME_END
+    )
     if framed is None:
         return _unobserved_failure(request, "dev-validation-codespaces-frame-invalid", codespace_name)
     try:
