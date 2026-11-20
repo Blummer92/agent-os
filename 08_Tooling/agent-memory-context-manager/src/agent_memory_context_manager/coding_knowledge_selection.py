@@ -289,6 +289,15 @@ def contextual_tie_scores(
 # A single 8+ character shared term can also count when the topic is specific.
 # No fuzzy semantic inference, new candidates, or external reads are used.
 _GENERIC_ONLY_REASONS = frozenset({"ecosystem-capability-match", "keyword-overlap"})
+# A standalone locator contains no meaningful task description. The CKR2
+# legacy contract allows generic knowledge selection for these references;
+# a lack of lexical overlap must not be treated as evidence of irrelevance.
+# Embedding the same locator in an actual task sentence does NOT exempt it.
+_IDENTITY_ONLY_TASK_REFERENCE = re.compile(
+    r"(?i)(?:issue:\s*\#?[1-9][0-9]*|pr\s*\#[1-9][0-9]*|"
+    r"https://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*)"
+)
+
 
 
 def _generic_tie_has_task_evidence(
@@ -411,10 +420,13 @@ def select_coding_knowledge(
 
     # A high-cardinality tie based solely on caller-supplied generic metadata
     # must not be marked SUFFICIENT without independent task-text support.
+    # A standalone issue/PR locator is not descriptive negative evidence;
+    # preserve its pinned historical selection result.
     # Put this after currentness/authority guards to preserve their explicit
     # fail-closed reasons; do not filter or discard unverifiable lessons.
     if (
         request.specialized_knowledge_required is True
+        and not _IDENTITY_ONLY_TASK_REFERENCE.fullmatch(request.task_reference.strip())
         and len(best) > MAX_SELECTED
         and all(set(item[3]) <= _GENERIC_ONLY_REASONS for item in best)
         and not _generic_tie_has_task_evidence(

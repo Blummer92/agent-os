@@ -314,3 +314,38 @@ def test_explicit_specialized_materiality_enforces_generic_tie_guard():
     assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
     assert result.reason_codes == ("generic-task-context-unverified",)
     assert result.selected_count == 0
+
+
+@pytest.mark.parametrize("ref", [
+    "issue:#1",
+    "issue:#1357",
+    "PR #4066",
+    "https://github.com/Blummer92/agent-os/issues/4026",
+])
+def test_identity_only_specialized_reference_preserves_legacy_generic_tie(ref):
+    # A source locator is not a task description; absent overlap cannot be
+    # evidence of false relevance. Pin legacy three-of-five selection.
+    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
+    result = select_coding_knowledge(request(task=ref), tied)
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert tuple(s.candidate.knowledge_id for s in result.selected) == (
+        "LL-1", "LL-2", "LL-3"
+    )
+
+
+def test_task_with_embedded_issue_locator_does_not_bypass_abstention():
+    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
+    result = select_coding_knowledge(
+        request(task="issue:#1 rename the dashboard column header"), tied
+    )
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("generic-task-context-unverified",)
+
+
+def test_undocumented_reference_shape_does_not_bypass_abstention():
+    tied = tuple(cand(f"LL-{i}") for i in range(1, 6))
+    result = select_coding_knowledge(
+        request(task="some unrelated words issue:#1"), tied
+    )
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.selected_count == 0
