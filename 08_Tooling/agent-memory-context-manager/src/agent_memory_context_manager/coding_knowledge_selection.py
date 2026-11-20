@@ -281,6 +281,36 @@ def contextual_tie_scores(
     return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
 
 
+# #4026 follow-up: a generic capability match does not itself establish that
+# one of several tied lessons is applicable. The caller's task text must
+# corroborate at least one tied lesson before we return SUFFICIENT. This
+# guards a high-ambiguity tie, not explicit library/path/CKR6 relevance.
+# A single 8+ character shared term can also count when the topic is specific.
+# No fuzzy semantic inference, new candidates, or external reads are used.
+_GENERIC_ONLY_REASONS = frozenset({"ecosystem-capability-match", "keyword-overlap"})
+
+
+def _generic_tie_has_task_evidence(
+    request: CodingKnowledgeRequest,
+    candidates: Any,
+) -> bool:
+    """Conservative task-to-guidance check, ignoring bucket vocabulary.
+
+    Free-text capability phrases may influence ranking but cannot substitute
+    for the actual task_reference when deciding whether to auto-suffice.
+    """
+    task_terms = _context_tokens((request.task_reference,))
+    for candidate in candidates:
+        bucket_terms = _context_tokens((
+            candidate.ecosystem, candidate.capability_kind, *candidate.keywords
+        ))
+        guidance_terms = _context_tokens((candidate.name, *candidate.use_when))
+        corroborating = (task_terms & guidance_terms) - bucket_terms
+        if len(corroborating) >= 2 or any(len(term) >= 8 for term in corroborating):
+            return True
+    return False
+
+
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -375,6 +405,26 @@ def select_coding_knowledge(
             (),
             request.canonical_rule_refs,
             ("unverifiable-relevant-candidate",),
+            candidate_count,
+        )
+
+    # A high-cardinality tie based solely on caller-supplied generic metadata
+    # must not be marked SUFFICIENT without independent task-text support.
+    # Put this after currentness/authority guards to preserve their explicit
+    # fail-closed reasons; do not filter or discard unverifiable lessons.
+    if (
+        len(best) > MAX_SELECTED
+        and all(set(item[3]) <= _GENERIC_ONLY_REASONS for item in best)
+        and not _generic_tie_has_task_evidence(
+            request, (item[2] for item in best)
+        )
+    ):
+        return _result(
+            SufficiencyStatus.MANUAL_REVIEW,
+            RetrievalEscalation.MANUAL_REVIEW,
+            (),
+            request.canonical_rule_refs,
+            ("generic-task-context-unverified",),
             candidate_count,
         )
 
