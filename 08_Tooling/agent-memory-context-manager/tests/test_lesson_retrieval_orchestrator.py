@@ -867,8 +867,12 @@ def test_terminal_row_overflow_reports_exact_bucket_and_read_count_without_selec
     assert result.retrieval_diagnostics["read_count"] == len(seen) == 5
 
 
-def _adapter_executor(pages):
+def _adapter_executor(pages, bodies=None):
     """Real adapter + ordered fake provider pages, via lesson_reader_composition.
+
+    ``bodies``, when given, records a copy of every request body the fake
+    provider's POST receives, so a test can assert exactly what the real
+    adapter forwarded (for example ``start_cursor``).
 
     The sibling packages are imported here, not at module scope: CI runs
     each 08_Tooling package's tests with only that package's src on
@@ -901,6 +905,8 @@ def _adapter_executor(pages):
     state = {"pages": list(pages)}
 
     def post(url, headers, body, timeout):
+        if bodies is not None:
+            bodies.append(dict(body))
         return dict(state["pages"].pop(0))
 
     adapter = NotionReadOnlyAdapter(
@@ -1222,9 +1228,11 @@ def test_ckr11_whitespace_cursor_never_reads_second_page_or_selects():
     assert "lesson-read-incomplete" in result.selection_reason_codes
 
 
-def test_ckr11_nonempty_spaced_cursor_still_reaches_next_page():
-    # Positive control: valid opaque text with surrounding whitespace is
-    # normalized by the established shared pagination contract.
+def test_ckr11_opaque_spaced_cursor_is_forwarded_unchanged_to_next_page():
+    # Notion cursors are opaque (https://developers.notion.com/reference/pagination):
+    # a valid token is passed back exactly as received. The provider below
+    # accepts the second request ONLY for the complete original token, so a
+    # trimmed copy cannot reach the eligible page-two lesson.
     calls = []
 
     def read(query):
@@ -1235,7 +1243,8 @@ def test_ckr11_nonempty_spaced_cursor_still_reaches_next_page():
                 "has_more": True,
                 "next_cursor": "  page-two  ",
             }
-        assert query["start_cursor"] == "page-two"
+        if query["start_cursor"] != "  page-two  ":
+            raise RuntimeError("provider rejected a rewritten start_cursor")
         return {
             "results": [_lesson_row("LL-42")],
             "has_more": False,
@@ -1243,6 +1252,290 @@ def test_ckr11_nonempty_spaced_cursor_still_reaches_next_page():
         }
 
     result = orchestrate_lesson_retrieval(request(), execute_read=read)
-    assert len(calls) == 2
+    assert [c.get("start_cursor") for c in calls] == [None, "  page-two  "]
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
-    assert "LL-42" in result.selected_lesson_ids
+    assert result.selected_lesson_ids == ("LL-42",)
+
+
+# --- Opaque pagination cursor integrity (adversarial matrix) ----------------
+#
+# `_page_cursor` may use `.strip()` to REJECT a whitespace-only token, but it
+# must never hand a trimmed copy of a valid token to the next provider query.
+# Every provider below honours ONLY the exact cursor it issued, so a rewritten
+# cursor is observable instead of being silently accepted.
+
+OPAQUE_CURSORS = [
+    pytest.param("page-two", id="ordinary"),
+    pytest.param("  page-two  ", id="leading-and-trailing-space"),
+    pytest.param("\tpage-two\n", id="tab-and-newline-padding"),
+    pytest.param("page two", id="internal-space"),
+    pytest.param(" page two ", id="unicode-whitespace"),
+    pytest.param("  ünï-✓-\U0001f4a5/+=%2B?&#  ", id="mixed-unicode-and-opaque-chars"),
+]
+
+# Both production orchestration loops: `read_snapshot` (relevance retrieval)
+# and `read_sequence` (explicit known-lesson identity lookup).
+ORCHESTRATOR_PATHS = [
+    pytest.param({}, id="snapshot-path"),
+    pytest.param({"known_knowledge_refs": ("LL-42",)}, id="read-sequence-path"),
+]
+
+
+class ExactCursorProvider:
+    """Fake provider that issues one cursor and accepts only that exact token.
+
+    A rewritten cursor is rejected the way the real API rejects an invalid
+    ``start_cursor`` (a raised provider error), never silently re-synced.
+    Every query is recorded so tests assert what was actually forwarded.
+    """
+
+    def __init__(self, issued, page_two_rows, page_one_rows=()):
+        self.issued = issued
+        self.page_one_rows = list(page_one_rows)
+        self.page_two_rows = list(page_two_rows)
+        self.queries = []
+
+    @property
+    def received_cursors(self):
+        return [q.get("start_cursor") for q in self.queries]
+
+    def __call__(self, query):
+        self.queries.append(dict(query))
+        if "start_cursor" not in query:
+            return {"results": list(self.page_one_rows), "has_more": True, "next_cursor": self.issued}
+        if query["start_cursor"] != self.issued:
+            raise RuntimeError(f"provider rejected start_cursor {query['start_cursor']!r}")
+        return {"results": list(self.page_two_rows), "has_more": False, "next_cursor": None}
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+@pytest.mark.parametrize("cursor", OPAQUE_CURSORS)
+def test_ckr11_valid_opaque_cursor_is_forwarded_verbatim_and_page_two_selected(path, cursor):
+    provider = ExactCursorProvider(cursor, [_lesson_row("LL-42")])
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=provider)
+    assert provider.received_cursors == [None, cursor]
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-42",)
+    assert "lesson-read-incomplete" not in result.selection_reason_codes
+
+
+@pytest.mark.parametrize("cursor", ["page-two", "  page-two  "])
+def test_ckr11_irrelevant_page_two_lesson_is_read_but_not_selected(cursor):
+    irrelevant = _lesson_row("LL-43")
+    irrelevant["properties"]["Area"] = _select("Governance")
+    irrelevant["properties"]["Learning Type"] = _select("Mistake")
+    provider = ExactCursorProvider(cursor, [irrelevant])
+    result = orchestrate_lesson_retrieval(request(), execute_read=provider)
+    assert provider.received_cursors == [None, cursor]  # page two really was read
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" not in result.selection_reason_codes
+
+
+def test_ckr11_archived_page_two_lesson_is_not_selected_by_existing_currentness_rule():
+    archived = _lesson_row("LL-42")
+    archived["properties"]["Status"] = _select("Archived note")
+    provider = ExactCursorProvider("  page-two  ", [archived])
+    result = orchestrate_lesson_retrieval(request(), execute_read=provider)
+    assert provider.received_cursors == [None, "  page-two  "]
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-incomplete" not in result.selection_reason_codes
+
+
+def test_ckr11_stale_conflicting_page_two_revision_blocks_selection():
+    # The current LL-42 is on page one; an older, different revision of the same
+    # identity exists only on page two. It must reach CKR2 (so the existing
+    # duplicate-identity conflict rule fires) -- which is only possible if the
+    # exact cursor reaches the provider.
+    stale = _lesson_row("LL-42", last_edited="2026-10-01T00:00:00.000Z")
+    stale["properties"]["What To Do Next Time"] = _rich_text("Superseded older guidance.")
+    provider = ExactCursorProvider("  page-two  ", [stale], page_one_rows=[_lesson_row("LL-42")])
+    result = orchestrate_lesson_retrieval(request(), execute_read=provider)
+    assert provider.received_cursors == [None, "  page-two  "]
+    assert result.selected_lesson_ids == ()
+    assert "duplicate-identity-conflict" in result.selection_reason_codes
+
+
+_MALFORMED_PAGE_ONE = [
+    pytest.param({"has_more": True, "next_cursor": ""}, "malformed-pagination", id="empty-string-cursor"),
+    pytest.param({"has_more": True, "next_cursor": " "}, "malformed-pagination", id="single-space-cursor"),
+    pytest.param(
+        {"has_more": True, "next_cursor": " \t  \n "}, "malformed-pagination",
+        id="whitespace-only-cursor",
+    ),
+    pytest.param({"has_more": True, "next_cursor": 123}, "malformed-pagination", id="integer-cursor"),
+    pytest.param(
+        {"has_more": True, "next_cursor": {"cursor": "page-two"}}, "malformed-pagination",
+        id="object-cursor",
+    ),
+    pytest.param({"has_more": "true", "next_cursor": "page-two"}, "malformed-pagination", id="string-has-more"),
+    pytest.param({"has_more": 1, "next_cursor": "page-two"}, "malformed-pagination", id="integer-has-more"),
+    pytest.param({"has_more": False, "next_cursor": "page-two"}, "malformed-pagination", id="terminal-page-with-cursor"),
+    pytest.param(
+        {"has_more": False, "next_cursor": "  page-two  "}, "malformed-pagination",
+        id="terminal-page-with-padded-cursor",
+    ),
+    pytest.param({"has_more": True}, "missing-cursor", id="has-more-without-cursor-key"),
+    pytest.param({"has_more": True, "next_cursor": None}, "missing-cursor", id="has-more-with-null-cursor"),
+]
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+@pytest.mark.parametrize("pagination, reason_code", _MALFORMED_PAGE_ONE)
+def test_ckr11_malformed_pagination_fails_closed_before_any_second_read(path, pagination, reason_code):
+    # Page one carries an eligible lesson, so any partial success is visible.
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) > 1:
+            return {"results": [_lesson_row("LL-43")], "has_more": False, "next_cursor": None}
+        return {"results": [_lesson_row("LL-42")], **pagination}
+
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=read)
+    assert len(calls) == 1
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == reason_code
+    assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+def test_ckr11_provider_rejecting_second_page_cursor_leaves_no_partial_success(path):
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {"results": [_lesson_row("LL-42")], "has_more": True, "next_cursor": "  page-two  "}
+        raise RuntimeError("provider rejected start_cursor")
+
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=read)
+    assert len(calls) == 2
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert "lesson-read-runtime-error" in result.selection_reason_codes
+    # The eligible page-one lesson was never admitted: no partial population
+    # reached normalization or selection.
+    assert result.retrieval_diagnostics["observed_rows"] == 0
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+def test_ckr11_exactly_repeated_padded_cursor_is_still_a_cycle(path):
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        return {"results": [_lesson_row("LL-42")], "has_more": True, "next_cursor": "  c1  "}
+
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=read)
+    assert [c.get("start_cursor") for c in calls] == [None, "  c1  "]
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "repeated-cursor"
+
+
+def test_ckr11_cycle_protection_compares_exact_tokens_not_trimmed_copies():
+    # "c1" and "  c1  " are different opaque tokens: neither is a repeat of the
+    # other. Cycle protection compares exact strings; a loop between distinct
+    # tokens stays bounded by the page cap.
+    provider_pages = iter([
+        {"results": [], "has_more": True, "next_cursor": "c1"},
+        {"results": [], "has_more": True, "next_cursor": "  c1  "},
+        {"results": [_lesson_row("LL-42")], "has_more": False, "next_cursor": None},
+    ])
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        return next(provider_pages)
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert [c.get("start_cursor") for c in calls] == [None, "c1", "  c1  "]
+    assert result.selected_lesson_ids == ("LL-42",)
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+def test_ckr11_page_bound_with_padded_cursors_still_fails_closed(path):
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        return {"results": [], "has_more": True, "next_cursor": f"  cursor-{len(calls)}  "}
+
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=read)
+    assert len(calls) == MAX_RETRIEVAL_PAGES
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "page-bound-exceeded"
+
+
+def test_ckr11_snapshot_row_bound_with_padded_cursors_still_fails_closed():
+    calls = []
+
+    def read(query):
+        calls.append(dict(query))
+        return {
+            "results": [_lesson_row("LL-42")] * 100,
+            "has_more": True,
+            "next_cursor": f"  cursor-{len(calls)}  ",
+        }
+
+    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    assert len(calls) == 5
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+
+
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+def test_ckr11_private_cursor_value_never_reaches_public_result(path):
+    secret = "PRIVATE-opaque-cursor-7f3a"
+    padded = f"  {secret}  "
+
+    ok = orchestrate_lesson_retrieval(
+        request(**path), execute_read=ExactCursorProvider(padded, [_lesson_row("LL-42")])
+    )
+    rejected = orchestrate_lesson_retrieval(
+        request(**path),
+        execute_read=lambda q: (
+            {"results": [], "has_more": True, "next_cursor": padded}
+            if "start_cursor" not in q
+            else (_ for _ in ()).throw(RuntimeError(f"rejected {q['start_cursor']!r}"))
+        ),
+    )
+    repeated = orchestrate_lesson_retrieval(
+        request(**path),
+        execute_read=lambda q: {"results": [], "has_more": True, "next_cursor": padded},
+    )
+    for result in (ok, rejected, repeated):
+        assert secret not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [pytest.param(p.values[0], id=p.id) for p in OPAQUE_CURSORS],
+)
+def test_page_cursor_helper_returns_valid_opaque_token_unchanged(token):
+    # Helper-level unit check only; the integration guarantees are the
+    # orchestrator-level tests above and the real-adapter test below.
+    from agent_memory_context_manager.lesson_activation_bridge import _page_cursor
+
+    assert _page_cursor({"results": [], "has_more": True, "next_cursor": token}) == (True, token)
+    assert _page_cursor({"results": [], "has_more": False, "next_cursor": None}) == (False, None)
+
+
+def test_ckr11_real_adapter_forwards_opaque_cursor_verbatim_to_provider_post():
+    # Real NotionReadOnlyAdapter + lesson_reader_composition + CKR11 + CKR2:
+    # the request body the provider's POST receives carries the complete token.
+    bodies = []
+    executor = _adapter_executor(
+        [
+            {"results": [], "has_more": True, "next_cursor": "  page-two  "},
+            {"results": [_planted_testing_row()], "has_more": False, "next_cursor": None},
+        ],
+        bodies=bodies,
+    )
+    result = orchestrate_lesson_retrieval(_ckr6_testing_request(), execute_read=executor)
+    assert [b.get("start_cursor") for b in bodies] == [None, "  page-two  "]
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert "LL-9001" in result.selected_lesson_ids

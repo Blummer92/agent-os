@@ -27,6 +27,8 @@ from agent_memory_context_manager.lesson_activation_bridge import (
 )
 from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
 
+from test_lesson_retrieval_orchestrator import OPAQUE_CURSORS
+
 
 def request(**overrides):
     data = dict(
@@ -280,3 +282,110 @@ def test_empty_second_page_ends_retrieval():
     result = orchestrate_lesson_activation(request(), execute_read=executor)
     assert len(calls) == 2
     assert result.selected_lesson_ids == ("LL-1",)
+
+
+# --- Opaque pagination cursor integrity on the activation (bridge) path ----
+#
+# Notion cursors are opaque (https://developers.notion.com/reference/pagination):
+# a valid token is forwarded exactly as received. `_page_cursor` may use
+# `.strip()` only to REJECT a whitespace-only token.
+
+
+@pytest.mark.parametrize("cursor", OPAQUE_CURSORS)
+def test_opaque_cursor_reaches_provider_verbatim_and_page_two_is_selected(cursor):
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        if "start_cursor" not in query:
+            return {"results": [], "has_more": True, "next_cursor": cursor}
+        if query["start_cursor"] != cursor:
+            raise RuntimeError(f"provider rejected start_cursor {query['start_cursor']!r}")
+        return {"results": [live_row(1)], "has_more": False, "next_cursor": None}
+
+    result = orchestrate_lesson_activation(request(), execute_read=executor)
+    assert [c.get("start_cursor") for c in calls] == [None, cursor]
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-1",)
+
+
+@pytest.mark.parametrize(
+    "pagination, message",
+    [
+        pytest.param({"has_more": True, "next_cursor": ""}, "malformed next_cursor", id="empty"),
+        pytest.param({"has_more": True, "next_cursor": " \t\u00a0\n "}, "malformed next_cursor", id="whitespace-only"),
+        pytest.param({"has_more": True, "next_cursor": 123}, "malformed next_cursor", id="integer"),
+        pytest.param({"has_more": True, "next_cursor": {"c": "x"}}, "malformed next_cursor", id="object"),
+        pytest.param({"has_more": "true", "next_cursor": "c1"}, "non-boolean has_more", id="string-has-more"),
+        pytest.param({"has_more": False, "next_cursor": "c1"}, "malformed next_cursor", id="terminal-with-cursor"),
+        pytest.param({"has_more": False, "next_cursor": "  c1  "}, "malformed next_cursor", id="terminal-with-padded-cursor"),
+        pytest.param({"has_more": True}, "missing next cursor", id="missing-cursor-key"),
+        pytest.param({"has_more": True, "next_cursor": None}, "missing next cursor", id="null-cursor"),
+    ],
+)
+def test_malformed_pagination_fails_closed_before_any_second_read(pagination, message):
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        return {"results": [live_row(1)], **pagination}
+
+    with pytest.raises(LessonActivationError, match=message):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert len(calls) == 1
+
+
+def test_provider_rejecting_second_page_cursor_yields_no_partial_result():
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        if len(calls) == 1:
+            return {"results": [live_row(1)], "has_more": True, "next_cursor": "  c1  "}
+        raise RuntimeError("provider rejected start_cursor")
+
+    with pytest.raises(RuntimeError, match="provider rejected"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert len(calls) == 2
+
+
+def test_exactly_repeated_padded_cursor_is_still_a_cycle_without_disclosing_it():
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        return {"results": [live_row(1)], "has_more": True, "next_cursor": "  PRIVATE-c1  "}
+
+    with pytest.raises(LessonActivationError, match="repeated pagination cursor") as caught:
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert [c.get("start_cursor") for c in calls] == [None, "  PRIVATE-c1  "]
+    assert "PRIVATE-c1" not in str(caught.value)
+
+
+def test_cycle_protection_compares_exact_tokens_not_trimmed_copies():
+    pages = iter([
+        {"results": [], "has_more": True, "next_cursor": "c1"},
+        {"results": [], "has_more": True, "next_cursor": "  c1  "},
+        {"results": [live_row(1)], "has_more": False, "next_cursor": None},
+    ])
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        return next(pages)
+
+    result = orchestrate_lesson_activation(request(), execute_read=executor)
+    assert [c.get("start_cursor") for c in calls] == [None, "c1", "  c1  "]
+    assert result.selected_lesson_ids == ("LL-1",)
+
+
+def test_page_bound_with_padded_cursors_still_fails_closed():
+    calls = []
+
+    def executor(query):
+        calls.append(dict(query))
+        return {"results": [], "has_more": True, "next_cursor": f"  cursor-{len(calls)}  "}
+
+    with pytest.raises(LessonActivationError, match="exceeded page bound"):
+        orchestrate_lesson_activation(request(), execute_read=executor)
+    assert len(calls) == MAX_RETRIEVAL_PAGES
