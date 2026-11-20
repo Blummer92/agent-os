@@ -1436,7 +1436,8 @@ def test_ckr11_exactly_repeated_padded_cursor_is_still_a_cycle(path):
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "repeated-cursor"
 
 
-def test_ckr11_cycle_protection_compares_exact_tokens_not_trimmed_copies():
+@pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
+def test_ckr11_cycle_protection_compares_exact_tokens_not_trimmed_copies(path):
     # "c1" and "  c1  " are different opaque tokens: neither is a repeat of the
     # other. Cycle protection compares exact strings; a loop between distinct
     # tokens stays bounded by the page cap.
@@ -1451,7 +1452,7 @@ def test_ckr11_cycle_protection_compares_exact_tokens_not_trimmed_copies():
         calls.append(dict(query))
         return next(provider_pages)
 
-    result = orchestrate_lesson_retrieval(request(), execute_read=read)
+    result = orchestrate_lesson_retrieval(request(**path), execute_read=read)
     assert [c.get("start_cursor") for c in calls] == [None, "c1", "  c1  "]
     assert result.selected_lesson_ids == ("LL-42",)
 
@@ -1489,8 +1490,8 @@ def test_ckr11_snapshot_row_bound_with_padded_cursors_still_fails_closed():
 
 @pytest.mark.parametrize("path", ORCHESTRATOR_PATHS)
 def test_ckr11_private_cursor_value_never_reaches_public_result(path):
-    secret = "PRIVATE-opaque-cursor-7f3a"
-    padded = f"  {secret}  "
+    private_value = "PRIVATE-opaque-cursor-7f3a"
+    padded = f"  {private_value}  "
 
     ok = orchestrate_lesson_retrieval(
         request(**path), execute_read=ExactCursorProvider(padded, [_lesson_row("LL-42")])
@@ -1508,7 +1509,7 @@ def test_ckr11_private_cursor_value_never_reaches_public_result(path):
         execute_read=lambda q: {"results": [], "has_more": True, "next_cursor": padded},
     )
     for result in (ok, rejected, repeated):
-        assert secret not in repr(result)
+        assert private_value not in repr(result)
 
 
 @pytest.mark.parametrize(
