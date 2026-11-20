@@ -1,15 +1,13 @@
-"""#4024: tests-only, synthetic CKR2 LL-51 relevance controls.
+"""#4024: LL-51 selection negative/positive controls on the production CKR11 path.
 
-These are selector contracts on an immutable fixture, not live Notion,
-independent human relevance labels, or permission to merge/activate lessons.
-The unrelated packaging request never contains CKR6/mutation vocabulary.
+The LL-51 fixture mirrors source-adjudicated fields captured on 2026-11-20
+(source: #1362 and the frozen PR #4067 QA archive). It is still an offline
+snapshot, not a live Notion read or independently human-adjudicated gold.
+No fixture asserts that broad keyword selection means task applicability.
 """
 from dataclasses import replace
 
 import pytest
-
-import agent_memory_context_manager.coding_knowledge_selection as selection_module
-import agent_memory_context_manager.lesson_activation_bridge as bridge_module
 
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeCandidate,
@@ -18,28 +16,45 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     SufficiencyStatus,
     select_coding_knowledge,
 )
-from agent_memory_context_manager.lesson_activation_bridge import (
-    LessonActivationError,
-    orchestrate_lesson_activation,
-)
 from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
+from agent_memory_context_manager.lesson_retrieval_orchestrator import (
+    orchestrate_lesson_retrieval,
+)
 
-SOURCE = "https://github.com/Blummer92/agent-os/issues/4024"
+SOURCE = "https://github.com/Blummer92/agent-os/issues/1362"
 REVISION = "2026-11-15T02:52:00.000Z"
+TITLE = (
+    "Failed repair attempts must re-enter CKR6 Lessons Learned preflight "
+    "before another repair hypothesis"
+)
+GUIDANCE = (
+    "Every failed implementation or repair attempt is a mandatory re-entry trigger: "
+    "preserve the failed hypothesis and durable checkpoint, record any side defect, "
+    "rerun CKR6 material-use planning, consume only bounded relevant Lessons Learned, "
+    "record consumed/not-material/unavailable, reacquire GitHub truth, then form the "
+    "next hypothesis. Continue the branch/PR lineage unless proven unusable. "
+    "GitHub code, tests, governance, and exact-head evidence are authoritative; "
+    "Notion Lessons Learned remain advisory."
+)
+GUARDRAIL = (
+    "After a governed coding or PR repair attempt remains red, do not begin another "
+    "repair hypothesis or repository mutation until CKR6 material-use evaluation "
+    "has been rerun, applicable Lessons Learned have been consumed or explicitly "
+    "classified not-material/unavailable, and the failed hypothesis is preserved "
+    "in the diagnostic state."
+)
 PACKAGING_TASK = (
     "Repair an isolated offline wheelhouse that omitted the navigation-registry "
     "distribution, preserving dependency closure and import provenance."
 )
 PACKAGING_HINTS = (
-    "offline Python wheelhouse",
-    "navigation registry package",
-    "isolated pip installation",
+    "offline Python wheelhouse", "navigation registry package", "isolated pip installation",
 )
-MUTATION_TASK = "Investigate the CKR6 mutation boundary and exact-head admission."
+MUTATION_TASK = "Re-enter CKR6 after a failed mutation-boundary repair attempt."
 
 
-def request(task=PACKAGING_TASK, **overrides):
-    values = dict(
+def request(task=PACKAGING_TASK, **changes):
+    fields = dict(
         task_reference=task,
         ecosystem_hints=("agent-os",),
         language_hints=("python",),
@@ -47,263 +62,227 @@ def request(task=PACKAGING_TASK, **overrides):
         target_path_hints=("08_Tooling/agent-os-navigation-registry",),
         specialized_knowledge_required=True,
     )
-    values.update(overrides)
-    return CodingKnowledgeRequest(**values)
+    fields.update(changes)
+    return CodingKnowledgeRequest(**fields)
 
 
-def candidate(lesson_id="LL-51", **overrides):
-    values = dict(
-        knowledge_id=lesson_id,
-        source_system="notion-lessons-learned",
-        source_revision=REVISION,
-        currentness=KnowledgeCurrentness.CURRENT,
-        name="CKR6 mutation boundary must fail closed",
-        ecosystem="python",
-        library_name=None,
-        capability_kind="testing",
-        keywords=(),
-        use_when=("Revalidate CKR6 mutation boundary admission on the exact head.",),
+def ll51_candidate(**changes):
+    fields = dict(
+        knowledge_id="LL-51", source_system="notion-lessons-learned",
+        source_revision=REVISION, currentness=KnowledgeCurrentness.CURRENT,
+        name=TITLE, ecosystem="python", library_name=None,
+        capability_kind="failure-avoidance", keywords=(),
+        use_when=(GUIDANCE, GUARDRAIL),
         canonical_github_refs=(SOURCE,),
     )
-    values.update(overrides)
-    return CodingKnowledgeCandidate(**values)
+    fields.update(changes)
+    return CodingKnowledgeCandidate(**fields)
 
 
-def _rich(value, kind="rich_text"):
+def testing_candidate():
+    # Real LL-50 metadata; it explicitly prefers ordinary pytest for exact,
+    # deterministic regressions. Used as an example of generic false sufficiency.
+    return CodingKnowledgeCandidate(
+        knowledge_id="LL-50", source_system="notion-lessons-learned",
+        source_revision="2026-11-15T00:45:00.000Z",
+        currentness=KnowledgeCurrentness.CURRENT,
+        name="Use Hypothesis selectively for property-based testing and debugging",
+        ecosystem="python", library_name=None, capability_kind="testing",
+        use_when=("Prefer ordinary pytest for exact closed vocabularies and known deterministic regressions.",),
+        canonical_github_refs=("https://github.com/Blummer92/agent-os/issues/1138",),
+    )
+
+
+def rich(value, kind="rich_text"):
     return {"type": kind, kind: [{"plain_text": value}]}
 
 
-def row(lesson_id=51, *, source=SOURCE, revision=REVISION,
-        status="Applied", surface=True, title="CKR6 mutation boundary must fail closed",
-        guidance="Revalidate CKR6 mutation boundary admission on the exact head."):
+def ll51_row(*, source=SOURCE, revision=REVISION):
     return {
-        "object": "page",
-        "id": f"fixture-{lesson_id}",
-        "url": f"https://www.notion.so/fixture-{lesson_id}",
+        "object": "page", "id": "fixture-51", "url": "https://www.notion.so/fixture-51",
         "last_edited_time": revision,
         "properties": {
-            "Lesson ID": {"type": "unique_id", "unique_id": {"prefix": "LL", "number": lesson_id}},
-            "Lesson Learned": _rich(title, "title"),
-            "Status": {"type": "select", "select": {"name": status}},
-            "Surface Before Work?": {"type": "checkbox", "checkbox": surface},
+            "Lesson ID": {"type": "unique_id", "unique_id": {"prefix": "LL", "number": 51}},
+            "Lesson Learned": rich(TITLE, "title"),
+            "Status": {"type": "select", "select": {"name": "Needs follow-up"}},
+            "Surface Before Work?": {"type": "checkbox", "checkbox": True},
             "Area": {"type": "select", "select": {"name": "Testing"}},
-            "Learning Type": {"type": "select", "select": {"name": "Testing lesson"}},
+            "Learning Type": {"type": "select", "select": {"name": "Mistake"}},
             "Applies To": {"type": "multi_select", "multi_select": []},
             "Source Link": {"type": "url", "url": source},
-            "Guardrail": _rich("Do not bypass currentness or provenance."),
-            "What To Do Next Time": _rich(guidance),
+            "Guardrail": rich(GUARDRAIL),
+            "What To Do Next Time": rich(GUIDANCE),
         },
     }
 
 
-def reader(rows, *, pages=None):
-    def read(query):
-        if pages is not None:
-            return pages[query.get("start_cursor")]
-        return {"results": list(rows), "has_more": False, "next_cursor": None}
-    return read
+def reader(rows):
+    return lambda _query: {"results": list(rows), "has_more": False, "next_cursor": None}
 
 
-def test_unrelated_packaging_request_does_not_select_ll51():
-    result = select_coding_knowledge(request(), (candidate(),))
+def ckr6_request(**changes):
+    return request(
+        task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",),
+        target_path_hints=(), **changes,
+    )
+
+
+def test_real_ll51_metadata_is_not_generic_testing():
+    candidate = ll51_candidate()
+    assert candidate.capability_kind == "failure-avoidance"
+    assert candidate.name == TITLE and candidate.canonical_github_refs == (SOURCE,)
+    assert ll51_row()["properties"]["Learning Type"]["select"]["name"] == "Mistake"
+
+
+def test_unrelated_packaging_does_not_select_real_ll51():
+    result = select_coding_knowledge(request(), (ll51_candidate(),))
     assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
     assert result.selected == ()
     assert result.reason_codes == ("no-relevant-candidate",)
 
 
-def test_unrelated_packaging_bridge_returns_no_relevant_signal():
-    result = orchestrate_lesson_activation(request(), execute_read=reader([row()]))
+def test_unrelated_packaging_through_production_retrieval_path():
+    result = orchestrate_lesson_retrieval(request(), execute_read=reader([ll51_row()]))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert result.selected_lesson_ids == ()
-    assert "no-relevant-candidate" in result.selection_reason_codes
-    assert result.selected_count == 0
-    assert not result.notion_write_performed and not result.github_write_performed
+    assert result.retrieval_diagnostics["observed_rows"] >= 1
 
 
-@pytest.mark.parametrize("irrelevant_path", [
-    "docs/meeting-notes.md",
-    "src/teacher-os/lesson-plan.py",
+@pytest.mark.parametrize("extra_path", [
+    "docs/meeting-notes.md", "src/teacher-os/lesson-plan.py",
 ])
-def test_irrelevant_path_does_not_change_negative_selection(irrelevant_path):
-    original = select_coding_knowledge(request(), (candidate(),))
-    altered = select_coding_knowledge(
-        request(target_path_hints=("08_Tooling/agent-os-navigation-registry", irrelevant_path)),
-        (candidate(),),
-    )
-    assert original.selected == altered.selected == ()
-    assert original.sufficiency_status == altered.sufficiency_status
+def test_irrelevant_path_does_not_select_ll51(extra_path):
+    req = request(target_path_hints=("08_Tooling/agent-os-navigation-registry", extra_path))
+    assert select_coding_knowledge(req, (ll51_candidate(),)).selected == ()
 
 
-def test_relevant_mutation_boundary_selects_current_ll51():
-    req = request(
-        task=MUTATION_TASK,
-        capability_keywords=("ckr6 mutation boundary",),
-        target_path_hints=(),
-    )
-    result = select_coding_knowledge(req, (candidate(),))
+def test_explicit_ckr6_mutation_hint_selects_real_ll51():
+    result = select_coding_knowledge(ckr6_request(), (ll51_candidate(),))
     assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert tuple(x.candidate.knowledge_id for x in result.selected) == ("LL-51",)
+    assert tuple(item.candidate.knowledge_id for item in result.selected) == ("LL-51",)
     assert result.selected[0].reason_codes == ("verified-ckr6-mutation-context-match",)
     assert result.selected[0].candidate.source_revision == REVISION
 
 
-def test_relevant_mutation_boundary_bridge_preserves_provenance():
-    req = request(
-        task=MUTATION_TASK,
-        capability_keywords=("ckr6 mutation boundary",),
-        target_path_hints=(),
+def test_explicit_ckr6_positive_uses_production_retrieval_path():
+    result = orchestrate_lesson_retrieval(
+        ckr6_request(), execute_read=reader([ll51_row()])
     )
-    result = orchestrate_lesson_activation(req, execute_read=reader([row()]))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-51",)
     assert SOURCE in result.canonical_github_refs
     assert result.candidate_count <= 5 and result.selected_count <= 3
 
 
-@pytest.mark.parametrize("override,expected", [
+def test_m12_free_text_mutation_cannot_activate_ckr6_rule():
+    # Mutation M12 in independent #4067 QA made the CKR6 special case trigger
+    # on the plain word "mutation" in task_reference without the explicit
+    # authorized capability hint. This must remain a no-match.
+    req = request(
+        task="Check mutation parsing in an unrelated Python package",
+        capability_keywords=("testing",), target_path_hints=(),
+    )
+    result = select_coding_knowledge(req, (ll51_candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+    assert result.reason_codes == ("no-relevant-candidate",)
+
+
+def test_real_ll51_is_not_selected_by_generic_testing_hint():
+    req = request(capability_keywords=("testing",), ecosystem_hints=("python",))
+    result = select_coding_knowledge(req, (ll51_candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+
+
+def test_generic_testing_can_still_make_unrelated_lesson_sufficient():
+    # Known open #4026 issue. This does not falsely identify LL-51 as testing.
+    req = request(capability_keywords=("testing",), ecosystem_hints=("python",))
+    result = select_coding_knowledge(req, (testing_candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert tuple(item.candidate.knowledge_id for item in result.selected) == ("LL-50",)
+
+
+@pytest.mark.parametrize("overrides,reason", [
     ({"currentness": KnowledgeCurrentness.STALE}, "stale-relevant-candidate"),
     ({"currentness": KnowledgeCurrentness.UNVERIFIABLE, "canonical_github_refs": ()},
      "unverifiable-relevant-candidate"),
     ({"authority_conflict": True}, "canonical-authority-conflict"),
 ])
-def test_relevant_candidate_provenance_fail_closed(override, expected):
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    result = select_coding_knowledge(req, (candidate(**override),))
+def test_relevant_currentness_and_conflicts_fail_closed(overrides, reason):
+    result = select_coding_knowledge(ckr6_request(), (ll51_candidate(**overrides),))
     assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
     assert result.selected == ()
-    assert result.reason_codes == (expected,)
+    assert result.reason_codes == (reason,)
+
+
+def test_current_ll51_without_primary_source_is_insufficient():
+    result = select_coding_knowledge(
+        ckr6_request(), (ll51_candidate(canonical_github_refs=()),)
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_production_path_missing_source_cannot_select_ll51():
+    result = orchestrate_lesson_retrieval(
+        ckr6_request(), execute_read=reader([ll51_row(source=None)])
+    )
+    assert "LL-51" not in result.selected_lesson_ids
+    assert result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
 
 
 def test_conflicting_duplicate_revision_fails_closed():
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    original = candidate()
+    original = ll51_candidate()
     conflicting = replace(original, source_revision="2026-11-16T00:00:00.000Z")
-    result = select_coding_knowledge(req, (original, conflicting))
+    result = select_coding_knowledge(ckr6_request(), (original, conflicting))
     assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
     assert result.reason_codes == ("duplicate-identity-conflict",)
     assert result.selected == ()
 
 
-@pytest.mark.parametrize("malformation", [
-    {"last_edited_time": None},
-    {"properties": None},
-    {"object": "database"},
+@pytest.mark.parametrize("bad", [
+    {"last_edited_time": None}, {"properties": None}, {"object": "database"},
 ])
-def test_malformed_provider_row_never_selects_ll51(malformation):
-    damaged = row()
-    damaged.update(malformation)
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    result = orchestrate_lesson_activation(req, execute_read=reader([damaged]))
+def test_malformed_provider_row_production_path_fails_closed(bad):
+    row = ll51_row()
+    row.update(bad)
+    result = orchestrate_lesson_retrieval(ckr6_request(), execute_read=reader([row]))
     assert "LL-51" not in result.selected_lesson_ids
     assert result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
 
 
-def test_incomplete_pagination_cannot_return_partial_positive():
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
+def test_production_path_rejects_incomplete_cursor_with_diagnostics():
     def incomplete(_query):
-        return {"results": [row()], "has_more": True, "next_cursor": None}
-    with pytest.raises(LessonActivationError, match="cursor"):
-        orchestrate_lesson_activation(req, execute_read=incomplete)
-
-
-def test_unrelated_generic_testing_hint_is_not_evidence_of_applicability():
-    # Deliberately characterize a known limitation without changing the
-    # production selector or asserting a policy that has not been approved.
-    req = request(capability_keywords=("testing",), ecosystem_hints=("python",))
-    result = select_coding_knowledge(req, (candidate(),))
-    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
-    assert tuple(x.candidate.knowledge_id for x in result.selected) == ("LL-51",)
-    # This is a negative relevance finding, NOT a positive accuracy verdict.
-
-
-def test_negative_and_positive_selection_are_order_invariant():
-    unrelated = request()
-    relevant = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    pool = (candidate(), candidate("LL-10", name="Other unrelated testing lesson"))
-    for req in (unrelated, relevant):
-        forward = select_coding_knowledge(req, pool)
-        backward = select_coding_knowledge(req, pool[::-1])
-        assert tuple(x.candidate.knowledge_id for x in forward.selected) == tuple(
-            x.candidate.knowledge_id for x in backward.selected
-        )
-        assert forward.sufficiency_status == backward.sufficiency_status
-
-
-# --- in-process mutation discrimination, not isolated source mutation trials ---
-
-def test_current_candidate_with_missing_primary_provenance_is_not_sufficient():
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    result = select_coding_knowledge(req, (candidate(canonical_github_refs=()),))
-    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
-    assert result.reason_codes == ("canonical-reference-missing",)
-
-
-def test_bridge_missing_primary_source_cannot_become_sufficient():
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    result = orchestrate_lesson_activation(req, execute_read=reader([row(source=None)]))
+        return {"results": [ll51_row()], "has_more": True, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(ckr6_request(), execute_read=incomplete)
     assert result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "missing-cursor"
 
 
-def test_padded_opaque_cursor_is_forwarded_verbatim():
-    cursor = "  cursor-Ω-opaque  "
-    seen = []
-    pages = {
-        None: {"results": [], "has_more": True, "next_cursor": cursor},
-        cursor: {"results": [row()], "has_more": False, "next_cursor": None},
-    }
-
+def test_production_path_forwards_padded_opaque_cursor_verbatim():
+    cursor = "  cursor-opaque-Ω  "
+    calls = []
     def read(query):
-        seen.append(query.get("start_cursor"))
-        return pages[query.get("start_cursor")]
-
-    req = request(task=MUTATION_TASK, capability_keywords=("ckr6 mutation boundary",))
-    result = orchestrate_lesson_activation(req, execute_read=read)
-    assert seen == [None, cursor]
+        value = query.get("start_cursor")
+        calls.append(value)
+        if value is None:
+            return {"results": [], "has_more": True, "next_cursor": cursor}
+        assert value == cursor
+        return {"results": [ll51_row()], "has_more": False, "next_cursor": None}
+    result = orchestrate_lesson_retrieval(ckr6_request(), execute_read=read)
+    assert calls == [None, cursor]
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-51",)
 
 
-def test_mutant_broad_match_is_detected(monkeypatch):
-    with monkeypatch.context() as patch:
-        patch.setattr(selection_module, "_match_candidate",
-                      lambda _req, _cand: (2, ("mutant-broad-match",)))
-        with pytest.raises(AssertionError):
-            test_unrelated_packaging_request_does_not_select_ll51()
-
-
-def test_mutant_missing_positive_match_is_detected(monkeypatch):
-    with monkeypatch.context() as patch:
-        patch.setattr(selection_module, "_match_candidate",
-                      lambda _req, _cand: (0, ()))
-        with pytest.raises(AssertionError):
-            test_relevant_mutation_boundary_selects_current_ll51()
-
-
-def test_mutant_duplicate_conflict_bypass_is_detected(monkeypatch):
-    with monkeypatch.context() as patch:
-        patch.setattr(selection_module, "_deduplicate",
-                      lambda candidates: (candidates, False))
-        with pytest.raises(AssertionError):
-            test_conflicting_duplicate_revision_fails_closed()
-
-
-def test_mutant_missing_source_bypass_is_detected(monkeypatch):
-    with monkeypatch.context() as patch:
-        patch.setattr(selection_module, "_missing_candidate_provenance",
-                      lambda _selected: False)
-        with pytest.raises(AssertionError):
-            test_current_candidate_with_missing_primary_provenance_is_not_sufficient()
-
-
-def test_mutant_cursor_trim_is_detected(monkeypatch):
-    original = bridge_module._page_cursor
-
-    def broken_page_cursor(raw):
-        has_more, cursor = original(raw)
-        return has_more, cursor.strip() if cursor is not None else None
-
-    with monkeypatch.context() as patch:
-        patch.setattr(bridge_module, "_page_cursor", broken_page_cursor)
-        with pytest.raises(KeyError):
-            test_padded_opaque_cursor_is_forwarded_verbatim()
+def test_positive_negative_order_independence():
+    pool = (ll51_candidate(), testing_candidate())
+    for req in (request(), ckr6_request()):
+        first = select_coding_knowledge(req, pool)
+        second = select_coding_knowledge(req, pool[::-1])
+        assert tuple(x.candidate.knowledge_id for x in first.selected) == tuple(
+            x.candidate.knowledge_id for x in second.selected
+        )
+        assert first.sufficiency_status == second.sufficiency_status
