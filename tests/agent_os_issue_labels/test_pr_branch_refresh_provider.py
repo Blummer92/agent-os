@@ -439,13 +439,74 @@ def test_missing_merge_base_blocks_before_rebase_or_push():
 
 
 def test_rebase_failure_is_bounded_and_does_not_attempt_push():
+    # #3772: a rejected replay falls back to bounded merge-tree preparation;
+    # when the final tree also conflicts the attempt stays blocked and no
+    # remote transport is reached.
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(),
         observation(return_code=1),
+        observation(),
+        observation(return_code=1),
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
-    assert result.reason_code == "rebase-rejected"
+    assert result.reason_code == "reconciliation.semantic-conflict"
+    assert runner.calls[3][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[4][0] == ("git", "rebase", "--abort")
+    assert runner.calls[5][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_rebase_rejected_falls_back_to_merge_tree_candidate_and_updates_once():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(),
+        observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "updated"
+    assert result.old_head_sha == OLD and result.new_head_sha == NEW
+    assert runner.calls[3][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[4][0] == ("git", "rebase", "--abort")
+    assert runner.calls[5][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert runner.calls[10][0] == ("git", "diff", "--name-only", "--no-renames", MAIN, NEW)
+    assert sum("push" in call[0] for call in runner.calls) == 1
+
+
+def test_rebase_abort_failure_blocks_without_fallback_or_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(return_code=1),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "rebase-abort-rejected"
+    assert all("merge-tree" not in call[0] for call in runner.calls)
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_rebase_abort_uncertain_maps_to_ambiguous_without_fallback():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(return_code=None, timed_out=True, termination_confirmed=False),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "ambiguous"
+    assert result.reason_code == "rebase-abort-outcome-uncertain"
+    assert all("merge-tree" not in call[0] for call in runner.calls)
     assert all("push" not in call[0] for call in runner.calls)
 
 
@@ -735,6 +796,65 @@ def _local_integrity_provider(repo):
         branch_update_authorized=True,
         environment=dict(os.environ),
     )
+
+
+def test_linear_replay_conflict_falls_back_to_merge_tree_candidate_with_local_git(tmp_path):
+    # #3772 shape: a linear feature lineage whose intermediate replay conflicts
+    # with current main while the final tree reconciles cleanly. The fallback
+    # must restore the working tree and produce the bounded merge-tree
+    # candidate through the same preparation path a conflicted branch uses.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    _commit_file(repo, "changelog.txt", "anchor\n", "base")
+    _git(repo, "switch", "-qc", "agent/linear-replay-conflict")
+    _commit_file(repo, "changelog.txt", "feature entry\nanchor\n", "feature 1")
+    _commit_file(repo, "changelog.txt", "anchor\nfeature entry\n", "feature 2 repair")
+    feature_head = _git_out(repo, "rev-parse", "HEAD")
+    _git(repo, "switch", "-q", "main")
+    _commit_file(repo, "changelog.txt", "main entry\nanchor\n", "main advance")
+    current_main = _git_out(repo, "rev-parse", "HEAD")
+    merge_base = _git_out(repo, "merge-base", feature_head, current_main)
+
+    _git(repo, "checkout", "-q", "--detach", feature_head)
+    replay = _git(
+        repo,
+        "rebase",
+        "--no-autostash",
+        "--onto",
+        current_main,
+        merge_base,
+        feature_head,
+        check=False,
+    )
+    assert replay.returncode != 0
+
+    live = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os",
+        pr_number=3772,
+        base_branch="main",
+        base_sha=current_main,
+        head_branch="agent/linear-replay-conflict",
+        head_sha=feature_head,
+        current_main_sha=current_main,
+        branch_state="behind",
+        mergeability="mergeable",
+        changed_paths=("changelog.txt",),
+    )
+    subject = _local_integrity_provider(repo)
+    subject.backing = FakeBacking(live)
+    candidate = subject._rebase_rejected_fallback(
+        expected_head_sha=feature_head,
+        current_main_sha=current_main,
+        admitted_paths=live.changed_paths,
+    )
+
+    assert isinstance(candidate, str)
+    assert _git_out(repo, "rev-parse", f"{candidate}^1") == current_main
+    assert _git_out(repo, "diff", "--name-only", "--no-renames", current_main, candidate) == "changelog.txt"
+    assert (repo / "changelog.txt").read_text(encoding="utf-8") == "main entry\nanchor\nfeature entry\n"
 
 
 def _multiple_merge_fixture(tmp_path):
