@@ -12,6 +12,7 @@ REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
 CONTINUATION_CONSUMER_REQUEST_ID = "continuation-live-consumer-2026-10-30"
+CKR6_SELECTION_SUFFICIENCY_REQUEST_ID = "ckr6-selection-sufficiency-2026-11-18"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -606,6 +607,43 @@ LESSONS = MappingProxyType({
         "properties": MappingProxyType({
             "Source Link": "https://github.com/Blummer92/agent-os/pull/1858",
             "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/1200",),
+        }),
+    }),
+    # #4026: reviewed CKR6 relevance finding, proposal only until an
+    # owner-issued one-time #3417 command and exact Notion readback.
+    # Status and Surface Before Work? are deliberately absent from this
+    # entry, and the writer never sends fields the entry does not name.
+    CKR6_SELECTION_SUFFICIENCY_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Lesson Learned": "A sufficient CKR6 result is not evidence of correct lesson selection",
+            "What Happened": (
+                "In a 2026-11-18 local controlled experiment against the current general discovery "
+                "path on main 6fdb6be0, requests with exact capability 'testing' (142 and 472 "
+                "characters) selected LL-10/18/21 while eligible LL-65 fell outside the five-identity "
+                "bound among 35 tied generic matches; the same keyword also selected LL-65 for an "
+                "unrelated packaging task inside the closed adversarial fixture. The general matcher "
+                "never reads task_reference."
+            ),
+            "What To Do Next Time": (
+                "Treat a sufficient CKR6 result as unverified selection: compare the selected lesson "
+                "identities against the task's expectation before relying on them. If a known-relevant "
+                "lesson is absent, prepare a controlled capability-keyword or known-reference "
+                "comparison; run it hosted only with separate authorization. Do not force a capability "
+                "keyword as a standing fix."
+            ),
+            "Guardrail": (
+                "Never infer correct selection from a sufficient status. Repair requires reviewed CKR2 "
+                "contextual relevance ahead of the ranking bound, not global keyword injection, forced "
+                "lesson selection, or larger budgets."
+            ),
+            "Area": "Governance",
+            "Learning Type": "Mistake",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
+            "Supporting Source Links": (
+                "https://github.com/Blummer92/agent-os/issues/520",
+                "08_Tooling/agent-memory-context-manager/src/agent_memory_context_manager/coding_knowledge_selection.py",
+            ),
         }),
     }),
 })
