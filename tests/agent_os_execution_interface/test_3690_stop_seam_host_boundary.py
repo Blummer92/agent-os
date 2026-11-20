@@ -4,7 +4,7 @@ The repository-owned Stop seam (``hook_adapter.run_stop_hook``) can block one
 premature Stop, but only when the HOST supplies a structured
 ``agent_os_continuation`` observation in the hook payload (#2826, documented in
 ``continuation_driver``). These tests drive the REAL hook entrypoint as a
-subprocess with a payload shaped like Claude Code's documented Stop input and
+subprocess with a payload modeled on Claude Code's Stop input (not captured from a live host) and
 pin both halves of the boundary:
 
 * repository side, conforming: a host-supplied nonterminal observation blocks
@@ -31,7 +31,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "scripts" / "agent-os-execution-interface-preflight.py"
 
-# Shape of Claude Code's documented Stop hook input (no continuation field).
+# Payload shape modeled on Claude Code's Stop hook input (session/transcript/cwd/stop_hook_active,
+# NO continuation field). Authored here from the hook contract; it was NOT captured from a live
+# host, so the no-op test pins repository behavior for such a payload, not the host's actual output.
 HOST_STOP_PAYLOAD = {
     "session_id": "abc123",
     "transcript_path": "/tmp/transcript.jsonl",
@@ -62,7 +64,7 @@ def run_stop(payload: dict) -> subprocess.CompletedProcess[str]:
 
 
 def test_host_payload_without_structured_observation_is_a_no_op() -> None:
-    # What Claude Code actually sends: nothing here can name an authorized next
+    # A Stop payload without the structured field (the modeled Claude Code shape): nothing here can name an authorized next
     # action, so the seam must neither block nor invent one.
     done = run_stop(HOST_STOP_PAYLOAD)
     assert done.returncode == 0

@@ -96,6 +96,8 @@ def _without_one_attribution_footer(body: str) -> str:
             if not any(known in candidate for known in _CLAUDE_CODE_FOOTERS):
                 return candidate
     return body
+
+
 # #2410 bounded Ready-recovery ingress grammar. The comment carries only
 # immutable selectors; the dispatch module and the validation workflow each
 # re-verify every binding against live GitHub records before any recovery.

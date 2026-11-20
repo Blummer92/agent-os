@@ -1,22 +1,25 @@
-"""#3690 AC5/AC9: attribution-footer policy parity across ingress and sources.
+"""#3690 AC5/AC9: attribution-footer stripping parity across ingress and sources.
 
-Four production sites strip *exactly one known trailing* Claude Code attribution
-footer before an exact-grammar check: the ``validate-draft`` ingress parser
+Four production sites with an exact-grammar check strip *exactly one known trailing*
+Claude Code attribution footer first: the ``validate-draft`` ingress parser
 (workflow-scheduler, stdlib-only so it cannot import the ``scripts`` tree), the
-approval source, and the two ``refresh-pr`` modules. One site deliberately does
-the opposite: ``merge_authorization_source`` *rejects* a footer, because the
-footer is the only in-band evidence that an agent, not the owner, authored the
-comment. These are different gates with different polarity, so they must not be
-merged by similarity -- this file pins both the parity of the strippers and the
-polarity of the rejector, so a drift in either direction fails the suite instead
-of silently weakening an authority boundary.
+approval source, and the two ``refresh-pr`` modules. (The CKR6 envelope parser and
+``lesson_learning_loop`` have their own, differently shaped trailer handling and are
+outside this parity set.) A drift in the footer set or in the stripping boundary
+cases of any of the four fails this file instead of silently diverging.
+
+One site deliberately does the OPPOSITE and is not covered here:
+``merge_authorization_source`` *rejects* a footer, because the footer is in-band
+evidence that an agent, not the owner, authored the comment (#3734). That polarity
+is pinned by the pre-existing
+``tests/agent_os_issue_acceptance/test_merge_authorization_source.py``
+(``test_exact_connector_footer_is_rejected_not_stripped`` and
+``test_legacy_connector_footer_is_rejected_like_other_footers``). These are different
+gates with different polarity and must not be merged by similarity.
 """
 from __future__ import annotations
 
 from scripts.agent_os_issue_acceptance import approval_source
-from scripts.agent_os_issue_acceptance.merge_authorization_source import (
-    AUTHORIZATION_MARKER,
-)
 from scripts.agent_os_issue_labels import (
     pr_branch_refresh_actions,
     pr_branch_refresh_authorization_source,
@@ -55,16 +58,3 @@ def test_all_stripping_sites_behave_identically_on_the_boundary_cases() -> None:
     for body, expected in cases.items():
         for strip in strippers:
             assert strip(body) == expected, (strip.__module__, body)
-
-
-def test_merge_authorization_source_rejects_instead_of_stripping() -> None:
-    # Polarity pin: a trusted merge-authorization record is exactly marker + one
-    # payload line. This module owns no footer tuple and no stripping function, so
-    # an agent-attribution footer makes the payload multi-line and therefore
-    # malformed -- by design (see its module docstring).
-    from scripts.agent_os_issue_acceptance import merge_authorization_source as source
-
-    assert not hasattr(source, "_CLAUDE_CODE_FOOTERS")
-    assert not hasattr(source, "_canonical_comment_body")
-    assert AUTHORIZATION_MARKER
-    assert "No footer canonicalization" in open(source.__file__, encoding="utf-8").read()
