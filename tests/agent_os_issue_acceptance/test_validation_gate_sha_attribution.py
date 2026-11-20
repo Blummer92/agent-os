@@ -38,7 +38,9 @@ def test_summary_reports_distinct_pr_head_workflow_run_and_tested_sha_sources():
 
     assert "github.event.pull_request.head.sha" in content
     assert "PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in content
-    assert 'tested_sha="$(git rev-parse HEAD)"' in step
+    # Preserve actual checkout attribution without inventing a tested checkout
+    # when an upstream failure prevented checkout.
+    assert 'tested_sha="$(git rev-parse HEAD 2>/dev/null || printf %s not-checked-out-in-this-run)"' in step
 
     pr_head_lines = _lines_using("PR_HEAD_SHA")
     workflow_run_lines = _lines_using("$GITHUB_SHA")
