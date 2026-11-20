@@ -611,13 +611,13 @@ def _spy_bound(monkeypatch):
     import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
 
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     return seen
 
 

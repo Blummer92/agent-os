@@ -391,33 +391,41 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
     )
 
 
-def _bound_relevant_lessons(
+def _bound_relevant_lessons_with_order(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
-) -> tuple[LessonRecordEvidence, ...]:
-    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher.
+) -> tuple[tuple[LessonRecordEvidence, ...], tuple[str, ...]]:
+    """Keep the five-identity bound and original full-pool ranking.
+
+    Return selected records in input order to preserve duplicate-revision
+    behavior, plus an immutable rank order for the final CKR2 selection.
 
     R1 (#2425): the budget counts DISTINCT lesson IDs. A conflicting
     identity counts once, and ALL its records enter the bound set, so a
     conflict at the bound edge is reported by the selector instead of being
     silently dropped with the second revision.
     """
-    ranked: list[tuple[int, str, LessonRecordEvidence]] = []
+    ranked: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
     unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
         bucket, _ = _match_candidate(request, _as_selection_candidate(lesson))
         if bucket:
-            ranked.append((bucket, lesson.lesson_id.casefold(), lesson))
+            lesson_id = lesson.lesson_id
+            ranked.append((bucket, (lesson_id.casefold(), lesson_id), lesson))
         else:
             unranked.append(lesson)
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
         # #4026: inside each relevance bucket, order by exact request-context
-        # overlap before the five-ID cut; the legacy id order breaks ties and
+        # overlap before the five-ID cut; the total ID order breaks ties and
         # is the whole order when nothing overlaps. Buckets never mix.
-        reordered: list[tuple[int, str, LessonRecordEvidence]] = []
+        reordered: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
-            group = [item for item in ranked if item[0] == bucket]
+            # Score equal normalized records once, while retaining the
+            # original rows for raw counts and revision-conflict checks.
+            group = list(dict.fromkeys(
+                item for item in ranked if item[0] == bucket
+            ))
             scores = contextual_tie_scores(
                 request, (_as_selection_candidate(item[2]) for item in group)
             )
@@ -427,13 +435,23 @@ def _bound_relevant_lessons(
         # Rank identities, not individual revisions. A second revision of
         # a selected ID may be unranked, but must still reach CKR2's
         # fail-closed duplicate-identity conflict check.
-        selected_ids = {
-            lesson.lesson_id
-            for lesson in _take_distinct_ids([item[2] for item in ranked])
-        }
-        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
-    unranked.sort(key=lambda item: item.lesson_id.casefold())
-    return _take_distinct_ids(unranked)
+        chosen = _take_distinct_ids([item[2] for item in ranked])
+        ranked_ids = tuple(dict.fromkeys(item.lesson_id for item in chosen))
+        selected_ids = set(ranked_ids)
+        return (
+            tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
+            ranked_ids,
+        )
+    unranked.sort(key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
+    chosen = _take_distinct_ids(unranked)
+    return chosen, tuple(dict.fromkeys(item.lesson_id for item in chosen))
+
+
+def _bound_relevant_lessons(
+    request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
+) -> tuple[LessonRecordEvidence, ...]:
+    """Backward-compatible tuple-only bridge boundary."""
+    return _bound_relevant_lessons_with_order(request, lessons)[0]
 
 
 # PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
@@ -602,8 +620,8 @@ def orchestrate_lesson_activation(
         if isinstance(normalized, LessonRecordEvidence):
             lessons.append(normalized)
 
-    bounded = _bound_relevant_lessons(request, lessons)
-    return consume_lesson_preflight(request, bounded)
+    bounded, rank_order = _bound_relevant_lessons_with_order(request, lessons)
+    return consume_lesson_preflight(request, bounded, _ranked_order=rank_order)
 
 
 def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:

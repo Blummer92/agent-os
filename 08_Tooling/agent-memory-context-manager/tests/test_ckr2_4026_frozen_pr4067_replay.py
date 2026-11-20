@@ -14,9 +14,9 @@ import pytest
 
 from agent_memory_context_manager import coding_knowledge_selection as cks
 from agent_memory_context_manager import lesson_activation_bridge as bridge
-from agent_memory_context_manager.lesson_preflight import LessonRetrievalStatus
-from agent_memory_context_manager.lesson_retrieval_orchestrator import (
-    orchestrate_lesson_retrieval,
+from agent_memory_context_manager.lesson_preflight import (
+    LessonRetrievalStatus,
+    consume_lesson_preflight,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ckr2_4026_33way_rank_signatures.tsv"
@@ -89,22 +89,25 @@ def rows():
     return result
 
 
-def candidates():
-    values = [bridge.normalize_lesson_row(row) for row in rows()]
+def candidates(input_rows=None):
+    values = [
+        bridge.normalize_lesson_row(row)
+        for row in (rows() if input_rows is None else input_rows)
+    ]
     assert all(isinstance(v, bridge.LessonRecordEvidence) for v in values)
     return values
 
 
 def replay(kind="original", input_rows=None):
-    result_rows = rows() if input_rows is None else input_rows
-    return orchestrate_lesson_retrieval(
-        request(kind),
-        execute_read=lambda _q: {
-            "results": list(result_rows),
-            "has_more": False,
-            "next_cursor": None,
-        },
-    )
+    """Replay the historical two cuts without invoking current CKR11 policy.
+
+    The first cut passes only the bounded records, deliberately not a rank
+    plan. The standalone preflight then re-scores those five records, as
+    production did at the pinned before-state.
+    """
+    req = request(kind)
+    bounded = bridge._bound_relevant_lessons(req, candidates(input_rows))
+    return consume_lesson_preflight(req, bounded)
 
 
 def test_snapshot_has_33_way_bucket_two_tie_and_unverified_candidate():
@@ -128,15 +131,18 @@ def test_snapshot_has_33_way_bucket_two_tie_and_unverified_candidate():
 @pytest.mark.parametrize("kind", [
     "original", "without_disclaimer", "disclaimer_only", "inverted_disclaimer",
 ])
-def test_frozen_production_retrieval_characterization(kind):
-    # This pins a failure observed in 2026, not the behavior desired after repair.
+def test_frozen_historical_two_stage_characterization(kind):
+    # This pins an observed before-state, not today's CKR11 production behavior.
     result = replay(kind)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == SELECTED[kind]
     assert result.selection_reason_codes == ("knowledge-sufficient",)
     if kind == "original":
-        assert result.retrieval_diagnostics["best_bucket_tied_identities"] == 33
-        assert result.retrieval_diagnostics["selection_basis"] == "generic-tie-lexical-cut"
+        basis = bridge.describe_selection_basis(
+            request(kind), candidates(), identity_route=False
+        )
+        assert basis.tied_identities == 33
+        assert basis.basis == "generic-tie-lexical-cut"
         assert result.candidate_count == 5
 
 
