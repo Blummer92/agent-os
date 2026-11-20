@@ -20,6 +20,7 @@ from .coding_knowledge_selection import (
     RetrievalEscalation,
     SufficiencyStatus,
     select_coding_knowledge,
+    _select_coding_knowledge,
 )
 
 MAX_LESSON_RECORDS = 5
@@ -238,6 +239,7 @@ def consume_lesson_preflight(
     *,
     retrieval_available: bool = True,
     repair_context: RepairContext = RepairContext.NONE,
+    _ranked_order: tuple[str, ...] | None = None,
 ) -> LessonPreflightResult:
     """Normalize eligible lesson evidence and delegate selection to CKR2."""
     if type(request) is not CodingKnowledgeRequest:
@@ -246,6 +248,21 @@ def consume_lesson_preflight(
         raise TypeError("lessons must be a tuple of LessonRecordEvidence values")
     if type(retrieval_available) is not bool:
         raise TypeError("retrieval_available must be bool")
+
+    # A ranking plan may only describe the <=5 bounded lessons already read.
+    # This check prevents missing, repeated or extra identity priority entries.
+    if _ranked_order is not None and (
+        type(_ranked_order) is not tuple
+        or any(type(identity) is not str for identity in _ranked_order)
+        or len(_ranked_order) != len({lesson.lesson_id for lesson in lessons})
+        or set(_ranked_order) != {lesson.lesson_id for lesson in lessons}
+    ):
+        return _fallback(
+            LessonRetrievalStatus.MANUAL_REVIEW,
+            "upstream-ranking-order-mismatch",
+            RetrievalEscalation.MANUAL_REVIEW,
+            candidate_count=len(lessons),
+        )
 
     plan = plan_lesson_preflight(request, repair_context=repair_context)
     effective_request = _forced_material_request(request, repair_context)
@@ -279,16 +296,39 @@ def consume_lesson_preflight(
         )
 
     eligible: list[LessonRecordEvidence] = []
+    ineligible_ids: set[str] = set()
     stale_or_conflicting = 0
     for lesson in lessons:
         if lesson.archived or lesson.status not in _ALLOWED_STATUSES or not lesson.surface_before_work:
+            ineligible_ids.add(lesson.lesson_id)
             continue
         if lesson.currentness is not KnowledgeCurrentness.CURRENT or lesson.authority_conflict:
             stale_or_conflicting += 1
         eligible.append(lesson)
 
     candidates = tuple(_candidate(item) for item in eligible)
-    selection = select_coding_knowledge(effective_request, candidates)
+    if _ranked_order is None:
+        selection = select_coding_knowledge(effective_request, candidates)
+    else:
+        # Eligibility may exclude some bounded lessons. Do not recompute
+        # context scores when filtering their IDs from the original plan.
+        eligible_ids = {item.lesson_id for item in eligible}
+        if eligible_ids & ineligible_ids:
+            # The order was chosen from the full pool. An eligible record
+            # cannot inherit the rank of a conflicting ineligible record of
+            # the same identity. Preserve the conflict before filtering.
+            return _fallback(
+                LessonRetrievalStatus.MANUAL_REVIEW,
+                "duplicate-identity-conflict",
+                RetrievalEscalation.MANUAL_REVIEW,
+                candidate_count=len(lessons),
+            )
+        eligible_order = tuple(
+            identity for identity in _ranked_order if identity in eligible_ids
+        )
+        selection = _select_coding_knowledge(
+            effective_request, candidates, _ranked_order=eligible_order
+        )
     return _from_selection(selection, tuple(eligible), stale_or_conflicting)
 
 

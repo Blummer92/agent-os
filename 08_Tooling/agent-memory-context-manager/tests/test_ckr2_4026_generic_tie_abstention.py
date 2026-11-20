@@ -76,13 +76,37 @@ def test_three_generic_candidates_preserve_existing_non_tie_behavior():
 
 
 def test_known_identity_request_preserves_admission():
+    calls = []
+    rows = {f"LL-{n}": _lesson_row(f"LL-{n}") for n in range(10, 15)}
+
+    def known_only(query):
+        calls.append(query)
+        assert query["filter"]["or"] == [
+            {"property": "Lesson ID", "unique_id": {"equals": 14}}
+        ]
+        return {"results": [rows["LL-14"]], "has_more": False, "next_cursor": None}
+
     result = orchestrate_lesson_retrieval(
         request(known_knowledge_refs=("LL-14",)),
-        execute_read=read([_lesson_row(f"LL-{n}") for n in range(10, 15)]),
+        execute_read=known_only,
     )
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("LL-14",)
     assert result.retrieval_diagnostics["selection_basis"] == "identity-scoped"
+    assert result.retrieval_diagnostics["best_bucket_tied_identities"] == 1
+    assert len(calls) == 1
+
+
+def test_abstention_keeps_caller_rules_but_not_unverified_lesson_references():
+    caller_ref = "https://github.com/Blummer92/agent-os/issues/4026"
+    result = orchestrate_lesson_retrieval(
+        request(canonical_rule_refs=(caller_ref,)),
+        execute_read=read([_lesson_row(f"LL-{n}") for n in range(10, 14)]),
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selected_lesson_ids == ()
+    assert result.canonical_github_refs == (caller_ref,)
+    assert result.handoff_projection["allowed_inspect_first"] == [caller_ref]
 
 
 def test_exact_library_match_preserves_admission_against_generic_tie():

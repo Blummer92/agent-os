@@ -32,7 +32,7 @@ from .lesson_activation_bridge import (
     _LEARNING_TYPE_CAPABILITY,
     _LEARNING_TYPE_PROPERTY,
     _page_cursor,
-    _bound_relevant_lessons,
+    _bound_relevant_lessons_with_order,
     _extract_bounded_rows,
     build_filtered_query,
     build_known_reference_query,
@@ -60,31 +60,34 @@ _GENERIC_TIE_UNVERIFIED = "generic-relevance-unverified"
 
 
 def _abstain_on_generic_tie(
-    result: LessonPreflightResult, basis: SelectionBasis
+    result: LessonPreflightResult, basis: SelectionBasis,
+    canonical_rule_refs: tuple[str, ...],
 ) -> LessonPreflightResult:
     if (
         basis.basis != "generic-tie-lexical-cut"
         or result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
     ):
         return result
+    # Drop lesson-owned references with the unreviewed selection. Keep the
+    # caller's independent canonical rules available for the manual review.
+    canonical_rule_refs = tuple(sorted(set(canonical_rule_refs)))
     return replace(
         result,
         lesson_retrieval_status=LessonRetrievalStatus.MANUAL_REVIEW,
         selected_count=0,
         selected_lesson_ids=(),
         selection_reason_codes=(_GENERIC_TIE_UNVERIFIED,),
-        canonical_github_refs=(),
+        canonical_github_refs=canonical_rule_refs,
         knowledge_refs=(),
         retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW,
         handoff_projection={
             "known_facts": ["coding-knowledge-sufficiency:manual-review"],
             "prior_decisions": [],
-            "allowed_inspect_first": [],
+            "allowed_inspect_first": list(canonical_rule_refs),
             "stop_conditions": ["coding-knowledge:" + _GENERIC_TIE_UNVERIFIED],
         },
         selection=None,
     )
-
 
 
 _EXECUTABLE_STEPS = (
@@ -686,8 +689,11 @@ def orchestrate_lesson_retrieval(
             current_request = record_retrieval_attempt(
                 current_request, RetrievalEscalation.KNOWN_REFERENCE
             )
+            bounded, rank_order = _bound_relevant_lessons_with_order(
+                current_request, accumulated
+            )
             result = consume_lesson_preflight(
-                current_request, _bound_relevant_lessons(current_request, accumulated)
+                current_request, bounded, _ranked_order=rank_order
             )
             if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
                 return with_diagnostics(
@@ -720,8 +726,11 @@ def orchestrate_lesson_retrieval(
         return with_diagnostics(_unavailable_result(current_request, exc), NOT_EVALUATED)
 
     accumulate(snapshot_rows)
+    bounded, rank_order = _bound_relevant_lessons_with_order(
+        current_request, accumulated
+    )
     result = consume_lesson_preflight(
-        current_request, _bound_relevant_lessons(current_request, accumulated)
+        current_request, bounded, _ranked_order=rank_order
     )
     if (
         result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
@@ -733,7 +742,10 @@ def orchestrate_lesson_retrieval(
     basis = describe_selection_basis(
         current_request, accumulated, identity_route=False
     )
-    return with_diagnostics(_abstain_on_generic_tie(result, basis), basis)
+    return with_diagnostics(
+        _abstain_on_generic_tie(result, basis, current_request.canonical_rule_refs),
+        basis,
+    )
 
 
 __all__ = [

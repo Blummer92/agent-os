@@ -360,13 +360,13 @@ def _rows(count, start=10):
     return [_lesson_row(f"LL-{n}") for n in range(start, start + count)]
 
 
-def test_p1_orchestrator_records_snapshot_basis_in_diagnostics_only():
+def test_p1_orchestrator_keeps_snapshot_basis_when_abstaining():
     result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(34)))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
     assert result.selected_lesson_ids == ()
     assert result.selection_reason_codes == ("generic-relevance-unverified",)
     assert result.retrieval_escalation.value == "manual-review"
-    assert len(result.selected_lesson_ids) == MAX_SELECTED
+    assert result.selected_count == 0
     diag = result.retrieval_diagnostics
     assert diag["selection_basis"] == "generic-tie-lexical-cut"
     assert diag["best_bucket_tied_identities"] == 34

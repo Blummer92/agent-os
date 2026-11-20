@@ -263,13 +263,13 @@ def test_provider_errors_are_sanitized_and_admit_nothing():
 
 def test_no_partial_snapshot_reaches_ckr2_after_a_failed_read(monkeypatch):
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
     inner = _ckr6_filter_evaluating_reader(rows, [])
     state = {"n": 0}
@@ -300,13 +300,13 @@ def test_duplicate_records_collapse_and_conflicting_revisions_survive(monkeypatc
     # list must contain no exact-duplicate records, while both revisions of
     # the conflicting identity survive.
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     result = orchestrate_lesson_retrieval(
         _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, [])
     )
@@ -381,13 +381,13 @@ def test_snapshot_accumulates_exactly_the_direct_filtered_corpus(monkeypatch):
     assert len(rows) == 2 * len(_AREA_ECOSYSTEM) * len(_LEARNING_TYPE_CAPABILITY)
     assert len(rows) <= 500  # the invariant is pinned INSIDE the row bound
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     req = _ckr6_testing_request()
     orchestrate_lesson_retrieval(req, execute_read=_ckr6_filter_evaluating_reader(rows, []))
     query = build_escalation_query(req, RetrievalEscalation.WORKSPACE_SEARCH)
