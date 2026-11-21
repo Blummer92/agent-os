@@ -37,9 +37,9 @@ def test_two_runners_preserve_completed_workflow(tmp_path):
     for runner in (first, second):
         original = runner.repository.try_claim_execution
 
-        def synchronize(task_id, original=original):
+        def synchronize(task_id, original=original, **claim_conditions):
             barrier.wait(timeout=10)
-            return original(task_id)
+            return original(task_id, **claim_conditions)
 
         runner.repository.try_claim_execution = synchronize
 

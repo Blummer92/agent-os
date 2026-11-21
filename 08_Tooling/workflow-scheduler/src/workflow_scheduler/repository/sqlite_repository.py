@@ -35,6 +35,7 @@ import json
 import sqlite3
 import uuid
 import threading
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +50,20 @@ from workflow_scheduler.models import (
     WorkflowStatus,
 )
 from workflow_scheduler.time_utils import parse_utc_storage, utc_now, utc_storage_string
+
+
+def _remember(obj, status: str, stamp: str) -> None:
+    # Store exact DB text so legacy ISO spellings still compare byte for byte.
+    obj._repository_snapshot = (status, stamp)
+
+
+def _write_stamp(obj, old_stamp: str | None) -> str:
+    value = obj.updated_at
+    if old_stamp is not None:
+        previous = parse_utc_storage(old_stamp)
+        if value <= previous:
+            value = max(utc_now(), previous + timedelta(microseconds=1))
+    return utc_storage_string(value)
 
 
 class SQLiteRepository:
@@ -132,10 +147,20 @@ class SQLiteRepository:
                     reason TEXT,
                     created_at TEXT NOT NULL,
                     decided_at TEXT,
+                    workflow_wait INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (task_id) REFERENCES tasks(id)
                 )
                 """
             )
+
+            # Serialize the check and additive migration across processes.
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("PRAGMA table_info(approval_requests)")
+            if "workflow_wait" not in {row[1] for row in cursor.fetchall()}:
+                cursor.execute(
+                    "ALTER TABLE approval_requests "
+                    "ADD COLUMN workflow_wait INTEGER NOT NULL DEFAULT 0"
+                )
 
             cursor.execute(
                 """
@@ -224,6 +249,7 @@ class SQLiteRepository:
                 ),
             )
             conn.commit()
+            _remember(workflow, workflow.status.value, utc_storage_string(workflow.updated_at))
 
     def get_workflow(self, workflow_id: str) -> Optional[WorkflowPlan]:
         """Retrieve workflow from database."""
@@ -237,7 +263,7 @@ class SQLiteRepository:
             if not row:
                 return None
 
-            return WorkflowPlan(
+            workflow = WorkflowPlan(
                 workflow_id=row["workflow_id"],
                 title=row["title"],
                 created_by=row["created_by"],
@@ -249,6 +275,8 @@ class SQLiteRepository:
                 created_at=parse_utc_storage(row["created_at"]),
                 updated_at=parse_utc_storage(row["updated_at"]),
             )
+            _remember(workflow, row["status"], row["updated_at"])
+            return workflow
 
     def update_workflow(self, workflow: WorkflowPlan) -> bool:
         """Update workflow in database.
@@ -262,9 +290,12 @@ class SQLiteRepository:
         a workflow (e.g. completed -> running, paused -> draft) is
         refused as a no-op; the return value reports whether the write
         landed. Existing callers that ignore the return value keep
-        working, with the DB row unchanged on refusal.
+        working, with the DB row unchanged on refusal. A repository-loaded
+        snapshot must still match both the status and timestamp it read.
         """
         with self._lock:
+            old_status, old_stamp = getattr(workflow, "_repository_snapshot", (None, None))
+            new_stamp = _write_stamp(workflow, old_stamp)
             conn = self._get_connection()
             cursor = conn.cursor()
 
@@ -273,6 +304,7 @@ class SQLiteRepository:
                 UPDATE workflows
                 SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
                 WHERE workflow_id = ?
+                  AND (? IS NULL OR (status = ? AND updated_at = ?))
                   AND status NOT IN ('completed','failed','cancelled','governance_blocked')
                   AND (
                     status = ?
@@ -286,8 +318,9 @@ class SQLiteRepository:
                     json.dumps(workflow.tasks),
                     json.dumps(workflow.dependencies),
                     json.dumps(workflow.metadata),
-                    utc_storage_string(workflow.updated_at),
+                    new_stamp,
                     workflow.workflow_id,
+                    old_status, old_status, old_stamp,
                     workflow.status.value,
                     workflow.status.value,
                     workflow.status.value,
@@ -295,7 +328,11 @@ class SQLiteRepository:
                 ),
             )
             conn.commit()
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            _remember(workflow, workflow.status.value, new_stamp)
+            workflow.updated_at = parse_utc_storage(new_stamp)
+            return True
 
     def create_task(self, task: Task) -> None:
         """Store task in database."""
@@ -336,6 +373,7 @@ class SQLiteRepository:
                 ),
             )
             conn.commit()
+            _remember(task, task.status.value, utc_storage_string(task.updated_at))
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Retrieve task from database."""
@@ -349,7 +387,7 @@ class SQLiteRepository:
             if not row:
                 return None
 
-            return Task(
+            task = Task(
                 id=row["id"],
                 workflow_id=row["workflow_id"],
                 type=row["type"],
@@ -372,8 +410,10 @@ class SQLiteRepository:
                 paused_from_status=row["paused_from_status"],
                 batch_id=row["batch_id"],
             )
+            _remember(task, row["status"], row["updated_at"])
+            return task
 
-    def update_task(self, task: Task) -> bool:
+    def update_task(self, task: Task, *, approval_request: ApprovalRequest | None = None) -> bool:
         """Update task in database.
 
         Conditional transition guard (Repair B): the write is a single
@@ -392,8 +432,14 @@ class SQLiteRepository:
         draft/pending/approved/queued/retry_scheduled movement, approval
         pending and governance-blocked entry, pause, resume, cancel, and
         same-status field updates. Returns True when the write landed.
+        An optional new approval request is committed in the same transaction
+        as the pending transition, not created on a refused write.
         """
+        if approval_request is not None and approval_request.task_id != task.id:
+            raise ValueError("Approval request belongs to a different task")
         with self._lock:
+            old_status, old_stamp = getattr(task, "_repository_snapshot", (None, None))
+            new_stamp = _write_stamp(task, old_stamp)
             conn = self._get_connection()
             cursor = conn.cursor()
 
@@ -403,6 +449,11 @@ class SQLiteRepository:
                 SET status = ?, payload = ?, lease_lock = ?, updated_at = ?,
                     retry_count = ?, next_retry_at = ?, max_retries = ?, paused_from_status = ?, batch_id = ?
                 WHERE id = ? AND execution_claim_token IS NULL
+                  AND (? IS NULL OR (status = ? AND updated_at = ?))
+                  AND (NOT ? OR EXISTS (
+                    SELECT 1 FROM workflows
+                    WHERE workflow_id = tasks.workflow_id AND status = 'running'
+                  ))
                   AND status NOT IN ('completed','failed','cancelled','governance_blocked')
                   AND retry_count <= ?
                   AND (status != 'paused' OR ? = paused_from_status OR ? = 'cancelled')
@@ -411,23 +462,56 @@ class SQLiteRepository:
                     task.status.value,
                     json.dumps(task.payload),
                     utc_storage_string(task.lease_lock) if task.lease_lock else None,
-                    utc_storage_string(task.updated_at),
+                    new_stamp,
                     task.retry_count,
                     utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
                     task.max_retries,
                     task.paused_from_status,
                     task.batch_id,
                     task.id,
+                    old_status, old_status, old_stamp,
+                    getattr(task, "_require_running_workflow", False),
                     task.retry_count,
                     task.status.value,
                     task.status.value,
                 ),
             )
-            conn.commit()
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return False
+            try:
+                if approval_request is not None:
+                    self._insert_approval_request(cursor, approval_request)
+                if (
+                    task.status == TaskStatus.APPROVAL_PENDING
+                    and getattr(task, "_require_running_workflow", False)
+                ):
+                    # Persist workflow provenance on the specific current
+                    # request before any other connection can approve it.
+                    result = cursor.execute(
+                        """UPDATE approval_requests SET workflow_wait = 1
+                        WHERE id = (
+                            SELECT id FROM approval_requests WHERE task_id = ?
+                            ORDER BY created_at DESC, id DESC LIMIT 1
+                        ) AND decision = 'pending'""",
+                        (task.id,),
+                    )
+                    if result.rowcount != 1:
+                        conn.rollback()
+                        return False
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+            _remember(task, task.status.value, new_stamp)
+            task.updated_at = parse_utc_storage(new_stamp)
+            return True
 
 
-    def try_claim_execution(self, task_id: str) -> str | None:
+    def try_claim_execution(
+        self, task_id: str, *, require_running_workflow: bool = False,
+        snapshot: tuple[str, str] | None = None,
+    ) -> str | None:
         """Single-winner claim across connections and processes.
 
         Running tasks are not automatically stolen after a timeout.
@@ -435,6 +519,7 @@ class SQLiteRepository:
         """
         token = uuid.uuid4().hex
         now = utc_storage_string(utc_now())
+        old_status, old_stamp = snapshot or (None, None)
         with self._lock:
             conn = self._get_connection()
             result = conn.execute(
@@ -442,9 +527,13 @@ class SQLiteRepository:
                 "execution_claim_token = ?, updated_at = ? "
                 "WHERE id = ? AND execution_claim_token IS NULL "
                 "AND lease_lock IS NULL "
+                "AND (? IS NULL OR (status = ? AND updated_at = ?)) "
+                "AND (NOT ? OR EXISTS (SELECT 1 FROM workflows "
+                "WHERE workflow_id = tasks.workflow_id AND status = 'running')) "
                 "AND status IN (?, ?, ?, ?, ?)",
                 (
                     TaskStatus.RUNNING.value, now, token, now, task_id,
+                    old_status, old_status, old_stamp, require_running_workflow,
                     TaskStatus.DRAFT.value, TaskStatus.PENDING.value,
                     TaskStatus.APPROVED.value, TaskStatus.QUEUED.value,
                     TaskStatus.RETRY_SCHEDULED.value,
@@ -465,6 +554,7 @@ class SQLiteRepository:
         """
         with self._lock:
             conn = self._get_connection()
+            new_stamp = utc_storage_string(task.updated_at)
             result = conn.execute(
                 "UPDATE tasks SET status = ?, payload = ?, updated_at = ?, "
                 "retry_count = ?, next_retry_at = ?, max_retries = ?, "
@@ -474,7 +564,7 @@ class SQLiteRepository:
                 "AND retry_count <= ?",
                 (
                     task.status.value, json.dumps(task.payload),
-                    utc_storage_string(task.updated_at),
+                    new_stamp,
                     task.retry_count,
                     utc_storage_string(task.next_retry_at)
                     if task.next_retry_at else None,
@@ -483,7 +573,10 @@ class SQLiteRepository:
                 ),
             )
             conn.commit()
-            return result.rowcount == 1
+            if result.rowcount != 1:
+                return False
+            _remember(task, task.status.value, new_stamp)
+            return True
 
     def release_execution_claim(self, task_id: str, token: str) -> bool:
         """A different or superseded worker cannot release this claim."""
@@ -509,8 +602,7 @@ class SQLiteRepository:
 
             tasks = []
             for row in rows:
-                tasks.append(
-                    Task(
+                task = Task(
                         id=row["id"],
                         workflow_id=row["workflow_id"],
                         type=row["type"],
@@ -534,8 +626,9 @@ class SQLiteRepository:
                         max_retries=row["max_retries"],
                         paused_from_status=row["paused_from_status"],
                         batch_id=row["batch_id"],
-                    )
                 )
+                _remember(task, row["status"], row["updated_at"])
+                tasks.append(task)
             return tasks
 
     def create_approval_request(self, approval: ApprovalRequest) -> None:
@@ -543,8 +636,11 @@ class SQLiteRepository:
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
+            self._insert_approval_request(cursor, approval)
+            conn.commit()
 
-            cursor.execute(
+    def _insert_approval_request(self, cursor: sqlite3.Cursor, approval: ApprovalRequest) -> None:
+        cursor.execute(
                 """
                 INSERT INTO approval_requests
                 (id, task_id, requested_by, approver, decision, reason, created_at, decided_at)
@@ -560,8 +656,7 @@ class SQLiteRepository:
                     utc_storage_string(approval.created_at),
                     utc_storage_string(approval.decided_at) if approval.decided_at else None,
                 ),
-            )
-            conn.commit()
+        )
 
     def get_approval_request(self, task_id: str) -> Optional[ApprovalRequest]:
         """Retrieve the most recent approval request for a task."""
@@ -570,7 +665,7 @@ class SQLiteRepository:
             cursor = conn.cursor()
 
             cursor.execute(
-                "SELECT * FROM approval_requests WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM approval_requests WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (task_id,),
             )
             row = cursor.fetchone()
@@ -587,6 +682,33 @@ class SQLiteRepository:
                 reason=row["reason"],
                 created_at=parse_utc_storage(row["created_at"]),
                 decided_at=parse_utc_storage(row["decided_at"]) if row["decided_at"] else None,
+            )
+
+    def workflow_approval_waits(self, workflow_id: str) -> tuple[set[str], set[str]]:
+        """Return (current wait IDs, all IDs with request-bound wait history)."""
+        with self._lock:
+            rows = self._get_connection().execute(
+                """SELECT tasks.id, approval.workflow_wait AND (
+                    (tasks.status = 'approval_pending' AND approval.decision = 'pending')
+                    OR (tasks.status IN ('approved','running')
+                        AND approval.decision = 'approved')
+                    OR (tasks.status = 'queued' AND tasks.retry_count = 0
+                        AND approval.decision = 'approved')
+                ) AS current_wait
+                FROM tasks
+                JOIN approval_requests AS approval ON approval.id = (
+                    SELECT id FROM approval_requests WHERE task_id = tasks.id
+                    ORDER BY created_at DESC, id DESC LIMIT 1
+                )
+                WHERE tasks.workflow_id = ? AND EXISTS (
+                    SELECT 1 FROM approval_requests AS history
+                    WHERE history.task_id = tasks.id AND history.workflow_wait = 1
+                )""",
+                (workflow_id,),
+            ).fetchall()
+            return (
+                {row["id"] for row in rows if row["current_wait"]},
+                {row["id"] for row in rows},
             )
 
     def update_approval_decision(

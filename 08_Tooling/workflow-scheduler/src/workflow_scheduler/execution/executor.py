@@ -171,14 +171,14 @@ class Executor:
                 if approval is not None and approval.decision == ApprovalDecision.REJECTED:
                     # Already decided against; a rejected task is a hard block,
                     # not a pending one — do not overwrite its cancelled state.
+                    task.status = TaskStatus.GOVERNANCE_BLOCKED
+                    if not self._persist_task(task):
+                        return self._task_state_conflict()
                     self.audit_logger.log_governance_blocked(
                         task=task,
                         blockers=stop_result.blockers,
                         reason="Task was rejected by approver",
                     )
-                    task.status = TaskStatus.GOVERNANCE_BLOCKED
-                    self._persist_task(task)
-
                     return ExecutionResult(
                         success=False,
                         error="Task was rejected by approver",
@@ -189,18 +189,19 @@ class Executor:
                         checks_failed=stop_result.blockers,
                     )
 
+                new_approval = None
                 if approval is None:
-                    approval = ApprovalRequest(
+                    new_approval = ApprovalRequest(
                         id=str(uuid.uuid4()),
                         task_id=task.id,
                         requested_by=task.owner,
                         decision=ApprovalDecision.PENDING,
                     )
-                    self.repository.create_approval_request(approval)
-                    self.audit_logger.log_approval_requested(task)
-
                 task.mark_approval_pending()
-                self._persist_task(task)
+                if not self._persist_task(task, approval_request=new_approval):
+                    return self._task_state_conflict()
+                if new_approval is not None:
+                    self.audit_logger.log_approval_requested(task)
 
                 return ExecutionResult(
                     success=False,
@@ -212,14 +213,14 @@ class Executor:
                     checks_failed=stop_result.blockers,
                 )
 
+            task.status = TaskStatus.GOVERNANCE_BLOCKED
+            if not self._persist_task(task):
+                return self._task_state_conflict()
             self.audit_logger.log_governance_blocked(
                 task=task,
                 blockers=stop_result.blockers,
                 reason=stop_result.reason,
             )
-            task.status = TaskStatus.GOVERNANCE_BLOCKED
-            self._persist_task(task)
-
             return ExecutionResult(
                 success=False,
                 error=stop_result.reason,
@@ -493,15 +494,31 @@ class Executor:
             checks_failed=["execution"],
         )
 
-    def _persist_task(self, task: Task) -> None:
+    @staticmethod
+    def _task_state_conflict() -> ExecutionResult:
+        return ExecutionResult(
+            success=False, error="Task state changed; guarded write refused",
+            output=None, is_transient=False, status="blocked",
+            blockers=["task_state_conflict"], checks_failed=["task_state_conflict"],
+        )
+
+    def _persist_task(self, task: Task, *, approval_request: ApprovalRequest | None = None) -> bool:
         token = getattr(task, "_execution_claim_token", None)
         if token is None:
-            self.repository.update_task(task)
-        elif not self.repository.update_claimed_task(task, token):
+            if approval_request is None:
+                return self.repository.update_task(task)
+            return self.repository.update_task(task, approval_request=approval_request)
+        if not self.repository.update_claimed_task(task, token):
             raise RuntimeError("Execution claim was lost; task update refused")
+        return True
 
     def _acquire_lease(self, task: Task) -> bool:
-        token = self.repository.try_claim_execution(task.id)
+        if getattr(task, "_require_running_workflow", False):
+            token = self.repository.try_claim_execution(
+                task.id, require_running_workflow=True, snapshot=getattr(task, "_repository_snapshot", None),
+            )
+        else:
+            token = self.repository.try_claim_execution(task.id)
         if token is None:
             return False
         claimed = self.repository.get_task(task.id)
