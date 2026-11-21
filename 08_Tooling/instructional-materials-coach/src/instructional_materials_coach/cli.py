@@ -128,6 +128,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                                         help="Canonical idempotency key the receipt must match exactly.")
     preview_teacher_review.add_argument("--preview-out", default="", help="Optional local JSON preview record (evidence only; non-authorizing).")
 
+    evaluate_draft = subparsers.add_parser(
+        "evaluate-draft",
+        help="Offline no-write advisory evaluation of one host-supplied lesson draft (#4072): closed-vocabulary "
+             "deterministic findings in one content-safe receipt. Semantic review is not performed, nothing "
+             "is rendered or published, and the result is never a classroom-readiness claim. Never requests "
+             "credentials or writes to Drive/Notion.",
+    )
+    evaluate_draft.add_argument("--content", required=True, help="Authored lesson content YAML (the draft to evaluate).")
+    evaluate_draft.add_argument("--prior-draft", default="",
+                                help="Optional previous draft YAML: enables removed-item and unchanged-resubmission findings.")
+    evaluate_draft.add_argument("--lesson-content-result", default="",
+                                help="Optional governed #3580 lesson-content result JSON (or its #2283 runner envelope). "
+                                     "With the four identity arguments below it verifies lesson identity; "
+                                     "supply all five or none.")
+    evaluate_draft.add_argument("--request-id", default="", help="Exact governed request id, e.g. candy-branding-lesson-content.")
+    evaluate_draft.add_argument("--canonical-unit-page-id", default="", help="Exact dashed Notion page id of the canonical unit.")
+    evaluate_draft.add_argument("--lesson", default="", help='Exact "Day / Lesson Number" value, e.g. "Day 1".')
+    evaluate_draft.add_argument("--generated-at", default="", help="Exact result run provenance, e.g. <run_id>:<attempt>.")
+    evaluate_draft.add_argument("--material-requirement", default="",
+                                help="Optional full MaterialRequirement JSON: blocks when AI-assisted generation is not "
+                                     "permitted or the artifact type is unsupported. Absent is never treated as permission.")
+    evaluate_draft.add_argument("--artifact-type", default="",
+                                help="Optional declared artifact type (worksheet and slide-deck are evaluated).")
+    evaluate_draft.add_argument("--min-questions", type=int, default=None,
+                                help="Optional request-declared minimum number of worksheet questions (recorded as unverified).")
+    evaluate_draft.add_argument("--min-slides", type=int, default=None,
+                                help="Optional request-declared minimum number of slides (recorded as unverified).")
+    evaluate_draft.add_argument("--receipt-out", default="",
+                                help="Optional local JSON evaluation receipt (evidence only; non-authorizing). "
+                                     "Without it the receipt is printed to stdout.")
+
     log_lesson = subparsers.add_parser("log-lesson")
     log_lesson.add_argument("--title", required=True)
     log_lesson.add_argument("--what-happened", required=True)
@@ -652,8 +683,80 @@ def _preview_teacher_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_bounded_file(path: str) -> bytes:
+    """Read one input file, enforcing the byte bound on the bytes actually read."""
+    with open(path, "rb") as handle:
+        data = handle.read(MAX_LESSON_CONTENT_RESULT_BYTES + 1)
+    if len(data) > MAX_LESSON_CONTENT_RESULT_BYTES:
+        raise ValueError(f"{Path(path).name} exceeds the byte bound")
+    return data
+
+
+def _evaluate_draft(args: argparse.Namespace) -> int:
+    """#4072 offline advisory draft evaluation: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes.
+
+    Reads only the files the caller supplies and writes only the requested
+    local receipt path. Every line that states the status also states the
+    evaluation limits (`semantic_review`, `not_evaluated`).
+    """
+    from .draft_evaluation import DraftEvaluationInputError, evaluate_draft, exit_code, status_line
+    from .lesson_content_result import LessonContentSelection
+
+    identity_values = (args.lesson_content_result, args.request_id, args.canonical_unit_page_id, args.lesson, args.generated_at)
+    supplied = sum(1 for value in identity_values if value)
+    if 0 < supplied < len(identity_values):
+        print("Draft evaluation: input rejected (identity-group-incomplete) — supply --lesson-content-result, "
+              "--request-id, --canonical-unit-page-id, --lesson and --generated-at together, or none of them.",
+              file=sys.stderr)
+        return 1
+    try:
+        draft = _read_bounded_file(args.content)
+        prior = _read_bounded_file(args.prior_draft) if args.prior_draft else None
+        evidence = _read_bounded_file(args.lesson_content_result) if args.lesson_content_result else None
+        requirement = _read_bounded_file(args.material_requirement) if args.material_requirement else None
+    except (OSError, ValueError) as exc:
+        print(f"Draft evaluation: input rejected (input-unreadable) — {exc}", file=sys.stderr)
+        return 1
+    selection = (
+        LessonContentSelection(
+            request_id=args.request_id,
+            canonical_unit_page_id=args.canonical_unit_page_id,
+            day_lesson_number=args.lesson,
+            generated_at=args.generated_at,
+        )
+        if evidence is not None
+        else None
+    )
+    try:
+        receipt = evaluate_draft(
+            draft,
+            prior_draft=prior,
+            lesson_content_evidence=evidence,
+            selection=selection,
+            material_requirement=requirement,
+            artifact_type=args.artifact_type or None,
+            min_questions=args.min_questions,
+            min_slides=args.min_slides,
+        )
+    except DraftEvaluationInputError as exc:
+        print(f"Draft evaluation: input rejected ({exc.reason_code}) — {exc}", file=sys.stderr)
+        return 1
+    if args.receipt_out:
+        try:
+            write_build_receipt_atomic(args.receipt_out, receipt)
+        except OSError as exc:
+            print(f"Draft evaluation: receipt persistence failed — {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(json.dumps(receipt, sort_keys=True, indent=2))
+    print(status_line(receipt), file=sys.stderr)
+    return exit_code(receipt)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "evaluate-draft":
+        return _evaluate_draft(args)
     if args.command == "preview-worksheet":
         return _preview_worksheet(args)
     if args.command == "preview-slides-ab":
