@@ -9,6 +9,7 @@ from pathlib import Path
 # Only known developer-authored admission reasons may reach public receipts.
 _ADMISSION_REASONS = frozenset({
     "event-byte-bound-exceeded", "event-invalid-structure",
+    "event-invalid-json", "event-invalid-encoding",
     "untrusted-execution-context", "created-comment-required",
     "repository-mismatch", "ordinary-issue-request-required",
     "explicit-owner-request-required", "comment-identity-required",
