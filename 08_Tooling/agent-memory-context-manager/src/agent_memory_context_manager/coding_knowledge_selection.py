@@ -525,6 +525,33 @@ def _match_candidate(
                for term in ("ckr6", "mutation")):
             return 2, ("verified-ckr6-mutation-context-match",)
 
+    # #4026: the Writer's real, explicit task phrases are not controlled
+    # Notion Learning Type / Applies To options. Before the old generic path,
+    # allow only a source-owned, two-mechanism title+guidance agreement. A bare
+    # "Notion" tag, caller prose, or known-ID hint is never a match on its own.
+    # This is a lexical relevance hypothesis; eligibility and independent
+    # semantic applicability remain separate CKR6/CKR2 requirements.
+    if (
+        {"notion writer", "persistence readback", "failure receipts"} <= capability_hints
+        and ecosystem_match
+        and candidate.source_system == "notion-lessons-learned"
+        and "notion" in {_norm(tag) for tag in candidate.keywords}
+    ):
+        title = candidate.name.casefold()
+        guidance = " ".join(candidate.use_when).casefold()
+        def whole(pattern: str, text: str) -> bool:
+            return bool(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", text))
+
+        if (
+            whole("notion", title)
+            and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", title)
+            and whole("notion", guidance)
+            and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
+            and whole("readback|read.back|verif(?:y|ied|ication)", guidance)
+            and not whole("unrelated|irrelevant|nonapplicable|never|avoid|do\s+not|don.t", title + " " + guidance)
+        ):
+            return 2, ("notion-writer-readback-text-match",)
+
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
     if path_match:
