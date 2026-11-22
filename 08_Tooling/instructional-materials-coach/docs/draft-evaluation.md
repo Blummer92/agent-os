@@ -41,11 +41,22 @@ imc-build evaluate-draft --content DRAFT.yaml
     [--min-questions N] [--min-slides N] [--receipt-out RECEIPT.json]
 ```
 Inputs are bounded to 262,144 bytes each (the existing
-`MAX_LESSON_CONTENT_RESULT_BYTES`). An unreadable, oversized or malformed input,
-an incomplete identity group, a non-positive minimum or an invalid requirement
-is reported on stderr as `input rejected (<reason>)`, exits 1, and writes no
-receipt. Without `--receipt-out` the receipt is printed to stdout. The status
+`MAX_LESSON_CONTENT_RESULT_BYTES`). Draft YAML additionally rejects aliases
+(including alias chains) and structures deeper than 64 nodes or exceeding 8,192
+composed nodes so small inputs cannot amplify into unbounded expanded content.
+An unreadable, oversized or malformed input, an incomplete identity group, a
+non-positive minimum or an invalid requirement is reported on stderr as
+`input rejected (<reason>)`, exits 1, and writes no receipt. The evaluator
+rejects an explicitly empty `--artifact-type`, and conflicting types from
+`--artifact-type` and a supplied MaterialRequirement are rejected with
+`artifact-type-conflict` instead of silently treating two supported types as
+one. Without `--receipt-out` the receipt is printed to stdout. The status
 line always goes to stderr.
+
+To preserve supplied evidence, `--receipt-out` must not designate the same file
+as `--content`, `--prior-draft`, `--lesson-content-result`, or
+`--material-requirement` (including symlink and hardlink aliases). The CLI
+rejects such an output as `input-output-path-collision` before writing.
 
 Exit code 0 for `no-deterministic-finding` and `review`; exit code 1 for `fail`,
 `blocked` and input errors, mirroring `preview-worksheet`.
@@ -77,7 +88,7 @@ delete the flagged item to clear a finding.
 | `draft-teacher-voice-in-student-copy` | fail | `scan_teacher_voice` matches a student-facing string |
 | `draft-instruction-line-over-35-words` | manual-review | a worksheet question or slide bullet longer than 35 words (the rubric's advisory Quick QA heuristic "about 35 words") |
 | `draft-ungrounded-claim-pattern` | manual-review | a match of one of four closed pattern families (percentages, multiplicative claims, attributions, absolute quantifiers) that is not a substring of the verified lesson fields after `normalize_text` and case folding; the grounding set is empty without verified identity |
-| `draft-structure-below-request-declared-minimum` | fail | fewer questions or slides than `--min-questions` or `--min-slides`; applies only when supplied, never defaulted, recorded as request-declared and unverified |
+| `draft-structure-below-request-declared-minimum` | fail | fewer substantive (nonblank) questions or slides than `--min-questions` or `--min-slides`; applies only when supplied, never defaulted, recorded as request-declared and unverified |
 | `draft-revision-items-removed` | manual-review | with `--prior-draft`, fewer slides or fewer questions than the prior draft (counts only) |
 | `draft-unchanged-since-prior-draft` | manual-review | with `--prior-draft`, the parsed draft equals the prior draft after `normalize_text` on every string |
 | `draft-ai-generation-not-permitted` | blocked | a supplied MaterialRequirement has `ai_review.ai_assisted_generation_permitted` false |
@@ -85,9 +96,12 @@ delete the flagged item to clear a finding.
 
 `normalize_text` folds whitespace only. It applies no case folding, punctuation
 stripping or fuzzy matching, so a change to case or punctuation is a change. The
-unchanged-draft finding detects one unchanged resubmission. It is not a revision
-budget, a stop rule or a progress check, and it does not say whether earlier
-findings were resolved. A claim-pattern match is a review queue entry, not a
+unchanged-draft finding detects one unchanged resubmission. The comparison
+uses student-facing title, objectives, slide indexes/headings/bullets, and
+questions; changes only to lesson identity, context tokens or prerequisite
+metadata do not falsely count as a revision. It is not a revision budget, a
+stop rule or a progress check, and it does not say whether earlier findings were
+resolved. A claim-pattern match is a review queue entry, not a
 judgment of falsity: legitimate statistics are flagged unless the verified lesson
 text contains them, and no input suppresses, defaults or downgrades a finding. An
 absent MaterialRequirement is recorded as `requirements: absent` and is never
