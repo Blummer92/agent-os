@@ -44,6 +44,10 @@ def verify_persisted_write(
     if not isinstance(writer_result, Mapping):
         return _outcome("unverified", "invalid-writer-result")
     status = writer_result.get("status")
+    # Apply admission-to-receipt identity binding to BOTH success-like results.
+    if (status in ("persisted", "unchanged") and expected_request_id is not None
+            and writer_result.get("request_id") != expected_request_id):
+        return _outcome("unverified", "writer-request-binding-mismatch")
     if status == "unchanged":
         if type(writer_result.get("write_attempts")) is int and writer_result["write_attempts"] == 0 and writer_result.get("readback_verified") is True:
             return _outcome("no-new-write", "writer-confirmed-unchanged")

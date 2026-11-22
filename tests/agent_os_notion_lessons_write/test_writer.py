@@ -480,6 +480,118 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("private-synthetic-diagnostic", json.dumps((receipt, verify)))
 
 
+    def test_oversized_non_object_and_missing_events_are_bounded(self):
+        from scripts.agent_os_notion_lessons_write.admission import MAX_EVENT_BYTES
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        cases = (
+            (b"x" * (MAX_EVENT_BYTES + 1), "event-byte-bound-exceeded"),
+            (b"[1,2,3]", "event-invalid-structure"),
+            (b'"hello"', "event-invalid-structure"),
+            (None, "event-unreadable"),
+        )
+        for raw, expected in cases:
+            with self.subTest(expected=expected, raw=raw is not None), tempfile.TemporaryDirectory() as directory, patch.dict(
+                "os.environ", env, clear=True
+            ):
+                root = Path(directory)
+                event_file = root / "event.json"
+                if raw is not None:
+                    event_file.write_bytes(raw)
+                with patch("scripts.agent_os_notion_lessons_write.live.LiveLessonsClient",
+                           side_effect=AssertionError("provider must not be constructed")):
+                    code = main(["--phase", "execute", "--event", str(event_file),
+                                 "--output", str(root / "result.json")])
+                result = json.loads((root / "result.json").read_text())
+                verification = json.loads((root / "verification.json").read_text())
+                self.assertEqual(code, 1)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], expected)
+                self.assertEqual(result["write_attempts"], 0)
+                self.assertEqual(verification["status"], "unverified")
+
+    def test_unknown_admission_exception_is_never_a_raw_reason(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch("scripts.agent_os_notion_lessons_write.runner.admit",
+                       side_effect=WriteBlocked("private-provider-synthetic-value")):
+                code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                             "--output", str(root / "result.json")])
+            result = json.loads((root / "result.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["reason_code"], "bounded-request-unavailable")
+        self.assertNotIn("private-provider-synthetic-value", json.dumps(result))
+
+    def test_post_admission_write_blocked_never_invokes_verifier(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request",
+                       side_effect=WriteBlocked("canonical-owner-request-changed")), patch(
+                "scripts.agent_os_notion_lessons_write.verify_live_write.verify_persisted_write",
+                side_effect=AssertionError("verifier must not be called")
+            ):
+                code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                             "--output", str(root / "result.json")])
+            result = json.loads((root / "result.json").read_text())
+            verification = json.loads((root / "verification.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["request_id"], REQUEST_ID)
+        self.assertEqual(result["reason_code"], "canonical-owner-request-changed")
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertEqual(verification["status"], "unverified")
+
+    def test_exception_after_writer_entry_is_uncertain_not_zero_attempts(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request", return_value=None), patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", return_value=Client()
+            ), patch("scripts.agent_os_notion_lessons_write.writer.execute",
+                     side_effect=RuntimeError("private-after-write")), patch(
+                "scripts.agent_os_notion_lessons_write.verify_live_write.verify_persisted_write",
+                side_effect=AssertionError("must not verify an uncertain write")
+            ):
+                code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                             "--output", str(root / "result.json")])
+            result = json.loads((root / "result.json").read_text())
+            verification = json.loads((root / "verification.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertEqual(result["write_attempts"], 1)
+        self.assertFalse(result["readback_verified"])
+        self.assertEqual(verification["status"], "unverified")
+        self.assertNotIn("private-after-write", json.dumps((result, verification)))
+
+    def test_forged_writer_request_identity_cannot_reach_verifier(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        forged = {"status": "persisted", "request_id": "another-registered-id",
+                  "write_attempts": 1, "readback_verified": True}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request", return_value=None), patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", return_value=Client()
+            ), patch("scripts.agent_os_notion_lessons_write.writer.execute", return_value=forged), patch(
+                "scripts.agent_os_notion_lessons_write.verify_live_write.verify_persisted_write",
+                side_effect=AssertionError("identity mismatch must not reach verifier")
+            ):
+                code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                             "--output", str(root / "result.json")])
+            verification = json.loads((root / "verification.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(verification["reason_code"], "writer-request-binding-mismatch")
+
+
 
 # ---------------------------------------------------------------- independent live-write verification
 
@@ -570,6 +682,17 @@ class IndependentPersistedWriteTests(unittest.TestCase):
         self.assertEqual(outcome["status"], "unverified")
         self.assertEqual(called, [])
 
+    def test_unchanged_receipt_is_also_bound_to_admitted_request(self):
+        unchanged = execute(AdmittedRequest(101), Client(page()))
+        self.assertEqual(unchanged["status"], "unchanged")
+        calls = []
+        outcome = verify_persisted_write(
+            unchanged, lambda rid: calls.append(rid), expected_request_id="different-reviewed-request"
+        )
+        self.assertEqual(outcome["status"], "unverified")
+        self.assertEqual(outcome["reason_code"], "writer-request-binding-mismatch")
+        self.assertEqual(calls, [])
+
     def test_receipt_counters_reject_boolean_not_integers(self):
         client = Client()
         receipt = execute(AdmittedRequest(100), client)
@@ -580,9 +703,10 @@ class IndependentPersistedWriteTests(unittest.TestCase):
         self.assertEqual(called, [])
         unchanged = execute(AdmittedRequest(101), Client(page()))
         unchanged["write_attempts"] = False
-        outcome = verify_persisted_write(unchanged, lambda rid: called.append(rid))
+        second_called = []
+        outcome = verify_persisted_write(unchanged, lambda rid: second_called.append(rid))
         self.assertEqual(outcome["status"], "unverified")
-        self.assertEqual(called, [])
+        self.assertEqual(second_called, [])
 
     def test_matching_preexisting_page_cannot_prove_this_run_wrote(self):
         client = Client(page())
@@ -615,13 +739,11 @@ class RunnerIndependentReadbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
             root = Path(directory)
             (root / "event.json").write_text(json.dumps(event()))
-            with patch("scripts.agent_os_notion_lessons_write.admission.verify_current_request", return_value=None), patch(
-                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", return_value=client
+            with patch("scripts.agent_os_notion_lessons_write.live.LiveLessonsClient", return_value=client), patch(
+                "scripts.agent_os_notion_lessons_write.runner.verify_current_request", return_value=None
             ):
-                # Verify-current is imported into runner, not looked up through admission.
-                with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request", return_value=None):
-                    status = main(["--phase", "execute", "--event", str(root / "event.json"),
-                                   "--output", str(root / "result.json")])
+                status = main(["--phase", "execute", "--event", str(root / "event.json"),
+                               "--output", str(root / "result.json")])
             result = json.loads((root / "result.json").read_text())
             verification = json.loads((root / "verification.json").read_text())
         return status, result, verification
