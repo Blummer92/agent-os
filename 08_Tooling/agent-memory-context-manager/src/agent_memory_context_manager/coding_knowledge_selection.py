@@ -525,6 +525,33 @@ def _match_candidate(
                for term in ("ckr6", "mutation")):
             return 2, ("verified-ckr6-mutation-context-match",)
 
+    # #4026: a specifically requested Git PR-refresh reconciliation
+    # mechanism can match source-owned guidance even when Notion's generic
+    # Learning Type/Applies To fields have no such controlled label.
+    #
+    # Require two explicit caller signals and multiple independent signals in
+    # the lesson itself. Free-form task_reference and generic "testing" never
+    # activate this path. This is a relevance *text match* only; it does not
+    # attest to lesson applicability, currentness, provenance, or write authority.
+    if (
+        "branch refresh" in capability_hints
+        and "merge-tree fallback" in capability_hints
+    ):
+        title = candidate.name.casefold()
+        guidance = " ".join(candidate.use_when).casefold()
+        if (
+            re.search(r"(?<![a-z0-9])(?:prs?|pull requests?)(?![a-z0-9])", title)
+            and re.search(r"(?<![a-z0-9])(?:reconciliation|reconciling)(?![a-z0-9])", title)
+            and not re.search(r"(?<![a-z0-9])(?:not|never|unrelated|avoid)(?![a-z0-9])", title)
+            and re.search(r"(?<![a-z0-9])refresh(?:es|ed|ing)?(?![a-z0-9])", guidance)
+            and re.search(
+                r"(?<![a-z0-9])(?:reconciliation|reconcile|reconciled|reconciling|merge-tree)(?![a-z0-9])",
+                guidance,
+            )
+            and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
+        ):
+            return 2, ("pr-refresh-reconciliation-text-match",)
+
     # #4026: the Writer's real, explicit task phrases are not controlled
     # Notion Learning Type / Applies To options. Before the old generic path,
     # allow only a source-owned, two-mechanism title+guidance agreement. A bare
