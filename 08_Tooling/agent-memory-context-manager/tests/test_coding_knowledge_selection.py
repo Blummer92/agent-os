@@ -455,3 +455,125 @@ def test_pr_a11_candidate_count_retains_raw_count_after_dedup():
     assert result.candidate_count == 3
     assert result.selected_count == 2
     assert result.knowledge_refs == ("a", "b")
+
+
+# #4026: frozen source-adjudicated LL-61/LL-80 mechanism controls.
+# Snapshots prove deterministic matching behavior, not live Notion truth.
+def _pr_refresh_candidate(identity, title, guidance, *,
+                          currentness=KnowledgeCurrentness.CURRENT,
+                          refs=("https://github.com/Blummer92/agent-os/issues/1865",),
+                          conflict=False):
+    return CodingKnowledgeCandidate(
+        knowledge_id=identity,
+        source_system="notion-lessons-learned",
+        source_revision="2026-11-15T00:45:00.000Z",
+        currentness=currentness,
+        name=title,
+        ecosystem="python",
+        library_name=None,
+        capability_kind="deployment",
+        use_when=(guidance,),
+        canonical_github_refs=refs,
+        authority_conflict=conflict,
+    )
+
+
+_PR_REFRESH_HINTS = (
+    "branch refresh",
+    "merge-tree fallback",
+    "Git lineage scope validation",
+    "expected-head transport",
+)
+_LL61_REFRESH = _pr_refresh_candidate(
+    "LL-61",
+    "Stale or diverged PRs should get deterministic reconciliation before being declared unrefreshable",
+    "For stale PR refresh, reacquire exact head and current main, then use the governed deterministic reconciliation path. A genuine git conflict must fail closed before any push.",
+)
+_LL80_REFRESH = _pr_refresh_candidate(
+    "LL-80",
+    "PR refresh must test deterministic reconciliation before treating mergeable=false as a conflict",
+    "For refresh/reconciliation, let the deterministic reconciliation or git merge-tree path determine whether the branch can be refreshed. A genuine conflict must fail closed before push.",
+)
+
+
+def _pr_refresh_request(**changes):
+    fields = {
+        "task_reference": "PR #3991 exact-head guarded branch reconciliation",
+        "ecosystem_hints": ("agent-os",),
+        "language_hints": ("python",),
+        "capability_keywords": _PR_REFRESH_HINTS,
+        "specialized_knowledge_required": True,
+    }
+    fields.update(changes)
+    return CodingKnowledgeRequest(**fields)
+
+
+def test_pr_refresh_exact_signals_match_archived_mechanism_without_generic_testing():
+    result = select_coding_knowledge(
+        _pr_refresh_request(), (_LL80_REFRESH, _LL61_REFRESH)
+    )
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert set(result.knowledge_refs) == {"LL-61", "LL-80"}
+    assert all(item.reason_codes == ("pr-refresh-reconciliation-text-match",)
+               for item in result.selected)
+
+
+@pytest.mark.parametrize("hints", [
+    (), ("branch refresh",), ("merge-tree fallback",),
+    ("testing",), ("not branch refresh", "merge-tree fallback"),
+])
+def test_pr_refresh_partial_or_generic_hints_do_not_activate_text_match(hints):
+    result = select_coding_knowledge(
+        _pr_refresh_request(capability_keywords=hints),
+        (_LL61_REFRESH, _LL80_REFRESH),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+
+
+@pytest.mark.parametrize("title,guidance", [
+    ("PR refresh documentation", "Reconcile changelog, not git."),
+    ("Git PR refresh", "Refresh git tags only, not branch reconciliation."),
+    ("Deploy branch via Git", "Reconcile refresh operation."),
+    ("PR refresh must not use deterministic reconciliation", "Use git refresh reconciliation."),
+])
+def test_pr_refresh_unrelated_or_negated_guidance_cannot_match(title, guidance):
+    unrelated = _pr_refresh_candidate("LL-TEST", title, guidance)
+    result = select_coding_knowledge(_pr_refresh_request(), (unrelated,))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+
+
+def test_pr_refresh_missing_source_cannot_be_sufficient():
+    bad = _pr_refresh_candidate(
+        "LL-61", _LL61_REFRESH.name, _LL61_REFRESH.use_when[0], refs=()
+    )
+    result = select_coding_knowledge(_pr_refresh_request(), (bad,))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_pr_refresh_stale_and_conflicting_lessons_still_fail_closed():
+    for changes in (
+        {"currentness": KnowledgeCurrentness.STALE},
+        {"currentness": KnowledgeCurrentness.UNVERIFIABLE},
+        {"conflict": True},
+    ):
+        bad = _pr_refresh_candidate(
+            "LL-61", _LL61_REFRESH.name, _LL61_REFRESH.use_when[0], **changes
+        )
+        result = select_coding_knowledge(_pr_refresh_request(), (bad,))
+        assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+        assert result.selected == ()
+        assert result.reason_codes
+
+
+def test_pr_refresh_matching_does_not_override_candidate_budget():
+    result = select_coding_knowledge(
+        _pr_refresh_request(),
+        tuple(_pr_refresh_candidate(
+            f"LL-TEST-{i}", _LL61_REFRESH.name, _LL61_REFRESH.use_when[0]
+        ) for i in range(MAX_CANDIDATES + 1)),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("candidate-budget-exceeded",)
