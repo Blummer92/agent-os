@@ -23,7 +23,12 @@ def main(argv: list[str] | None = None) -> int:
             raw = source.read(MAX_EVENT_BYTES + 1)
         if len(raw) > MAX_EVENT_BYTES:
             raise WriteBlocked("event-byte-bound-exceeded")
-        event = json.loads(raw)
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WriteBlocked("event-invalid-json") from exc
+        except UnicodeDecodeError as exc:
+            raise WriteBlocked("event-invalid-encoding") from exc
         context = dict(event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
                        ref=os.environ.get("GITHUB_REF", ""),
                        workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF", ""),

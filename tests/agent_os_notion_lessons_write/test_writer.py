@@ -369,6 +369,23 @@ class WriterTests(unittest.TestCase):
         self.assertEqual(result["status"], "persisted")
         self.assertEqual(client.calls[-2:], ["write", "get"])
 
+    def test_update_timeout_before_mutation_does_not_claim_persistence(self):
+        class UnappliedTimeoutClient(Client):
+            def update(self, page_id, intended):
+                self.calls.append("write")
+                self.sent.append(deepcopy(intended))
+                raise TimeoutError("private-before-mutation")
+
+        client = UnappliedTimeoutClient(page())
+        before = deepcopy(client.page)
+        result = execute(update_request(), client)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertEqual(result["write_attempts"], 1)
+        self.assertFalse(result["readback_verified"])
+        self.assertEqual(client.page, before)
+        self.assertEqual(client.calls[-2:], ["write", "get"])
+        self.assertNotIn("private-before-mutation", json.dumps(result))
+
     def test_receipt_identity_mismatch_stays_uncertain(self):
         client = Client(page())
         client.receipt_id = SOURCE_ID
@@ -414,6 +431,54 @@ class RunnerTests(unittest.TestCase):
                 code = main(["--phase", "execute", "--event", str(root / "event.json"), "--output", str(root / "result.json")])
             self.assertEqual(code, 1)
             self.assertEqual(json.loads((root / "result.json").read_text())["write_attempts"], 0)
+
+    def test_event_input_errors_cannot_construct_live_client(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        cases = ((b"{broken", "event-invalid-json"), (bytes([255]), "event-invalid-encoding"))
+        for raw, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory, patch.dict(
+                "os.environ", env, clear=True
+            ):
+                root = Path(directory)
+                (root / "event.json").write_bytes(raw)
+                with patch("scripts.agent_os_notion_lessons_write.live.LiveLessonsClient",
+                           side_effect=AssertionError("provider must not be constructed")):
+                    code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                                 "--output", str(root / "result.json")])
+                receipt = json.loads((root / "result.json").read_text())
+                verify = json.loads((root / "verification.json").read_text())
+                self.assertEqual(code, 1)
+                self.assertEqual(receipt["status"], "blocked")
+                self.assertEqual(receipt["reason_code"], reason)
+                self.assertEqual(receipt["write_attempts"], 0)
+                self.assertEqual(verify["status"], "unverified")
+                self.assertFalse(verify["persisted_state_verified"])
+
+    def test_post_admission_failure_cannot_become_verified_persistence(self):
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF, "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", env, clear=True):
+            root = Path(directory)
+            (root / "event.json").write_text(json.dumps(event()), encoding="utf-8")
+            with patch("scripts.agent_os_notion_lessons_write.runner.verify_current_request",
+                       side_effect=RuntimeError("private-synthetic-diagnostic")), patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient",
+                side_effect=AssertionError("client must not be constructed")
+            ):
+                code = main(["--phase", "execute", "--event", str(root / "event.json"),
+                             "--output", str(root / "result.json")])
+            receipt = json.loads((root / "result.json").read_text())
+            verify = json.loads((root / "verification.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt["status"], "blocked")
+        self.assertEqual(receipt["request_id"], REQUEST_ID)
+        self.assertEqual(receipt["write_attempts"], 0)
+        self.assertEqual(receipt["reason_code"], "bounded-request-unavailable")
+        self.assertEqual(verify["status"], "unverified")
+        self.assertFalse(verify["persisted_state_verified"])
+        self.assertNotIn("private-synthetic-diagnostic", json.dumps((receipt, verify)))
+
 
 
 # ---------------------------------------------------------------- independent live-write verification
