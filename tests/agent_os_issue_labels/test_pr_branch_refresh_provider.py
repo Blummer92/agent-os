@@ -33,20 +33,24 @@ class FakeRunner:
     observations: list[BranchUpdateObservation]
     calls: list[tuple[tuple[str, ...], str, dict[str, str]]] = field(default_factory=list)
     head_subject: str = ""
+    # Legacy tests can opt into synthetic successful lineage probes; new
+    # strict tests exercise every Git observation in its real call order.
+    strict_lineage: bool = False
 
     def run(self, argv, *, cwd, env):
         argv = tuple(argv)
         # #2921 adds read-only lineage probes before the existing preparation
         # sequence. Legacy provider tests model one admitted feature path and keep
         # their historical call assertions focused on the mutation lifecycle.
-        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
-            return observation(stdout="scripts/example.py\n")
-        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
-            return observation(stdout=f"{OLD}\n")
-        if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
-            return observation(stdout="scripts/example.py\n")
-        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
-            return observation()
+        if not self.strict_lineage:
+            if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
+                return observation(stdout="scripts/example.py\n")
+            if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
+                return observation(stdout=f"{OLD}\n")
+            if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
+                return observation(stdout="scripts/example.py\n")
+            if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+                return observation()
         self.calls.append((argv, cwd, dict(env)))
         if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
             return observation(stdout=f"{self.head_subject}\n")
@@ -564,6 +568,61 @@ def test_conflicted_snapshot_routes_directly_to_merge_tree_without_rebase():
     assert result.new_head_sha == NEW
     assert runner.calls[2][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
     assert all("rebase" not in argv for argv, _, _ in runner.calls)
+    assert sum("push" in argv for argv, _, _ in runner.calls) == 1
+
+
+def test_strict_lineage_runner_rejects_unattributed_scope_before_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout="unadmitted.txt\n"),
+    ], strict_lineage=True)
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "blocked"
+    assert result.reason_code == "lineage-integrity.admitted-scope-mismatch"
+    assert len(runner.calls) == 2
+    assert runner.calls[1][0] == ("git", "diff", "--name-only", "--no-renames", MERGE_BASE, OLD)
+    assert all("push" not in argv for argv, _, _ in runner.calls)
+
+
+def test_strict_lineage_runner_requires_explicit_history_before_one_push():
+    remote_ref = "refs/heads/agent/1237-publication-required-continuation"
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(),
+        observation(),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout=f"{OLD}\t{remote_ref}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\t{remote_ref}\n"),
+    ], strict_lineage=True)
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "updated"
+    assert result.new_head_sha == NEW
+    assert runner.observations == []
+    assert runner.calls[1][0] == ("git", "diff", "--name-only", "--no-renames", MERGE_BASE, OLD)
+    assert runner.calls[2][0] == ("git", "rev-list", "--first-parent", "--no-merges", f"{MERGE_BASE}..{OLD}")
+    assert runner.calls[3][0] == ("git", "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", OLD)
+    assert runner.calls[4][0] == ("git", "rev-list", "--first-parent", "--merges", f"{MERGE_BASE}..{OLD}")
+    assert sum("push" in argv for argv, _, _ in runner.calls) == 1
+
+
+def test_transport_rejection_blocks_with_exact_reason_and_no_second_push():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(return_code=1),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "blocked"
+    assert result.reason_code == "transport.push-rejected"
+    assert result.new_head_sha is None
     assert sum("push" in argv for argv, _, _ in runner.calls) == 1
 
 
