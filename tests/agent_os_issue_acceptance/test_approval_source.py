@@ -7,6 +7,7 @@ would post.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -249,3 +250,75 @@ def test_serialize_rejects_multiline_or_bad_marker():
         serialize_approval_comment(APPROVAL_MARKER, b"a\nb")
     with pytest.raises(ValueError):
         serialize_approval_comment("bogus/v1", b"{}")
+
+
+def test_incomplete_projection_from_owner_fails_closed():
+    comments = _triple_comments(_bundle())
+    marker, raw = comments[2].body.split("\n", 1)
+    payload = json.loads(raw)
+    payload["complete"] = False
+    comments[2] = replace(
+        comments[2], body=serialize_approval_comment(marker, json.dumps(payload).encode())
+    )
+    result = _read(comments)
+    assert result.status is ApprovalSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.trusted-record-malformed",)
+    assert result.projection is None
+
+
+def test_same_applicability_id_with_other_revision_is_binding_mismatch():
+    bundle = _bundle()
+    comments = _triple_comments(bundle)
+    changed = replace(bundle[1], approval_revision="approval-revision:" + "f" * 64)
+    comments[1] = _comment(
+        12, serialize_approval_comment(
+            APPLICABILITY_MARKER, serialize_approval_applicability_result(changed)
+        ),
+    )
+    result = _read(comments)
+    assert result.status is ApprovalSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("approval.binding-mismatch",)
+    assert result.approval is None
+
+
+def test_organization_owner_snapshot_is_not_an_approval_source():
+    result = reacquire_approval_source(
+        transport=_Transport(_triple_comments(_bundle()), owner_type="Organization"),
+        repository=REPO,
+        pr_number=PR,
+    )
+    assert result.status is ApprovalSourceStatus.NEEDS_DECISION
+    assert result.reason_codes == ("source.owner-unsupported",)
+    assert result.source_comment_ids == ()
+
+
+def test_selected_approval_still_reports_all_reconstructed_comment_ids():
+    bundle = _bundle()
+    other = _tauth._bundle(approval_expires="2026-07-26T17:00:00Z")
+    result = _read(
+        _triple_comments(bundle) + _triple_comments(other, start=21),
+        expected_approval_id=bundle[0].approval_id,
+    )
+    assert result.status is ApprovalSourceStatus.CURRENT
+    assert result.approval == bundle[0]
+    assert result.source_comment_ids == (11, 12, 13, 21, 22, 23)
+
+
+@pytest.mark.parametrize("conflict", [False, True], ids=["identical", "conflicting"])
+def test_duplicate_artifacts_distinguish_agreement_from_conflict(conflict: bool):
+    bundle = _bundle()
+    comments = _triple_comments(bundle)
+    duplicate = replace(bundle[1], details=("different synthetic test detail",)) if conflict else bundle[1]
+    comments.append(
+        _comment(14, serialize_approval_comment(
+            APPLICABILITY_MARKER, serialize_approval_applicability_result(duplicate)
+        )),
+    )
+    result = _read(comments)
+    if conflict:
+        assert result.status is ApprovalSourceStatus.NEEDS_DECISION
+        assert result.reason_codes == ("source.trusted-record-malformed",)
+        assert result.approval is None
+    else:
+        assert result.status is ApprovalSourceStatus.CURRENT
+        assert result.source_comment_ids == (11, 12, 13, 14)
