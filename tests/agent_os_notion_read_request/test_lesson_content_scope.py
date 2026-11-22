@@ -618,6 +618,9 @@ def test_incomplete_read_publishes_no_lessons_in_receipt(tmp_path, shipped_catal
     assert code == 1
     assert receipt["dispatch_status"] == "failed"
     assert receipt["result"] is None
-    assert "incomplete" in receipt["failure"]["detail"]
+    assert receipt["dispatch_reason"] == "notion-read-request-error"
+    assert receipt["failure"]["reason_code"] == "notion-read-request-error"
+    assert receipt["failure"]["detail"] is None
+    assert receipt["failure"]["phase"] == "run"
     for marker in ("target 1", "focus 1", "evidence 1", _page_id(1)):
         assert marker not in json.dumps(receipt)
