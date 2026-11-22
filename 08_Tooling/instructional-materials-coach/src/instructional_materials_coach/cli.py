@@ -149,7 +149,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     evaluate_draft.add_argument("--material-requirement", default="",
                                 help="Optional full MaterialRequirement JSON: blocks when AI-assisted generation is not "
                                      "permitted or the artifact type is unsupported. Absent is never treated as permission.")
-    evaluate_draft.add_argument("--artifact-type", default="",
+    evaluate_draft.add_argument("--artifact-type", default=None,
                                 help="Optional declared artifact type (worksheet and slide-deck are evaluated).")
     evaluate_draft.add_argument("--min-questions", type=int, default=None,
                                 help="Optional request-declared minimum number of worksheet questions (recorded as unverified).")
@@ -692,6 +692,23 @@ def _read_bounded_file(path: str) -> bytes:
     return data
 
 
+def _receipt_path_conflicts_with_input(receipt_path: str, inputs: tuple[str, ...]) -> bool:
+    """Reject path aliases, including same paths, symlinks and hardlinks."""
+    target = Path(receipt_path)
+    target_resolved = target.resolve()
+    for path in inputs:
+        source = Path(path)
+        if target_resolved == source.resolve():
+            return True
+        try:
+            if target.samefile(source):
+                return True
+        except OSError:
+            # A not-yet-created receipt may have no inode to compare.
+            pass
+    return False
+
+
 def _evaluate_draft(args: argparse.Namespace) -> int:
     """#4072 offline advisory draft evaluation: no ALLOW_WRITE, credentials, Drive/Notion, or lesson-record writes.
 
@@ -709,6 +726,20 @@ def _evaluate_draft(args: argparse.Namespace) -> int:
               "--request-id, --canonical-unit-page-id, --lesson and --generated-at together, or none of them.",
               file=sys.stderr)
         return 1
+    if args.receipt_out:
+        try:
+            if _receipt_path_conflicts_with_input(
+                args.receipt_out,
+                tuple(path for path in (
+                    args.content, args.prior_draft, args.lesson_content_result, args.material_requirement
+                ) if path),
+            ):
+                print("Draft evaluation: input rejected (input-output-path-collision) — "
+                      "receipt output must not alias any input file", file=sys.stderr)
+                return 1
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Draft evaluation: input rejected (input-unreadable) — {exc}", file=sys.stderr)
+            return 1
     try:
         draft = _read_bounded_file(args.content)
         prior = _read_bounded_file(args.prior_draft) if args.prior_draft else None
@@ -734,7 +765,7 @@ def _evaluate_draft(args: argparse.Namespace) -> int:
             lesson_content_evidence=evidence,
             selection=selection,
             material_requirement=requirement,
-            artifact_type=args.artifact_type or None,
+            artifact_type=args.artifact_type,
             min_questions=args.min_questions,
             min_slides=args.min_slides,
         )
