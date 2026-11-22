@@ -63,6 +63,13 @@ criteria, and authorization; then use a non-protected branch. Change only files
 inside the approved scope, run validation, commit intentionally, open or reuse
 one draft PR, and report through the inherited final-report standard.
 
+Apply the issue-primary guard to actual primary implementation claims. For an
+exact-file request without such a claim, apply the GitHub Change Request Draft
+checks instead. Do not invent an issue identity, skip duplicate/concurrency
+checks, or treat a generic GitHub write tool as governed host admission. Carry
+the same current owner grant through in-scope readback and validation without
+asking for it again; stop if the required host evidence is unavailable.
+
 For an eligible lane, directly corresponding tests, documentation, minimum
 required exports, architecture registration, and policy-required generated
 manifests or changelog entries do not require a new stop when behaviorally
@@ -88,7 +95,7 @@ Before any merge admission decision that depends on GitHub Actions validation st
 ## Governed Mutation Seams (#3281)
 The ChatGPT execution surface exposes the governed GitHub mutation guard/readback contracts as MCP admission tools. This overlay names those contracts as the executable owners of AGENTS.md step 9 (subordinate-mutation readback/continuation) and the Draft-PR post-create obligations above:
 - Seam 1 (issue-comment write boundary): `admit_agent_os_issue_comment_mutation_tool` runs `defect_evidence_mutation_guard.evaluate_defect_evidence_mutation` (#2741) as the pre-write verify-open guard — defect/process evidence aimed at a closed issue is refused fail-closed and routed to the open root-cause owner (`reacquire-target-state` / `route-to-open-owner` / `create-new-bug`) — and `comment_mutation_readback.evaluate_comment_persistence` (#2785) as the post-write canonical readback. A subordinate comment write is admitted as persisted only after canonical readback proves the exact intended body; a provider success claim alone never proves persistence, and an uncertain response never authorizes an automatic retry and never creates a duplicate comment.
-- Seam 2 (Safe Implementation Lane post-PR step): `project_agent_os_lane_post_pr_issue_reconciliation_tool` runs `lane_post_pr_issue_reconciliation.project_lane_post_pr_issue_reconciliation` (#2791) after Draft PR readback to project the implementation issue's expected post-PR disposition, and `evaluate_lane_post_pr_issue_readback` to prove it from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition; the plan reuses the existing lifecycle-mutation vocabulary and can never grant merge or Ready authority.
+- Seam 2 (Safe Implementation Lane post-PR step): `project_agent_os_lane_post_pr_issue_reconciliation_tool` runs `lane_post_pr_issue_reconciliation.project_lane_post_pr_issue_reconciliation` (#2791) after Draft PR readback to project the implementation issue's expected post-PR disposition, and `evaluate_lane_post_pr_issue_readback` to prove it from the canonical post-mutation readback. For Safe Lane work only, Draft PR creation is never reported fully reconciled while the implementation issue keeps a stale Ready label or an open disposition; the plan reuses the existing lifecycle-mutation vocabulary and can never grant merge or Ready authority.
 The tools are pure admission/readback composition: they perform no GitHub writes, authorize none, and introduce no second issue registry, queue, scheduler, or lifecycle authority. Live host consumption is separately authorized; registration and tests alone are not closure evidence.
 ## Agent OS Issue Post-Create Classification And Continuation
 After every successful authorized creation of any Agent OS issue, treat the creation response as provisional until canonical issue readback proves the issue identity, body, state, and managed classification labels. This contract applies to implementation handoffs, bug capture, testing/planning issues, focused successors, self-defect issues, and every other tiered Agent OS issue created through a supported surface. Prefer the existing structured issue-create path, which supplies the validated `proposed_labels` set at creation and verifies exact label readback. Do not report Agent OS issue creation as complete while a canonical managed owner/readiness/type projection that was part of the validated creation plan is missing.
