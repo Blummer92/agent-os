@@ -169,16 +169,16 @@ def test_run_phase_oserror_is_not_misclassified_as_transport(tmp_path, capsys) -
 
 
 def test_provider_wrapped_domain_error_does_not_leak_detail(tmp_path, capsys) -> None:
-    secret = "provider-secret-opaque-value"
+    sensitive_marker = "provider-private-synthetic-value"
     with patch(
         "scripts.agent_os_notion_read_request.runner.run_notion_read_request",
-        side_effect=NotionReadRequestError("read failed: " + secret),
+        side_effect=NotionReadRequestError("read failed: " + sensitive_marker),
     ):
         code, receipt = _run_main(tmp_path, b"{}", capsys)
     assert code == 1
     _assert_failure_shape(receipt, "notion-read-request-error")
     assert receipt["failure"]["detail"] is None
-    assert secret not in json.dumps(receipt)
+    assert sensitive_marker not in json.dumps(receipt)
 
 
 def test_transport_actual_byte_bound_does_not_trust_stat(tmp_path, capsys) -> None:
