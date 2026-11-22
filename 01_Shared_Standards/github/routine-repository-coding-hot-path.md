@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the minimum Agent OS context and transitions for ordinary Tier 0/1 `no-external-write` repository coding while preserving existing authorization, exact-head validation, and ownership contracts.
+Define the minimum Agent OS context and transitions for ordinary issue-based Tier 0/1 `no-external-write` repository coding while preserving existing authorization, exact-head validation, and ownership contracts.
 
 This is a composition rule, not a new router, state model, cache, agent, Scheduler, or authorization system.
 
@@ -39,6 +39,8 @@ The minimum path applies only when current evidence proves all of the following:
 - no release-mode request;
 - no finite multi-item mission;
 - no classroom/PPUX routing requirement.
+
+An owner-authorized exact-file GitHub Change Request follows its own existing route, not this issue-based hot path. Do not require Safe Lane issue readiness for an exact-file request that makes no primary issue claim. A request that does claim primary implementation of an issue still requires the existing issue-primary admission.
 
 ## Lazy paths
 

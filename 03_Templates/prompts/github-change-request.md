@@ -21,6 +21,26 @@ GitHub source of truth, `no-external-write` boundary, repository-owner
 implementation instruction, and confirmation that Tier 2 or excluded surfaces
 do not apply.
 
+For an exact-file request, bind the authenticated owner instruction to the
+repository, base and source preimages, exact paths and intended change,
+and the specific permitted operations. An existing issue may be a non-closing
+coordination reference without being the primary implementation issue. If the
+request makes a primary issue claim, the existing primary-PR creation admission
+still applies; otherwise do not invoke it with a substitute issue or create an
+administrative issue.
+
+Before writing, verify current scope and authority, exact repository/base and
+preimages, applicable initial CKR6, and current competing-work evidence.
+Immediately before Draft creation, verify canonical branch/head and PR evidence
+against the approved request and changes. Reuse a single matching Draft only
+within the same authorized lineage; reconcile uncertain writes before any retry.
+Stop for incomplete evidence, competing or ambiguous work, or changed scope.
+Keep any genuinely applicable checkpoint or lease checks; GitHub PR search
+alone is not lease clearance. Preserve exact canonical Draft readback and
+existing validation and independent QA. Obtain any required PR/head-bound CKR6
+result only after canonical observation of that head; it does not substitute
+for initial preflight or authorize landing.
+
 ## Target Files Or Bounded Scope Envelope
 List exact files, or name the bounded module or repository area. For the Safe
 Implementation Lane, include directly corresponding tests and documentation,
@@ -42,8 +62,8 @@ Paste the exact proposed content, patch, or implementation instructions.
 
 ## Branch Handling
 Use a non-protected branch. A harness- or environment-assigned branch name is
-acceptable when linked to the issue and used consistently; a preferred name is
-not an authorization boundary.
+acceptable when bound to the authorized request or implementation issue and
+used consistently; a preferred name is not an authorization boundary.
 
 ## Acceptance Criteria
 - Expected files exist or are updated.
