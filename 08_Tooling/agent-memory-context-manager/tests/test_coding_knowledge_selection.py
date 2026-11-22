@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 from itertools import permutations
 
@@ -433,7 +434,6 @@ def test_pr_a04_six_genuinely_distinct_still_exceed_budget():
 def test_pr_a05_same_id_conflicting_revisions_require_manual_review():
     # The same identity at two different source revisions is a conflict,
     # not a duplicate to collapse: it must fail closed.
-    from dataclasses import replace
 
     one = candidate()
     two = replace(one, source_revision="rev-2")
@@ -577,3 +577,186 @@ def test_pr_refresh_matching_does_not_override_candidate_budget():
     )
     assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
     assert result.reason_codes == ("candidate-budget-exceeded",)
+
+
+# Additional adversarial contract coverage from the #4091 Gemini review.
+# These tests pin observed CKR2 semantics; they neither authorize writes nor
+# claim human-adjudicated relevance or CKR6 admission.
+@pytest.mark.parametrize("count", (4, MAX_CANDIDATES))
+def test_gemini_budget_exact_boundary_and_selection_cap(count):
+    values = tuple(candidate(f"item-{i}", library_name="hypothesis")
+                   for i in range(count))
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.candidate_count == count
+    assert result.selected_count == MAX_SELECTED
+    assert result.knowledge_refs == ("item-0", "item-1", "item-2")
+
+
+@pytest.mark.parametrize("field,value", (
+    ("currentness", KnowledgeCurrentness.STALE),
+    ("authority_conflict", True),
+    ("library_name", "different-library"),
+    ("use_when", ("A conflicting normalized guidance field.",)),
+))
+def test_gemini_equal_revision_with_different_fields_fails_duplicate_identity(field, value):
+    original = candidate()
+    conflicting = replace(original, **{field: value})
+    result = select_coding_knowledge(request(), (original, conflicting))
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("duplicate-identity-conflict",)
+    assert result.selected_count == 0
+
+
+def test_gemini_winning_bucket_checks_all_five_for_currentness():
+    values = tuple(candidate(f"item-{i}", library_name="hypothesis",
+                             currentness=(KnowledgeCurrentness.STALE if i == 4
+                                          else KnowledgeCurrentness.CURRENT))
+                   for i in range(MAX_CANDIDATES))
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("stale-relevant-candidate",)
+    assert result.selected_count == 0
+
+
+def test_gemini_lower_bucket_stale_does_not_override_current_exact_match():
+    generic = candidate("generic", library_name="other",
+                        currentness=KnowledgeCurrentness.STALE)
+    exact = candidate("exact", library_name="hypothesis")
+    result = select_coding_knowledge(request(), (generic, exact))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.knowledge_refs == ("exact",)
+    assert result.selected[0].reason_codes == ("exact-library-match",)
+
+
+@pytest.mark.parametrize("changed,expected_reason", (
+    ({"authority_conflict": True, "canonical_github_refs": ()},
+     "canonical-authority-conflict"),
+    ({"currentness": KnowledgeCurrentness.STALE, "canonical_github_refs": ()},
+     "stale-relevant-candidate"),
+    ({"currentness": KnowledgeCurrentness.UNVERIFIABLE,
+      "canonical_github_refs": ()}, "unverifiable-relevant-candidate"),
+))
+def test_gemini_manual_review_precedes_missing_selected_provenance(changed, expected_reason):
+    result = select_coding_knowledge(request(), (replace(candidate(), **changed),))
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == (expected_reason,)
+    assert result.selected == ()
+
+
+def test_gemini_distinct_candidate_budget_precedes_currentness():
+    values = tuple(candidate(f"item-{i}", library_name="hypothesis",
+                             currentness=(KnowledgeCurrentness.STALE if i == 0
+                                          else KnowledgeCurrentness.CURRENT))
+                   for i in range(MAX_CANDIDATES + 1))
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("candidate-budget-exceeded",)
+    assert result.selected_count == 0
+
+
+def test_gemini_winning_bucket_missing_selected_provenance_remains_insufficient():
+    values = tuple(candidate(f"item-{i}", library_name="hypothesis",
+                             canonical_github_refs=(() if i == 0 else ("docs/ok.md",)))
+                   for i in range(MAX_CANDIDATES))
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_gemini_exact_library_path_combines_reasons_and_dominates_generic_match():
+    generic = candidate("generic", library_name="other")
+    req = request(target_path_hints=("pkg/hypothesis/helpers.py",))
+    result = select_coding_knowledge(req, (generic, candidate()))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.knowledge_refs == ("hypothesis",)
+    assert result.selected[0].reason_codes == ("exact-library-match", "target-path-match")
+
+
+def test_gemini_contextual_tie_break_prefers_unique_mechanism_context():
+    first = replace(candidate("z", library_name="other"),
+                    use_when=("Handle rebase conflict recovery safely.",))
+    second = replace(candidate("a", library_name="other"),
+                     use_when=("Update release notes only.",))
+    req = request(library_hints=(), task_reference="Investigate rebase conflict recovery")
+    outcome = select_coding_knowledge(req, (second, first))
+    assert outcome.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert outcome.knowledge_refs == ("z", "a")
+    assert tuple(item.reason_codes for item in outcome.selected) == (
+        ("ecosystem-capability-match",), ("ecosystem-capability-match",),
+    )
+
+
+def test_gemini_known_reference_precedes_out_of_order_attempt_history():
+    req = request(known_knowledge_refs=("knowledge:hypothesis",),
+                  attempted_retrieval=(RetrievalEscalation.WORKSPACE_SEARCH,
+                                       RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY))
+    result = select_coding_knowledge(req, ())
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+
+
+@pytest.mark.parametrize("name", (
+    "ecosystem_hints", "language_hints", "library_hints",
+    "capability_keywords", "target_path_hints", "canonical_rule_refs",
+    "known_knowledge_refs",
+))
+def test_gemini_request_signal_fields_reject_non_tuple_values(name):
+    with pytest.raises(TypeError):
+        request(**{name: ["python"]})
+
+
+@pytest.mark.parametrize("supplied", ([], (item for item in (candidate(),))))
+def test_gemini_candidate_pool_requires_exact_tuple(supplied):
+    with pytest.raises(TypeError):
+        select_coding_knowledge(request(), supplied)
+
+
+def test_gemini_validation_limits_and_control_character_fail_closed():
+    from agent_memory_context_manager.coding_knowledge_selection import (
+        MAX_GUIDANCE_TEXT_CHARS, MAX_SIGNAL_ITEMS, MAX_TEXT_CHARS,
+    )
+    with pytest.raises(ValueError):
+        request(library_hints=tuple(f"lib-{i}" for i in range(MAX_SIGNAL_ITEMS + 1)))
+    with pytest.raises(ValueError):
+        request(task_reference="x" * (MAX_TEXT_CHARS + 1))
+    for field in ("use_when", "avoid_when"):
+        with pytest.raises(ValueError):
+            replace(candidate(), **{field: ("x" * (MAX_GUIDANCE_TEXT_CHARS + 1),)})
+    for invalid in ("\n", "\x00", "  "):
+        with pytest.raises(ValueError):
+            request(task_reference=invalid)
+
+
+def test_gemini_projection_reports_selected_and_inspect_first_evidence():
+    result = select_coding_knowledge(request(), (candidate(),))
+    projection = result.to_handoff_projection()
+    assert projection["known_facts"] == [
+        "coding-knowledge-sufficiency:sufficient",
+        "coding-knowledge:hypothesis",
+    ]
+    assert projection["allowed_inspect_first"] == [
+        "01_Shared_Standards/python/testing-standard.md",
+    ]
+    insufficient = select_coding_knowledge(request(), ())
+    assert insufficient.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert insufficient.to_handoff_projection()["known_facts"] == [
+        "coding-knowledge-sufficiency:insufficient",
+    ]
+
+
+def test_gemini_pr_refresh_pair_has_stable_order_and_count():
+    left = select_coding_knowledge(_pr_refresh_request(), (_LL61_REFRESH, _LL80_REFRESH))
+    right = select_coding_knowledge(_pr_refresh_request(), (_LL80_REFRESH, _LL61_REFRESH))
+    assert left.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert left.selected_count == 2
+    assert left.to_json() == right.to_json()
+    assert set(left.knowledge_refs) == {"LL-61", "LL-80"}
+
+
+def test_gemini_casefold_collision_status_and_count():
+    values = tuple(candidate(identity) for identity in ("A", "a", "SS", "ss", "ß"))
+    result = select_coding_knowledge(request(), values)
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected_count == MAX_SELECTED
+    assert result.knowledge_refs == ("A", "a", "SS")
