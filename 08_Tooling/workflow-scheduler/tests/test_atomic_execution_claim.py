@@ -66,10 +66,13 @@ def test_stale_task_update_cannot_overwrite_claim(tmp_path):
 
     owned = a.get_task("claim-test")
     owned.mark_completed()
-    assert a.update_claimed_task(owned, token)
     assert not b.release_execution_claim("claim-test", "wrong-token")
-    assert a.release_execution_claim("claim-test", token)
-    assert a.get_task("claim-test").status == TaskStatus.COMPLETED
+    assert a.get_task("claim-test").status == TaskStatus.RUNNING
+    assert a.update_claimed_task(owned, token)
+    # A settled result releases the claim in the same commit (crash-safe).
+    assert not a.release_execution_claim("claim-test", token)
+    settled = a.get_task("claim-test")
+    assert settled.status == TaskStatus.COMPLETED and settled.lease_lock is None
 
 
 def test_unfinished_claim_is_not_silently_stolen(tmp_path):

@@ -88,6 +88,10 @@ class SQLiteRepository:
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
+            # Serialize every schema check and additive migration (tasks and
+            # approval_requests) across processes: PRAGMA-then-ALTER is only
+            # safe inside one write transaction.
+            cursor.execute("BEGIN IMMEDIATE")
 
             cursor.execute(
                 """
@@ -153,8 +157,6 @@ class SQLiteRepository:
                 """
             )
 
-            # Serialize the check and additive migration across processes.
-            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("PRAGMA table_info(approval_requests)")
             if "workflow_wait" not in {row[1] for row in cursor.fetchall()}:
                 cursor.execute(
@@ -306,6 +308,12 @@ class SQLiteRepository:
                 WHERE workflow_id = ?
                   AND (? IS NULL OR (status = ? AND updated_at = ?))
                   AND status NOT IN ('completed','failed','cancelled','governance_blocked')
+                  AND (NOT ? OR NOT EXISTS (
+                    SELECT 1 FROM tasks
+                    WHERE workflow_id = workflows.workflow_id
+                      AND (status != 'completed' OR execution_claim_token IS NOT NULL
+                           OR lease_lock IS NOT NULL)
+                  ))
                   AND (
                     status = ?
                     OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
@@ -321,6 +329,7 @@ class SQLiteRepository:
                     new_stamp,
                     workflow.workflow_id,
                     old_status, old_status, old_stamp,
+                    getattr(workflow, "_require_completed_workflow_tasks", False),
                     workflow.status.value,
                     workflow.status.value,
                     workflow.status.value,
@@ -542,7 +551,9 @@ class SQLiteRepository:
             conn.commit()
             return token if result.rowcount == 1 else None
 
-    def update_claimed_task(self, task: Task, token: str) -> bool:
+    def update_claimed_task(
+        self, task: Task, token: str, *, approval_request: ApprovalRequest | None = None,
+    ) -> bool:
         """Only the execution claim holder can persist its result.
 
         Repair B extension: even the holder may not write over a
@@ -552,13 +563,26 @@ class SQLiteRepository:
         it fails closed (False, so the executor raises) if the row was
         terminalized or its retry state advanced by another writer.
         """
+        if approval_request is not None and (
+            task.status != TaskStatus.APPROVAL_PENDING
+            or not task.approval_required
+            or approval_request.task_id != task.id
+            or approval_request.decision != ApprovalDecision.PENDING
+        ):
+            raise ValueError("Claimed approval does not match the pending task")
         with self._lock:
             conn = self._get_connection()
             new_stamp = utc_storage_string(task.updated_at)
+            # A settled (non-RUNNING) result releases the claim in the same
+            # commit, so a crash between persistence and release cannot leave
+            # a settled row fenced by a claim that no live holder owns.
+            release = task.status != TaskStatus.RUNNING
             result = conn.execute(
                 "UPDATE tasks SET status = ?, payload = ?, updated_at = ?, "
                 "retry_count = ?, next_retry_at = ?, max_retries = ?, "
-                "paused_from_status = ?, batch_id = ? "
+                "paused_from_status = ?, batch_id = ?, approval_required = ?, "
+                "lease_lock = CASE WHEN ? THEN NULL ELSE lease_lock END, "
+                "execution_claim_token = CASE WHEN ? THEN NULL ELSE execution_claim_token END "
                 "WHERE id = ? AND execution_claim_token = ? "
                 "AND status NOT IN ('completed','failed','cancelled','governance_blocked') "
                 "AND retry_count <= ?",
@@ -568,13 +592,33 @@ class SQLiteRepository:
                     task.retry_count,
                     utc_storage_string(task.next_retry_at)
                     if task.next_retry_at else None,
-                    task.max_retries, task.paused_from_status, task.batch_id,
+                    task.max_retries, task.paused_from_status, task.batch_id, task.approval_required,
+                    release, release,
                     task.id, token, task.retry_count,
                 ),
             )
-            conn.commit()
             if result.rowcount != 1:
+                conn.rollback()
                 return False
+            try:
+                if approval_request is not None:
+                    # The task-ID-only approval command cannot bind a delayed
+                    # decision to a new request. Only publish a first request.
+                    existing = result.execute(
+                        "SELECT 1 FROM approval_requests WHERE task_id = ? LIMIT 1",
+                        (task.id,),
+                    ).fetchone()
+                    if existing is not None:
+                        conn.rollback()
+                        return False
+                    self._insert_approval_request(
+                        result, approval_request,
+                        workflow_wait=getattr(task, "_require_running_workflow", False),
+                    )
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
             _remember(task, task.status.value, new_stamp)
             return True
 
@@ -639,12 +683,14 @@ class SQLiteRepository:
             self._insert_approval_request(cursor, approval)
             conn.commit()
 
-    def _insert_approval_request(self, cursor: sqlite3.Cursor, approval: ApprovalRequest) -> None:
+    def _insert_approval_request(
+        self, cursor: sqlite3.Cursor, approval: ApprovalRequest, *, workflow_wait: bool = False,
+    ) -> None:
         cursor.execute(
                 """
                 INSERT INTO approval_requests
-                (id, task_id, requested_by, approver, decision, reason, created_at, decided_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, task_id, requested_by, approver, decision, reason, created_at, decided_at, workflow_wait)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     approval.id,
@@ -655,6 +701,7 @@ class SQLiteRepository:
                     approval.reason,
                     utc_storage_string(approval.created_at),
                     utc_storage_string(approval.decided_at) if approval.decided_at else None,
+                    workflow_wait,
                 ),
         )
 

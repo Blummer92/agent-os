@@ -245,88 +245,88 @@ class Executor:
                 checks_failed=["lease_acquisition"],
             )
 
+        # Only a durable result may release the claim. If persistence
+        # raises, leave the outcome unresolved rather than clearing the fence.
+        return self._execute_claimed(task)
+
+    def _execute_claimed(self, task: Task) -> ExecutionResult:
+        # Execute task via adapter. A raised exception is treated the
+        # same as a malformed return value -- both are adapter contract
+        # violations, not scheduler bugs, and must not propagate.
         try:
-            # Execute task via adapter. A raised exception is treated the
-            # same as a malformed return value -- both are adapter contract
-            # violations, not scheduler bugs, and must not propagate.
-            try:
-                adapter_result = self.adapter.execute(task)
-            except Exception as exc:  # noqa: BLE001 - any adapter exception is a contract violation
-                invalid_reason = f"adapter raised {type(exc).__name__}: {exc}"
-                adapter_result = None
-            else:
-                invalid_reason = _validate_adapter_result(adapter_result)
+            adapter_result = self.adapter.execute(task)
+        except Exception as exc:  # noqa: BLE001 - any adapter exception is a contract violation
+            invalid_reason = f"adapter raised {type(exc).__name__}: {exc}"
+            adapter_result = None
+        else:
+            invalid_reason = _validate_adapter_result(adapter_result)
 
-            if invalid_reason is not None:
-                self.audit_logger.log_adapter_result_invalid(task, reason=invalid_reason)
-                task.mark_failed(error=f"Invalid adapter result: {invalid_reason}", is_transient=False)
-                self._persist_task(task)
+        if invalid_reason is not None:
+            self.audit_logger.log_adapter_result_invalid(task, reason=invalid_reason)
+            task.mark_failed(error=f"Invalid adapter result: {invalid_reason}", is_transient=False)
+            self._persist_task(task)
 
-                return ExecutionResult(
-                    success=False,
-                    error=f"Invalid adapter result: {invalid_reason}",
-                    output=None,
-                    is_transient=False,
-                    status="fail",
-                    checks_failed=["adapter_result_invalid"],
-                )
+            return ExecutionResult(
+                success=False,
+                error=f"Invalid adapter result: {invalid_reason}",
+                output=None,
+                is_transient=False,
+                status="fail",
+                checks_failed=["adapter_result_invalid"],
+            )
 
-            if _is_contract_result(adapter_result):
-                return self._handle_contract_result(task, adapter_result)
+        if _is_contract_result(adapter_result):
+            return self._handle_contract_result(task, adapter_result)
 
-            if adapter_result.get("success"):
-                task.mark_completed(result=adapter_result.get("output"))
-                self.audit_logger.log_task_completed(task, result=adapter_result.get("output"))
-                self._persist_task(task)
+        if adapter_result.get("success"):
+            task.mark_completed(result=adapter_result.get("output"))
+            self.audit_logger.log_task_completed(task, result=adapter_result.get("output"))
+            self._persist_task(task)
 
-                return ExecutionResult(
-                    success=True,
-                    error=None,
-                    output=adapter_result.get("output"),
-                    is_transient=False,
-                    status="pass",
-                    checks_passed=["execution"],
-                )
-            else:
-                error = adapter_result.get("error", "Unknown error")
-                is_transient = adapter_result.get("is_transient", False)
+            return ExecutionResult(
+                success=True,
+                error=None,
+                output=adapter_result.get("output"),
+                is_transient=False,
+                status="pass",
+                checks_passed=["execution"],
+            )
+        else:
+            error = adapter_result.get("error", "Unknown error")
+            is_transient = adapter_result.get("is_transient", False)
 
-                if is_transient and RetryManager.should_retry(task):
-                    delay = RetryManager.compute_delay(task.retry_count)
-                    task.payload["error"] = error
-                    task.schedule_retry(delay)
-                    self.audit_logger.log_retry_scheduled(task, delay_seconds=delay)
-                    self._persist_task(task)
-
-                    return ExecutionResult(
-                        success=False,
-                        error=error,
-                        output=None,
-                        is_transient=True,
-                        status="retry_scheduled",
-                        checks_failed=["execution"],
-                    )
-
-                if is_transient:
-                    # Retry budget exhausted; this transient failure is now terminal.
-                    self.audit_logger.log_retry_exhausted(task, attempts=task.retry_count)
-
-                task.mark_failed(error=error, is_transient=False)
-                self.audit_logger.log_task_failed(task, error=error, is_transient=False)
+            if is_transient and RetryManager.should_retry(task):
+                delay = RetryManager.compute_delay(task.retry_count)
+                task.payload["error"] = error
+                task.schedule_retry(delay)
+                self.audit_logger.log_retry_scheduled(task, delay_seconds=delay)
                 self._persist_task(task)
 
                 return ExecutionResult(
                     success=False,
                     error=error,
                     output=None,
-                    is_transient=False,
-                    status="fail",
+                    is_transient=True,
+                    status="retry_scheduled",
                     checks_failed=["execution"],
                 )
 
-        finally:
-            # Release lease lock
-            self._release_lease(task)
+            if is_transient:
+                # Retry budget exhausted; this transient failure is now terminal.
+                self.audit_logger.log_retry_exhausted(task, attempts=task.retry_count)
+
+            task.mark_failed(error=error, is_transient=False)
+            self.audit_logger.log_task_failed(task, error=error, is_transient=False)
+            self._persist_task(task)
+
+            return ExecutionResult(
+                success=False,
+                error=error,
+                output=None,
+                is_transient=False,
+                status="fail",
+                checks_failed=["execution"],
+            )
 
     def execute_many(
         self,
@@ -373,9 +373,8 @@ class Executor:
         primitives the legacy success/failure/retry path and the
         pre-execution governance/approval path already use. This is a
         second entry point into the same lifecycle transitions, not a
-        new state machine. Only called from within execute()'s lease-
-        holding try block, so the caller's `finally: self._release_lease`
-        still runs for every branch here.
+        new state machine. Only called with an active claim; durable
+        persistence of a settled result releases it.
         """
         status = result["status"]
         message = result["message"]
@@ -447,6 +446,21 @@ class Executor:
 
         if status == "approval-required":
             approval_reason = result["approval_reason"]
+            if self.repository.get_approval_request(task.id) is not None:
+                # A new request needs separately bound approval. The current
+                # task-ID-only command cannot safely distinguish it from a
+                # delayed replay of the earlier decision.
+                reason = "Adapter requested another approval for an already reviewed task"
+                task.status = TaskStatus.GOVERNANCE_BLOCKED
+                self._persist_task(task)
+                self.audit_logger.log_governance_blocked(
+                    task=task, blockers=["adapter_approval_repeated"], reason=reason,
+                )
+                return ExecutionResult(
+                    success=False, error=reason, output=None, is_transient=False,
+                    status="blocked", blockers=["adapter_approval_repeated"],
+                    checks_failed=["adapter_approval_repeated"],
+                )
 
             # Set approval_required so a future execute() call is gated
             # by StopConditionChecker on the approval decision just like
@@ -455,20 +469,16 @@ class Executor:
             # whatever decision gets recorded against this approval.
             task.approval_required = True
 
-            approval = self.repository.get_approval_request(task.id)
-            if approval is None:
-                approval = ApprovalRequest(
-                    id=str(uuid.uuid4()),
-                    task_id=task.id,
-                    requested_by=task.owner,
-                    decision=ApprovalDecision.PENDING,
-                    reason=approval_reason,
-                )
-                self.repository.create_approval_request(approval)
-                self.audit_logger.log_approval_requested(task)
-
+            approval = ApprovalRequest(
+                id=str(uuid.uuid4()),
+                task_id=task.id,
+                requested_by=task.owner,
+                decision=ApprovalDecision.PENDING,
+                reason=approval_reason,
+            )
             task.mark_approval_pending()
-            self._persist_task(task)
+            self._persist_task(task, approval_request=approval)
+            self.audit_logger.log_approval_requested(task)
 
             return ExecutionResult(
                 success=False,
@@ -508,8 +518,17 @@ class Executor:
             if approval_request is None:
                 return self.repository.update_task(task)
             return self.repository.update_task(task, approval_request=approval_request)
-        if not self.repository.update_claimed_task(task, token):
+        persisted = (
+            self.repository.update_claimed_task(task, token)
+            if approval_request is None
+            else self.repository.update_claimed_task(task, token, approval_request=approval_request)
+        )
+        if not persisted:
             raise RuntimeError("Execution claim was lost; task update refused")
+        if task.status != TaskStatus.RUNNING:
+            # update_claimed_task released the claim atomically with the result.
+            task.lease_lock = None
+            delattr(task, "_execution_claim_token")
         return True
 
     def _acquire_lease(self, task: Task) -> bool:
@@ -527,12 +546,3 @@ class Executor:
         task.updated_at = claimed.updated_at
         task._execution_claim_token = token
         return True
-
-    def _release_lease(self, task: Task) -> None:
-        token = getattr(task, "_execution_claim_token", None)
-        if token is None:
-            return
-        if not self.repository.release_execution_claim(task.id, token):
-            raise RuntimeError("Execution claim release refused")
-        task.lease_lock = None
-        delattr(task, "_execution_claim_token")

@@ -450,12 +450,26 @@ class WorkflowSchedulerCLI:
             else:
                 state_conflicts.add(task_id)
 
+        def settle_in_flight() -> bool:
+            # Another runner may have settled work this runner observed in
+            # flight. Re-read it once more before giving up, so concurrent
+            # runners cannot all exit "executing elsewhere" and strand the
+            # workflow RUNNING after every task has settled.
+            settled_any = False
+            for task_id in sorted(in_flight_elsewhere):
+                current = self.repository.get_task(task_id)
+                if current is not None and current.status != TaskStatus.RUNNING and current.lease_lock is None:
+                    in_flight_elsewhere.discard(task_id)
+                    reconcile_task(task_id)
+                    settled_any = True
+            return settled_any
+
         while (
             len(completed) + len(cancelled) + len(paused) + len(failed)
             + len(blocked) + len(approval_pending) + len(retry_pending)
             + len(in_flight_elsewhere)
             + len(state_conflicts)
-        ) < len(tasks):
+        ) < len(tasks) or settle_in_flight():
             raw_ready = [
                 task_id
                 for task_id in resolver.get_ready_tasks(completed)
@@ -469,6 +483,8 @@ class WorkflowSchedulerCLI:
                 and task_id not in state_conflicts
             ]
             if not raw_ready:
+                if settle_in_flight():
+                    continue
                 break
 
             # Group batch members contiguously (first-seen order preserved
@@ -495,16 +511,6 @@ class WorkflowSchedulerCLI:
                     state_conflicts.add(task_id)
                     continue
 
-                if _approval_continuation and task.id not in waiting:
-                    approval = self.repository.get_approval_request(task.id)
-                    if task.status == TaskStatus.APPROVED or (
-                        approval is not None and approval.decision == ApprovalDecision.APPROVED
-                    ):
-                        # Automatic continuation consumes only approval
-                        # decisions that belong to this workflow run.
-                        state_conflicts.add(task.id)
-                        continue
-
                 if task.batch_id:
                     touched_batch_ids.add(task.batch_id)
 
@@ -520,6 +526,16 @@ class WorkflowSchedulerCLI:
                 } or task.lease_lock is not None:
                     reconcile_task(task.id)
                     continue
+                if _approval_continuation and task.id not in waiting:
+                    approval = self.repository.get_approval_request(task.id)
+                    if task.status == TaskStatus.APPROVED or (
+                        approval is not None and approval.decision == ApprovalDecision.APPROVED
+                    ):
+                        # Automatic continuation consumes only approval
+                        # decisions that belong to this workflow run.
+                        state_conflicts.add(task.id)
+                        continue
+
                 task._require_running_workflow = True
                 if task.status != TaskStatus.QUEUED:
                     task.status = TaskStatus.QUEUED
@@ -552,7 +568,9 @@ class WorkflowSchedulerCLI:
                     retry_pending.add(task.id)
                 elif {"lease_acquisition", "task_state_conflict"}.intersection(result.checks_failed):
                     reconcile_task(task.id)
-                elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
+                elif result.status == "blocked" and result.blockers in (
+                    [StopConditionChecker.APPROVAL_ENGINE_DEFERRED], ["adapter_approval_required"],
+                ):
                     approval_pending.add(task.id)
                 elif result.status == "blocked":
                     blocked.add(task.id)
@@ -645,7 +663,7 @@ class WorkflowSchedulerCLI:
 
         if failed or blocked or cancelled:
             reason = f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
-            workflow.mark_failed(reason=reason)
+            settle = lambda plan: plan.mark_failed(reason=reason)  # noqa: E731
             status = "fail"
             checks_failed = [
                 c
@@ -657,11 +675,27 @@ class WorkflowSchedulerCLI:
                 if c
             ]
         else:
-            workflow.mark_completed()
+            settle = lambda plan: plan.mark_completed()  # noqa: E731
             status = "pass"
             checks_failed = []
 
-        if not self.repository.update_workflow(workflow):
+        # Retry a verdict only over a fresh RUNNING snapshot of the same
+        # plan. Never place a prior verdict on a replaced task/dependency set,
+        # nor reverse a concurrent pause/cancel/terminal transition.
+        plan_shape = (workflow.mode, workflow.tasks, workflow.dependencies)
+        for _attempt in range(3):
+            settle(workflow)
+            if status == "pass":
+                workflow._require_completed_workflow_tasks = True
+            if self.repository.update_workflow(workflow):
+                break
+            current = self.repository.get_workflow(workflow_id)
+            if current is None or current.status != WorkflowStatus.RUNNING:
+                return self._workflow_write_refused(workflow_id)
+            if (current.mode, current.tasks, current.dependencies) != plan_shape:
+                return self._workflow_write_refused(workflow_id)
+            workflow = current
+        else:
             return self._workflow_write_refused(workflow_id)
         if status == "pass":
             self.audit_logger.log_workflow_completed(workflow)
