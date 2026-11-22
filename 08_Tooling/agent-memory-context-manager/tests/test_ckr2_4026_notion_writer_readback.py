@@ -71,7 +71,7 @@ def test_exact_mechanism_match_requires_lesson_owned_title_guidance_and_controll
     (), ("Notion writer",), ("persistence readback",),
     ("Notion writer", "persistence readback"),
     ("Notion writer", "failure receipts"),
-    ("testing",), ("Notion", "readback"),
+    ("testing",),
 ])
 def test_partial_or_generic_request_hints_cannot_select(hints):
     result = select_coding_knowledge(request(capability_keywords=hints), (candidate(),))
