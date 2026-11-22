@@ -422,9 +422,9 @@ def test_unchanged_resubmission_is_detected_by_identity_and_whitespace_equivalen
     assert CODE_UNCHANGED not in _codes(evaluate_draft(punctuated, prior_draft=base))
     changed = _bytes(worksheet_questions=["A different first question?", "Fixture question two?", "Fixture question three?"])
     assert CODE_UNCHANGED not in _codes(evaluate_draft(changed, prior_draft=base))
-    # Any other parsed field counts as a change, so a changed draft is never flagged.
-    retitled = _bytes(prerequisite_tutorials=["tutorial-0-adobe-express-favorite-food-reference"])
-    assert CODE_UNCHANGED not in _codes(evaluate_draft(retitled, prior_draft=base))
+    # Metadata-only changes do not count as substantive student-facing revisions.
+    metadata_only = _bytes(prerequisite_tutorials=["tutorial-0-adobe-express-favorite-food-reference"])
+    assert CODE_UNCHANGED in _codes(evaluate_draft(metadata_only, prior_draft=base))
 
 
 def test_without_a_prior_draft_neither_prior_finding_applies_and_it_is_recorded():
@@ -542,7 +542,7 @@ def test_no_receipt_text_or_status_line_claims_quality_accuracy_grade_fit_or_rea
         evaluate_draft(_bytes()),
         _verified(),
         evaluate_draft(_bytes(worksheet_questions=["Studies show colors sell?", f"The {phrase}?"]), prior_draft=_bytes()),
-        evaluate_draft(_bytes(), material_requirement=_requirement(ai_permitted=False), artifact_type="teacher-guide"),
+        evaluate_draft(_bytes(), material_requirement=_requirement(ai_permitted=False, artifact_type="teacher-guide"), artifact_type="teacher-guide"),
     ]
     for receipt in drafts:
         _assert_no_quality_claims(status_line(receipt))
@@ -830,8 +830,9 @@ def test_requirement_path_also_loads_no_provider_or_write_module():
         "from instructional_materials_coach.draft_evaluation import evaluate_draft\n"
         "import pathlib\n"
         f"req = pathlib.Path({str(REQUIREMENT_FIXTURE)!r}).read_bytes()\n"
-        "try:\n    evaluate_draft(b'title: t\\nobjectives: []\\nslides: []\\nworksheet_questions: []\\n', material_requirement=req)\n"
-        "except Exception:\n    pass\n"
+        "receipt = evaluate_draft(b'title: t\\nobjectives: []\\nslides: []\\nworksheet_questions: []\\n', material_requirement=req)\n"
+        "assert receipt['requirements'] == 'present', receipt\n"
+        "assert receipt['applicability']['draft-ai-generation-not-permitted'] == 'applicable', receipt\n"
     )
     assert not [name for name in loaded if name.startswith(FORBIDDEN_LOADED_PREFIXES)]
 
@@ -884,3 +885,115 @@ def test_model_produced_draft_matches_its_asserted_golden_findings(entry):
 
 def test_suite_states_that_ci_cannot_assert_writing_quality():
     assert "CI cannot assert" in (__doc__ or "")
+
+
+# --------------------------------------------------------------------------------------
+# Independent Gemini-review negative controls (verified/reproduced before repair)
+# --------------------------------------------------------------------------------------
+
+
+def test_gemini_receipt_out_rejects_same_input_symlink_and_hardlink(tmp_path, capsys):
+    original = _bytes()
+    source = tmp_path / "draft.yaml"
+    source.write_bytes(original)
+    symlink = tmp_path / "link.yaml"
+    symlink.symlink_to(source)
+    hardlink = tmp_path / "hardlink.yaml"
+    os.link(source, hardlink)
+    for output in (source, symlink, hardlink):
+        assert cli.main(["evaluate-draft", "--content", str(source), "--receipt-out", str(output)]) == 1
+        captured = capsys.readouterr()
+        assert "input-output-path-collision" in captured.err and captured.out == ""
+        assert source.read_bytes() == original
+    assert cli.main([
+        "evaluate-draft", "--content", str(source), "--prior-draft", str(hardlink),
+        "--receipt-out", str(hardlink),
+    ]) == 1
+    assert source.read_bytes() == original
+
+
+def test_gemini_draft_yaml_alias_and_excessive_nesting_are_rejected_before_expansion():
+    original = _bytes()
+    with pytest.raises(DraftEvaluationInputError) as caught:
+        evaluate_draft(original + b"\nextra: &anchor [a,b]\nalias: *anchor\n")
+    assert caught.value.reason_code == "input-unreadable"
+    deep = original + b"\nextra: " + b"[" * 70 + b"x" + b"]" * 70 + b"\n"
+    with pytest.raises(DraftEvaluationInputError) as caught:
+        evaluate_draft(deep)
+    assert caught.value.reason_code == "input-unreadable"
+
+
+def test_gemini_empty_question_placeholders_do_not_meet_declared_minimum():
+    receipt = evaluate_draft(_bytes(worksheet_questions=["A real question?", "", "  ", "\u200b"]), min_questions=4)
+    assert receipt["status"] == "fail"
+    assert _finding(receipt, CODE_BELOW_MINIMUM)["locations"] == ["worksheet_questions"]
+    assert receipt["draft_counts"]["questions"] == 4
+
+
+def test_gemini_metadata_only_changes_cannot_hide_unchanged_student_content():
+    source = _bytes()
+    other = _bytes(lesson_identity={"day_lesson_number": "Day 2"})
+    receipt = evaluate_draft(other, prior_draft=source)
+    assert CODE_UNCHANGED in _codes(receipt)
+    assert receipt["status"] == "review"
+    changed = _bytes(worksheet_questions=["A genuinely changed question?", *BASE["worksheet_questions"][1:]])
+    assert CODE_UNCHANGED not in _codes(evaluate_draft(changed, prior_draft=source))
+
+
+def test_gemini_conflicting_supported_artifact_declarations_are_input_errors():
+    with patch.object(draft_evaluation, "_requirement_facts", return_value=("worksheet", True)):
+        with pytest.raises(DraftEvaluationInputError) as caught:
+            evaluate_draft(_bytes(), material_requirement=b"fixture", artifact_type="slide-deck")
+        assert caught.value.reason_code == "artifact-type-conflict"
+        with pytest.raises(DraftEvaluationInputError) as caught:
+            evaluate_draft(_bytes(), material_requirement=b"fixture", artifact_type="rubric")
+        assert caught.value.reason_code == "artifact-type-conflict"
+        same = evaluate_draft(_bytes(), material_requirement=b"fixture", artifact_type="worksheet")
+        assert same["declared"]["artifact_types"] == ["worksheet"]
+
+
+def test_gemini_empty_artifact_flag_is_invalid_in_library_and_cli(tmp_path, capsys):
+    with pytest.raises(DraftEvaluationInputError) as caught:
+        evaluate_draft(_bytes(), artifact_type="")
+    assert caught.value.reason_code == "artifact-type-invalid"
+    draft = _write(tmp_path, "draft.yaml", _bytes())
+    assert cli.main(["evaluate-draft", "--content", draft, "--artifact-type", ""]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and "artifact-type-invalid" in captured.err
+    assert cli.main(["evaluate-draft", "--content", draft]) == 0
+    assert json.loads(capsys.readouterr().out)["declared"]["artifact_types"] == []
+
+
+def test_gemini_finding_location_truncation_records_full_occurrence_count():
+    marker = "NO-FREE-TEXT-MARKER"
+    words = " ".join(["word"] * 36)
+    receipt = evaluate_draft(_bytes(worksheet_questions=[f"{marker} {words} {i}?" for i in range(33)]))
+    finding = _finding(receipt, CODE_LONG_LINE)
+    assert finding["occurrences"] == 33
+    assert len(finding["locations"]) == 32
+    assert finding["locations"][0] == "question_1" and finding["locations"][-1] == "question_32"
+    assert finding["locations_truncated"] is True
+    assert marker not in json.dumps(receipt)
+
+
+def test_gemini_invalid_scalar_parameter_precedes_yaml_parsing():
+    with pytest.raises(DraftEvaluationInputError) as caught:
+        evaluate_draft(b"this: [is not valid", min_questions=0)
+    assert caught.value.reason_code == "declared-minimum-invalid"
+
+
+def test_gemini_whitespace_identity_flag_returns_blocked_receipt(tmp_path, capsys):
+    draft = _write(tmp_path, "draft.yaml", _bytes())
+    evidence = _write(tmp_path, "lesson-content.json", _evidence_bytes())
+    args = ["--lesson-content-result", evidence, "--request-id", "   ",
+            "--canonical-unit-page-id", UNIT_PAGE_ID, "--lesson", "Day 1",
+            "--generated-at", GENERATED_AT]
+    assert cli.main(["evaluate-draft", "--content", draft, *args]) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "blocked"
+    assert receipt["identity_reason_code"] == "selection-malformed"
+
+
+def test_gemini_routing_note_is_non_authorizing_constant():
+    from instructional_materials_coach.draft_evaluation import TEACHER_MODELING_ROUTING_NOTE
+    _assert_no_quality_claims(TEACHER_MODELING_ROUTING_NOTE)
