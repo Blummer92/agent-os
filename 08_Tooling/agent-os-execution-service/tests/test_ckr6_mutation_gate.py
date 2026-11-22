@@ -979,3 +979,74 @@ def test_linked_issue_extraction_rejects_non_authoritative(body):
 def test_linked_issue_extraction_ambiguous_closing_looking(body):
     with pytest.raises(ValueError, match=ISSUE_LINK_AMBIGUOUS):
         _linked_issue_from_pr_body(body)
+
+
+def test_exact_file_same_number_routes_to_pr_thread_only(monkeypatch):
+    """The verified exact-file route has no primary implementation issue."""
+    from agent_os_execution_service import ckr6_mutation_gate as gate
+
+    class Reader:
+        def __init__(self):
+            self.reads = []
+
+        def read_head_observed_at(self, repository, branch, sha, pr_number):
+            return "2026-11-22T21:00:00Z"
+
+        def read_issue_comments(self, repository, number):
+            self.reads.append(number)
+            return [{"id": 7, "body": "PR-only note"}]
+
+    reader = Reader()
+    captured = []
+
+    def evaluate(**kwargs):
+        captured.append(kwargs)
+        return gate.GateDecision(False, gate.REQUEST_MISSING)
+
+    monkeypatch.setattr(gate, "evaluate_mutation_boundary", evaluate)
+    result = gate.run_gate(
+        reader=reader, repository=REPOSITORY,
+        issue_number=4092, pr_number=4092,
+        head_repository=REPOSITORY,
+        head_branch="ckr/pr4-trusted-evidence",
+        head_sha="b" * 40,
+    )
+    assert not result.admitted
+    assert reader.reads == [4092]
+    assert captured[0]["issue_comments"] == ()
+    assert captured[0]["pr_comments"] == [{"id": 7, "body": "PR-only note"}]
+    assert captured[0]["head_sha"] == "b" * 40
+
+
+def test_standard_issue_primary_still_reads_two_threads(monkeypatch):
+    from agent_os_execution_service import ckr6_mutation_gate as gate
+
+    class Reader:
+        def __init__(self):
+            self.reads = []
+
+        def read_head_observed_at(self, repository, branch, sha, pr_number):
+            return "2026-11-22T21:00:00Z"
+
+        def read_issue_comments(self, repository, number):
+            self.reads.append(number)
+            return [{"id": number}]
+
+    reader = Reader()
+    captured = []
+
+    def evaluate(**kwargs):
+        captured.append(kwargs)
+        return gate.GateDecision(False, gate.REQUEST_MISSING)
+
+    monkeypatch.setattr(gate, "evaluate_mutation_boundary", evaluate)
+    result = gate.run_gate(
+        reader=reader, repository=REPOSITORY,
+        issue_number=4054, pr_number=4092,
+        head_repository=REPOSITORY,
+        head_branch="example", head_sha="b" * 40,
+    )
+    assert not result.admitted
+    assert reader.reads == [4054, 4092]
+    assert captured[0]["issue_comments"] == [{"id": 4054}]
+    assert captured[0]["pr_comments"] == [{"id": 4092}]
