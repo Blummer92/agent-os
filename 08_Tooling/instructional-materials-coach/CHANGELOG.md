@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Offline advisory draft evaluation (#4072): `imc-build evaluate-draft` and the
+  leaf module `draft_evaluation.py` (contract `imc-draft-evaluation-v1`)
+  evaluate one host-supplied lesson draft and return a closed vocabulary of
+  deterministic findings (teacher voice, instruction line over 35 words,
+  ungrounded claim pattern, request-declared minimum, removed items, unchanged
+  resubmission, AI generation not permitted, unsupported artifact type) in one
+  content-safe, deterministically fingerprinted receipt. Every receipt states
+  `semantic_review: not-performed` and a fixed `not_evaluated` list,
+  `classroom_ready` false and `preview_only` true; a `no-deterministic-finding`
+  result is never a statement about writing, accuracy, grade level or
+  classroom readiness, and nothing requires a host to run it. Existing lesson
+  identity, preview, student-voice and normalization contracts are reused
+  unchanged. Offline: no model call, credential, network or external write.
+  See `docs/draft-evaluation.md`.
 - Tutorial-day connection for worksheets (#3215): lesson content specs may
   declare `prerequisite_tutorials` (tutorial ids); `tutorial_connection.py`
   resolves them against a typed tutorial registry (Tutorial 0: Adobe

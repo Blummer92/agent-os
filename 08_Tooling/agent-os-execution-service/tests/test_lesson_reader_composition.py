@@ -156,6 +156,42 @@ def test_raised_provider_http_failure_is_projected_as_finite_sanitized_reason():
     assert len(adapter.tasks) == 1
 
 
+def test_adapter_pagination_metadata_failure_is_projected_as_malformed_pagination():
+    # #4016 R-1: a missing/malformed has_more detected by the adapter keeps
+    # its own finite reason code instead of collapsing to notion-read-failure.
+    adapter = SpyNotionAdapter(
+        result={
+            "status": "failure",
+            "message": "Notion API pagination metadata is malformed: response is missing required field 'has_more'",
+        }
+    )
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError) as exc_info:
+        reader({"page_size": 5, "filter": {"and": []}})
+
+    assert str(exc_info.value) == "notion-malformed-pagination"
+
+
+def test_adapter_missing_cursor_failure_is_projected_as_malformed_pagination():
+    # #4016: has_more without a usable cursor is pagination malformation, the
+    # same classification the direct executor gives a malformed next_cursor.
+    adapter = SpyNotionAdapter(
+        result={
+            "status": "failure",
+            "message": "Notion API set has_more without a valid opaque next_cursor",
+        }
+    )
+    reader = build_lesson_read_executor(data_source_id="lessons-source", adapter=adapter)
+    assert reader is not None
+
+    with pytest.raises(LessonReadUnavailableError) as exc_info:
+        reader({"page_size": 5, "filter": {"and": []}})
+
+    assert str(exc_info.value) == "notion-malformed-pagination"
+
+
 def test_raised_provider_connection_failure_is_projected_as_finite_reason():
     adapter = RaisingNotionAdapter(
         RuntimeError("Notion API connection error: dial tcp: connection refused")

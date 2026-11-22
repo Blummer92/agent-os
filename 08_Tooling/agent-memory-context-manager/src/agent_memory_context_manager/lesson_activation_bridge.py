@@ -27,11 +27,14 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .coding_knowledge_selection import (
     MAX_GUIDANCE_TEXT_CHARS,
+    MAX_SELECTED,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
     _match_candidate,
+    _norm,
+    contextual_tie_scores,
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
@@ -73,6 +76,9 @@ MAX_SUPPORTING_REFS = 5
 _SUPPORTING_REF = re.compile(
     r"https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}"
 )
+_GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
+_GITHUB_NUMBER = re.compile(r"[1-9][0-9]*")
+_GITHUB_COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
 _GOVERNANCE_PREFIXES = (
     "00_Governance/",
     "01_Shared_Standards/",
@@ -359,9 +365,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
         )
-        # CKR2 validates additional text invariants, including control
-        # characters. Check them inside this row's isolation boundary so
-        # a malformed lesson cannot abort selection of the complete corpus.
+        # Validate CKR2 text invariants inside the per-row isolation boundary.
         _as_selection_candidate(lesson)
         return lesson
     except (TypeError, ValueError):
@@ -387,37 +391,149 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
     )
 
 
-def _bound_relevant_lessons(
+def _bound_relevant_lessons_with_order(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
-) -> tuple[LessonRecordEvidence, ...]:
-    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher.
+) -> tuple[tuple[LessonRecordEvidence, ...], tuple[str, ...]]:
+    """Keep the five-identity bound and original full-pool ranking.
+
+    Return selected records in input order to preserve duplicate-revision
+    behavior, plus an immutable rank order for the final CKR2 selection.
 
     R1 (#2425): the budget counts DISTINCT lesson IDs. A conflicting
     identity counts once, and ALL its records enter the bound set, so a
     conflict at the bound edge is reported by the selector instead of being
     silently dropped with the second revision.
     """
-    ranked: list[tuple[int, str, LessonRecordEvidence]] = []
+    ranked: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
     unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
         bucket, _ = _match_candidate(request, _as_selection_candidate(lesson))
         if bucket:
-            ranked.append((bucket, lesson.lesson_id.casefold(), lesson))
+            lesson_id = lesson.lesson_id
+            ranked.append((bucket, (lesson_id.casefold(), lesson_id), lesson))
         else:
             unranked.append(lesson)
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
+        # #4026: inside each relevance bucket, order by exact request-context
+        # overlap before the five-ID cut; the total ID order breaks ties and
+        # is the whole order when nothing overlaps. Buckets never mix.
+        reordered: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
+        for bucket in sorted({item[0] for item in ranked}, reverse=True):
+            # Score equal normalized records once, while retaining the
+            # original rows for raw counts and revision-conflict checks.
+            group = list(dict.fromkeys(
+                item for item in ranked if item[0] == bucket
+            ))
+            scores = contextual_tie_scores(
+                request, (_as_selection_candidate(item[2]) for item in group)
+            )
+            order = sorted(range(len(group)), key=lambda index: (-scores[index], group[index][1]))
+            reordered.extend(group[index] for index in order)
+        ranked = reordered
         # Rank identities, not individual revisions. A second revision of
         # a selected ID may be unranked, but must still reach CKR2's
         # fail-closed duplicate-identity conflict check.
-        selected_ids = {
-            lesson.lesson_id
-            for lesson in _take_distinct_ids([item[2] for item in ranked])
-        }
-        return tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids)
-    unranked.sort(key=lambda item: item.lesson_id.casefold())
-    return _take_distinct_ids(unranked)
+        chosen = _take_distinct_ids([item[2] for item in ranked])
+        ranked_ids = tuple(dict.fromkeys(item.lesson_id for item in chosen))
+        selected_ids = set(ranked_ids)
+        return (
+            tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
+            ranked_ids,
+        )
+    unranked.sort(key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
+    chosen = _take_distinct_ids(unranked)
+    return chosen, tuple(dict.fromkeys(item.lesson_id for item in chosen))
+
+
+def _bound_relevant_lessons(
+    request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
+) -> tuple[LessonRecordEvidence, ...]:
+    """Backward-compatible tuple-only bridge boundary."""
+    return _bound_relevant_lessons_with_order(request, lessons)[0]
+
+
+# PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
+# lessons. A value states mechanism only -- never relevance, truth or
+# verification -- and never feeds selection, status or admission.
+# ``not-evaluated`` means selection was skipped, unavailable or could not
+# complete (not-needed, no read executor, read error, incomplete pagination);
+# ``no-relevant-signal`` is reserved for a COMPLETED evaluation that found no
+# qualifying match.
+SELECTION_BASIS_VALUES = frozenset({
+    "no-relevant-signal",
+    "identity-scoped",
+    "title-echo",
+    "exact-library",
+    "rule-ckr6-mutation-boundary",
+    "generic-unique",
+    "generic-tie-lexical-cut",
+    "not-evaluated",
+})
+_GENERIC_REASONS = frozenset({
+    "keyword-overlap", "ecosystem-capability-match", "target-path-match",
+})
+
+
+@dataclass(frozen=True)
+class SelectionBasis:
+    basis: str
+    best_bucket: int
+    tied_identities: int
+
+
+# Recorded when no evaluation completed. Never produced by
+# ``describe_selection_basis`` itself, which always describes a completed one.
+NOT_EVALUATED = SelectionBasis(basis="not-evaluated", best_bucket=0, tied_identities=0)
+
+
+def describe_selection_basis(
+    request: CodingKnowledgeRequest,
+    lessons: Sequence[LessonRecordEvidence],
+    *,
+    identity_route: bool,
+) -> SelectionBasis:
+    """Describe how the canonical CKR2 matcher chose among ``lessons``.
+
+    Pure and observational: reuses ``_match_candidate`` unchanged, reads
+    only the request's hint fields (never ``task_reference``), does not
+    mutate or reorder its inputs, and is never consulted by selection.
+    ``tied_identities`` counts DISTINCT lesson IDs in the best bucket over
+    the whole pool given (before the five-ID bound), so a duplicate revision
+    counts once.
+    """
+    best = 0
+    tied: set[str] = set()
+    reasons: set[str] = set()
+    via_library_name = False
+    hints = {_norm(value) for value in request.library_hints}
+    for lesson in lessons:
+        bucket, matched = _match_candidate(request, _as_selection_candidate(lesson))
+        if not bucket:
+            continue
+        if bucket > best:
+            best, tied, reasons, via_library_name = bucket, set(), set(), False
+        if bucket == best:
+            tied.add(lesson.lesson_id)
+            reasons.update(matched)
+            if lesson.library_name and _norm(lesson.library_name) in hints:
+                via_library_name = True
+
+    # Evaluated in the documented order; the first matching row wins.
+    if not best:
+        basis = "no-relevant-signal"
+    elif identity_route:
+        basis = "identity-scoped"
+    elif best == 3:
+        basis = "exact-library" if via_library_name else "title-echo"
+    elif "verified-ckr6-mutation-context-match" in reasons:
+        basis = "rule-ckr6-mutation-boundary"
+    elif reasons & _GENERIC_REASONS:
+        basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
+    else:  # pragma: no cover - the matcher has no other reason vocabulary
+        basis = "no-relevant-signal"
+    return SelectionBasis(basis=basis, best_bucket=best, tied_identities=len(tied))
 
 
 def _take_distinct_ids(
@@ -504,8 +620,8 @@ def orchestrate_lesson_activation(
         if isinstance(normalized, LessonRecordEvidence):
             lessons.append(normalized)
 
-    bounded = _bound_relevant_lessons(request, lessons)
-    return consume_lesson_preflight(request, bounded)
+    bounded, rank_order = _bound_relevant_lessons_with_order(request, lessons)
+    return consume_lesson_preflight(request, bounded, _ranked_order=rank_order)
 
 
 def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
@@ -531,6 +647,12 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     ``has_more: true`` without a non-empty string ``next_cursor`` is
     malformed: following it would loop, and ignoring it would silently
     truncate the database.
+
+    A valid ``next_cursor`` is an opaque Notion token
+    (https://developers.notion.com/reference/pagination) and is returned
+    byte-for-byte as received. ``.strip()`` is used only to reject a
+    whitespace-only token; it must never rewrite the value forwarded as
+    ``start_cursor``.
     """
     if not isinstance(raw, Mapping):
         raise LessonActivationError("read executor must return a mapping")
@@ -542,7 +664,11 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     next_cursor = raw.get("next_cursor")
     if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor.strip()):
         raise LessonActivationError("read executor returned a malformed next_cursor")
-    return has_more, next_cursor.strip() if isinstance(next_cursor, str) else None
+    # A terminal page must not simultaneously advertise a continuation.
+    # Do not admit an incomplete or internally contradictory corpus to CKR2.
+    if not has_more and next_cursor is not None:
+        raise LessonActivationError("read executor returned a malformed next_cursor")
+    return has_more, next_cursor
 
 
 def _guidance_text(prop: Any) -> tuple[str | None, str]:
@@ -768,16 +894,43 @@ def _github_source_link(prop: Any) -> str | None:
     # provenance. Plain resource URLs are unaffected: blob-URL primaries
     # (relied on by an existing test) and governance-path primaries still
     # normalize as CURRENT.
-    if "#" in value:
-        return None
-    if not (
-        value.startswith("https://github.com/")
-        or value.startswith("00_Governance/")
-        or value.startswith("01_Shared_Standards/")
-        or value.startswith("02_Agent_Overlays/")
-        or value.startswith("04_Registry/")
-        or value.startswith("08_Tooling/")
+    if (
+        "#" in value or "\\" in value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
         return None
-    return value
 
+    if value.startswith(_GOVERNANCE_PREFIXES):
+        # Keep the existing governed locations but require a path to a
+        # resource, not just the directory prefix.
+        return value if _has_source_segments(value.split("/")) else None
+
+    github = "https://github.com/"
+    if not value.startswith(github) or "?" in value or any(char.isspace() for char in value):
+        return None
+    segments = value.removeprefix(github).split("/")
+    if len(segments) < 4 or not _has_source_segments(segments):
+        return None
+    owner, repo, kind, *resource = segments
+    if _GITHUB_REPOSITORY.fullmatch(f"{owner}/{repo}") is None:
+        return None
+
+    # Validate shape only. This does not resolve a remote link or assert that
+    # the linked material substantiates the lesson.
+    if kind in {"issues", "pull"} and len(resource) == 1 and _GITHUB_NUMBER.fullmatch(resource[0]):
+        return value
+    if kind == "blob" and len(resource) >= 2:
+        return value  # a ref and a file path
+    if kind == "commit" and len(resource) == 1 and _GITHUB_COMMIT.fullmatch(resource[0]):
+        return value
+    if kind == "actions" and len(resource) in {2, 4}:
+        if resource[0] == "runs" and _GITHUB_NUMBER.fullmatch(resource[1]):
+            if len(resource) == 2 or (
+                resource[2] == "job" and _GITHUB_NUMBER.fullmatch(resource[3])
+            ):
+                return value
+    return None
+
+
+def _has_source_segments(segments: Sequence[str]) -> bool:
+    return all(segment.strip() and segment not in {".", ".."} for segment in segments)

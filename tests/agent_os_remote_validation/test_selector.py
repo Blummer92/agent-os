@@ -56,6 +56,18 @@ def _select(value: SelectionInput, rules: dict[str, object] | None = None):
     return select_validation_plan(value, rules or RULES)
 
 
+def test_ci_executor_receipt_changes_select_bounded_junit_and_receipt_tests() -> None:
+    paths = (
+        "tests/test_agent_os_ci_validation_junit.py",
+        "tests/test_agent_os_ci_validation_receipt.py",
+    )
+    commands = tuple(f"python -m pytest {path}" for path in paths)
+    for path in paths:
+        plan = _select(_input([path]))
+        assert plan.profile == "focused"
+        assert plan.commands == commands
+
+
 def test_documentation_only_is_static_and_zero_build() -> None:
     plan = _select(_input(_fixtures()["static"]))
     assert plan.profile == "static"
@@ -75,6 +87,27 @@ def test_mapped_package_is_focused() -> None:
     assert plan.reason_codes == ("profile.focused-package",)
     assert plan.remote_build_required is True
     assert validate_validation_plan(plan) == ()
+
+
+def test_4088_exact_file_routing_changes_require_aggregate() -> None:
+    plan = _select(_input([
+        "AGENTS.md",
+        "01_Shared_Standards/github/routine-repository-coding-hot-path.md",
+        "02_Agent_Overlays/github-service-agent.md",
+        "03_Templates/prompts/github-change-request.md",
+    ]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-configuration",)
+    assert plan.execution_authorized is False
+    assert plan.side_effects_performed is False
+    assert validate_validation_plan(plan) == ()
+
+
+def test_root_agents_rule_does_not_promote_other_markdown_paths() -> None:
+    assert _select(_input(["AGENTS.md"])).profile == "aggregate"
+    assert _select(_input(["other/AGENTS.md"])).profile == "manual-review"
+    assert _select(_input(["docs/AGENTS.md"])).profile == "static"
 
 
 def test_workflow_change_is_aggregate() -> None:
@@ -485,11 +518,18 @@ def test_documentation_only_remains_static() -> None:
 
 
 def test_tooling_documentation_only_reproduces_2630_as_static() -> None:
+    # D07 Track A: the visual-asset-drive-writer and visual-asset-routing
+    # READMEs that used to stand here are now owned by focused rules (whole-
+    # directory ownership, the execution-service precedent), so they select
+    # their focused suites -- see
+    # test_focused_tooling_documentation_outranks_generic_static_classification.
+    # The #2630 case is preserved with documentation from tool directories
+    # that still have no focused owner.
     paths = [
         "03_Templates/prompts/workspace-automation-builder.md",
         "08_Tooling/workspace-automation-builder/README.md",
-        "08_Tooling/visual-asset-drive-writer/README.md",
-        "08_Tooling/visual-asset-routing/README.md",
+        "08_Tooling/ckr4-benchmark-harness/README.md",
+        "08_Tooling/teacher-os-web/README.md",
     ]
     plan = _select(_input(paths))
     assert plan.profile == "static"
@@ -1724,3 +1764,14 @@ def test_every_npm_focused_rule_is_covered_by_node_setup():
                 directory = command[3:].split(" && ", 1)[0]
                 assert directory in known, f"npm rule {rule['name']} project {directory} is not in _NODE_PROJECTS"
                 assert node_setup_requirements((command,))["needs_node"] is True
+
+
+def test_frontend_driver_and_its_regression_tests_select_focused_pytest() -> None:
+    paths = [
+        "scripts/agent_os_frontend_checks.py",
+        "tests/test_agent_os_frontend_checks.py",
+    ]
+    for selection in ([paths[0]], [paths[1]], paths):
+        plan = _select(_input(selection))
+        assert plan.profile == "focused"
+        assert plan.commands == ("python -m pytest tests/test_agent_os_frontend_checks.py",)

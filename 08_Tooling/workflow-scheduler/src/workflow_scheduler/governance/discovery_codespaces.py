@@ -25,6 +25,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._stdout_frame import extract_framed_payload
 from .dev_validation_codespaces import (
     APPROVED_CODESPACE_PROFILE_ID,
     _CODESPACE_NAME_RE,
@@ -127,22 +128,6 @@ def main():
     _emit(payload)
 main()
 '''
-
-
-def _extract_framed_payload(stdout: object) -> str | None:
-    if (
-        type(stdout) is not str
-        or stdout.count(_FRAME_START) != 1
-        or stdout.count(_FRAME_END) != 1
-    ):
-        return None
-    start = stdout.find(_FRAME_START)
-    end = stdout.find(_FRAME_END)
-    return (
-        stdout[start + len(_FRAME_START) : end].strip()
-        if start >= 0 and end > start
-        else None
-    )
 
 
 @dataclass(frozen=True)
@@ -288,7 +273,9 @@ def run_discovery_over_codespaces(
             }
         )
         return {"discovery": evidence, "codespaces_capable": False}
-    framed = _extract_framed_payload(completed.stdout)
+    framed = extract_framed_payload(
+        completed.stdout, frame_start=_FRAME_START, frame_end=_FRAME_END
+    )
     if framed is None:
         return {"discovery": _failure(request, "discovery-codespaces-frame-invalid", codespace_name), "codespaces_capable": False}
     try:

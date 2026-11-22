@@ -318,6 +318,15 @@ class NotionReadOnlyAdapter(TaskAdapter):
         max_pages: int,
         max_results: int,
     ) -> Dict[str, Any]:
+        # Strict pagination contract (#4016 R-1/R-2): the adapter reports the
+        # provider's pagination evidence exactly as received. It never
+        # fabricates completeness from a missing or malformed ``has_more``,
+        # and never silently trims a provider page: oversized or cumulative
+        # overflow is reported whole with truthful ``has_more`` so the
+        # consuming layer (lesson snapshot, lesson-content read) can reject
+        # it with its own bound classification. Only a single page larger
+        # than the adapter's absolute result ceiling is rejected here, as a
+        # memory bound, never as a completeness claim.
         results: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
         last: Dict[str, Any] = {}
@@ -329,11 +338,26 @@ class NotionReadOnlyAdapter(TaskAdapter):
                 data_source_id, request_body, filter_properties
             )
             page_results = self._require_results(last)
-            remaining = max_results - len(results)
-            results.extend(page_results[:remaining])
+            if len(page_results) > _MAX_RESULTS:
+                raise NotionReadOnlyAdapterError(
+                    "Notion API returned a malformed response: provider page "
+                    "exceeds the maximum result count"
+                )
+            if "has_more" not in last:
+                raise NotionReadOnlyAdapterError(
+                    "Notion API pagination metadata is malformed: response "
+                    "is missing required field 'has_more'"
+                )
+            has_more = last["has_more"]
+            if type(has_more) is not bool:
+                raise NotionReadOnlyAdapterError(
+                    "Notion API pagination metadata is malformed: "
+                    "'has_more' must be a boolean"
+                )
+            results.extend(page_results)
             if len(results) >= max_results:
                 break
-            if not last.get("has_more"):
+            if not has_more:
                 break
             next_cursor = last.get("next_cursor")
             if not isinstance(next_cursor, str) or not next_cursor:
@@ -343,7 +367,7 @@ class NotionReadOnlyAdapter(TaskAdapter):
             cursor = next_cursor
         return {
             "results": results,
-            "has_more": bool(last.get("has_more")),
+            "has_more": last.get("has_more", False),
             "next_cursor": last.get("next_cursor"),
             "request_id": last.get("request_id"),
         }

@@ -184,9 +184,8 @@ def test_pending_is_published_before_expensive_work_and_only_when_authoritative(
     pending = names.index("Publish authoritative aggregate pending status")
     assert pending < names.index("Check out repository")
     assert pending < names.index("Run aggregate validation")
-    assert pending > names.index("Reuse valid exact-head aggregate evidence")
-    cond = steps[pending]["if"]
-    assert "authoritative == 'true'" in cond and "run_required != 'false'" in cond
+    assert pending > names.index("Resolve authoritative candidate identity")
+    assert steps[pending]["if"] == "${{ steps.authority.outputs.authoritative == 'true' }}"
     assert "-f state=pending" in steps[pending]["run"]
     assert "agent-os/authoritative-aggregate" in steps[pending]["run"]
 

@@ -1,0 +1,37 @@
+{
+  "schema": "agent-os/ckr-pr3-rubric/draft-v1",
+  "approval_state": "proposed",
+  "evidence_mode": "offline-shadow-only",
+  "historical_design": "CKR PR-2 ADR section I",
+  "cohort": {
+    "min_frozen_reviewed_lesson_identities": 20,
+    "min_holdout_scenarios": 24,
+    "min_positive_scenarios": 8,
+    "min_hard_negative_scenarios": 8,
+    "temporal_cutoff_utc": "2026-11-19T00:00:00Z",
+    "cutoff_status": "draft; confirm with owner before freeze",
+    "group_split": "Group scenarios by non-sensitive opaque incident-family hash; no group may cross development and holdout. Custodian verifies related tasks, code families and shared root causes before freezing, not just identifiers."
+  },
+  "arms": {
+    "baseline": "Unchanged production normalization, eligibility and selector; publish actual max-three returned lessons separately from any diagnostic top five.",
+    "A": "Existing shadow applicability evaluator on reviewed revision-bound records and independently evidence-bound minimal task observations. Scaffolding does not supply trusted observations.",
+    "B": "Verified CI evidence-only comparison using pre-registered feature construction; BLOCKED until a reproducible exact-head source and pre-registered comparator are available.",
+    "C": "A+B; BLOCKED until both arms are independently runnable. Never substitute static links, caller payloads or no-evidence results for verified evidence."
+  },
+  "metrics": {
+    "recall_at_5": "Diagnostic ranked list only; macro over positive scenarios: |top5[lesson ID and revision] intersect valid gold| / |gold|. If an arm has no defensible predeclared ranking to five, NOT_APPLICABLE; separately report Recall@3 over actual supported output.",
+    "precision_at_3": "Macro over positive scenarios: matched (ID, revision) among first 3 / 3 including empty slots; separately report returned-list precision where denominators are nonzero.",
+    "positive_hit_count": "Count positive scenarios with at least one valid gold (ID, revision) in first 3; keeper metric for comparison; include cohort, denominator and paired discordance.",
+    "correct_abstention": "No shadow recommendation on ABSTAIN cases. Report hard negatives separately; pipeline unavailability or underevaluation is not an abstention success.",
+    "hard_negative_false_positive_rate": "Hard-negative scenarios with any recommendation / eligible pre-registered hard-negative cohort; one violation fails proposed gate.",
+    "provenance_accuracy": "All proposed recommendations must be exact lesson/revision bound and use independently verified input evidence. Count provenance failures; missing provenance is unresolved, never a success.",
+    "explanation_fidelity": "An independent verifier traces each recommendation reason to reviewed record ID/revision and the qualifying observation identity or known baseline reason; aggregate counts plus missing traces. Do not disclose private lesson content.",
+    "shuffle_stability": "Ten pre-registered script-derived seeds permute equivalent input order only. Require identical ordered recommendation IDs/revisions, match status, stable reason codes and decision across permutations."
+  },
+  "draft_go_no_go": {
+    "pr3_shadow_program": "A or fully available C has more positive hits than baseline on the same frozen cohort, zero hard-negative false positives, zero strict safety failures and 100% explanation traceability. Unmeasured arms are not candidates for recommendation.",
+    "pr4_pr5_comparison": "Only on comparable complete arms: C beats A by at least 2 positives or improves correct abstention without new false positives. Any production integration still requires separate governing approval, verified acquisition and safety gates.",
+    "zero_tolerance": ["unreviewed-or-stale-lesson", "unverified-evidence", "conflicting-identity", "partial-snapshot", "unjustified-promotion", "production-selection-invariance-diff", "private-fixture-disclosure"],
+    "activation_authorized": false
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
+import re
 from typing import Any
 
 MAX_CANDIDATES = 5
@@ -224,11 +225,77 @@ class CodingKnowledgeSelectionResult:
         }
 
 
+# #4026: contextual tie-break INSIDE one relevance bucket only. It never creates
+# relevance (bucket 0 stays excluded), never moves a candidate across buckets,
+# never changes budgets, provenance or currentness checks, and adds no reason
+# code. With no overlap every score is 0 and the legacy id order is unchanged.
+_CONTEXT_TOKEN = re.compile(r"[a-z0-9]+")
+_MIN_CONTEXT_TOKEN_CHARS = 4
+
+
+def _context_tokens(texts: Any) -> frozenset[str]:
+    return frozenset(
+        token
+        for text in texts
+        for token in _CONTEXT_TOKEN.findall(text.casefold())
+        if len(token) >= _MIN_CONTEXT_TOKEN_CHARS
+    )
+
+
+def contextual_tie_scores(
+    request: CodingKnowledgeRequest,
+    tied: Any,
+) -> list[int]:
+    """Exact whole-word overlap between request context and tied candidates.
+
+    Request context is task_reference plus capability_keywords;
+    candidate text is its name and use_when. A shared token is weighted by
+    how many tied candidates do NOT contain it (n - df), so words common
+    to the whole tie group carry no weight. No stemming, synonyms or fuzzy
+    matching. Deterministic, integer-valued, aligned with tied by position.
+    """
+    candidates = list(tied)
+    if len(candidates) < 2:
+        return [0] * len(candidates)
+    # A capability keyword that already matched candidate vocabulary formed the
+    # relevance bucket; counting it again as context would reward any lesson
+    # that merely mentions the bucket's own term. Free-text phrases still count.
+    consumed = {_norm(candidate.capability_kind) for candidate in candidates} | {
+        _norm(keyword) for candidate in candidates for keyword in candidate.keywords
+    }
+    wanted = _context_tokens(
+        (
+            request.task_reference,
+            *(kw for kw in request.capability_keywords if _norm(kw) not in consumed),
+        )
+    )
+    shared = [
+        _context_tokens((candidate.name, *candidate.use_when)) & wanted
+        for candidate in candidates
+    ]
+    document_frequency: dict[str, int] = {}
+    for tokens in shared:
+        for token in tokens:
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+    total = len(candidates)
+    return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
+
+
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
 ) -> CodingKnowledgeSelectionResult:
-    """Select the smallest current relevant knowledge set from supplied evidence."""
+    """Standalone CKR2: rank once within the caller's bounded candidate pool."""
+    return _select_coding_knowledge(request, candidates, _ranked_order=None)
+
+
+def _select_coding_knowledge(
+    request: CodingKnowledgeRequest,
+    candidates: tuple[CodingKnowledgeCandidate, ...],
+    *,
+    _ranked_order: tuple[str, ...] | None,
+) -> CodingKnowledgeSelectionResult:
+    """Run CKR2 safeguards; trusted retrieval may supply a frozen rank order."""
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
     if type(candidates) is not tuple:
@@ -286,9 +353,45 @@ def select_coding_knowledge(
             candidate_count,
         )
 
+    # The pre-cut ranking is internal to the CKR11/CKR6 path. Reject
+    # stale or forged identity priorities and cross-bucket inversions.
+    if _ranked_order is not None:
+        ranked_buckets = {item.knowledge_id: 0 for item in deduped}
+        ranked_buckets.update((item[2].knowledge_id, item[0]) for item in ranked)
+        invalid_order = (
+            type(_ranked_order) is not tuple
+            or any(type(identity) is not str for identity in _ranked_order)
+            or len(_ranked_order) != len(set(_ranked_order))
+            or set(_ranked_order) != {item.knowledge_id for item in deduped}
+            or 0 in ranked_buckets.values()
+        )
+        if not invalid_order:
+            invalid_order = any(
+                ranked_buckets[earlier] < ranked_buckets[later]
+                for earlier, later in zip(_ranked_order, _ranked_order[1:])
+            )
+        if invalid_order:
+            return _result(
+                SufficiencyStatus.MANUAL_REVIEW,
+                RetrievalEscalation.MANUAL_REVIEW,
+                (),
+                request.canonical_rule_refs,
+                ("upstream-ranking-order-mismatch",),
+                candidate_count,
+            )
+
     best_bucket = max(item[0] for item in ranked)
     best = [item for item in ranked if item[0] == best_bucket]
     best.sort(key=lambda item: item[1])
+    if _ranked_order is None:
+        # Standalone CKR2 callers retain the original bounded ranking.
+        scores = contextual_tie_scores(request, (item[2] for item in best))
+        order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
+        best = [best[index] for index in order]
+    else:
+        # Never recompute document frequency on the five finalists.
+        priority = {identity: index for index, identity in enumerate(_ranked_order)}
+        best.sort(key=lambda item: priority[item[2].knowledge_id])
 
     if any(item[2].authority_conflict for item in best):
         return _result(
@@ -421,6 +524,33 @@ def _match_candidate(
         if all(re.search(r"(?<![a-z0-9])" + term + r"(?![a-z0-9])", lesson_text)
                for term in ("ckr6", "mutation")):
             return 2, ("verified-ckr6-mutation-context-match",)
+
+    # #4026: a specifically requested Git PR-refresh reconciliation
+    # mechanism can match source-owned guidance even when Notion's generic
+    # Learning Type/Applies To fields have no such controlled label.
+    #
+    # Require two explicit caller signals and multiple independent signals in
+    # the lesson itself. Free-form task_reference and generic "testing" never
+    # activate this path. This is a relevance *text match* only; it does not
+    # attest to lesson applicability, currentness, provenance, or write authority.
+    if (
+        "branch refresh" in capability_hints
+        and "merge-tree fallback" in capability_hints
+    ):
+        title = candidate.name.casefold()
+        guidance = " ".join(candidate.use_when).casefold()
+        if (
+            re.search(r"(?<![a-z0-9])(?:prs?|pull requests?)(?![a-z0-9])", title)
+            and re.search(r"(?<![a-z0-9])(?:reconciliation|reconciling)(?![a-z0-9])", title)
+            and not re.search(r"(?<![a-z0-9])(?:not|never|unrelated|avoid)(?![a-z0-9])", title)
+            and re.search(r"(?<![a-z0-9])refresh(?:es|ed|ing)?(?![a-z0-9])", guidance)
+            and re.search(
+                r"(?<![a-z0-9])(?:reconciliation|reconcile|reconciled|reconciling|merge-tree)(?![a-z0-9])",
+                guidance,
+            )
+            and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
+        ):
+            return 2, ("pr-refresh-reconciliation-text-match",)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)

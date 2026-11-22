@@ -25,15 +25,18 @@ from .lesson_activation_bridge import (
     MAX_RETRIEVAL_PAGES,
     MAX_RETRIEVAL_ROWS,
     LessonActivationError,
+    NOT_EVALUATED,
+    SelectionBasis,
     _AREA_ECOSYSTEM,
     _AREA_PROPERTY,
     _LEARNING_TYPE_CAPABILITY,
     _LEARNING_TYPE_PROPERTY,
     _page_cursor,
-    _bound_relevant_lessons,
+    _bound_relevant_lessons_with_order,
     _extract_bounded_rows,
     build_filtered_query,
     build_known_reference_query,
+    describe_selection_basis,
     known_lesson_numbers,
     normalize_lesson_row,
 )
@@ -47,6 +50,45 @@ from .lesson_preflight import (
 )
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+
+
+# A large generic-only tie is not evidence that any of the finalists are
+# genuinely applicable to the task. Preserve the existing tie diagnostics but
+# require manual adjudication instead of admitting a lexical-cut result.
+# This does not change the CKR2 candidate/selection budgets or direct callers.
+_GENERIC_TIE_UNVERIFIED = "generic-relevance-unverified"
+
+
+def _abstain_on_generic_tie(
+    result: LessonPreflightResult, basis: SelectionBasis,
+    canonical_rule_refs: tuple[str, ...],
+) -> LessonPreflightResult:
+    if (
+        basis.basis != "generic-tie-lexical-cut"
+        or result.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
+    ):
+        return result
+    # Drop lesson-owned references with the unreviewed selection. Keep the
+    # caller's independent canonical rules available for the manual review.
+    canonical_rule_refs = tuple(sorted(set(canonical_rule_refs)))
+    return replace(
+        result,
+        lesson_retrieval_status=LessonRetrievalStatus.MANUAL_REVIEW,
+        selected_count=0,
+        selected_lesson_ids=(),
+        selection_reason_codes=(_GENERIC_TIE_UNVERIFIED,),
+        canonical_github_refs=canonical_rule_refs,
+        knowledge_refs=(),
+        retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW,
+        handoff_projection={
+            "known_facts": ["coding-knowledge-sufficiency:manual-review"],
+            "prior_decisions": [],
+            "allowed_inspect_first": list(canonical_rule_refs),
+            "stop_conditions": ["coding-knowledge:" + _GENERIC_TIE_UNVERIFIED],
+        },
+        selection=None,
+    )
+
 
 _EXECUTABLE_STEPS = (
     RetrievalEscalation.KNOWN_REFERENCE,
@@ -98,6 +140,16 @@ _INCOMPLETE_REASON_CODES = {
     "read executor returned a non-boolean has_more": "malformed-pagination",
     "read executor returned a malformed next_cursor": "malformed-pagination",
     _READ_BUDGET_MESSAGE: "read-budget-exceeded",
+}
+
+
+# Adapter-projected provider pagination failures carry the same incomplete
+# classification as a direct-executor pagination failure (#4016 R-1): the
+# composition projects a missing/malformed ``has_more`` into a finite
+# provider code, and the retrieval result records the existing CKR11 reason
+# instead of leaving the failure without an incomplete classification.
+_NOTION_INCOMPLETE_REASON_CODES = {
+    "notion-malformed-pagination": "malformed-pagination",
 }
 
 
@@ -389,6 +441,43 @@ def _terminal_query_bucket(query: Mapping[str, Any]) -> str:
     return "unobserved"
 
 
+def _finite_terminal_page_signature(
+    raw: object, *, page_size: int
+) -> dict[str, object] | None:
+    """Classify finite, provider-response-only page metadata (#4011).
+
+    Buckets are relative to the regime's page size: the legacy 25-row
+    vocabulary for read_sequence, the 100-row snapshot bound for
+    read_snapshot. A normal 100-row snapshot page is '100', not 'over-25',
+    so it can no longer be confused with an oversized page.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    results = raw.get("results")
+    if isinstance(results, list):
+        bucket = (
+            f"0-{page_size - 1}" if len(results) < page_size
+            else str(page_size) if len(results) == page_size
+            else f"over-{page_size}"
+        )
+    else:
+        bucket = "unobserved"
+    # Missing metadata is invalid, just like a non-boolean completion flag.
+    has_more = raw.get("has_more")
+    cursor = raw.get("next_cursor")
+    return {
+        "terminal_page_row_count_bucket": bucket,
+        "terminal_page_has_more": (
+            "true" if has_more is True
+            else "false" if has_more is False
+            else "invalid"
+        ),
+        "terminal_page_cursor_present": (
+            isinstance(cursor, str) and bool(cursor.strip())
+        ),
+    }
+
+
 def orchestrate_lesson_retrieval(
     request: CodingKnowledgeRequest,
     *,
@@ -413,8 +502,11 @@ def orchestrate_lesson_retrieval(
     read_count = 0
     incomplete_reason_code: str | None = None
     terminal_query_bucket = "unobserved"
+    terminal_page_signature: dict[str, object] | None = None
 
-    def with_diagnostics(value: LessonPreflightResult) -> LessonPreflightResult:
+    def with_diagnostics(
+        value: LessonPreflightResult, basis: SelectionBasis | None = None
+    ) -> LessonPreflightResult:
         # Only finite counts and static normalization reason names; no raw rows.
         diagnostics = {
             "read_count": read_count,
@@ -432,15 +524,22 @@ def orchestrate_lesson_retrieval(
             "skip_reasons": {reason: skipped[reason] for reason in sorted(skipped)},
             "candidate_count": value.candidate_count,
         }
+        if basis is not None:
+            # PR-1 (observational): HOW the lessons were chosen. Never read
+            # back by selection, status mapping or admission.
+            diagnostics["selection_basis"] = basis.basis
+            diagnostics["best_bucket_tied_identities"] = basis.tied_identities
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
             diagnostics["terminal_query_bucket"] = terminal_query_bucket
+            if terminal_page_signature is not None:
+                diagnostics.update(terminal_page_signature)
         return replace(value, retrieval_diagnostics=diagnostics)
 
     def read_sequence(query: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         # One bounded sequence: at most MAX_RETRIEVAL_PAGES pages and
         # MAX_RETRIEVAL_ROWS rows, following cursors as before (#3973).
-        nonlocal read_count, terminal_query_bucket
+        nonlocal read_count, terminal_query_bucket, terminal_page_signature
         rows: list[Mapping[str, Any]] = []
         cursor: str | None = None
         seen_cursors: set[str | None] = set()
@@ -454,8 +553,13 @@ def orchestrate_lesson_retrieval(
             # Name only a query that is actually sent: a budget stop above leaves
             # the bucket of the last issued query, never the one it refused.
             terminal_query_bucket = _terminal_query_bucket(query)
+            # Discard stale metadata when the next provider call fails.
+            terminal_page_signature = None
             raw = execute_read(page_query)
             read_count += 1
+            terminal_page_signature = _finite_terminal_page_signature(
+                raw, page_size=MAX_RETRIEVAL_ROWS
+            )
             page_rows = _extract_bounded_rows(raw)
             # Reject an oversized supplied page instead of truncating it.
             if len(raw["results"]) > MAX_RETRIEVAL_ROWS - len(rows):
@@ -511,7 +615,7 @@ def orchestrate_lesson_retrieval(
         # normalization, the CKR2 bound, or selection. Cursor discipline and
         # the shared read budget are unchanged from read_sequence; page and
         # row bounds are the snapshot's own.
-        nonlocal read_count, terminal_query_bucket
+        nonlocal read_count, terminal_query_bucket, terminal_page_signature
         rows: list[Mapping[str, Any]] = []
         cursor: str | None = None
         seen_cursors: set[str | None] = set()
@@ -523,8 +627,13 @@ def orchestrate_lesson_retrieval(
                 raise LessonActivationError(_READ_BUDGET_MESSAGE)
             page_query = query if cursor is None else {**query, "start_cursor": cursor}
             terminal_query_bucket = _terminal_query_bucket(query)
+            # Discard stale metadata when the next provider call fails.
+            terminal_page_signature = None
             raw = execute_read(page_query)
             read_count += 1
+            terminal_page_signature = _finite_terminal_page_signature(
+                raw, page_size=SNAPSHOT_PAGE_SIZE
+            )
             if not isinstance(raw, Mapping):
                 raise LessonActivationError("read executor must return a mapping")
             results = raw.get("results")
@@ -533,8 +642,12 @@ def orchestrate_lesson_retrieval(
             # Reject an oversized supplied page instead of truncating it.
             if len(results) > SNAPSHOT_PAGE_SIZE:
                 raise LessonActivationError(_ROW_BOUND_MESSAGE)
-            if any(not isinstance(item, Mapping) for item in results):
-                raise LessonActivationError("read executor result contains non-mapping items")
+            # A page is admitted only whole: any non-mapping item makes the
+            # page malformed, never silently filtered.
+            if not all(isinstance(item, Mapping) for item in results):
+                raise LessonActivationError(
+                    "read executor result contains non-mapping items"
+                )
             rows.extend(results)
             has_more, next_cursor = _page_cursor(raw)
             if not has_more:
@@ -551,8 +664,8 @@ def orchestrate_lesson_retrieval(
         nonlocal observed_rows, normalized_rows
         observed_rows += len(rows)
         for row in rows:
-            # One invalid corpus row must not crash an otherwise complete
-            # snapshot. Invalid evidence is skipped, never sent to CKR2.
+            # Invalid rows must not crash a fully retrieved corpus or leak
+            # unchecked candidates into CKR2.
             try:
                 normalized = normalize_lesson_row(row)
             except (TypeError, ValueError):
@@ -576,11 +689,19 @@ def orchestrate_lesson_retrieval(
             current_request = record_retrieval_attempt(
                 current_request, RetrievalEscalation.KNOWN_REFERENCE
             )
+            bounded, rank_order = _bound_relevant_lessons_with_order(
+                current_request, accumulated
+            )
             result = consume_lesson_preflight(
-                current_request, _bound_relevant_lessons(current_request, accumulated)
+                current_request, bounded, _ranked_order=rank_order
             )
             if result.lesson_retrieval_status is not LessonRetrievalStatus.INSUFFICIENT:
-                return with_diagnostics(result)
+                return with_diagnostics(
+                    result,
+                    describe_selection_basis(
+                        current_request, accumulated, identity_route=True
+                    ),
+                )
         # Relevance retrieval is one complete bounded snapshot of the
         # canonical data source, replacing the fragmented filtered/exact/
         # workspace cascade: normalization, dedup, the CKR2 bound and
@@ -598,11 +719,18 @@ def orchestrate_lesson_retrieval(
             incomplete_reason_code = _INCOMPLETE_REASON_CODES.get(
                 str(exc), "unknown-incomplete"
             )
-        return with_diagnostics(_unavailable_result(current_request, exc))
+        elif str(exc) in _NOTION_INCOMPLETE_REASON_CODES:
+            incomplete_reason_code = _NOTION_INCOMPLETE_REASON_CODES[str(exc)]
+        # Retrieval could not complete: selection was not evaluated. The
+        # separate reason codes above/below are preserved unchanged.
+        return with_diagnostics(_unavailable_result(current_request, exc), NOT_EVALUATED)
 
     accumulate(snapshot_rows)
+    bounded, rank_order = _bound_relevant_lessons_with_order(
+        current_request, accumulated
+    )
     result = consume_lesson_preflight(
-        current_request, _bound_relevant_lessons(current_request, accumulated)
+        current_request, bounded, _ranked_order=rank_order
     )
     if (
         result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
@@ -611,7 +739,13 @@ def orchestrate_lesson_retrieval(
         # A complete snapshot leaves no further retrieval step: the honest
         # next recommendation is manual review, not a cascade re-read.
         result = replace(result, retrieval_escalation=RetrievalEscalation.MANUAL_REVIEW)
-    return with_diagnostics(result)
+    basis = describe_selection_basis(
+        current_request, accumulated, identity_route=False
+    )
+    return with_diagnostics(
+        _abstain_on_generic_tie(result, basis, current_request.canonical_rule_refs),
+        basis,
+    )
 
 
 __all__ = [

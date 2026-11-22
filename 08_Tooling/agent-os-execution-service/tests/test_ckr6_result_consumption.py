@@ -632,6 +632,14 @@ def test_p1_consume_rejects_blocked_status_marked_admissible(status):
         _consume(record)
 
 
+@pytest.mark.parametrize("status", [[], {}, None, 0, False])
+def test_issue_start_consumer_rejects_non_string_status_as_invalid_result(status):
+    # Reject malformed producer output via the consumer's ValueError contract.
+    result = _result(status=status, substantial_hypothesis_admissible=False)
+    with pytest.raises(ValueError, match="status must be a string"):
+        _consume(_comment(result))
+
+
 @pytest.mark.parametrize("status", ["not-needed", "sufficient", "unavailable-safe-fallback"])
 def test_p1_issue_start_admitting_outcomes_are_consumed_and_admit(status):
     payload = _consume(_comment(_result(status=status)))

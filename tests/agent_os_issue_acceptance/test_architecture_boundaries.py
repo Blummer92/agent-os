@@ -63,6 +63,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         "approval",
         frozenset(
             {
+                "_connector_attribution",
                 "authorization_drift_review",
                 "approval_records",
                 "approved_execution_projection",

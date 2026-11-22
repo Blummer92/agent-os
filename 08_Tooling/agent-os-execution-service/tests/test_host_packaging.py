@@ -51,6 +51,9 @@ CAPABILITY_REGISTRY_PROJECT = ROOT / "08_Tooling" / "reusable-capability-registr
 # ``instructional-workflow-contracts`` distribution that the installed
 # ``agent-os-mcp`` server imports at module scope.
 INSTRUCTIONAL_CONTRACTS_PROJECT = ROOT / "src"
+# The repository-root pyproject.toml builds the canonical Navigation Registry
+# wheel required by agent-os-execution-service. Keep it in the offline closure.
+NAVIGATION_REGISTRY_PROJECT = ROOT
 
 RUNTIME_PROJECTS = (
     CAPABILITY_REGISTRY_PROJECT,
@@ -58,6 +61,7 @@ RUNTIME_PROJECTS = (
     WORKFLOW_SCHEDULER_PROJECT,
     EXECUTION_SERVICE_PROJECT,
     INSTRUCTIONAL_CONTRACTS_PROJECT,
+    NAVIGATION_REGISTRY_PROJECT,
 )
 
 # The canonical descriptor loader production host composition binds (#1287).
@@ -114,6 +118,7 @@ def _build_wheels(output: Path) -> dict[str, Path]:
         "agent_memory_context_manager",
         "reusable_capability_registry",
         "instructional_workflow_contracts",
+        "agent_os_navigation_registry",
     }, sorted(wheels)
     return wheels
 
@@ -356,6 +361,12 @@ def test_distributions_carry_one_canonical_copy_of_every_runtime_module(
         if "scripts/agent_os_issue_labels/connected_issue_creation.py" in _wheel_names(wheel)
     ]
     assert issue_labels_carriers == ["workflow_scheduler"]
+    navigation_carriers = [
+        name
+        for name, wheel in built_wheels.items()
+        if "navigation_registry/__init__.py" in _wheel_names(wheel)
+    ]
+    assert navigation_carriers == ["agent_os_navigation_registry"]
     contracts_carriers = [
         name
         for name, wheel in built_wheels.items()

@@ -557,6 +557,14 @@ def test_malformed_termination_metadata_rejects_read(shipped_catalog, has_more) 
         )
 
 
+def test_missing_has_more_through_adapter_rejects_read(shipped_catalog) -> None:
+    # #4016 R-1: the adapter fails the read on missing termination metadata;
+    # the lesson-content layer reports the adapter failure, never a complete read.
+    http = FakeNotionHttp([{"results": [_lesson(1)]}])
+    with pytest.raises(NotionReadRequestError, match="not successful"):
+        _execute(shipped_catalog, http)
+
+
 @pytest.mark.parametrize("transient", [True, False], ids=["retryable", "failure"])
 def test_adapter_failure_during_continuation_rejects_read(shipped_catalog, transient) -> None:
     http = FakeNotionHttp(

@@ -547,8 +547,8 @@ class TestWorkflowRerunAfterApproval:
         approve_result = cli.approve("task-1", approver="alice")
         assert approve_result["status"] == "pass"
 
-        # Second run must not be refused as "workflow_terminal".
-        second_run = cli.run_workflow("approval-workflow")
+        # Approval itself continues the previously started workflow.
+        second_run = approve_result["continuation"]
         assert second_run["status"] == "pass"
         assert second_run["completed"] == 1
 
@@ -565,9 +565,9 @@ class TestWorkflowRerunAfterApproval:
         cli.create_workflow(yaml_path)
 
         cli.run_workflow("approval-workflow")
-        cli.approve("task-1", approver="alice")
+        approval = cli.approve("task-1", approver="alice")
 
-        second_run = cli.run_workflow("approval-workflow")
+        second_run = approval["continuation"]
 
         assert second_run["status"] == "pass"
         assert second_run["completed"] == 2

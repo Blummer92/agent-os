@@ -209,6 +209,32 @@ def test_missing_repeated_and_malformed_cursors_fail_closed():
         assert result.retrieval_diagnostics["incomplete_reason_code"] == code, code
 
 
+def test_non_mapping_result_items_reject_the_whole_page():
+    # P5 fix: a page containing any non-mapping item is malformed as a whole;
+    # the mapping items on it are never admitted.
+    rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
+    cases = (
+        {"results": rows[:99] + ["not-a-mapping"], "has_more": False},
+        {"results": rows[:99] + [None], "has_more": False},
+    )
+    for page in cases:
+        result = orchestrate_lesson_retrieval(
+            _ckr6_testing_request(), execute_read=lambda _q, _p=page: _p
+        )
+        assert result.selected_lesson_ids == ()
+        assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-page"
+
+
+def test_missing_has_more_rejects_the_page():
+    # P6 fix: a page without has_more is rejected, never assumed complete.
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(),
+        execute_read=lambda _q: {"results": [_planted()]},
+    )
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+
+
 def test_budget_exhaustion_fails_closed(monkeypatch):
     monkeypatch.setattr(orch, "MAX_PREFLIGHT_READS", 1)
     rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
@@ -237,13 +263,13 @@ def test_provider_errors_are_sanitized_and_admit_nothing():
 
 def test_no_partial_snapshot_reaches_ckr2_after_a_failed_read(monkeypatch):
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     rows = _count_consistent_rows() + _extra_rows(33) + [_planted()]
     inner = _ckr6_filter_evaluating_reader(rows, [])
     state = {"n": 0}
@@ -274,13 +300,13 @@ def test_duplicate_records_collapse_and_conflicting_revisions_survive(monkeypatc
     # list must contain no exact-duplicate records, while both revisions of
     # the conflicting identity survive.
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     result = orchestrate_lesson_retrieval(
         _ckr6_testing_request(), execute_read=_ckr6_filter_evaluating_reader(rows, [])
     )
@@ -355,13 +381,13 @@ def test_snapshot_accumulates_exactly_the_direct_filtered_corpus(monkeypatch):
     assert len(rows) == 2 * len(_AREA_ECOSYSTEM) * len(_LEARNING_TYPE_CAPABILITY)
     assert len(rows) <= 500  # the invariant is pinned INSIDE the row bound
     seen = []
-    real = orch._bound_relevant_lessons
+    real = orch._bound_relevant_lessons_with_order
 
     def spy(req, accumulated):
         seen.append(list(accumulated))
         return real(req, accumulated)
 
-    monkeypatch.setattr(orch, "_bound_relevant_lessons", spy)
+    monkeypatch.setattr(orch, "_bound_relevant_lessons_with_order", spy)
     req = _ckr6_testing_request()
     orchestrate_lesson_retrieval(req, execute_read=_ckr6_filter_evaluating_reader(rows, []))
     query = build_escalation_query(req, RetrievalEscalation.WORKSPACE_SEARCH)
@@ -454,12 +480,11 @@ def test_selection_stays_bounded_when_relevant_lessons_exceed_the_candidate_budg
 
 
 def test_bad_unrelated_corpus_row_is_skipped_without_losing_valid_lesson():
-    # The complete 88-row corpus includes one invalid guidance field that
-    # used to abort normalization after an otherwise complete snapshot.
-    good = _planted()
     bad = _lesson_row("LL-8701")
-    bad["properties"]["Guardrail"] = {"type": "rich_text", "rich_text": [{"plain_text": "invalid\ncontrol"}]}
-    rows = _count_consistent_rows() + [bad, good]
+    bad["properties"]["Guardrail"] = {
+        "type": "rich_text", "rich_text": [{"plain_text": "invalid\ncontrol"}],
+    }
+    rows = _count_consistent_rows() + [bad, _planted()]
     assert len(rows) == 88
     calls = []
     result = orchestrate_lesson_retrieval(
@@ -499,7 +524,6 @@ def test_one_normalization_value_error_cannot_crash_complete_snapshot(monkeypatc
         "oversized-or-malformed-field", 0
     ) >= 1
     assert "incomplete_reason_code" not in result.retrieval_diagnostics
-
 
 @pytest.mark.parametrize("field,kind", [
     ("Lesson Learned", "title"),
@@ -546,7 +570,6 @@ def test_non_mapping_snapshot_item_rejects_entire_population(invalid, later_page
     assert diagnostics["terminal_query_bucket"] == "workspace"
     assert diagnostics["read_count"] == (2 if later_page else 1)
     assert diagnostics["normalized_rows"] == 0
-
 
 def test_missing_has_more_on_second_page_fails_closed():
     # A relevant first page must not become an eligible partial snapshot
