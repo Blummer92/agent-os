@@ -52,9 +52,12 @@ MAX_TOTAL_COMMENT_BYTES = 256 * 1024
 def _canonical_comment_body(body: str) -> str:
     """Strip exactly one known connector attribution footer, and nothing else.
 
-    Mirrors merge_authorization_source._canonical_comment_body: the footer is
-    tolerated only when it is the single trailing occurrence. Anything else
-    still fails the exact-shape check below.
+    The footer is tolerated only when it is the single trailing occurrence.
+    Anything else still fails the exact-shape check below. Policy peers (pinned
+    by tests/test_3690_attribution_footer_parity.py): the refresh-authorization
+    and refresh-trigger modules and the validate-draft ingress. The opposite
+    policy is deliberate in merge_authorization_source, which REJECTS a footer
+    (agent-authorship evidence, #3734).
     """
     for footer in _CLAUDE_CODE_FOOTERS:
         if body.endswith(footer):
