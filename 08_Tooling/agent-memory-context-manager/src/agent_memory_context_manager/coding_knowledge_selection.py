@@ -548,7 +548,16 @@ def _match_candidate(
             and whole("notion", guidance)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
             and whole("readback|read.back|verif(?:y|ied|ication)", guidance)
-            and not whole("unrelated|irrelevant|nonapplicable|never|avoid|do\s+not|don.t", title + " " + guidance)
+            # Reject ambiguous/negative guidance, rather than promote a
+            # lexical mention of readback to affirmative advice.
+            and not whole(
+                r"unrelated|irrelevant|nonapplicable|no|not|never|without|"
+                r"avoid|skip|reject(?:ed)?|"
+                r"prohibit(?:ed|ion)?|forbid(?:den)?|cannot|"
+                r"can.t|don.t|doesn.t|didn.t|shouldn.t|mustn.t|"
+                r"wouldn.t|couldn.t|won.t|isn.t|aren.t",
+                title + " " + guidance,
+            )
         ):
             return 2, ("notion-writer-readback-text-match",)
 

@@ -91,6 +91,16 @@ def test_partial_or_generic_request_hints_cannot_select(hints):
     {"use_when": ("Unrelated Notion writer readback instructions.",)},
     {"use_when": ("After a Notion write, never use readback to verify persisted state.",)},
     {"use_when": ("After a Notion write, do not use readback to verify persisted state.",)},
+    {"use_when": ("A Notion writer should not use independent readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer must not use readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer should not verify persisted changes with readback.",)},
+    {"use_when": ("A Notion writer shouldn't use readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer mustn't use readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer can't use readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer cannot use readback to verify persisted changes.",)},
+    {"use_when": ("A Notion writer verifies persisted changes without readback.",)},
+    {"use_when": ("A Notion writer should skip readback when verifying persisted changes.",)},
+    {"use_when": ("A Notion writer is prohibited from using readback to verify persisted changes.",)},
 ])
 def test_unrelated_or_incomplete_lesson_owned_mechanism_fails_closed(changes):
     result = select_coding_knowledge(request(), (candidate(**changes),))
