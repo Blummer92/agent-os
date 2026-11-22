@@ -321,6 +321,38 @@ def test_conflicting_origin_urls_fail_closed(tmp_path, monkeypatch):
     assert hook_adapter.resolve_repository_identity(root) is None
 
 
+@pytest.mark.parametrize(
+    "header",
+    (
+        '[remote "origin"]trailing',
+        '[remote "origin2"]',
+        '[remote "origin_backup"]',
+        '[remote "or igin"]',
+    ),
+)
+def test_non_origin_or_malformed_remote_headers_cannot_establish_identity(tmp_path, monkeypatch, header):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(
+        f'{header}\n\turl = https://github.com/Blummer92/agent-os.git\n',
+        encoding="utf-8",
+    )
+    assert hook_adapter.resolve_repository_identity(root) is None
+
+
+@pytest.mark.parametrize("header", ('[remote "origin"]', '[REMOTE "origin"]', '[remote\t"origin"]'))
+def test_valid_origin_headers_remain_accepted(tmp_path, monkeypatch, header):
+    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
+    root = tmp_path / "c"
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text(
+        f'{header}\n\turl = https://github.com/Blummer92/agent-os.git\n',
+        encoding="utf-8",
+    )
+    assert hook_adapter.resolve_repository_identity(root) == REPOSITORY
+
+
 def test_non_origin_remote_never_establishes_identity(tmp_path, monkeypatch):
     monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
     root = tmp_path / "c"
