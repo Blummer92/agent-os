@@ -89,6 +89,27 @@ def test_mapped_package_is_focused() -> None:
     assert validate_validation_plan(plan) == ()
 
 
+def test_4088_exact_file_routing_changes_require_aggregate() -> None:
+    plan = _select(_input([
+        "AGENTS.md",
+        "01_Shared_Standards/github/routine-repository-coding-hot-path.md",
+        "02_Agent_Overlays/github-service-agent.md",
+        "03_Templates/prompts/github-change-request.md",
+    ]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-configuration",)
+    assert plan.execution_authorized is False
+    assert plan.side_effects_performed is False
+    assert validate_validation_plan(plan) == ()
+
+
+def test_root_agents_rule_does_not_promote_other_markdown_paths() -> None:
+    assert _select(_input(["AGENTS.md"])).profile == "aggregate"
+    assert _select(_input(["other/AGENTS.md"])).profile == "manual-review"
+    assert _select(_input(["docs/AGENTS.md"])).profile == "static"
+
+
 def test_workflow_change_is_aggregate() -> None:
     plan = _select(_input(_fixtures()["aggregate"]))
     assert plan.profile == "aggregate"
